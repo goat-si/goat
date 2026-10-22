@@ -297,6 +297,8 @@ const registry = Layer.mock(ProviderRegistry.ProviderRegistry)({
   getProviders: Effect.succeed([
     { instanceId, models: [{ slug: "fake" }] },
   ] as unknown as ReadonlyArray<never>),
+  refreshInstance: () =>
+    Effect.succeed([{ instanceId, models: [{ slug: "fake" }] }] as unknown as ReadonlyArray<never>),
 });
 
 it.effect(
@@ -315,7 +317,10 @@ it.effect(
           .pipe(Effect.flip);
       const model = yield* launch({ instanceId, model: "nonexistent" });
       expect(model.code).toBe("invalid_request");
-      expect(model.message).toContain("does not offer model nonexistent");
+      expect(model.message).toContain(
+        "does not offer model nonexistent, even after refreshing its model list",
+      );
+      expect(model.message).toContain('goat_provider_diagnose {instanceId:"fakeCloud"}');
       const provider = yield* launch({
         instanceId: ProviderInstanceId.make("gone"),
         model: "fake",
@@ -326,6 +331,37 @@ it.effect(
     }).pipe(Effect.provide(f.layer));
   },
 );
+
+it.effect("a model the provider gained since the last probe is accepted after one refresh", () => {
+  // The cached catalog predates the provider's own catalog change, as after `ocx sync`.
+  let catalog = [{ instanceId, models: [{ slug: "fake" }] }];
+  const refreshes: string[] = [];
+  const stale = Layer.mock(ProviderRegistry.ProviderRegistry)({
+    getProviders: Effect.sync(() => catalog as unknown as ReadonlyArray<never>),
+    refreshInstance: (id) =>
+      Effect.sync(() => {
+        refreshes.push(id);
+        catalog = [{ instanceId, models: [{ slug: "fake" }, { slug: "added" }] }];
+        return catalog as unknown as ReadonlyArray<never>;
+      }),
+  });
+  const f = fixture(false, "published-ref", stale);
+  return Effect.gen(function* () {
+    const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+    const launch = (model: string) =>
+      service.launch(
+        scope,
+        { title: "Probe", message: "Hi", modelSelection: { instanceId, model } },
+        { runtimeMode: "full-access", interactionMode: "default" },
+      );
+    yield* launch("added");
+    expect(refreshes).toEqual([instanceId]);
+    expect(f.launched.map((input) => input.modelSelection.model)).toEqual(["added"]);
+    // A model the cache already lists launches without another probe.
+    yield* launch("fake");
+    expect(refreshes).toHaveLength(1);
+  }).pipe(Effect.provide(f.layer));
+});
 
 it.effect.each(["worker", "owner"])(
   "thread launch cannot bypass the cloud capability through profile %s",
@@ -401,6 +437,33 @@ it.effect("a goatclaw role launch carries the role's brief and binds the role's 
     ]);
   }).pipe(Effect.provide(f.layer));
 });
+
+it.effect(
+  "a role launch whose work the caller's profile cannot do is refused before anything starts",
+  () => {
+    const f = fixture(false, "published-ref", undefined, "manager");
+    return Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+    VALUES (${callerId}, ${projectId}, 'Caller', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`;
+      const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+      const error = yield* service
+        .launch(
+          scope,
+          { title: "Merge queue", goatclawRole: "merge-manager", message: "Land #701." },
+          { runtimeMode: "full-access", interactionMode: "default" },
+        )
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        code: "capability_denied",
+        message:
+          "A merge-manager launch needs pr.merge, which this caller's profile does not allow.",
+      });
+      expect(f.launched).toHaveLength(0);
+      expect(yield* sql`SELECT id FROM goatclaw_lane_reservations`).toEqual([]);
+    }).pipe(Effect.provide(f.layer));
+  },
+);
 
 it.effect("role launches are refused while goatclaw is off", () => {
   const f = fixture();

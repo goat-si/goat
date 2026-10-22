@@ -125,6 +125,7 @@ const environment = (home: string) =>
     let memoryEnabled = true;
     const context = yield* Layer.buildWithMemoMap(
       McpHttp.layerMemoryToolkit.pipe(
+        Layer.provide(AccessFixture.layerPermissionProfilesOff),
         Layer.provideMerge(
           Layer.mergeAll(
             Sync.layer,

@@ -283,6 +283,24 @@ const make = Effect.gen(function* () {
       );
     });
 
+  /**
+   * The configured GOAT Bot model when this machine offers it. Dispatched work falls back to it
+   * after the project and server defaults and before the text generation model, so a bot set to
+   * a coding model sends its workers there too. A chosen model this machine no longer offers
+   * falls back with a warning rather than asking, matching the bot turn itself.
+   */
+  const goatBotPreferred = Effect.fn("ChannelDispatcher.goatBotPreferred")(function* (
+    chosen: ModelSelection | null,
+  ) {
+    if (chosen === null) return undefined;
+    if (yield* modelOffered(chosen)) return chosen;
+    yield* Effect.logWarning(
+      "GOAT Bot model is not available here; using the text generation model",
+      { instanceId: chosen.instanceId, model: chosen.model },
+    );
+    return undefined;
+  });
+
   /** Channel work already started on this machine, per provider account. */
   const localTasksByInstance = ledger
     .listTasksByStatus(["dispatching", "running", "waiting_input"])
@@ -433,13 +451,12 @@ const make = Effect.gen(function* () {
         }
         return yield* projectChoices(allowed, hostWorkspace);
       }
-      const settings = resolveProjectSettings(
-        yield* serverSettings.getSettings.pipe(Effect.orDie),
-        chosen.id,
-      ).settings;
+      const all = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const settings = resolveProjectSettings(all, chosen.id).settings;
       const projectModel =
         chosen.defaultModelSelection ??
         settings.defaultModelSelection ??
+        (yield* goatBotPreferred(all.goatBotModelSelection)) ??
         settings.textGenerationModelSelection;
       // The Slack connection's model applies only where it is offered. Slack settings have no
       // control to change it, so an unavailable one falls back to the project's model with a
@@ -702,10 +719,8 @@ const make = Effect.gen(function* () {
         named === undefined || identities._tag === "None"
           ? null
           : yield* identities.value.resolve(named.workspaceRoot);
-      const settings = resolveProjectSettings(
-        yield* serverSettings.getSettings.pipe(Effect.orDie),
-        named?.id ?? null,
-      ).settings;
+      const all = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const settings = resolveProjectSettings(all, named?.id ?? null).settings;
       const bot = yield* ledger.getBot(stored.ownerId);
       return {
         ...(defaultProjectGone ? { requireNamedProject: true } : {}),
@@ -716,6 +731,7 @@ const make = Effect.gen(function* () {
         modelSelection:
           named?.defaultModelSelection ??
           settings.defaultModelSelection ??
+          all.goatBotModelSelection ??
           settings.textGenerationModelSelection,
         runtimeMode: lowerRuntimeMode(
           task.requester.runtimeModeCeiling,

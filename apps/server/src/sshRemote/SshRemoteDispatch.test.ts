@@ -65,6 +65,7 @@ import {
   readRemoteToolResult,
   resolveSshCliRunner,
 } from "./SshRemoteDispatch.ts";
+import { layerPermissionProfilesOff } from "../mcp/McpToolAccess.testkit.ts";
 
 describe("SSH dispatch tool compatibility", () => {
   it.effect("fails once with the host and unknown GOAT tool on a legacy-only endpoint", () =>
@@ -1304,6 +1305,7 @@ const registrationLayer = McpHttpServer.toolkitRegistration(
     ),
   }),
 ).pipe(
+  Layer.provide(layerPermissionProfilesOff),
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
 );

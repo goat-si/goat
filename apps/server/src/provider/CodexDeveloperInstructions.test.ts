@@ -4,6 +4,7 @@ import {
   GOAT_ORCHESTRATION_INSTRUCTIONS,
   GOAT_ORCHESTRATION_SECTIONS,
 } from "@goat/provider-core/server/orchestrationInstructions";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { describe, it } from "vite-plus/test";
 
 import {
@@ -57,6 +58,14 @@ describe("buildCodexAdditionalContext", () => {
       sections.map((entry) => entry.value).join("\n\n"),
       GOAT_ORCHESTRATION_INSTRUCTIONS.trim(),
     );
+  });
+
+  it("delivers the development discipline even when GOAT tools are unavailable", () => {
+    const context = buildCodexAdditionalContext({ model: "gpt-5.3-codex" }, false);
+    NodeAssert.deepEqual(context.t3_code_development, {
+      kind: "application",
+      value: GOAT_DEVELOPMENT_INSTRUCTIONS,
+    });
   });
 });
 

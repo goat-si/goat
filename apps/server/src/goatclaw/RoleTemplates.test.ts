@@ -1,6 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 import { BUILTIN_PERMISSION_PROFILES, GoatclawRole } from "@goat/contracts";
-import { goatclawRoleBrief, goatclawRoleTemplate } from "./RoleTemplates.ts";
+import {
+  GOATCLAW_LANE_DEFAULTS,
+  GOATCLAW_REPORT_PROTOCOL,
+  goatclawRoleBrief,
+  goatclawRoleTemplate,
+} from "./RoleTemplates.ts";
 
 describe("goatclaw role templates", () => {
   it.each(GoatclawRole.literals)("%s launches under a built-in profile", (role) => {
@@ -32,9 +37,12 @@ describe("goatclaw role templates", () => {
     expect(goatclawRoleTemplate("issue-sweeper").preamble).toContain("You do not merge");
   });
 
-  it("puts the shared report protocol between the preamble and the task", () => {
+  it("puts the lane defaults and the shared report protocol between the preamble and the task", () => {
     const brief = goatclawRoleBrief("domain-manager", "Ship H4.");
     expect(brief.startsWith(goatclawRoleTemplate("domain-manager").preamble)).toBe(true);
+    const lane = brief.indexOf(GOATCLAW_LANE_DEFAULTS);
+    expect(lane).toBeGreaterThan(0);
+    expect(brief.indexOf(GOATCLAW_REPORT_PROTOCOL)).toBeGreaterThan(lane);
     for (const kind of ["progress", "needs_input", "completed or failed"])
       expect(brief).toContain("- " + kind + ":");
     expect(brief).toContain("NOT RUN:");

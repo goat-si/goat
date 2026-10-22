@@ -36,7 +36,11 @@ import {
   type ChannelOutboundKind,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
-import { channelEvidenceLabels } from "@goat/shared/channelEvidence";
+import {
+  channelEvidenceLabels,
+  channelEvidenceSentence,
+  splitChannelResultText,
+} from "@goat/shared/channelEvidence";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   classifyTextGenerationFailure,
@@ -109,6 +113,7 @@ import {
   singleQuestionChoice,
   type DeliveredChoices,
 } from "./channelDecisionChoices.ts";
+import { openQuestionTask } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
 import {
@@ -1630,14 +1635,10 @@ const make = Effect.gen(function* () {
 
       if (action.type === "answer_question") {
         const answerer = yield* judgedNow;
-        const stored = yield* ledger.getTask(action.taskId);
-        const open =
-          stored !== undefined &&
-          stored.task.conversationId === conversationId &&
-          stored.task.openQuestions.some((question) => question.questionId === action.questionId);
-        if (stored === undefined || !open) {
-          replyText = "I couldn't match that to an open question. Which task do you mean?";
-          finalDecision = { replyText, action: { type: "clarify", question: replyText } };
+        const { stored, refused } = yield* openQuestionTask(ledger, { ...action, conversationId });
+        if (refused !== undefined) {
+          finalDecision = refused;
+          replyText = finalDecision.replyText;
         } else if (answerer === undefined || !mayAnswerFor(answerer, stored.task.requester)) {
           replyText = CHANNEL_COPY.answerNotAllowed;
           finalDecision = { replyText, action: { type: "report_only" } };
@@ -1803,17 +1804,18 @@ const make = Effect.gen(function* () {
           pending.event.payload.observed.needsYou,
         );
         const result = pending.event.payload.observed.result;
-        if (result?.observedCheck !== undefined && result.observedCheck.status !== "running") {
+        const evidence =
+          result?.observedCheck !== undefined && result.observedCheck.status !== "running"
+            ? channelEvidenceSentence(result, stored.task.title)
+            : null;
+        // GOAT Bot's card shows the check as it lands; text channels get one sentence.
+        if (evidence !== null && stored.task.originAddress.kind !== "goat") {
           deliveries.push(
             replyDelivery({
               causeKey: "narration:" + pending.event.eventId + ":evidence",
               destination: stored.task.originAddress,
               kind: "receipt",
-              text:
-                "Check evidence for " +
-                stored.task.title +
-                "\n" +
-                channelEvidenceLabels(result).join("\n"),
+              text: evidence,
               task: stored.task,
             }),
           );
@@ -1828,6 +1830,30 @@ const make = Effect.gen(function* () {
         return;
       }
       const task = stored.task;
+      const origin = task.originAddress;
+      const bot = (yield* ledger.getBot(stored.ownerId))?.bot;
+      // In GOAT Bot a task's card is its result: it already shows the outcome, the summary and
+      // the checks, so a message repeating them would say everything twice. A turn is GOAT Bot's
+      // own answer and stays a message.
+      const cardIsResult =
+        bot !== undefined &&
+        task.kind !== "turn" &&
+        (base.kind === "result" || base.kind === "failure");
+      if (cardIsResult && origin.kind === "goat") {
+        // The outcome is delivered as the card itself, under the narration's key, so the work
+        // queue still sees the result reach the person. The timeline records each card version
+        // once, so this adds no second item.
+        yield* ledger.completeNarration({
+          owner,
+          sequence: pending.sequence,
+          deliveries: [chipDelivery(task, bot, "narration:" + pending.event.eventId + ":origin")],
+          now,
+        });
+        yield* wake.wake;
+        return;
+      }
+      const plain = splitChannelResultText(base.text).text;
+      const baseText = plain === "" ? base.text : plain;
       // The requester's own words set the reply's language; the worker's summary may use another.
       const request = yield* ledger.getInput(task.originInputId);
       const requestTail =
@@ -1838,40 +1864,47 @@ const make = Effect.gen(function* () {
       // phrased by the model.
       const worded =
         base.kind === "question" || (task.kind === "turn" && base.kind === "result")
-          ? base.text
+          ? baseText
           : Option.match(
               yield* generate({
                 mode: "task_event",
                 conversationId: task.conversationId,
                 originKind: task.requester.originKind,
-                taskEvent: { taskId: task.taskId, type: pending.event.type, summary: base.text },
+                taskEvent: { taskId: task.taskId, type: pending.event.type, summary: baseText },
                 tail: requestTail,
                 tasks: [],
                 allowedTargets: [],
                 requester: task.requester,
               }),
-              { onNone: () => base.text, onSome: (result) => result.replyText },
+              {
+                onNone: () => baseText,
+                onSome: (result) => splitChannelResultText(result.replyText).text || baseText,
+              },
             );
-      const origin = task.originAddress;
+      // Text channels have no card, so meaningful verification rides along as one sentence.
+      const evidence =
+        origin.kind !== "goat" && (base.kind === "result" || base.kind === "failure")
+          ? channelEvidenceSentence(task.observed?.result)
+          : null;
       const deliveries = [
         replyDelivery({
           causeKey: "narration:" + pending.event.eventId + ":origin",
           destination: origin,
           kind: base.kind,
-          text: [
-            worded,
-            ...(base.kind === "result" || base.kind === "failure"
-              ? channelEvidenceLabels(task.observed?.result)
-              : []),
-          ].join("\n"),
+          text: evidence === null ? worded : worded + "\n\n" + evidence,
           task,
           mentionActorId: mentionFor(origin, task.requester.externalActorId),
           options: "options" in base ? base.options : undefined,
         }),
       ];
-      // Work started elsewhere shows up in the bot as its chip and its final result only.
-      const bot = (yield* ledger.getBot(stored.ownerId))?.bot;
-      if (bot !== undefined && origin.kind !== "goat" && base.kind !== "question") {
+      // Work started elsewhere shows up in the bot as its card; its result is on the card, and
+      // only receipts and a turn's answer also arrive as messages.
+      if (
+        bot !== undefined &&
+        origin.kind !== "goat" &&
+        base.kind !== "question" &&
+        !cardIsResult
+      ) {
         deliveries.push(
           replyDelivery({
             causeKey: "narration:" + pending.event.eventId + ":bot",

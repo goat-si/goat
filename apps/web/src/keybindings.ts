@@ -10,6 +10,7 @@ import {
   type ThreadJumpKeybindingCommand,
 } from "@goat/contracts";
 import {
+  DEFAULT_RESOLVED_KEYBINDINGS,
   isMacPlatform,
   matchesKeybindingShortcut,
   matchesKeybindingShortcutModifiers,
@@ -19,6 +20,7 @@ import {
   type ShortcutModifierStateLike,
 } from "@goat/shared/keybindings";
 import { isElectron } from "./env";
+import { isNotesPageOpen } from "./notes/notesPageVisibility";
 import { projectScriptIdFromCommand } from "./projectScripts";
 
 export type { ShortcutEventLike, ShortcutModifierStateLike } from "@goat/shared/keybindings";
@@ -62,6 +64,7 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
     isWeb: !isElectron,
     isDesktop: isElectron,
     editableFocus: false,
+    notesPageOpen: isNotesPageOpen(),
     ...options?.context,
   };
 }
@@ -187,6 +190,69 @@ export function resolveShortcutCommand(
     return binding.command;
   }
   return null;
+}
+
+const ruleIdentity = (rule: ResolvedKeybindingRule) =>
+  JSON.stringify([
+    rule.command,
+    rule.shortcut.key,
+    rule.shortcut.modKey,
+    rule.shortcut.metaKey,
+    rule.shortcut.ctrlKey,
+    rule.shortcut.shiftKey,
+    rule.shortcut.altKey,
+    rule.whenAst ?? null,
+  ]);
+const BUILT_IN_RULES = new Set(DEFAULT_RESOLVED_KEYBINDINGS.map(ruleIdentity));
+
+/**
+ * Shortcuts for a page-scoped command whose when-clause holds. The server backfills new
+ * defaults ahead of persisted rules, so on existing installs notes.new sits before the default
+ * chat.new on the same keys. Later built-in defaults therefore do not shadow the page's
+ * command; any rule the person added or changed still does, as everywhere else.
+ */
+function pageCommandShortcuts(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): KeybindingShortcut[] {
+  const platform = resolvePlatform(options);
+  const context = resolveContext(options);
+  const claimed = new Set<string>();
+  const shortcuts: KeybindingShortcut[] = [];
+  for (let index = keybindings.length - 1; index >= 0; index -= 1) {
+    const binding = keybindings[index];
+    if (!binding || !matchesWhenClause(binding.whenAst, context)) continue;
+    const shortcut = shortcutForContext(binding, context);
+    const conflictKey = shortcutConflictKey(shortcut, platform);
+    if (binding.command === command) {
+      if (!claimed.has(conflictKey)) shortcuts.push(shortcut);
+    } else if (!BUILT_IN_RULES.has(ruleIdentity(binding))) {
+      claimed.add(conflictKey);
+    }
+  }
+  return shortcuts;
+}
+
+export function matchesPageCommand(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): boolean {
+  const platform = resolvePlatform(options);
+  return pageCommandShortcuts(keybindings, command, options).some((shortcut) =>
+    matchesKeybindingShortcut(event, shortcut, platform),
+  );
+}
+
+export function pageCommandShortcutLabel(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): string | null {
+  const shortcut = pageCommandShortcuts(keybindings, command, options)[0];
+  return shortcut ? formatShortcutLabel(shortcut, resolvePlatform(options)) : null;
 }
 
 export function resolveChatShortcutCommand(

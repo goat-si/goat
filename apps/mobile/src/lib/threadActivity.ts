@@ -2004,10 +2004,9 @@ export function buildPendingUserInputAnswers(
 
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
-    if (answer === null) {
-      return null;
-    }
-    answers[question.id] = answer;
+    // An optional question left blank is omitted; it must not hold back the required ones.
+    if (answer !== null) answers[question.id] = answer;
+    else if (question.required !== false) return null;
   }
 
   return answers;

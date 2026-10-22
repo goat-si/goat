@@ -113,6 +113,7 @@ import {
 } from "./TimelineAssistantRows";
 import { V2EventTimelineRow } from "./TimelineV2EventRow";
 import { useTimelinePositionRestore } from "./useTimelinePositionRestore";
+import { useTimelineEndPin } from "./useTimelineEndPin";
 import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { useStableHandoffRuns, useIncrementalTimelineRows, useStableRows } from "./useTimelineRows";
 
@@ -991,9 +992,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
 
   const canvas = useChatCanvas();
   const registerTimeline = canvas?.registerTimeline;
+  const [timelineScrollNode, setTimelineScrollNode] = useState<HTMLElement | null>(null);
   const setTimelineList = (list: LegendListRef | null) => {
     listRef.current = list;
     const node = list?.getScrollableNode() ?? null;
+    setTimelineScrollNode(node);
     registerTimeline?.(node);
     onScrollableNodeChange?.(node);
   };
@@ -1042,6 +1045,24 @@ const ConversationTimeline = memo(function ConversationTimeline({
     </TimelineRowCtx>
   );
   const listExtraData = { identity: listIdentityKey, rowCount: rows.length, sharedState };
+
+  const endMaintenance =
+    citationPositioning ||
+    (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
+    anchoredEndSpace ||
+    !liveFollowEnabled ||
+    fullscreenAppRowId !== null ||
+    disclosureToggleSettling
+      ? false
+      : isWorking && !prefersReducedMotion && settlingListIdentity === null
+        ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
+        : TIMELINE_MAINTAIN_SCROLL_AT_END;
+  useTimelineEndPin({
+    listRef,
+    scrollNode: timelineScrollNode,
+    enabled: endMaintenance !== false,
+    smooth: endMaintenance === TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH,
+  });
 
   const forwardMinimapWheel = (event: WheelEvent) => {
     const scrollNode = listRef.current?.getScrollableNode();
@@ -1102,18 +1123,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
             onLoad={handleListLoad}
             {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
             contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
-            maintainScrollAtEnd={
-              citationPositioning ||
-              (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
-              anchoredEndSpace ||
-              !liveFollowEnabled ||
-              fullscreenAppRowId !== null ||
-              disclosureToggleSettling
-                ? false
-                : isWorking && !prefersReducedMotion && settlingListIdentity === null
-                  ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
-                  : TIMELINE_MAINTAIN_SCROLL_AT_END
-            }
+            maintainScrollAtEnd={endMaintenance}
             maintainVisibleContentPosition={
               findActive ||
               citationPositioning ||

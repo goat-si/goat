@@ -34,7 +34,7 @@ it("parses once per document load while toolbar edits serialize and rerender the
     expect(noteMarkdownToDoc).toHaveBeenCalledTimes(1);
     expect(container.querySelector(".tiptap p")?.textContent).toBe("original");
     const heading = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Heading",
+      (button) => button.getAttribute("aria-label") === "Heading",
     )!;
     await act(async () => heading.click());
     expect(saved.at(-1)).toBe("## original\n");

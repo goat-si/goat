@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
-import { CommandId, EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
+import { CommandId, EnvironmentId, MessageId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -198,4 +199,46 @@ describe("ChannelBotRegistry report owner", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+});
+
+describe("ChannelBotRegistry model selection", () => {
+  const lunaSelection = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-6-luna",
+  } as const;
+  const astraSelection = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-6-astra",
+  } as const;
+
+  it.effect("seeds the canonical bot thread with the configured GOAT Bot model", () => {
+    const harness = makeHarness({
+      settingsLayer: Settings.layerTest({
+        textGenerationModelSelection: lunaSelection,
+        goatBotModelSelection: modelSelection,
+        defaultRuntimeMode: "full-access",
+      }).pipe(Layer.orDie),
+    });
+    return Effect.gen(function* () {
+      const registry = yield* Registry.ChannelBotRegistry;
+      yield* registry.ensure({}, owner);
+      assert.strictEqual(harness.world.launches[0]?.modelSelection.model, "gpt-6.1-sol");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("a null GOAT Bot model follows the new-thread default before text generation", () => {
+    const harness = makeHarness({
+      settingsLayer: Settings.layerTest({
+        textGenerationModelSelection: lunaSelection,
+        defaultModelSelection: astraSelection,
+        goatBotModelSelection: null,
+        defaultRuntimeMode: "full-access",
+      }).pipe(Layer.orDie),
+    });
+    return Effect.gen(function* () {
+      const registry = yield* Registry.ChannelBotRegistry;
+      yield* registry.ensure({}, owner);
+      assert.strictEqual(harness.world.launches[0]?.modelSelection.model, "gpt-6-astra");
+    }).pipe(Effect.provide(harness.layer));
+  });
 });

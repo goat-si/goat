@@ -26,7 +26,7 @@ export function useSidebarActivityToggle() {
   const projectsSidebar = useLegacySidebarEnabled();
   const toggleActivity = async () => {
     if (projectsSidebar === null) return;
-    await updateClientSettings({ legacySidebarEnabled: !projectsSidebar });
+    await updateClientSettings({ projectsSidebarEnabled: !projectsSidebar });
   };
   return { activityActive: projectsSidebar === false, toggleActivity };
 }

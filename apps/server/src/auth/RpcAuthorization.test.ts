@@ -664,6 +664,7 @@ describe("notes permissions", () => {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
     for (const method of [
       WS_METHODS.notesWrite,
+      WS_METHODS.notesUpdate,
       WS_METHODS.notesMove,
       WS_METHODS.notesDelete,
       WS_METHODS.notesStartWork,
@@ -688,6 +689,7 @@ describe("notes permissions", () => {
           Layer.mergeAll(
             group.toLayer({
               [WS_METHODS.notesWrite]: () => invoked,
+              [WS_METHODS.notesUpdate]: () => invoked,
               [WS_METHODS.notesMove]: () => invoked,
               [WS_METHODS.notesDelete]: () => invoked,
               [WS_METHODS.notesStartWork]: () => invoked,
@@ -703,6 +705,7 @@ describe("notes permissions", () => {
         client[WS_METHODS.notesWrite]({ path: "a.md", body: "changed", baseRevision: null }).pipe(
           Effect.asVoid,
         ),
+        client[WS_METHODS.notesUpdate]({ path: "a.md", pinned: true }).pipe(Effect.asVoid),
         client[WS_METHODS.notesMove]({ from: "a.md", to: "b.md", baseRevision: revision }).pipe(
           Effect.asVoid,
         ),

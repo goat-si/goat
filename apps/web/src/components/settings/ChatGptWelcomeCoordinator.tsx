@@ -3,17 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { usesChatGptSharing } from "@goat/shared/usageLimits";
 import { useState } from "react";
 import { environmentPresentations } from "../../state/presentation";
-import { OpenAI } from "../Icons";
-import { Button } from "../ui/button";
-import {
-  Dialog,
-  DialogPopup,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "../ui/dialog";
-import { ChatGptUsageButton } from "./ChatGptUsageButton";
+import { ChatGptWelcomeDialog } from "../onboarding/ChatGptWelcomeDialog";
 
 const STORAGE_KEY = "goat:chatgpt-sharing-welcome:v1";
 function readAcknowledgedProfiles(): string[] {
@@ -58,29 +48,11 @@ export function ChatGptWelcomeCoordinator() {
     }
   };
   return (
-    <Dialog
+    <ChatGptWelcomeDialog
       open={next !== undefined}
-      onOpenChange={(open) => {
-        if (!open) dismiss();
-      }}
-    >
-      <DialogPopup>
-        <DialogHeader>
-          <OpenAI className="mb-2 size-8" aria-hidden="true" />
-          <DialogTitle>Your ChatGPT plan is connected</DialogTitle>
-          <DialogDescription>
-            Eligible usage in GOAT uses your ChatGPT plan. Manage your shared usage and any credit
-            settings in ChatGPT.
-          </DialogDescription>
-          <p className="text-xs text-muted-foreground">
-            {next?.providerName} on {next?.environmentLabel}
-          </p>
-        </DialogHeader>
-        <DialogFooter>
-          <ChatGptUsageButton />
-          <Button onClick={dismiss}>Continue</Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+      providerName={next?.providerName}
+      environmentLabel={next?.environmentLabel}
+      onDismiss={dismiss}
+    />
   );
 }

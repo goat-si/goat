@@ -30,6 +30,8 @@ import {
   OrchestratorMcpTaskCancelResult,
   OrchestratorMcpTaskStatusInput,
   OrchestratorMcpThreadInterruptInput,
+  OrchestratorMcpThreadRetryInput,
+  OrchestratorMcpThreadRetryResult,
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListInput,
   OrchestratorMcpThreadListResult,
@@ -257,6 +259,15 @@ const ThreadInterruptTool = Tool.make(agentSurfaceRegistry["thread.interrupt"].n
   dependencies: hostThreadDependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.interrupt"]));
 
+const ThreadRetryTool = Tool.make(agentSurfaceRegistry["thread.retry"].name, {
+  description: agentSurfaceRegistry["thread.retry"].description,
+  parameters: OrchestratorMcpThreadRetryInput,
+  success: OrchestratorMcpThreadRetryResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: hostThreadDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.retry"]));
+
 const ThreadStatusTool = Tool.make(agentSurfaceRegistry["thread.status"].name, {
   description: agentSurfaceRegistry["thread.status"].description,
   parameters: OrchestratorMcpThreadStatusInput,
@@ -367,6 +378,7 @@ export const OrchestratorToolkit = Toolkit.make(
   ThreadWaitTool,
   ThreadStatusTool,
   ThreadInterruptTool,
+  ThreadRetryTool,
   ThreadWatchTool,
   ThreadUnwatchTool,
   ThreadWatchListTool,

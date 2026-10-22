@@ -74,6 +74,7 @@ vi.mock("./useGoatBotHome", () => ({
   useGoatBotHome: () => undefined,
   useGoatBotHomeSettings: () => ({ moveTarget: null, busy: false, error: null }),
 }));
+vi.mock("./GoatBotModelPicker", () => ({ GoatBotModelPicker: () => null }));
 vi.mock("./goatBotHooks", () => ({
   useGoatBotEnvironments: () => {
     useTick();
@@ -390,7 +391,8 @@ beforeEach(() => {
   items = [];
   permission = true;
   dual = false;
-  useGlobalAgentStore.setState({ ref: null, botRef: null });
+  // The sidebar row only appears once someone picks GOAT Bot as the logo's mode.
+  useGlobalAgentStore.setState({ ref: null, botRef: null, mode: "bot" });
   port = {
     // Like ChannelBotRegistry: only an active candidate can cause legacy_active.
     ensureBot: vi.fn(async (_env, input) => {
@@ -629,7 +631,8 @@ it("keeps target-specific offline, loading and missing history states with summa
   expect(
     isGoatBotThread({ environmentId, id: "worker" }, useGlobalAgentStore.getState().botRef),
   ).toBe(false);
-  expect(container.textContent).toContain("Jun");
+  // A request made in GOAT itself came from the reader, so the card does not name them.
+  expect(container.textContent).not.toContain("Jun");
   expect(container.querySelector("time")?.dateTime).toBe("2026-10-12T12:02:00.000Z");
   setConnection(false);
   await render();

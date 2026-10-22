@@ -75,6 +75,16 @@ The most common defect in this repo is a change that works on the path you teste
 - **Connection modes.** Local, remote/relay, and tunnel behave differently. Multi-device and multi-environment cases are real.
 - **Docs.** Check whether the change makes existing guidance inaccurate. Apply the [documentation rules](#documentation) before adding anything.
 
+## Development discipline
+
+Classify a change before choosing how much process it gets, and reclassify it when it grows: C0 text, C1 local to one file, C2 a conventional slice, C3 across module boundaries, C5 still ambiguous. Security, auth, data deletion or migration, public contracts, release, permissions, and new dependencies are C4 however small they look. Each class has a verification floor.
+
+- Do not claim that tests pass, a bug is fixed, or work is done without a fresh command and its output. A child's report is not proof. Name each check you did not run on a `NOT RUN:` line.
+- No placeholders, TODO-only changes, or fallbacks that hide a failure. Findings and plans cite `path:line`.
+- Search consumers before removing an export. Get approval before destroying anything. Commit each working step. Pass generated text through files or `--body-file`.
+
+The full rules and the lane brief checklist are in [Development discipline](docs/operations/discipline.md). Load the `goat-dev` skill for implementation work in this repository.
+
 ## Dev servers
 
 - `vp i` installs. New worktrees get this from a `post-checkout` hook that runs `scripts/setup-worktree.ts`; if module resolution looks broken, it probably did not run, so run `node scripts/setup-worktree.ts`.
@@ -102,7 +112,7 @@ An empty database is a bad test. Seed your worktree's `.goat` with a copy of rea
 - While you iterate, run `vp test run <files>`. For big files, add `-t "<name>"`.
 - Use `vp run typecheck`, not `npx tsc`; it caches per package. Both run tsc-rs (`typescript` is the `@tsc-rs/typescript` drop-in).
 - Run `node -e` snippets from `apps/server` or the owning package. `effect` does not resolve from the repo root.
-- Test meaningful logic or observable behavior. Do not render components to static markup to assert props or attributes, or add tests that merely assert callback wiring or mirror the implementation.
+- A test proves observable behavior, a contract, the regression of a real bug, or an invariant under concurrency, and its title says which. Test count is not a goal. Do not write tests that restate the implementation, assert private call sequences or mocks of internals, repeat a path another level already covers, dump snapshots without intent, or check getters and types. Prefer one integration or contract test over several unit tests of internals. Do not render components to static markup to assert props or attributes, or add tests that merely assert callback wiring. See the [testing policy](docs/operations/testing.md).
 - **Do not run repo-wide checks.** No `vp check`, no `vp run -r test`, no `vp run -r typecheck` unless I ask. CI owns the full suite.
 - Backend behavior changes ship with focused tests for that behavior.
 - Proof for a bug fix depends on the bug. Logic, data, state, and protocol bugs get a failing test first (the fewest that fail on `main` for that reason, in the module's existing test file), then the fix. Purely visual bugs (spacing, colour, alignment, a layout shift) get before/after captures as their proof and no test: do not add UI tests for nitpicks, and do not ask for one in review when a capture already shows it. A server-only fix with no visible surface ships the test plus a short runtime transcript.
@@ -201,6 +211,8 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
   Named `Effect.fn` creates a span; the unnamed form does not. Preserve existing span names and
   options, and pass combinators as additional function-builder arguments.
 - Inferred types over annotations. `any` is the enemy.
+- New files stay under about 800 lines. `goat/code-budget` fails a file over 1000 lines, a listed file that grows past its recorded length, and new non-null assertions (outside tests) or casts to `any`. Move code into a new module instead of raising the baseline. See [code budgets](docs/operations/code-quality.md).
+- GOAT features live in GOAT-owned modules. An upstream file gets a thin hook only (an import, a registration, a call), because every changed upstream line can conflict on the next upstream merge.
 - Comments say why: a constraint, an external quirk, or an invariant the code can't show. Don't restate names or signatures, narrate steps, or record history. `goat/no-low-value-comments` catches the mechanical cases.
 - Our users drive agents all day and notice a dropped frame, a lying spinner, and a stale label. No continuously repainting animations; they peg the GPU on high-refresh displays.
 - If a rule here fights the task in front of you, say so loudly and get a human sign-off before breaking it.

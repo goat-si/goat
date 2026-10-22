@@ -22,6 +22,7 @@ import * as MemorySyncService from "./memory/MemorySyncService.ts";
 import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
 import * as NoteWorkService from "./notes/NoteWorkService.ts";
 import * as NotesService from "./notes/NotesService.ts";
+import { makeNoteRpcHandlers, ServerWsNotesRpcGroup } from "./notes/NotesRpcHandlers.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as CodexRoutes from "./provider/CodexRouteService.ts";
 import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
@@ -83,7 +84,6 @@ import {
   WsMemoryAdministrationRpcGroup,
   WsMemoryCoreRpcGroup,
   WsMemoryImportRpcGroup,
-  WsNotesRpcGroup,
   type AcpRegistryDeleteSessionInput,
   type AcpRegistryDisableProviderInput,
   type AcpRegistryImportSessionInput,
@@ -666,7 +666,6 @@ const ServerWsRpcGroup = RpcAuthorization.AuthorizedWsRpcGroup.middleware(RpcIns
 const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
 const ServerWsCoreServerRpcGroup = WsCoreServerRpcGroup.middleware(RpcInstrumentation);
 const ServerWsCoreWorkspaceRpcGroup = WsCoreWorkspaceRpcGroup.middleware(RpcInstrumentation);
-const ServerWsNotesRpcGroup = WsNotesRpcGroup.middleware(RpcInstrumentation);
 const ServerWsChannelRpcGroup = WsChannelRpcGroup.middleware(RpcInstrumentation);
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
@@ -2116,20 +2115,11 @@ export const layerWsRpc = (
         return result;
       });
 
-      const notes = yield* NotesService.NotesService;
-      const noteWork = yield* NoteWorkService.NoteWorkService;
-      const noteHandlers = ServerWsNotesRpcGroup.of({
-        [WS_METHODS.notesList]: (input) => notes.list(input),
-        [WS_METHODS.notesRead]: (input) => notes.read(input),
-        [WS_METHODS.notesWrite]: (input) => notes.write(input, "user"),
-        [WS_METHODS.notesMove]: (input) => notes.move(input, "user"),
-        [WS_METHODS.notesDelete]: (input) => notes.delete(input),
-        [WS_METHODS.notesSubscribe]: () => notes.subscribe,
-        [WS_METHODS.notesStartWork]: (input) =>
-          noteWork.startWork(input, clientOrigin.surface === "mobile" ? "mobile" : "web"),
-        [WS_METHODS.notesWorkTargets]: () => noteWork.workTargets,
-        [WS_METHODS.notesWorkTargetProjects]: (input) => noteWork.workTargetProjects(input),
-      });
+      const noteHandlers = makeNoteRpcHandlers(
+        yield* NotesService.NotesService,
+        yield* NoteWorkService.NoteWorkService,
+        clientOrigin.surface === "mobile" ? "mobile" : "web",
+      );
       const channelHandlers = ServerWsChannelRpcGroup.of({
         [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
         [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: () => channelBots.status(channelOwner),

@@ -70,7 +70,13 @@ A late check updates the bound run's evidence without reopening the task or chan
 Local reconciliation and authenticated remote observation recover this evidence from persisted state.
 An absent check remains pending until the check worker records a disposition; an explicit no-check
 disposition ends observation without manufacturing a passing result. Web, mobile, Slack, and bot
-recall present the two kinds of evidence separately.
+recall present the two kinds of evidence separately. People see evidence only once an agent
+reported tests or a check runs; Slack and iMessage get it as one sentence, never as label lines.
+
+In GOAT Bot a task's card is its result. A non-turn task's outcome is delivered as its card under
+the `narration:<event>:origin` key, because the work queue and worker slots count an outcome as
+seen only when that delivery lands. A turn's answer stays a message, and its card carries no
+summary.
 
 MCP agents use the same ledger through the `channel_*` tools in [`mcp-toolkits.md`](mcp-toolkits.md).
 `CHANNEL_MCP_TOOL_NAMES` has no tool that sends to an arbitrary channel.

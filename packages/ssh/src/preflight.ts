@@ -17,7 +17,7 @@ import { readOnlySshArgs, readOnlyProxyJumpArgs } from "./probeOptions.ts";
 import { probeHostKey } from "./hostKey.ts";
 import { runPreflightProcess } from "./preflightProcess.ts";
 import { checkRuntimeAvailability } from "./runtimeAvailability.ts";
-import type { RemoteGoatRunnerOptions } from "./tunnel.ts";
+import type { RemoteGoatRunnerOptions } from "./remoteRuntime.ts";
 
 const FACTS = String.raw`printf 'GOAT_OS=%s\n' "$(uname -s)"
 printf 'GOAT_ARCH=%s\n' "$(uname -m)"

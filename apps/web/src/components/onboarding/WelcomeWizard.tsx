@@ -87,7 +87,7 @@ import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { presentSavedCloudEnvironmentConnection } from "../cloud/cloudEnvironmentConnectionPresentation";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { GoatWordmark } from "../GoatWordmark";
+import { GoatLogotype } from "../GoatLogotype";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { CommandBlock } from "../CommandBlock";
@@ -97,7 +97,7 @@ import { Input } from "../ui/input";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { ScrollArea } from "../ui/scroll-area";
 import { Spinner } from "../ui/spinner";
-import { WizardPanel, WizardSteps, WizardPopup, WizardHeader } from "../ui/wizard";
+import { WizardPanel, WizardSteps, WizardPopup, WizardHeader } from "./OnboardingWizard";
 import { Dialog } from "../ui/dialog";
 import { toastManager } from "../ui/toast";
 import { cn } from "../../lib/utils";
@@ -234,15 +234,7 @@ export function WelcomeWizard({
         bottomStickOnMobile={false}
         initialFocus={() => document.getElementById("onboarding-pairing-url") ?? true}
       >
-        <WizardHeader
-          title="Set up GOAT"
-          identity={
-            <div className="flex items-center gap-2" role="img" aria-label="GOAT">
-              <GoatWordmark className="size-6 shrink-0" aria-hidden />
-              <span className="text-2xl font-medium tracking-tight">GOAT</span>
-            </div>
-          }
-        >
+        <WizardHeader title="Set up GOAT" identity={<GoatLogotype className="self-start" />}>
           <WizardSteps
             steps={ONBOARDING_STAGES}
             currentStep={stageIndex}

@@ -5,6 +5,7 @@ import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as M from "@goat/contracts";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
 
@@ -270,6 +271,18 @@ function makeClaudeTestTurnInput(input: {
 }
 
 describe("ClaudeAdapterV2 runtime query policy", () => {
+  it("appends the development discipline without GOAT MCP and leaves out orchestration", () => {
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "native-no-goat-mcp",
+      resume: false,
+      cwd: "/workspace",
+    });
+    const append = (options.systemPrompt as { readonly append?: string }).append ?? "";
+    assert.include(append, GOAT_DEVELOPMENT_INSTRUCTIONS);
+    assert.notInclude(append, "Use `delegate_task`");
+  });
+
   it.each([
     ["--permission-mode acceptEdits", "acceptEdits"],
     ["--dangerously-skip-permissions", "bypassPermissions"],
@@ -813,6 +826,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
     };
     assert.equal(systemPrompt.type, "preset");
     assert.equal(systemPrompt.preset, "claude_code");
+    assert.include(systemPrompt.append ?? "", GOAT_DEVELOPMENT_INSTRUCTIONS);
     assert.include(systemPrompt.append ?? "", "Use `delegate_task`");
     const logged = ClaudeAdapterV2.loggedClaudeQueryOptions(options);
     assert.equal(logged.hasMcpServers, true);

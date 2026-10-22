@@ -21,6 +21,7 @@ import { observeResize } from "~/lib/observeResize";
 import { formatShortTimestamp } from "~/timestampFormat";
 
 import { MemorySettingsEntry } from "../settings/MemorySettings";
+import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 
 /** How close to the bottom still counts as "following" new messages. */
@@ -257,7 +258,7 @@ export function GoatBotTimeline({
                             <MessageCircleQuestionIcon className="mt-1 size-3.5 shrink-0 text-warning-foreground" />
                           ) : null}
                           <div className="min-w-0">
-                            {row.text}
+                            <GoatBotLinkedText text={row.text} />
                             {row.memory ? (
                               <MemorySettingsEntry
                                 environmentId={row.memory.environmentId}

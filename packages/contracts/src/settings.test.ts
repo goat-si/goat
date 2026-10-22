@@ -244,8 +244,14 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to Projects view", () => {
-    expect(decodeClientSettings({}).legacySidebarEnabled).toBe(true);
+  it("defaults to Activity view", () => {
+    expect(decodeClientSettings({}).projectsSidebarEnabled).toBe(false);
+  });
+
+  it("moves clients that only saved the old Projects default to Activity view", () => {
+    const decoded = decodeClientSettings({ legacySidebarEnabled: true });
+    expect(decoded.projectsSidebarEnabled).toBe(false);
+    expect(decoded).not.toHaveProperty("legacySidebarEnabled");
   });
 
   it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
@@ -253,16 +259,18 @@ describe("ClientSettings sidebar", () => {
       sidebarV2Enabled: false,
       sidebarV2ConfiguredByUser: true,
     });
-    expect(decoded.legacySidebarEnabled).toBe(true);
+    expect(decoded.projectsSidebarEnabled).toBe(false);
     expect(decoded).not.toHaveProperty("sidebarV2Enabled");
     expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
   });
 
   it.each([true, false])("preserves an explicit sidebar view choice: %s", (value) => {
-    expect(decodeClientSettings({ legacySidebarEnabled: value }).legacySidebarEnabled).toBe(value);
-    expect(decodeClientSettingsPatch({ legacySidebarEnabled: value }).legacySidebarEnabled).toBe(
+    expect(decodeClientSettings({ projectsSidebarEnabled: value }).projectsSidebarEnabled).toBe(
       value,
     );
+    expect(
+      decodeClientSettingsPatch({ projectsSidebarEnabled: value }).projectsSidebarEnabled,
+    ).toBe(value);
   });
 });
 
