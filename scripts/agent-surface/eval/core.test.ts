@@ -136,7 +136,7 @@ describe("summarizeTask", () => {
   const task = { id: "t", claim: "reduces" } as Task;
   const arms = { baselineArm: "call-only", candidateArm: "eval" };
   const metrics = (min: number, max: number) =>
-    ({ modelTurns: { min, max }, toolCalls: max - 1 }) as RunMetrics;
+    ({ modelTurns: { min, max }, toolCalls: max - 1, failedToolCalls: 0 }) as RunMetrics;
   const row = (
     arm: string,
     pair: number,
@@ -162,18 +162,30 @@ describe("summarizeTask", () => {
   const runs = (arm: string, turns: [number, number]) =>
     Array.from({ length: 10 }, (_, pair) => row(arm, pair, turns));
 
-  it("passes only when both bounds fall by a third and failures do not rise", () => {
-    const passing = [...runs("call-only", [6, 9]), ...runs("eval", [4, 6])];
+  it("passes only when the candidate's most turns are a third below the baseline's fewest", () => {
+    const passing = [...runs("call-only", [9, 12]), ...runs("eval", [4, 6])];
     expect(summarizeTask(task, passing, arms).verdict).toBe("pass");
-    const upperOnly = [...runs("call-only", [6, 9]), ...runs("eval", [5, 6])];
-    expect(summarizeTask(task, upperOnly, arms).reasons).toEqual([
-      "model turns did not fall by a third at both bounds",
+    // Both ends fell by a third, but the true counts could be 6 and 6.
+    const overlapping = [...runs("call-only", [6, 9]), ...runs("eval", [4, 6])];
+    expect(summarizeTask(task, overlapping, arms).reasons).toEqual([
+      "the candidate's most turns are not a third below the baseline's fewest",
+    ]);
+  });
+
+  it("needs ten successful runs per arm, not ten attempts", () => {
+    const mostlyFailed = (arm: string, turns: [number, number]) =>
+      Array.from({ length: 10 }, (_, pair) =>
+        row(arm, pair, turns, pair === 0 ? {} : { ok: false, failures: ["oracle"] }),
+      );
+    const rows = [...mostlyFailed("call-only", [9, 12]), ...mostlyFailed("eval", [4, 6])];
+    expect(summarizeTask(task, rows, arms).reasons).toEqual([
+      "fewer than 10 successful clean runs in an arm",
     ]);
   });
 
   it("keeps failed runs in the rate and out of the medians, and drops contaminated runs", () => {
     const rows = [
-      ...runs("call-only", [6, 9]),
+      ...runs("call-only", [9, 12]),
       ...runs("eval", [4, 6]),
       row("eval", 10, [1, 1], { ok: false, failures: ["oracle"] }),
       row("eval", 11, [1, 1], { contamination: ["goat_eval in call-only"] }),
@@ -182,5 +194,26 @@ describe("summarizeTask", () => {
     expect(summary.candidate).toMatchObject({ clean: 11, failed: 1, contaminated: 1, turnsMin: 4 });
     expect(summary.reasons).toEqual(["the candidate failed more often"]);
     expect(gate([summary]).pass).toBe(false);
+  });
+
+  it("fails the gate when the control moved", () => {
+    const reduces = summarizeTask(
+      task,
+      [...runs("call-only", [9, 12]), ...runs("eval", [4, 6])],
+      arms,
+    );
+    const control = { id: "t", claim: "no_gain" } as Task;
+    const moved = summarizeTask(
+      control,
+      [...runs("call-only", [9, 12]), ...runs("eval", [4, 6])],
+      arms,
+    );
+    const flat = summarizeTask(
+      control,
+      [...runs("call-only", [2, 2]), ...runs("eval", [2, 2])],
+      arms,
+    );
+    expect(gate([reduces, moved])).toEqual({ pass: false, notPassed: ["t: suspect"] });
+    expect(gate([reduces, flat]).pass).toBe(true);
   });
 });

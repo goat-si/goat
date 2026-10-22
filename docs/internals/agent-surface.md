@@ -456,14 +456,14 @@ prototype on a branch and passes. The task set, runner, and report are in
   fewer bytes in context: one round trip instead of 24, and 356 bytes instead of 116,234 for eight
   pages ([BENCHMARKS.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/BENCHMARKS.md)).
 - **Contamination.** A run that used a tool or capability its arm does not have, or that the
-  harness could not finish, is reported and excluded from every figure. A failed tool call or a
-  mismatched oracle is the arm's own cost, so that run stays in the failure rate and only leaves
-  the turn medians. Excluding it would hide the first-call mistakes a new syntax adds:
+  harness could not finish, is reported and excluded from every figure. A failed tool call is
+  the arm's own cost: the run keeps its extra turns in the medians, and the report counts failed
+  calls per arm. A wrong answer keeps the run in the failure rate. Excluding either would hide the first-call mistakes a new syntax adds:
   aside-codemode counted 47 failed results in 371 runs, and the four most common were wrong
   names and argument shapes ([ADR-0011](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0011-the-block-carries-what-an-error-cannot-say.md)).
-- **Pass.** At least a third fewer model turns at both ends of the range on each multi-step
-  workload, with no rise in failed runs and every oracle met. Anything else is "not built", and
-  the result is recorded either way.
+- **Pass.** On each multi-step workload, the candidate's most model turns are at least a third
+  below the baseline's fewest, with no rise in failed runs and every oracle met, and the control
+  shows no gain. Anything else is "not built", and the result is recorded either way.
 
 ## Human steps
 

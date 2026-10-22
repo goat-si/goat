@@ -64,7 +64,7 @@ export interface Implemented {
 
 export class CampaignError extends Error {}
 
-/** The fewest clean runs per arm and task before a ratio means anything. */
+/** The fewest successful clean runs per arm and task before a median means anything. */
 export const MIN_CLEAN_RUNS = 10;
 /** D8: the candidate must need at least a third fewer model turns. */
 export const REQUIRED_TURN_RATIO = 2 / 3;
@@ -446,6 +446,7 @@ export interface ArmSummary {
   readonly turnsMin: number | null;
   readonly turnsMax: number | null;
   readonly toolCalls: number | null;
+  readonly failedToolCalls: number | null;
 }
 
 export interface TaskSummary {
@@ -474,16 +475,16 @@ const summarizeArm = (rows: ReadonlyArray<RunRow>, arm: string): ArmSummary => {
     turnsMin: median(ok.map((metrics) => metrics.modelTurns.min)),
     turnsMax: median(ok.map((metrics) => metrics.modelTurns.max)),
     toolCalls: median(ok.map((metrics) => metrics.toolCalls)),
+    failedToolCalls: median(ok.map((metrics) => metrics.failedToolCalls)),
   };
 };
 
+// Each run's true turn count lies somewhere in its range, so a reduction only holds if the
+// candidate's most turns are below the baseline's fewest.
 const fewerTurns = (baseline: ArmSummary, candidate: ArmSummary) =>
   baseline.turnsMin !== null &&
-  baseline.turnsMax !== null &&
-  candidate.turnsMin !== null &&
   candidate.turnsMax !== null &&
-  candidate.turnsMin <= baseline.turnsMin * REQUIRED_TURN_RATIO &&
-  candidate.turnsMax <= baseline.turnsMax * REQUIRED_TURN_RATIO;
+  candidate.turnsMax <= baseline.turnsMin * REQUIRED_TURN_RATIO;
 
 export const summarizeTask = (
   task: Task,
@@ -505,21 +506,26 @@ export const summarizeTask = (
         }
       : { ...base, verdict: "as_expected", reasons: [] };
   const reasons: Array<string> = [];
-  if (baseline.clean < MIN_CLEAN_RUNS || candidate.clean < MIN_CLEAN_RUNS)
-    reasons.push("fewer than " + MIN_CLEAN_RUNS + " clean runs in an arm");
+  const succeeded = (summary: ArmSummary) => summary.clean - summary.failed;
+  if (succeeded(baseline) < MIN_CLEAN_RUNS || succeeded(candidate) < MIN_CLEAN_RUNS)
+    reasons.push("fewer than " + MIN_CLEAN_RUNS + " successful clean runs in an arm");
   if (!fewerTurns(baseline, candidate))
-    reasons.push("model turns did not fall by a third at both bounds");
+    reasons.push("the candidate's most turns are not a third below the baseline's fewest");
   if ((candidate.failureRate ?? 1) > (baseline.failureRate ?? 0))
     reasons.push("the candidate failed more often");
   return { ...base, verdict: reasons.length === 0 ? "pass" : "fail", reasons };
 };
 
-/** D8 passes only when every reduces task, manual ones included, ran and passed. */
+/**
+ * D8 passes only when every reduces task, manual ones included, ran and passed, and every
+ * control ran and showed no gain; a control that moved means the count itself is suspect.
+ */
 export const gate = (summaries: ReadonlyArray<TaskSummary>) => {
-  const reduces = summaries.filter((summary) => summary.claim === "reduces");
-  const notPassed = reduces.filter((summary) => summary.verdict !== "pass");
+  const notPassed = summaries.filter((summary) =>
+    summary.claim === "reduces" ? summary.verdict !== "pass" : summary.verdict !== "as_expected",
+  );
   return {
-    pass: reduces.length > 0 && notPassed.length === 0,
+    pass: summaries.some((summary) => summary.claim === "reduces") && notPassed.length === 0,
     notPassed: notPassed.map((summary) => summary.task + ": " + summary.verdict),
   };
 };

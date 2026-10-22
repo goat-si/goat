@@ -51,13 +51,16 @@ as a measurement.
 GOAT does not record how many model requests a run made. Calls a model makes in one response
 appear as consecutive timeline items. The runner therefore reports model turns as a range:
 tool rounds + 1 at the low end, where consecutive tool items count once, and tool calls + 1 at
-the high end. The gate requires the one-third reduction at both ends, so neither parallel calls
-nor merged rounds can produce a pass on their own.
+the high end. A reduction counts only when the candidate's high end is at least a third below
+the baseline's low end, so the gate holds whatever the true counts were. This is strict on
+purpose. It relaxes only when providers report requests per run.
 
 A run fails when it does not complete before its deadline, when its final reply lacks exactly
 one `EVAL_JSON` line with the task's keys, or when a check disagrees with the server. Failed
 runs stay in the failure rate. Medians come from successful runs, because a run that gave up
-early would look cheap. Each task needs at least ten clean runs per arm.
+early would look cheap. Each task needs at least ten successful clean runs per arm. A tool call
+that failed and was retried is not a failed run: its extra turns stay in the counts, and the
+report shows failed calls per arm. The gate also fails if the control shows a gain.
 
 Tool calls, tool output size, and wall time are recorded but never decide the gate; the
 [protocol](../internals/agent-surface.md#measurement-protocol-draft) explains why.

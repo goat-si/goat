@@ -182,7 +182,7 @@ const CHECKS: Readonly<Record<string, (input: CheckInput) => Promise<ReadonlyArr
       const status = String(run?.["status"]);
       if (!TERMINAL.has(status)) failures.push(id + " is still " + status);
       const claimed = reported.find((item) => item["threadId"] === id)?.["status"];
-      if (claimed !== undefined && claimed !== status)
+      if (claimed !== status)
         failures.push(id + " reported " + JSON.stringify(claimed) + ", server says " + status);
     }
     return failures;
@@ -205,8 +205,19 @@ const CHECKS: Readonly<Record<string, (input: CheckInput) => Promise<ReadonlyArr
         failures.push("no child thread " + JSON.stringify(review["childThreadId"]));
         continue;
       }
-      if (!TERMINAL.has(String(run["status"])))
-        failures.push("a review is still " + String(run["status"]));
+      const childThreadId = String(review["childThreadId"]);
+      if (run["status"] !== "completed")
+        failures.push(childThreadId + " ended " + String(run["status"]) + ", not completed");
+      if (review["model"] !== run["model"])
+        failures.push(
+          childThreadId +
+            " reported model " +
+            JSON.stringify(review["model"]) +
+            ", ran " +
+            String(run["model"]),
+        );
+      if (typeof review["verdict"] !== "string" || review["verdict"].trim() === "")
+        failures.push(childThreadId + " reported no verdict");
       ran.push(String(run["providerInstanceId"]) + "/" + String(run["model"]));
     }
     if (JSON.stringify(ran.sort()) !== JSON.stringify(requested))
@@ -347,8 +358,11 @@ const runOnce = async (
   if (!answer.ok) failures.push(answer.why);
   else
     for (const check of task.checks)
+      // A check that cannot read what the answer points at is judging a wrong answer.
       failures.push(
-        ...(await CHECKS[check]!({ ...context, answer: answer.value, fixture, metrics })),
+        ...(await CHECKS[check]!({ ...context, answer: answer.value, fixture, metrics }).catch(
+          (error: unknown) => [check + ": " + String(error)],
+        )),
       );
   return {
     ...row,

@@ -32,6 +32,7 @@ const armLine = (summary: ArmSummary) =>
     summary.wentFirst,
     cell(summary.turnsMin) + " to " + cell(summary.turnsMax),
     cell(summary.toolCalls),
+    cell(summary.failedToolCalls),
   ].join(" | ") +
   " |";
 
@@ -73,10 +74,11 @@ const main = () => {
     "",
     "Gate: " + (verdict.pass ? "**pass**" : "**not met** (" + verdict.notPassed.join("; ") + ")"),
     "",
-    "Model turns are a range: tool rounds + 1 to tool calls + 1. Medians use successful clean runs; " +
-      "a task needs " +
+    "Model turns are a range: tool rounds + 1 to tool calls + 1. A reduction counts only when the " +
+      "candidate's most turns are a third below the baseline's fewest. Medians use successful clean " +
+      "runs; a task needs " +
       MIN_CLEAN_RUNS +
-      " clean runs per arm.",
+      " of them per arm, and the control must show no gain.",
   ];
   for (const summary of summaries) {
     out.push(
@@ -84,8 +86,8 @@ const main = () => {
       "## " + summary.task + " (" + summary.claim + "): " + summary.verdict,
       ...summary.reasons.map((reason) => "- " + reason),
       "",
-      "| arm | runs | contaminated | failed | failure rate | went first | median model turns | median tool calls |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| arm | runs | contaminated | failed | failure rate | went first | median model turns | median tool calls | median failed calls |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
       armLine(summary.baseline),
       armLine(summary.candidate),
       "",
