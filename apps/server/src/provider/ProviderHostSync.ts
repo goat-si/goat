@@ -1047,11 +1047,12 @@ const make = Effect.gen(function* () {
           : yield* handoffs
               .read({ threadId: thread.threadId, handoffId: TurnItemId.make(handoffId) })
               .pipe(
-                Effect.catchTag("HandoffError", (error) =>
-                  error.reason === "not_found"
-                    ? Effect.succeed(undefined)
-                    : Effect.fail(fail("unavailable", "Could not read the approval. Try again.")),
-                ),
+                Effect.catchTags({
+                  HandoffError: (error) =>
+                    error.reason === "not_found"
+                      ? Effect.succeed(undefined)
+                      : Effect.fail(fail("unavailable", "Could not read the approval. Try again.")),
+                }),
               );
       switch (handoff?.state) {
         case "declined":

@@ -114,9 +114,8 @@ type LaunchOptions = {
   readonly registerInterrupted?: boolean;
   readonly goatclawRole?: "issue-sweeper";
   readonly references?: boolean;
-  readonly launchError?:
-    | SshRemoteDispatch.SshRemoteDispatchError
-    | RemoteDispatchCoordinator.RemoteDispatchError;
+  readonly dispatchError?: SshRemoteDispatch.SshRemoteDispatchError;
+  readonly coordinationError?: RemoteDispatchCoordinator.RemoteDispatchError;
 };
 
 /** Calls goat_ssh_thread_launch over mocks; returns its last response and what it asked for. */
@@ -211,28 +210,36 @@ const launchRaw = (options: LaunchOptions = {}) =>
         validateLaunchAttachments: (requested) => Effect.succeed(requested),
         launchThread: (input, beforeLaunch) => {
           launchInputs.push(input);
-          return beforeLaunch.pipe(
-            Effect.andThen(options.launchError ?? Effect.succeed(remoteResult)),
-          ) as never;
+          const outcome: Effect.Effect<
+            typeof remoteResult,
+            SshRemoteDispatch.SshRemoteDispatchError
+          > =
+            options.dispatchError === undefined
+              ? Effect.succeed(remoteResult)
+              : Effect.fail(options.dispatchError);
+          return beforeLaunch.pipe(Effect.andThen(outcome));
         },
       }),
       // A calling thread launches through the report coordinator, which wraps the SSH launch.
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
-        launch: (input, beforeLaunch) =>
-          Effect.sync(() => {
-            deliveries.push(input.delivery);
-            launchInputs.push(input.launch);
-          }).pipe(
-            Effect.andThen(beforeLaunch),
-            Effect.andThen(
-              options.launchError ??
-                Effect.succeed({
+        launch: (input, beforeLaunch) => {
+          const failure = options.coordinationError ?? options.dispatchError;
+          const outcome: Effect.Effect<
+            { correlationId: string; launch: typeof remoteResult; reportsSupported: boolean },
+            RemoteDispatchCoordinator.RemoteDispatchError | SshRemoteDispatch.SshRemoteDispatchError
+          > =
+            failure === undefined
+              ? Effect.succeed({
                   correlationId: "rr-test",
                   launch: remoteResult,
                   reportsSupported: true,
-                }),
-            ),
-          ),
+                })
+              : Effect.fail(failure);
+          return Effect.sync(() => {
+            deliveries.push(input.delivery);
+            launchInputs.push(input.launch);
+          }).pipe(Effect.andThen(beforeLaunch), Effect.andThen(outcome));
+        },
       }),
       Layer.mock(LaunchWatchService.LaunchWatchService)({
         register: (input) =>
@@ -353,7 +360,7 @@ it.effect("keeps the dispatch reason and whether the launch may have started", (
     });
     // A calling thread launches through the report coordinator; an outside client directly.
     for (const outsideClient of [false, true]) {
-      const { response } = yield* launchRaw({ launchError: uncertain, outsideClient });
+      const { response } = yield* launchRaw({ dispatchError: uncertain, outsideClient });
       expect(response, `outsideClient=${outsideClient}`).toMatchObject({
         code: "orchestration_error",
         message: uncertain.message,
@@ -363,7 +370,7 @@ it.effect("keeps the dispatch reason and whether the launch may have started", (
     }
 
     const refused = yield* launchRaw({
-      launchError: new SshRemoteDispatch.SshRemoteDispatchError({
+      dispatchError: new SshRemoteDispatch.SshRemoteDispatchError({
         reason: "remote_refused",
         message: "box refused: this credential cannot launch threads.",
         remoteCode: "capability_denied",
@@ -377,7 +384,7 @@ it.effect("keeps the dispatch reason and whether the launch may have started", (
 
     // Recording the dispatch can fail after the remote accepted the launch.
     const unrecorded = yield* launchRaw({
-      launchError: new RemoteDispatchCoordinator.RemoteDispatchError({ stage: "storage" }),
+      coordinationError: new RemoteDispatchCoordinator.RemoteDispatchError({ stage: "storage" }),
     });
     expect(unrecorded.response).toMatchObject({
       code: "orchestration_error",
