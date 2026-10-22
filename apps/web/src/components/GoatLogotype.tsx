@@ -11,34 +11,21 @@ const INK_VIEWBOX = [
   GOAT_MARK_INK_BOX.height,
 ].join(" ");
 
-// The mark's ink is as tall as the wordmark's capitals, which are 8/11 of the font size.
-const markClassName = { label: "h-2", title: "h-4" } as const;
-
-/** The GOAT mark beside the pixel wordmark. The letters truncate when squeezed. */
-export function GoatLogotype({
-  size = "title",
-  className,
-}: {
-  size?: keyof typeof markClassName;
-  className?: string;
-}) {
+/**
+ * The GOAT mark beside the pixel wordmark. The solid mark is drawn 14px tall, a little under the
+ * 16px capitals, so it reads the same weight as the one-pixel strokes. The letters truncate when
+ * squeezed.
+ */
+export function GoatLogotype({ className }: { className?: string }) {
   return (
     <span
       role="img"
       aria-label="GOAT"
-      className={cn(
-        "inline-flex min-w-0 items-center",
-        size === "title" ? "gap-2" : "gap-1",
-        className,
-      )}
+      className={cn("inline-flex min-w-0 items-center gap-2", className)}
     >
-      <GoatWordmark
-        aria-hidden
-        viewBox={INK_VIEWBOX}
-        className={cn(markClassName[size], "w-auto shrink-0")}
-      />
+      <GoatWordmark aria-hidden viewBox={INK_VIEWBOX} className="h-3.5 w-auto shrink-0" />
       <span className="min-w-0 truncate">
-        <PixelText size={size}>GOAT</PixelText>
+        <PixelText size="title">GOAT</PixelText>
       </span>
     </span>
   );
