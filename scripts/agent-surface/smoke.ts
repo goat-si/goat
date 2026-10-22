@@ -13,7 +13,8 @@
  * annotations and closed schemas, refusal of unknown arguments, and that every safe read answers
  * with a result or a coded error. When the server offers goat_call, goat_eval or goat_describe
  * (docs/internals/agent-surface.md#rollout, steps 5 and 11) it also checks that a call through them
- * matches the direct call and that goat_eval enforces its call cap. Exit 0 when nothing failed.
+ * matches the direct call, that goat_eval accepts 32 calls and refuses 33, and that the
+ * served /llms.txt names every listed path. Exit 0 when nothing failed.
  */
 type Json =
   | null
@@ -238,28 +239,44 @@ const main = async (): Promise<ReadonlyArray<Check>> => {
     check("goat_call matches direct calls", failures);
   }
 
-  if (!listedNames.has("goat_eval"))
-    check(
-      "goat_eval enforces its call cap",
-      [],
-      "goat_eval is not offered (rollout step 11, gated)",
-    );
-  else {
-    const call = { call: "environment.read", args: {} };
-    const tooMany = { seq: Array.from({ length: 33 }, () => call) };
+  if (!listedNames.has("goat_eval")) {
+    for (const name of ["goat_eval enforces its call cap", "goat_eval matches direct calls"])
+      check(name, [], "goat_eval is not offered (rollout step 11, gated)");
+  } else {
+    const envelopeStatus = (result: CallResult) =>
+      (result.structuredContent as JsonObject | undefined)?.["status"];
+    const program = (count: number) => ({
+      seq: Array.from({ length: count }, () => ({ call: "environment.read", args: {} })),
+    });
+    const atCap = await callTool("goat_eval", { program: program(32) });
     const [first, second] = [
-      await callTool("goat_eval", { program: tooMany }),
-      await callTool("goat_eval", { program: tooMany }),
+      await callTool("goat_eval", { program: program(33) }),
+      await callTool("goat_eval", { program: program(33) }),
     ];
-    const failures: Array<string> = [];
-    if (
-      first.isError !== true &&
-      (first.structuredContent as JsonObject | undefined)?.["status"] !== "error"
-    )
-      failures.push("33 calls were accepted");
+    const capFailures: Array<string> = [];
+    // A cap that refuses everything would pass the over-limit case alone.
+    if (atCap.isError === true || envelopeStatus(atCap) !== "ok")
+      capFailures.push(`32 calls were refused: ${resultText(atCap).slice(0, 120)}`);
+    if (first.isError !== true && envelopeStatus(first) !== "error")
+      capFailures.push("33 calls were accepted");
     if (resultText(first) !== resultText(second))
-      failures.push("the same over-limit program failed differently");
-    check("goat_eval enforces its call cap", failures);
+      capFailures.push("the same over-limit program failed differently");
+    check("goat_eval enforces its call cap", capFailures);
+
+    const parityFailures: Array<string> = [];
+    for (const [name, args] of SAFE_READS) {
+      const entry = byName.get(name);
+      if (entry === undefined || !direct.has(name)) continue;
+      const result = await callTool("goat_eval", { program: { call: entry.path, args } });
+      const envelope = result.structuredContent as JsonObject | undefined;
+      const viaEval =
+        envelope?.["status"] === "ok"
+          ? "ok"
+          : `error:${String((envelope?.["error"] as JsonObject | undefined)?.["reason"] ?? "")}`;
+      if (viaEval !== direct.get(name))
+        parityFailures.push(`${entry.path}: direct ${direct.get(name)}, goat_eval ${viaEval}`);
+    }
+    check("goat_eval matches direct calls", parityFailures);
   }
 
   if (!listedNames.has("goat_describe"))
@@ -277,6 +294,30 @@ const main = async (): Promise<ReadonlyArray<Check>> => {
       if (described.isError === true) failures.push(`${entry.path}: ${outcome(described)}`);
     }
     check("goat_describe covers every listed tool", failures);
+  }
+
+  // Served reference (design D14): the index names every path this credential can use.
+  // A dev server hands unknown paths to the web app, so only a plain-text 200 counts as served.
+  const llmsCheck = "served /llms.txt names every listed path";
+  const llms = await fetch(new URL("/llms.txt", endpoint), {
+    headers: { authorization: authorization! },
+    redirect: "manual",
+  }).catch((error: unknown) => String(error));
+  if (typeof llms === "string") check(llmsCheck, [`request failed: ${llms}`]);
+  else if (
+    llms.status !== 200 ||
+    !(llms.headers.get("content-type") ?? "").startsWith("text/plain")
+  )
+    check(llmsCheck, [], `/llms.txt is not served yet (HTTP ${llms.status})`);
+  else {
+    const index = await llms.text();
+    check(
+      llmsCheck,
+      listed.flatMap((tool) => {
+        const entry = byName.get(tool.name);
+        return entry === undefined || index.includes(entry.path) ? [] : [entry.path];
+      }),
+    );
   }
   return checks;
 };
