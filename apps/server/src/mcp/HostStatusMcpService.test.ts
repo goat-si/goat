@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import { expect, it } from "@effect/vitest";
@@ -190,7 +191,7 @@ const run = <A, E>(
         projectProviders: (providers) => Effect.succeed(providers),
       }),
     ),
-    Layer.provide(HostThreadsMcpService.layer),
+    Layer.provide(HostThreadsMcpService.layer.pipe(Layer.provide(layerNoFleetSync))),
     Layer.provide(
       Layer.mock(ThreadResultService.ThreadResultService)({
         forRun: () => Effect.succeed(null),

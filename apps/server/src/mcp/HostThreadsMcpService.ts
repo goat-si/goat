@@ -270,7 +270,8 @@ const make = Effect.gen(function* () {
   const coordinator = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
   // Only words an error better, so a layer without report bindings goes without.
   const reports = yield* Effect.serviceOption(RemoteReportService.RemoteReportService);
-  const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
+  // Required: an optional lookup resolved at layer build silently refused every profiled send.
+  const fleet = yield* FleetSync.GoatclawFleetSync;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const launchWatches = yield* LaunchWatchService.LaunchWatchService;
   const replicas = yield* ThreadReplicaService.ThreadReplicaService;
@@ -827,14 +828,14 @@ const make = Effect.gen(function* () {
               });
         const ceiling = admission?.ceiling;
         if (host !== undefined && admission !== undefined && ceiling !== undefined) {
-          const reach = Option.isNone(fleet) ? undefined : yield* fleet.value.ensure(host);
-          if (reach?.enforcesCeilings !== true) {
+          const reach = yield* fleet.ensure(host);
+          if (!reach.enforcesCeilings) {
             yield* admission.settle(false);
             return yield* failure(
               "capability_denied",
-              reach?.sync.state === "outdated"
+              reach.sync.state === "outdated"
                 ? `GOAT on ${host} is too old to enforce goatclaw permission ceilings, so this send was not delivered. Update GOAT on ${host}.`
-                : `Could not confirm that GOAT on ${host} enforces goatclaw permission ceilings, so this send was not delivered${reach?.sync.message === undefined ? "." : `: ${reach.sync.message}`}`,
+                : `Could not confirm that GOAT on ${host} enforces goatclaw permission ceilings, so this send was not delivered${reach.sync.message === undefined ? "." : `: ${reach.sync.message}`}`,
             );
           }
         }

@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../../goatclaw/FleetSync.testkit.ts";
 import * as RepositoryReferenceMcpService from "../RepositoryReferenceMcpService.ts";
 import * as RepositoryLaunchMcpService from "../RepositoryLaunchMcpService.ts";
 import * as ThreadReplicaService from "../ThreadReplicaService.ts";
@@ -100,6 +101,7 @@ import { ThreadToolkit } from "./thread/tools.ts";
 import { WorktreeToolkit } from "./worktree/tools.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
+  Layer.provide(layerNoFleetSync),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
 );
@@ -117,6 +119,7 @@ const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadR
 // A service provided here shadows a test's own mock, so tests that stub the
 // provider registry start from this layer.
 const layerThreadToolkitWithoutProviders = McpHttpServer.layerThreadToolkit.pipe(
+  Layer.provide(layerNoFleetSync),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
   Layer.provide(ServerSettings.layerTest()),
@@ -1646,6 +1649,7 @@ it.effect("pending toolkit host routing preserves target authority", () =>
     const localTargets: Array<ThreadId> = [];
     const remoteId = ThreadId.make("remote-thread");
     const dependencies = McpHttpServer.layerThreadToolkit.pipe(
+      Layer.provide(layerNoFleetSync),
       Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
       Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
       Layer.provide(ServerSettings.layerTest()),

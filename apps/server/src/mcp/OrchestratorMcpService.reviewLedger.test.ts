@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
@@ -191,7 +192,10 @@ const serviceLayer = ({ orchestrator, store }: Effect.Success<ReturnType<typeof 
     }),
     Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({ callHostTool: () => Effect.succeed({}) }),
   );
-  return OrchestratorMcpService.layer.pipe(Layer.provide(dependencies));
+  return OrchestratorMcpService.layer.pipe(
+    Layer.provide(layerNoFleetSync),
+    Layer.provide(dependencies),
+  );
 };
 
 it.effect.each([false, true])(

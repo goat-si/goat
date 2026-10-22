@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
@@ -125,6 +126,7 @@ const runSearch = (
       }),
   });
   const hostLayer = HostThreads.layer.pipe(
+    Layer.provide(layerNoFleetSync),
     Layer.provide(
       Layer.mock(ThreadResultService.ThreadResultService)({
         forRun: () => Effect.succeed(null),

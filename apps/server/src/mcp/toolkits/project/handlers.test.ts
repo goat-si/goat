@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../../../goatclaw/FleetSync.testkit.ts";
 import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as ThreadReplicaService from "../../ThreadReplicaService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -1104,6 +1105,7 @@ it.effect("lists and reads another machine's projects through that machine's own
       ),
     );
     const dependencies = HostThreadsMcpService.layer.pipe(
+      Layer.provide(layerNoFleetSync),
       Layer.provide(Layer.mock(ThreadResults.ThreadResultService)({})),
       Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
       Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
