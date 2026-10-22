@@ -660,6 +660,61 @@ it.effect("counts live native subagents, nested ones included, against maxLanes"
   }).pipe(Effect.provide(fixture())),
 );
 
+it.effect(
+  "delegated descendants share the root lane budget without sharing reservation ownership",
+  () =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const sql = yield* SqlClient.SqlClient;
+      yield* seed("root", "auto");
+      for (const [parent, child] of [
+        ["root", "child"],
+        ["child", "grandchild"],
+      ]) {
+        yield* profiles.claim(threadScope(parent!), {
+          id: child!,
+          childThreadId: ThreadId.make(child!),
+          runtimeMode: "auto",
+        });
+        yield* seed(child!, "auto");
+        yield* sql`INSERT INTO orchestration_v2_projection_subagents
+        (subagent_id, thread_id, child_thread_id, parent_node_id, provider, origin, status, updated_at, payload_json)
+        VALUES (${child!}, ${parent!}, ${child!}, 'node', 'codex', 'app_owned', 'running', '2026-10-23', '{}')`;
+      }
+      yield* profiles.claim(threadScope("grandchild"), { id: "third", runtimeMode: "auto" });
+      const denied = yield* profiles
+        .claim(threadScope("child"), {
+          id: "fourth",
+          runtimeMode: "auto",
+        })
+        .pipe(Effect.result);
+      expect(denied._tag).toBe("Failure");
+      if (denied._tag === "Failure")
+        expect(denied.failure.message).toContain("permits at most 3 running lanes");
+      expect(
+        (yield* profiles.claim(threadScope("grandchild"), {
+          id: "third",
+          runtimeMode: "auto",
+        })).enabled,
+      ).toBe(true);
+      expect(
+        (yield* profiles
+          .claim(threadScope("root"), {
+            id: "third",
+            runtimeMode: "auto",
+          })
+          .pipe(Effect.flip)).message,
+      ).toContain("belongs to another caller");
+      yield* profiles.release("third");
+      expect(
+        (yield* profiles.claim(threadScope("root"), {
+          id: "replacement",
+          runtimeMode: "auto",
+        })).enabled,
+      ).toBe(true);
+    }).pipe(Effect.provide(fixture())),
+);
+
 it.effect("native subagent limits follow the thread's live profile and fail closed", () =>
   Effect.gen(function* () {
     const profiles = yield* PermissionProfiles;
@@ -687,4 +742,68 @@ it.effect("native subagent limits follow the thread's live profile and fail clos
     yield* settings.updateSettings({ goatclaw: { enabled: false } });
     expect(yield* profiles.nativeSubagentLimit(ThreadId.make("child"))).toBeUndefined();
   }).pipe(Effect.provide(fixture("manager"))),
+);
+
+it.effect(
+  "counts native lanes under delegated children and keeps the narrower live lane ceiling",
+  () =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const sql = yield* SqlClient.SqlClient;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* seed("root", "auto");
+      yield* profiles.claim(threadScope("root"), {
+        id: "child",
+        childThreadId: ThreadId.make("child"),
+        runtimeMode: "auto",
+      });
+      yield* seed("child", "auto");
+      yield* sql`INSERT INTO orchestration_v2_projection_subagents
+      (subagent_id, thread_id, child_thread_id, parent_node_id, provider, origin, status, updated_at, payload_json)
+      VALUES ('delegated', 'root', 'child', 'node', 'codex', 'app_owned', 'running', '2026-10-23', '{}'),
+             ('native', 'child', 'native-child', 'node', 'codex', 'provider_native', 'running', '2026-10-23', '{}'),
+             ('nested', 'native-child', NULL, 'node', 'codex', 'provider_native', 'waiting', '2026-10-23', '{}')`;
+      for (const caller of ["root", "child"]) {
+        expect(
+          (yield* profiles
+            .claim(threadScope(caller), { id: `extra:${caller}`, runtimeMode: "auto" })
+            .pipe(Effect.flip)).message,
+        ).toContain("permits at most 3 running lanes");
+      }
+      yield* sql`UPDATE orchestration_v2_projection_subagents SET status = 'completed' WHERE subagent_id IN ('native', 'nested')`;
+      const policy = (yield* settings.getSettings).goatclaw;
+      yield* settings.updateSettings({
+        goatclaw: {
+          profiles: { ...policy.profiles, worker: { ...policy.profiles.worker!, maxLanes: 1 } },
+        },
+      });
+      expect(
+        (yield* profiles
+          .claim(threadScope("child"), { id: "narrowed", runtimeMode: "auto" })
+          .pipe(Effect.flip)).message,
+      ).toContain("permits at most 1 running lanes");
+      yield* seed("unrelated", "auto");
+      expect(
+        (yield* profiles.claim(threadScope("unrelated"), { id: "unrelated", runtimeMode: "auto" }))
+          .enabled,
+      ).toBe(true);
+    }).pipe(Effect.provide(fixture())),
+);
+
+it.effect("refuses cyclic delegation ancestry without admitting another lane", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    const sql = yield* SqlClient.SqlClient;
+    yield* seed("a", "auto");
+    yield* sql`INSERT INTO orchestration_v2_projection_subagents
+      (subagent_id, thread_id, child_thread_id, parent_node_id, provider, origin, status, updated_at, payload_json)
+      VALUES ('a-to-b', 'a', 'b', 'node', 'codex', 'app_owned', 'running', '2026-10-23', '{}'),
+             ('b-to-a', 'b', 'a', 'node', 'codex', 'app_owned', 'running', '2026-10-23', '{}')`;
+    expect(
+      (yield* profiles
+        .claim(threadScope("a"), { id: "cycle", runtimeMode: "auto" })
+        .pipe(Effect.flip)).code,
+    ).toBe("capability_denied");
+    expect(yield* sql`SELECT id FROM goatclaw_lane_reservations`).toEqual([]);
+  }).pipe(Effect.provide(fixture())),
 );

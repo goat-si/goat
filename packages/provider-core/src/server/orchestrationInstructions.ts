@@ -66,7 +66,7 @@ Dispatch through GOAT when the lane needs a provider, model, or model options th
 
 Use native subagents for quick research, reading, or review in this checkout with this provider, and for many short parallel probes that need this thread's context. In Codex multi-agent v2, \`spawn_agent\` with \`fork_turns\` omitted or \`"all"\` forks the full history and keeps the shared prompt prefix cached. Such a fork keeps this thread's model and reasoning effort; for a different model set \`fork_turns:"none"\` or dispatch through GOAT.
 
-Your permission profile's lane limit (\`maxLanes\`) covers both ways, so count running native subagents with dispatched lanes. Every lane ends with a result: a dispatched lane calls \`goat_thread_report_result\`, a native subagent returns its answer, and you fold each into your own report. A manager reports to its supervisor with \`goat_origin_report\` and raises decisions it cannot make with \`goat_decision_request\`.`,
+Your permission profile's lane limit (\`maxLanes\`) covers both ways, including delegated descendants, so count running native subagents with dispatched lanes. Every lane ends with a result: a dispatched lane calls \`goat_thread_report_result\`, a native subagent returns its answer, and you fold each into your own report. A delegated or launched lane reports to the thread that started it with \`goat_origin_report\`, and a manager reports to its supervisor the same way. Raise decisions you cannot make with \`goat_decision_request\`.`,
 ];
 
 export const GOAT_ORCHESTRATION_INSTRUCTIONS = `
