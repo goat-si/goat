@@ -557,30 +557,51 @@ it.effect("a role launch binds the child under the role's profile, narrowed by t
       id: "sweeper",
       childThreadId: ThreadId.make("sweeper"),
       runtimeMode: "full-access",
-      profileId: "worker",
+      role: "issue-sweeper",
     });
     yield* seed("sweeper");
     expect(yield* profiles.resolve(threadScope("sweeper"))).toMatchObject({
       profile: { id: "worker", capabilities: BUILTIN_PERMISSION_PROFILES.worker!.capabilities },
       runtimeMode: "auto",
     });
-    // A worker caller cannot hand a merge-manager role the merge capability it lacks.
+    // A worker caller cannot start a merge manager: narrowing would drop the merge its brief asks for.
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* settings.updateSettings({ goatclaw: { defaultProfile: "worker" } });
+    const refused = yield* profiles
+      .claim(outside, {
+        id: "merger",
+        childThreadId: ThreadId.make("merger"),
+        runtimeMode: "full-access",
+        role: "merge-manager",
+      })
+      .pipe(Effect.flip);
+    expect(refused).toMatchObject({
+      code: "capability_denied",
+      message: "A merge-manager launch needs pr.merge, which this caller's profile does not allow.",
+    });
+    const sql = yield* SqlClient.SqlClient;
+    expect(yield* sql`SELECT id FROM goatclaw_lane_reservations WHERE id = 'merger'`).toEqual([]);
+    expect(
+      yield* sql`SELECT thread_id FROM goatclaw_thread_profiles WHERE thread_id = 'merger'`,
+    ).toEqual([]);
+    // An owner caller can: the child holds merge-manager's capabilities, pr.merge included.
+    yield* settings.updateSettings({ goatclaw: { defaultProfile: "owner" } });
     const granted = yield* profiles.claim(outside, {
       id: "merger",
       childThreadId: ThreadId.make("merger"),
       runtimeMode: "full-access",
-      profileId: "merge-manager",
+      role: "merge-manager",
     });
-    expect(granted.profile.id).toBe("merge-manager");
-    expect(granted.profile.capabilities).not.toContain("pr.merge");
-    expect(granted.runtimeMode).toBe("auto");
+    expect(granted.profile).toMatchObject({ id: "merge-manager" });
+    expect(granted.profile.capabilities).toContain("pr.merge");
+    const { "merge-manager": _removed, ...remaining } = (yield* settings.getSettings).goatclaw
+      .profiles;
+    yield* settings.updateSettings({ goatclaw: { profiles: remaining } });
     expect(
       (yield* profiles
-        .claim(outside, { id: "ghost", runtimeMode: "auto", profileId: "missing" })
+        .claim(outside, { id: "ghost", runtimeMode: "auto", role: "merge-manager" })
         .pipe(Effect.flip)).message,
-    ).toContain("missing does not exist");
+    ).toContain("merge-manager does not exist");
   }).pipe(Effect.provide(fixture("manager"))),
 );
 
@@ -589,7 +610,7 @@ it.effect("role launches and bindings stop while goatclaw is off", () =>
     const profiles = yield* PermissionProfiles;
     const sql = yield* SqlClient.SqlClient;
     const error = yield* profiles
-      .claim(outside, { id: "role", runtimeMode: "auto", profileId: "worker" })
+      .claim(outside, { id: "role", runtimeMode: "auto", role: "issue-sweeper" })
       .pipe(Effect.flip);
     expect(error.code).toBe("capability_denied");
     yield* profiles.bind(ThreadId.make("bot-turn"), "owner", "channel:owner");
@@ -649,7 +670,7 @@ it.effect("native subagent limits follow the thread's live profile and fail clos
       id: "child",
       childThreadId: ThreadId.make("child"),
       runtimeMode: "full-access",
-      profileId: "owner",
+      role: "supervisor",
     });
     expect(yield* profiles.nativeSubagentLimit(ThreadId.make("child"))).toBe(6);
     const policy = (yield* settings.getSettings).goatclaw;

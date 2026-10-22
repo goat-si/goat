@@ -1278,6 +1278,59 @@ it.effect("shows the fetch diagnosis when preparing a worktree from origin fails
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("keeps the redacted fetch output with a preparation failure", () => {
+  const harness = makeHarness({
+    fetchWorktreeBaseCommit: (input) =>
+      Effect.gen(function* () {
+        yield* input.onOutputLine?.("Receiving objects:  12% (240/2000)") ?? Effect.void;
+        yield* input.onOutputLine?.("Receiving objects:  45% (900/2000)") ?? Effect.void;
+        yield* (
+          input.onOutputLine?.(
+            "error: RPC failed; https://bot:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/o/r.git",
+          ) ?? Effect.void
+        );
+        return yield* new GitCommandError({
+          operation: "GitVcsDriver.fetchWorktreeBase",
+          command: "git",
+          cwd: project.workspaceRoot,
+          reason: "timed_out",
+          detail: "Git command timed out.",
+        });
+      }),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const launched = yield* launches.launch(
+      launchInput({
+        command: "command:launch:fetch-log",
+        thread: "thread:launch:fetch-log",
+        message: "Start from origin",
+        workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
+      }),
+    );
+    yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
+      Stream.filter(
+        (stored) => stored.event.type === "run.updated" && stored.event.payload.status === "failed",
+      ),
+      Stream.runHead,
+    );
+    const projection = yield* threads.getThreadProjection(launched.threadId);
+    const failure = projection.turnItems.find((item) => item.type === "error")?.failure;
+    assert.deepStrictEqual(failure?.log?.split("\n"), [
+      "Fetching main from its remote.",
+      "Receiving objects:  45% (900/2000)",
+      "error: RPC failed; https://***@github.com/o/r.git",
+    ]);
+    assert.equal(failure?.retryable, true);
+    const preparation = projection.turnItems.find((item) => item.type === "command_execution");
+    assert.include(
+      preparation?.type === "command_execution" ? (preparation.output ?? "") : "",
+      "Receiving objects:  45% (900/2000)",
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect.each(["fails", "is interrupted"] as const)(
   "holds a message queued during setup when the workspace preparation %s",
   (ending) =>

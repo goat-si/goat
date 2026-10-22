@@ -625,12 +625,27 @@ With `host`, a host whose GOAT predates the tool is read with a one-item
 `goat_thread_read` instead, which cannot name the request kind and reports
 `waiting`.
 
+`failure` explains a run that failed before its agent's first message: during
+workspace preparation (Git fetch, worktree checkout, setup script) or when its
+provider refused to start it. It carries the error class, the message, and for a
+preparation the last lines of its redacted log. The launch watch sends the same
+facts, with a suggested action, to the launching thread when such a run ends; for
+a host whose GOAT predates `failure` it falls back to `lastError`.
+
 ### `goat_thread_interrupt`
 
 Interrupts a selected active run through the normal V2 `run.interrupt` command.
 Without `runId`, it selects the newest interruptible run. A terminal run is
 returned unchanged, and a thread with no active provider turn returns
 `no_active_run`.
+
+### `goat_thread_retry`
+
+Runs the workspace preparation of a failed run again, the same as Retry on the
+failure in the thread. Only a run whose preparation failed qualifies
+(`failure.canRetry`); any other failed run is refused with `invalid_request`,
+and a new `goat_thread_send` is the way forward there. The launch watch reports
+the retried run like the original.
 
 ## Delegated Task Lifecycle
 

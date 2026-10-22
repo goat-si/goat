@@ -20,6 +20,8 @@ import {
   OrchestratorMcpThreadWatchListResult,
   OrchestratorMcpThreadWatchResult,
   type OrchestratorMcpThreadInterruptInput,
+  type OrchestratorMcpThreadRetryInput,
+  OrchestratorMcpThreadRetryResult,
   type OrchestratorMcpThreadListInput,
   type OrchestratorMcpThreadListItem,
   type OrchestratorMcpThreadReadInput,
@@ -123,6 +125,7 @@ const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 const decodeWait = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
 const decodeSend = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendResult);
 const decodeInterrupt = Schema.decodeUnknownEffect(OrchestratorMcpThreadInterruptResult);
+const decodeRetry = Schema.decodeUnknownEffect(OrchestratorMcpThreadRetryResult);
 const decodeStatus = Schema.decodeUnknownEffect(OrchestratorMcpThreadStatusResult);
 
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
@@ -195,6 +198,10 @@ export interface HostThreadsMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadInterruptInput,
   ) => Effect.Effect<OrchestratorMcpThreadInterruptResult, OrchestratorMcpFailure>;
+  readonly retryThread: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpThreadRetryInput,
+  ) => Effect.Effect<OrchestratorMcpThreadRetryResult, OrchestratorMcpFailure>;
   /**
    * Calls one of a host's own read-only tools, such as goat_project_list, and
    * decodes the answer as `decode` reads that tool's result, tagged with the host.
@@ -924,6 +931,19 @@ const make = Effect.gen(function* () {
               writes: true,
             },
             decodeInterrupt,
+          ),
+    retryThread: (scope, input) =>
+      input.host === undefined
+        ? local.retryThread(scope, input)
+        : onHost(
+            scope,
+            {
+              host: input.host,
+              tool: "goat_thread_retry",
+              arguments: withoutHost(input),
+              writes: true,
+            },
+            decodeRetry,
           ),
     readOnHost: (scope, input, decode) => onHost(scope, { ...input, writes: false }, decode),
     reconcileCheckpoint: (scope, input) => replicas.reconcile(input, replicaAuthorization(scope)),

@@ -222,6 +222,13 @@ const handlers = {
       return yield* service.threadStatus(scope, input);
     }),
   ),
+  goat_thread_retry: McpToolAccess.writesThreads(localTargets, (input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.retryThread(scope, input);
+    }),
+  ),
   goat_thread_replication_set: McpToolAccess.writesEnvironment((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;

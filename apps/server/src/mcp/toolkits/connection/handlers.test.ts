@@ -23,7 +23,7 @@ import * as HubNodes from "../../../hubNodes/HubNodes.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
-import { liveThreadsLayer } from "../../McpToolAccess.testkit.ts";
+import { liveThreadsLayer, layerPermissionProfilesOff } from "../../McpToolAccess.testkit.ts";
 import * as Handlers from "./handlers.ts";
 import { ConnectionToolkit } from "./tools.ts";
 
@@ -633,6 +633,7 @@ it.effect("production registration refuses undeclared arguments before invoking 
   }).pipe(
     Effect.provide(
       McpHttpServer.layerConnectionToolkit.pipe(
+        Layer.provide(layerPermissionProfilesOff),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provideMerge(liveThreadsLayer),
         Layer.provide(Layer.mock(HubNodes.HubNodes)({})),

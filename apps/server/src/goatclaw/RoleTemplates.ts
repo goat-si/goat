@@ -5,12 +5,23 @@
  *
  * @module RoleTemplates
  */
-import { GOATCLAW_ROLE_PROFILES, type GoatclawRole } from "@goat/contracts";
+import {
+  GOATCLAW_ROLE_PROFILES,
+  type GoatclawRole,
+  OrchestratorMcpFailure,
+  type PermissionCapability,
+  type PermissionProfile,
+} from "@goat/contracts";
 
 export interface GoatclawRoleTemplate {
   readonly role: GoatclawRole;
   readonly title: string;
   readonly profileId: string;
+  /**
+   * What the role's work uses. A launch whose narrowed profile lacks one is refused, so GOAT
+   * never starts a role whose brief asks for something its profile cannot do.
+   */
+  readonly requires: ReadonlyArray<PermissionCapability>;
   readonly preamble: string;
 }
 
@@ -43,6 +54,7 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
   {
     supervisor: {
       title: "goatclaw supervisor",
+      requires: [],
       preamble: [
         "You are the goatclaw supervisor. You read, plan, and ask; the managers you launch do the writing.",
         READ_ONLY,
@@ -52,14 +64,16 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
     },
     "domain-manager": {
       title: "goatclaw domain manager",
+      requires: ["pr.open"],
       preamble: [
         "You are a goatclaw domain manager. You own one goal and see it through.",
         "Plan the goal into lanes and run them with delegate_task, goat_thread_launch, or goat_ssh_thread_launch on a host with room (goat_host_status with placement). Stay within your profile's lane limit and queue the rest. Keep each lane to one problem and one pull request, and read each lane's result with goat_thread_read instead of parsing chat.",
-        "Open pull requests to dev and hand merging to a merge manager; do not merge yourself.",
+        "Open pull requests to dev and do not merge them yourself; ask the supervisor, or the person through goat_decision_request, for a merge manager.",
       ].join("\n"),
     },
     "merge-manager": {
       title: "goatclaw merge manager",
+      requires: ["pr.merge"],
       preamble: [
         "You are the goatclaw merge manager. Merge one pull request at a time.",
         "Merge a pull request only when goat-ci-result is SUCCESS on its exact current head, it is not CONFLICTING, and no review requests changes. Re-read the head and checks right before merging. Skip anything else and say why.",
@@ -70,6 +84,7 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
     },
     "issue-sweeper": {
       title: "goatclaw issue sweeper",
+      requires: ["pr.open"],
       preamble: [
         "You are the goatclaw issue sweeper. Triage open issues and fix the small ones.",
         "For each issue: confirm it against dev, then label it, ask for what is missing, close it as a duplicate or already fixed with a comment naming the evidence, or fix it. A fix is one problem in one pull request to dev with a focused test. Leave anything that needs a product decision or a large change to the supervisor through the decision inbox.",
@@ -84,6 +99,17 @@ export const goatclawRoleTemplate = (role: GoatclawRole): GoatclawRoleTemplate =
   profileId: GOATCLAW_ROLE_PROFILES[role],
   ...templates[role],
 });
+
+export const missingRoleCapabilities = (role: GoatclawRole, profile: PermissionProfile) =>
+  goatclawRoleTemplate(role).requires.filter(
+    (capability) => !profile.capabilities.includes(capability),
+  );
+
+export const roleRefusal = (role: GoatclawRole, missing: ReadonlyArray<PermissionCapability>) =>
+  new OrchestratorMcpFailure({
+    code: "capability_denied",
+    message: `A ${role} launch needs ${missing.join(", ")}, which this caller's profile does not allow.`,
+  });
 
 /** The text a role's thread receives in front of its task. */
 export const goatclawRoleBrief = (role: GoatclawRole, task: string): string =>

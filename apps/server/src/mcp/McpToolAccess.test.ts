@@ -17,7 +17,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
-import { liveThreadShell } from "./McpToolAccess.testkit.ts";
+import { liveThreadShell, layerPermissionProfilesOff } from "./McpToolAccess.testkit.ts";
 
 const supervisedThreadId = ThreadId.make("thread:supervised");
 const planThreadId = ThreadId.make("thread:plan");
@@ -189,6 +189,7 @@ export const refusedAtCompileTime = () => {
 
 const probeServer = (threads: Layer.Layer<ThreadManagement.ThreadManagementService>) =>
   McpHttpServer.toolkitRegistration(ProbeToolkit, layerProbeHandlers).pipe(
+    Layer.provide(layerPermissionProfilesOff),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(threads),
   );

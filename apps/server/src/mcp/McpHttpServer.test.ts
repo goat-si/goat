@@ -9,6 +9,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -74,6 +75,7 @@ const client = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provideMerge(PreviewAutomationBroker.layer),
@@ -83,6 +85,7 @@ const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
   Layer.provideMerge(NodeServices.layer),
 );
 const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provide(
@@ -172,6 +175,7 @@ const layerRecordingTools = (calls: Array<unknown>) => {
       goat_project_update: record,
     }),
   ).pipe(
+    Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(
       Layer.mergeAll(
@@ -996,6 +1000,7 @@ it.effect("admits provider and OAuth client credentials and points only clients 
           ),
         }),
       ).pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(McpHttpServer.layerMcpTransport),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
@@ -1228,4 +1233,91 @@ it.effect("a refused body that never finishes stops being read at its deadline",
     yield* TestClock.adjust("5 seconds");
     expect(yield* Fiber.join(read)).toBeUndefined();
   }),
+);
+
+it.effect("serves llms.txt whole without a credential and filtered with one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = {
+        environmentId,
+        requestNamespace: "llms",
+        capabilities: new Set<McpInvocationContext.McpCapability>(),
+        issuedAt: 1,
+      };
+      const threadScope: McpInvocationContext.McpThreadInvocationScope = {
+        ...base,
+        thread: {
+          threadId,
+          providerSessionId: "provider-session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+      };
+      const clientScope = (
+        access: McpInvocationContext.McpClientCaller["access"],
+      ): McpInvocationContext.McpInvocationScope => ({
+        ...base,
+        thread: undefined,
+        client: { sessionId: access, label: access, access },
+      });
+      const clients: Record<string, McpInvocationContext.McpInvocationScope> = {
+        "Bearer client.full": clientScope("auto"),
+        "Bearer client.readonly": clientScope("read-only"),
+      };
+      yield* HttpRouter.serve(
+        McpHttpServer.layerLlmsTxtRoute.pipe(
+          Layer.provide(
+            Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+              explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),
+              isRegistryToken: () => false,
+              resolve: (token) => Effect.succeed(token === "threadToken" ? threadScope : undefined),
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+              authenticate: (request) =>
+                Effect.succeed(clients[request.headers.authorization ?? ""]),
+            }),
+          ),
+        ),
+        { disableListenLog: true, disableLogger: true },
+      ).pipe(Layer.build);
+      const httpClient = yield* HttpClient.HttpClient;
+      const paths = (token?: string) =>
+        Effect.gen(function* () {
+          const response = yield* httpClient.get("/llms.txt", {
+            headers: token === undefined ? {} : { authorization: "Bearer " + token },
+          });
+          expect(response.status).toBe(200);
+          expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
+          const body = yield* response.text;
+          return new Set(
+            body
+              .split("\n")
+              .filter((line) => line.startsWith("- "))
+              .map((line) => line.slice(2, line.indexOf(":"))),
+          );
+        });
+
+      const all = yield* paths();
+      expect(all.size).toBe(Object.keys(agentSurfaceRegistry).length);
+
+      const thread = yield* paths("threadToken");
+      expect(thread.has("device.screenshot")).toBe(true);
+      expect(thread.has("permission_profile.sync")).toBe(false);
+
+      const client = yield* paths("client.full");
+      expect(client.has("permission_profile.sync")).toBe(true);
+      expect(client.has("device.screenshot")).toBe(false);
+
+      const reader = yield* paths("client.readonly");
+      expect(reader.has("decision.list")).toBe(true);
+      expect(reader.has("decision.request")).toBe(false);
+
+      const refused = yield* httpClient.get("/llms.txt", {
+        headers: { authorization: "Bearer stale.token" },
+      });
+      expect(refused.status).toBe(401);
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

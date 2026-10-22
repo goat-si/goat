@@ -1,4 +1,5 @@
 import {
+  type GoatclawRole,
   type GoatclawSettings,
   OrchestratorMcpFailure,
   PermissionProfile,
@@ -16,6 +17,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { clientRuntimeModeCeiling, type McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { goatclawRoleTemplate, missingRoleCapabilities, roleRefusal } from "./RoleTemplates.ts";
 
 const modes: ReadonlyArray<RuntimeMode> = [
   "approval-required",
@@ -67,15 +69,18 @@ interface ClaimInput {
   readonly host?: string | undefined;
   readonly worktree?: boolean | undefined;
   readonly forwarded?: PermissionProfile | undefined;
-  /** A stored profile the child runs under, narrowed by the caller's; role launches set it. */
-  readonly profileId?: string | undefined;
+  /**
+   * A role launch: the child runs under the role's stored profile narrowed by the caller's, and
+   * is refused when that lacks a capability the role's work uses.
+   */
+  readonly role?: GoatclawRole | undefined;
   /**
    * A follow-up send to a thread on `host`. Its lane is that thread: a lane it already holds is
    * not counted twice, and no local profile binding is written for a thread that lives elsewhere.
    */
   readonly remoteThreadId?: string | undefined;
 }
-type CheckResult =
+export type CheckResult =
   | { readonly ok: true; readonly effective: PermissionProfileView }
   | { readonly ok: false; readonly reason: string };
 interface CloudApprovalInput {
@@ -178,7 +183,7 @@ const ownerOf = (scope: McpInvocationScope) =>
 const encodeProfile = Schema.encodeSync(Schema.fromJsonString(PermissionProfile));
 const decodeProfile = Schema.decodeUnknownEffect(Schema.fromJsonString(PermissionProfile));
 
-const checkProfile = (
+export const checkProfile = (
   effective: PermissionProfileView,
   capability: PermissionCapability,
   context: CheckContext,
@@ -411,18 +416,21 @@ export const layer = Layer.effect(
     ) {
       const effective = yield* resolve(scope, input.runtimeMode, input.forwarded);
       if (!effective.enabled) {
-        if (input.profileId !== undefined)
+        if (input.role !== undefined)
           return yield* refusal("goatclaw is off, so role launches are unavailable.");
         return effective;
       }
       let granted = effective;
-      if (input.profileId !== undefined) {
+      if (input.role !== undefined) {
+        const { profileId } = goatclawRoleTemplate(input.role);
         const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
-        const named = policy.profiles[input.profileId];
+        const named = policy.profiles[profileId];
         if (named === undefined)
-          return yield* refusal(`Permission profile ${input.profileId} does not exist.`);
+          return yield* refusal(`Permission profile ${profileId} does not exist.`);
         // intersectProfiles keeps its first argument's id, so the child is bound under the role's profile.
         const profile = intersectProfiles(named, effective.profile);
+        const missing = missingRoleCapabilities(input.role, profile);
+        if (missing.length > 0) return yield* roleRefusal(input.role, missing);
         granted = { ...effective, profile, runtimeMode: profile.runtimeModeCeiling };
       }
       const sql = yield* sqlEffect;

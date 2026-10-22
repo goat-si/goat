@@ -5,6 +5,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   CommandId,
   CheckpointId,
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   ProviderInstanceId,
   type ThreadReplicaPayload,
   EnvironmentId,
@@ -71,6 +72,9 @@ interface World {
   readonly escalationMessages: Set<string>;
   readonly escalationReads: Array<ReadonlyArray<string>>;
   readonly assistantMessages: Array<{ runId: RunId; text: string }>;
+  /** The followed thread's runs and error items, for a run that failed before its agent spoke. */
+  runs: Array<Record<string, unknown>>;
+  turnItems: Array<Record<string, unknown>>;
   providerThreads: Array<{ cloudTask?: { attach?: string; tracking: string } }>;
   requests: Array<{ id: string; status: string; kind: string }>;
   subagents: Array<{ origin: string; childThreadId: ThreadId }>;
@@ -144,6 +148,8 @@ const makeWorld = Effect.gen(function* () {
     escalationMessages: new Set(),
     escalationReads: [],
     assistantMessages: [],
+    runs: [],
+    turnItems: [],
     providerThreads: [],
     requests: [],
     subagents: [],
@@ -259,6 +265,8 @@ const layerFor = (world: World, baseDir: string) =>
                 runtimeRequests: world.requests,
                 subagents: world.subagents,
                 providerThreads: world.providerThreads,
+                runs: world.runs,
+                turnItems: world.turnItems,
               } as never;
             }),
           dispatch: (command) => dispatchIn(world, command),
@@ -1142,6 +1150,125 @@ describe("LaunchWatchService", () => {
       expect(world.hostCalls.at(-1)?.ceiling).toBe("approval-required");
       // The transcript tail starts a fixed window before its end and follows its pages.
       expect(readArgs.map((args) => args.afterPosition)).toEqual([undefined, 59, 79]);
+    }),
+  );
+
+  it.effect("tells the launcher why a run failed preparing its workspace, with the log", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      world.runs.push({
+        id: run1,
+        status: "failed",
+        workspacePreparation: { type: "worktree", baseRef: "dev" },
+      });
+      world.turnItems.push({
+        type: "error",
+        status: "failed",
+        runId: run1,
+        ordinal: 2,
+        failure: {
+          class: "unknown",
+          code: ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+          retryable: true,
+          message:
+            "Workspace preparation failed during provision worktree: Git made no progress for 2m 0s. It had already stalled once and was retried.",
+          log: "Fetching dev from its remote.\nReceiving objects:  45% (900/2000)",
+        },
+      });
+      yield* Queue.offer(world.waits, finished(run1, "failed"));
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchLocal(service, run1);
+          const wake = yield* Queue.take(world.delivered);
+          expect(wake.text).toContain(
+            'Launched thread "Fix the flake" (threadId target, this environment) failed while GOAT prepared its workspace, in run run-1 (error class unknown, retryable).',
+          );
+          expect(wake.text).toContain("It had already stalled once and was retried.");
+          expect(wake.text).toContain(
+            "Preparation log (last lines, redacted):\nFetching dev from its remote.\nReceiving objects:  45% (900/2000)",
+          );
+          expect(wake.text).toContain("Suggested action: Git on this machine was slow or stuck");
+          expect(wake.text).toContain('Retry with goat_thread_retry {threadId: "target"}');
+          expect(wake.notification).toMatchObject({
+            outcome: "failed",
+            summary: 'Launched thread "Fix the flake" failed preparing its workspace',
+          });
+          expect(wake.notification?.detail).toContain("Receiving objects:  45%");
+        }),
+      );
+    }),
+  );
+
+  it.effect.each([
+    {
+      host: "an older host",
+      status: {
+        lastError:
+          "Workspace preparation failed during provision worktree: Git command failed in GitVcsDriver.fetchRemote (/repo): Git command timed out.",
+        lastErrorClass: "validation_error",
+      },
+      retry: "Retry it from a GOAT client connected to box",
+    },
+    {
+      host: "an updated host",
+      status: {
+        lastError: "Workspace preparation failed during provision worktree: timed out.",
+        lastErrorClass: "unknown",
+        failure: {
+          runId: run1,
+          stage: "workspace_preparation",
+          errorClass: "unknown",
+          retryable: true,
+          message: "Workspace preparation failed during provision worktree: timed out.",
+          log: "Fetching dev from its remote.",
+          canRetry: true,
+        },
+      },
+      retry: 'Retry with goat_thread_retry {threadId: "target", host: "box"}',
+    },
+  ])("reports a remote run that failed preparing its workspace, from $host", (example) =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      world.hostCall = (call) => {
+        switch (call.tool) {
+          case "goat_thread_wait":
+            return Effect.succeed({
+              threadId: target,
+              runId: run1,
+              status: "failed",
+              timedOut: false,
+            });
+          case "goat_thread_read":
+            return Effect.succeed(remoteRead({ itemCount: 1 }));
+          case "goat_thread_status":
+            return Effect.succeed({
+              threadId: target,
+              title: "Remote fix",
+              phase: "failed",
+              terminal: true,
+              run: { runId: run1, status: "failed" },
+              ...example.status,
+            });
+          default:
+            return Effect.die(new Error("unexpected " + call.tool));
+        }
+      };
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchRemote(service, run1);
+          const wake = yield* Queue.take(world.delivered);
+          expect(wake.text).toContain(
+            "(threadId target, host box) failed while GOAT prepared its workspace, in run run-1",
+          );
+          expect(wake.text).toContain(example.status.lastError);
+          expect(wake.text).toContain("Suggested action: Git on box was slow or stuck");
+          expect(wake.text).toContain(example.retry);
+          expect(wake.notification?.outcome).toBe("failed");
+        }),
+      );
+      expect(world.hostCalls.every(({ call }) => call.writes === false)).toBe(true);
     }),
   );
 

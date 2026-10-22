@@ -101,6 +101,7 @@ import { ThreadToolkit } from "./thread/tools.ts";
 import { WorktreeToolkit } from "./worktree/tools.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provide(layerNoFleetSync),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
@@ -119,6 +120,7 @@ const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadR
 // A service provided here shadows a test's own mock, so tests that stub the
 // provider registry start from this layer.
 const layerThreadToolkitWithoutProviders = McpHttpServer.layerThreadToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provide(layerNoFleetSync),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
@@ -288,6 +290,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_thread_replication_set",
     "goat_thread_report_result",
     "goat_thread_reschedule",
+    "goat_thread_retry",
     "goat_thread_search",
     "goat_thread_send",
     "goat_thread_send_attachments",
@@ -317,7 +320,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(174);
+  expect(names.size).toBe(175);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);
@@ -461,6 +464,7 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
   }).pipe(
     Effect.provide(
       McpHttpServer.layerHtmlToolkit.pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(McpProviderSessions.layer),
         Layer.provide(PreviewBrowser.layer),
@@ -1223,6 +1227,7 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
   }).pipe(
     Effect.provide(
       McpHttpServer.layerAttachmentToolkit.pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(ServerSecretStore.layer),
@@ -1653,6 +1658,7 @@ it.effect("pending toolkit host routing preserves target authority", () =>
     const localTargets: Array<ThreadId> = [];
     const remoteId = ThreadId.make("remote-thread");
     const dependencies = McpHttpServer.layerThreadToolkit.pipe(
+      Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
       Layer.provide(layerNoFleetSync),
       Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
       Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),

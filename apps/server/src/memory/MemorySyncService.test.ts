@@ -6817,6 +6817,7 @@ it.effect.each(["accepted", "rejected"] as const)(
             }).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "unavailable" }))),
         });
         const integrated = McpHttpServer.layerMemoryToolkit.pipe(
+          Layer.provide(McpAccess.layerPermissionProfilesOff),
           Layer.provideMerge(fixture(client)),
           Layer.provideMerge(McpServer.McpServer.layer),
           Layer.provide(McpAccess.liveThreadsLayer),

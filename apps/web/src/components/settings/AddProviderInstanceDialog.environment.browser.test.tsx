@@ -212,22 +212,6 @@ function setup() {
 }
 
 describe("AddProviderInstanceDialog environment routing", () => {
-  it("creates a provider with its default identity without typing", async () => {
-    await using fixture = setup();
-    const { render } = fixture;
-
-    await render();
-    await act(async () => radio("Grok").click());
-    await click("Next");
-    await click("Next");
-    await click("Add and set up");
-    expect(settingsHooks.mutate).toHaveBeenCalledWith({
-      operation: "create",
-      instanceId: "grok",
-      instance: { driver: "grok", enabled: true, displayName: "Grok" },
-    });
-  });
-
   it("shows each provider's install and sign-in state on the provider list", async () => {
     await using fixture = setup();
     const { render } = fixture;
@@ -254,6 +238,11 @@ describe("AddProviderInstanceDialog environment routing", () => {
     await click("Next");
     await click("Next");
     await click("Add and set up");
+    expect(settingsHooks.mutate).toHaveBeenCalledWith({
+      operation: "create",
+      instanceId: "grok",
+      instance: { driver: "grok", enabled: true, displayName: "Grok" },
+    });
 
     expect(signInStep()?.textContent).toContain("remote-device/grok");
     expect(actions.onOpenChange).not.toHaveBeenCalled();
