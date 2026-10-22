@@ -6,6 +6,7 @@ import {
   type ProjectCreatePayload,
   type ProjectUpdatePayload,
   type ProjectSnapshot,
+  type RepositoryIdentity,
   type ThreadId,
 } from "@goat/contracts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
@@ -131,6 +132,13 @@ export class ProjectService extends Context.Service<
       options?: { readonly includeDeleted?: boolean },
     ) => Effect.Effect<Option.Option<Project>, ProjectOperationError>;
     readonly snapshot: Effect.Effect<ProjectSnapshot, ProjectOperationError>;
+    /**
+     * The snapshot reports only cached identities, so a project read before its first lookup, or
+     * after the cache expired, has none. This waits for the lookup.
+     */
+    readonly awaitRepositoryIdentity: (
+      workspaceRoot: string,
+    ) => Effect.Effect<RepositoryIdentity | null>;
     readonly getShell: (
       projectId: ProjectId,
     ) => Effect.Effect<Option.Option<OrchestrationProjectShell>, ProjectOperationError>;
@@ -570,6 +578,7 @@ export const make = Effect.gen(function* () {
     getById,
     getByWorkspaceRoot,
     snapshot,
+    awaitRepositoryIdentity: projectEnrichment.awaitRepositoryIdentity,
     getShell,
     listShells,
   });

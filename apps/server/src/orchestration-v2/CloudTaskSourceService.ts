@@ -17,8 +17,15 @@ export class CloudTaskSourceError extends Schema.TaggedError<CloudTaskSourceErro
       "remote",
       "unpublished",
       "source_restriction",
+      "checkout_mismatch",
       "read",
     ]),
+    /** The branch the caller asked for, when it is the subject of the refusal. */
+    branch: Schema.optional(Schema.String),
+    /** The branch checked out in the project folder. */
+    checkedOut: Schema.optional(Schema.String),
+    /** The push remote that was asked about the branch. */
+    remote: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -31,9 +38,13 @@ export class CloudTaskSourceError extends Schema.TaggedError<CloudTaskSourceErro
       case "remote":
         return "Configure a repository push remote before starting a cloud task.";
       case "unpublished":
-        return "Push this branch before starting a cloud task.";
+        return this.branch === undefined
+          ? "Push this branch before starting a cloud task."
+          : `Branch ${this.branch} is not on ${this.remote ?? "its push remote"}. Push it, or pass a branch that exists there.`;
       case "source_restriction":
         return "This provider requires an existing clean checkout on the selected published branch at its pushed SHA. Local edits, untracked files and unpushed commits cannot be included.";
+      case "checkout_mismatch":
+        return `This provider starts from the project folder, which has ${this.checkedOut} checked out, not ${this.branch}. Check out ${this.branch} there, or omit the branch to start from ${this.checkedOut}.`;
       case "read":
         return "Could not verify the published cloud task source.";
     }
@@ -108,6 +119,14 @@ const make = Effect.gen(function* () {
       restriction === "project-folder" ? local.branch : (requestedBranch ?? local.branch);
     if (!rawBranch || /^[0-9a-f]{40,64}$/i.test(rawBranch))
       return yield* new CloudTaskSourceError({ reason: "branch" });
+    const requested = requestedBranch?.replace(/^refs\/heads\//, "");
+    // The project folder is the source, so another branch would silently start from the checkout.
+    if (restriction === "project-folder" && requested !== undefined && requested !== rawBranch)
+      return yield* new CloudTaskSourceError({
+        reason: "checkout_mismatch",
+        branch: requested,
+        checkedOut: rawBranch,
+      });
     const remotesResult = yield* read(cwd, ["remote"]);
     if (remotesResult.exitCode !== 0 || remotesResult.stdoutTruncated)
       return yield* new CloudTaskSourceError({ reason: "read" });
@@ -190,7 +209,12 @@ const make = Effect.gen(function* () {
       remoteResult.stdout.trim(),
       ref,
     ]);
-    if (published.exitCode === 2) return yield* new CloudTaskSourceError({ reason: "unpublished" });
+    if (published.exitCode === 2)
+      return yield* new CloudTaskSourceError({
+        reason: "unpublished",
+        branch: publishedBranch,
+        remote: `${remote} (${repository})`,
+      });
     if (published.exitCode !== 0 || published.stdoutTruncated) {
       return yield* new CloudTaskSourceError({ reason: "read" });
     }
@@ -200,7 +224,11 @@ const make = Effect.gen(function* () {
       .find((line) => line.split(/\s+/)[1] === ref);
     const sha = row?.split(/\s+/)[0];
     if (!sha || !/^[0-9a-f]{40,64}$/.test(sha)) {
-      return yield* new CloudTaskSourceError({ reason: "unpublished" });
+      return yield* new CloudTaskSourceError({
+        reason: "unpublished",
+        branch: publishedBranch,
+        remote: `${remote} (${repository})`,
+      });
     }
     const head = yield* read(cwd, ["rev-parse", "HEAD"]);
     if (head.exitCode !== 0 || head.stdoutTruncated)

@@ -128,6 +128,7 @@ const layerTest = Layer.mergeAll(RuntimeLayer.layer, RuntimeLayer.layerEventSink
           faviconPath: null,
           repositoryIdentityResolved: false,
         }),
+      awaitRepositoryIdentity: () => Effect.succeed(null),
       invalidate: () => Effect.void,
       subscribeChanges: Effect.never,
     }),

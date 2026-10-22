@@ -633,6 +633,7 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
           faviconPath: null,
           repositoryIdentityResolved: false,
         }),
+      awaitRepositoryIdentity: () => Effect.succeed(null),
       invalidate: () => Effect.void,
       subscribeChanges: Effect.never,
     }),

@@ -44,6 +44,12 @@ import * as CloudAgents from "./CloudAgentService.ts";
 
 const SECRET = "sk-live-0123456789abcdefSECRET";
 const projectId = ProjectId.make("project:goat");
+const GOAT_IDENTITY = {
+  canonicalKey: "github.com/goat-si/goat",
+  locator: { source: "git-remote", remoteName: "origin", remoteUrl: "x" },
+  owner: "goat-si",
+  name: "goat",
+} as const;
 const agent = "bc-1a2b3c4d-5e6f-7a8b-9c0d-112233445566";
 
 const scope = (
@@ -99,6 +105,9 @@ interface World {
     cloudRun: ThreadLaunchMcp.CloudRunLaunch | undefined;
   }>;
   readonly dispatched: Array<unknown>;
+  /** The snapshot's identity cache is cold or expired; only an awaited lookup knows the origin. */
+  coldIdentity: boolean;
+  readonly identityLookups: Array<string>;
 }
 
 const makeWorld = (): World => ({
@@ -110,6 +119,8 @@ const makeWorld = (): World => ({
   hostWrites: [],
   launches: [],
   dispatched: [],
+  coldIdentity: false,
+  identityLookups: [],
 });
 
 const appThread = (threadId: ThreadId, title: string, externalLauncher?: string) =>
@@ -314,20 +325,24 @@ const layerFor = (world: World, profile?: string) => {
       connectedHosts: Effect.sync(() => [...world.hosts]),
     }),
     Layer.mock(Project.ProjectService)({
-      snapshot: Effect.succeed({
-        projects: [
-          {
-            id: projectId,
-            deletedAt: null,
-            repositoryIdentity: {
-              canonicalKey: "github.com/goat-si/goat",
-              locator: { source: "git-remote", remoteName: "origin", remoteUrl: "x" },
-              owner: "goat-si",
-              name: "goat",
-            },
-          },
-        ],
-      } as never),
+      snapshot: Effect.sync(
+        () =>
+          ({
+            projects: [
+              {
+                id: projectId,
+                workspaceRoot: "/fixture/goat",
+                deletedAt: null,
+                repositoryIdentity: world.coldIdentity ? null : GOAT_IDENTITY,
+              },
+            ],
+          }) as never,
+      ),
+      awaitRepositoryIdentity: (workspaceRoot) =>
+        Effect.sync(() => {
+          world.identityLookups.push(workspaceRoot);
+          return GOAT_IDENTITY;
+        }),
     }),
     Layer.mock(ThreadManagement.ThreadManagementService)({
       dispatch: (command) =>
@@ -608,6 +623,35 @@ it.effect("launches on the chosen holder: dry run, a preferred host, and this en
           .launch(scope("full-access"), { ...input, provider: "claudeCloud" }, full)
           .pipe(Effect.flip);
         assert.match(noLogin.message, /No connected host holds a Claude Cloud login/u);
+      }),
+    );
+  }),
+);
+
+it.effect("finds a registered project whose identity cache is cold, with or without a branch", () =>
+  Effect.gen(function* () {
+    const world = makeWorld();
+    world.coldIdentity = true;
+    yield* run(
+      world,
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        const input = { provider: "cursorCloud", repo: "goat-si/goat", prompt: "Probe" } as const;
+        const withBranch = yield* service.launch(
+          scope("full-access"),
+          { ...input, branch: "dev" },
+          full,
+        );
+        const without = yield* service.launch(scope("full-access"), input, full);
+        assert.deepEqual(
+          [withBranch.holder.host, without.holder.host, world.identityLookups],
+          [null, null, ["/fixture/goat", "/fixture/goat"]],
+        );
+        assert.deepEqual(
+          world.launches.map((launch) => launch.input.workspaceStrategy),
+          [{ type: "root", branch: "dev" }, { type: "root" }],
+        );
+        assert.match(withBranch.note ?? "", /from dev;/u);
       }),
     );
   }),

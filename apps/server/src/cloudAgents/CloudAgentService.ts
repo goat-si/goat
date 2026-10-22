@@ -497,10 +497,22 @@ const make = Effect.gen(function* () {
         failure("orchestration_error", "Could not read this environment's projects."),
       ),
     );
-    const project = snapshot.projects.find(
+    const live = snapshot.projects.filter((candidate) => candidate.deletedAt === null);
+    const cached = live.find((candidate) =>
+      projectMatchesRepository(candidate.repositoryIdentity, repo),
+    );
+    if (cached !== undefined) return cached;
+    // A cold or expired identity cache reports no identity; wait for those before refusing.
+    const resolved = yield* Effect.forEach(
+      live.filter((candidate) => candidate.repositoryIdentity === null),
       (candidate) =>
-        candidate.deletedAt === null &&
-        projectMatchesRepository(candidate.repositoryIdentity, repo),
+        projects
+          .awaitRepositoryIdentity(candidate.workspaceRoot)
+          .pipe(Effect.map((repositoryIdentity) => ({ ...candidate, repositoryIdentity }))),
+      { concurrency: 4 },
+    );
+    const project = resolved.find((candidate) =>
+      projectMatchesRepository(candidate.repositoryIdentity, repo),
     );
     if (project === undefined)
       return yield* failure(
@@ -579,7 +591,7 @@ const make = Effect.gen(function* () {
         holder,
         dryRun: false,
         threadId: launched.threadId,
-        note: "The cloud run starts in this thread; goat_cloud_run_list and goat_thread_status follow it.",
+        note: `The cloud run starts in this thread from ${input.branch ?? "the branch checked out in the project folder"}; goat_cloud_run_list and goat_thread_status follow it.`,
       };
     },
   );
