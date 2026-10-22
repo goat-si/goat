@@ -442,6 +442,9 @@ export default defineConfig({
         { paths: [...RESTRICTED_IMPORT_PATHS, RESTRICTED_PULL_REQUEST_GLYPH_IMPORTS] },
       ],
       "goat/no-global-process-runtime": "error",
+      // Files over 1000 lines, non-null assertions, and casts to any only shrink;
+      // oxlint-plugin-goat/code-budgets.json records what exists. docs/operations/code-quality.md
+      "goat/code-budget": "error",
       "goat/no-inline-schema-compile": "warn",
       "goat/no-low-value-comments": "error",
       "goat/no-manual-effect-runtime-in-tests": "error",

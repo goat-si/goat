@@ -151,7 +151,7 @@ service.
 
 Role templates (`apps/server/src/goatclaw/RoleTemplates.ts`) are launch presets over these
 profiles: `goatclawRole` on `goat_thread_launch` and `goat_ssh_thread_launch` puts the role's
-preamble and shared report protocol in front of the message and has `claim` bind the child under
+preamble, lane defaults and shared report protocol in front of the message and has `claim` bind the child under
 the role's stored profile intersected with the caller's, so a role only narrows. The role-to-profile
 map lives in contracts beside the built-ins. Role launches refuse while goatclaw is off, which is how
 turning it off stops new managers while running ones finish. GOAT Bot turns start outside any MCP

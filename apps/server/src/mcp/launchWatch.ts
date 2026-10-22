@@ -5,6 +5,8 @@ import {
   type OrchestrationV2RunStatus,
   ProjectId,
   ModelSelection,
+  OrchestrationV2ProviderFailureClass,
+  OrchestratorMcpRunFailure,
   RunId,
   RuntimeMode,
   ThreadId,
@@ -407,8 +409,13 @@ export function finishedWake(input: {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly excerpt: string | null;
+  /** Why the run failed before its agent's first message, when it did. */
+  readonly failure?: OrchestratorMcpRunFailure | null;
 }): LaunchWatchWake {
   const { watch } = input;
+  if (input.status === "failed" && input.excerpt === null && input.failure != null) {
+    return launchFailedWake({ ...input, failure: input.failure });
+  }
   const name = named(watch, input.title);
   const excerpt = input.excerpt === null ? null : truncate(input.excerpt, EXCERPT_MAX_CHARS);
   const place = [
@@ -430,6 +437,126 @@ export function finishedWake(input: {
       outcome: notificationOutcome(input.status),
       summary: truncate(`${name} ${input.status.replace("_", " ")}`, SUMMARY_MAX_CHARS),
       ...(excerpt === null ? {} : { detail: excerpt }),
+    },
+  };
+}
+
+/**
+ * What a host's goat_thread_status says about a failed run. A host from before
+ * `failure` existed still names the thread's last error, so its launcher hears that much.
+ */
+export const RemoteRunFailureStatus = Schema.Struct({
+  run: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
+  lastError: Schema.NullOr(Schema.String),
+  lastErrorClass: Schema.optional(Schema.NullOr(OrchestrationV2ProviderFailureClass)),
+  failure: Schema.optional(Schema.NullOr(OrchestratorMcpRunFailure)),
+});
+export type RemoteRunFailureStatus = typeof RemoteRunFailureStatus.Type;
+
+const OLDER_HOST_PREPARATION_PREFIX = "Workspace preparation failed";
+
+export function failureFromRemoteStatus(
+  status: RemoteRunFailureStatus,
+  runId: RunId,
+): OrchestratorMcpRunFailure | null {
+  if (status.run?.runId !== runId) return null;
+  if (status.failure !== undefined) return status.failure;
+  if (status.lastError === null) return null;
+  return {
+    runId,
+    stage: status.lastError.startsWith(OLDER_HOST_PREPARATION_PREFIX)
+      ? "workspace_preparation"
+      : "before_first_message",
+    errorClass: status.lastErrorClass ?? "unknown",
+    retryable: null,
+    message: status.lastError,
+    log: null,
+    canRetry: false,
+  };
+}
+
+const AUTH_FAILURE = /authenticat|credential|permission denied|could not read username/i;
+
+/** One concrete next step for a run that failed before its agent started. */
+function suggestedAction(failure: OrchestratorMcpRunFailure, host: string | null): string {
+  const machine = host === null ? "this machine" : host;
+  if (failure.stage === "workspace_preparation") {
+    if (failure.retryable === true || /timed out|no progress|stalled/i.test(failure.message))
+      return `Git on ${machine} was slow or stuck, which a retry usually gets past. If the retry fails the same way, run the same git fetch in that repository on ${machine} to see whether the remote or the local repository is slow.`;
+    if (AUTH_FAILURE.test(failure.message))
+      return `Fix Git credentials or SSH access for that repository on ${machine}, then retry.`;
+    if (/setup script/i.test(failure.message))
+      return "Fix the project's setup script (its output is in the log), then retry.";
+    return `Check the base ref, branch and repository named in the error on ${machine}, then retry or launch again with a corrected workspace.`;
+  }
+  switch (failure.errorClass) {
+    case "usage_limit":
+      return "The provider's usage limit is reached. Launch again after it resets, or with another model.";
+    case "permission_error":
+      return `The provider refused to start. Check its sign-in and permissions on ${machine}, then launch again.`;
+    case "transport_error":
+      return `The provider could not be reached from ${machine}. Launch again once it is reachable.`;
+    case "validation_error":
+      return "The provider rejected the request, often the model or its options. Launch again with a supported model.";
+    default:
+      return "Read the thread, then send it a new message or launch again.";
+  }
+}
+
+/** Keeps the end of a log, where a failure shows. */
+const tail = (text: string, max: number) =>
+  text.length <= max ? text : `…${text.slice(text.length - max + 1)}`;
+
+function launchFailedWake(input: {
+  readonly watch: LaunchWatch;
+  readonly runId: RunId;
+  readonly status: LaunchWatchTerminalStatus;
+  readonly title: string | null;
+  readonly failure: OrchestratorMcpRunFailure;
+}): LaunchWatchWake {
+  const { watch, failure } = input;
+  const name = named(watch, input.title);
+  const stage =
+    failure.stage === "workspace_preparation"
+      ? "while GOAT prepared its workspace"
+      : "before its agent's first message";
+  const kind = [
+    `error class ${failure.errorClass}`,
+    failure.retryable === null ? null : failure.retryable ? "retryable" : "not retryable",
+  ]
+    .filter((part) => part !== null)
+    .join(", ");
+  const retry = failure.canRetry
+    ? `Retry with goat_thread_retry ${toolArgs(watch)}; the user can also press Retry on the failure in that thread. This watch reports the retried run.`
+    : failure.stage === "workspace_preparation"
+      ? `Retry it from a GOAT client connected to ${watch.host ?? "this environment"} (Retry on the failure in that thread), or launch again.`
+      : null;
+  const log = failure.log === null ? null : tail(failure.log, EXCERPT_MAX_CHARS * 2);
+  const lines = [
+    `${name} (${identity(watch)}) failed ${stage}, in run ${input.runId} (${kind}).`,
+    "",
+    truncate(failure.message, EXCERPT_MAX_CHARS),
+    ...(log === null ? [] : ["", "Preparation log (last lines, redacted):", log]),
+    "",
+    `Suggested action: ${suggestedAction(failure, watch.host)}`,
+    ...(retry === null ? [] : [retry]),
+    `goat_thread_status ${toolArgs(watch)} shows the same failure. ${STOP_HINT}`,
+  ];
+  const detail = truncate(
+    log === null ? failure.message : `${failure.message}\n\n${tail(log, EXCERPT_MAX_CHARS / 2)}`,
+    EXCERPT_MAX_CHARS,
+  );
+  return {
+    ...wakeIds(watch, `run:${input.runId}`),
+    text: lines.join("\n"),
+    notification: {
+      source: { kind: "background_task" },
+      outcome: "failed",
+      summary: truncate(
+        `${name} failed ${failure.stage === "workspace_preparation" ? "preparing its workspace" : "before starting"}`,
+        SUMMARY_MAX_CHARS,
+      ),
+      detail,
     },
   };
 }

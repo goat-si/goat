@@ -45,6 +45,8 @@ import {
   type OrchestratorMcpTaskCancelResult,
   type OrchestratorMcpThreadDetail,
   type OrchestratorMcpThreadInterruptInput,
+  type OrchestratorMcpThreadRetryInput,
+  type OrchestratorMcpThreadRetryResult,
   type OrchestratorMcpThreadInterruptResult,
   type OrchestratorMcpThreadListInput,
   type OrchestratorMcpThreadListItem,
@@ -310,6 +312,11 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadInterruptInput,
   ) => Effect.Effect<OrchestratorMcpThreadInterruptResult, OrchestratorMcpFailure>;
+  /** Runs a failed run's workspace preparation again, like Retry in the thread. */
+  readonly retryThread: (
+    scope: McpInvocationScope,
+    input: Omit<OrchestratorMcpThreadRetryInput, "host">,
+  ) => Effect.Effect<Omit<OrchestratorMcpThreadRetryResult, "host">, OrchestratorMcpFailure>;
 }
 
 export class OrchestratorMcpService extends Context.Service<
@@ -2931,7 +2938,7 @@ const make = Effect.gen(function* () {
               parentThreadId: scope.thread.threadId,
               parentRunId: parentRun.id,
               parentNodeId,
-              task: taskPrompt(input),
+              task: Profiles.childBrief(admitted, scope.thread.threadId, taskPrompt(input)),
               ...(input.title === undefined ? {} : { title: input.title }),
               modelSelection: target.modelSelection,
               driver: target.driver,
@@ -2957,7 +2964,7 @@ const make = Effect.gen(function* () {
                 memoryGrantCeiling,
                 workspace: remote.workspace ?? { type: "cwd" },
                 title: input.title ?? taskPrompt(input).slice(0, 72),
-                message: taskPrompt(input),
+                message: Profiles.childBrief(admitted, scope.thread.threadId, taskPrompt(input)),
                 modelSelection: target.modelSelection,
                 runtimeMode,
                 callerRuntimeMode,
@@ -3161,7 +3168,7 @@ const make = Effect.gen(function* () {
           parentThreadId: scope.thread.threadId,
           parentRunId: parentRun.id,
           parentNodeId: parentRun.rootNodeId,
-          task: taskPrompt(input),
+          task: Profiles.childBrief(admitted, scope.thread.threadId, taskPrompt(input)),
           ...(input.title === undefined ? {} : { title: input.title }),
           modelSelection: target.modelSelection,
           runtimeMode,
@@ -4131,7 +4138,7 @@ const make = Effect.gen(function* () {
           .getThreadRecords(input.threadId, ["runs", "turnItems", "providerThreads"], {
             runIds,
             turnItemRunIds: runIds,
-            turnItemTypes: ["user_message", "assistant_message"],
+            turnItemTypes: ["user_message", "assistant_message", "error"],
           })
           .pipe(Effect.mapError(threadManagementFailure));
         const cloudTask = cloudTaskForRun(
@@ -4221,6 +4228,41 @@ const make = Effect.gen(function* () {
         runId: result.run.id,
         status: result.type === "already_terminal" ? result.run.status : "interrupt_requested",
       } satisfies OrchestratorMcpThreadInterruptResult;
+    }),
+    retryThread: Effect.fn("OrchestratorMcpService.retryThread")(function* (scope, input) {
+      const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
+      yield* assertLiveCallerForOtherThread(scope, parent, target);
+      yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
+      yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
+      const key = yield* requestKey(input.clientRequestId);
+      const run =
+        input.runId === undefined
+          ? target.runs.toSorted((left, right) => left.ordinal - right.ordinal).at(-1)
+          : target.runs.find((candidate) => candidate.id === input.runId);
+      if (run === undefined)
+        return yield* failure("run_not_found", `Thread ${input.threadId} has no run to retry.`);
+      if (run.status === "preparing")
+        return { threadId: input.threadId, runId: run.id, status: "preparing" as const };
+      if (run.status !== "failed" || run.workspacePreparation === undefined)
+        return yield* failure(
+          "invalid_request",
+          `Run ${run.id} did not fail while preparing its workspace, so there is nothing to retry. Read the thread and send it a new message with goat_thread_send instead.`,
+        );
+      yield* threadLaunch
+        .retryPreparation({
+          commandId: stableCommandId({ scope, requestKey: key, operation: "thread-retry" }),
+          threadId: input.threadId,
+          runId: run.id,
+        })
+        .pipe(
+          Effect.mapError((error) =>
+            failure(
+              "orchestration_error",
+              `Unable to retry run ${run.id} of thread ${input.threadId}: ${errorMessage(error)}`,
+            ),
+          ),
+        );
+      return { threadId: input.threadId, runId: run.id, status: "preparing" as const };
     }),
   });
 });

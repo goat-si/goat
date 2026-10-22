@@ -31,6 +31,10 @@ export const notesRpc = {
     label: "notes:delete",
     tag: WS_METHODS.notesDelete,
   }),
+  update: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "notes:update",
+    tag: WS_METHODS.notesUpdate,
+  }),
   startWork: createEnvironmentRpcCommand(connectionAtomRuntime, {
     label: "notes:start-work",
     tag: WS_METHODS.notesStartWork,

@@ -366,10 +366,7 @@ describe("GOAT Bot turns", () => {
       const done = (yield* ledger.getTask(turn.taskId))!.task;
       assert.strictEqual(done.status, "completed");
       const texts = (yield* botMessages).messages.map((message) => message.text);
-      assert.include(
-        texts,
-        "Docker takes 41 GB and /tmp 3 GB.\nReported tests: not reported\nGOAT check: pending",
-      );
+      assert.include(texts, "Docker takes 41 GB and /tmp 3 GB.");
       assert.notInclude(texts.join("\n"), "Docker images take 41 GB.");
     }).pipe(Effect.provide(harness.layer));
   });

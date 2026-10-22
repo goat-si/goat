@@ -8,6 +8,7 @@ import {
   type RunId,
   ThreadId,
 } from "@goat/contracts";
+import { type LlmsTxtCaller, renderLlmsTxt } from "@goat/contracts/agentSurface/llms";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -342,6 +343,44 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
 const layerMcpAuthMiddleware = HttpRouter.middleware<{
   provides: McpInvocationContext.McpInvocationContext;
 }>()(makeMcpAuthMiddleware).layer;
+
+const llmsTxtCaller = (scope: McpInvocationContext.McpInvocationScope): LlmsTxtCaller =>
+  scope.client === undefined
+    ? { kind: "thread" }
+    : { kind: "client", readOnly: scope.client.access === "read-only" };
+
+const llmsTxtResponse = (caller: LlmsTxtCaller) =>
+  HttpServerResponse.text(renderLlmsTxt(caller), {
+    contentType: "text/plain; charset=utf-8",
+    // The body depends on the credential, so no shared cache may keep it.
+    headers: { "cache-control": "no-store", vary: "authorization" },
+  });
+
+/**
+ * The registry index for agents. Without a credential it lists every path; a
+ * credential that /mcp would accept filters it, and one /mcp would refuse gets
+ * the same 401.
+ */
+export const layerLlmsTxtRoute = Layer.unwrap(
+  makeMcpAuthMiddleware.pipe(
+    Effect.map((authenticate) =>
+      HttpRouter.add(
+        "GET",
+        "/llms.txt",
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          if (request.headers.authorization === undefined)
+            return llmsTxtResponse({ kind: "anonymous" });
+          return yield* authenticate(
+            McpInvocationContext.McpInvocationContext.pipe(
+              Effect.map((scope) => llmsTxtResponse(llmsTxtCaller(scope))),
+            ),
+          );
+        }),
+      ),
+    ),
+  ),
+);
 
 /**
  * Claude Code moves an MCP result above its output limit to a file and hands
@@ -917,6 +956,12 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
 const encodeOrchestratorMcpFailure = Schema.encodeSync(OrchestratorMcpFailure);
 const encodeReferenceRefusal = Schema.encodeSync(Schema.fromJsonString(OrchestratorMcpFailure));
 
+const refusalResult = (failure: OrchestratorMcpFailure) =>
+  new McpSchema.CallToolResult({
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify(encodeOrchestratorMcpFailure(failure)) }],
+  });
+
 const undeclaredArgumentsResult = (
   tool: string,
   undeclared: ReadonlyArray<string>,
@@ -954,6 +999,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const effects = yield* McpToolAccess.ToolEffects;
+    const permissions = yield* Profiles.PermissionProfiles;
     return yield* register.pipe(
       Effect.provideService(
         McpServer.McpServer,
@@ -981,10 +1027,23 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                 Context.add(Tool.Destructive, effect === "destructive"),
               ),
             };
+            // Arguments never decode for a caller whose goatclaw profile refuses the tool.
+            const gated = (payload: unknown) =>
+              McpToolAccess.requireDeclaredCapability(
+                permissions,
+                registration.tool.name,
+                effect,
+                payload,
+              ).pipe(
+                Effect.matchEffect({
+                  onFailure: (failure) => Effect.succeed(refusalResult(failure)),
+                  onSuccess: () => registration.handle(payload),
+                }),
+              );
             const inputSchema = registration.tool.inputSchema;
             // A parameter schema with an index signature declares its own extra keys.
             if (typeof inputSchema.additionalProperties === "object")
-              return server.addTool(registration);
+              return server.addTool({ ...registration, handle: gated });
             const properties = inputSchema.properties ?? {};
             return server.addTool({
               ...registration,
@@ -999,7 +1058,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                 return undeclared.length === 0
                   ? validateRepositoryReferenceArguments(registration.tool.name, payload).pipe(
                       Effect.matchEffect({
-                        onSuccess: () => registration.handle(payload),
+                        onSuccess: () => gated(payload),
                         onFailure: () =>
                           Effect.succeed(
                             new McpSchema.CallToolResult({
@@ -1449,6 +1508,7 @@ export const layer = Layer.mergeAll(
   layerSshToolkitRegistration,
   layerConnectionToolkit,
   layerRemoteReportRegistration,
+  layerLlmsTxtRoute,
 ).pipe(
   // LaunchWatchService and RemoteDispatchCoordinator are left to the caller:
   // the server provides one of each for these tools and the remote-launch
@@ -1458,6 +1518,8 @@ export const layer = Layer.mergeAll(
   Layer.provide(RemoteReportService.layer),
   // Run results for the report tool and the thread read and wait tools.
   Layer.provide(ThreadResultService.layer),
+  // Every registration's goatclaw capability gate, and the handlers that check profiles.
+  Layer.provide(Profiles.layer),
   Layer.provideMerge(layerMcpTransport),
 );
 

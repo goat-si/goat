@@ -40,7 +40,7 @@ function ChatRouteGlobalShortcuts() {
     AuthPreviewOperateScope,
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const legacySidebarEnabled = useLegacySidebarEnabled();
+  const projectsSidebarEnabled = useLegacySidebarEnabled();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -121,7 +121,7 @@ function ChatRouteGlobalShortcuts() {
           // on every thread update.
           const threads = readThreadShells();
           if (await startNewThreadFromLastWork({ threads, projects, handleNewThread })) return;
-          if (legacySidebarEnabled === false && projectGroupCount > 1) {
+          if (projectsSidebarEnabled === false && projectGroupCount > 1) {
             openCommandPalette({ open: "new-thread-in" });
             return;
           }
@@ -197,7 +197,7 @@ function ChatRouteGlobalShortcuts() {
     selectedThreadKeysSize,
     startScratchThread,
     projects,
-    legacySidebarEnabled,
+    projectsSidebarEnabled,
     terminalOpen,
   ]);
 

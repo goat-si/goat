@@ -13,6 +13,7 @@ import {
   ModelSelection,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadInterruptResult,
+  type OrchestratorMcpRunFailure,
   OrchestratorMcpThreadWaitResult,
   type ProjectId,
   type RunId,
@@ -47,6 +48,7 @@ import {
   addPendingRun,
   clearAttempts,
   EXCERPT_MAX_CHARS,
+  failureFromRemoteStatus,
   finishedWake,
   goneWake,
   isTerminalStatus,
@@ -65,9 +67,11 @@ import {
   recordFailure,
   recordQuestion,
   recordFailedAttempt,
+  RemoteRunFailureStatus,
   settleRun,
   wakeAttempt,
 } from "./launchWatch.ts";
+import { runFailure } from "./threadStatus.ts";
 
 /**
  * Wakes a thread when a thread it launched finishes, so orchestrators do not
@@ -254,6 +258,8 @@ interface Details {
    * the completion webhook is not told it completed. The launching thread still hears why.
    */
   readonly linkOnlyRegistration: boolean;
+  /** Why the run failed before its agent's first message, when it did. */
+  readonly failure: OrchestratorMcpRunFailure | null;
 }
 
 const noDetails: Details = {
@@ -263,6 +269,7 @@ const noDetails: Details = {
   excerpt: null,
   prUrl: null,
   linkOnlyRegistration: false,
+  failure: null,
 };
 
 class LauncherGone extends Data.TaggedError("LauncherGone")<{}> {}
@@ -304,6 +311,7 @@ const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 const decodeRequestIds = Schema.decodeUnknownEffect(
   Schema.Struct({ requestIds: Schema.Array(Schema.String) }),
 );
+const decodeFailureStatus = Schema.decodeUnknownEffect(RemoteRunFailureStatus);
 
 const describe = (error: unknown) =>
   error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
@@ -679,8 +687,14 @@ export const make = Effect.gen(function* () {
       const shell = yield* threads.getThreadShell(watch.threadId);
       const records = yield* threads.getThreadRecords(
         watch.threadId,
-        ["messages", "providerThreads"],
-        { messageRoles: ["assistant"], messageRunIds: [runId] },
+        ["messages", "providerThreads", "runs", "turnItems"],
+        {
+          messageRoles: ["assistant"],
+          messageRunIds: [runId],
+          runIds: [runId],
+          turnItemRunIds: [runId],
+          turnItemTypes: ["assistant_message", "error"],
+        },
       );
       return {
         title: shell?.title ?? null,
@@ -692,6 +706,10 @@ export const make = Effect.gen(function* () {
           (thread) =>
             thread.cloudTask?.attach === "registered" && thread.cloudTask.tracking === "link-only",
         ),
+        failure: runFailure(
+          records.runs.find((run) => run.id === runId) ?? null,
+          records.turnItems,
+        ),
       } satisfies Details;
     });
 
@@ -700,7 +718,12 @@ export const make = Effect.gen(function* () {
    * Positions count every visible item while the messages view only filters,
    * so the read starts a fixed window before the end.
    */
-  const remoteDetails = (watch: LaunchWatch, host: string, runId: RunId) =>
+  const remoteDetails = (
+    watch: LaunchWatch,
+    host: string,
+    runId: RunId,
+    status: LaunchWatchTerminalStatus,
+  ) =>
     Effect.gen(function* () {
       const read = (args: Record<string, unknown>) =>
         callHost(
@@ -727,22 +750,46 @@ export const make = Effect.gen(function* () {
         if (!result.hasMore || result.nextPosition === null) break;
         afterPosition = result.nextPosition;
       }
+      const excerpt = lastText(texts);
+      // A run that failed before its agent spoke has nothing to quote; its status says why.
+      const failure =
+        status === "failed" && excerpt === null
+          ? yield* callHost(
+              watch,
+              host,
+              "goat_thread_status",
+              { threadId: watch.threadId },
+              REMOTE_READ_TIMEOUT_MS,
+            ).pipe(
+              Effect.flatMap(decodeFailureStatus),
+              Effect.map((remote) => failureFromRemoteStatus(remote, runId)),
+              Effect.catch((error) =>
+                error instanceof LauncherGone
+                  ? Effect.fail(error)
+                  : Effect.logDebug("launch watch: failure status unreadable", {
+                      host,
+                      cause: error,
+                    }).pipe(Effect.as(null)),
+              ),
+            )
+          : null;
       return {
         title: head.thread.title,
         branch: head.thread.branch,
         worktreePath: head.thread.worktreePath,
-        excerpt: lastText(texts),
+        excerpt,
         prUrl: head.thread.linkedPullRequest?.url ?? null,
         // Registered runs live on their holder, whose own watch reads them locally.
         linkOnlyRegistration: false,
+        failure,
       } satisfies Details;
     });
 
   /** Details make a wake more useful but never hold it back. */
-  const detailsFor = (watch: LaunchWatch, runId: RunId) =>
+  const detailsFor = (watch: LaunchWatch, runId: RunId, status: LaunchWatchTerminalStatus) =>
     (watch.host === null
       ? localDetails(watch, runId)
-      : remoteDetails(watch, watch.host, runId)
+      : remoteDetails(watch, watch.host, runId, status)
     ).pipe(
       Effect.timeoutOption(REMOTE_READ_TIMEOUT_MS * 2),
       Effect.map(Option.getOrElse(() => noDetails)),
@@ -1687,7 +1734,9 @@ export const make = Effect.gen(function* () {
         if (result._tag === "Terminal" && result.status === "completed")
           yield* capture(watch, result.runId);
         const details =
-          result._tag === "Terminal" ? yield* detailsFor(watch, result.runId) : noDetails;
+          result._tag === "Terminal"
+            ? yield* detailsFor(watch, result.runId, result.status)
+            : noDetails;
         const pause = yield* apply(watchId, incarnation, runId, result, details).pipe(
           Effect.catch((error) =>
             Effect.logWarning("launch watch: state not saved, will retry", {

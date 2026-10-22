@@ -1894,30 +1894,6 @@ it.effect(
     }).pipe(Effect.provide(bootstrapDependencies)),
 );
 
-it.effect("settings CAS conflict after activation is typed and never marks the admin ready", () =>
-  Effect.gen(function* () {
-    yield* interruptedHub;
-    const transitions = yield* Settings.MemoryHubSettingsTransitions;
-    yield* transitions.applyMemoryHubTransition(
-      {
-        requestId: M.MemoryOperationId.make(id(9001)),
-        expectedVersion: 0,
-        settings: { mode: "disabled" },
-      },
-      Effect.void,
-    );
-    const admin = yield* Hub.makeAdministrator;
-    const failure = yield* admin.update(firstHub, Effect.void).pipe(Effect.flip);
-    assert.strictEqual(failure._tag, "MemoryHubError");
-    if (failure._tag === "MemoryHubError") assert.strictEqual(failure.code, "revision_changed");
-    const store = yield* Store.MemoryStore;
-    assert.strictEqual(
-      (yield* store.transact(store.readHubAdminTx(firstHub.requestId)))?.stage,
-      "activated",
-    );
-  }).pipe(Effect.provide(bootstrapDependencies)),
-);
-
 it.effect(
   "superseding CAS retires activation and disable configure restart reuse its publication",
   () =>
@@ -1943,6 +1919,7 @@ it.effect(
       const admin = yield* Hub.makeAdministrator;
       const conflict = yield* admin.update(firstHub, Effect.void).pipe(Effect.flip);
       assert.strictEqual(conflict._tag, "MemoryHubError");
+      if (conflict._tag === "MemoryHubError") assert.strictEqual(conflict.code, "revision_changed");
       const denied = yield* admin
         .update(
           {

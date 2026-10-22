@@ -10,6 +10,7 @@ import {
   GOAT_BROWSER_TOOL_INSTRUCTIONS,
   GOAT_ORCHESTRATION_SECTIONS,
 } from "@goat/provider-core/server/orchestrationInstructions";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 
 /**
  * Codex cuts the middle out of any `additionalContext` value over 1,000 tokens,
@@ -206,6 +207,14 @@ export function buildCodexDeveloperInstructions(interactionMode: ProviderInterac
     : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
 }
 
+/** Sent on every turn, with or without GOAT MCP; the discipline does not depend on GOAT's tools. */
+export function buildCodexDevelopmentContext(): Record<
+  string,
+  V2TurnStartParams__AdditionalContextEntry
+> {
+  return { t3_code_development: { kind: "application", value: GOAT_DEVELOPMENT_INSTRUCTIONS } };
+}
+
 /**
  * This must stay out of the collaboration mode: when the model catalog ships
  * its own text for a mode, as newer models do, Codex uses that text and drops
@@ -219,6 +228,7 @@ export function buildCodexAdditionalContext(
   // Separate keys keep each value under Codex's per-entry cap. Codex emits
   // entries in key order, so the numbering preserves the authored order.
   return {
+    ...buildCodexDevelopmentContext(),
     ...Object.fromEntries(
       GOAT_ORCHESTRATION_SECTIONS.map((section, index) => [
         `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,

@@ -499,3 +499,25 @@ it.effect("a structured remote wait completes the note even when follow-up reads
     assert.strictEqual(followUpReads, 0);
   }).pipe(Effect.provide(notesLayer())),
 );
+
+it.effect("a doing note associated only through related never completes", () =>
+  Effect.gen(function* () {
+    const notes = yield* Notes.NotesService;
+    const reference = { threadId: link.threadId, host: "host-a" };
+    yield* notes.write(
+      { path: "reference.md", body: "work", status: "doing", baseRevision: null },
+      "user",
+    );
+    yield* notes.update({ path: "reference.md", relate: reference });
+    const auto = Context.get(yield* Layer.build(autoLayer()), Auto.NoteAutoDone);
+    yield* auto.reconcile;
+    yield* notes.refreshResults(reference.threadId, reference.host, succeeded);
+    yield* auto.reconcileNote("reference.md");
+    const note = yield* notes.read({ path: "reference.md" });
+    assert.strictEqual(note.status, "doing");
+    assert.strictEqual(note.updatedBy, "user");
+    assert.deepStrictEqual(note.related, [reference]);
+    assert.deepStrictEqual(note.threads, []);
+    assert.deepStrictEqual(yield* notes.linked(reference.threadId, reference.host), []);
+  }).pipe(Effect.provide(notesLayer(() => Effect.succeed(succeeded)))),
+);

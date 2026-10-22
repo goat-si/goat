@@ -62,7 +62,7 @@ export const frameRelayOutcome = (input: {
 export const framePendingReports = (texts: ReadonlyArray<string>) =>
   [
     "<remote_reports>",
-    "Reports from threads this thread launched on other machines, delivered since your last turn:",
+    "Reports from threads this thread launched, delivered since your last turn:",
     ...texts,
     "</remote_reports>",
   ].join("\n\n");

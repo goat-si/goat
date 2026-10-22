@@ -168,6 +168,7 @@ import {
 import type { ManagedServerProvider } from "@goat/provider-core/server/snapshot";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import {
   buildRuntimeInstructions,
   COMPUTER_USE_INSTRUCTIONS,
@@ -1424,6 +1425,8 @@ export function makeClaudeQueryOptions(input: {
         }) +
           "\n\n" +
           MemoryContext.MEMORY_DATA_BOUNDARY_REMINDER +
+          "\n\n" +
+          GOAT_DEVELOPMENT_INSTRUCTIONS +
           (input.mcpServers === undefined ? "" : GOAT_ORCHESTRATION_INSTRUCTIONS),
         ...launchAppendSystemPrompt,
       ].join("\n\n"),

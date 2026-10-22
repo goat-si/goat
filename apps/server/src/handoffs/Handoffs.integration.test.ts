@@ -797,6 +797,101 @@ it.effect(
     ),
 );
 it.effect(
+  "provider settings progress survives restart and its outcome stays readable for a day",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-provider-progress-" });
+        const store = Context.get(
+          yield* Layer.build(
+            SecretStore.layer.pipe(
+              Layer.provide(ServerConfig.layerTest(home, { prefix: "provider-progress-" })),
+            ),
+          ),
+          SecretStore.ServerSecretStore,
+        );
+        const reviewer = AuthSessionId.make("provider-settings-reviewer");
+        const now = yield* DateTime.now;
+        const dependencies = Layer.mergeAll(
+          Layer.succeed(SecretStore.ServerSecretStore, store),
+          Layer.mock(Environment.ServerEnvironment)({
+            getEnvironmentId: Effect.succeed(EnvironmentId.make("provider-settings-host")),
+          }),
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            dispatch: orchestrator.dispatch,
+            getThreadRecords: orchestrator.getThreadRecords,
+          }),
+          Layer.mock(SessionStore.SessionStore)({
+            cookieName: "test",
+            legacyCookieName: undefined,
+            listActive: () =>
+              Effect.succeed([
+                {
+                  sessionId: reviewer,
+                  subject: "test",
+                  method: "browser-session-cookie",
+                  scopes: ["orchestration:operate", "providers:manage"],
+                  client: { label: "Human reviewer", deviceType: "unknown" },
+                  issuedAt: now,
+                  expiresAt: DateTime.add(now, { days: 2 }),
+                  lastConnectedAt: now,
+                  connected: true,
+                  current: true,
+                },
+              ]),
+          }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+        );
+        const start = Layer.build(
+          Layer.fresh(Handoffs.layer).pipe(Layer.provide(dependencies)),
+        ).pipe(Effect.map((context) => Context.get(context, Handoffs.Handoffs)));
+        const service = yield* start;
+        const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+        const summary = yield* service.create({
+          kind: "approval",
+          title: "Change provider settings?",
+          reason: "An agent asked",
+          requestedBy: { threadId, providerInstanceId: instanceId, path: "provider.settings" },
+          target: {
+            environmentId: EnvironmentId.make("provider-settings-host"),
+            path: "provider.settings",
+          },
+          runId: run.id,
+          nodeId: run.rootNodeId!,
+          human: { location: "Add Devin." },
+          args: { version: 1 },
+        });
+        const address = { threadId, handoffId: summary.handoffId };
+        const recordBeforeApproval = yield* Effect.flip(
+          service.recordProviderProgress(address, { step: "early" }),
+        );
+        assert.equal(recordBeforeApproval.reason, "invalid_request");
+        yield* service.respond({ ...address, action: "completed" }, reviewer);
+        yield* service.recordProviderProgress(address, { effects: { install: "done" } });
+
+        const restarted = yield* start;
+        const [continuation] = yield* restarted.completedProviderContinuations("provider.settings");
+        assert.deepStrictEqual(continuation?.progress, { effects: { install: "done" } });
+        assert.deepStrictEqual(continuation?.args, { version: 1 });
+
+        const settled = {
+          effects: { install: "done", save: "done" },
+          outcome: { state: "applied" },
+        };
+        yield* restarted.finishProviderContinuation(address, settled);
+        assert.deepStrictEqual(
+          yield* restarted.completedProviderContinuations("provider.settings"),
+          [],
+        );
+        assert.deepStrictEqual(yield* restarted.readProviderProgress(address), settled);
+        yield* TestClock.adjust("25 hours");
+        assert.isUndefined(yield* restarted.readProviderProgress(address));
+      }),
+    ),
+);
+
+it.effect(
   "provider Home approval survives its requesting run and expires after fifteen minutes",
   () =>
     Effect.gen(function* () {

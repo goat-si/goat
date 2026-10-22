@@ -2,7 +2,6 @@ import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
-import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 import * as NotesService from "../notes/NotesService.ts";
 import * as SshDeviceAdd from "../sshRemote/SshDeviceAdd.ts";
@@ -67,8 +66,9 @@ import { EnvironmentId, HandoffSummary, ProviderInstanceId, ThreadId } from "@go
 import * as Arbitrary from "effect/Arbitrary";
 import * as Schema from "effect/Schema";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
-import { liveThreadsLayer } from "./McpToolAccess.testkit.ts";
+import { layerPermissionProfilesOff, liveThreadsLayer } from "./McpToolAccess.testkit.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { FAILURE_CLASSES } from "@goat/contracts/agentSurface/envelope";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
@@ -140,7 +140,8 @@ const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistrations))
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const dependencies = Layer.mergeAll(
   Layer.mock(DecisionInbox.DecisionInbox)({}),
-  Layer.mock(Profiles.PermissionProfiles)({}),
+  // goatclaw off: the capability gate admits every call, so handlers decide access.
+  layerPermissionProfilesOff,
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
@@ -250,7 +251,7 @@ const client = McpSchema.McpServerClient.of({
 });
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(195); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes, hub, permission profile and goatclaw sync, computer use, decision, and lane tools.
+  expect(entries).toHaveLength(197); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, and preparation retry tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
@@ -497,18 +498,39 @@ const callers = {
 type Caller = keyof typeof callers;
 const TARGET_THREAD = "thread:conformance-target";
 
-/** reached: the access layer let the call into its handler, which then met inert services. */
-type Outcome = "thread_required" | "read_only" | "denied" | "reached";
-const classify = (result: McpSchema.CallToolResult): Outcome => {
+/**
+ * reached: the access layer let the call into its handler, which then met inert services.
+ * unexpected and defect never match an expectation, so a wrong argument or a crash before the
+ * handler cannot pass as access granted.
+ */
+type Outcome = "thread_required" | "read_only" | "denied" | "reached" | "unexpected" | "defect";
+const INERT_SERVICE_DEFECT = "inert service";
+// The tool-level wrapper's text when a handler dies on an inert service.
+const HANDLER_DIED = "Tool execution failed due to an internal server error.";
+// Refusals a handler makes after access passed, from its own domain checks.
+const HANDLER_CODES = new Set(["target_required", "orchestration_error"]);
+// invalid_request from a rule the handler checks after access, on these sampled inputs.
+const HANDLER_VALIDATION: Readonly<Record<string, string>> = {
+  "attachment.discard": "Only the caller that prepared an upload may discard it.",
+  "thread.reschedule": "A caller outside a thread must pass a model to resume with.",
+  "project.create": "A project made from a title takes no other settings.",
+};
+const IMAGE_TOOL_FAILURE = /^(Preview snapshot|Device screenshot) failed/;
+const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
   const content = result.content[0];
   const text = content?.type === "text" ? content.text : "";
   if (!result.isError) return "reached";
+  if (text === INERT_SERVICE_DEFECT || text === HANDLER_DIED) return "reached";
+  if (text.startsWith("defect:")) return "defect";
   if (/thread_credential_required|acts as the calling GOAT thread/.test(text))
     return "thread_required";
   // Some toolkits (pull requests, images) return the refusal message without its code.
   if (/approved for read-only access/.test(text)) return "read_only";
   if (/"code":"capability_denied"/.test(text)) return "denied";
-  return "reached";
+  if (IMAGE_TOOL_FAILURE.test(text)) return "reached";
+  const code = /"code":"([a-z_]+)"/.exec(text)?.[1];
+  if (code === "invalid_request" && path in HANDLER_VALIDATION) return "reached";
+  return code !== undefined && HANDLER_CODES.has(code) ? "reached" : "unexpected";
 };
 
 // Inputs the schema sampler cannot satisfy, and reads that reach other machines with this
@@ -516,6 +538,7 @@ const classify = (result: McpSchema.CallToolResult): Outcome => {
 const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
   "note.read": { path: "inbox/note.md" },
   "note.write": { path: "inbox/note.md", body: "- [ ] item", status: null, baseRevision: null },
+  "note.update": { path: "inbox/note.md", pinned: true },
   "note.move": { from: "inbox/note.md", to: "done/note.md", baseRevision: "0".repeat(64) },
   "channel.task_export": { from: "2026-01-01T00:00:00.000Z", to: "2026-01-02T00:00:00.000Z" },
   "scheduler.status": { local: false },
@@ -609,13 +632,15 @@ const argumentsFor = Effect.fn(function* (entry: Entry) {
   const sampled = yield* Schema.encodeUnknownEffect(codec)(sample);
   const encoded: Record<string, unknown> = isObject(sampled) ? sampled : {};
   // Routing to another host has its own tests; this matrix asks about the local call.
-  const required = (Tool.getJsonSchema(tool) as JsonSchema)["required"];
+  const schema = Tool.getJsonSchema(tool) as JsonSchema;
+  const required = schema["required"];
   const hostRequired = Array.isArray(required) && required.includes("host");
+  const takesThread = isObject(schema["properties"]) && "threadId" in schema["properties"];
   return {
     ...encoded,
     ...(entry.hostRoutable && "host" in encoded && !hostRequired ? { host: null } : {}),
     // Outside clients name their target thread; without one they stop at target resolution.
-    ...("threadId" in encoded && encoded["threadId"] === null ? { threadId: TARGET_THREAD } : {}),
+    ...(takesThread && (encoded["threadId"] ?? null) === null ? { threadId: TARGET_THREAD } : {}),
   };
 });
 
@@ -639,12 +664,24 @@ describe("agent surface access", () => {
             const result = yield* call(entry.name, args).pipe(
               Effect.provideService(McpInvocationContext, callers[caller]),
               Effect.provideService(McpSchema.McpServerClient, client),
-              // An inert service dies; the access layer already ran.
-              Effect.catchDefect(() =>
-                Effect.succeed(new McpSchema.CallToolResult({ isError: true, content: [] })),
+              // An inert service dies after the access layer ran; any other defect fails the case.
+              Effect.catchDefect((defect) =>
+                Effect.succeed(
+                  new McpSchema.CallToolResult({
+                    isError: true,
+                    content: [
+                      {
+                        type: "text",
+                        text: String(defect).includes("UnimplementedError")
+                          ? INERT_SERVICE_DEFECT
+                          : `defect: ${String(defect)}`,
+                      },
+                    ],
+                  }),
+                ),
               ),
             );
-            const outcome = classify(result);
+            const outcome = classify(entry.path, result);
             const expected = expectedOutcome(entry, caller);
             if (outcome !== expected) {
               const content = result.content[0];
@@ -667,6 +704,10 @@ describe("agent surface access", () => {
       );
       expect(REASONS[exception.reason], path).toBeDefined();
     }
+    for (const path of Object.keys(HANDLER_VALIDATION))
+      expect(registeredNames, path).toContain(
+        agentSurfaceRegistry[path as keyof typeof agentSurfaceRegistry]?.name,
+      );
   });
 
   // quarantine: #778 goat_call is not on dev yet; add it to via when rollout step 5 lands.
@@ -675,4 +716,73 @@ describe("agent surface access", () => {
   it.todo(
     "gives a goat_eval call step the same outcome as a direct call for every entry and caller",
   );
+});
+
+type JsonNode = Readonly<Record<string, unknown>>;
+const literalsOf = (node: unknown, resolve: (node: unknown) => JsonNode | undefined): string[] => {
+  const schema = resolve(node);
+  if (schema === undefined) return [];
+  if (typeof schema.const === "string") return [schema.const];
+  if (Array.isArray(schema.enum)) return schema.enum.filter((value) => typeof value === "string");
+  for (const key of ["anyOf", "oneOf"] as const)
+    if (Array.isArray(schema[key]))
+      return schema[key].flatMap((member) => literalsOf(member, resolve));
+  return [];
+};
+/** Domain literals a schema can return as a failure: tagged errors, and refusal arms of results. */
+const failureLiterals = (root: unknown, onlyRefusals: boolean): ReadonlyArray<string> => {
+  const defs = ((root as JsonNode).$defs ?? {}) as Readonly<Record<string, JsonNode>>;
+  const resolve = (node: unknown): JsonNode | undefined => {
+    const fields = node as JsonNode | undefined;
+    if (fields === undefined || typeof fields !== "object") return undefined;
+    const ref = fields.$ref;
+    return typeof ref === "string" ? resolve(defs[ref.replace("#/$defs/", "")]) : fields;
+  };
+  const found = new Set<string>();
+  const seen = new Set<unknown>();
+  const walk = (node: unknown) => {
+    const schema = resolve(node);
+    if (schema === undefined || seen.has(schema)) return;
+    seen.add(schema);
+    const properties = schema.properties as Readonly<Record<string, unknown>> | undefined;
+    if (properties !== undefined) {
+      const tags = literalsOf(properties._tag, resolve);
+      const kinds = [
+        ...literalsOf(properties.kind, resolve),
+        ...literalsOf(properties.status, resolve),
+      ];
+      const isFailure = onlyRefusals
+        ? kinds.some((kind) => kind === "error" || kind === "refused")
+        : tags.length > 0;
+      if (isFailure) {
+        const reasons = ["code", "reason", "failureCode"].flatMap((key) =>
+          literalsOf(properties[key], resolve),
+        );
+        for (const literal of reasons.length > 0 ? reasons : tags) found.add(literal);
+      }
+      for (const value of Object.values(properties)) walk(value);
+    }
+    for (const key of ["anyOf", "oneOf", "allOf"] as const)
+      if (Array.isArray(schema[key])) for (const member of schema[key]) walk(member);
+    if (schema.items !== undefined) walk(schema.items);
+  };
+  walk(root);
+  return [...found];
+};
+
+it("classifies every domain failure literal the served tools can return", () => {
+  const missing = new Map<string, Set<string>>();
+  for (const toolkit of Object.values(toolkits))
+    for (const tool of Object.values<Tool.Any>(toolkit.tools)) {
+      const literals = [
+        ...failureLiterals(Tool.getJsonSchemaFromSchema(tool.failureSchema), false),
+        ...failureLiterals(Tool.getJsonSchemaFromSchema(tool.successSchema), true),
+      ];
+      for (const literal of literals)
+        if (FAILURE_CLASSES[literal] === undefined)
+          missing.set(literal, (missing.get(literal) ?? new Set()).add(tool.name));
+    }
+  expect(
+    Object.fromEntries([...missing].map(([literal, names]) => [literal, [...names].sort()])),
+  ).toEqual({});
 });

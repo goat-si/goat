@@ -1,18 +1,25 @@
 import {
   OrchestratorMcpFailure,
+  type PermissionCapability,
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
 } from "@goat/contracts";
-import type { AgentSurfaceEffect } from "@goat/contracts/agentSurface";
+import {
+  type AgentSurfaceEffect,
+  type AgentSurfaceEntry,
+  agentSurfaceRegistry,
+} from "@goat/contracts/agentSurface";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Struct from "effect/Struct";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { Tool, Toolkit } from "effect/ai";
 
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   DispatchModeLimit,
   type DispatchModeRefusal,
@@ -122,6 +129,83 @@ export const hostReachingCaller = orchestratingCaller;
 const requireThreadCaller = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((scope) => McpInvocationContext.requireThreadScope(scope, "This tool")),
 );
+
+// Keyed by the served legacy names and by path.
+const declaredEntries: ReadonlyMap<string, AgentSurfaceEntry> = new Map(
+  Object.values(agentSurfaceRegistry).flatMap((entry) =>
+    [...entry.legacyNames, entry.path].map((name) => [name, entry as AgentSurfaceEntry] as const),
+  ),
+);
+
+const stringArgument = (args: unknown, key: string) => {
+  const value =
+    typeof args === "object" && args !== null ? (args as Record<string, unknown>)[key] : undefined;
+  return typeof value === "string" ? value : undefined;
+};
+
+const capabilityRefused = (message: string) =>
+  new OrchestratorMcpFailure({ code: "capability_denied", message });
+
+const admitCapability = (
+  tool: string,
+  capability: PermissionCapability,
+  result: Profiles.CheckResult,
+) =>
+  result.ok
+    ? Effect.void
+    : Effect.fail(
+        capabilityRefused(`${tool} needs the goatclaw ${capability} capability. ${result.reason}`),
+      );
+
+/**
+ * With goatclaw on, a GOAT thread runs a write only when its effective profile holds the
+ * capability the tool's registry entry declares, plus threads.remote and an allowed host when
+ * the call names a host. Direct calls and goat_call reach it through the served handle, before
+ * arguments decode. Outside clients stay bounded by their approved access: other GOAT hosts
+ * call writes as one. A call without an invocation scope comes from inside this process.
+ */
+export const requireDeclaredCapability = (
+  permissions: Profiles.PermissionProfiles["Service"],
+  tool: string,
+  declaredEffect: AgentSurfaceEffect,
+  args: unknown,
+): Effect.Effect<void, OrchestratorMcpFailure> => {
+  const entry = declaredEntries.get(tool);
+  const capability = entry?.capability;
+  // A mismatch between the registry and the handler's declaration fails closed below.
+  const reads = declaredEffect === "read" && (entry?.effect ?? "read") === "read";
+  if (reads || capability === "none") return Effect.void;
+  return Effect.gen(function* () {
+    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    if (Option.isNone(scope) || scope.value.thread === undefined) return;
+    const effective = yield* permissions.resolve(scope.value).pipe(
+      Effect.mapError(
+        (failure) =>
+          new OrchestratorMcpFailure({
+            code: failure.code,
+            message: `${tool}: ${failure.message}`,
+          }),
+      ),
+    );
+    if (capability === undefined) {
+      if (effective.enabled)
+        return yield* capabilityRefused(`${tool} declares no goatclaw capability.`);
+      return;
+    }
+    const host = entry?.hostRoutable === true ? stringArgument(args, "host") : undefined;
+    yield* admitCapability(
+      tool,
+      capability,
+      Profiles.checkProfile(effective, capability, { host }),
+    );
+    if (host !== undefined)
+      yield* admitCapability(
+        tool,
+        "threads.remote",
+        Profiles.checkProfile(effective, "threads.remote", { host }),
+      );
+  });
+};
 
 export const reads = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("read", (params: P) => handle(params));

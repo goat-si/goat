@@ -238,6 +238,14 @@ function normalizeReplayFrame(value: unknown): unknown {
       }
       params.collaborationMode = collaborationMode;
     }
+    // GOAT sends its development discipline on every turn; transcripts recorded before it existed
+    // stay valid, like the developer instructions above.
+    if (typeof params.additionalContext === "object" && params.additionalContext !== null) {
+      const { t3_code_development: _development, ...additionalContext } =
+        params.additionalContext as Record<string, unknown>;
+      if (Object.keys(additionalContext).length === 0) delete params.additionalContext;
+      else params.additionalContext = additionalContext;
+    }
     normalized.params = params;
   }
 

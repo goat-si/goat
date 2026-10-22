@@ -972,6 +972,14 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
               {failureItem.failure.message}
             </Text>
           ) : null}
+          {failureItem.failure.log ? (
+            <Text
+              selectable
+              className="ml-7 mt-1 font-mono text-xs leading-snug text-foreground-muted"
+            >
+              {failureItem.failure.log}
+            </Text>
+          ) : null}
           {failureItem.failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE &&
           failureItem.runId !== null ? (
             <WorkspacePreparationRetryButton

@@ -2,6 +2,8 @@
 import * as NodeCrypto from "node:crypto";
 import {
   channelWorkerObservationEquals,
+  CommandId,
+  MessageId,
   NonNegativeInt,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
@@ -30,10 +32,12 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import { localQuestionLauncher } from "../orchestration-v2/QuestionEscalationService.ts";
 import {
   isTerminalRunStatus,
   pendingUserInputRequestIdsForRun,
 } from "../orchestration-v2/ThreadManagementService.ts";
+import { frameRemoteReport } from "./reportFrame.ts";
 import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import {
   completionHoldCount,
@@ -276,7 +280,72 @@ const make = Effect.gen(function* () {
     input: RemoteOriginReportInput,
   ) {
     const value = yield* decodeReportInput(input).pipe(Effect.mapError(invalid));
-    return yield* append(threadId, value, null);
+    return yield* append(threadId, value, null).pipe(
+      Effect.catchIf(
+        (error) => error.reason === "not_bound",
+        () => reportToLauncher(threadId, value),
+      ),
+    );
+  });
+  /**
+   * A thread launched by a thread on this machine has no origin binding: its origin is that
+   * launcher, found the way question escalation finds it. A question wakes the launcher; any
+   * other report waits in its inbox for its next turn, as an origin's `wake` delivery does.
+   */
+  const reportToLauncher = Effect.fn("RemoteReportService.reportToLauncher")(function* (
+    threadId: ThreadId,
+    value: RemoteOriginReportInput,
+  ) {
+    const shell = yield* orchestrator.getThreadShell(threadId).pipe(Effect.mapError(unavailable));
+    if (shell === null || shell.deletedAt !== null)
+      return yield* new RemoteReportError({ reason: "thread_deleted" });
+    const parentId = shell.lineage.parentThreadId;
+    const subagents =
+      shell.launchedBy === undefined &&
+      parentId !== null &&
+      shell.lineage.relationshipToParent === "subagent"
+        ? (yield* orchestrator
+            .getThreadRecords(parentId, ["subagents"])
+            .pipe(Effect.mapError(unavailable))).subagents
+        : [];
+    const launcherId = localQuestionLauncher(shell, subagents);
+    if (launcherId === undefined) return yield* new RemoteReportError({ reason: "not_bound" });
+    const text = frameRemoteReport({
+      host: "this machine",
+      correlationId: threadId,
+      kind: value.status,
+      summary: value.summary,
+      source: "agent",
+    });
+    if (value.status === "needs_input") {
+      const key = `origin-report:${threadId}:${NodeCrypto.randomUUID()}`;
+      yield* orchestrator
+        .dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`server:${key}`),
+          threadId: launcherId,
+          messageId: MessageId.make(`message:${key}`),
+          text: `${text}\nRead the thread with goat_thread_read {threadId: "${threadId}"} and answer it with goat_thread_send.`,
+          attachments: [],
+          createdBy: "agent",
+          creationSource: "server",
+          notification: {
+            source: { kind: "monitor" },
+            outcome: "updated",
+            summary: `${shell.title.slice(0, 80)}: needs_input`,
+          },
+          dispatchMode: { type: "queue_after_active" },
+        })
+        .pipe(Effect.mapError(unavailable));
+    } else {
+      const createdAt = DateTime.formatIso(yield* DateTime.now);
+      yield* sql`INSERT INTO remote_report_inbox
+        (origin_thread_id, correlation_id, kind, text, created_at)
+        VALUES (${launcherId}, ${`local:${threadId}`}, ${value.status}, ${text}, ${createdAt})`.pipe(
+        Effect.mapError(storage),
+      );
+    }
+    return { sequence: 0, delivery: "launcher" as const };
   });
   const relay = Effect.fn("RemoteReportService.relay")(function* (
     threadId: ThreadId,

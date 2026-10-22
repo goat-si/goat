@@ -250,6 +250,16 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             {failureItem.failure.message}
           </p>
         ) : null}
+        {failureItem.failure.log ? (
+          <details className="ms-7 pb-1 text-xs text-muted-foreground">
+            <summary className="w-fit cursor-pointer rounded-sm -outline-offset-2 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+              Show log
+            </summary>
+            <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-muted/40 p-2 font-mono text-xs">
+              {failureItem.failure.log}
+            </pre>
+          </details>
+        ) : null}
         {retryRunId !== null && onRetryWorkspacePreparation ? (
           <div className="ms-7 pb-1">
             <Button

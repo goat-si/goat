@@ -14,7 +14,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import type { RemoteGoatRunnerOptions } from "./tunnel.ts";
+import type { RemoteGoatRunnerOptions } from "./remoteRuntime.ts";
 import { MAX_RUNTIME_ARCHIVE_BYTES } from "./runtimeArchive.ts";
 import { runPreflightProcess } from "./preflightProcess.ts";
 import { findPublishedRuntime, type PublishedRuntimeSearch } from "./runtimePublished.ts";

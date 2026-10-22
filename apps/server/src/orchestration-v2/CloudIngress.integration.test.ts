@@ -83,6 +83,7 @@ import * as Registry from "./ProviderAdapterRegistry.ts";
 import * as Recovery from "./ProviderRuntimeRecoveryService.ts";
 import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 import { makeFakeCloudAdapter } from "./testkit/FakeCloudAdapter.ts";
+import { layerPermissionProfilesOff } from "../mcp/McpToolAccess.testkit.ts";
 
 const cloudMcpClient = McpSchema.McpServerClient.of({
   clientId: 1,
@@ -130,6 +131,7 @@ function cloudDelegationMcpLayer<A, E, R>(
   projects: Layer.Layer<Projects.ProjectService>,
 ) {
   return McpHttpServer.layerOrchestratorToolkit.pipe(
+    Layer.provide(layerPermissionProfilesOff),
     Layer.provide(layerNoFleetSync),
     Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),

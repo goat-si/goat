@@ -26,7 +26,7 @@ import { TestClock } from "effect/testing";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
-import { liveThreadsLayer } from "../mcp/McpToolAccess.testkit.ts";
+import { liveThreadsLayer, layerPermissionProfilesOff } from "../mcp/McpToolAccess.testkit.ts";
 import * as ThreadLaunchMcp from "../mcp/ThreadLaunchMcpService.ts";
 import * as HomeRequests from "../provider/CodexHomeRequests.ts";
 import * as Routing from "../provider/ProviderDiagnosisRouting.ts";
@@ -843,6 +843,7 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
       ProviderToolkit,
       ProviderHandlers.layer,
     ).pipe(
+      Layer.provide(layerPermissionProfilesOff),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(liveThreadsLayer),
       Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),

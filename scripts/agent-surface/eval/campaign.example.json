@@ -1,0 +1,49 @@
+{
+  "taskSetVersion": 1,
+  "projectId": "<project id on the eval server>",
+  "pairs": 10,
+  "baselineArm": "call-only",
+  "candidateArm": "eval",
+  "arms": [
+    {
+      "id": "call-only",
+      "modelSelection": {
+        "instanceId": "<provider instance without code execution>",
+        "model": "<model>"
+      },
+      "forbidTools": ["goat_eval"],
+      "forbidItemTypes": ["command_execution", "file_change"]
+    },
+    {
+      "id": "eval",
+      "modelSelection": {
+        "instanceId": "<same provider, with goat_eval listed>",
+        "model": "<same model>"
+      },
+      "forbidTools": [],
+      "forbidItemTypes": ["command_execution", "file_change"]
+    }
+  ],
+  "fixtureModel": {
+    "instanceId": "<cheap provider instance>",
+    "model": "<cheap model>"
+  },
+  "reviewModels": [
+    {
+      "instanceId": "<instance>",
+      "model": "<model A>"
+    },
+    {
+      "instanceId": "<instance>",
+      "model": "<model B>"
+    },
+    {
+      "instanceId": "<instance>",
+      "model": "<model C>"
+    }
+  ],
+  "values": {
+    "syncProvider": "<provider for provider-sync-all-hosts>",
+    "setupProvider": "<provider for human-step-resume>"
+  }
+}

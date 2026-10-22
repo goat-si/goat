@@ -13,6 +13,7 @@ import {
   type OrchestrationV2CreationSource,
   type OrchestrationV2ProviderThreadNativeMetadata,
   type OrchestrationV2CloudTask,
+  type OrchestrationV2ProviderFailure,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadLauncher,
   type ProviderDriverKind,
@@ -61,6 +62,11 @@ import type * as Orchestrator from "./Orchestrator.ts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import {
+  appendPreparationLine,
+  type PreparationLog,
+  renderPreparationLog,
+} from "./preparationLog.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
   | { readonly type: "root"; readonly branch?: string | undefined }
@@ -288,6 +294,14 @@ export function preparationFailureClass(error: unknown): {
   return { class: "validation_error", code: null, retryable: false };
 }
 
+const withPreparationLog = (
+  failure: OrchestrationV2ProviderFailure,
+  log: PreparationLog,
+): OrchestrationV2ProviderFailure => {
+  const text = renderPreparationLog(log);
+  return text === null ? failure : { ...failure, log: text };
+};
+
 const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const setupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
@@ -421,7 +435,10 @@ const make = Effect.gen(function* () {
     input: PreparationInput,
     threadId: ThreadId,
     runId: RunId | null,
+    log: Ref.Ref<PreparationLog>,
   ) {
+    const note = (line: string) =>
+      Ref.update(log, (current) => appendPreparationLine(current, line));
     const project = yield* projects.getById(input.projectId).pipe(
       Effect.mapError(mapError(input, "resolve-project", threadId)),
       Effect.flatMap(
@@ -556,15 +573,20 @@ const make = Effect.gen(function* () {
             .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))) !== null;
         yield* setupTracker.stageStatus(threadId, "fetch", shouldFetch ? "running" : "skipped");
         if (shouldFetch) {
+          yield* note(`Fetching ${input.workspaceStrategy.baseRef} from its remote.`);
           const remoteBase = yield* git
             .fetchWorktreeBaseCommit({
               cwd: project.workspaceRoot,
               refName: input.workspaceStrategy.baseRef,
+              onOutputLine: note,
             })
             .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
           if (remoteBase !== null) {
             startRef = remoteBase.commitSha;
             baseRefName = `refs/remotes/${remoteBase.remoteRefName}`;
+            yield* note(
+              `Fetched ${remoteBase.remoteRefName} at ${remoteBase.commitSha.slice(0, 12)}.`,
+            );
           }
         }
         if (shouldFetch) yield* setupTracker.stageStatus(threadId, "fetch", "done");
@@ -582,6 +604,7 @@ const make = Effect.gen(function* () {
           branch = flattenTemporaryWorktreeBranchName(branch);
         }
         yield* setupTracker.stageStatus(threadId, "checkout", "running");
+        yield* note(`Creating a worktree on branch ${branch} from ${startRef}.`);
         // Set from the fallback callback; the cast keeps TS from narrowing it to null.
         let worktreesDirectoryNotice = null as string | null;
         let existingBranch = null as {
@@ -620,14 +643,20 @@ const make = Effect.gen(function* () {
                 onCheckoutProgress: (progress) =>
                   setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
                 onHookStarted: (hookName) =>
-                  setupTracker.stage(threadId, "checkout", {
-                    percent: 100,
-                    detail: `Files checked out; running the repository's ${hookName} hook`,
-                  }),
+                  note(`Files checked out; running the repository's ${hookName} hook.`).pipe(
+                    Effect.andThen(
+                      setupTracker.stage(threadId, "checkout", {
+                        percent: 100,
+                        detail: `Files checked out; running the repository's ${hookName} hook`,
+                      }),
+                    ),
+                  ),
                 onHookStalled: ({ hookName, detail }) =>
                   Effect.sync(() => {
                     hookStallNotice = `Kept the finished checkout; stopped waiting for the ${hookName} hook. ${detail}`;
-                  }),
+                  }).pipe(
+                    Effect.andThen(note(`Stopped waiting for the ${hookName} hook. ${detail}`)),
+                  ),
                 onSparseCheckout: (excluded) =>
                   Effect.sync(() => {
                     sparseNotice = `Left out ${excluded.join(", ")} (worktreeSparseExclude); run git sparse-checkout disable in the worktree to add them`;
@@ -638,6 +667,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         worktreePath = worktree.worktree.path;
         branch = worktree.worktree.refName;
+        yield* note(`Worktree ready at ${worktreePath} on branch ${branch}.`);
         if (existingBranch?.worktree !== "reused") createdWorktreePath = worktreePath;
         if (existingBranch === null) createdBranch = branch;
         const existingBranchNotice =
@@ -784,7 +814,9 @@ const make = Effect.gen(function* () {
                   ? {
                       observeCompletion: {
                         onOutputLine: (line: string) =>
-                          setupTracker.appendTail(threadId, "setup-script", line),
+                          note(line).pipe(
+                            Effect.andThen(setupTracker.appendTail(threadId, "setup-script", line)),
+                          ),
                       },
                     }
                   : {}),
@@ -799,6 +831,7 @@ const make = Effect.gen(function* () {
       let awaitAsyncSetup = Effect.void;
       if (setup.status === "started") {
         setupTerminalId = setup.terminalId;
+        yield* note(`Running setup script "${setup.scriptName}": ${setup.scriptCommand}`);
         yield* setupTracker.update(threadId, (snapshot) => ({
           ...snapshot,
           setupScript: {
@@ -810,6 +843,7 @@ const make = Effect.gen(function* () {
         if (setup.completion) {
           const awaitCompletion = Effect.gen(function* () {
             const completion = yield* setup.completion!;
+            yield* note(`Setup script exited with ${completion.exitCode ?? "no exit code"}.`);
             yield* setupTracker.stage(threadId, "setup-script", {
               status: completion.exitCode === 0 ? "done" : "failed",
               detail: `exited with ${completion.exitCode ?? "no exit code"}`,
@@ -939,6 +973,7 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     runId: RunId | null,
     cause: unknown,
+    log: PreparationLog = [],
   ) =>
     runId === null
       ? Effect.logWarning("Thread workspace preparation failed", {
@@ -952,11 +987,14 @@ const make = Effect.gen(function* () {
             commandId: CommandId.make(`${input.commandId}:fail`),
             threadId,
             runId,
-            failure: makeProviderFailure({
-              cause,
-              message: failureDetail(cause),
-              ...preparationFailureClass(cause),
-            }),
+            failure: withPreparationLog(
+              makeProviderFailure({
+                cause,
+                message: failureDetail(cause),
+                ...preparationFailureClass(cause),
+              }),
+              log,
+            ),
           })
           .pipe(
             Effect.catchCause((persistCause) =>
@@ -989,8 +1027,9 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     runId: RunId | null,
   ) {
+    const log = yield* Ref.make<PreparationLog>([]);
     const preparation = Effect.gen(function* () {
-      const prepare = prepareInBackground(input, threadId, runId);
+      const prepare = prepareInBackground(input, threadId, runId, log);
       if (
         runId === null ||
         (input.workspaceStrategy.type !== "worktree" && input.reusedWorktree === undefined)
@@ -1017,11 +1056,16 @@ const make = Effect.gen(function* () {
     });
     yield* preparation.pipe(
       Effect.onError((cause) =>
-        failPreparedRun(
-          input,
-          threadId,
-          runId,
-          Cause.hasInterruptsOnly(cause) ? "Worktree setup cancelled." : Cause.squash(cause),
+        Ref.get(log).pipe(
+          Effect.flatMap((lines) =>
+            failPreparedRun(
+              input,
+              threadId,
+              runId,
+              Cause.hasInterruptsOnly(cause) ? "Worktree setup cancelled." : Cause.squash(cause),
+              lines,
+            ),
+          ),
         ),
       ),
       Effect.ignoreCause,

@@ -386,27 +386,29 @@ describe("R7 path over the assembled layer (fake Slack SDK)", () => {
           (post) => !post.text.includes("SLACK-RESULT-7B") || post.threadTs === slackRoot,
         ),
       );
-      // The bot shows GOAT's conversation in full, but for Slack's task only its chip and
-      // completion report; the Slack request and Slack's first answer stay in Slack.
+      // The bot shows GOAT's conversation in full, but for Slack's task only its chip, which
+      // carries the result; the Slack request and Slack's answers stay in Slack.
       const after = yield* botMessages;
-      const slackInBot = after.messages.filter(
-        (message) => message.channel?.taskId === slackTask.taskId,
-      );
       assert.deepStrictEqual(
-        slackInBot.map((message) => message.channel?.kind),
-        ["result"],
-      );
-      assert.include(slackInBot[0]!.text, "SLACK-RESULT-7B");
-      const botTexts = after.messages.map((message) => message.text).join("\n");
-      assert.include(botTexts, "GOAT-RESULT-7A");
-      assert.notInclude(botTexts, "do: slack job");
-      assert.isFalse(
-        after.messages.some(
+        after.messages.filter(
           (message) =>
-            message.channel?.conversationId === slackTask.conversationId &&
-            message.channel?.kind !== "result",
+            message.channel?.taskId === slackTask.taskId ||
+            message.channel?.conversationId === slackTask.conversationId,
+        ),
+        [],
+      );
+      const cards = new Map(
+        after.turnItems.flatMap((item) =>
+          item.type === "notification" && item.ledgerTask !== undefined
+            ? [[item.ledgerTask.taskId, item.ledgerTask] as const]
+            : [],
         ),
       );
+      assert.strictEqual(cards.get(slackTask.taskId)?.summary, "SLACK-RESULT-7B");
+      assert.strictEqual(cards.get(goatTask.taskId)?.summary, "GOAT-RESULT-7A");
+      const botTexts = after.messages.map((message) => message.text).join("\n");
+      assert.notInclude(botTexts, "GOAT-RESULT-7A");
+      assert.notInclude(botTexts, "do: slack job");
       assert.deepStrictEqual(after.runs, []);
     }).pipe(Effect.provide(harness.layer));
   });

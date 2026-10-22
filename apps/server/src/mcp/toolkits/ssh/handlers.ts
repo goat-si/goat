@@ -1,6 +1,10 @@
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as FleetSync from "../../../goatclaw/FleetSync.ts";
-import { goatclawRoleBrief, goatclawRoleTemplate } from "../../../goatclaw/RoleTemplates.ts";
+import {
+  goatclawRoleBrief,
+  missingRoleCapabilities,
+  roleRefusal,
+} from "../../../goatclaw/RoleTemplates.ts";
 import { newCommandId } from "../../threadAccess.ts";
 import { addDevice } from "./addDevice.ts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
@@ -341,6 +345,8 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
             code: "capability_denied",
             message: "goatclaw is off, so role launches are unavailable.",
           });
+        const missing = role === undefined ? [] : missingRoleCapabilities(role, effective.profile);
+        if (role !== undefined && missing.length > 0) return yield* roleRefusal(role, missing);
         if (role !== undefined && input.message === undefined)
           return yield* new OrchestratorMcpFailure({
             code: "invalid_request",
@@ -455,7 +461,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                 host: input.host,
                 runtimeMode,
                 worktree: input.workspace?.type === "worktree",
-                ...(role === undefined ? {} : { profileId: goatclawRoleTemplate(role).profileId }),
+                ...(role === undefined ? {} : { role }),
               });
               const guardedLaunch = {
                 ...launch,

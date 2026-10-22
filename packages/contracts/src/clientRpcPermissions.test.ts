@@ -161,3 +161,14 @@ it("hub device verify and membership changes need orchestration:operate", () => 
   ])
     expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
 });
+
+it("note mutations require orchestration operation permission", () => {
+  for (const method of [
+    WS_METHODS.notesWrite,
+    WS_METHODS.notesUpdate,
+    WS_METHODS.notesMove,
+    WS_METHODS.notesDelete,
+    WS_METHODS.notesStartWork,
+  ])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
+});

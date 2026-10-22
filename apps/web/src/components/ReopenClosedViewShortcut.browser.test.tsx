@@ -19,8 +19,8 @@ const state = vi.hoisted(() => ({
   openPreview: vi.fn(),
   setShortcuts: vi.fn(async () => undefined),
   toast: vi.fn(),
-  legacySidebarEnabled: true,
-  updateClientSettings: vi.fn(async (_patch: { legacySidebarEnabled: boolean }) => true),
+  projectsSidebarEnabled: true,
+  updateClientSettings: vi.fn(async (_patch: { projectsSidebarEnabled: boolean }) => true),
   toggleSidebar: vi.fn(),
 }));
 
@@ -85,7 +85,7 @@ vi.mock(import("./ui/toast"), async (original) => {
 vi.mock(import("../hooks/useSettings"), async (original) => ({
   ...(await original()),
   useEnvironmentIdentificationMode: (() => "none") as never,
-  useLegacySidebarEnabled: () => state.legacySidebarEnabled,
+  useLegacySidebarEnabled: () => state.projectsSidebarEnabled,
   updateClientSettings: state.updateClientSettings as never,
 }));
 vi.mock("./LegacySidebar", () => ({ default: () => null }));
@@ -147,12 +147,12 @@ function setup() {
     keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
     params: {},
     workspaceAvailable: true,
-    legacySidebarEnabled: true,
+    projectsSidebarEnabled: true,
   });
   state.navigate.mockResolvedValue(undefined);
   state.openPreview.mockReset();
   state.updateClientSettings.mockImplementation(async (patch) => {
-    state.legacySidebarEnabled = patch.legacySidebarEnabled;
+    state.projectsSidebarEnabled = patch.projectsSidebarEnabled;
     return true;
   });
   menuListeners.clear();
@@ -351,14 +351,14 @@ describe("root reopen shortcut", () => {
     )[0].find(({ command }) => command === "sidebar.toggleActivity");
     expect(forwarded).toBeDefined();
     await act(() => menuAction(forwarded!.command));
-    expect(state.legacySidebarEnabled).toBe(false);
-    expect(state.updateClientSettings).toHaveBeenLastCalledWith({ legacySidebarEnabled: false });
+    expect(state.projectsSidebarEnabled).toBe(false);
+    expect(state.updateClientSettings).toHaveBeenLastCalledWith({ projectsSidebarEnabled: false });
     expect(state.toggleSidebar).not.toHaveBeenCalled();
 
     await screen.rerender();
     await act(() => menuAction(forwarded!.command));
-    expect(state.legacySidebarEnabled).toBe(true);
-    expect(state.updateClientSettings).toHaveBeenLastCalledWith({ legacySidebarEnabled: true });
+    expect(state.projectsSidebarEnabled).toBe(true);
+    expect(state.updateClientSettings).toHaveBeenLastCalledWith({ projectsSidebarEnabled: true });
     expect(state.updateClientSettings).toHaveBeenCalledTimes(2);
 
     await act(() => menuAction("sidebar.toggle"));
@@ -376,7 +376,7 @@ describe("root reopen shortcut", () => {
       { command: "sidebar.toggleActivity", shortcut: parseKeybindingShortcut("mod+shift+u") },
     ]);
     await act(() => menuAction("sidebar.toggleActivity"));
-    expect(state.legacySidebarEnabled).toBe(false);
+    expect(state.projectsSidebarEnabled).toBe(false);
     expect(state.toggleSidebar).not.toHaveBeenCalled();
   });
 });

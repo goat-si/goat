@@ -257,6 +257,22 @@ export function usePendingThreadRequests(input: {
       if (key.startsWith(prefix) && !retained.has(DraftId.make(key)))
         clearQuestionAttachmentDraft(DraftId.make(key));
     }
+    // Answers held until the projection resolved their question are released here. A leftover
+    // responding id is harmless: it is only compared with a question still pending.
+    const stillPending = new Set<string>(pendingRequestIds);
+    for (const key of userInputResponsesInFlight.current) {
+      const [keyEnvironmentId, keyThreadId, keyRequestId] = JSON.parse(key) as [
+        string,
+        string,
+        string,
+      ];
+      if (
+        keyEnvironmentId === environmentId &&
+        keyThreadId === questionThread.id &&
+        !stillPending.has(keyRequestId)
+      )
+        userInputResponsesInFlight.current.delete(key);
+    }
   }, [environmentId, activeThread, projectedThreadId, pendingUserInputs]);
   const activePendingDraftAnswers =
     !activePendingUserInput || !activeThreadId
@@ -356,15 +372,17 @@ export function usePendingThreadRequests(input: {
       );
       if ((useQuestionAttachmentPreparation.getState().counts[target] ?? 0) > 0) return;
       const draft = useComposerDraftStore.getState().getComposerDraft(target);
-      providerAnswers[question.id] = projectPendingUserInputAnswer(
-        answers[question.id],
-        settleThreadContextsForAgent({
-          records: draft?.threadContexts ?? [],
-          agentEnvironmentId: environmentId,
-          entries: appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries,
-          isDesktopRenderer: window.desktopBridge !== undefined,
-        }),
-      );
+      // An optional question left blank has no answer and must stay absent from the command.
+      if (answers[question.id] !== undefined)
+        providerAnswers[question.id] = projectPendingUserInputAnswer(
+          answers[question.id],
+          settleThreadContextsForAgent({
+            records: draft?.threadContexts ?? [],
+            agentEnvironmentId: environmentId,
+            entries: appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries,
+            isDesktopRenderer: window.desktopBridge !== undefined,
+          }),
+        );
       const attachments = draft ? [...draft.images, ...draft.files] : [];
       if (attachments.length === 0) continue;
       const uploaded = getUploadedAttachments({ environmentId, images: attachments });
@@ -400,8 +418,12 @@ export function usePendingThreadRequests(input: {
         error instanceof Error ? error.message : "Failed to submit user input.",
       );
     }
-    userInputResponsesInFlight.current.delete(responseKey);
-    setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+    // An accepted answer keeps the question locked until the projection drops it. Unlocking on
+    // the receipt let a second option pick send another answer that failed as already answered.
+    if (result._tag === "Failure") {
+      userInputResponsesInFlight.current.delete(responseKey);
+      setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+    }
     return result;
   };
 

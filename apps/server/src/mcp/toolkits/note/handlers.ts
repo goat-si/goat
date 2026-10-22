@@ -33,6 +33,11 @@ export const layer = Access.toLayer(NoteToolkit, {
         .pipe(Effect.mapError(failure));
     }),
   ),
+  goat_note_update: Access.writes((input) =>
+    Effect.gen(function* () {
+      return yield* (yield* Notes.NotesService).update(input).pipe(Effect.mapError(failure));
+    }),
+  ),
   goat_note_move: Access.writes((input) =>
     Effect.gen(function* () {
       return yield* (yield* Notes.NotesService).move(input, "agent").pipe(Effect.mapError(failure));

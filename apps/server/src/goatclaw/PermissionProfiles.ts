@@ -1,4 +1,5 @@
 import {
+  type GoatclawRole,
   type GoatclawSettings,
   OrchestratorMcpFailure,
   PermissionProfile,
@@ -16,6 +17,9 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { clientRuntimeModeCeiling, type McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { goatclawRoleTemplate, missingRoleCapabilities, roleRefusal } from "./RoleTemplates.ts";
+/** The goatclaw brief a delegated task starts with, reached through the profile service's module. */
+export { goatclawDelegatedTaskBrief as childBrief } from "./RoleTemplates.ts";
 
 const modes: ReadonlyArray<RuntimeMode> = [
   "approval-required",
@@ -67,15 +71,18 @@ interface ClaimInput {
   readonly host?: string | undefined;
   readonly worktree?: boolean | undefined;
   readonly forwarded?: PermissionProfile | undefined;
-  /** A stored profile the child runs under, narrowed by the caller's; role launches set it. */
-  readonly profileId?: string | undefined;
+  /**
+   * A role launch: the child runs under the role's stored profile narrowed by the caller's, and
+   * is refused when that lacks a capability the role's work uses.
+   */
+  readonly role?: GoatclawRole | undefined;
   /**
    * A follow-up send to a thread on `host`. Its lane is that thread: a lane it already holds is
    * not counted twice, and no local profile binding is written for a thread that lives elsewhere.
    */
   readonly remoteThreadId?: string | undefined;
 }
-type CheckResult =
+export type CheckResult =
   | { readonly ok: true; readonly effective: PermissionProfileView }
   | { readonly ok: false; readonly reason: string };
 interface CloudApprovalInput {
@@ -178,7 +185,7 @@ const ownerOf = (scope: McpInvocationScope) =>
 const encodeProfile = Schema.encodeSync(Schema.fromJsonString(PermissionProfile));
 const decodeProfile = Schema.decodeUnknownEffect(Schema.fromJsonString(PermissionProfile));
 
-const checkProfile = (
+export const checkProfile = (
   effective: PermissionProfileView,
   capability: PermissionCapability,
   context: CheckContext,
@@ -411,18 +418,21 @@ export const layer = Layer.effect(
     ) {
       const effective = yield* resolve(scope, input.runtimeMode, input.forwarded);
       if (!effective.enabled) {
-        if (input.profileId !== undefined)
+        if (input.role !== undefined)
           return yield* refusal("goatclaw is off, so role launches are unavailable.");
         return effective;
       }
       let granted = effective;
-      if (input.profileId !== undefined) {
+      if (input.role !== undefined) {
+        const { profileId } = goatclawRoleTemplate(input.role);
         const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
-        const named = policy.profiles[input.profileId];
+        const named = policy.profiles[profileId];
         if (named === undefined)
-          return yield* refusal(`Permission profile ${input.profileId} does not exist.`);
+          return yield* refusal(`Permission profile ${profileId} does not exist.`);
         // intersectProfiles keeps its first argument's id, so the child is bound under the role's profile.
         const profile = intersectProfiles(named, effective.profile);
+        const missing = missingRoleCapabilities(input.role, profile);
+        if (missing.length > 0) return yield* roleRefusal(input.role, missing);
         granted = { ...effective, profile, runtimeMode: profile.runtimeModeCeiling };
       }
       const sql = yield* sqlEffect;
@@ -440,11 +450,35 @@ export const layer = Layer.effect(
               yield* admit(checkProfile(effective, "threads.remote", input));
             if (input.worktree) yield* admit(checkProfile(effective, "worktree.create", input));
             if (existing === undefined) {
+              const ancestors =
+                scope.thread === undefined
+                  ? []
+                  : yield* sql<{ thread_id: ThreadId }>`
+                WITH RECURSIVE ancestors(thread_id) AS (
+                  SELECT ${scope.thread.threadId}
+                  UNION
+                  SELECT s.thread_id FROM orchestration_v2_projection_subagents s
+                  JOIN ancestors a ON s.child_thread_id = a.thread_id WHERE s.origin = 'app_owned'
+                )
+                SELECT a.thread_id FROM ancestors a WHERE NOT EXISTS (
+                  SELECT 1 FROM orchestration_v2_projection_subagents s
+                  WHERE s.child_thread_id = a.thread_id AND s.origin = 'app_owned')`;
+              const root = ancestors[0]?.thread_id;
+              if (scope.thread !== undefined && root === undefined)
+                return yield* refusal("The delegated task's caller ancestry is unavailable.");
+              const rootProfile =
+                root === undefined ? effective : yield* resolve(scope, undefined, undefined, root);
               // Pending/unknown launches consume a slot across restarts. Watches and cancellation requests are not terminal evidence.
               const counts = yield* sql<{
                 count: number;
-              }>`SELECT COUNT(DISTINCT COALESCE(l.host, 'local') || ':' || COALESCE(l.child_thread_id, l.id)) AS count FROM goatclaw_lane_reservations l
-          WHERE l.owner_key = ${owner}
+              }>`WITH RECURSIVE callers(thread_id) AS (
+            SELECT ${root ?? null}
+            UNION
+            SELECT s.child_thread_id FROM orchestration_v2_projection_subagents s
+            JOIN callers c ON s.thread_id = c.thread_id
+            WHERE s.origin = 'app_owned' AND s.child_thread_id IS NOT NULL)
+          SELECT COUNT(DISTINCT COALESCE(l.host, 'local') || ':' || COALESCE(l.child_thread_id, l.id)) AS count FROM goatclaw_lane_reservations l
+          WHERE (l.owner_key = ${owner} OR l.owner_key IN (SELECT 'thread:' || thread_id FROM callers))
           AND (${input.remoteThreadId ?? null} IS NULL OR l.host IS NOT ${input.host ?? null} OR l.child_thread_id IS NOT ${input.remoteThreadId ?? null})
           AND (
             (l.host IS NULL AND (EXISTS (SELECT 1 FROM orchestration_v2_projection_runs r WHERE r.thread_id = l.child_thread_id AND r.status IN ('preparing','queued','starting','running','waiting'))
@@ -452,27 +486,37 @@ export const layer = Layer.effect(
             OR (l.host IS NOT NULL AND (l.pending = 1 OR EXISTS (SELECT 1 FROM remote_dispatches d
               WHERE (d.correlation_id = l.correlation_id OR d.task_id = l.id)
               AND d.state IN ('launching','running','lost')))))`;
-              // Native subagents share the caller's session and never reserve, so count the live
-              // ones it and its native descendants started. Nested Codex v2 records sit on the
-              // spawning child thread; UNION keeps the walk finite.
+              // Keep reservation ownership on the actual caller for retries. Its delegation
+              // family shares capacity, including natives below delegated children; UNION
+              // keeps both ancestry walks finite even if a projection contains a cycle.
               const natives =
                 scope.thread === undefined
                   ? []
                   : yield* sql<{
                       count: number;
-                    }>`WITH RECURSIVE native(subagent_id, child_thread_id, status, run_id) AS (
-            SELECT s.subagent_id, s.child_thread_id, s.status, s.run_id FROM orchestration_v2_projection_subagents s
-            WHERE s.thread_id = ${scope.thread.threadId} AND s.origin = 'provider_native'
+                    }>`WITH RECURSIVE native(subagent_id, child_thread_id, status, run_id, origin) AS (
+            SELECT s.subagent_id, s.child_thread_id, s.status, s.run_id, s.origin FROM orchestration_v2_projection_subagents s
+            WHERE s.thread_id = ${root}
             UNION
-            SELECT s.subagent_id, s.child_thread_id, s.status, s.run_id FROM orchestration_v2_projection_subagents s
-            JOIN native n ON s.thread_id = n.child_thread_id WHERE s.origin = 'provider_native')
+            SELECT s.subagent_id, s.child_thread_id, s.status, s.run_id, s.origin FROM orchestration_v2_projection_subagents s
+            JOIN native n ON s.thread_id = n.child_thread_id)
           SELECT COUNT(DISTINCT n.subagent_id) AS count FROM native n
-          WHERE n.status IN ('pending','running','waiting') AND NOT EXISTS (
+          WHERE n.origin = 'provider_native' AND n.status IN ('pending','running','waiting') AND NOT EXISTS (
             SELECT 1 FROM orchestration_v2_projection_runs r WHERE r.run_id = n.run_id AND r.status = 'rolled_back')`;
               yield* admit(
-                checkProfile(effective, "threads.launch", {
-                  lanesRunning: (counts[0]?.count ?? 0) + (natives[0]?.count ?? 0),
-                }),
+                checkProfile(
+                  {
+                    ...effective,
+                    profile: {
+                      ...effective.profile,
+                      maxLanes: Math.min(effective.profile.maxLanes, rootProfile.profile.maxLanes),
+                    },
+                  },
+                  "threads.launch",
+                  {
+                    lanesRunning: (counts[0]?.count ?? 0) + (natives[0]?.count ?? 0),
+                  },
+                ),
               );
               yield* sql`INSERT INTO goatclaw_lane_reservations (id, owner_key, child_thread_id, host) VALUES (${input.id}, ${owner}, ${input.childThreadId ?? input.remoteThreadId ?? null}, ${input.host ?? null})`;
             }

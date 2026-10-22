@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { AuthOrchestrationReadScope, WsNotesRpcGroup, WS_METHODS } from "@goat/contracts";
+import { AuthOrchestrationReadScope, ThreadId, WsNotesRpcGroup, WS_METHODS } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -19,6 +19,7 @@ const readGroup = WsNotesRpcGroup.omit(
   WS_METHODS.notesList,
   WS_METHODS.notesRead,
   WS_METHODS.notesWrite,
+  WS_METHODS.notesUpdate,
   WS_METHODS.notesMove,
   WS_METHODS.notesDelete,
   WS_METHODS.notesStartWork,
@@ -132,7 +133,10 @@ it.effect("read-only MCP callers can read notes and cannot write or move them", 
         baseRevision: original.revision,
       })
       .pipe(Stream.unwrap, Stream.runCollect);
-    for (const result of [write, move]) {
+    const update = yield* toolkit
+      .handle("goat_note_update", { path: original.path, pinned: true })
+      .pipe(Stream.unwrap, Stream.runCollect);
+    for (const result of [write, move, update]) {
       const failure = result.at(-1)!.result;
       assert.isTrue("code" in failure);
       if ("code" in failure) assert.strictEqual(failure.code, "capability_denied");
@@ -147,6 +151,45 @@ it.effect("read-only MCP callers can read notes and cannot write or move them", 
           ...testScope,
           client: { ...testScope.client, access: "read-only" },
         }),
+      ),
+    ),
+  ),
+);
+
+it.effect("MCP header updates preserve body, status and author", () =>
+  Effect.gen(function* () {
+    const notes = yield* Notes.NotesService;
+    const original = yield* notes.write(
+      { path: "task.md", body: "Keep body", status: "doing", baseRevision: null },
+      "user",
+    );
+    const toolkit = yield* NoteToolkit.pipe(
+      Effect.provide(Access.HandlersLayer.layer(Handlers.layer)),
+    );
+    const updated = yield* toolkit
+      .handle("goat_note_update", {
+        path: original.path,
+        pinned: true,
+        relate: { threadId: ThreadId.make("reference"), host: "host" },
+      })
+      .pipe(Stream.unwrap, Stream.runCollect);
+    const result = updated.at(-1)!.result;
+    assert.isTrue("body" in result);
+    if ("body" in result) {
+      assert.strictEqual(result.body, "Keep body");
+      assert.strictEqual(result.status, "doing");
+      assert.strictEqual(result.updatedBy, "user");
+      assert.isTrue(result.pinned);
+      assert.deepStrictEqual(result.related, [
+        { threadId: ThreadId.make("reference"), host: "host" },
+      ]);
+    }
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        notesLayer(),
+        liveThreadsLayer,
+        Layer.succeed(Invocation.McpInvocationContext, testScope),
       ),
     ),
   ),

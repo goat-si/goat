@@ -1,10 +1,18 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { NOTE_FOLDER_MAX_LENGTH, NoteFolder, NotePath } from "./notes.ts";
+import {
+  NOTE_FOLDER_MAX_LENGTH,
+  NOTE_PREVIEW_MAX_LENGTH,
+  NoteSummary,
+  NoteFolder,
+  NotePath,
+} from "./notes.ts";
 
 const isPath = Schema.is(NotePath);
 const isFolder = Schema.is(NoteFolder);
+const decodeSummary = Schema.decodeUnknownSync(NoteSummary);
+const isSummary = Schema.is(NoteSummary);
 
 describe("NotePath", () => {
   it("accepts a root note or a note in one folder", () => {
@@ -54,5 +62,35 @@ describe("NoteFolder", () => {
     expect(isFolder("a/b")).toBe(false);
     expect(isFolder(".git")).toBe(false);
     expect(isFolder("")).toBe(false);
+  });
+});
+
+describe("NoteSummary compatibility", () => {
+  const legacy = {
+    path: "a.md",
+    folder: null,
+    title: "A",
+    status: "idea",
+    threads: [],
+    updatedBy: null,
+    revision: "a".repeat(64),
+    updatedAt: "2026-10-23T00:00:00.000Z",
+    size: 0,
+  };
+  it("decodes summaries from older hubs without metadata fields", () => {
+    expect(decodeSummary(legacy)).toEqual(legacy);
+  });
+  it("decodes pinned, preview and reference threads from newer hubs", () => {
+    const summary = {
+      ...legacy,
+      pinned: true,
+      preview: "context",
+      related: [{ threadId: "t", host: null }],
+    };
+    expect(decodeSummary(summary)).toEqual(summary);
+  });
+  it("rejects previews over the wire cap", () => {
+    expect(isSummary({ ...legacy, preview: "x".repeat(NOTE_PREVIEW_MAX_LENGTH) })).toBe(true);
+    expect(isSummary({ ...legacy, preview: "x".repeat(NOTE_PREVIEW_MAX_LENGTH + 1) })).toBe(false);
   });
 });

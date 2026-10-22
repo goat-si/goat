@@ -1002,7 +1002,8 @@ const layerMemoryAdministrationToolkit = McpHttpServer.toolkitRegistration(
 export const layerMemoryToolkits = Layer.mergeAll(
   McpHttpServer.layerMemoryToolkit,
   layerMemoryAdministrationToolkit,
-);
+  // The goatclaw capability gate on every MCP registration reads the caller's profile.
+).pipe(Layer.provide(PermissionProfiles.layer));
 
 const layerServerEnvironment = ServerEnvironment.layer.pipe(
   Layer.provide(layerProviderMemoryImport),
@@ -1395,7 +1396,7 @@ const layerMakeRoutes = Layer.mergeAll(
     McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
     ComputerUseLeaseRoute.layer,
     layerMemoryToolkits,
-    McpHttpServer.layerProviderToolkit,
+    McpHttpServer.layerProviderToolkit.pipe(Layer.provide(PermissionProfiles.layer)),
     HandoffExpiry.layer,
     // Fleet goals act through the same launch, watch and dispatch services as these tools.
     McpHttpServer.layerFleetToolkit.pipe(

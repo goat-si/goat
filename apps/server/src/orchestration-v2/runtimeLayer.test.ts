@@ -1957,7 +1957,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         if (result._tag === "Failure")
           assert.equal(
             result.failure.message,
-            `This question was already ${status === "resolved" ? "answered by another responder" : status} at an unknown time.`,
+            `This question ${status === "resolved" ? "was already answered by another responder at an unknown time." : `${status === "expired" ? "expired" : "was cancelled"} at an unknown time, so it can no longer be answered.`}`,
           );
         assert.equal(
           (yield* orchestrator.getThreadProjection(question.threadId)).runtimeRequests[0]?.status,
@@ -2313,7 +2313,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         .pipe(Effect.result);
       assert.equal(dismissedAgain._tag, "Failure");
       if (dismissedAgain._tag === "Failure")
-        assert.include(dismissedAgain.failure.message, "already dismissed by the user");
+        assert.include(dismissedAgain.failure.message, "dismissed by the user at 1970");
       assert.equal(
         dismissedProjection.nodes.find((node) => node.id === dismissed.nodeId)?.status,
         "cancelled",
