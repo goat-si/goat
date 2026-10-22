@@ -21,7 +21,7 @@ import {
   SshConnectionTarget,
   type EnvironmentConnectionPresentation,
 } from "@goat/client-runtime/connection";
-import { act, render, stubGlobal } from "../../../test/render";
+import { act, render, stubGlobal } from "../../test/render";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import type { LegendListRef } from "@legendapp/list/react";
 import type { MessagesTimeline } from "~/components/chat/MessagesTimeline";

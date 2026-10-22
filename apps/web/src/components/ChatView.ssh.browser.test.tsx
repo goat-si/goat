@@ -9,7 +9,7 @@ import {
   store,
   result,
   deferred,
-} from "./chat/sshComposerTestFixture";
+} from "~/test/sshComposerFixture";
 import { act, fakeTimers } from "../../test/render";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";

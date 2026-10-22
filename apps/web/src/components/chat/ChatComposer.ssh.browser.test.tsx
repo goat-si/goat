@@ -1,4 +1,4 @@
-import { state, setupSshComposer, id, store, result, deferred } from "./sshComposerTestFixture";
+import { state, setupSshComposer, id, store, result, deferred } from "~/test/sshComposerFixture";
 import { act } from "../../../test/render";
 import type { ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
