@@ -10,7 +10,7 @@ import {
   result,
   deferred,
 } from "~/test/sshComposerFixture";
-import { act, fakeTimers } from "../../test/render";
+import { act, fakeTimers, stubGlobal } from "../../test/render";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -620,11 +620,14 @@ describe("timeline follow navigation", () => {
     stack.use(fakeTimers());
     const frames = new Map<number, FrameRequestCallback>();
     let nextFrame = 0;
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      frames.set(++nextFrame, callback);
-      return nextFrame;
-    });
-    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    // Acquired after the fixture, so the stubs restore before it unmounts.
+    stack.use(
+      stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        frames.set(++nextFrame, callback);
+        return nextFrame;
+      }),
+    );
+    stack.use(stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id)));
     // Server-thread routes reuse ChatView; exercise that lifetime without a keyed remount.
     async function mountReusedView(draftId = id) {
       const session = store().getDraftSession(draftId)!;

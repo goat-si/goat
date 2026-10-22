@@ -383,6 +383,9 @@ export async function setupSshComposer(realComposer = false) {
     vi.stubGlobal("scrollBy", () => {});
   }
   const registry = state.registry!;
+  // The registry outlives one test, and a test that times out never disposes. Unwrap a spy it
+  // left behind so this one wraps the real get instead of recursing through the old spy.
+  if (vi.isMockFunction(registry.get)) registry.get.mockRestore();
   const get = registry.get.bind(registry);
   vi.spyOn(registry, "get").mockImplementation(((atom: Atom.Atom<unknown>) =>
     atom === environmentCatalog.catalogValueAtom
