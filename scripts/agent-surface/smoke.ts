@@ -12,7 +12,7 @@
  * Checks the listing against packages/contracts/src/agentSurface/registry.ts, the published
  * annotations and closed schemas, refusal of unknown arguments, and that every safe read answers
  * with a result or a coded error. When the server offers goat_call, goat_eval or goat_describe
- * (docs/internals/agent-surface.md, rollout 2, 4, 10) it also checks that a call through them
+ * (docs/internals/agent-surface.md#rollout, steps 5 and 11) it also checks that a call through them
  * matches the direct call and that goat_eval enforces its call cap. Exit 0 when nothing failed.
  */
 type Json =
@@ -217,7 +217,7 @@ const main = async (): Promise<ReadonlyArray<Check>> => {
   check("safe reads answer with a result or a coded error", readFailures);
 
   if (!listedNames.has("goat_call"))
-    check("goat_call matches direct calls", [], "goat_call is not offered (rollout 4)");
+    check("goat_call matches direct calls", [], "goat_call is not offered (rollout step 5)");
   else {
     const failures: Array<string> = [];
     for (const [name, args] of SAFE_READS) {
@@ -239,7 +239,11 @@ const main = async (): Promise<ReadonlyArray<Check>> => {
   }
 
   if (!listedNames.has("goat_eval"))
-    check("goat_eval enforces its call cap", [], "goat_eval is not offered (rollout 10)");
+    check(
+      "goat_eval enforces its call cap",
+      [],
+      "goat_eval is not offered (rollout step 11, gated)",
+    );
   else {
     const call = { call: "environment.read", args: {} };
     const tooMany = { seq: Array.from({ length: 33 }, () => call) };
@@ -259,7 +263,11 @@ const main = async (): Promise<ReadonlyArray<Check>> => {
   }
 
   if (!listedNames.has("goat_describe"))
-    check("goat_describe covers every listed tool", [], "goat_describe is not offered (rollout 2)");
+    check(
+      "goat_describe covers every listed tool",
+      [],
+      "goat_describe is not offered (rollout step 5)",
+    );
   else {
     const failures: Array<string> = [];
     for (const tool of listed) {

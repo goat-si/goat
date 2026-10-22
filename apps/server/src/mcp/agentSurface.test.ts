@@ -665,9 +665,9 @@ describe("agent surface access", () => {
     }
   });
 
-  // quarantine: #778 goat_call is not on dev yet; add it to via when rollout 4 lands.
+  // quarantine: #778 goat_call is not on dev yet; add it to via when rollout step 5 lands.
   it.todo("gives goat_call the same outcome as a direct call for every entry and caller");
-  // quarantine: #778 goat_eval is not on dev yet; add a one-call program to via when rollout 10 lands.
+  // quarantine: #778 goat_eval is gated on measurement (rollout step 11); add a one-call program to via if it ships.
   it.todo(
     "gives a goat_eval call step the same outcome as a direct call for every entry and caller",
   );

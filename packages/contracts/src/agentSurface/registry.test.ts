@@ -4,98 +4,90 @@ import { type AgentSurfaceEntry, agentSurfaceRegistry } from "./registry.ts";
 type Entry = (typeof agentSurfaceRegistry)[keyof typeof agentSurfaceRegistry];
 const entries: ReadonlyArray<Entry> = Object.values(agentSurfaceRegistry);
 
-// The three projections in docs/internals/agent-surface.md#paths. Resource and verb are stored
+// The projections in docs/internals/agent-surface.md#paths. Resource and verb are stored
 // separately because names such as goat_preview_recording_start cannot be split reliably.
 const mcpName = (entry: AgentSurfaceEntry) => `goat_${entry.resource}_${entry.verb}`;
 const kebab = (part: string) => part.replaceAll("_", "-");
 const cliCommand = (entry: AgentSurfaceEntry) =>
   `goat ${kebab(entry.resource)} ${kebab(entry.verb)}`;
-const docsAnchor = (entry: AgentSurfaceEntry) =>
-  `reference/${kebab(entry.resource)}.md#${kebab(entry.verb)}`;
 
-// The naming map in docs/internals/agent-surface.md#naming-map: 48 legacy names whose canonical
-// name is the projection of their path. They must stay resolvable through the deprecation window,
-// so each one stays in exactly one entry's legacyNames before and after the listing flip.
-const DESIGN_RENAMES = [
+// Shipped names that are not the projection of their path. They stay callable and gain a
+// canonical name at the listing flip (docs/internals/agent-surface.md#rollout, step 10; #781).
+const OFF_GRAMMAR_NAMES = [
+  "channel_bot_home",
+  "channel_bot_home_claim",
+  "channel_ingest",
+  "channel_input_get",
+  "channel_task_export",
+  "channel_task_get",
+  "channel_task_list",
+  "channel_task_move",
+  "channel_task_report",
   "create_threads",
   "delegate_task",
-  "task_status",
-  "task_cancel",
-  "orchestrator_capabilities",
-  "schedule_task",
-  "list_scheduled_tasks",
-  "update_scheduled_task",
   "delete_scheduled_task",
-  "run_scheduled_task_now",
-  "request_secret",
-  "preview_status",
-  "preview_open",
-  "preview_dialog",
-  "preview_navigate",
-  "preview_resize",
-  "preview_set_appearance",
-  "preview_snapshot",
-  "preview_click",
-  "preview_type",
-  "preview_hover",
-  "preview_select",
-  "preview_drag",
-  "preview_upload",
-  "preview_press",
-  "preview_scroll",
-  "preview_evaluate",
-  "preview_wait_for",
-  "preview_recording_start",
-  "preview_recording_stop",
+  "device_close",
   "device_list",
   "device_open",
   "device_screenshot",
-  "device_close",
+  "goat_cloud_holders",
+  "goat_cloud_launch",
+  "goat_cloud_run_forget",
+  "goat_cloud_run_list",
+  "goat_cloud_run_register",
+  "goat_goatclaw_sync",
   "html_preview",
   "html_render",
   "link_pull_request",
-  "unlink_pull_request",
+  "list_scheduled_tasks",
   "list_thread_pull_requests",
-  "watch_pull_request",
-  "unwatch_pull_request",
-  "write_pull_request_guides",
-  "read_pull_request_guide",
-  "channel_ingest",
-  "channel_input_get",
-  "channel_task_get",
-  "channel_task_list",
-  "channel_task_report",
-] as const;
-
-// Tools added after the naming map, or kept "unchanged" by it although their name is not the
-// projection of their path. Each needs a canonical-name decision before the listing flip (#781).
-const UNMAPPED_NAMES = [
-  "goat_goatclaw_sync",
-  "goat_cloud_holders",
-  "goat_cloud_launch",
-  "goat_cloud_run_register",
-  "goat_cloud_run_list",
-  "goat_cloud_run_forget",
-  "channel_bot_home",
-  "channel_bot_home_claim",
-  "channel_task_export",
-  "channel_task_move",
-  "preview_back",
-  "preview_forward",
-  "preview_reload",
-  "preview_logs",
-  "memory_search",
+  "memory_forget",
+  "memory_history",
+  "memory_hub_disable",
   "memory_list",
   "memory_read",
-  "memory_history",
-  "memory_sync_status",
-  "memory_upsert",
-  "memory_forget",
-  "memory_revert_resolution",
   "memory_read_source",
-  "memory_hub_disable",
+  "memory_revert_resolution",
+  "memory_search",
   "memory_settings_get",
   "memory_settings_update",
+  "memory_sync_status",
+  "memory_upsert",
+  "orchestrator_capabilities",
+  "preview_back",
+  "preview_click",
+  "preview_dialog",
+  "preview_drag",
+  "preview_evaluate",
+  "preview_forward",
+  "preview_hover",
+  "preview_logs",
+  "preview_navigate",
+  "preview_open",
+  "preview_press",
+  "preview_recording_start",
+  "preview_recording_stop",
+  "preview_reload",
+  "preview_resize",
+  "preview_scroll",
+  "preview_select",
+  "preview_set_appearance",
+  "preview_snapshot",
+  "preview_status",
+  "preview_type",
+  "preview_upload",
+  "preview_wait_for",
+  "read_pull_request_guide",
+  "request_secret",
+  "run_scheduled_task_now",
+  "schedule_task",
+  "task_cancel",
+  "task_status",
+  "unlink_pull_request",
+  "unwatch_pull_request",
+  "update_scheduled_task",
+  "watch_pull_request",
+  "write_pull_request_guides",
 ] as const;
 
 describe("agent surface grammar", () => {
@@ -107,26 +99,23 @@ describe("agent surface grammar", () => {
     }
   });
 
-  it("projects every path to a distinct MCP name, CLI command and docs anchor", () => {
-    for (const project of [mcpName, cliCommand, docsAnchor]) {
+  it("projects every path to a distinct MCP name and CLI command", () => {
+    for (const project of [mcpName, cliCommand]) {
       const projected = entries.map(project);
       expect(new Set(projected).size).toBe(entries.length);
     }
   });
 
-  it("names every new tool by its path; older names are listed with a pending decision", () => {
-    const pending = new Set<string>([...DESIGN_RENAMES, ...UNMAPPED_NAMES]);
+  it("names every new tool by its path", () => {
+    const listed = new Set<string>(OFF_GRAMMAR_NAMES);
     const offGrammar = entries.filter((entry) => entry.name !== mcpName(entry));
     expect(
-      offGrammar.filter((entry) => !pending.has(entry.name)).map((entry) => entry.path),
+      offGrammar.filter((entry) => !listed.has(entry.name)).map((entry) => entry.path),
     ).toEqual([]);
-    // A name that was renamed leaves this list; the alias test below keeps it resolvable.
-    const known = new Set(entries.flatMap((entry) => entry.legacyNames));
-    expect(UNMAPPED_NAMES.filter((name) => !known.has(name))).toEqual([]);
   });
 
-  it("keeps each design rename resolvable as exactly one entry's legacy name", () => {
-    for (const legacy of DESIGN_RENAMES) {
+  it("keeps every shipped name resolvable as exactly one entry's legacy name", () => {
+    for (const legacy of OFF_GRAMMAR_NAMES) {
       const owners = entries.filter((entry) => entry.legacyNames.includes(legacy));
       expect(
         owners.map((entry) => entry.path),
