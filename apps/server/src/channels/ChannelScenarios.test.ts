@@ -74,6 +74,7 @@ import {
   defaultScript,
   environmentId,
   goatInput,
+  latestCard,
   linkSlackUser,
   makeHarness,
   makeRuntime,
@@ -146,6 +147,57 @@ const notesFileExists = Effect.gen(function* () {
  */
 
 describe("GOAT bot boundary (scenario 6)", () => {
+  const starSummary =
+    "OpenCodex has 17.8k stars: https://github.com/example/opencodex\nNOT RUN: separate tests.";
+  const trailers = ["NOT RUN:", "Reported tests:", "GOAT check:"];
+
+  it.effect("shows a GOAT Bot task's result once, on its card, without agent trailers", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("do: count the stars", "stars-goat"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      harness.world.setStatus(task.worker!.threadId, 1, "completed", starSummary);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const texts = (yield* botMessages).messages.map((message) => message.text).join("\n");
+      assert.notInclude(texts, "17.8k");
+      for (const trailer of trailers) assert.notInclude(texts, trailer);
+      const card = yield* latestCard;
+      assert.strictEqual(card?.status, "completed");
+      assert.include(card?.summary ?? "", "17.8k stars");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("sends a Slack result as prose and leaves the bot's card as its only result", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(slackInput("do: count the stars", "stars-slack"), slackContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      harness.world.setStatus(task.worker!.threadId, 1, "completed", starSummary);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const results = resultsTo(harness.slackSent, "result");
+      assert.lengthOf(results, 1);
+      const text = results[0]!.message.text;
+      assert.include(text, "17.8k stars: https://github.com/example/opencodex");
+      for (const trailer of trailers) assert.notMatch(text, new RegExp("^" + trailer, "mu"));
+      const texts = (yield* botMessages).messages.map((message) => message.text).join("\n");
+      assert.notInclude(texts, "17.8k");
+      assert.include((yield* latestCard)?.summary ?? "", "17.8k stars");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect(
     "refuses MCP and scheduled direct sends without bot run events or provider effects",
     () => {
@@ -432,10 +484,14 @@ describe("GOAT bot boundary (scenario 6)", () => {
       yield* runtime.drain;
       yield* runtime.drain;
       assert.strictEqual((yield* onlyTask).status, "completed");
-      const next = yield* orchestrator.getThreadRecords(nextBotId, ["messages"]);
+      // The task's card in the replacement bot carries the result.
+      const next = yield* orchestrator.getThreadRecords(nextBotId, ["turnItems"]);
       assert.isTrue(
-        next.messages.some(
-          (message) => message.role === "assistant" && message.text.includes("Shipped to staging."),
+        next.turnItems.some(
+          (item) =>
+            item.type === "notification" &&
+            item.ledgerTask?.status === "completed" &&
+            item.ledgerTask.summary === "Shipped to staging.",
         ),
       );
     }).pipe(Effect.provide(harness.layer));
@@ -987,7 +1043,7 @@ describe("duplicates and restarts (scenario 2)", () => {
         assert.strictEqual(resultsTo(harness.slackSent, "result").length, 1);
         assert.strictEqual(
           resultsTo(harness.slackSent, "result")[0]?.message.text,
-          "Done: recover result\nRecovered result.\nReported tests: not reported\nGOAT check: pending",
+          "Done: recover result\nRecovered result.\n\nVerification: the agent reported no tests; GOAT's own check is pending.",
         );
       }),
     ).pipe(Effect.provide(harness.layer));
@@ -3396,11 +3452,7 @@ describe("GOAT Bot home", () => {
       );
       yield* runtime.drain;
       assert.strictEqual((yield* onlyTask).status, "completed");
-      assert.isTrue(
-        (yield* botMessages).messages.some((message) =>
-          message.text.includes("Finished on the original machine."),
-        ),
-      );
+      assert.strictEqual((yield* latestCard)?.summary, "Finished on the original machine.");
     }).pipe(Effect.provide(harness.layer));
   });
 });

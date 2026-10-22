@@ -868,6 +868,13 @@ export const botMessages = Effect.gen(function* () {
   return records;
 });
 
+/** The newest task card in the bot; a GOAT Bot task's result lives there. */
+export const latestCard = Effect.map(botMessages, (records) =>
+  records.turnItems
+    .flatMap((item) => (item.type === "notification" && item.ledgerTask ? [item.ledgerTask] : []))
+    .at(-1),
+);
+
 export const onlyTask = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const page = yield* ledger.listTasks({ ownerId, limit: 10 });

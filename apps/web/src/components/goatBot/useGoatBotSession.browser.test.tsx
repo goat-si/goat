@@ -629,7 +629,8 @@ it("keeps target-specific offline, loading and missing history states with summa
   expect(
     isGoatBotThread({ environmentId, id: "worker" }, useGlobalAgentStore.getState().botRef),
   ).toBe(false);
-  expect(container.textContent).toContain("Jun");
+  // A request made in GOAT itself came from the reader, so the card does not name them.
+  expect(container.textContent).not.toContain("Jun");
   expect(container.querySelector("time")?.dateTime).toBe("2026-10-12T12:02:00.000Z");
   setConnection(false);
   await render();
