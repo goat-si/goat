@@ -115,6 +115,8 @@ export const makeCliHarness = Effect.fnUntraced(function* (
   } = {},
 ) {
   const fake = new FakePty();
+  // Later spawns: the trust retry opens interactive Claude, then starts the cloud session again.
+  const fakes = [fake, new FakePty(), new FakePty()];
   const commandSpawned = yield* Deferred.make<void>();
   const commands: ChildProcess.StandardCommand[] = [];
   const starts: PtyAdapter.PtySpawnInput[] = [];
@@ -168,7 +170,9 @@ export const makeCliHarness = Effect.fnUntraced(function* (
                       )
                     : Effect.sync(() => {
                         starts.push(input);
-                        return fake;
+                        const next = fakes[starts.length - 1];
+                        if (!next) throw new Error("Unexpected extra PTY spawn.");
+                        return next;
                       }),
               }),
             ),
@@ -177,5 +181,5 @@ export const makeCliHarness = Effect.fnUntraced(function* (
       ),
     ),
   );
-  return { service, fake, commands, starts, commandSpawned };
+  return { service, fake, fakes, commands, starts, commandSpawned };
 });

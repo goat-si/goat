@@ -113,6 +113,11 @@ const makeHarness = Effect.fnUntraced(function* () {
   const startedAt = yield* DateTime.now;
   let pauseSend = false;
   let found = true;
+  // Trust prompts Claude shows during start; the CLI answers them only with a trust policy.
+  let trustPrompts = 0;
+  let trustAllowed = true;
+  const trustChecks: string[] = [];
+  const trustRecords: Array<{ cwd: string; threadId: string; prompts: number }> = [];
   const cli = Cli.ClaudeCloudCli.of({
     readiness: (login, cwd) =>
       Effect.sync(() => {
@@ -121,11 +126,17 @@ const makeHarness = Effect.fnUntraced(function* () {
         controlCommands.push({ kind: "readiness", cwd });
         return { version: "2.1.296" };
       }),
-    start: (_login, cwd) =>
+    start: (_login, cwd, _prompt, trust) =>
       Effect.gen(function* () {
         startCwds.push(cwd);
         expect(ledger.at(-1)?.status).toBe("submitting");
         starts += 1;
+        if (trustPrompts > 0 && !trust)
+          return yield* new ClaudeCloudError({
+            detail: "Claude Code hasn't trusted this folder yet.",
+            outcome: "rejected",
+          });
+        for (let prompt = 0; prompt < trustPrompts; prompt++) trust?.onAccepted();
         if (startError) return yield* startError;
         return {
           receipt: {
@@ -136,6 +147,7 @@ const makeHarness = Effect.fnUntraced(function* () {
           exited: Deferred.await(exit),
         };
       }),
+    acceptTrust: () => Effect.die("acceptTrust is driven by the CLI tests"),
     send: (login, cwd, id) =>
       Effect.gen(function* () {
         expect(login).toEqual(LOGIN);
@@ -173,6 +185,17 @@ const makeHarness = Effect.fnUntraced(function* () {
             }
           : null;
       }),
+    folderTrust: {
+      allowed: (cwd) =>
+        Effect.sync(() => {
+          trustChecks.push(cwd);
+          return trustAllowed;
+        }),
+      record: (input) =>
+        Effect.sync(() => {
+          trustRecords.push(input);
+        }),
+    },
   }).pipe(Effect.provideService(Cli.ClaudeCloudCli, cli));
   const runtime = yield* adapter.openSession({
     threadId: THREAD,
@@ -277,8 +300,59 @@ const makeHarness = Effect.fnUntraced(function* () {
     sendError: (error: ClaudeCloudError) => {
       sendError = error;
     },
+    trustPrompts: (count: number) => {
+      trustPrompts = count;
+    },
+    disallowTrust: () => {
+      trustAllowed = false;
+    },
+    trustChecks,
+    trustRecords,
   };
 });
+
+it.effect.each([1, 2])(
+  "a registered folder's trust prompts (%s) are accepted, noticed in the thread and recorded",
+  (prompts) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        h.trustPrompts(prompts);
+        yield* h.runtime.startTurn(h.input);
+        yield* Deferred.await(h.accepted);
+        expect(h.trustChecks).toEqual(["/fixture/project"]);
+        expect(h.trustRecords).toEqual([
+          { cwd: "/fixture/project", threadId: h.input.threadId, prompts },
+        ]);
+        const notices = h.events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "system_notice"
+            ? [event.turnItem.message]
+            : [],
+        );
+        expect(notices).toEqual([
+          "Claude Code asked to trust /fixture/project. GOAT accepted it automatically.",
+        ]);
+        expect(h.ledger.at(-1)?.status).toBe("running");
+      }),
+    ),
+);
+
+it.effect("a folder outside GOAT's projects keeps the trust rejection and records nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      h.trustPrompts(1);
+      h.disallowTrust();
+      yield* h.runtime.startTurn(h.input);
+      yield* Deferred.await(h.terminal);
+      expect(h.trustRecords).toEqual([]);
+      expect(h.ledger.at(-1)).toMatchObject({
+        status: "failed",
+        error: "Claude Code hasn't trusted this folder yet.",
+      });
+    }),
+  ),
+);
 
 it.effect(
   "acceptance stays open until a linked PR is durably committed; the base owns result messages",

@@ -756,3 +756,190 @@ it.effect.each([
     }),
   ),
 );
+
+// Folder trust with a trust policy: GOAT answers Claude's own dialog in its PTY.
+const TRUST_DIALOG = `${FOLDER_TRUST_PROMPT}${NATIVE_FOLDER_TRUST_OPTION}  2. No, exit\r\n`;
+const trustPolicy = () => {
+  const accepted: number[] = [];
+  return { accepted, trust: { onAccepted: () => accepted.push(accepted.length + 1) } };
+};
+
+it.effect.each([
+  { name: "at start", before: "", dialogs: 1 },
+  { name: "mid-stream", before: "Preparing cloud session…\r\n", dialogs: 1 },
+  { name: "twice", before: "", dialogs: 2 },
+])("answers the folder trust prompt $name and keeps the receipt", ({ before, dialogs }) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const policy = trustPolicy();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task", policy.trust)
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(before);
+      for (let dialog = 0; dialog < dialogs; dialog++) {
+        // The question renders before its options; only the rendered option is answered.
+        h.fake.emit(FOLDER_TRUST_PROMPT);
+        expect(h.fake.writes).toHaveLength(dialog);
+        for (const character of NATIVE_FOLDER_TRUST_OPTION) h.fake.emit(character);
+        h.fake.emit("  2. No, exit\r\n");
+      }
+      expect(h.fake.writes).toEqual(Array.from({ length: dialogs }, () => "\r"));
+      h.fake.emit(RECEIPT);
+      const handle = yield* Fiber.join(fiber);
+      expect(handle.receipt.taskId).toBe("session_ABC123");
+      expect(policy.accepted).toHaveLength(dialogs);
+      expect(h.starts).toHaveLength(1);
+      h.fake.finish(0);
+      yield* handle.exited;
+    }),
+  ),
+);
+
+it.effect("stops answering after three trust prompts and sends nothing more", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const policy = trustPolicy();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task", policy.trust)
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      for (let dialog = 0; dialog < 4; dialog++) h.fake.emit(TRUST_DIALOG);
+      const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+      expect(error.outcome).toBe("rejected");
+      expect(error.detail).toBe(
+        "Claude Code kept asking to trust /fixture/project after GOAT accepted it 3 times. No prompt was sent.",
+      );
+      expect(h.fake.writes).toEqual(["\r", "\r", "\r"]);
+    }),
+  ),
+);
+
+it.effect("a trust prompt after the receipt stays uncertain and is never answered", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const policy = trustPolicy();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task", policy.trust)
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(RECEIPT + TRUST_DIALOG);
+      const handle = yield* Fiber.join(fiber);
+      const failure = yield* handle.exited.pipe(Effect.flip);
+      expect(failure.outcome).toBe("uncertain");
+      expect(h.fake.writes).toEqual([]);
+      expect(policy.accepted).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("a trust dialog that never renders its options rejects after the start window", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task", trustPolicy().trust)
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(FOLDER_TRUST_PROMPT);
+      yield* TestClock.adjust("60 seconds");
+      const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+      expect(error.outcome).toBe("rejected");
+      expect(h.fake.writes).toEqual([]);
+    }),
+  ),
+);
+
+it.effect.each(SYNTHETIC_FOLDER_TRUST_REFUSALS)(
+  "after a refusal, trusts the folder in interactive Claude and starts once more (%#)",
+  (refusal) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeCliHarness();
+        const policy = trustPolicy();
+        const fiber = yield* h.service
+          .start(LOGIN, "/fixture/project", "task", policy.trust)
+          .pipe(Effect.forkChild);
+        yield* h.fake.ready;
+        h.fake.emit(refusal);
+        h.fake.finish(1);
+        const interactive = h.fakes[1]!;
+        yield* interactive.ready;
+        interactive.emit(TRUST_DIALOG);
+        interactive.emit("Welcome to Claude Code\r\n");
+        const retried = h.fakes[2]!;
+        yield* retried.ready;
+        retried.emit(RECEIPT);
+        const handle = yield* Fiber.join(fiber);
+        expect(handle.receipt.taskId).toBe("session_ABC123");
+        expect(h.starts.map((start) => [start.args, start.cwd])).toEqual([
+          [["--cloud=task"], "/fixture/project"],
+          [[], "/fixture/project"],
+          [["--cloud=task"], "/fixture/project"],
+        ]);
+        expect([h.fake.writes, interactive.writes, retried.writes]).toEqual([[], ["\r"], []]);
+        expect(interactive.kills).toBe(1);
+        expect(policy.accepted).toHaveLength(1);
+        retried.finish(0);
+        yield* handle.exited;
+      }),
+    ),
+);
+
+it.effect("a second refusal after accepting trust is reported and not retried again", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task", trustPolicy().trust)
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(SYNTHETIC_FOLDER_TRUST_REFUSALS[0]);
+      h.fake.finish(1);
+      yield* h.fakes[1]!.ready;
+      h.fakes[1]!.emit(TRUST_DIALOG);
+      h.fakes[1]!.emit("Welcome\r\n");
+      yield* h.fakes[2]!.ready;
+      h.fakes[2]!.emit(SYNTHETIC_FOLDER_TRUST_REFUSALS[0]);
+      h.fakes[2]!.finish(1);
+      const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+      expect(error).toMatchObject({
+        outcome: "rejected",
+        detail:
+          "Claude Code still refuses /fixture/project after GOAT accepted its trust prompt. No prompt was sent.",
+      });
+      expect(h.starts).toHaveLength(3);
+    }),
+  ),
+);
+
+it.effect("accepting trust alone answers the prompt and closes interactive Claude", () =>
+  Effect.gen(function* () {
+    const h = yield* makeCliHarness();
+    const fiber = yield* h.service.acceptTrust(LOGIN, "/fixture/project").pipe(Effect.forkChild);
+    yield* h.fake.ready;
+    h.fake.emit(TRUST_DIALOG);
+    expect(h.fake.writes).toEqual(["\r"]);
+    h.fake.emit("Welcome to Claude Code\r\n");
+    yield* Fiber.join(fiber);
+    expect(h.starts[0]).toMatchObject({ shell: LOGIN.binary, args: [], cwd: "/fixture/project" });
+    expect(h.fake.kills).toBe(1);
+    expect(h.fake.listeners).toBe(0);
+  }),
+);
+
+it.effect("accepting trust fails plainly when Claude never shows the prompt", () =>
+  Effect.gen(function* () {
+    const h = yield* makeCliHarness();
+    const fiber = yield* h.service.acceptTrust(LOGIN, "/fixture/project").pipe(Effect.forkChild);
+    yield* h.fake.ready;
+    h.fake.emit("Choose a theme\r\n");
+    yield* TestClock.adjust("30 seconds");
+    const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+    expect(error).toMatchObject({ outcome: "rejected", reason: "folder_untrusted" });
+    expect(h.fake.writes).toEqual([]);
+  }),
+);

@@ -43,6 +43,21 @@
       "noticeFile": "apps/web/src/components/BOAT-LOGO-NOTICE"
     },
     {
+      "bundles": ["ios", "android", "mobile", "web", "desktop"],
+      "license": "MIT",
+      "name": "Devin mark from Lobe Icons",
+      "sourceUrl": "https://github.com/lobehub/lobe-icons",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2023 LobeHub"],
+          "preamble": [
+            "The Devin Cloud provider mark is the devin-color glyph from @lobehub/icons-static-svg 1.98.0, unchanged. Devin is a trademark of Cognition AI."
+          ]
+        }
+      ]
+    },
+    {
       "bundles": ["desktop", "web"],
       "license": "MIT",
       "name": "Ionic keyboard assist",

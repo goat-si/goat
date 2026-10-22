@@ -11,6 +11,7 @@ export const ClaudeCloudReason = Schema.Literals([
   "not_signed_in",
   "wrong_sign_in",
   "cloud_unsupported",
+  "folder_untrusted",
 ]);
 export type ClaudeCloudReason = typeof ClaudeCloudReason.Type;
 
@@ -83,19 +84,43 @@ export function readStartReceipt(raw: string) {
   return { ...first, title: titles[0]![1]!.trim().slice(0, 512) };
 }
 
-export function trustRequired(raw: string) {
+function trustText(raw: string) {
   // Native trust options use absolute cursor columns as word spacing; preserve those boundaries.
   // eslint-disable-next-line no-control-regex -- Match the native PTY's ESC cursor-column sequence.
-  const prompt = cleanOutput(raw.replace(/\u001b\[\d+G/g, " ")).replace(
+  return cleanOutput(raw.replace(/\u001b\[\d+G/g, " ")).replace(
     /^\s*(?:Created cloud session:|View:|Resume with:).*$/gm,
     "",
   );
-  const folderPrompt =
-    /^\s*(?:[❯>]\s*)?(?:Do you trust (?:the files in this folder|this (?:folder|directory))\?|(?:1\.\s*)?Yes, I trust this folder|Trust (?:this (?:folder|directory)|the files in this folder)\?)[ \t]*$/im;
-  // Refusals need a terminated line; a chunk may end before a generic diagnostic's qualifier.
-  const folderRefusal =
-    /^\s*(?:Error:\s*)?(?:This (?:folder|directory) is not trusted|Workspace trust is required for this (?:folder|directory)|Claude Code cannot run in an untrusted (?:folder|directory))[.!]?[ \t]*\n/im;
-  return folderPrompt.test(prompt) || folderRefusal.test(prompt);
+}
+
+const FOLDER_QUESTION =
+  /^\s*(?:[❯>]\s*)?(?:Do you trust (?:the files in this folder|this (?:folder|directory))\?|Trust (?:this (?:folder|directory)|the files in this folder)\?)[ \t]*$/im;
+const FOLDER_YES = /^\s*(?:[❯>]\s*)?(?:1\.\s*)?Yes, I trust this folder[ \t]*$/im;
+// "Yes, proceed" is generic, so it only counts beneath the folder question.
+const PROCEED = /^\s*(?:[❯>]\s*)?(?:1\.\s*)?Yes, proceed[ \t]*$/im;
+// Refusals need a terminated line; a chunk may end before a generic diagnostic's qualifier.
+const FOLDER_REFUSAL =
+  /^\s*(?:Error:\s*)?(?:This (?:folder|directory) is not trusted|Workspace trust is required for this (?:folder|directory)|Claude Code cannot run in an untrusted (?:folder|directory))[.!]?[ \t]*\n/im;
+
+/** Claude's folder trust dialog is on screen, possibly before its options have rendered. */
+export function trustPrompt(raw: string) {
+  const text = trustText(raw);
+  return FOLDER_QUESTION.test(text) || FOLDER_YES.test(text);
+}
+
+/** The dialog's "yes" option has rendered, so Enter on its default selection trusts the folder. */
+export function trustOption(raw: string) {
+  const text = trustText(raw);
+  return FOLDER_YES.test(text) || (FOLDER_QUESTION.test(text) && PROCEED.test(text));
+}
+
+/** Claude refused to run in the folder without asking. */
+export function trustRefusal(raw: string) {
+  return FOLDER_REFUSAL.test(trustText(raw));
+}
+
+export function trustRequired(raw: string) {
+  return trustPrompt(raw) || trustRefusal(raw);
 }
 
 export function redact(detail: string, environment: NodeJS.ProcessEnv) {
