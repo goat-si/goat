@@ -16,6 +16,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -41,6 +42,12 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderCredentialStore from "../ProviderCredentialStore.ts";
 import * as ProviderHostLive from "../ProviderHostLive.ts";
+import {
+  deriveProviderInstanceEntries,
+  isProviderInstancePickerReady,
+} from "../../../../web/src/providerInstances.ts";
+import { getProviderSummary } from "../../../../web/src/components/settings/providerStatus.ts";
+import { mergeProviderSnapshot } from "../ProviderRegistry.ts";
 
 const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "goat-codex-driver-maintenance-",
@@ -98,6 +105,157 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
+  it.effect.each(["ready", "initialize-error", "signed-out"] as const)(
+    "retains startup diagnostics without changing %s availability or guidance",
+    (scenario) =>
+      Effect.gen(function* () {
+        const instanceId = ProviderInstanceId.make("startup-diagnostic");
+        const credentials = new Map<string, Uint8Array>();
+        const secrets = ServerSecretStore.ServerSecretStore.of({
+          get: (key) => Effect.sync(() => Option.fromUndefinedOr(credentials.get(key))),
+          set: (key, value) =>
+            Effect.sync(() => {
+              credentials.set(key, value);
+            }),
+          remove: (key) =>
+            Effect.sync(() => {
+              credentials.delete(key);
+            }),
+          create: () => Effect.die("unused"),
+          getOrCreateRandom: () => Effect.die("unused"),
+        });
+        yield* Effect.gen(function* () {
+          const store = yield* ProviderCredentialStore.make("codex-chatgpt", instanceId);
+          if (scenario !== "signed-out") {
+            const json = yield* encodeCredentials({
+              clientId: "oaiapp_test",
+              accessToken: "dummy-access",
+              refreshToken: "dummy-refresh",
+              expiresAt: Number.MAX_SAFE_INTEGER,
+              earliestRefreshAt: null,
+              scopes: ["chatgpt.tokens.use.direct"],
+              subject: "test-user",
+              email: null,
+            });
+            yield* store.set(new TextEncoder().encode(json));
+          }
+          const executable: CodexInstallation.CodexExecutable = {
+            executablePath: "/fixture/codex",
+            managedVersionDirectory: null,
+            source: "local",
+            version: "0.164.0",
+            startupWarning: "Codex startup check warning: the diagnostic timed out.",
+          };
+          const installation = yield* CodexInstallation.CodexInstallation;
+          const serverConfig = yield* ServerConfig.ServerConfig;
+          const home = NodePath.join(serverConfig.stateDir, "startup-home");
+          const methods: string[] = [];
+          const spawner = ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const output = yield* Queue.unbounded<Uint8Array>();
+              yield* Effect.addFinalizer(() => Queue.shutdown(output));
+              return ChildProcessSpawner.makeHandle({
+                pid: ChildProcessSpawner.ProcessId(4242),
+                exitCode: Effect.never,
+                isRunning: Effect.succeed(true),
+                kill: () => Effect.void,
+                unref: Effect.succeed(Effect.void),
+                stdin: Sink.forEach((chunk: Uint8Array) =>
+                  Effect.gen(function* () {
+                    for (const line of new TextDecoder().decode(chunk).trim().split("\n")) {
+                      const request = JSON.parse(line) as { id?: number; method: string };
+                      if (request.id === undefined) continue;
+                      methods.push(request.method);
+                      const result =
+                        request.method === "initialize"
+                          ? {
+                              userAgent: "codex/0.164.0",
+                              codexHome: home,
+                              platformFamily: "unix",
+                              platformOs: "macos",
+                            }
+                          : request.method === "config/read"
+                            ? { config: {}, origins: {} }
+                            : request.method === "account/read"
+                              ? { account: null, requiresOpenaiAuth: false }
+                              : { data: [], nextCursor: null };
+                      const response =
+                        scenario === "initialize-error" && request.method === "initialize"
+                          ? {
+                              id: request.id,
+                              error: { code: -32603, message: "Fixture initialize failure" },
+                            }
+                          : { id: request.id, result };
+                      yield* Queue.offer(
+                        output,
+                        new TextEncoder().encode(JSON.stringify(response) + "\n"),
+                      );
+                    }
+                  }),
+                ),
+                stdout: Stream.fromQueue(output),
+                stderr: Stream.empty,
+                all: Stream.empty,
+                getInputFd: () => Sink.drain,
+                getOutputFd: () => Stream.empty,
+              });
+            }),
+          );
+          const instance = yield* CodexDriver.create({
+            instanceId,
+            displayName: "Startup diagnostic",
+            enabled: true,
+            environment: [],
+            config: { ...CodexDriver.defaultConfig(), setupMode: "managed", homePath: home },
+          }).pipe(
+            Effect.provideService(CodexInstallation.CodexInstallation, {
+              ...installation,
+              resolve: () => Effect.succeed(executable),
+              acquire: () => Effect.succeed(executable),
+            }),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          );
+          const snapshot = yield* instance.snapshot.refresh;
+          expect(snapshot.installed).toBe(true);
+          if (scenario === "ready") {
+            expect(snapshot.status).toBe("ready");
+            expect(snapshot.message).toBe(executable.startupWarning);
+            const retained = mergeProviderSnapshot(snapshot, snapshot);
+            const [entry] = deriveProviderInstanceEntries([retained]);
+            expect(entry && isProviderInstancePickerReady(entry)).toBe(true);
+            expect(entry).toMatchObject({ enabled: true, isAvailable: true, status: "ready" });
+            expect(getProviderSummary(retained).detail).toBe(executable.startupWarning);
+            expect(retained.models.map((model) => model.slug)).toEqual(["gpt-fixture"]);
+            expect(methods).toContain("initialize");
+          } else {
+            expect(snapshot.message).not.toBe(executable.startupWarning);
+            if (scenario === "initialize-error") expect(snapshot.status).toBe("error");
+            else {
+              expect(snapshot.auth.status).toBe("unauthenticated");
+              expect(snapshot.message).toBe("Sign in with ChatGPT to use Codex.");
+              expect(methods).toEqual([]);
+            }
+          }
+        }).pipe(
+          Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make((request) => {
+              expect(request.url).toBe("https://api.openai.com/v1/models");
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    models: [{ slug: "gpt-fixture", display_name: "Fixture", visibility: "list" }],
+                  }),
+                ),
+              );
+            }),
+          ),
+        );
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("disconnect refreshes a restored managed account while its auth flow is idle", () =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("restored-managed-account");
