@@ -1984,7 +1984,7 @@ const importAddress = { memorySpaceId: M.MemorySpaceId, environmentId: M.Environ
 const importSourceAddress = { ...importAddress, sourceId: M.MemoryImportSourceId };
 const importDigestsCodec = codec(Schema.Array(digest));
 const ImportSlotCodec = Schema.Struct({
-  format: M.MemoryImportFormat,
+  format: M.MemoryImportSourceFormat,
   rootSlot: importKey,
   selection: Schema.NullOr(importKey),
 });

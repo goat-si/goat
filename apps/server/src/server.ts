@@ -66,6 +66,7 @@ import * as MemoryReportAdapter from "./memory/MemoryReportAdapter.ts";
 import * as MemoryReportWorker from "./memory/MemoryReportWorker.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
 import * as MemorySettings from "./memory/MemorySettingsService.ts";
+import { parseAsideMemory } from "./memory/imports/AsideMemoryImporter.ts";
 import * as MemorySnapshot from "./memory/MemorySnapshot.ts";
 import * as MemorySnapshotBinding from "./memory/MemorySnapshotBinding.ts";
 import * as MemoryStore from "./memory/MemoryStore.ts";
@@ -876,6 +877,9 @@ export const layerMemoryImport = (config?: MemoryImportReaderConfig) =>
             rootSlot: "default",
             path: path.join(home, ".omo", "memory", "agents"),
           },
+          // Listed only when the user asks to discover Aside; each store slot's semantic
+          // directories become separate sources and nothing under ~/.aside is ever written.
+          { format: "aside", rootSlot: "default", path: path.join(home, ".aside", "u") },
         ],
       };
       const reader = yield* preflightMemoryImportStateDirectory(readerConfig.stateDir).pipe(
@@ -905,7 +909,12 @@ export const layerMemoryImport = (config?: MemoryImportReaderConfig) =>
             syncStatus: sync.syncStatus,
           },
           reader.success,
-          { codex: parseCodexMemory, claude: parseClaudeMemory, omo: parseOmoMemory },
+          {
+            codex: parseCodexMemory,
+            claude: parseClaudeMemory,
+            omo: parseOmoMemory,
+            aside: parseAsideMemory,
+          },
           {
             uuid: () => NodeCrypto.randomUUID(),
             now: () => Clock.currentTimeMillis,

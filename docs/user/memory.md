@@ -26,6 +26,8 @@ If search coverage is incomplete or unavailable, an empty result does not prove 
 
 In **Settings → Memory → Import memories**, choose Codex, Claude, or OMO and the destination scope. Discover available profiles on the selected device, preview one, choose the memories, confirm your selection, then apply the import. Up to 32 memories are applied per batch. Other providers are not supported for import.
 
+Servers that support it also offer **Aside**. Discovery lists each Aside store on the device by semantic folder (for example `1/agent` or `1/projects`), and nothing is read until you choose one. Only the `## Current` section of each page is imported, one memory per `###` heading; history, dated logs and the `MEMORY.md`/`USER.md` briefings are skipped. Pages with an unexpected layout, sections over 16 KiB and pages over 256 KiB are listed with the reason and never shortened. A folder with more than 128 importable sections cannot be previewed. Pages from `projects/` import only into a project scope. Import each Aside store on one device and let memory sharing carry it to the others.
+
 **Stop import** stops later batches; a batch already sent may still be applied. After partial completion, a lost response, or a restart, use **Check import result** to check the saved operation. This never applies it again automatically. If asked to preview again, review the latest result before starting another import.
 
 If your browser cannot safely run imports, use a current browser or the desktop app. You can still check a saved import result. Imports leave provider originals unchanged, and forgotten memories are not imported again.

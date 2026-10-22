@@ -15,7 +15,10 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Settings from "../serverSettings.ts";
-import { ProviderMemoryImportRuntime } from "./imports/MemoryImportTypes.ts";
+import {
+  ProviderMemoryImportRuntime,
+  provenanceImportFormat,
+} from "./imports/MemoryImportTypes.ts";
 import type {
   ImportProviderFacade,
   ImportPorts,
@@ -969,8 +972,7 @@ const make = Effect.fnUntraced(function* (
                     environmentId,
                     importSource: {
                       sourceId: registration.sourceId,
-                      // Hub protocol v1 peers decode only these formats.
-                      format: registration.source.format satisfies M.MemoryImportFormat,
+                      format: provenanceImportFormat(registration.source.format),
                       parserVersion: registration.source.parserVersion,
                       sourceLocator: registration.sourceLocator,
                       sourceItemKey: candidate.sourceItemKey,

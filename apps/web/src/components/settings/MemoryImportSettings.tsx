@@ -5,13 +5,19 @@ import {
   MemoryOperationId,
   type EnvironmentId,
   type MemorySpaceId,
-  type MemoryImportFormat,
+  type MemoryImportSourceFormat,
   type MemoryImportSource,
   type MemoryImportPreviewItem,
 } from "@goat/contracts";
+import {
+  memoryImportFormatLabels,
+  memoryImportFormats,
+  memoryImportIssueReason,
+} from "@goat/client-runtime/memory-import-workflow";
 import { useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { readEnvironmentScope, readPreparedConnection } from "../../state/session";
 import { memoryImportRequestFailureMessage } from "@goat/client-runtime/memory-import-workflow";
+import { useEnvironment } from "../../state/environments";
 import { memoryEnvironment } from "../../state/memory";
 import {
   registerMemoryImportDestination,
@@ -36,6 +42,9 @@ export function MemoryImportSettings({
 }) {
   const registry = useContext(RegistryContext);
   const canImport = useAtomValue(memoryEnvironment.importProvider.permissionAtom(environmentId));
+  const formats = memoryImportFormats(
+    useEnvironment(environmentId)?.serverConfig?.environment.capabilities,
+  );
   const [admission] = useState(() => {
     try {
       return createMemoryImportAdmission({ environmentId, memorySpaceId });
@@ -59,7 +68,7 @@ export function MemoryImportSettings({
     workflow?.subscribe ?? (() => () => {}),
     workflow?.getSnapshot ?? (() => undefined),
   );
-  const [format, setFormat] = useState<MemoryImportFormat | null>(null);
+  const [format, setFormat] = useState<MemoryImportSourceFormat | null>(null);
   const [sources, setSources] = useState<readonly MemoryImportSource[]>([]);
   const [items, setItems] = useState<readonly MemoryImportPreviewItem[]>([]);
   const [selected, setSelected] = useState<readonly string[]>([]);
@@ -179,7 +188,7 @@ export function MemoryImportSettings({
     <SettingsSection title="Import memories">
       <SettingsRow
         title="Provider memories"
-        description="Import supported Codex, Claude, or OMO memories from the selected device. Other providers are not supported. Memory write and file read permissions are required."
+        description={`Import supported ${new Intl.ListFormat("en", { type: "disjunction" }).format(formats.map((f) => memoryImportFormatLabels[f]))} memories from the selected device. Other providers are not supported. Memory write and file read permissions are required.${formats.includes("aside") ? " Aside imports only the Current section of each page; project pages need a project scope." : ""}`}
       >
         <div className="space-y-3">
           <Select
@@ -197,9 +206,9 @@ export function MemoryImportSettings({
               <SelectValue placeholder="Choose a provider" />
             </SelectTrigger>
             <SelectPopup>
-              {(["codex", "claude", "omo"] as const).map((value) => (
+              {formats.map((value) => (
                 <SelectItem key={value} value={value}>
-                  {value === "codex" ? "Codex" : value === "claude" ? "Claude" : "OMO"}
+                  {memoryImportFormatLabels[value]}
                 </SelectItem>
               ))}
             </SelectPopup>
@@ -243,7 +252,9 @@ export function MemoryImportSettings({
                   })
                 }
               >
-                Preview profile {index + 1}
+                {source.format === "aside"
+                  ? `Preview ${source.label}`
+                  : `Preview profile ${index + 1}`}
               </Button>
             ))}
           </div>
@@ -272,8 +283,11 @@ export function MemoryImportSettings({
                     }}
                   />
                   <span>
-                    {item.title ?? `Memory ${index + 1}`}
-                    {item.issue !== undefined ? " · Unavailable for import" : ""}
+                    {item.title ??
+                      (format === "aside" ? item.sourceItemKey : `Memory ${index + 1}`)}
+                    {item.issue !== undefined
+                      ? ` · ${memoryImportIssueReason(item.issue, "item")}`
+                      : ""}
                     {item.tooLargeForTurnStart
                       ? " · Stored, but too large to add to new turns automatically"
                       : ""}

@@ -103,6 +103,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       generationHold: Schema.optionalKey(Schema.Boolean),
       /** Separate diagnostics/read and Settings reconcile RPCs; absent on older servers. */
       hubDiagnostics: Schema.optionalKey(Schema.Boolean),
+      /** Server accepts the opt-in `aside` import source format; absent on older servers. */
+      asideImport: Schema.optionalKey(Schema.Boolean),
     }),
   ),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),

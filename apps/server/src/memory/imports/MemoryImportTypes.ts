@@ -16,10 +16,17 @@ export type ImportSourceAddress = ImportAddress & { readonly sourceId: M.MemoryI
 export type ImportBatchAddress = ImportAddress & { readonly operationId: M.MemoryOperationId };
 /** Logical server slot, never a caller-supplied absolute path. */
 export type ImportSlot = {
-  readonly format: M.MemoryImportFormat;
+  readonly format: M.MemoryImportSourceFormat;
   readonly rootSlot: string;
   readonly selection: string | null;
 };
+/**
+ * Revision provenance travels over hub protocol v1, whose peers decode `MemoryImportFormat`
+ * strictly. Aside imports record the closest legacy family, a Markdown memory repository;
+ * `parserVersion` (aside-semantic-v1) and the `aside/…` source locator still name the source.
+ */
+export const provenanceImportFormat = (format: M.MemoryImportSourceFormat): M.MemoryImportFormat =>
+  format === "aside" ? "omo" : format;
 export type ImportRegistrationLookup = ImportAddress &
   (
     | { readonly by: "source"; readonly sourceId: M.MemoryImportSourceId }
@@ -34,10 +41,15 @@ export type ImportSourceFile = {
   readonly selector: string;
   readonly text: string;
   readonly byteCount: number;
+  /**
+   * Per-file refusal from a reader that reports instead of failing the snapshot (Aside only).
+   * `text` is empty and `byteCount` is the on-disk size.
+   */
+  readonly issue?: M.MemoryImportIssue;
 };
 export type ImportSnapshot = {
   readonly slot: ImportSlot;
-  readonly format: M.MemoryImportFormat;
+  readonly format: M.MemoryImportSourceFormat;
   readonly parserVersion: string;
   readonly profile: string;
   readonly sourceLocator: string;
@@ -55,7 +67,7 @@ export type ImportDiscoveredSlot = {
 /** Acquisition/cleanup belong to L2/L5 Scope; every returned operation is closed (R=never). */
 export type MemoryImportReaderShape = {
   readonly discover: (input: {
-    readonly format: M.MemoryImportFormat;
+    readonly format: M.MemoryImportSourceFormat;
   }) => Effect.Effect<readonly ImportDiscoveredSlot[], M.MemoryImportRpcError, never>;
   readonly read: (input: {
     readonly slot: ImportSlot;
@@ -70,6 +82,8 @@ export type ImportCandidate = {
   /** Parser emits evidence=[]; L4 attaches import evidence before preparing commit. */
   readonly payload: M.MemoryPayload;
   readonly byteCount: number;
+  /** Apply refuses any scope other than an explicit project binding. */
+  readonly requiresProject?: boolean;
 };
 export type ImportParsedItem =
   | { readonly kind: "candidate"; readonly candidate: ImportCandidate }
@@ -78,12 +92,15 @@ export type ImportParsedItem =
       readonly sourceItemKey: string;
       readonly byteCount: number;
       readonly issue: M.MemoryImportIssue;
+      readonly requiresProject?: boolean;
     };
 /** Pure: no filesystem, SQL, clock, randomness or model calls. Unsafe keys fail the whole file. */
 export type MemoryImportParser = (
   input: ImportSnapshot,
 ) => Effect.Effect<readonly ImportParsedItem[], M.MemoryImportRpcError, never>;
-export type MemoryImportParsers = { readonly [F in M.MemoryImportFormat]: MemoryImportParser };
+export type MemoryImportParsers = {
+  readonly [F in M.MemoryImportSourceFormat]: MemoryImportParser;
+};
 
 export type ImportSession = {
   readonly sessionId: string;
