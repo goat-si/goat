@@ -96,9 +96,67 @@ describe("classifySlackEvent", () => {
     expect(retry.event.dedupeKey).toBe(first.event.dedupeKey);
   });
 
+  const richBlocks = [
+    {
+      type: "rich_text",
+      elements: [
+        {
+          type: "rich_text_section",
+          elements: [
+            { type: "user", user_id: "U0BOT" },
+            { type: "text", text: " 배포 확인해줘 " },
+            { type: "emoji", name: "rocket" },
+            { type: "broadcast", range: "channel" },
+          ],
+        },
+        {
+          type: "rich_text_list",
+          elements: [
+            {
+              type: "rich_text_section",
+              elements: [
+                { type: "text", text: "see " },
+                { type: "link", url: "https://github.com/a/b/pull/1" },
+              ],
+            },
+            { type: "rich_text_section", elements: [{ type: "channel", channel_id: "C0OPS" }] },
+          ],
+        },
+      ],
+    },
+  ];
+
+  it("reads the rich text blocks of a message whose text is empty", () => {
+    const result = classifySlackEvent(envelope(mention({ text: "", blocks: richBlocks })), config);
+    if (result._tag !== "message") throw new Error("expected a message");
+    expect(result.event.text).toBe(
+      "배포 확인해줘 :rocket:\nsee https://github.com/a/b/pull/1\n<#C0OPS>",
+    );
+  });
+
+  it("prefers the text field when it has one", () => {
+    const result = classifySlackEvent(envelope(mention({ blocks: richBlocks })), config);
+    if (result._tag !== "message") throw new Error("expected a message");
+    expect(result.event.text).toBe("fix the login bug");
+  });
+
+  it("bounds a hostile block payload", () => {
+    const section = {
+      type: "rich_text_section",
+      elements: Array.from({ length: 50_000 }, () => ({ type: "text", text: "a" })),
+    };
+    const result = classifySlackEvent(
+      envelope(mention({ text: "", blocks: [{ type: "rich_text", elements: [section] }] })),
+      config,
+    );
+    if (result._tag !== "message") throw new Error("expected a message");
+    expect(result.event.text.length).toBeLessThanOrEqual(2000);
+  });
+
   it.each([
     ["own bot user", mention({ user: "U0BOT" }), "own_bot"],
     ["bot_id", mention({ bot_id: "B0OTHER" }), "bot_message"],
+    ["bot_profile without bot_id", mention({ bot_profile: { id: "B0OTHER" } }), "bot_message"],
     ["bot_message subtype", directMessage({ subtype: "bot_message" }), "bot_message"],
     ["edited message", directMessage({ subtype: "message_changed" }), "subtype"],
     ["deleted message", directMessage({ subtype: "message_deleted" }), "subtype"],
