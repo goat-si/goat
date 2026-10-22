@@ -190,6 +190,19 @@ describe("release payload helpers", () => {
     expect(exposureProblems("goat", "/home/runner/.cargo/registry/src/x.rs", hosted, true)).toEqual(
       ["goat: absolute build path"],
     );
+    // Cua Driver is an upstream release; its Windows executables carry its hosted CI's paths.
+    const cua = "win-unpacked/resources/cua-driver/cua-driver.exe";
+    const windowsRunner = ["C:\\Users\\runneradmin", "C:\\a\\goat\\goat"];
+    expect(
+      exposureProblems(
+        cua,
+        "D:\\a\\cua\\cua\\src C:\\Users\\runneradmin\\.cargo\\x",
+        windowsRunner,
+      ),
+    ).toEqual([]);
+    expect(exposureProblems(cua, "C:\\a\\goat\\goat\\apps\\x", windowsRunner)).toEqual([
+      `${cua}: absolute build path`,
+    ]);
     expect(exposureProblems("main.js", "'C:\\a\\b\\c'")).toEqual([]);
     // Electron's own executable and libraries carry Chromium's inline source maps.
     for (const name of [
