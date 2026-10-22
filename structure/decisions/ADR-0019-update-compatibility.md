@@ -98,9 +98,10 @@
     or lease: a new client marks its automatic idle refresh, and the runtime drops such a request
     unless it is the newest same-channel target strictly newer than itself and not the last failed
     one. Older clients send no marker and keep their behavior, including moving a runtime to their
-    own release. Windows hosts, servers outside the default home, and releases that speak a
-    protocol the runtime does not serve stay client-driven, so a rollback always restarts a
-    version the new supervisor accepts.
+    own release. Windows hosts take part when Git for Windows bash is found (the OpenSSH
+    DefaultShell or a standard install path) and otherwise stay client-driven. Servers outside
+    the default home, and releases that speak a protocol the runtime does not serve, stay
+    client-driven, so a rollback always restarts a version the new supervisor accepts.
   - A rollback during probation discards what the new version wrote in those minutes, as ADR-0013
     already accepts for the SSH supervisor.
   - A trial from before this change reports no port. The launcher then skips the smoke probe but

@@ -83,16 +83,16 @@ export type OrchestrationV2ThreadLauncher = typeof OrchestrationV2ThreadLauncher
 ### MODIFY `apps/server/src/mcp/toolkits/project/tools.ts`, `handlers.ts`
 
 - `goat_thread_launch` 파라미터에 `launchedBy: Schema.optional(OrchestrationV2ThreadLauncher.annotate({ description:
-"Set by GOAT when it forwards an SSH launch. Leave unset." }))`.
+  "Set by GOAT when it forwards an SSH launch. Leave unset." }))`.
 - 핸들러: `caller`가 있으면 `{kind: "launch", threadId: caller.id, environmentId: null, environmentLabel: null,
-threadTitle: caller.title}`, 없으면 `input.launchedBy`(SSH 전달)를 쓴다. `ThreadMessageIntake.launchThread`에 넘긴다.
+  threadTitle: caller.title}`, 없으면 `input.launchedBy`(SSH 전달)를 쓴다. `ThreadMessageIntake.launchThread`에 넘긴다.
   새 서비스 의존은 없다.
 
 ### MODIFY `apps/server/src/mcp/toolkits/ssh/handlers.ts`, `apps/server/src/sshRemote/SshRemoteDispatch.ts`
 
 - 핸들러: `caller.caller !== undefined`일 때만 `ServerEnvironment.ServerEnvironment`의 `getDescriptor`로
   `{environmentId, label}`을 읽어 `{kind: "launch", threadId: launcher.id, environmentId, environmentLabel: label,
-threadTitle: launcher.title}`를 만들고 `dispatch.launchThread({..., launchedBy})`. 스레드 밖 외부 MCP 클라이언트
+  threadTitle: launcher.title}`를 만들고 `dispatch.launchThread({..., launchedBy})`. 스레드 밖 외부 MCP 클라이언트
   (`threadAccess.ts:73-82`의 `caller: undefined`, `McpToolAccess.test.ts:264`)는 지금처럼 계보 없이 launch한다
   (watch 등록 가드 `ssh/handlers.ts:84-86`과 같은 조건). 의존 체인: `ssh/tools.ts`의 `goat_ssh_thread_launch` `dependencies`에
   `ServerEnvironment.ServerEnvironment` 추가(`ssh/tools.ts:20-25`) → `McpHttpServer.ts:852-870`이 등록 시 요구 →

@@ -63,6 +63,18 @@ export const serverEventLoopDelayMax = Metric.gauge("goat_server_event_loop_dela
   attributes: { unit: "ms" },
 });
 
+export const runsTotal = Metric.counter("goat_runs_total", {
+  description: "Runs that finished, by outcome. A later rollback does not count again.",
+});
+
+export const runDuration = Metric.timer("goat_run_duration", {
+  description: "Wall time of a run, from when it started to its terminal status.",
+});
+
+export const runQueueWait = Metric.timer("goat_run_queue_wait", {
+  description: "Time a run waited between being requested and starting.",
+});
+
 export const memoryStoreBytes = Metric.gauge("goat_memory_store_bytes", {
   description:
     "Allocated bytes of the memory_* tables and indexes at the last storage sample, by area.",

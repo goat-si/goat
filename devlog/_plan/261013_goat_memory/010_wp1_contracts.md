@@ -393,11 +393,11 @@ Define result schemas exactly as follows:
   includes metadata-only quarantined/forgotten/blocked arms. includeQuarantined includes blocked.
   Cursor binds space/scope/watermark; clients cannot interpret an incomplete index as no memories.
 - `MemoryHistoryPage`: `memoryId`, `revisions: { revision: MemoryRevision,
-payload: MemoryPayload | null }[]`, `resolutions: { resolution: MemoryResolution,
-payload: MemoryResolutionPayload | null }[]`, `tombstone: MemoryTombstone | null`,
+  payload: MemoryPayload | null }[]`, `resolutions: { resolution: MemoryResolution,
+  payload: MemoryResolutionPayload | null }[]`, `tombstone: MemoryTombstone | null`,
   `reports: MemoryReportDelivery[]`, `revertResults: MemoryRevertResult[]`, `nextCursor: string | null`; combined records <=100 and serialized page <=64 KiB. Revert results are local request state, not revisions; reconnect/history refetch recovers pending or terminal status.
 - `MemoryMutationReceipt`: `operationId`, `memoryId`, `outcome: 'accepted' | 'noop' |
-'conflicted' | 'deleted'`, `revisionId: MemoryRevisionId | null`, `pendingSync: boolean`.
+  'conflicted' | 'deleted'`, `revisionId: MemoryRevisionId | null`, `pendingSync: boolean`.
   No payload; accepted means committed intent, not generation or remote convergence. Revert uses
   the separate result below; local pending intent must never appear as an accepted mutation.
 - `MemoryRevertStatus`: `pending | accepted | revision_changed | forgotten | revert_expired`.

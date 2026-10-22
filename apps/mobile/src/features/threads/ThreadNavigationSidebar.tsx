@@ -1,3 +1,4 @@
+import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { resolveScratchProjectScopeKey } from "@goat/client-runtime/state/project-grouping";
@@ -8,7 +9,8 @@ import {
   threadSearchMatchKey,
   type EnvironmentThreadSearchMatch,
 } from "@goat/client-runtime/state/thread-search";
-import { LegendList } from "@legendapp/list/react-native";
+import { AnimatedLegendList } from "@legendapp/list/reanimated";
+import { THREAD_SIDEBAR_ROW_LAYOUT } from "./threadListAnimations";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -155,6 +157,7 @@ function ThreadNavigationSidebarPane(
     regenerateThreadTitle,
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
+  const activeNewTask = useActiveNewTask();
   const queuedThreadKeys = useQueuedThreadKeys();
   const { confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = Object.values(savedConnectionsById)
@@ -526,6 +529,7 @@ function ThreadNavigationSidebarPane(
   // clock deliberately stays out: its per-row text lives on the items, so a
   // tick only re-renders rows whose displayed text actually moved.
   const listExtraData = {
+    activeNewTask,
     selectedThreadKey: props.selectedThreadKey ?? "",
     projectByKey,
     projectTitleByProjectKey,
@@ -572,6 +576,14 @@ function ThreadNavigationSidebarPane(
         return (
           <ThreadListV2PendingRow
             pendingTask={item.pendingTask}
+            selected={
+              activeNewTask?.pendingKey === item.pendingTask.key ||
+              (item.pendingTask.kind === "pending" &&
+                scopedThreadKey(
+                  item.pendingTask.environmentId,
+                  item.pendingTask.message.threadId,
+                ) === props.selectedThreadKey)
+            }
             project={projectByKey.get(pendingScopeKey) ?? null}
             projectTitle={projectTitleByProjectKey.get(pendingScopeKey)}
             environmentLabel={
@@ -584,6 +596,10 @@ function ThreadNavigationSidebarPane(
             showPendingDivider={item.showPendingDivider}
             onSelectPendingTask={props.onOpenPendingTask}
             onDeletePendingTask={confirmDeletePendingTask}
+            fullSwipeWidth={props.width - 20}
+            onSwipeableClose={handleSwipeableClose}
+            onSwipeableWillOpen={handleSwipeableWillOpen}
+            simultaneousSwipeGesture={sidebarScrollGesture}
           />
         );
       }
@@ -620,7 +636,10 @@ function ThreadNavigationSidebarPane(
             )}
             searchQuery={props.searchQuery}
             pane="sidebar"
-            selected={scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey}
+            selected={
+              !activeNewTask &&
+              scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
+            }
             fullSwipeWidth={props.width - 20}
             onSelectThread={handleSelectThread}
             onOpenThreadPullRequests={handleOpenThreadPullRequests}
@@ -766,7 +785,8 @@ function ThreadNavigationSidebarPane(
         <View className="flex-1">
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
-              <LegendList
+              <AnimatedLegendList
+                itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
                 data={listItems}
                 ListHeaderComponent={<DecisionInboxRow onPress={props.onOpenDecisions} />}
                 drawDistance={500}
@@ -838,7 +858,8 @@ function ThreadNavigationSidebarPane(
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
-              <LegendList
+              <AnimatedLegendList
+                itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
                 data={listItems}
                 ListHeaderComponent={<DecisionInboxRow onPress={props.onOpenDecisions} />}
                 drawDistance={500}

@@ -31,10 +31,16 @@ the list has **Join** too. The device needs OpenCodex and a direct SSH alias on
 the hub. GOAT compares the host key OpenCodex is offered with the key GOAT pinned
 for that alias, links the device, and checks its parity.
 
+A Windows device cannot be a Remote Link Child, so **Join** connects it as a Hub
+client instead. That needs this hub's OpenCodex in Hub mode with addresses the
+device can reach, such as behind Tailscale Serve. GOAT creates a single-use
+invite on the hub and redeems it on the device; you never see or copy the code.
+Agents can request the same for a device GOAT reaches only by password.
+
 **Repair** walks the fixes for failing checks in order: sync the device's
 settings, restart its OpenCodex once nothing runs there, and reconnect the link.
-**Leave** disconnects the device and returns it to its own sign-ins; GOAT asks
-before it does that.
+**Leave** disconnects the device and returns it to its own sign-ins, then revokes
+its link or Hub key on the hub; GOAT asks before it does that.
 
 Each action lists its steps and their results. Some changes wait for a person: a
 host key GOAT has not pinned or that changed, re-linking a device, or removing
@@ -48,6 +54,12 @@ to change this hub's settings.
 threads, merge pull requests or change settings only as far as its profile
 allows, and an agent without its own profile gets **Default profile**. Turn it on
 in **Settings → Hub**.
+
+The switch covers your whole fleet. Turning it on or off on one machine does the
+same on every host connected to it, and the most recent change wins wherever you
+made it. The row lists each host as **applied**, **waiting** (not reached yet) or
+**needs a GOAT update**; a host on an older GOAT cannot take the setting, and
+agents cannot launch or send follow-ups to it while profiles are on.
 
 ## Read a device
 

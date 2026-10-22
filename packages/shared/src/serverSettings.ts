@@ -5,6 +5,8 @@ import {
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
+  globalIdleCompaction,
+  type IdleCompactionMode,
   isProviderAvailable,
   isUnconfiguredDefaultInstanceEnabled,
   resolveProjectProviderInstanceEnabled,
@@ -19,6 +21,7 @@ import {
   type ServerProvider,
   ServerSettings,
   type ServerSettingsPatch,
+  withIdleCompaction,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -406,6 +409,22 @@ export function assertNoMemoryHubSettingsPatch(patch: unknown): void {
   }
 }
 
+/**
+ * A client from before `idleCompaction` patches the old boolean switch. Turning
+ * it off keeps "Never" rather than reverting to the default.
+ */
+function patchedIdleCompaction(
+  current: ServerSettings,
+  patch: ServerSettingsPatch,
+): IdleCompactionMode {
+  if (patch.idleCompaction !== undefined) return patch.idleCompaction;
+  const legacy = patch.compactIdleThreads;
+  if (legacy === undefined) return globalIdleCompaction(current);
+  if (typeof legacy === "string") return legacy;
+  if (legacy) return "beforeCacheExpires";
+  return globalIdleCompaction(current) === "off" ? "off" : "onReturn";
+}
+
 export function applyServerSettingsPatch(
   current: ServerSettings,
   rawPatch: ServerSettingsPatch,
@@ -675,7 +694,7 @@ export function applyServerSettingsPatch(
     normalizedBackgroundActivity,
   );
   const nextWithReplacements = {
-    ...nextWithReplacementsBase,
+    ...withIdleCompaction(nextWithReplacementsBase, patchedIdleCompaction(current, patch)),
     ...deriveLegacyProjectOverrides(nextWithReplacementsBase),
     backgroundActivity: normalizedBackgroundActivity,
     automaticGitFetchInterval: resolvedBackgroundActivity.automaticGitFetchInterval,

@@ -1,12 +1,11 @@
-import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
-import type { ScopedThreadRef } from "@goat/contracts";
+import { type ScopedThreadRef } from "@goat/contracts";
+import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
+import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
 import { useEffect, useRef } from "react";
-
-import { useThreadShell } from "../state/entities";
-import { threadEnvironment } from "../state/threads";
-import { useAtomCommand } from "../state/use-atom-command";
-import { useUiStateStore } from "../uiStateStore";
-import { resolveThreadLastVisitedAt } from "./Sidebar.logic";
+import { useUiStateStore } from "../../uiStateStore";
+import { threadEnvironment } from "../../state/threads";
+import { useThreadShell } from "../../state/entities";
+import { useAtomCommand } from "../../state/use-atom-command";
 
 // During an active turn updatedAt advances frequently; each visit broadcasts to shell subscribers.
 const VISIT_DISPATCH_THROTTLE_MS = 10_000;

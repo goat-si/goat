@@ -1,319 +1,39 @@
 import { Toolbar } from "../../components/ui/Toolbar";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { use, useCallback, useEffect, useRef } from "react";
+import { use } from "react";
 import { useNavigation, type ParamListBase } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Platform } from "react-native";
-import type { SearchBarCommands } from "react-native-screens";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
-import { useUniwindTheme } from "../../lib/useUniwindTheme";
-import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
-import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
-import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
-import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
-import { useDeviceType } from "../../native/native-layout-metrics";
-import { buildHomeListFilterMenu } from "./home-list-filter-menu";
-import {
-  createSidebarFilterHeaderItem,
-  createSidebarHeaderItems,
-} from "../threads/sidebar-native-header-items";
 import type { HomeHeaderProps } from "./HomeHeader.types";
-import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
+/**
+ * The iOS thread list lives in the workspace, whose WorkspaceToolbar owns its header and search.
+ * GOAT adds its own left toolbar buttons: Notes, and the GOAT Bot toggle.
+ */
 export function HomeHeader(props: HomeHeaderProps) {
   const botMode = useMobileGoatBotModeButton();
   const mode = props.homeMode ?? botMode.mode;
   const botKnown = props.botKnown ?? botMode.known;
   const toggleMode = props.onToggleHomeMode ?? botMode.toggle;
   const navigation = useNavigation<NativeStackNavigationProp<ParamListBase>>();
-  const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
-  const compactBot = !layout.usesSplitView && mode === "bot";
-  const usesNativeMailSearchToolbar = useNativeMailSearchToolbar();
-  const deviceType = useDeviceType();
   const primaryColumn = use(NativePrimaryColumnContext);
-  const sidebarHeader =
-    Platform.OS === "ios" &&
-    primaryColumn !== null &&
-    (deviceType === "pad" || !usesNativeMailSearchToolbar);
-  const showsCompactCompose = deviceType === "pad" && !layout.usesSplitView;
-  const searchBarRef = useRef<SearchBarCommands>(null);
-  const focusAfterReveal = useRef(false);
-  useEffect(
-    () =>
-      navigation.addListener("transitionEnd", (event) => {
-        if (focusAfterReveal.current && !event.data.closing) {
-          focusAfterReveal.current = false;
-          searchBarRef.current?.focus();
-        }
-      }),
-    [navigation],
-  );
-  const iconColor = useUniwindTheme()["--color-icon"];
-  const hasCustomListOptions =
-    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
-  const focusSearch = useCallback(() => {
-    if (primaryColumn && !panes.primarySidebarVisible) {
-      focusAfterReveal.current = true;
-      togglePrimarySidebar();
-      return true;
-    }
-    searchBarRef.current?.focus();
-    return searchBarRef.current !== null;
-  }, [primaryColumn, panes.primarySidebarVisible, togglePrimarySidebar]);
-  useHardwareKeyboardCommand("focusSearch", focusSearch);
-  const filterMenu = buildHomeListFilterMenu(props);
-
-  if (props.usesWorkspaceToolbar) {
-    return (
-      <>
-        <Toolbar placement="left">
-          <Toolbar.Button
-            accessibilityLabel="Open notes"
-            icon="doc.text"
-            onPress={() => navigation.navigate("Notes")}
-          />
-          {botKnown ? (
-            <Toolbar.Button
-              accessibilityLabel={
-                mode === "bot" && primaryColumn?.selectedThreadKey == null
-                  ? "Show threads"
-                  : "Show GOAT Bot"
-              }
-              icon={
-                mode === "bot" && primaryColumn?.selectedThreadKey == null
-                  ? "list.bullet"
-                  : "bubble.left.and.bubble.right"
-              }
-              onPress={toggleMode}
-            />
-          ) : null}
-        </Toolbar>
-
-        {deviceType === "duo-unfolded" ? (
-          <NativeStackScreenOptions
-            optionsVersion={filterMenu.items}
-            options={{
-              nativeSidebarFilter: createSidebarFilterHeaderItem({
-                filterIcon: hasCustomListOptions
-                  ? "line.3.horizontal.decrease.circle.fill"
-                  : "line.3.horizontal.decrease.circle",
-                filterMenu,
-              }),
-            }}
-          />
-        ) : null}
-      </>
-    );
-  }
-
+  const showsThreads = mode === "bot" && primaryColumn?.selectedThreadKey == null;
   return (
-    <>
-      <NativeStackScreenOptions
-        optionsVersion={[
-          filterMenu.items,
-          showsCompactCompose,
-          mode,
-          botKnown,
-          primaryColumn?.selectedThreadKey,
-        ]}
-        options={{
-          headerTintColor: iconColor,
-          unstable_headerRightItems: () => [
-            withNativeGlassHeaderItem({
-              accessibilityLabel: "Open notes",
-              icon: { name: "doc.text", type: "sfSymbol" } as const,
-              identifier: "home-notes",
-              label: "",
-              onPress: () => navigation.navigate("Notes"),
-              type: "button",
-            }),
-            ...(sidebarHeader
-              ? [
-                  ...createSidebarHeaderItems({
-                    filterIcon: hasCustomListOptions
-                      ? "line.3.horizontal.decrease.circle.fill"
-                      : "line.3.horizontal.decrease.circle",
-                    filterMenu,
-                    onOpenSettings: props.onOpenSettings,
-                  }),
-                  ...(showsCompactCompose
-                    ? [
-                        withNativeGlassHeaderItem({
-                          accessibilityLabel: "New task",
-                          axisBehavior: "horizontalOnly",
-                          icon: { name: "square.and.pencil", type: "sfSymbol" } as const,
-                          identifier: "home-new-task",
-                          label: "",
-                          onPress: props.onStartNewTask,
-                          type: "button",
-                        }),
-                      ]
-                    : []),
-                ]
-              : [
-                  withNativeGlassHeaderItem({
-                    accessibilityLabel: "Open settings",
-                    icon: { name: "ellipsis", type: "sfSymbol" } as const,
-                    identifier: "home-settings",
-                    label: "",
-                    onPress: props.onOpenSettings,
-                    type: "button",
-                  }),
-                ]),
-            ...(botKnown
-              ? [
-                  withNativeGlassHeaderItem({
-                    accessibilityLabel:
-                      mode === "bot" && primaryColumn?.selectedThreadKey == null
-                        ? "Show threads"
-                        : "Show GOAT Bot",
-                    icon: {
-                      name:
-                        mode === "bot" && primaryColumn?.selectedThreadKey == null
-                          ? "list.bullet"
-                          : "bubble.left.and.bubble.right",
-                      type: "sfSymbol",
-                    } as const,
-                    identifier: "home-mode",
-                    label: "",
-                    onPress: toggleMode,
-                    type: "button",
-                  }),
-                ]
-              : []),
-          ],
-          // The keys below are set per-branch (not `undefined`) so a later
-          // reapply cannot clobber options owned by Toolbar.
-          ...(compactBot
-            ? {
-                headerSearchBarOptions: undefined,
-                unstable_headerToolbarItems: () => [],
-              }
-            : sidebarHeader
-              ? {
-                  headerSearchBarOptions: {
-                    ref: searchBarRef,
-                    autoCapitalize: "none" as const,
-                    hideNavigationBar: false,
-                    hideWhenScrolling: false,
-                    obscureBackground: false,
-                    placement: "stacked" as const,
-                    allowToolbarIntegration: false,
-                    placeholder: "Search",
-                    onCancelButtonPress: () => props.onSearchQueryChange(""),
-                    onChangeText: (event) => props.onSearchQueryChange(event.nativeEvent.text),
-                  },
-                  unstable_headerToolbarItems: () => [],
-                }
-              : usesNativeMailSearchToolbar
-                ? {
-                    headerSearchBarOptions: {
-                      ref: searchBarRef,
-                      autoCapitalize: "none" as const,
-                      onCancelButtonPress: () => props.onSearchQueryChange(""),
-                    },
-                    unstable_headerToolbarItems: () => [
-                      createNativeMailSearchToolbarItem({
-                        composeButtonId: "home-new-task",
-                        composeSystemImageName: "square.and.pencil",
-                        filterMenu,
-                        filterButtonId: "home-filter",
-                        filterSystemImageName: hasCustomListOptions
-                          ? "line.3.horizontal.decrease.circle.fill"
-                          : "line.3.horizontal.decrease",
-                        onComposePress: props.onStartNewTask,
-                        onSearchTextChange: props.onSearchQueryChange,
-                        placeholder: "Search",
-                        searchTextChangeId: "home-search-text",
-                        showsSearchDismissButton: true,
-                      }),
-                    ],
-                  }
-                : {
-                    // Pre-Liquid-Glass iOS: standard pull-down search in the nav
-                    // bar; create + sort live in the plain bottom toolbar below.
-                    headerSearchBarOptions: {
-                      ref: searchBarRef,
-                      autoCapitalize: "none" as const,
-                      hideNavigationBar: false,
-                      placeholder: "Search",
-                      onCancelButtonPress: () => {
-                        props.onSearchQueryChange("");
-                      },
-                      onChangeText: (event) => {
-                        props.onSearchQueryChange(event.nativeEvent.text);
-                      },
-                    },
-                  }),
-        }}
+    <Toolbar placement="left">
+      <Toolbar.Button
+        accessibilityLabel="Open notes"
+        icon="doc.text"
+        onPress={() => navigation.navigate("Notes")}
       />
-
-      {compactBot || sidebarHeader || usesNativeMailSearchToolbar ? null : (
-        <Toolbar placement="bottom">
-          <Toolbar.Menu
-            accessibilityLabel="Filter threads"
-            icon={
-              hasCustomListOptions
-                ? "line.3.horizontal.decrease.circle.fill"
-                : "line.3.horizontal.decrease.circle"
-            }
-            title="Thread list options"
-            separateBackground
-          >
-            <Toolbar.Menu title="Environment">
-              <Toolbar.Label>Environment</Toolbar.Label>
-              <Toolbar.MenuAction
-                isOn={props.selectedEnvironmentId === null}
-                onPress={() => props.onEnvironmentChange(null)}
-                subtitle="Show threads from every environment"
-              >
-                <Toolbar.Label>All environments</Toolbar.Label>
-              </Toolbar.MenuAction>
-              {props.environments.map((environment) => (
-                <Toolbar.MenuAction
-                  key={environment.environmentId}
-                  isOn={props.selectedEnvironmentId === environment.environmentId}
-                  onPress={() => props.onEnvironmentChange(environment.environmentId)}
-                >
-                  <Toolbar.Label>{environment.label}</Toolbar.Label>
-                </Toolbar.MenuAction>
-              ))}
-            </Toolbar.Menu>
-
-            {props.projects.length > 0 ? (
-              <Toolbar.Menu title="Project">
-                <Toolbar.Label>Project</Toolbar.Label>
-                <Toolbar.MenuAction
-                  isOn={props.selectedProjectKey === null}
-                  onPress={() => props.onProjectChange(null)}
-                  subtitle="Show threads from every project"
-                >
-                  <Toolbar.Label>All projects</Toolbar.Label>
-                </Toolbar.MenuAction>
-                {props.projects.map((project) => (
-                  <Toolbar.MenuAction
-                    key={project.key}
-                    isOn={props.selectedProjectKey === project.key}
-                    onPress={() => props.onProjectChange(project.key)}
-                  >
-                    <Toolbar.Label>{project.label}</Toolbar.Label>
-                  </Toolbar.MenuAction>
-                ))}
-              </Toolbar.Menu>
-            ) : null}
-          </Toolbar.Menu>
-          <Toolbar.Spacer flexible />
-          <Toolbar.Button
-            accessibilityLabel="New task"
-            icon="square.and.pencil"
-            onPress={props.onStartNewTask}
-            separateBackground
-          />
-        </Toolbar>
-      )}
-    </>
+      {botKnown ? (
+        <Toolbar.Button
+          accessibilityLabel={showsThreads ? "Show threads" : "Show GOAT Bot"}
+          icon={showsThreads ? "list.bullet" : "bubble.left.and.bubble.right"}
+          onPress={toggleMode}
+        />
+      ) : null}
+    </Toolbar>
   );
 }

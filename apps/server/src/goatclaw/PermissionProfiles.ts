@@ -69,6 +69,11 @@ interface ClaimInput {
   readonly forwarded?: PermissionProfile | undefined;
   /** A stored profile the child runs under, narrowed by the caller's; role launches set it. */
   readonly profileId?: string | undefined;
+  /**
+   * A follow-up send to a thread on `host`. Its lane is that thread: a lane it already holds is
+   * not counted twice, and no local profile binding is written for a thread that lives elsewhere.
+   */
+  readonly remoteThreadId?: string | undefined;
 }
 type CheckResult =
   | { readonly ok: true; readonly effective: PermissionProfileView }
@@ -126,6 +131,15 @@ export class PermissionProfiles extends Context.Service<
       id: string,
       childThreadId?: string,
       correlationId?: string,
+    ) => Effect.Effect<void, OrchestratorMcpFailure>;
+    /**
+     * Settles a follow-up send's lane on the thread's remote dispatch, which counts while that
+     * thread runs. A thread this machine never dispatched has no ledger here, so its slot frees.
+     */
+    readonly completeRemote: (
+      id: string,
+      host: string,
+      remoteThreadId: string,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
     readonly release: (
       id: string,
@@ -236,7 +250,7 @@ export const layer = Layer.effect(
       if (!policy.enabled) {
         if (forwarded !== undefined)
           return yield* refusal(
-            "This destination has goatclaw disabled and cannot enforce the forwarded permission ceiling.",
+            "goatclaw is off on this destination: the fleet's goatclaw policy has not reached it yet, so it cannot enforce the forwarded permission ceiling. Retry once the sending machine shows the policy applied here.",
           );
         return {
           enabled: false,
@@ -430,7 +444,9 @@ export const layer = Layer.effect(
               const counts = yield* sql<{
                 count: number;
               }>`SELECT COUNT(DISTINCT COALESCE(l.host, 'local') || ':' || COALESCE(l.child_thread_id, l.id)) AS count FROM goatclaw_lane_reservations l
-          WHERE l.owner_key = ${owner} AND (
+          WHERE l.owner_key = ${owner}
+          AND (${input.remoteThreadId ?? null} IS NULL OR l.host IS NOT ${input.host ?? null} OR l.child_thread_id IS NOT ${input.remoteThreadId ?? null})
+          AND (
             (l.host IS NULL AND (EXISTS (SELECT 1 FROM orchestration_v2_projection_runs r WHERE r.thread_id = l.child_thread_id AND r.status IN ('preparing','queued','starting','running','waiting'))
               OR l.pending = 1))
             OR (l.host IS NOT NULL AND (l.pending = 1 OR EXISTS (SELECT 1 FROM remote_dispatches d
@@ -458,7 +474,7 @@ export const layer = Layer.effect(
                   lanesRunning: (counts[0]?.count ?? 0) + (natives[0]?.count ?? 0),
                 }),
               );
-              yield* sql`INSERT INTO goatclaw_lane_reservations (id, owner_key, child_thread_id, host) VALUES (${input.id}, ${owner}, ${input.childThreadId ?? null}, ${input.host ?? null})`;
+              yield* sql`INSERT INTO goatclaw_lane_reservations (id, owner_key, child_thread_id, host) VALUES (${input.id}, ${owner}, ${input.childThreadId ?? input.remoteThreadId ?? null}, ${input.host ?? null})`;
             }
             if (input.childThreadId !== undefined) {
               // Binding precedes the command commit, which can immediately start a provider turn.
@@ -509,6 +525,25 @@ export const layer = Layer.effect(
         Effect.mapError(storageFailure),
       );
     });
+    const completeRemote = Effect.fn("PermissionProfiles.completeRemote")(function* (
+      id: string,
+      host: string,
+      remoteThreadId: string,
+    ) {
+      if (Option.isNone(database)) return;
+      const sql = database.value;
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`UPDATE goatclaw_lane_reservations SET pending = 0, child_thread_id = ${remoteThreadId},
+            correlation_id = (SELECT d.correlation_id FROM remote_dispatches d WHERE d.host = ${host}
+              AND d.remote_thread_id = ${remoteThreadId} AND d.kind = 'thread' ORDER BY d.created_at DESC LIMIT 1)
+            WHERE id = ${id}`;
+            yield* sql`DELETE FROM goatclaw_lane_reservations WHERE id = ${id} AND correlation_id IS NULL`;
+          }),
+        )
+        .pipe(Effect.mapError(storageFailure));
+    });
     const bind = Effect.fn("PermissionProfiles.bind")(function* (
       threadId: ThreadId,
       profileId: string,
@@ -546,6 +581,7 @@ export const layer = Layer.effect(
       requireCloudApproval,
       claim,
       complete,
+      completeRemote,
       release,
       bind,
       nativeSubagentLimit,

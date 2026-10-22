@@ -19,7 +19,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
 import * as HubMembership from "./HubMembership.ts";
-import { HubOcx, HubOcxError, type OcxOutput } from "./HubOcx.ts";
+import { type DevicePlatform, HubOcx, HubOcxError, type OcxOutput } from "./HubOcx.ts";
 import * as HubParity from "./HubParity.ts";
 
 const PINNED = "SHA256:pinnedpinnedpinnedpinnedpinnedpinnedpinned0";
@@ -58,6 +58,13 @@ interface Fixture {
   readonly deviceExit?: Readonly<Record<string, number>>;
   readonly health?: { readonly service: string; readonly role?: string };
   readonly strayTunnel?: boolean;
+  readonly platform?: DevicePlatform;
+  /** `ocx connect status --json` on the device. */
+  readonly connection?: Readonly<Record<string, unknown>>;
+  /** Home `ocx hub invite` exit; 0 mints a code. */
+  readonly inviteExit?: number;
+  readonly connectExit?: number;
+  readonly addExit?: { readonly code: number; readonly phase: string };
 }
 
 const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
@@ -79,6 +86,7 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
     if (command === "probe")
       return Effect.succeed(json({ alias, fingerprint: offered, keyType: "ssh-ed25519" }));
     if (command === "add") {
+      if (fixture.addExit) return Effect.succeed({ stdout: "", ...fixture.addExit });
       if (fixture.addFails)
         return Effect.succeed({ code: 1, stdout: "", phase: "child_relay_failed" });
       links.set(alias!, "lnk_fedcba9876543210");
@@ -92,9 +100,14 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
   };
   const device = (alias: string, args: ReadonlyArray<string>) => {
     calls.push(`device ${alias} ${args.join(" ")}`);
-    return fixture.deviceDown?.includes(args[0]!)
-      ? Effect.fail(new HubOcxError({ reason: "unreachable", message: `${alias} is down.` }))
-      : Effect.succeed({ code: fixture.deviceExit?.[args[0]!] ?? 0, stdout: "opencodex 2.89.0" });
+    if (fixture.deviceDown?.includes(args[0]!))
+      return Effect.fail(new HubOcxError({ reason: "unreachable", message: `${alias} is down.` }));
+    if (args[0] === "connect" && args[1] === "status")
+      return Effect.succeed(json(fixture.connection ?? { state: "disconnected" }));
+    return Effect.succeed({
+      code: fixture.deviceExit?.[args[0]!] ?? 0,
+      stdout: "opencodex 2.83.0",
+    });
   };
   const goatclaw = {
     enabled: true,
@@ -117,6 +130,23 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
           HubOcx.of({
             home,
             device,
+            devicePlatform: (alias) =>
+              Effect.sync(() => {
+                calls.push(`platform ${alias}`);
+                return fixture.platform ?? "posix";
+              }),
+            connectHubClient: (alias) =>
+              Effect.sync(() => {
+                calls.push(`handoff ${alias}`);
+                return (fixture.inviteExit ?? 0) !== 0
+                  ? { minted: false as const, exit: fixture.inviteExit! }
+                  : {
+                      minted: true as const,
+                      dataUrl: "https://hub.tailnet-example.ts.net:8443",
+                      expiresAt: "2026-10-22T12:05:00.000Z",
+                      connect: { code: fixture.connectExit ?? 0, stdout: "" },
+                    };
+              }),
             pinnedFingerprint: () => Effect.succeed(fixture.pin),
             directAlias: () => Effect.succeed(fixture.direct ?? true),
             runningTurns: () => Effect.succeed(fixture.running ?? 0),
@@ -180,6 +210,7 @@ it.effect("an owner joins a pinned device: GOAT's pin becomes --expect-fingerpri
     expect(result.state).toBe("child");
     expect(hub.calls).toEqual([
       "home link status --json",
+      "platform mac-studio",
       "device mac-studio --version",
       "home link probe mac-studio --json",
       `home link add mac-studio --expect-fingerprint ${PINNED} --json`,
@@ -321,7 +352,7 @@ it.effect("an alias behind ProxyJump is refused before probing", () =>
     const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
     expect(result.state).toBe("failed");
     expect(result.message).toContain("ProxyJump");
-    expect(hub.calls).toEqual([]);
+    expect(hub.calls).toEqual(["home link status --json", "platform mac-studio"]);
   }),
 );
 
@@ -459,4 +490,203 @@ it.effect("a tunnel that outlives the revoke is reported", () =>
     expect(result.state).toBe("degraded");
     expect(result.steps.at(-1)).toMatchObject({ step: "link_removed", outcome: "failed" });
   }),
+);
+
+const MINI_KEY = "0b7c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3";
+
+it.effect("a Windows device joins as a Hub client: invite here, connect there, then parity", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ platform: "windows" });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mini" });
+    expect(result).toMatchObject({ state: "child", transport: "hub-client" });
+    expect(hub.calls).toEqual([
+      "home link status --json",
+      "platform mini",
+      "device mini --version",
+      "device mini connect status --json",
+      "handoff mini",
+      "verify mini",
+    ]);
+    expect(result.steps.map(({ step, outcome }) => `${step} ${outcome}`)).toEqual([
+      "preflight ok",
+      "invite ok",
+      "connect ok",
+    ]);
+    // Nothing about Remote Link runs for a Hub client.
+    expect(hub.calls.some((call) => call.includes("link probe") || call.includes("link add"))).toBe(
+      false,
+    );
+    expect((yield* hub.audit).map(({ outcome }) => outcome)).toEqual(["started", "child"]);
+  }),
+);
+
+it.effect("transport remote-link on Windows is refused before a probe or link add", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ platform: "windows", pin: PINNED });
+    const result = yield* hub.membership.join(scope, {
+      deviceAlias: "mini",
+      transport: "remote-link",
+    });
+    expect(result).toMatchObject({ state: "failed", transport: "remote-link" });
+    expect(result.message).toContain("remote_platform_unsupported");
+    expect(result.steps).toEqual([
+      { step: "preflight", outcome: "failed", detail: result.message },
+    ]);
+    expect(hub.calls).toEqual(["home link status --json", "platform mini"]);
+    expect(yield* hub.audit).toEqual([]);
+  }),
+);
+
+it.effect("an unreadable platform still meets OpenCodex's own refusal (exit 125)", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({
+      pin: PINNED,
+      addExit: { code: 125, phase: "remote_platform_unsupported" },
+    });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mini" });
+    expect(result.state).toBe("failed");
+    expect(result.message).toBe(
+      "Remote Link refuses this platform; it joins as a Hub-mode client instead.",
+    );
+  }),
+);
+
+it.effect("a password-only device can ask for a Hub client join on any platform", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ platform: "posix" });
+    const result = yield* hub.membership.join(scope, {
+      deviceAlias: "lidge",
+      transport: "hub-client",
+    });
+    expect(result).toMatchObject({ state: "child", transport: "hub-client" });
+    expect(hub.calls).toContain("handoff lidge");
+  }),
+);
+
+it.effect("a hub that cannot mint an invite stops before touching the device", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ platform: "windows", inviteExit: 1 });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mini" });
+    expect(result.state).toBe("failed");
+    expect(result.message).toContain("Hub mode");
+    expect(result.steps.at(-1)).toMatchObject({ step: "invite", outcome: "failed" });
+    expect(hub.calls).not.toContain("verify mini");
+    expect((yield* hub.audit).map(({ outcome }) => outcome)).toEqual(["started", "failed"]);
+  }),
+);
+
+it.effect("a failed ocx connect is reported without parity", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ platform: "windows", connectExit: 1 });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mini" });
+    expect(result.state).toBe("failed");
+    expect(result.steps.at(-1)).toEqual({
+      step: "connect",
+      outcome: "failed",
+      detail: "ocx connect exited 1; the unused code expires on its own.",
+    });
+    expect(hub.calls).not.toContain("verify mini");
+  }),
+);
+
+// mini on 2026-10-22: a Home-initiated link that Git Bash let enroll, after the Home revoked it.
+const miniLinkConnection = {
+  state: "connected",
+  serverUrl: "http://127.0.0.1:52889",
+  transport: "link",
+  link: { tunnelPort: 52889, linkId: "lnk_ac30f40bb6167a49" },
+  apiKeyId: MINI_KEY,
+};
+
+it.effect("a device still holding a Remote Link connection is not given a second one", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ platform: "windows", connection: miniLinkConnection });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mini" });
+    expect(result.state).toBe("failed");
+    expect(result.message).toContain("http://127.0.0.1:52889");
+    expect(hub.calls).not.toContain("handoff mini");
+  }),
+);
+
+it.effect("a non-owner Hub client join waits for an approval bound to that transport", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ profile: "hub-admin", pin: PINNED });
+    const first = yield* hub.membership.join(scope, {
+      deviceAlias: "lidge",
+      transport: "hub-client",
+    });
+    expect(first).toMatchObject({ state: "needs_human", transport: "hub-client" });
+    expect(hub.calls).not.toContain("handoff lidge");
+    const item = yield* hub.inbox.get(owner, first.decisionId!);
+    expect(item.context).toContain(HubMembership.decisionBinding("join", "lidge", "hub-client"));
+
+    yield* hub.approve(first.decisionId!);
+    // The same approval cannot be spent on a Remote Link join.
+    const wrong = yield* hub.membership
+      .join(scope, { deviceAlias: "lidge", decisionId: first.decisionId! })
+      .pipe(Effect.flip);
+    expect(wrong.code).toBe("invalid_request");
+
+    const second = yield* hub.membership.join(scope, {
+      deviceAlias: "lidge",
+      transport: "hub-client",
+      decisionId: first.decisionId!,
+    });
+    expect(second.state).toBe("child");
+    expect(hub.calls.filter((call) => call === "handoff lidge")).toHaveLength(1);
+  }),
+);
+
+it.effect("a Hub client leaves device first, then its data key is revoked on the hub", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({
+      connection: {
+        state: "connected",
+        serverUrl: "https://hub.tailnet-example.ts.net:8443",
+        apiKeyId: MINI_KEY,
+      },
+    });
+    const result = yield* hub.membership.leave(scope, { deviceAlias: "mini" });
+    expect(result).toMatchObject({ state: "ready", transport: "hub-client" });
+    expect(hub.calls).toEqual([
+      "home link status --json",
+      "device mini connect status --json",
+      "device mini disconnect --json",
+      "device mini restart",
+      "health mini",
+      `home access key remove ${MINI_KEY} --yes --json`,
+    ]);
+  }),
+);
+
+it.effect("a device that is not joined leaves nothing to do", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup();
+    const result = yield* hub.membership.leave(scope, { deviceAlias: "mini" });
+    expect(result.state).toBe("ready");
+    expect(hub.calls.some((call) => call.includes("disconnect"))).toBe(false);
+  }),
+);
+
+it.effect(
+  "mini's legacy link: the device refuses ocx disconnect, so only a forced revoke remains",
+  () =>
+    Effect.gen(function* () {
+      // "disconnect refused: Codex routing is injected but no journal records the original state"
+      const hub = yield* setup({ linked: ["mini"], deviceExit: { disconnect: 1 } });
+      const asked = yield* hub.membership.leave(scope, { deviceAlias: "mini" });
+      expect(asked).toMatchObject({ state: "needs_human", transport: "remote-link" });
+      expect(asked.message).toContain("ocx disconnect exited 1.");
+      expect(hub.calls.some((call) => call.includes("revoke"))).toBe(false);
+
+      yield* hub.approve(asked.decisionId!);
+      const forced = yield* hub.membership.leave(scope, {
+        deviceAlias: "mini",
+        decisionId: asked.decisionId!,
+      });
+      expect(forced.state).toBe("degraded");
+      expect(hub.calls).toContain(
+        "home link revoke --link-id lnk_0123456789abcdef --force --yes --json",
+      );
+    }),
 );

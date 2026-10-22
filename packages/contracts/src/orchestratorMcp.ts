@@ -32,7 +32,6 @@ import {
   UserInputRespondedBy,
   ProviderApprovalDecision,
 } from "./providerPolicy.ts";
-import { PermissionProfile } from "./permissionProfiles.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
 import { PullRequestState } from "./pullRequest.ts";
@@ -64,6 +63,7 @@ import {
   ProviderOptionSelectionValue,
 } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { PermissionProfile } from "./permissionProfiles.ts";
 
 const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)).annotate({
   description: "Complete task or message text for the target agent.",
@@ -687,6 +687,19 @@ export const OrchestratorMcpThreadSearchResult = Schema.Struct({
   ),
 });
 export type OrchestratorMcpThreadSearchResult = typeof OrchestratorMcpThreadSearchResult.Type;
+// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on
+// decode instead of failing the call; pagination returns the rest. Values below 1 still fail:
+// 0 asks for nothing, and answering it with one item would be a different request.
+const clampedPositiveInt = (maximum: number) =>
+  PositiveInt.pipe(
+    Schema.decodeTo(
+      PositiveInt.check(Schema.isLessThanOrEqualTo(maximum)),
+      SchemaTransformation.transform({
+        decode: (value) => Math.min(value, maximum),
+        encode: (value) => value,
+      }),
+    ),
+  );
 
 export const OrchestratorMcpThreadReadInput = Schema.Struct({
   threadId: ThreadId,
@@ -695,9 +708,15 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   textOffset: Schema.optional(NonNegativeInt),
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
   afterPosition: Schema.optional(NonNegativeInt),
-  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
-  runLimit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(50))),
-  maxCharsPerItem: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(50_000))),
+  limit: Schema.optional(clampedPositiveInt(100)).annotate({
+    description: "Maximum timeline items to return, from 1 to 100.",
+  }),
+  runLimit: Schema.optional(clampedPositiveInt(50)).annotate({
+    description: "Maximum recent runs to return, from 1 to 50.",
+  }),
+  maxCharsPerItem: Schema.optional(clampedPositiveInt(50_000)).annotate({
+    description: "Maximum text characters per item, from 1 to 50000.",
+  }),
 });
 export type OrchestratorMcpThreadReadInput = typeof OrchestratorMcpThreadReadInput.Type;
 
@@ -794,6 +813,7 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+  /** Set by the GOAT that forwards a send from a goatclaw-profiled caller; outside dispatch only. */
   permissionProfileCeiling: Schema.optional(PermissionProfile),
   expectedLatestRunId: Schema.optional(
     RunId.annotate({
@@ -1022,6 +1042,23 @@ export const OrchestratorMcpThreadInterruptResult = Schema.Struct({
 });
 export type OrchestratorMcpThreadInterruptResult = typeof OrchestratorMcpThreadInterruptResult.Type;
 
+export const OrchestratorMcpCapabilitiesInput = Schema.Struct({
+  search: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(200)).annotate({
+      description:
+        "Words to match against model ids and labels. Lists matching models instead of the default short list.",
+    }),
+  ),
+});
+export type OrchestratorMcpCapabilitiesInput = typeof OrchestratorMcpCapabilitiesInput.Type;
+
+export const OrchestratorMcpModelOption = Schema.Struct({
+  id: Schema.String,
+  values: Schema.Array(ProviderOptionSelectionValue),
+  default: Schema.optional(ProviderOptionSelectionValue),
+});
+export type OrchestratorMcpModelOption = typeof OrchestratorMcpModelOption.Type;
+
 export const OrchestratorMcpProviderCapability = Schema.Struct({
   executionLocation: Schema.optional(Schema.Literals(["local", "cloud"])),
   followUp: Schema.optional(
@@ -1036,10 +1073,17 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
   models: Schema.Array(
     Schema.Struct({
       id: Schema.String,
-      label: Schema.NullOr(Schema.String),
-      options: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
+      /** Omitted when it only restates the id. A host on an older GOAT sends null. */
+      label: Schema.optional(Schema.NullOr(Schema.String)),
+      // A host on an older GOAT advertises full option descriptors. Remote delegation
+      // still reads its capabilities, so both shapes decode.
+      options: Schema.optional(
+        Schema.Array(Schema.Union([OrchestratorMcpModelOption, ProviderOptionDescriptor])),
+      ),
     }),
   ),
+  /** Models left out of `models`: unlisted visible models, or matches past the cap with `search`. */
+  omittedModels: Schema.optional(NonNegativeInt),
   runtimeModes: Schema.optional(Schema.Array(RuntimeMode)),
   canRunChildTask: Schema.Boolean,
   canRunCrossProviderChildTask: Schema.Boolean,

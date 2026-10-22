@@ -241,6 +241,11 @@ export interface SshHostToolCall {
    * to make it. Like approvals, it never falls back to a narrower session.
    */
   readonly providersManage?: boolean;
+  /**
+   * The remote session carries `settings:write`. Only this machine's goatclaw fleet sync asks
+   * for it, to apply the policy a person changed here; like approvals, it never falls back.
+   */
+  readonly settingsWrite?: boolean;
   readonly requireReady?: true;
   /** Refuse when no current session already carries exactly this caller's authority. */
   readonly existingSessionOnly?: true;
@@ -390,8 +395,9 @@ const sessionKey = (
   approvals: boolean,
   memoryGrantCeiling: import("@goat/contracts").MemoryTaskGrantCeiling = "none",
   providersManage = false,
+  settingsWrite = false,
 ) =>
-  `${targetConnectionKey(target)}\u0000${ceiling}\u0000${memoryGrantCeiling}${approvals ? "\u0000approvals" : ""}${providersManage ? "\u0000providers" : ""}`;
+  `${targetConnectionKey(target)}\u0000${ceiling}\u0000${memoryGrantCeiling}${approvals ? "\u0000approvals" : ""}${providersManage ? "\u0000providers" : ""}${settingsWrite ? "\u0000settings" : ""}`;
 const decodeRemoteCapabilities = Schema.decodeUnknownEffect(OrchestratorMcpCapabilitiesResult);
 
 const decodeRemoteProject = Schema.decodeUnknownEffect(Schema.Struct({ id: ProjectId }));
@@ -962,8 +968,16 @@ const make = Effect.gen(function* () {
     requireReady?: true,
     providersManage = false,
     existingSessionOnly = false,
+    settingsWrite = false,
   ) {
-    const key = sessionKey(target, ceiling, approvals, memoryGrantCeiling, providersManage);
+    const key = sessionKey(
+      target,
+      ceiling,
+      approvals,
+      memoryGrantCeiling,
+      providersManage,
+      settingsWrite,
+    );
     if (existingSessionOnly) {
       const cached = sessions.get(key);
       const now = yield* Clock.currentTimeMillis;
@@ -983,11 +997,12 @@ const make = Effect.gen(function* () {
       const issued = yield* withRuntime(
         manager.issueMcpClientSession(target, {
           ...(requireReady === undefined ? {} : { requireReady }),
-          label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""}${providersManage ? ", providers" : ""})`,
+          label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""}${providersManage ? ", providers" : ""}${settingsWrite ? ", settings" : ""})`,
           ttl: SESSION_TTL,
           runtimeModeCeiling: ceiling,
           ...(approvals ? { approvals: true } : {}),
           ...(providersManage ? { providersManage: true } : {}),
+          ...(settingsWrite ? { settingsWrite: true } : {}),
           memoryScopes:
             memoryGrantCeiling === "none"
               ? []
@@ -2059,6 +2074,7 @@ const make = Effect.gen(function* () {
           requireReady ? true : undefined,
           call.providersManage === true,
           call.existingSessionOnly === true,
+          call.settingsWrite === true,
         ).pipe(unavailable(target.alias));
         attemptedToken = session.token;
         if (call.writes && !session.ceilingApplied) {
@@ -2102,6 +2118,7 @@ const make = Effect.gen(function* () {
                   call.approvals === true,
                   call.memoryGrantCeiling ?? "none",
                   call.providersManage === true,
+                  call.settingsWrite === true,
                 ),
                 attemptedToken,
               );

@@ -951,6 +951,10 @@ vi.mock("@legendapp/list/react-native", () => ({
     </section>
   ),
 }));
+vi.mock("@legendapp/list/reanimated", async () => ({
+  AnimatedLegendList: (await import("@legendapp/list/react-native")).LegendList,
+}));
+vi.mock("../threads/threadListAnimations", () => ({ THREAD_SIDEBAR_ROW_LAYOUT: undefined }));
 vi.mock("react-native-screens", () => ({ ScrollViewMarker: Box }));
 vi.mock("react-native-gesture-handler", () => ({
   GestureDetector: Box,

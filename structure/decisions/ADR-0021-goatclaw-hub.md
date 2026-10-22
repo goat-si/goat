@@ -43,6 +43,11 @@
     GOAT as a new usage-limit source kind and an optional host-status field.
   - The hub is the default cloud credential holder. Paid launches need a profile capability and a person's request
     or an approved decision.
+  - goatclaw is switched for the whole fleet. Each GOAT exchanges its goatclaw policy with every host it reaches
+    (`goat_goatclaw_sync`, with a `settings:write` dispatch session), and every machine keeps the most recently
+    changed policy, so turning it on or off anywhere applies everywhere connected. A policy nobody set never wins.
+    Remote launches and follow-up sends forward the caller's ceiling; only a destination that cannot enforce it is
+    refused.
   - Compatibility is a verdict from OpenCodex's served protocols and features. Adopted installs are advised and never
     replaced; managed installs follow ADR-0019's trial, probation and rollback.
 - **Reasons.** Credentials, rotation and revocation stay in the one program that already owns them. GOAT adds

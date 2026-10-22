@@ -9,29 +9,33 @@ export const HUB_ACTION_LABEL: Record<HubAction, string> = {
   repair: "Repair",
 };
 
-/** What each transport can do here. Hub clients join through ocx connect, which H3 does not run. */
+/** What each transport can do here. Join picks Hub client for Windows devices. */
 export const HUB_DEVICE_ACTIONS: Record<HubTransport, ReadonlyArray<HubAction>> = {
   standalone: ["join"],
   "remote-link": ["repair", "leave"],
-  "hub-client": [],
+  "hub-client": ["repair", "leave"],
 };
 
 /** Shown while a call runs. The service reports each step when it returns, so nothing is ticked. */
 export const HUB_ACTION_PLAN: Record<HubAction, string> = {
-  join: "Probe and host key, then link add, parity, and repair steps if checks fail.",
-  leave: "Disconnect and restart the device, check it is standalone, then revoke the link here.",
+  join: "Platform check, then a Remote Link (probe, host key, link add) or, for Windows, a Hub invite and ocx connect; then parity and repair steps if checks fail.",
+  leave:
+    "Disconnect and restart the device, check it is standalone, then revoke its link or data key here.",
   repair: "Parity, then repair steps 1–3 as needed; re-linking asks for a decision.",
 };
 
 const STEP_LABEL: Record<HubDeviceStep["step"], string> = {
+  preflight: "Platform check",
   probe: "Probe and host key",
   link_add: "Link add",
+  invite: "Hub invite",
+  connect: "ocx connect on device",
   sync: "Repair 1 · ocx sync",
   restart: "Repair 2 · ocx restart",
   reconnect: "Repair 3 · link reconnect",
   disconnect: "Disconnect device",
   health: "Device health",
-  revoke: "Revoke on this Home",
+  revoke: "Revoke on this hub",
   link_removed: "Link removed",
 };
 

@@ -236,10 +236,6 @@ export const MessageSquareOffIcon = /* @__PURE__ */ solarIcon(
   solar.chatRoundOff,
   "MessageSquareOffIcon",
 );
-export const MessageSquareTextIcon = /* @__PURE__ */ solarIcon(
-  solar.chatRoundLine,
-  "MessageSquareTextIcon",
-);
 export const MessageSquareWarningIcon = /* @__PURE__ */ solarIcon(
   solar.chatRoundWarning,
   "MessageSquareWarningIcon",

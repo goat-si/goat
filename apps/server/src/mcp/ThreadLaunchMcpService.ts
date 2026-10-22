@@ -35,6 +35,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { nativeWorkspacePath } from "../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
+import { resolveRuntimeMode } from "./OrchestratorMcpService.ts";
 import {
   newCommandId,
   readCaller,
@@ -315,10 +316,28 @@ const make = Effect.gen(function* () {
           Effect.mapError(unavailable),
           Effect.map(Option.getOrUndefined),
         );
+        // A caller outside a thread has nothing to inherit, so it starts with the
+        // project's effective defaults, as the composer does. Its mode stays
+        // within the ceiling it was approved with.
+        const projectDefaults =
+          caller === undefined
+            ? yield* ServerSettings.ServerSettingsService.pipe(
+                Effect.flatMap((settings) => settings.getSettings),
+                Effect.mapError(unavailable),
+                Effect.flatMap((settings) =>
+                  Effect.map(
+                    readProject,
+                    (project) => resolveProjectSettings(settings, projectId, project).settings,
+                  ),
+                ),
+              )
+            : undefined;
         const modelSelection =
           input.modelSelection ??
           caller?.modelSelection ??
-          (yield* readProject)?.defaultModelSelection ??
+          (projectDefaults === undefined
+            ? (yield* readProject)?.defaultModelSelection
+            : projectDefaults.defaultModelSelection) ??
           undefined;
         if (modelSelection === undefined)
           return yield* new OrchestratorMcpFailure({
@@ -326,6 +345,12 @@ const make = Effect.gen(function* () {
             message:
               "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
           });
+        const startedRuntimeMode =
+          projectDefaults !== undefined && input.runtimeMode === undefined
+            ? yield* resolveRuntimeMode(runtimeMode, projectDefaults.defaultRuntimeMode).pipe(
+                Effect.orElseSucceed(() => runtimeMode),
+              )
+            : runtimeMode;
         const startsRun = input.message !== undefined || attachments.length > 0;
         yield* checkModelSelection(modelSelection, input.modelSelection !== undefined);
         const adapter = yield* adapters
@@ -458,7 +483,7 @@ const make = Effect.gen(function* () {
               const admitted = yield* permissions.claim(scope, {
                 id: commandId,
                 childThreadId: threadId,
-                runtimeMode,
+                runtimeMode: startedRuntimeMode,
                 worktree: input.workspaceStrategy?.type === "worktree",
                 forwarded: input.permissionProfileCeiling,
                 ...(role === undefined ? {} : { profileId: goatclawRoleTemplate(role).profileId }),

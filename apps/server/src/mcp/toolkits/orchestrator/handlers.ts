@@ -38,11 +38,11 @@ const localResult = (threadId: ThreadId, runId?: RunId | null) =>
   );
 
 const handlers = {
-  orchestrator_capabilities: McpToolAccess.reads(() =>
+  orchestrator_capabilities: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.capabilities(scope);
+      return yield* service.capabilities(scope, input);
     }),
   ),
   delegate_task: McpToolAccess.destructive(

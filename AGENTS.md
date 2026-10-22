@@ -78,27 +78,34 @@ The most common defect in this repo is a change that works on the path you teste
 ## Dev servers
 
 - `vp i` installs. New worktrees get this from a `post-checkout` hook that runs `scripts/setup-worktree.ts`; if module resolution looks broken, it probably did not run, so run `node scripts/setup-worktree.ts`.
+- Setup runs in the background. While `.goat/setup-running` names a live PID, wait for it and do not run `vp i`. It ends with `.goat/setup-done` or `.goat/setup-failed` (with the error tail). With no marker at all, setup never ran here, so run `vp i` yourself.
 - `vp run dev` starts server and web. In a worktree, state defaults to that worktree's gitignored `.goat` (a worktree created earlier keeps its `.t3`), which deliberately outranks an ambient `GOAT_HOME` so you cannot land on shared state by accident. An explicit `--home-dir` still wins.
 - Ports derive from the worktree path and are stable across restarts, but read the real ones from the `[dev-runner]` line since occupied ports shift.
 - Sharing over the tailnet is three steps: run `vp run dev --share` in the background, wait for the `pairingUrl:` line in its output, then give that full URL to an unpaired browser. Do not wire up `tailscale serve` by hand, open the URL yourself, or consume the user's pairing link. A browser with the reusable dev cookie can use the bare origin. If a normal one-time token was consumed, mint a fresh one with `node apps/server/src/bin.ts pair`. It carries standard scopes, while the startup URL carries admin scopes needed for Connections settings.
 - To reuse web dev auth across worktrees, configure one fixed `GOAT_DEV_AUTH_TOKEN` in the main checkout's gitignored `.env`. Worktree setup links that file into worktrees. Never commit or publish the token or a startup URL. See [Reusable dev credential](docs/operations/development.md#reusable-dev-credential).
 - Stop what you started, by the PID you tracked. See rule 1.
+- Need a second checkout? `git worktree add` it next to this worktree, not in `/tmp`. Remove it when done.
 
 ## Test data
 
 An empty database is a bad test. Seed your worktree's `.goat` with a copy of real data instead of pointing at live state:
 
-- Run `vp run migrate-dev-db` with your dev server stopped. It rebuilds `<worktree>/.goat/userdata/statev2.sqlite` from a read-only snapshot of `~/.goat/userdata/statev2.sqlite`, or `~/.t3/userdata/statev2.sqlite` when the GOAT database is absent. It keeps recent projects and their stopped threads, and drops scheduled tasks, pending work, and auth sessions, so your dev server never runs the developer's agents. Raise `--projects` and `--threads-per-project` for more data.
+- The first `vp run dev` in a worktree does this for you when its database is missing. `--no-seed` or `GOAT_DEV_SEED=0` skips it.
+- Run `vp run migrate-dev-db` with your dev server stopped to refresh. It rebuilds `<worktree>/.goat/userdata/statev2.sqlite` from a read-only snapshot of `~/.goat/userdata/statev2.sqlite`, or `~/.t3/userdata/statev2.sqlite` when the GOAT database is absent. It keeps recent projects and their stopped threads, and drops scheduled tasks, pending work, and auth sessions, so your dev server never runs the developer's agents. Raise `--projects` and `--threads-per-project` for more data.
 - Refresh `statev2.sqlite`, not `state.sqlite`. The server copies the V1 `state.sqlite` only when `statev2.sqlite` is missing.
 - Bring `secrets` and `settings.json` only if the flow under test needs them.
 - Copy in, never symlink. Data flows one way: into your sandbox, never back out.
 
 ## Verifying
 
-- Smallest proof that the change works. `vp test run <files>` for the tests you touched, targeted lint and typecheck for the scope you changed.
+- Before you push, run `vp run check:changed`. It runs CI's fast checks for changed files: format, lint, knip, typecheck of affected packages and dependents, and tests beside changes. CI still runs the full test suites.
+- While you iterate, run `vp test run <files>`. For big files, add `-t "<name>"`.
+- Use `vp run typecheck`, not `npx tsc`; it caches per package. Both run tsc-rs (`typescript` is the `@tsc-rs/typescript` drop-in).
+- Run `node -e` snippets from `apps/server` or the owning package. `effect` does not resolve from the repo root.
 - Test meaningful logic or observable behavior. Do not render components to static markup to assert props or attributes, or add tests that merely assert callback wiring or mirror the implementation.
 - **Do not run repo-wide checks.** No `vp check`, no `vp run -r test`, no `vp run -r typecheck` unless I ask. CI owns the full suite.
 - Backend behavior changes ship with focused tests for that behavior.
+- Proof for a bug fix depends on the bug. Logic, data, state, and protocol bugs get a failing test first (the fewest that fail on `main` for that reason, in the module's existing test file), then the fix. Purely visual bugs (spacing, colour, alignment, a layout shift) get before/after captures as their proof and no test: do not add UI tests for nitpicks, and do not ask for one in review when a capture already shows it. A server-only fix with no visible surface ships the test plus a short runtime transcript.
 - The server is event-sourced, and side effects run after the command commits. In tests, drain the effect worker (`OrchestrationEffectWorkerV2.drain`) or await the specific persisted event or `Deferred` that marks the milestone. Never wait on sleeps or polling. A test that needs a timeout to pass is wrong. Concretely:
   - `it.effect` runs on a `TestClock`; `Effect.sleep` only advances through `TestClock.adjust`. `it.live` is wall-clock and only for subprocess or network fixtures.
   - No `yieldNow` or `sleep` polling loops. Await the `Deferred`, take from the `Queue`, or drain the worker.
@@ -137,7 +144,7 @@ For authorized mobile verification, a missing or outdated native client is a bui
 - UI changes need before/after images embedded in the PR description. Motion or timing needs a short video. The `goat-screenshot-gate` check flags a PR that changes `apps/web`, `apps/desktop`, `apps/mobile`, or `apps/marketing` without an embedded image; after adding one, re-run that job. Drafts and non-UI PRs are skipped, and only a maintainer can waive it with the `gui-screenshot-waived` label.
 - Attach images by dragging them into the description editor, or, from the command line, run `node scripts/pr-assets.ts upload <pr> <files...>`. It commits them to the orphan `pr-assets` branch as `<pr>/<name>` without touching your checkout, checks that each URL loads, and prints markdown that links them by commit SHA. Add `--patch-body` to repoint embeds already in the description, such as `![after](pr-assets/after.png)`. Relative paths and branch-name links never render, and the gate rejects them. Never commit screenshots or PR-only assets to the PR branch; the squash merge carries them into `dev`.
 - One request is one PR. Split it only when the maintainer asks. Outside contributions follow the stricter [one problem per PR](CONTRIBUTING.md#one-problem) rule.
-- When babysitting: poll checks and comments newer than the last push, verify each bot finding against the source, fix real ones, dismiss false positives with a written reason. Stay quiet when nothing is new. Stop when the bots are green on the latest commit.
+- When babysitting: call `watch_pull_request` and end your turn. GOAT wakes you on checks, comments, or conflicts. Do not poll or sleep. Verify each bot finding against the source, fix real ones, dismiss false positives with a written reason. Stay quiet when nothing is new. Stop when the bots are green on the latest commit.
 
 ## Merging
 
@@ -178,7 +185,7 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
 - `packages/contracts` - Effect/Schema contracts plus small derived helpers. No heavy runtime logic.
 - `packages/shared` - shared runtime utils, subpath exports, no barrel.
 - `packages/client-runtime` - client code shared by web and mobile.
-- `.repos/` - vendored read-only references. Prefer their patterns over invented ones. Never edit or import from them. Sync with `vpr sync:repos` when bumping the matching dependency. Thread worktrees leave `.repos/` out (`worktreeSparseExclude` in `goat.json`), so read it from the main checkout, the first path in `git worktree list`, or run `git sparse-checkout disable` to bring it into this worktree.
+- `.repos/` - vendored read-only references. Prefer their patterns over invented ones. Never edit or import from them. Sync with `vpr sync:repos` when bumping the matching dependency. Thread worktrees leave `.repos/` out (`worktreeSparseExclude` in `goat.json`), so read it from the main checkout, the first path in `git worktree list`, read one file with `git show origin/dev:.repos/<path>`, or run `git sparse-checkout disable` to bring it into this worktree.
 
 ## Taste
 

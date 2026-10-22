@@ -736,7 +736,12 @@ export class Health extends Context.Service<
 
 // apps/server/src/fleet/health/Rescheduler.ts (T2)
 export type RescheduleReason =
-  "stalled" | "host_unreachable" | "failed" | "drain" | "fallback_relaunch" | "manual";
+  | "stalled"
+  | "host_unreachable"
+  | "failed"
+  | "drain"
+  | "fallback_relaunch"
+  | "manual";
 export interface RescheduleRequest {
   readonly ref: FleetThreadRef;
   readonly owner: FleetOwnerKey;
@@ -761,7 +766,11 @@ export type RescheduleResult =
   | {
       readonly _tag: "Refused";
       readonly reason:
-        "no_capacity" | "host_still_answers" | "budget" | "no_resume_point" | "unsupported_remote";
+        | "no_capacity"
+        | "host_still_answers"
+        | "budget"
+        | "no_resume_point"
+        | "unsupported_remote";
       readonly message: string;
     };
 export class Rescheduler extends Context.Service<

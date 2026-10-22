@@ -320,9 +320,13 @@ function WorkspaceVideoPreview(props: {
       void refreshAssetUrl().catch(() => undefined);
     },
   });
+  // Servers that report the file's revision let an unchanged file stay loaded; older ones
+  // only offer the workspace mutation, which changes after every command.
+  const fileRevision = assetUrl._tag === "Success" ? assetUrl.fileRevision : undefined;
+  const revision = fileRevision ?? props.workspaceMutationId;
   const latestUrl =
     assetUrl._tag === "Success"
-      ? workspaceMediaPreviewUrl(assetUrl.url, props.workspaceMutationId, props.refreshRequestId)
+      ? workspaceMediaPreviewUrl(assetUrl.url, revision, props.refreshRequestId)
       : null;
 
   return (
@@ -333,8 +337,8 @@ function WorkspaceVideoPreview(props: {
         label={props.name}
         revision={
           props.refreshRequestId === 0
-            ? props.workspaceMutationId
-            : `${props.workspaceMutationId ?? ""}:files:${props.refreshRequestId}`
+            ? revision
+            : `${revision ?? ""}:files:${props.refreshRequestId}`
         }
         preload="metadata"
         className="flex h-full min-h-0 w-full max-w-5xl items-center justify-center"
@@ -381,9 +385,13 @@ function WorkspaceAudioPreview(props: {
       void refreshAssetUrl().catch(() => undefined);
     },
   });
+  // Servers that report the file's revision let an unchanged file stay loaded; older ones
+  // only offer the workspace mutation, which changes after every command.
+  const fileRevision = assetUrl._tag === "Success" ? assetUrl.fileRevision : undefined;
+  const revision = fileRevision ?? props.workspaceMutationId;
   const url =
     assetUrl._tag === "Success"
-      ? workspaceMediaPreviewUrl(assetUrl.url, props.workspaceMutationId, props.refreshRequestId)
+      ? workspaceMediaPreviewUrl(assetUrl.url, revision, props.refreshRequestId)
       : null;
   if (assetUrl._tag === "Failure" || (url !== null && failedUrl === url)) {
     return (
@@ -397,7 +405,14 @@ function WorkspaceAudioPreview(props: {
     );
   }
   if (url === null) return <FileSurfaceLoading />;
-  return <AudioPreview src={url} name={props.name} onError={() => setFailedUrl(url)} />;
+  return (
+    <AudioPreview
+      src={url}
+      name={props.name}
+      revision={revision}
+      onError={() => setFailedUrl(url)}
+    />
+  );
 }
 
 function clampFileLine(contents: string, requestedLine: number): number {

@@ -9,6 +9,7 @@ import {
 import { resolveWorktreeHome } from "@goat/shared/devHome";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { buildMobilePairingLink } from "@goat/shared/mobilePairingLink";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import {
@@ -65,12 +66,16 @@ export class NoRunningServerError extends Schema.TaggedError<NoRunningServerErro
   "NoRunningServerError",
   {
     checkedStatePaths: Schema.Array(Schema.String),
+    inLinkedWorktree: Schema.Boolean,
   },
 ) {
   override get message(): string {
     return [
       "No running GOAT server found.",
       ...this.checkedStatePaths.map((statePath) => `  checked ${statePath}`),
+      ...(this.inLinkedWorktree
+        ? ["In a linked worktree, pass --base-dir to pair with a server outside it."]
+        : []),
       isGoatConnectEnabled()
         ? "Start one with `npx t3 serve`, or connect this machine with T3 Connect: `npx t3 connect`."
         : "Start one with `goat serve`.",
@@ -240,21 +245,25 @@ const discoverPairTarget = Effect.fn("pair.discoverPairTarget")(function* (
   explicitBaseDir: string | undefined,
 ) {
   const bases: Array<string> = [];
+  let inLinkedWorktree = false;
   if (explicitBaseDir !== undefined && explicitBaseDir.trim().length > 0) {
     bases.push(yield* resolveBaseDir(explicitBaseDir));
   } else {
-    // Same precedence as dev-runner: inside a linked worktree its own `.t3`
-    // outranks the shared home, so `goat pair` in a worktree pairs with the dev
-    // server under test rather than the daily-driver install.
-    const worktreeHome = yield* resolveWorktreeHome(process.cwd());
+    // Same precedence as dev-runner: inside a linked worktree only its own
+    // `.goat` counts. Minting opens the target database with this checkout's
+    // migrations, so falling back to the shared home could migrate the live
+    // install with unreleased schema.
+    const worktreeHome = yield* resolveWorktreeHome(yield* HostProcess.WorkingDirectory);
     if (worktreeHome !== undefined) {
       bases.push(worktreeHome);
-    }
-    const envHome = yield* Config.String("GOAT_HOME").pipe(Config.option);
-    // Without an explicit home, an implicit dev server and an installed one may each live
-    // in a different default home (see resolveGoatHome).
-    for (const variant of ["userdata", "dev"] as const) {
-      bases.push(yield* resolveBaseDir(Option.getOrUndefined(envHome), variant));
+      inLinkedWorktree = true;
+    } else {
+      const envHome = yield* Config.String("GOAT_HOME").pipe(Config.option);
+      // Without an explicit home, an implicit dev server and an installed one may each live
+      // in a different default home (see resolveGoatHome).
+      for (const variant of ["userdata", "dev"] as const) {
+        bases.push(yield* resolveBaseDir(Option.getOrUndefined(envHome), variant));
+      }
     }
   }
 
@@ -290,7 +299,7 @@ const discoverPairTarget = Effect.fn("pair.discoverPairTarget")(function* (
       } satisfies DiscoveredPairTarget;
     }
   }
-  return yield* new NoRunningServerError({ checkedStatePaths });
+  return yield* new NoRunningServerError({ checkedStatePaths, inLinkedWorktree });
 });
 
 /**

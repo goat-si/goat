@@ -89,8 +89,6 @@ function GoatBotModelRow({ environmentId }: { environmentId: EnvironmentId }) {
                     provider={activeEntry.driverKind}
                     models={activeEntry.models}
                     model={selection.model}
-                    prompt=""
-                    onPromptChange={() => {}}
                     modelOptions={selection.options ?? []}
                     allowPromptInjectedEffort={false}
                     planModeEnabled={

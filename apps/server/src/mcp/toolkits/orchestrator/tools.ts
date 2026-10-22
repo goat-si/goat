@@ -1,4 +1,5 @@
 import {
+  OrchestratorMcpCapabilitiesInput,
   OrchestrationV2StopWorkflowInput,
   ThreadReplicaCaptureInput,
   ThreadReplicaCaptureResult,
@@ -85,6 +86,7 @@ const hostThreadResultDependencies = [
 
 const OrchestratorCapabilitiesTool = Tool.make(agentSurfaceRegistry["provider.list"].name, {
   description: agentSurfaceRegistry["provider.list"].description,
+  parameters: OrchestratorMcpCapabilitiesInput,
   success: OrchestratorMcpCapabilitiesResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",

@@ -5,7 +5,7 @@ import {
   serializeAssistantCitation,
   withAssistantCitationComment,
 } from "@goat/shared/assistantCitations";
-import { isPathWord } from "@goat/shared/composerTrigger";
+import { isCurrencyAmountQuery, isPathWord } from "@goat/shared/composerTrigger";
 import {
   splitPromptIntoComposerSegments,
   type ComposerPromptSegment,
@@ -298,6 +298,7 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
   }
   const skillPrefix = /^\p{Sc}/u.exec(token);
   if (skillPrefix) {
+    if (isCurrencyAmountQuery(token.slice(skillPrefix[0].length))) return null;
     return {
       kind: "skill",
       query: token.slice(skillPrefix[0].length),
@@ -351,6 +352,21 @@ export function parseStandaloneComposerSlashCommand(text: string): "plan" | "def
   const command = match[1]?.toLowerCase();
   if (command === "plan") return "plan";
   return "default";
+}
+
+/**
+ * A replacement ending in a space swallows one space already after the range, so inserting
+ * `@file ` before existing text does not leave a double space.
+ */
+export function extendReplacementRangeForTrailingSpace(
+  text: string,
+  rangeEnd: number,
+  replacement: string,
+): number {
+  if (!replacement.endsWith(" ")) {
+    return rangeEnd;
+  }
+  return text[rangeEnd] === " " ? rangeEnd + 1 : rangeEnd;
 }
 
 export function replaceTextRange(

@@ -138,6 +138,11 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
       Effect.map((draft) =>
         stamp({
           ...draft,
+          // A diagnostic is advisory: `warning` status disables otherwise usable
+          // providers in the model picker. Settings also presents ready messages.
+          ...(draft.status === "ready" && !draft.message && executable.value.startupWarning
+            ? { message: executable.value.startupWarning }
+            : {}),
           auth: managedAuth,
           version: draft.version ?? executable.value.version,
           usageLimits,

@@ -5,6 +5,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -19,7 +20,18 @@ const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
 /** Arguments are code-built; this keeps every one inert inside single quotes. */
 const SAFE_ARG = /^[A-Za-z0-9_.:=/+-]+$/u;
 export const SAFE_ALIAS = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
+/** OpenCodex mints `ocx_pair_` plus base64url; anything else never reaches a device script. */
+const PAIRING_CODE = /^ocx_pair_[A-Za-z0-9_-]{16,128}$/u;
+/** Git Bash (MINGW), MSYS and Cygwin all run on Windows, which Remote Link refuses. */
+const WINDOWS_UNAME = /^(?:MINGW|MSYS|CYGWIN|Windows_NT)/iu;
 const decodeStatus = Schema.decodeUnknownEffect(GoatHostStatusResult);
+const Invite = Schema.Struct({
+  code: Schema.String,
+  expiresAt: Schema.String,
+  dataUrl: Schema.String,
+  managementUrl: Schema.String,
+});
+const decodeInvite = Schema.decodeUnknownOption(Schema.fromJsonString(Invite));
 
 export interface OcxOutput {
   readonly code: number;
@@ -32,6 +44,21 @@ export class HubOcxError extends Data.TaggedError("HubOcxError")<{
   readonly reason: "ocx_missing" | "unreachable";
   readonly message: string;
 }> {}
+
+export type DevicePlatform = "windows" | "posix";
+
+/**
+ * The pairing code exists only inside this result's producer; callers see whether one was
+ * minted and how `ocx connect` exited.
+ */
+export type HubClientHandoff =
+  | { readonly minted: false; readonly exit: number; readonly phase?: string }
+  | {
+      readonly minted: true;
+      readonly dataUrl: string;
+      readonly expiresAt: string;
+      readonly connect: OcxOutput;
+    };
 
 /** The only seam to OpenCodex and SSH; tests replace it with a scripted runner. */
 export class HubOcx extends Context.Service<
@@ -46,6 +73,16 @@ export class HubOcx extends Context.Service<
       args: ReadonlyArray<string>,
       timeoutMs: number,
     ) => Effect.Effect<OcxOutput, HubOcxError>;
+    /** `uname -s` on the device; undefined when it does not answer. */
+    readonly devicePlatform: (alias: string) => Effect.Effect<DevicePlatform | undefined>;
+    /**
+     * `ocx hub invite --json` here, then `ocx connect <dataUrl> --pairing-code-stdin` on the
+     * device over GOAT SSH. The one-use code travels only on stdin and is never returned.
+     */
+    readonly connectHubClient: (
+      alias: string,
+      timeoutMs: number,
+    ) => Effect.Effect<HubClientHandoff, HubOcxError>;
     /** SHA256 fingerprint of GOAT's pinned host key for the alias, if GOAT pins one. */
     readonly pinnedFingerprint: (alias: string) => Effect.Effect<string | undefined>;
     /** False when `ssh -G` shows a jump chain or proxy command, or cannot resolve the alias. */
@@ -68,14 +105,28 @@ export class HubOcx extends Context.Service<
 const phaseOf = (stderr: string) =>
   /\b((?:remote|child|home)_[a-z_]{2,60}|link_not_found)\b/u.exec(stderr)?.[1];
 
-/** Resolves ocx in OpenCodex's remoteOcxArgv order: Desktop and system installs before PATH shims. */
-export const deviceScript = (args: ReadonlyArray<string>) => {
+export const platformOf = (uname: string): DevicePlatform | undefined => {
+  const name = uname.trim();
+  return name === "" ? undefined : WINDOWS_UNAME.test(name) ? "windows" : "posix";
+};
+
+/**
+ * Resolves ocx in OpenCodex's remoteOcxArgv order: Desktop and system installs before PATH shims.
+ * A pairing code goes to ocx's stdin through the shell's printf builtin, so it is never in argv.
+ */
+export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) => {
   for (const arg of args) if (!SAFE_ARG.test(arg)) throw new TypeError("Unsafe ocx argument.");
+  if (pairingCode !== undefined && !PAIRING_CODE.test(pairingCode))
+    throw new TypeError("Unexpected pairing code shape.");
   const quoted = args.map((arg) => `'${arg}'`).join(" ");
   // The script arrives on sh's stdin, so ocx must not read it.
+  const invoke =
+    pairingCode === undefined
+      ? `"$goat_ocx" ${quoted} </dev/null 2>/dev/null`
+      : `printf '%s\\n' '${pairingCode}' | "$goat_ocx" ${quoted} 2>/dev/null`;
   return [
     "goat_ocx=",
-    'for goat_candidate in "$HOME/.opencodex-desktop/bin/ocx" /Applications/OpenCodex.app/Contents/MacOS/ocx /usr/bin/ocx; do',
+    'for goat_candidate in "$HOME/.opencodex-desktop/bin/ocx" /Applications/OpenCodex.app/Contents/MacOS/ocx /usr/bin/ocx "/c/Program Files/OpenCodex/ocx"; do',
     '  if [ -x "$goat_candidate" ]; then goat_ocx=$goat_candidate; break; fi',
     "done",
     'if [ -z "$goat_ocx" ]; then',
@@ -83,11 +134,13 @@ export const deviceScript = (args: ReadonlyArray<string>) => {
     "  goat_ocx=$(command -v ocx 2>/dev/null) || goat_ocx=",
     "fi",
     "if [ -z \"$goat_ocx\" ]; then printf '\\n__goat_ocx_exit=127\\n'; exit 0; fi",
-    `"$goat_ocx" ${quoted} </dev/null 2>/dev/null`,
+    invoke,
     "printf '\\n__goat_ocx_exit=%s\\n' \"$?\"",
     "",
   ].join("\n");
 };
+
+export const platformScript = "uname -s 2>/dev/null\nprintf '\\n__goat_ocx_exit=%s\\n' \"$?\"\n";
 
 export const parseDeviceOutput = (stdout: string): OcxOutput | undefined => {
   const match = EXIT.exec(stdout);
@@ -150,50 +203,105 @@ const make = Effect.gen(function* () {
       timeoutBehavior: "timedOutResult",
     });
 
+  const home = Effect.fn("HubOcx.home")(function* (args: ReadonlyArray<string>, timeoutMs: number) {
+    const binary = (yield* inventory.read).binaries[0]?.path;
+    if (binary === undefined)
+      return yield* new HubOcxError({
+        reason: "ocx_missing",
+        message: "OpenCodex is not installed on this hub.",
+      });
+    const output = yield* run(binary, args, timeoutMs).pipe(
+      Effect.mapError(
+        () => new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
+      ),
+    );
+    const phase = phaseOf(output.stderr);
+    return {
+      code: output.timedOut ? 124 : (output.code ?? 1),
+      stdout: output.stdoutTruncated ? "" : output.stdout,
+      ...(phase === undefined ? {} : { phase }),
+    } satisfies OcxOutput;
+  });
+
+  const runDevice = Effect.fn("HubOcx.runDevice")(function* (
+    alias: string,
+    script: string,
+    timeoutMs: number,
+  ) {
+    const result = yield* dispatch.runHostScript({ host: alias, script, timeoutMs }).pipe(
+      Effect.mapError(
+        (error) =>
+          new HubOcxError({
+            reason: "unreachable",
+            message: `${alias} could not be reached over SSH (${error.reason}).`,
+          }),
+      ),
+    );
+    const output = parseDeviceOutput(result.stdout);
+    if (output === undefined)
+      return yield* new HubOcxError({
+        reason: "unreachable",
+        message: `${alias} did not finish the ocx command.`,
+      });
+    if (output.code === 127)
+      return yield* new HubOcxError({
+        reason: "ocx_missing",
+        message: `OpenCodex is not installed on ${alias}.`,
+      });
+    return output;
+  });
+
   return HubOcx.of({
-    home: Effect.fn("HubOcx.home")(function* (args, timeoutMs) {
-      const binary = (yield* inventory.read).binaries[0]?.path;
-      if (binary === undefined)
-        return yield* new HubOcxError({
-          reason: "ocx_missing",
-          message: "OpenCodex is not installed on this hub.",
+    home,
+    device: (alias, args, timeoutMs) => runDevice(alias, deviceScript(args), timeoutMs),
+    devicePlatform: Effect.fn("HubOcx.devicePlatform")(
+      function* (alias) {
+        const result = yield* dispatch.runHostScript({
+          host: alias,
+          script: platformScript,
+          timeoutMs: 30_000,
         });
-      const output = yield* run(binary, args, timeoutMs).pipe(
-        Effect.mapError(
-          () => new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
+        const output = parseDeviceOutput(result.stdout);
+        return output?.code === 0 ? platformOf(output.stdout) : undefined;
+      },
+      Effect.orElseSucceed(() => undefined),
+    ),
+    connectHubClient: Effect.fn("HubOcx.connectHubClient")(function* (alias, timeoutMs) {
+      const minted = yield* home(["hub", "invite", "--json"], 60_000);
+      const invite =
+        minted.code === 0 ? Option.getOrUndefined(decodeInvite(minted.stdout.trim())) : undefined;
+      // A shape this script cannot quote safely is refused; the unused code expires on its own.
+      if (
+        invite === undefined ||
+        !PAIRING_CODE.test(invite.code) ||
+        !SAFE_ARG.test(invite.dataUrl) ||
+        !SAFE_ARG.test(invite.managementUrl)
+      )
+        return {
+          minted: false as const,
+          exit: minted.code === 0 ? 1 : minted.code,
+          ...(minted.phase === undefined ? {} : { phase: minted.phase }),
+        };
+      const connect = yield* runDevice(
+        alias,
+        deviceScript(
+          [
+            "connect",
+            invite.dataUrl,
+            "--management-url",
+            invite.managementUrl,
+            "--pairing-code-stdin",
+          ],
+          invite.code,
         ),
+        timeoutMs,
       );
-      const phase = phaseOf(output.stderr);
       return {
-        code: output.timedOut ? 124 : (output.code ?? 1),
-        stdout: output.stdoutTruncated ? "" : output.stdout,
-        ...(phase === undefined ? {} : { phase }),
+        minted: true as const,
+        dataUrl: invite.dataUrl,
+        expiresAt: invite.expiresAt,
+        connect,
       };
-    }),
-    device: Effect.fn("HubOcx.device")(function* (alias, args, timeoutMs) {
-      const result = yield* dispatch
-        .runHostScript({ host: alias, script: deviceScript(args), timeoutMs })
-        .pipe(
-          Effect.mapError(
-            (error) =>
-              new HubOcxError({
-                reason: "unreachable",
-                message: `${alias} could not be reached over SSH (${error.reason}).`,
-              }),
-          ),
-        );
-      const output = parseDeviceOutput(result.stdout);
-      if (output === undefined)
-        return yield* new HubOcxError({
-          reason: "unreachable",
-          message: `${alias} did not finish the ocx command.`,
-        });
-      if (output.code === 127)
-        return yield* new HubOcxError({
-          reason: "ocx_missing",
-          message: `OpenCodex is not installed on ${alias}.`,
-        });
-      return output;
     }),
     pinnedFingerprint: Effect.fn("HubOcx.pinnedFingerprint")(
       function* (alias) {

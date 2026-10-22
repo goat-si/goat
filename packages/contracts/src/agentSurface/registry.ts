@@ -122,6 +122,21 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { idempotentHint: true, openWorldHint: false },
   }),
+  "permission_profile.sync": entry({
+    resource: "permission_profile",
+    verb: "sync",
+    name: "goat_goatclaw_sync",
+    toolkit: "fleet",
+    summary: "Exchange goatclaw policy with a connected GOAT.",
+    description:
+      "Used by a connected GOAT, not by agents: goatclaw is on or off for the whole fleet, so a machine sends its policy and this one keeps whichever was changed last, returning the result. Needs an outside client with settings:write.",
+    effect: "write",
+    hostRoutable: false,
+    requires: "client",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "attachment.prepare_upload": entry({
     resource: "attachment",
     verb: "prepare_upload",
@@ -644,9 +659,9 @@ export const agentSurfaceRegistry = {
     verb: "device_join",
     name: "goat_hub_device_join",
     toolkit: "hostStatus",
-    summary: "Join a device to this OpenCodex Home as a Remote Link Child.",
+    summary: "Join a device to this OpenCodex Home as a Remote Link Child or Hub client.",
     description:
-      "Join a device SSH alias to this machine's OpenCodex Home as a Remote Link Child, then verify P1–P8 parity and run repair steps 1–3 if it is not ok. The alias must be direct (no ProxyJump or ProxyCommand) and the device must already have OpenCodex. The Home's offered SSH fingerprint must match GOAT's pin for the alias and is passed to ocx link add as --expect-fingerprint. Needs hub.manage. Unless the caller's profile is owner, and whenever the pin is missing or differs, the first call returns state needs_human with a decisionId; once a person approves it in the decision inbox, call again with that decisionId. Hub-mode clients (Windows) are not joined here. GOAT never reads or stores link keys.",
+      "Join a device SSH alias to this machine's OpenCodex Home, then verify P1–P8 parity and run repair steps 1–3 if it is not ok. The device must already have OpenCodex. A platform check runs first: Windows (Git Bash, MSYS, Cygwin) joins as a Hub-mode client because Remote Link refuses it; transport remote-link on Windows is refused before any link is made. Pass transport hub-client for a device GOAT reaches only by password. Remote Link: the alias must be direct (no ProxyJump or ProxyCommand), and the Home's offered SSH fingerprint must match GOAT's pin and is passed to ocx link add as --expect-fingerprint. Hub client: this machine must run OpenCodex in Hub mode with public data and management origins; GOAT runs ocx hub invite here and gives the single-use code to ocx connect --pairing-code-stdin on the device over SSH stdin. Needs hub.manage. Unless the caller's profile is owner, and whenever a Remote Link pin is missing or differs, the first call returns state needs_human with a decisionId; once a person approves it in the decision inbox, call again with that decisionId. GOAT never reads or stores link keys, data keys or pairing codes.",
     effect: "write",
     hostRoutable: false,
     requires: "either",
@@ -659,9 +674,9 @@ export const agentSurfaceRegistry = {
     verb: "device_leave",
     name: "goat_hub_device_leave",
     toolkit: "hostStatus",
-    summary: "Remove a Remote Link Child from this OpenCodex Home.",
+    summary: "Remove a Remote Link Child or Hub client from this OpenCodex Home.",
     description:
-      "Remove a Remote Link Child, device first: over SSH, ocx disconnect and ocx restart on the device until its /healthz answers as standalone; then ocx link revoke --force on this Home, and check that ocx link status and the Home's ssh -R tunnels no longer show the link. If the device step fails, the Home link is left in place and the call returns state needs_human with a decisionId for an owner to approve a force-revoke. Needs hub.manage; unless the caller's profile is owner, the first call also returns needs_human with a decisionId to approve. Call again with an approved decisionId to continue.",
+      "Remove a device, device first: over SSH, ocx disconnect and ocx restart on the device until its /healthz answers as standalone. Then, for a Remote Link Child, ocx link revoke --force on this Home and a check that ocx link status and the Home's ssh -R tunnels no longer show the link; for a Hub client, ocx access key remove for its data key. If the device step fails, the hub's link or key is left in place and the call returns state needs_human with a decisionId for an owner to approve a force-revoke. Needs hub.manage; unless the caller's profile is owner, the first call also returns needs_human with a decisionId to approve. Call again with an approved decisionId to continue.",
     effect: "destructive",
     hostRoutable: false,
     requires: "either",
@@ -1092,7 +1107,7 @@ export const agentSurfaceRegistry = {
     toolkit: "orchestrator",
     summary: "Get orchestration capabilities",
     description:
-      "List the V2 provider instances and their current models from the same live catalog as the composer, including configured custom models, inherited runtime settings, and app-owned orchestration features available to this caller. For a separate top-level thread in a new or existing worktree, use goat_thread_launch with workspaceStrategy.",
+      "List the V2 provider instances, a short list of their models from the same live catalog as the composer, inherited runtime settings, and app-owned orchestration features available to this caller. The list has the user's favorite and custom models, your own model, every current Codex, Claude, Muse and Grok model, and the first 8 current models of other providers. Other legacy models are left out. omittedModels counts models left out; pass search, such as 'sonnet 4.6', to find them. delegate_task accepts any catalog model, listed or not. For a separate top-level thread in a new or existing worktree, use goat_thread_launch with workspaceStrategy.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -1217,7 +1232,7 @@ export const agentSurfaceRegistry = {
     toolkit: "orchestrator",
     summary: "Schedule a recurring task",
     description:
-      "Create persistent work in the app scheduler that runs even when no turn is active. Pass schedule as a STRUCTURED OBJECT, never JSON text. Timers: {type:'interval', everyMs:3600000} is hourly; {type:'fixed_time', timeOfDay:'09:00', weekdays:[1,2,3,4,5]} is weekday mornings; report the returned nextRunAt. Webhook dedupe accepts replayKey and coalesceKey templates with coalesceWindowSeconds (10–3600, default 120); replay keys expire after 7 days and coalescing keeps the latest payload in a window measured from its first delivery. Webhooks: {type:'webhook'} runs once per request to a generated URL. The run sees the request ONLY through prompt placeholders: {{body.path}} (e.g. {{body.action}}, {{body.release.tag_name}}), {{headers.name}}, {{query.name}}, {{body}}, or {{request}} (method, headers with credentials redacted, and body). Each value arrives framed as untrusted request data, and $skill, @file or /command mentions inside it do not act; without a signature, anyone with the URL can trigger a run. For a sender that signs requests, first call request_secret so the user enters the secret privately (never ask for it in chat or invent one), then set signature with the returned secretRef, e.g. GitHub: {type:'webhook', signature:{header:'x-hub-signature-256', encoding:'hex', prefix:'sha256=', secretRef}}. To run only for some requests, add filters, all of which must match, e.g. filters:[{path:'headers.x-github-event', op:'equals', value:'pull_request'}, {path:'body.action', op:'in', value:['opened','reopened']}]; ops are equals, notEquals, in, startsWith and exists. The result's webhookUrl is the public URL to give the user; if it is absent, webhookUrlUnavailableReason says why and what the user should do (public URLs need GOAT Connect, which is coming soon; a sender that reaches the server directly can use the address in Settings → Scheduled Tasks); never share a path instead. A webhookUrl shows the tunnel is configured, not that it is running. Omit projectId for this thread's project. In this thread's project, runs post into THIS thread by default (bindToCurrentThread=true), which suits an orchestrator that sees every trigger, delegates work, and can dedupe against what is in flight; use false only when the user wants a fresh top-level thread per run. Elsewhere each run launches a fresh thread. Provider, model, and runtime settings inherit from this thread, or from the project default when there is no calling thread.",
+      "Create persistent work in the app scheduler that runs even when no turn is active. Pass schedule as a STRUCTURED OBJECT, never JSON text. Timers: {type:'interval', everyMs:3600000} is hourly; {type:'fixed_time', timeOfDay:'09:00', weekdays:[1,2,3,4,5]} is weekday mornings; report the returned nextRunAt. Webhook dedupe accepts replayKey and coalesceKey templates with coalesceWindowSeconds (10–3600, default 120); replay keys expire after 7 days and coalescing keeps the latest payload in a window measured from its first delivery. Webhooks: {type:'webhook'} runs once per request to a generated URL. The run sees the request ONLY through prompt placeholders: {{body.path}} (e.g. {{body.action}}, {{body.release.tag_name}}), {{headers.name}}, {{query.name}}, {{body}}, or {{request}} (method, headers with credentials redacted, and body). Each value arrives framed as untrusted request data, and $skill, @file or /command mentions inside it do not act; without a signature, anyone with the URL can trigger a run. For a sender that signs requests, first call request_secret so the user enters the secret privately (never ask for it in chat or invent one), then set signature with the returned secretRef, e.g. GitHub: {type:'webhook', signature:{header:'x-hub-signature-256', encoding:'hex', prefix:'sha256=', secretRef}}. To run only for some requests, add filters, all of which must match, e.g. filters:[{path:'headers.x-github-event', op:'equals', value:'pull_request'}, {path:'body.action', op:'in', value:['opened','reopened']}]; ops are equals, notEquals, in, startsWith and exists. A path segment ending in [] fans out over an array: {path:'body.issue.labels[].name', op:'equals', value:'needs more info'} matches when any label has that name, and notEquals only when none does. The result's webhookUrl is the public URL to give the user; if it is absent, webhookUrlUnavailableReason says why and what the user should do (public URLs need GOAT Connect, which is coming soon; a sender that reaches the server directly can use the address in Settings → Scheduled Tasks); never share a path instead. A webhookUrl shows the tunnel is configured, not that it is running. Omit projectId for this thread's project. In this thread's project, runs post into THIS thread by default (bindToCurrentThread=true), which suits an orchestrator that sees every trigger, delegates work, and can dedupe against what is in flight; use false only when the user wants a fresh top-level thread per run. Elsewhere each run launches a fresh thread. Provider, model, and runtime settings inherit from this thread, or from the project default when there is no calling thread.",
     effect: "destructive",
     hostRoutable: false,
     requires: "either",

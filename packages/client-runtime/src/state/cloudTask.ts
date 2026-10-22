@@ -6,8 +6,13 @@ import type {
 
 type Projection = Pick<
   OrchestrationV2ThreadProjection,
-  "thread" | "runs" | "providerThreads" | "providerSessions"
->;
+  "runs" | "providerThreads" | "providerSessions"
+> & {
+  readonly thread: Pick<
+    OrchestrationV2ThreadProjection["thread"],
+    "providerInstanceId" | "activeProviderThreadId"
+  >;
+};
 
 export function deriveCloudTaskState(
   projection: Projection | null | undefined,

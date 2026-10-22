@@ -1,4 +1,5 @@
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
+import * as FleetSync from "../../../goatclaw/FleetSync.ts";
 import { goatclawRoleBrief, goatclawRoleTemplate } from "../../../goatclaw/RoleTemplates.ts";
 import { newCommandId } from "../../threadAccess.ts";
 import { addDevice } from "./addDevice.ts";
@@ -297,6 +298,12 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
           });
         const pressure = yield* admitLaunch(input.host);
         const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        // goatclaw applies fleet-wide: bring the destination's policy up to date before it must
+        // enforce this ceiling. A host that cannot take it still refuses the launch clearly.
+        if (effective.enabled) {
+          const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
+          if (fleet._tag === "Some") yield* fleet.value.ensure(input.host);
+        }
         // The thread on this machine that launches; an outside client has none to record.
         const launcher = caller.caller;
         const launchedBy =

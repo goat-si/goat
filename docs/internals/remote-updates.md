@@ -383,8 +383,9 @@ updater's in-flight guard and never creates a second replacement path.
 
 A runtime started by `run-t3.sh` updates itself when its launch records
 (`~/.goat/ssh-launch/runtime/pid` and `managed`) name its own process and it runs in
-the default `~/.goat` home on a POSIX host. Windows hosts, whose supervisor needs a
-native detached spawn, stay client-driven. Preparation runs the same host download a
+the default `~/.goat` home. Windows hosts take part when Git for Windows bash is
+found (the OpenSSH DefaultShell or a standard install path) and otherwise stay
+client-driven. Preparation runs the same host download a
 client would, verified against `SHA256SUMS`, checks the executable against its install
 record, and runs `__service-preflight`. Activation checks idle, then runs the owning
 launch script in its own session with the target release as the requested version.
@@ -396,6 +397,22 @@ release finds the runtime incompatible and replaces it as before. The script hol
 closes admission) and starts the ADR-0013 supervisor. The drain stops this server, so
 nothing in it can interrupt the swap. A busy check, a cancelled drain, or a client
 holding the lock retries in 10 minutes.
+
+On Windows, PowerShell 5.1 compiles the command supervisor before Node detaches its
+executable: detaching PowerShell itself can exit successfully without running its
+script. The executable owns a kill-on-close Job Object before starting Git Bash.
+It stays alive while descendants hold command output, even if Bash exits
+first. Timeout and cancellation terminate that supervisor through its retained native
+process handle, so cleanup neither depends on a live parent PID nor selects a reused
+PID. The replacement supervisor and server use the existing WMI detached launch,
+outside the command job, and survive the updater's exit.
+
+Cleanup initially belongs to the supervisor's job without holding its handle, so timeout
+or interruption also stops cleanup before readiness. After cleanup acknowledges its retained
+supervisor handle, it receives a non-inheritable job handle. It can then remove the exact helper
+directory after supervisor exit, even when the original server drained first; its own exit
+closes the final job handle and stops any remaining descendants. Unlaunched preparation
+remains the original caller's responsibility.
 
 The supervisor writes `last-replacement.json` (status, target, previous version) in the
 launch state directory for every swap it runs. A `rolled-back` or `failed` record is the

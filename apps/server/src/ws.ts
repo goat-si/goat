@@ -305,6 +305,7 @@ import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
+import { isNetworkPath } from "@goat/shared/path";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
@@ -3186,7 +3187,10 @@ export const layerWsRpc = (
               input.resource._tag === "native-app-icon" ||
               input.resource._tag === "tool-output-image" ||
               input.resource._tag === "github-media" ||
-              (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
+              // A network path is served only from the thread's project, looked up below.
+              (input.resource._tag === "media-file" &&
+                path.isAbsolute(input.resource.path) &&
+                !isNetworkPath(input.resource.path))
             ) {
               return yield* issueAssetUrl({ resource: input.resource });
             }

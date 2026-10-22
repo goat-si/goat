@@ -19,9 +19,13 @@ https://<environment-address>/mcp
 The copied URL uses the route this device is connected over, so an agent on the
 same device can reach it.
 
-- **An agent on your own computers** can use any address that computer reaches
-  the environment at: a LAN or Tailscale address, or `localhost` on
-  the host. See [remote access](./remote-access.md).
+- **An agent on your own computers** can use `localhost` on the host or any
+  `https` address, such as
+  [Tailscale HTTPS](./remote-access.md#tailscale-https). Signing in sends the
+  agent's credentials to the environment, and agents only do that over `https`
+  or to `localhost`. A plain-`http` LAN or Tailscale address, like
+  `http://100.x.y.z:3773`, lets an agent find the environment but not finish
+  signing in.
 - **A hosted agent**, such as ChatGPT or a bot running in the cloud, must reach
   the environment from the internet through an HTTPS address you manage. GOAT
   Connect is coming soon; GOAT does not currently provide a public address. A
@@ -160,6 +164,28 @@ ends. Otherwise it keeps only the link and says so (`tracking: "link-only"`), an
 started outside GOAT are always link-only. **Stop** on a registered run's thread only stops
 following it: the run keeps going, and you cancel it from its page in the provider.
 `goat_cloud_run_forget` removes a registered run from GOAT; the cloud run itself keeps going.
+
+## Scripts on the host
+
+On the machine that runs the environment, `goat thread` uses the same tools
+without a sign-in:
+
+```sh
+id=$(goat thread start . "Find why the tests are slow")
+goat thread send "$id" "Now fix it" --wait
+goat thread show "$id"
+goat thread list
+```
+
+`.` means the project that contains the current folder; a project id also
+works. A new thread uses the project's default model and permission mode, and
+runs in the project folder unless you pass `--worktree <base-branch>`. `send`
+never interrupts: a busy thread gets the message as its next turn. Pass `-` as
+the message to read it from stdin.
+
+`--wait` prints the agent's reply. It exits 1 when the run fails or stops, and
+2 when the agent waits for an answer you give in the app. Add `--json` for a
+result that always includes the thread id.
 
 ## Remove an agent
 

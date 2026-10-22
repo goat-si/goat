@@ -16,6 +16,9 @@ import {
 import { sshRuntime } from "~/state/sshRuntime";
 import { sshRuntimeTargetKey } from "@goat/client-runtime/state/sshRuntime";
 import {
+  formatDesktopSshConnectionError,
+  parsePairingUrlFields,
+  parseRemotePairingFields,
   isSshConnectionSuperseded,
   savedConnectionPresentation,
   savedConnectionSshRoute,
@@ -118,8 +121,7 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { AnimatedHeight } from "../AnimatedHeight";
-import { getPairingTokenFromUrl } from "../../pairingUrl";
-import { readHostedPairingRequest } from "../../hostedPairing";
+
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import {
   resolveServerConfigVersionMismatch,
@@ -169,66 +171,6 @@ import {
 
 const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
 const NO_SSH_RUNTIME_STATUS = Atom.make(null);
-function parsePairingUrlFields(
-  input: string,
-): { readonly host: string; readonly pairingCode: string } | null {
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-
-  try {
-    const urlLikeInput =
-      /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//u.test(trimmed) || trimmed.startsWith("//")
-        ? trimmed
-        : `https://${trimmed}`;
-    const url = new URL(urlLikeInput, window.location.origin);
-    const hostedPairingRequest = readHostedPairingRequest(url);
-    if (hostedPairingRequest) {
-      return {
-        host: hostedPairingRequest.host,
-        pairingCode: hostedPairingRequest.token,
-      };
-    }
-
-    const pairingCode = getPairingTokenFromUrl(url);
-    if (!pairingCode) return null;
-    return {
-      host: url.origin,
-      pairingCode,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function parseRemotePairingFields(input: { readonly host: string; readonly pairingCode: string }): {
-  readonly host: string;
-  readonly pairingCode: string;
-} {
-  const parsedPairingUrl = parsePairingUrlFields(input.host);
-  if (parsedPairingUrl) return parsedPairingUrl;
-
-  const host = input.host.trim();
-  const pairingCode = input.pairingCode.trim();
-  if (!host) {
-    throw new Error("Enter a backend host.");
-  }
-  if (!pairingCode) {
-    throw new Error("Enter a pairing code.");
-  }
-  return { host, pairingCode };
-}
-
-function formatDesktopSshConnectionError(error: unknown): string {
-  const fallback = "Failed to connect SSH host.";
-  const rawMessage = error instanceof Error ? error.message : fallback;
-  const withoutIpcPrefix = rawMessage.replace(
-    /^Error invoking remote method 'desktop:ensure-ssh-environment':\s*/u,
-    "",
-  );
-  const withoutTaggedErrorPrefix = withoutIpcPrefix.replace(/^Ssh[A-Za-z]+Error:\s*/u, "");
-  return withoutTaggedErrorPrefix.trim() || fallback;
-}
-
 const isSshHostAlias = Schema.is(SshHostAlias);
 const isSshHostProbeError = Schema.is(SshHostProbeError);
 

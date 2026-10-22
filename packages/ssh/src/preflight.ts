@@ -443,7 +443,10 @@ export const runSshPreflight = Effect.fn("ssh/preflight.run")(function* (
     .map((line) => {
       const version = line.slice(15);
       const held = heldVersions.get(version);
-      return { version, ...(held === "pending" || held === "rejected" ? { held } : {}) };
+      return {
+        version,
+        ...(held === "pending" || held === "rejected" ? { held: held as typeof held } : {}),
+      };
     });
   const installedVersions = installedCandidates
     .filter((candidate) => candidate.held === undefined)

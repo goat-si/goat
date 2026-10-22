@@ -57,6 +57,7 @@ export async function loadMcpBridge(
     readonly cua?: { readonly command: string; readonly args: ReadonlyArray<string> };
     /** The per-turn computer use gate file the adapter writes. */
     readonly cuaGate?: string;
+    readonly inputSchema?: Record<string, unknown>;
   } = {},
 ) {
   const handlers = new Map<string, AgentStartHook>();
@@ -97,7 +98,7 @@ export async function loadMcpBridge(
     ]
   ).map((tool) => ({
     ...tool,
-    inputSchema: { type: "object", properties: {} },
+    inputSchema: options.inputSchema ?? { type: "object", properties: {} },
     outputSchema: { type: "object", properties: { count: { type: "number" } } },
   }));
   const source = NodeModule.stripTypeScriptTypes(

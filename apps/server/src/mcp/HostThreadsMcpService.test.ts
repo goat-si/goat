@@ -1,5 +1,6 @@
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import { BUILTIN_PERMISSION_PROFILES } from "@goat/contracts";
+import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import { describe, expect, it } from "@effect/vitest";
@@ -112,6 +113,9 @@ const runService = <A, E>(
   options: {
     readonly interactionMode: "default" | "plan";
     readonly goatclawEnabled?: boolean;
+    /** What goatclaw fleet sync reports for the destination; absent leaves the service out. */
+    readonly fleetReach?: FleetSync.HostReach;
+    readonly onSettle?: (sent: boolean) => void;
     readonly taskThread?: boolean;
     readonly reviewFinished?: boolean | (() => boolean);
     readonly relayReceipt?: {
@@ -192,11 +196,11 @@ const runService = <A, E>(
     ),
     Layer.provide(
       Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({
-        permissionProfile: () =>
+        admitRemoteSend: () =>
           Effect.succeed({
-            enabled: options.goatclawEnabled ?? false,
-            profile: BUILTIN_PERMISSION_PROFILES.worker!,
-            runtimeMode: "full-access",
+            ceiling:
+              options.goatclawEnabled === true ? BUILTIN_PERMISSION_PROFILES.worker! : undefined,
+            settle: (sent: boolean) => Effect.sync(() => options.onSettle?.(sent)),
           }),
         listThreads: () => Effect.succeed(localList),
         readThread: () =>
@@ -204,6 +208,13 @@ const runService = <A, E>(
             ? Effect.die("unused local read")
             : Effect.succeed(options.localRead),
       }),
+    ),
+    Layer.provide(
+      options.fleetReach === undefined
+        ? Layer.empty
+        : Layer.mock(FleetSync.GoatclawFleetSync)({
+            ensure: () => Effect.succeed(options.fleetReach!),
+          }),
     ),
     Layer.provide(
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
@@ -1094,14 +1105,54 @@ it.effect("forwards ready-only reads without changing ordinary host bootstrap po
   ),
 );
 
-it.effect(
-  "refuses remote sends while their profile and origin lane accounting cannot be preserved",
-  () =>
-    Effect.gen(function* () {
+it.effect("forwards the caller's goatclaw ceiling with a remote send and keeps its lane", () =>
+  Effect.gen(function* () {
+    const settled: Array<boolean> = [];
+    const { result, calls } = yield* runService(
+      {
+        interactionMode: "default",
+        goatclawEnabled: true,
+        fleetReach: { sync: { state: "applied" }, enforcesCeilings: true },
+        onSettle: (sent) => settled.push(sent),
+        hostCall: () =>
+          Effect.succeed({
+            threadId: "remote",
+            messageId: "message-1",
+            runId: "run-1",
+            status: "running",
+            delivery: "steered",
+          }),
+      },
+      (service) =>
+        service.sendToThread(scope, {
+          host: "box",
+          threadId: ThreadId.make("remote"),
+          message: "Continue",
+        }),
+    );
+    expect(result._tag).toBe("Success");
+    expect(calls[0]?.tool).toBe("goat_thread_send");
+    expect(calls[0]?.arguments.permissionProfileCeiling).toEqual(
+      BUILTIN_PERMISSION_PROFILES.worker,
+    );
+    expect(settled).toEqual([true]);
+  }),
+);
+
+it.effect("refuses a profiled remote send to a GOAT too old to enforce its ceiling", () =>
+  Effect.gen(function* () {
+    const settled: Array<boolean> = [];
+    for (const fleetReach of [
+      { sync: { state: "outdated" as const }, enforcesCeilings: false },
+      { sync: { state: "pending" as const, message: "box is offline." }, enforcesCeilings: false },
+      undefined,
+    ]) {
       const { result, calls } = yield* runService(
         {
           interactionMode: "default",
           goatclawEnabled: true,
+          ...(fleetReach === undefined ? {} : { fleetReach }),
+          onSettle: (sent) => settled.push(sent),
           hostCall: () => Effect.die("Remote send must be refused"),
         },
         (service) =>
@@ -1113,5 +1164,7 @@ it.effect(
       );
       expect(result).toMatchObject({ _tag: "Failure", failure: { code: "capability_denied" } });
       expect(calls).toHaveLength(0);
-    }),
+    }
+    expect(settled).toEqual([false, false, false]);
+  }),
 );

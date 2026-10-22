@@ -90,6 +90,7 @@ import * as RuntimeDrain from "./runtimeDrain.ts";
 import * as RuntimeIdentity from "./runtimeIdentity.ts";
 import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as SshRemoteDispatch from "./sshRemote/SshRemoteDispatch.ts";
+import * as GoatclawFleetSync from "./goatclaw/FleetSync.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
@@ -1462,7 +1463,8 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
   Layer.provide(layerLaunchWatches),
-  Layer.provide(SshRemoteDispatch.layer),
+  // One fleet goatclaw sync for the tools, host status and its scheduled reconcile.
+  Layer.provide(GoatclawFleetSync.layer.pipe(Layer.provideMerge(SshRemoteDispatch.layer))),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
