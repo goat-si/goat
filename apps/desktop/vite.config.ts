@@ -27,6 +27,16 @@ const mainProcessDefine = {
   __GOAT_BUILD_COMMIT_TIME__: JSON.stringify(resolveBuildCommitTime(import.meta.dirname)),
 };
 
+// Electron runs a sandboxed preload as the body of a function whose parameters include
+// require, process, Buffer, global, setImmediate, clearImmediate, exports and module. A
+// top-level declaration with one of those names (Effect declares setImmediate) is then a
+// SyntaxError and the preload never loads, so each preload bundle runs inside its own function.
+// scripts/build-desktop-artifact.ts checks the built files the same way Electron loads them.
+const sandboxedPreload = {
+  banner: { js: "(() => {" },
+  footer: { js: "})();" },
+} as const;
+
 export default defineConfig({
   run: {
     tasks: {
@@ -113,6 +123,7 @@ export default defineConfig({
       outExtensions: () => ({ js: ".cjs" }),
       define: publicConfigDefine,
       entry: ["src/preload.ts"],
+      ...sandboxedPreload,
       deps: {
         // Sandboxed Electron preloads cannot reliably resolve package imports
         // from inside the packaged ASAR. Bundle Clerk's preload bridge into the
@@ -134,6 +145,7 @@ export default defineConfig({
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/preview-pick-preload.ts"],
+      ...sandboxedPreload,
       deps: {
         alwaysBundle: (id) => id === "react-grab" || id.startsWith("react-grab/"),
       },
@@ -145,6 +157,7 @@ export default defineConfig({
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/preview-pip-preload.ts"],
+      ...sandboxedPreload,
     },
     {
       // Sandboxed preloads must be self-contained, without shared runtime chunks.
@@ -154,6 +167,7 @@ export default defineConfig({
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/mac-permission-preload.ts"],
+      ...sandboxedPreload,
     },
   ],
   test: {
