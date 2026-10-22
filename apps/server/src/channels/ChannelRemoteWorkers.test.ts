@@ -192,6 +192,7 @@ class RemoteMachine {
   /** goat_thread_send fails with this remote code. */
   refuseSendWith: string | undefined;
   /** The models orchestrator_capabilities lists; unset, the tool is refused (an older GOAT). */
+  reviewerRuntimeModes: ReadonlyArray<string> | undefined;
   offeredModels: ReadonlyArray<{ readonly instance: string; readonly model: string }> | undefined;
   /** orchestrator_capabilities alone cannot be reached (the call times out). */
   capabilitiesUnreachable = false;
@@ -541,6 +542,9 @@ class RemoteMachine {
                   providers: [...new Set(machine.offeredModels.map((entry) => entry.instance))].map(
                     (instance) => ({
                       providerInstanceId: instance,
+                      ...(machine.reviewerRuntimeModes === undefined
+                        ? {}
+                        : { runtimeModes: machine.reviewerRuntimeModes }),
                       driverKind: "codex",
                       // A real GOAT sends null for an account without a display name.
                       displayName: null,
@@ -4667,6 +4671,36 @@ describe("independent remote channel review", () => {
           ]
         : [],
     });
+
+  it.effect("refuses unsupported restricted remote reviewers without broadening modes", () => {
+    const { machine, harness } = reviewHarness();
+    return Effect.gen(function* () {
+      const { runtime } = yield* startReview(machine);
+      machine.reviewerRuntimeModes = ["full-access"];
+      yield* runtime.drain;
+      const done = yield* onlyTask;
+      assert.strictEqual(done.status, "completed");
+      assert.strictEqual(done.review?.verdict, "skipped");
+      assert.include(done.review?.summary ?? "", "approval-required");
+      assert.lengthOf(machine.launches, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("forwards the current goatclaw ceiling to the remote reviewer", () => {
+    const { machine, harness } = reviewHarness();
+    return Effect.gen(function* () {
+      const { runtime } = yield* startReview(machine);
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ goatclaw: { enabled: true, defaultProfile: "manager" } });
+      yield* runtime.drain;
+      assert.lengthOf(machine.launches, 2);
+      const launch = machine.launches[1]!;
+      assert.strictEqual(launch.runtimeMode, "approval-required");
+      assert.strictEqual(launch.callerRuntimeMode, "approval-required");
+      assert.strictEqual(launch.permissionProfileCeiling?.runtimeModeCeiling, "approval-required");
+      assert.strictEqual(launch.permissionProfileCeiling?.id, "manager");
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect(
     "holds remote success, recovers a lost reviewer launch reply and completes once with observed checks",

@@ -231,7 +231,7 @@ export type ChannelServicesLayer = Layer.Layer<
 >;
 
 /** A machine whose SSH config lists no hosts: every task stays on this machine. */
-const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+export const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
   listHosts: () => Effect.succeed([]),
   connectedHosts: Effect.succeed([]),
 });
@@ -246,6 +246,7 @@ export interface FakeProviderInstance {
   readonly resetsAt?: string;
   readonly ready?: boolean;
   readonly missing?: boolean;
+  readonly supportedRuntimeModes?: ReadonlyArray<import("@goat/contracts").RuntimeMode>;
 }
 
 const fakeInstance = (instance: FakeProviderInstance) =>
@@ -258,6 +259,9 @@ const fakeInstance = (instance: FakeProviderInstance) =>
       getSnapshot: Effect.map(DateTime.now, (now) => ({
         enabled: true,
         installed: true,
+        ...(instance.supportedRuntimeModes === undefined
+          ? {}
+          : { supportedRuntimeModes: instance.supportedRuntimeModes }),
         status: instance.ready === false ? "error" : "ready",
         auth: { status: instance.ready === false ? "unauthenticated" : "authenticated" },
         // No models listed, so any model counts as offered.

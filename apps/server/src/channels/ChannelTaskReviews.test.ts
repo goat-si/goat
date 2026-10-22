@@ -17,6 +17,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ReviewService from "../review/ReviewService.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
@@ -68,7 +69,7 @@ const events = Effect.gen(function* () {
   );
 });
 
-function harnessFor(enabled = true) {
+function harnessFor(enabled = true, unsupportedMode = false) {
   const channels = ChannelLayers.makeLayerServices(
     Layer.mock(SlackChannelSettings.SlackChannelSettings)({
       get: () =>
@@ -114,6 +115,7 @@ function harnessFor(enabled = true) {
       {
         instanceId: modelSelection.instanceId,
         models: [{ slug: modelSelection.model }, { slug: reviewer.model }],
+        ...(unsupportedMode ? { supportedRuntimeModes: ["full-access" as const] } : {}),
       },
     ],
   });
@@ -650,3 +652,69 @@ describe("independent channel review", () => {
     }).pipe(Effect.provide(provide(harness)));
   });
 });
+
+it.effect("refuses an unsupported restricted reviewer mode without launching", () => {
+  const harness = harnessFor(true, true);
+  return Effect.gen(function* () {
+    const { task } = yield* start(harness);
+    assert.strictEqual(task.status, "completed");
+    assert.strictEqual(task.review?.verdict, "skipped");
+    assert.include(task.review?.summary ?? "", "approval-required");
+    assert.lengthOf(harness.world.launches, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("honors the current goatclaw profile before a local review launch", () => {
+  const harness = harnessFor();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    yield* linkSlackUser();
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    yield* (yield* ChannelGateway.ChannelGateway).ingest(
+      slackInput("do: preserve the guard", "review-profile-denied"),
+      slackContext,
+    );
+    yield* runtime.drain;
+    const task = yield* onlyTask;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({ goatclaw: { enabled: true, defaultProfile: "observer" } });
+    yield* report(task.worker!.threadId, task.worker!.runId!, "Worker's original summary.");
+    harness.world.setStatus(task.worker!.threadId, 1, "completed");
+    yield* runtime.drain;
+    const reviewed = yield* onlyTask;
+    assert.strictEqual(reviewed.status, "completed");
+    assert.strictEqual(reviewed.review?.verdict, "skipped");
+    assert.include(reviewed.review?.summary ?? "", "permission profile");
+    assert.lengthOf(harness.world.launches, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect(
+  "binds the restricted reviewer ceiling and releases its goatclaw lane after cleanup",
+  () => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ goatclaw: { enabled: true, defaultProfile: "worker" } });
+      const { runtime, task } = yield* start(harness);
+      assert.strictEqual(task.status, "reviewing");
+      const sql = yield* SqlClient.SqlClient;
+      const profiles = yield* sql<{
+        ceiling_json: string;
+      }>`SELECT ceiling_json FROM goatclaw_thread_profiles WHERE thread_id = ${task.review!.threadId}`;
+      assert.strictEqual(
+        JSON.parse(profiles[0]!.ceiling_json).runtimeModeCeiling,
+        "approval-required",
+      );
+      const count = () =>
+        sql<{ count: number }>`SELECT COUNT(*) AS count FROM goatclaw_lane_reservations`;
+      assert.deepStrictEqual(yield* count(), [{ count: 1 }]);
+      yield* finishReviewer(harness, task, pass);
+      yield* runtime.drain;
+      yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS);
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).review?.verdict, "pass");
+      assert.deepStrictEqual(yield* count(), [{ count: 0 }]);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);

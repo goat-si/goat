@@ -5,6 +5,7 @@ import {
   type ChannelTask,
   type ChannelTaskReview,
   type RunId,
+  RuntimeMode,
   RemoteOriginReportsWaitResult,
   ReviewLedgerDecisionInput,
   RunId as RunIdSchema,
@@ -18,6 +19,8 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -28,6 +31,7 @@ import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReviewCleanup from "./ChannelReviewCleanup.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
+import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import { questionIdFor, reviewLaunchIdsFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { completionHoldCount, isThreadMissing } from "./channelWorkerObservation.ts";
@@ -57,6 +61,7 @@ const decodeProviders = Schema.decodeUnknownEffect(
       Schema.Struct({
         providerInstanceId: Schema.String,
         canRunChildTask: Schema.optional(Schema.Boolean),
+        runtimeModes: Schema.optional(Schema.Array(RuntimeMode)),
         models: Schema.Array(Schema.Struct({ id: Schema.String })),
       }),
     ),
@@ -102,6 +107,7 @@ const make = Effect.gen(function* () {
   const diffService = yield* Effect.serviceOption(ReviewService.ReviewService);
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const sql = yield* SqlClient.SqlClient;
+  const permissions = yield* Profiles.PermissionProfiles;
 
   const authorize = Effect.fn("ChannelTaskReviews.authorize")(function* (
     task: ChannelTask,
@@ -123,10 +129,44 @@ const make = Effect.gen(function* () {
     });
     return (
       identity !== undefined &&
+      identity.ownerId === task.requester.ownerId &&
       identity.principalId === task.requester.principalId &&
       identity.grantedScopes.includes("orchestration:operate") &&
       task.requester.grantedScopes.includes("orchestration:operate")
     );
+  });
+
+  // The server-owned review is a lane of the bot, so it uses the bot's current
+  // profile and lane budget even though no MCP transport initiated this launch.
+  const claimReview = Effect.fn("ChannelTaskReviews.claimReview")(function* (
+    stored: ChannelLedger.ChannelStoredTask,
+  ) {
+    const task = stored.task;
+    const bot = yield* ledger.getBot(stored.ownerId);
+    if (bot === undefined) return undefined;
+    const scope: McpInvocationScope = {
+      environmentId: bot.bot.environmentId,
+      capabilities: new Set(["orchestration"]),
+      issuedAt: DateTime.toEpochMillis(yield* DateTime.now),
+      requestNamespace: task.taskId,
+      thread: {
+        threadId: bot.bot.threadId,
+        providerSessionId: "channel-review:" + task.taskId,
+        providerInstanceId: task.review!.workerModel.instanceId,
+      },
+      client: undefined,
+    };
+    const ids = reviewLaunchIdsFor(task.taskId, task.generation, task.review!.workerRunId);
+    const admitted = yield* permissions
+      .claim(scope, {
+        id: ids.commandId,
+        runtimeMode: "approval-required",
+        ...(task.worker?.host === undefined
+          ? { childThreadId: task.review!.threadId }
+          : { host: task.worker.host }),
+      })
+      .pipe(Effect.option);
+    return Option.isNone(admitted) ? undefined : { scope, effective: admitted.value };
   });
 
   const reserve = Effect.fn("ChannelTaskReviews.reserve")(function* (
@@ -441,6 +481,16 @@ const make = Effect.gen(function* () {
         "The selected reviewer provider or model is unavailable.",
       );
     }
+    if (
+      offered.supportedRuntimeModes !== undefined &&
+      !offered.supportedRuntimeModes.includes("approval-required")
+    )
+      return yield* finish(
+        stored,
+        owner,
+        "skipped",
+        "The selected reviewer does not support approval-required mode.",
+      );
     let reserved = yield* ledger.getReviewDispatch(ids.commandId);
     if (reserved === undefined) {
       if (Option.isNone(diffService))
@@ -492,6 +542,16 @@ const make = Effect.gen(function* () {
         "The requester no longer permits the review launch.",
       );
     yield* cleanup.track(task, owner);
+    const admitted = yield* claimReview(stored);
+    if (admitted === undefined) {
+      yield* cleanup.notStarted(review.threadId, owner);
+      return yield* finish(
+        stored,
+        owner,
+        "skipped",
+        "The current permission profile does not permit an independent review launch.",
+      );
+    }
     const launched = yield* launches
       .launch({
         commandId: ids.commandId,
@@ -635,6 +695,13 @@ const make = Effect.gen(function* () {
         "The selected reviewer provider or model is unavailable on the worker host.",
       );
     }
+    if (provider.runtimeModes !== undefined && !provider.runtimeModes.includes("approval-required"))
+      return yield* finish(
+        stored,
+        owner,
+        "skipped",
+        "The selected remote reviewer does not support approval-required mode.",
+      );
     const cwd = worker.worktreePath ?? target.cwd;
     const diff = yield* ssh
       .runHostScript({
@@ -668,6 +735,16 @@ const make = Effect.gen(function* () {
     const readKey = NodeCrypto.randomBytes(32).toString("base64url");
     const inserted = yield* cleanup.reserveRemote(task, owner, readKey);
     if (!inserted) return;
+    const admitted = yield* claimReview(stored);
+    if (admitted === undefined) {
+      yield* cleanup.notStarted(review.threadId, owner);
+      return yield* finish(
+        stored,
+        owner,
+        "skipped",
+        "The current permission profile does not permit an independent remote review launch.",
+      );
+    }
     const bot = yield* ledger.getBot(stored.ownerId);
     const launched = yield* ssh
       .launchThread(
@@ -685,7 +762,13 @@ const make = Effect.gen(function* () {
           message: brief(task, completeDiff),
           modelSelection: review.reviewerModel,
           runtimeMode: "approval-required",
-          callerRuntimeMode: task.requester.runtimeModeCeiling,
+          callerRuntimeMode: lowerRuntimeMode(
+            task.requester.runtimeModeCeiling,
+            "approval-required",
+          ),
+          ...(admitted.effective.enabled
+            ? { permissionProfileCeiling: admitted.effective.profile }
+            : {}),
           interactionMode: "default",
           memoryGrantCeiling: "none",
           standingInstructions: false,
@@ -697,6 +780,20 @@ const make = Effect.gen(function* () {
           },
         },
         Effect.gen(function* () {
+          yield* permissions
+            .recheck(admitted.scope, admitted.effective, {
+              host: target.host,
+              runtimeMode: "approval-required",
+            })
+            .pipe(
+              Effect.mapError(
+                () =>
+                  new SshRemoteDispatch.SshRemoteDispatchError({
+                    reason: "caller_changed",
+                    message: "Review permission profile changed.",
+                  }),
+              ),
+            );
           if (!(yield* authorize(task, owner)))
             return yield* new SshRemoteDispatch.SshRemoteDispatchError({
               reason: "caller_changed",
@@ -897,4 +994,4 @@ const make = Effect.gen(function* () {
   });
   return ChannelTaskReviews.of({ reserve, reconcile });
 });
-export const layer = Layer.effect(ChannelTaskReviews, make);
+export const layer = Layer.effect(ChannelTaskReviews, make).pipe(Layer.provide(Profiles.layer));

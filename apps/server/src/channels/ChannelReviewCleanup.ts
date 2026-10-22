@@ -14,6 +14,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -79,6 +80,7 @@ export class ChannelReviewCleanup extends Context.Service<
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const permissions = yield* Profiles.PermissionProfiles;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const entryFor = (task: ChannelTask, now: string, readKey?: string) =>
@@ -149,6 +151,17 @@ const make = Effect.gen(function* () {
     if (value === undefined) return;
     const entry = decode(value);
     if (entry.remoteThreadId !== undefined) return;
+    const ids = reviewLaunchIdsFor(entry.taskId, entry.generation, entry.workerRunId);
+    yield* permissions.release(ids.commandId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ChannelLedger.ChannelLedgerError({
+            reason: "persistence",
+            detail: "Could not release the review lane.",
+            cause,
+          }),
+      ),
+    );
     yield* ledger.updateReviewCleanup({
       owner,
       key: reviewThreadId,
@@ -279,6 +292,19 @@ const make = Effect.gen(function* () {
     for (const json of yield* ledger.listReviewCleanup(DateTime.formatIso(now))) {
       const entry = decode(json);
       const done = yield* stop(entry, owner);
+      if (done) {
+        const ids = reviewLaunchIdsFor(entry.taskId, entry.generation, entry.workerRunId);
+        yield* permissions.release(ids.commandId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ChannelLedger.ChannelLedgerError({
+                reason: "persistence",
+                detail: "Could not release the review lane.",
+                cause,
+              }),
+          ),
+        );
+      }
       const persisted = yield* ledger.getReviewDispatch("cleanup:" + entry.threadId);
       const latest = persisted === undefined ? entry : decode(persisted);
       const attempts = entry.attempts + 1;
@@ -314,4 +340,4 @@ const make = Effect.gen(function* () {
     reconcile,
   });
 });
-export const layer = Layer.effect(ChannelReviewCleanup, make);
+export const layer = Layer.effect(ChannelReviewCleanup, make).pipe(Layer.provide(Profiles.layer));
