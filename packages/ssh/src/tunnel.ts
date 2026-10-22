@@ -87,14 +87,10 @@ import {
   type SshRuntimeProgressCallback,
 } from "./remoteRuntime.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
-import {
-  archiveFailure,
-  buildRemoteRuntimeProbeScript,
-  decodeRemoteRuntimeProbe,
-  makeRuntimeProvisioning,
-  remoteUploadCommand,
-  runtimePreparationError,
-} from "./runtimeProvisioning.ts";
+import { remoteUploadCommand } from "./runtimeInstallScripts.ts";
+import { archiveFailure, runtimePreparationError } from "./runtimePreparationErrors.ts";
+import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
+import { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
 import {
   REMOTE_RUNTIME_CLEANUP_SCRIPT,
   REMOTE_RUNTIME_FACT_WARMUP_SCRIPT,
