@@ -317,7 +317,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
   const acquire = Effect.fn("CodexInstallation.acquire")(function* () {
     return yield* Effect.acquireRelease(
       gate.withPermit(
-        resolve().pipe(
+        resolve(false).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
               leases += 1;
@@ -435,9 +435,12 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     Effect.scoped,
     Effect.orElseSucceed(() => false),
   );
-  const localCache = new Map<string, { fingerprint: string; executable: CodexExecutable | null }>();
+  const localCache = new Map<
+    string,
+    { fingerprint: string; executable: Omit<CodexExecutable, "startupWarning"> | null }
+  >();
   const resolveLocal = Effect.fn("CodexInstallation.resolveLocal")(
-    function* () {
+    function* (diagnose: boolean) {
       const executablePath = yield* resolveCommandPath("codex", { env: environment }).pipe(
         Effect.provideService(HostProcess.Platform, platform),
         Effect.provideService(FileSystem.FileSystem, fs),
@@ -457,56 +460,55 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       const info = yield* fs.stat(executablePath);
       const fingerprint = `${realExecutablePath}:${info.size}:${Option.getOrUndefined(info.mtime)?.getTime()}:${Option.getOrUndefined(info.ino)}`;
       const cached = localCache.get(executablePath);
+      let candidate = cached?.fingerprint === fingerprint ? cached.executable : undefined;
       let startupCandidate: CodexExecutable | null = null;
-      const executable =
-        cached?.fingerprint === fingerprint
-          ? cached.executable
-          : yield* Effect.gen(function* () {
-              const output = yield* runCommand(executablePath, ["--version"]);
-              const version = /^codex-cli (\d+\.\d+\.\d+)$/u.exec(output.trim())?.[1];
-              if (!version) return null;
-              const candidate = {
-                executablePath,
-                source: "local",
-                version,
-                managedVersionDirectory: null,
-              } satisfies CodexExecutable;
-              // Prereleases retain the existing conservative version policy. The
-              // stable gate stays off until 0.164; 0.163 has no one-shot flag.
-              if (!satisfiesSemverRange(version, ">=0.164.0")) {
-                yield* runCommand(executablePath, ["app-server", "--help"]);
-                return candidate;
-              }
-              startupCandidate = candidate;
-              const startupWarning = yield* probeStartupConfig(executablePath);
-              return { ...candidate, ...(startupWarning ? { startupWarning } : {}) };
-            }).pipe(
-              Effect.timeout("5 seconds"),
-              // Keep the one overall budget, but a diagnostic timeout must not
-              // turn a version-confirmed executable into a missing installation.
-              Effect.catchTags({
-                TimeoutError: () =>
-                  Effect.succeed(
-                    startupCandidate
-                      ? { ...startupCandidate, startupWarning: STARTUP_WARNINGS.timeout }
-                      : null,
-                  ),
-              }),
-              Effect.orElseSucceed(() => null),
-            );
-      localCache.set(executablePath, { fingerprint, executable });
+      const executable = yield* Effect.gen(function* () {
+        if (candidate === undefined) {
+          const output = yield* runCommand(executablePath, ["--version"]);
+          const version = /^codex-cli (\d+\.\d+\.\d+)$/u.exec(output.trim())?.[1];
+          if (!version) return null;
+          // Prereleases retain the existing conservative version policy. The
+          // stable gate stays off until 0.164; 0.163 has no one-shot flag.
+          if (!satisfiesSemverRange(version, ">=0.164.0"))
+            yield* runCommand(executablePath, ["app-server", "--help"]);
+          candidate = { executablePath, source: "local", version, managedVersionDirectory: null };
+        }
+        if (!candidate || !diagnose || !satisfiesSemverRange(candidate.version, ">=0.164.0"))
+          return candidate ?? null;
+        startupCandidate = candidate;
+        const startupWarning = yield* probeStartupConfig(executablePath);
+        return { ...candidate, ...(startupWarning ? { startupWarning } : {}) };
+      }).pipe(
+        Effect.timeout("5 seconds"),
+        // Keep the one overall budget, but a diagnostic timeout must not
+        // turn a version-confirmed executable into a missing installation.
+        Effect.catchTags({
+          TimeoutError: () =>
+            Effect.succeed(
+              startupCandidate
+                ? { ...startupCandidate, startupWarning: STARTUP_WARNINGS.timeout }
+                : null,
+            ),
+        }),
+        Effect.orElseSucceed(() => null),
+      );
+      // Config and cloud requirements can change without touching the binary.
+      // Cache discovery only; every status resolution gets a fresh diagnostic.
+      localCache.set(executablePath, { fingerprint, executable: candidate ?? null });
       if (!executable) return null;
       const advisory = yield* compatibility(executable.version);
       return advisory?.status === "supported" ? executable : null;
     },
     Effect.orElseSucceed(() => null),
   );
-  const resolve = Effect.fn("CodexInstallation.resolve")(function* () {
-    const local = yield* resolveLocal();
+  const resolve = Effect.fn("CodexInstallation.resolve")(function* (diagnose = true) {
+    // Runtime leases use initialize as their authority, without repeating the
+    // advisory config request already made by the status check.
+    const local = yield* resolveLocal(diagnose);
     return local ?? (yield* resolveManaged());
   });
   const reuseLocal = Effect.fn("CodexInstallation.reuseLocal")(function* () {
-    const local = yield* resolveLocal();
+    const local = yield* resolveLocal(true);
     if (!local) return false;
     yield* SubscriptionRef.update(
       state,

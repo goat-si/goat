@@ -146,6 +146,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
             version: "0.164.0",
             startupWarning: "Codex startup check warning: the diagnostic timed out.",
           };
+          let resolvedExecutable = executable;
           const installation = yield* CodexInstallation.CodexInstallation;
           const serverConfig = yield* ServerConfig.ServerConfig;
           const home = NodePath.join(serverConfig.stateDir, "startup-home");
@@ -210,7 +211,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
           }).pipe(
             Effect.provideService(CodexInstallation.CodexInstallation, {
               ...installation,
-              resolve: () => Effect.succeed(executable),
+              resolve: () => Effect.succeed(resolvedExecutable),
               acquire: () => Effect.succeed(executable),
             }),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -227,6 +228,14 @@ it.layer(layerTest)("CodexDriver", (it) => {
             expect(getProviderSummary(retained).detail).toBe(executable.startupWarning);
             expect(retained.models.map((model) => model.slug)).toEqual(["gpt-fixture"]);
             expect(methods).toContain("initialize");
+            const { startupWarning: _warning, ...healthyExecutable } = executable;
+            resolvedExecutable = healthyExecutable;
+            const refreshed = yield* instance.snapshot.refresh;
+            expect(refreshed.status).toBe("ready");
+            expect(refreshed.message).toBeUndefined();
+            expect(
+              getProviderSummary(mergeProviderSnapshot(snapshot, refreshed)).detail,
+            ).toBeNull();
           } else {
             expect(snapshot.message).not.toBe(executable.startupWarning);
             if (scenario === "initialize-error") expect(snapshot.status).toBe("error");

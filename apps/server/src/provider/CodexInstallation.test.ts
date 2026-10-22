@@ -141,6 +141,7 @@ const startupInfo = JSON.stringify({
   appServerVersion: "different-from-cli-version",
   configRequirements: { requirements: null },
 });
+const startupFailure = JSON.stringify({ error: { code: -32600, message: "fixture config error" } });
 
 function startupProbeFixture(
   input: {
@@ -202,6 +203,35 @@ function startupProbeFixture(
   return { spawner, calls };
 }
 
+it.effect.each([true, false])(
+  "refreshes diagnostics on the same service and binary after configuration changes (initially healthy: %s)",
+  (healthy) =>
+    Effect.gen(function* () {
+      const output = { stdout: healthy ? startupInfo : startupFailure, code: healthy ? 0 : 1 };
+      const fixture = startupProbeFixture(output);
+      const h = yield* makeHarness({ local: { version: "0.164.0" }, spawner: fixture.spawner });
+      const original = yield* h.fs.stat(h.localBinaryPath);
+      const before = yield* h.installation.resolve();
+      expect(before.startupWarning === undefined).toBe(healthy);
+      output.stdout = healthy ? startupFailure : startupInfo;
+      output.code = healthy ? 1 : 0;
+      const after = yield* h.installation.resolve();
+      expect(after.source).toBe("local");
+      expect(after.startupWarning === undefined).toBe(!healthy);
+      const afterStat = yield* h.fs.stat(h.localBinaryPath);
+      expect([afterStat.size, afterStat.ino, afterStat.mtime]).toEqual([
+        original.size,
+        original.ino,
+        original.mtime,
+      ]);
+      expect(fixture.calls.filter((args) => args[0] === "--version")).toHaveLength(1);
+      expect(fixture.calls.filter((args) => args.includes("--print-startup-config"))).toHaveLength(
+        3,
+      );
+      expect(h.downloads()).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect.each(["0.156.0", "0.163.0", "0.164.0", "0.165.0", "1.0.0"])(
   "gates startup diagnostics while retaining CLI version %s",
   (version) =>
@@ -213,10 +243,12 @@ it.effect.each(["0.156.0", "0.163.0", "0.164.0", "0.165.0", "1.0.0"])(
       expect(executable).not.toHaveProperty("startupWarning");
       expect(fixture.calls).toEqual([
         ["--version"],
-        [
-          "app-server",
-          version === "0.156.0" || version === "0.163.0" ? "--help" : "--print-startup-config",
-        ],
+        ...(version === "0.156.0" || version === "0.163.0"
+          ? [["app-server", "--help"]]
+          : [
+              ["app-server", "--print-startup-config"],
+              ["app-server", "--print-startup-config"],
+            ]),
       ]);
       expect(h.downloads()).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
@@ -291,9 +323,17 @@ it.effect.each([
     expect(JSON.stringify(executable)).not.toContain("secret-sentinel");
     expect(JSON.stringify(executable)).not.toContain("/private/config");
     expect((yield* h.installation.start).source).toBe("local");
-    expect(yield* h.installation.acquire().pipe(Effect.scoped)).toEqual(executable);
+    expect(yield* h.installation.acquire().pipe(Effect.scoped)).toMatchObject({
+      source: "local",
+      version: "0.164.0",
+    });
     expect(h.downloads()).toBe(0);
-    expect(fixture.calls).toEqual([["--version"], ["app-server", "--print-startup-config"]]);
+    expect(fixture.calls).toEqual([
+      ["--version"],
+      ["app-server", "--print-startup-config"],
+      ["app-server", "--print-startup-config"],
+      ["app-server", "--print-startup-config"],
+    ]);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
@@ -322,6 +362,7 @@ it.effect.each(["version", "legacy-help"] as const)(
 
 it.effect("shares the five-second budget and retains the candidate on diagnostic timeout", () =>
   Effect.gen(function* () {
+    let blocked = true;
     const versionStarted = yield* Deferred.make<void>();
     const versionRelease = yield* Deferred.make<void>();
     const startupStarted = yield* Deferred.make<void>();
@@ -331,7 +372,9 @@ it.effect("shares the five-second budget and retains the candidate on diagnostic
         Effect.andThen(Deferred.await(versionRelease)),
       ),
       beforeStartup: Deferred.succeed(startupStarted, undefined).pipe(Effect.asVoid),
-      startupExit: Effect.never,
+      startupExit: Effect.suspend(() =>
+        blocked ? Effect.never : Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+      ),
       finalized: Deferred.succeed(finalized, undefined).pipe(Effect.asVoid),
     });
     const fiber = yield* makeHarness({
@@ -345,12 +388,55 @@ it.effect("shares the five-second budget and retains the candidate on diagnostic
     yield* TestClock.adjust("1 second");
     const h = yield* Fiber.join(fiber);
     yield* Deferred.await(finalized);
-    expect(yield* h.installation.resolve()).toMatchObject({
+    expect(fixture.calls).toHaveLength(2);
+    expect((yield* h.installation.state).source).toBe("local");
+    blocked = false;
+    expect(yield* h.installation.resolve()).not.toHaveProperty("startupWarning");
+    expect(fixture.calls).toHaveLength(3);
+    expect(h.downloads()).toBe(0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("recovers a diagnostic timeout on the same service and unchanged binary", () =>
+  Effect.gen(function* () {
+    let blocked = false;
+    const started = yield* Deferred.make<void>();
+    const finalized = yield* Deferred.make<void>();
+    const fixture = startupProbeFixture({
+      startupExit: Effect.suspend(() =>
+        blocked
+          ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+      ),
+      finalized: Effect.suspend(() =>
+        blocked ? Deferred.succeed(finalized, undefined).pipe(Effect.asVoid) : Effect.void,
+      ),
+    });
+    const h = yield* makeHarness({ local: { version: "0.164.0" }, spawner: fixture.spawner });
+    const original = yield* h.fs.stat(h.localBinaryPath);
+    blocked = true;
+    expect((yield* h.installation.acquire().pipe(Effect.scoped)).source).toBe("local");
+    expect(fixture.calls).toHaveLength(2);
+    const fiber = yield* h.installation.resolve().pipe(Effect.forkScoped);
+    yield* Deferred.await(started);
+    yield* TestClock.adjust("5 seconds");
+    expect(yield* Fiber.join(fiber)).toMatchObject({
       source: "local",
       startupWarning: expect.stringContaining("timed out"),
     });
-    expect(fixture.calls).toHaveLength(2);
-    expect(h.downloads()).toBe(0);
+    yield* Deferred.await(finalized);
+    blocked = false;
+    const recovered = yield* h.installation.resolve();
+    expect(recovered.source).toBe("local");
+    expect(recovered).not.toHaveProperty("startupWarning");
+    const after = yield* h.fs.stat(h.localBinaryPath);
+    expect([after.size, after.ino, after.mtime]).toEqual([
+      original.size,
+      original.ino,
+      original.mtime,
+    ]);
+    expect(fixture.calls.filter((args) => args[0] === "--version")).toHaveLength(1);
+    expect(fixture.calls.filter((args) => args.includes("--print-startup-config"))).toHaveLength(3);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
