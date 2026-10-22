@@ -6,6 +6,7 @@ import {
   type ChannelTaskReview,
   type RunId,
   RuntimeMode,
+  NonNegativeInt,
   RemoteOriginReportsWaitResult,
   ReviewLedgerDecisionInput,
   RunId as RunIdSchema,
@@ -67,6 +68,7 @@ const decodeProviders = Schema.decodeUnknownEffect(
         canRunChildTask: Schema.optional(Schema.Boolean),
         runtimeModes: Schema.optional(Schema.Array(RuntimeMode)),
         models: Schema.Array(Schema.Struct({ id: Schema.String })),
+        omittedModels: Schema.optional(NonNegativeInt),
       }),
     ),
   }),
@@ -633,11 +635,16 @@ const make = Effect.gen(function* () {
           writes: false,
           timeoutMs: REMOTE_READ_MS,
         },
-        Effect.succeed(
-          tool === "orchestrator_capabilities"
-            ? task.requester.runtimeModeCeiling
-            : "approval-required",
-        ),
+        Effect.gen(function* () {
+          if (tool !== "orchestrator_capabilities") return "approval-required" as const;
+          if (!(yield* authorize(task, owner)))
+            return yield* new SshRemoteDispatch.SshRemoteDispatchError({
+              reason: "caller_changed",
+              launchMayHaveStarted: false,
+              message: "Review authorization changed.",
+            });
+          return task.requester.runtimeModeCeiling;
+        }),
       );
     const saved =
       (yield* ledger.getReviewDispatch(ids.correlationId)) ??
@@ -691,11 +698,58 @@ const make = Effect.gen(function* () {
       Effect.flatMap(decodeProviders),
       Effect.option,
     );
-    const provider = Option.isNone(offered)
+    if (!(yield* authorize(task, owner)))
+      return yield* finish(
+        stored,
+        owner,
+        "skipped",
+        "The requester no longer permits reviewer discovery.",
+      );
+    let provider = Option.isNone(offered)
       ? undefined
       : offered.value.providers.find(
           (value) => value.providerInstanceId === review.reviewerModel.instanceId,
         );
+    if (
+      provider !== undefined &&
+      provider.canRunChildTask !== false &&
+      (provider.omittedModels ?? 0) > 0 &&
+      !provider.models.some((value) => value.id === review.reviewerModel.model)
+    ) {
+      // Compact catalogs are not an availability oracle. Older hosts expose their
+      // complete list without omittedModels and do not need the newer search input.
+      const targeted = yield* call("orchestrator_capabilities", {
+        search: review.reviewerModel.model,
+      }).pipe(Effect.flatMap(decodeProviders), Effect.option);
+      if (!(yield* authorize(task, owner)))
+        return yield* finish(
+          stored,
+          owner,
+          "skipped",
+          "The requester no longer permits reviewer discovery.",
+        );
+      if (Option.isNone(targeted))
+        return yield* finish(
+          stored,
+          owner,
+          "failed",
+          "Could not resolve the selected reviewer from the remote catalog.",
+        );
+      provider = targeted.value.providers.find(
+        (value) => value.providerInstanceId === review.reviewerModel.instanceId,
+      );
+      if (
+        provider !== undefined &&
+        (provider.omittedModels ?? 0) > 0 &&
+        !provider.models.some((value) => value.id === review.reviewerModel.model)
+      )
+        return yield* finish(
+          stored,
+          owner,
+          "failed",
+          "The remote catalog search remained incomplete for the selected reviewer.",
+        );
+    }
     if (
       provider === undefined ||
       provider.canRunChildTask === false ||

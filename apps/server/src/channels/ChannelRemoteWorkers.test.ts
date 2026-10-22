@@ -203,6 +203,11 @@ class RemoteMachine {
   offeredModels: ReadonlyArray<{ readonly instance: string; readonly model: string }> | undefined;
   /** orchestrator_capabilities alone cannot be reached (the call times out). */
   capabilitiesUnreachable = false;
+  capabilityModelLimit: number | undefined;
+  capabilitySearchModels:
+    | ReadonlyArray<{ readonly instance: string; readonly model: string }>
+    | undefined;
+  capabilitySearchUnavailable = false;
   /** Weekly quota use per account that goat_host_status reports; unset, the tool is refused. */
   hostQuotas: Readonly<Record<string, number>> | undefined;
   hostQuotaPool: QuotaPool | undefined;
@@ -549,30 +554,54 @@ class RemoteMachine {
               case "goat_environment_read":
                 if (machine.environmentReadDown) return yield* machine.unreachable("down");
                 return { environmentId: machine.environmentReadId ?? machine.environmentId };
-              case "orchestrator_capabilities":
-                if (machine.capabilitiesUnreachable) return yield* machine.unreachable("timed out");
+              case "orchestrator_capabilities": {
+                const search =
+                  typeof call.arguments.search === "string" ? call.arguments.search : undefined;
+                if (
+                  machine.capabilitiesUnreachable ||
+                  (search !== undefined && machine.capabilitySearchUnavailable)
+                )
+                  return yield* machine.unreachable("timed out");
                 if (machine.offeredModels === undefined) break;
+                const catalog =
+                  search === undefined
+                    ? machine.offeredModels
+                    : (machine.capabilitySearchModels ?? machine.offeredModels);
                 return {
                   features: {
                     runFencedThreadSend: machine.runFencedThreadSend,
                     profileFencedThreadSend: machine.profileFencedThreadSend,
                   },
-                  providers: [...new Set(machine.offeredModels.map((entry) => entry.instance))].map(
-                    (instance) => ({
-                      providerInstanceId: instance,
-                      ...(machine.reviewerRuntimeModes === undefined
-                        ? {}
-                        : { runtimeModes: machine.reviewerRuntimeModes }),
-                      driverKind: "codex",
-                      // A real GOAT sends null for an account without a display name.
-                      displayName: null,
-                      canRunChildTask: !machine.unrunnable.includes(instance),
-                      models: machine
-                        .offeredModels!.filter((entry) => entry.instance === instance)
-                        .map((entry) => ({ id: entry.model })),
-                    }),
+                  providers: [...new Set(catalog.map((entry) => entry.instance))].map(
+                    (instance) => {
+                      const models = catalog.filter(
+                        (entry) =>
+                          entry.instance === instance &&
+                          (search === undefined ||
+                            entry.model.toLowerCase().includes(search.toLowerCase())),
+                      );
+                      const listed =
+                        machine.capabilityModelLimit === undefined
+                          ? models
+                          : models.slice(0, machine.capabilityModelLimit);
+                      return {
+                        providerInstanceId: instance,
+                        ...(machine.reviewerRuntimeModes === undefined
+                          ? {}
+                          : { runtimeModes: machine.reviewerRuntimeModes }),
+                        driverKind: "codex",
+                        // A real GOAT sends null for an account without a display name.
+                        displayName: null,
+                        canRunChildTask: !machine.unrunnable.includes(instance),
+                        ...(machine.capabilityModelLimit === undefined
+                          ? {}
+                          : { omittedModels: models.length - listed.length }),
+                        models: listed.map((entry) => ({ id: entry.model })),
+                      };
+                    },
                   ),
                 };
+              }
               case "goat_provider_diagnose":
                 return {
                   diagnoses: [
@@ -4603,7 +4632,7 @@ it.effect("automatic recovery refuses a different environment behind the same ho
 
 describe("independent remote channel review", () => {
   const reviewerModel = { instanceId: ProviderInstanceId.make("codex"), model: "review-model" };
-  const reviewHarness = (automatic = false) => {
+  const reviewHarness = (automatic = false, selectedReviewer = reviewerModel) => {
     const machine = new RemoteMachine();
     machine.offeredModels = [
       { instance: "codex", model: "gpt-6.1-sol" },
@@ -4620,7 +4649,7 @@ describe("independent remote channel review", () => {
               hasBotToken: true,
               allowedChannelIds: [],
               status: "connected",
-              review: { enabled: true, modelSelection: reviewerModel },
+              review: { enabled: true, modelSelection: selectedReviewer },
             },
           ]),
         defaultTarget: () => Effect.succeed(Option.none()),
@@ -5121,6 +5150,93 @@ describe("independent remote channel review", () => {
             (call) => call.arguments.correlationId === correlation && call.existingSessionOnly,
           ),
         );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect.each([
+    "available",
+    "missing",
+    "legacy-full",
+    "already-present",
+    "wrong-provider",
+    "wrong-model",
+    "revoked",
+    "search-failure",
+    "still-truncated",
+  ] as const)(
+    "resolves a remote reviewer beyond the compact catalog without widening connection policy: %s",
+    (scenario) => {
+      const selected = {
+        instanceId: ProviderInstanceId.make("opencode"),
+        model: "catalog/reviewer",
+      };
+      const { machine, harness } = reviewHarness(true, selected);
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* startReview(machine, true);
+        const others = Array.from({ length: 9 }, (_, n) => ({
+          instance: "opencode",
+          model: "catalog/other-" + n,
+        }));
+        const chosen = { instance: "opencode", model: selected.model };
+        machine.offeredModels = [
+          { instance: "codex", model: "gpt-6.1-sol" },
+          ...(scenario === "already-present"
+            ? [chosen, ...others]
+            : [...others, ...(scenario === "missing" ? [] : [chosen])]),
+        ];
+        machine.capabilityModelLimit = scenario === "legacy-full" ? undefined : 8;
+        if (scenario === "wrong-provider")
+          machine.capabilitySearchModels = [{ ...chosen, instance: "another-provider" }];
+        if (scenario === "wrong-model")
+          machine.capabilitySearchModels = [{ ...chosen, model: selected.model + "-other" }];
+        if (scenario === "still-truncated")
+          machine.capabilitySearchModels = [
+            ...Array.from({ length: 9 }, (_, n) => ({
+              ...chosen,
+              model: selected.model + "-variant-" + n,
+            })),
+            chosen,
+          ];
+        machine.capabilitySearchUnavailable = scenario === "search-failure";
+        const probes: SshRemoteDispatch.SshHostToolCall[] = [];
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        machine.beforeHostCall = (call) =>
+          Effect.gen(function* () {
+            if (call.tool !== "orchestrator_capabilities") return;
+            probes.push(call);
+            if (scenario === "revoked" && call.arguments.search !== undefined)
+              yield* ledger.unlinkIdentity({ connectionId: "slack-1", externalActorId: "U1" });
+          }).pipe(Effect.orDie);
+        yield* runtime.drain;
+        const searched = scenario !== "legacy-full" && scenario !== "already-present";
+        assert.lengthOf(probes, searched ? 2 : 1);
+        assert.deepStrictEqual(probes[0]!.arguments, {});
+        if (searched) assert.deepStrictEqual(probes[1]!.arguments, { search: selected.model });
+        for (const probe of probes) {
+          assert.isTrue(probe.requireReady);
+          assert.isTrue(probe.existingSessionOnly);
+          assert.isFalse(probe.writes);
+          assert.strictEqual(probe.memoryGrantCeiling, task.target!.memoryGrantCeiling ?? "none");
+        }
+        const launches =
+          scenario === "available" || scenario === "legacy-full" || scenario === "already-present";
+        assert.lengthOf(machine.launches, launches ? 2 : 1);
+        const current = yield* onlyTask;
+        if (launches) {
+          assert.strictEqual(current.status, "reviewing");
+          assert.deepStrictEqual(machine.launches[1]!.modelSelection, selected);
+          assert.strictEqual(machine.launches[1]!.runtimeMode, "approval-required");
+          assert.isTrue(machine.launches[1]!.requireReady);
+        } else {
+          assert.strictEqual(
+            current.review?.verdict,
+            scenario === "search-failure" || scenario === "still-truncated" ? "failed" : "skipped",
+          );
+          if (scenario === "revoked") assert.include(current.review?.summary ?? "", "requester");
+          if (scenario === "search-failure" || scenario === "still-truncated")
+            assert.notInclude(current.review?.summary ?? "", "unavailable");
+        }
       }).pipe(Effect.provide(harness.layer));
     },
   );
