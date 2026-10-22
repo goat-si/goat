@@ -2,11 +2,9 @@ import { DecisionToolkit } from "./toolkits/decision/tools.ts";
 import * as DecisionHandlers from "./toolkits/decision/handlers.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
-  McpCapabilityUnavailableError,
   OrchestratorMcpFailure,
   PreviewAutomationError,
   type PreviewAutomationSnapshot,
-  PreviewAutomationUnavailableError,
   type RunId,
   ThreadId,
 } from "@goat/contracts";
@@ -69,6 +67,7 @@ import { validateRepositoryReferenceArguments } from "./repositoryReferenceArgum
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
+import { imageToolFailure, imageToolSuccess } from "./imageToolResult.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -763,71 +762,6 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
   });
 });
 
-interface ImageToolResult {
-  readonly screenshot: {
-    readonly mimeType: "image/png";
-    readonly data: string;
-    readonly width: number;
-    readonly height: number;
-  };
-  readonly [key: string]: unknown;
-}
-
-/**
- * Failures surface only their tag unless the tool describes them: the remote
- * message may carry renderer or device output the agent should not see, and the
- * tag is what it can act on. Refusals written for the agent, such as a missing
- * thread credential, keep their code and message so it can tell them apart.
- */
-const imageToolFailure =
-  <E>(toolName: string, operation: string, failureText: string | ((error: E) => string)) =>
-  (cause: Cause.Cause<E>) => {
-    if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
-      return Effect.failCause(cause).pipe(Effect.orDie);
-    }
-    const failures = cause.reasons.filter(Cause.isFailReason);
-    const firstFailure = failures[0]?.error;
-    const errorTag =
-      typeof firstFailure === "object" &&
-      firstFailure !== null &&
-      "_tag" in firstFailure &&
-      typeof firstFailure._tag === "string"
-        ? firstFailure._tag
-        : `${toolName}Error`;
-    const refusal = failures[0] === undefined ? undefined : refusalFields(failures[0].error);
-    const message =
-      refusal?.message ??
-      (typeof failureText === "string" || failures[0] === undefined
-        ? undefined
-        : failureText(failures[0].error));
-    const result = new McpSchema.CallToolResult({
-      isError: true,
-      structuredContent: {
-        error: {
-          _tag: errorTag,
-          operation,
-          failureCount: failures.length,
-          ...refusal,
-          ...(message === undefined ? {} : { message }),
-        },
-      },
-      // Some clients show only the text content and others only structuredContent, so both carry it.
-      content: [
-        {
-          type: "text",
-          text:
-            refusal?.message ??
-            (typeof failureText === "string" ? failureText : (message ?? `${toolName} failed.`)),
-        },
-      ],
-    });
-    return Effect.logWarning(`${toolName} failed`, {
-      operation,
-      errorTag,
-      failureCount: failures.length,
-    }).pipe(Effect.as(result));
-  };
-
 /**
  * `McpServer.toolkit` serializes every result as JSON text, which is the wrong
  * shape for a screenshot: the model needs image content.
@@ -877,38 +811,8 @@ const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function*
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.matchCauseEffect({
             onFailure: imageToolFailure(tool.name, operation, failureText),
-            onSuccess: ({ encodedResult }) => {
-              const { screenshot, ...rest } = encodedResult as ImageToolResult;
-              const includeImage =
-                (payload as { readonly includeImage?: boolean } | undefined)?.includeImage !==
-                false;
-              const metadata = {
-                ...rest,
-                screenshot: {
-                  mimeType: screenshot.mimeType,
-                  width: screenshot.width,
-                  height: screenshot.height,
-                },
-              };
-              return Effect.succeed(
-                new McpSchema.CallToolResult({
-                  isError: false,
-                  structuredContent: metadata,
-                  content: [
-                    { type: "text", text: JSON.stringify(metadata) },
-                    ...(includeImage
-                      ? [
-                          {
-                            type: "image" as const,
-                            data: new Uint8Array(Buffer.from(screenshot.data, "base64")),
-                            mimeType: screenshot.mimeType,
-                          },
-                        ]
-                      : []),
-                  ],
-                }),
-              );
-            },
+            onSuccess: ({ encodedResult }) =>
+              Effect.succeed(imageToolSuccess(payload, encodedResult)),
           }),
         );
       }),
@@ -936,19 +840,6 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
 });
 
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
-const isCapabilityError = Schema.is(
-  Schema.Union([McpCapabilityUnavailableError, PreviewAutomationUnavailableError]),
-);
-
-function refusalFields(
-  error: unknown,
-): (Readonly<Record<string, unknown>> & { readonly message: string }) | undefined {
-  if (isOrchestratorMcpFailure(error)) return encodeOrchestratorMcpFailure(error);
-  if (isCapabilityError(error))
-    return { _tag: error._tag, capability: error.capability, message: error.message };
-  return undefined;
-}
-
 const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(function* () {
   const htmlRender = yield* HtmlRender.HtmlRender;
   const threads = yield* ThreadManagementService.ThreadManagementService;

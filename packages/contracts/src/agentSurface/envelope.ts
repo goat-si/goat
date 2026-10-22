@@ -397,7 +397,8 @@ export const fromToolResult = (
   );
   const others = result.content.filter((_, index) => blocks[index]?.type !== "text");
   const structured = asFields(result.structuredContent);
-  const parsedText = texts.length === 1 ? parseJson(texts[0]!) : undefined;
+  const [onlyText] = texts;
+  const parsedText = texts.length === 1 && onlyText !== undefined ? parseJson(onlyText) : undefined;
 
   // Image tools report failures inside their structured content.
   const nested = asFields(structured?.error);

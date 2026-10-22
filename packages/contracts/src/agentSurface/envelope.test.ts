@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { OrchestratorMcpFailure } from "../orchestratorMcp.ts";
+import { OrchestratorMcpFailure } from "../orchestratorMcpFailure.ts";
 import { SecretRequestError } from "../secretRequest.ts";
 import { WorktreeMcpFailure } from "../worktreeMcp.ts";
 import {

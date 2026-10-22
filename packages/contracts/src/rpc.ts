@@ -419,7 +419,7 @@ import {
   HostStrayCleanupResult,
   ServerGetHostStatusInput,
 } from "./hostStatus.ts";
-import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
+import { OrchestratorMcpFailure } from "./orchestratorMcpFailure.ts";
 import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
 import { OpenCodexUpdateStatus } from "./opencodex.ts";
 import { HubDeviceOperationInput, HubDeviceOperationResult } from "./hubDevice.ts";
