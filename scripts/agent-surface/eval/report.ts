@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - a plain Node script that reads campaign rows; no Effect runtime.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - a plain Node script that reads campaign rows; no Effect runtime.
 /**
  * Turns run.ts rows into the campaign report.
  *

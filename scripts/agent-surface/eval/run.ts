@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalFetch:off - a plain Node script that drives a GOAT server over MCP; no Effect runtime.
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalConsole:off globalDate:off - a plain Node script that drives a GOAT server over MCP; no Effect runtime.
 /**
  * Runs the goat_eval measurement campaign (docs/operations/agent-surface-eval.md).
  *
