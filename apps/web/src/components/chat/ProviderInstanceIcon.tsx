@@ -154,7 +154,7 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
             aria-label={label}
             tabIndex={props.focusable ? 0 : undefined}
             className={cn(
-              "relative isolate z-30 inline-flex shrink-0 items-center justify-center overflow-visible rounded-sm outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+              "relative isolate z-30 inline-flex shrink-0 items-center justify-center overflow-visible rounded-sm outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               props.className,
             )}
             style={accentStyle}

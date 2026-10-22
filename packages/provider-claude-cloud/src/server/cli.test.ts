@@ -762,8 +762,6 @@ it.effect.each([
 );
 
 // Folder trust with a trust policy: GOAT answers Claude's own dialog in its PTY.
-// An older layout highlights "Yes" first, so Enter alone accepts.
-const PRESELECTED_DIALOG = `${FOLDER_TRUST_PROMPT}${NATIVE_FOLDER_TRUST_OPTION}  2. No, exit\r\n`;
 const trustPolicy = () => {
   const accepted: number[] = [];
   return { accepted, trust: { onAccepted: () => accepted.push(accepted.length + 1) } };
