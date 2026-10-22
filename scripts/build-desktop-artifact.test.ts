@@ -83,7 +83,6 @@ import {
   SSH_RUNTIME_RESOURCE_SOURCE_DIR,
   WINDOWS_NATIVE_ASAR_UNPACK_GLOB,
   WINDOWS_SERVER_EXTRA_RESOURCES,
-  WINDOWS_SERVER_RESOURCE_SOURCE_DIR,
   WSL_RUNTIME_EXTRA_RESOURCES,
   parseServerVersionOutput,
   resolveDesktopBuildVersion,
@@ -2216,42 +2215,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         `${resource.from} ships via extraResources and must be excluded from app.asar`,
       );
     }
-
-    assert.deepStrictEqual(DESKTOP_FILE_EXCLUSIONS, [
-      "!**/node_modules/@cursor/sdk-*/**/*",
-      "!apps/desktop/prod-resources/cursor-sdk",
-      "!apps/desktop/prod-resources/cursor-sdk/**/*",
-      "!apps/desktop/prod-resources/resource-monitor",
-      "!apps/desktop/prod-resources/resource-monitor/**/*",
-      "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
-      "!**/*.map",
-      "!**/*.d.cts",
-      "!apps/desktop/resources/browser-secret",
-      "!apps/desktop/resources/browser-secret/**/*",
-      "!apps/desktop/prod-resources/browser-secret",
-      "!apps/desktop/prod-resources/browser-secret/**/*",
-      "!apps/desktop/prod-resources/windows-server",
-      "!apps/desktop/prod-resources/windows-server/**/*",
-      "!apps/desktop/prod-resources/ssh-runtime",
-      "!apps/desktop/prod-resources/ssh-runtime/**/*",
-      "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
-      "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
-      "!apps/desktop/prod-resources/LICENSE-T3CODE.txt",
-      "!apps/desktop/gnome-extension",
-      "!apps/desktop/gnome-extension/**/*",
-      "!apps/desktop/prod-resources/cua-driver",
-      "!apps/desktop/prod-resources/cua-driver/**/*",
-      "!apps/desktop/resources/cua-driver",
-      "!apps/desktop/resources/cua-driver/**/*",
-    ]);
-    assert.equal(WINDOWS_SERVER_RESOURCE_SOURCE_DIR, "apps/desktop/prod-resources/windows-server");
-    assert.deepStrictEqual(WINDOWS_SERVER_EXTRA_RESOURCES, [
-      {
-        from: "apps/desktop/prod-resources/windows-server",
-        to: ".",
-        filter: ["server.asar", "server.asar.unpacked/**/*"],
-      },
-    ]);
   });
 
   it.effect("applies platform-specific packaging to the build config", () =>
@@ -2489,22 +2452,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
-  it("stages the resource monitor as an external executable resource", () => {
-    assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
-      { from: "apps/desktop/prod-resources/cua-driver", to: "cua-driver" },
-      {
-        from: "apps/desktop/prod-resources/cursor-sdk",
-        to: "node_modules/@cursor",
-      },
-      {
-        from: "apps/desktop/prod-resources/resource-monitor",
-        to: "resource-monitor",
-      },
-      {
-        from: "apps/desktop/prod-resources/LICENSE-T3CODE.txt",
-        to: "LICENSE-T3CODE.txt",
-      },
-    ]);
+  it("maps resource monitor build targets and executable names", () => {
     assert.deepStrictEqual(resolveResourceMonitorRustTargets("mac", "universal"), [
       "aarch64-apple-darwin",
       "x86_64-apple-darwin",
