@@ -220,22 +220,22 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const lock = yield* Semaphore.make(1);
 
-  const audit = (
-    who: { readonly actor: string; readonly profile: string },
-    request: ProviderSettingsRequest,
-    outcome: "applied" | "needs_human" | "failed",
-    decisionId?: string,
-  ) =>
-    Effect.gen(function* () {
+  const audit = Effect.fn("ProviderSettings.audit")(
+    function* (
+      who: { readonly actor: string; readonly profile: string },
+      request: ProviderSettingsRequest,
+      outcome: "applied" | "needs_human" | "failed",
+      decisionId?: string,
+    ) {
       const time = DateTime.formatIso(yield* DateTime.now);
       const target = targetOf(request);
       yield* sql`INSERT INTO audit_events (time, actor, profile, action, target, outcome, decision_id)
         VALUES (${time}, ${who.actor}, ${who.profile}, ${`provider.${request.action}`}, ${target}, ${outcome}, ${decisionId ?? null})`;
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Provider settings audit row not written.", cause),
-      ),
-    );
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Provider settings audit row not written.", cause),
+    ),
+  );
 
   const decide = Effect.fn("ProviderSettings.decide")(function* (
     scope: McpInvocationScope,
@@ -285,7 +285,7 @@ const make = Effect.gen(function* () {
       Effect.flatMap((decision) =>
         decision.kind === "direct" ? Effect.void : Effect.fail(deniedAtCommit()),
       ),
-      Effect.catchTag("OrchestratorMcpFailure", () => Effect.fail(deniedAtCommit())),
+      Effect.catchTags({ OrchestratorMcpFailure: () => Effect.fail(deniedAtCommit()) }),
     );
 
   const approverHolds = (sessionId: AuthSessionId, scopes: ReadonlyArray<AuthEnvironmentScope>) =>
@@ -324,23 +324,25 @@ const make = Effect.gen(function* () {
         ? { driver: ProviderDriverKind.make(instanceId) }
         : undefined;
 
-  const install = (instance: ProviderInstanceConfig, instanceId: ProviderInstanceId) =>
-    Effect.gen(function* () {
-      const config = isRecord(instance.config) ? instance.config : {};
-      const agentId = typeof config.agentId === "string" ? config.agentId.trim() : "";
-      if (instance.driver !== "acpRegistry" || config.source === "local" || agentId === "")
-        return yield* invalid(
-          `install applies only to ACP Registry agents; ${instanceId} has no registry agent to download.`,
-        );
-      const prepared = yield* catalog
-        .prepare({ agentId })
-        .pipe(
-          Effect.mapError(() =>
-            failure("orchestration_error", `Could not install ACP Registry agent ${agentId}.`),
-          ),
-        );
-      return { agentId: prepared.agentId, version: prepared.version };
-    });
+  const install = Effect.fn("ProviderSettings.install")(function* (
+    instance: ProviderInstanceConfig,
+    instanceId: ProviderInstanceId,
+  ) {
+    const config = isRecord(instance.config) ? instance.config : {};
+    const agentId = typeof config.agentId === "string" ? config.agentId.trim() : "";
+    if (instance.driver !== "acpRegistry" || config.source === "local" || agentId === "")
+      return yield* invalid(
+        `install applies only to ACP Registry agents; ${instanceId} has no registry agent to download.`,
+      );
+    const prepared = yield* catalog
+      .prepare({ agentId })
+      .pipe(
+        Effect.mapError(() =>
+          failure("orchestration_error", `Could not install ACP Registry agent ${agentId}.`),
+        ),
+      );
+    return { agentId: prepared.agentId, version: prepared.version };
+  });
 
   const save = (
     mutation: Parameters<Settings.ServerSettingsService["Service"]["updateProviderInstance"]>[0],
@@ -351,42 +353,41 @@ const make = Effect.gen(function* () {
       .updateProviderInstance(mutation, patch, undefined, authorize)
       .pipe(Effect.mapError(saveFailure));
 
-  const link = (
+  const link = Effect.fn("ProviderSettings.link")(function* (
     cloudId: ProviderInstanceId,
     siblingId: ProviderInstanceId,
     authorize: Effect.Effect<void, ServerSettingsError>,
-  ) =>
-    Effect.gen(function* () {
-      const instances = (yield* current).providerInstances;
-      const cloud = resolveEntry(instances, cloudId);
-      if (cloud === undefined || !isCloudSiblingDriver(cloud.driver))
-        return yield* invalid(
-          `${cloudId} is not a Cursor Cloud, Claude Cloud, or Devin Cloud instance.`,
-        );
-      const expected = CLOUD_SIBLING_DRIVERS[cloud.driver as keyof typeof CLOUD_SIBLING_DRIVERS];
-      const sibling = resolveEntry(instances, siblingId);
-      if (sibling === undefined || sibling.driver !== expected)
-        return yield* invalid(
-          `${driverName(cloud.driver)} needs a ${driverName(expected)} instance; ${siblingId} is not one.`,
-        );
-      if (
-        cloud.driver === "devinCloud" &&
-        !isDevinAcpRegistryInstance({
-          ...sibling,
-          enabled: true,
-          config: { ...mergeConfig(sibling.config), enabled: true },
-        })
-      )
-        return yield* invalid(`ACP instance ${siblingId} does not run Devin.`);
-      const key = cloud.driver === "devinCloud" ? "siblingInstanceId" : "sourceInstanceId";
-      const next: ProviderInstanceConfig = {
-        ...cloud,
+  ) {
+    const instances = (yield* current).providerInstances;
+    const cloud = resolveEntry(instances, cloudId);
+    if (cloud === undefined || !isCloudSiblingDriver(cloud.driver))
+      return yield* invalid(
+        `${cloudId} is not a Cursor Cloud, Claude Cloud, or Devin Cloud instance.`,
+      );
+    const expected = CLOUD_SIBLING_DRIVERS[cloud.driver as keyof typeof CLOUD_SIBLING_DRIVERS];
+    const sibling = resolveEntry(instances, siblingId);
+    if (sibling === undefined || sibling.driver !== expected)
+      return yield* invalid(
+        `${driverName(cloud.driver)} needs a ${driverName(expected)} instance; ${siblingId} is not one.`,
+      );
+    if (
+      cloud.driver === "devinCloud" &&
+      !isDevinAcpRegistryInstance({
+        ...sibling,
         enabled: true,
-        config: mergeConfig(cloud.config, { [key]: siblingId }),
-      };
-      yield* save({ operation: "upsert", instanceId: cloudId, instance: next }, {}, authorize);
-      return summarize(cloudId, next);
-    });
+        config: { ...mergeConfig(sibling.config), enabled: true },
+      })
+    )
+      return yield* invalid(`ACP instance ${siblingId} does not run Devin.`);
+    const key = cloud.driver === "devinCloud" ? "siblingInstanceId" : "sourceInstanceId";
+    const next: ProviderInstanceConfig = {
+      ...cloud,
+      enabled: true,
+      config: mergeConfig(cloud.config, { [key]: siblingId }),
+    };
+    yield* save({ operation: "upsert", instanceId: cloudId, instance: next }, {}, authorize);
+    return summarize(cloudId, next);
+  });
 
   const uniqueId = (instances: Readonly<Record<string, unknown>>, base: string) => {
     const slug = base.replace(/[^a-zA-Z0-9_-]/gu, "-").replace(/^[^a-zA-Z]+/u, "") || "provider";
@@ -409,237 +410,225 @@ const make = Effect.gen(function* () {
     next: { call: "goat_provider_diagnose" },
   });
 
-  const applyLocal = (
+  const applyLocal = Effect.fn("ProviderSettings.applyLocal")(function* (
     request: ProviderSettingsRequest,
     authorize: Effect.Effect<void, ServerSettingsError>,
-  ): Effect.Effect<ProviderManageResult, OrchestratorMcpFailure> =>
-    Effect.gen(function* () {
-      const instances = (yield* current).providerInstances;
-      switch (request.action) {
-        case "update": {
-          const { input } = request;
-          const base = resolveEntry(instances, input.instanceId);
-          if (base === undefined)
-            return yield* invalid(
-              `No provider instance ${input.instanceId} on this environment. goat_provider_addable_list lists them.`,
-            );
-          const { displayName: _name, accentColor: _color, ...rest } = base;
-          const displayName =
-            input.displayName === null ? undefined : (input.displayName ?? base.displayName);
-          const accentColor =
-            input.accentColor === null ? undefined : (input.accentColor ?? base.accentColor);
-          const merged =
-            input.config === undefined ? base.config : mergeConfig(base.config, input.config);
-          // Legacy entries keep enabled inside config; turning one on must clear that flag too.
-          const config =
-            input.enabled === true && isRecord(merged) && merged.enabled === false
-              ? mergeConfig(merged, { enabled: null })
-              : merged;
-          const environment = mergeEnvironment(base.environment, input.environment);
-          const next: ProviderInstanceConfig = {
-            ...rest,
-            ...(displayName === undefined ? {} : { displayName }),
-            ...(accentColor === undefined ? {} : { accentColor }),
-            ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
-            ...(config === undefined ? {} : { config }),
-            ...(environment === undefined ? {} : { environment }),
-          };
-          const installed =
-            input.install === true ? yield* install(next, input.instanceId) : undefined;
-          const patch: ServerSettingsPatch =
-            input.defaultModel === undefined
-              ? {}
-              : {
-                  defaultModelSelection: {
-                    instanceId: input.instanceId,
-                    model: input.defaultModel.model,
-                    ...(input.defaultModel.options === undefined
-                      ? {}
-                      : { options: input.defaultModel.options }),
-                  },
-                };
-          yield* save(
-            { operation: "upsert", instanceId: input.instanceId, instance: next },
-            patch,
-            authorize,
+  ) {
+    const instances = (yield* current).providerInstances;
+    switch (request.action) {
+      case "update": {
+        const { input } = request;
+        const base = resolveEntry(instances, input.instanceId);
+        if (base === undefined)
+          return yield* invalid(
+            `No provider instance ${input.instanceId} on this environment. goat_provider_addable_list lists them.`,
           );
-          return applied("update", {
-            instance: summarize(input.instanceId, next),
-            ...(installed === undefined ? {} : { installed }),
-          });
-        }
-        case "add": {
-          const { input } = request;
-          const driver =
-            input.driver ?? (input.acpAgentId === undefined ? undefined : "acpRegistry");
-          if (driver === undefined)
-            return yield* invalid("Pass driver, or acpAgentId for an ACP Registry agent.");
-          if (!DRIVER_KINDS.has(driver))
-            return yield* invalid(
-              `GOAT has no provider driver ${driver}. goat_provider_addable_list lists them.`,
-            );
-          if (input.acpAgentId !== undefined && driver !== "acpRegistry")
-            return yield* invalid("acpAgentId needs the acpRegistry driver.");
-          const config = mergeConfig(
-            input.acpAgentId !== undefined
-              ? { source: "registry", agentId: input.acpAgentId, distribution: "auto" }
-              : driver === "codex"
-                ? { setupMode: "existing" }
-                : {},
-            input.config,
-          );
-          const instanceId = input.instanceId ?? uniqueId(instances, input.acpAgentId ?? driver);
-          if (Object.hasOwn(instances, instanceId))
-            return yield* invalid(
-              `Provider instance ${instanceId} already exists. Change it with goat_provider_update.`,
-            );
-          const environment = mergeEnvironment(undefined, input.environment);
-          const instance: ProviderInstanceConfig = {
-            driver: ProviderDriverKind.make(driver),
-            enabled: input.enabled ?? true,
-            ...(input.displayName === undefined ? {} : { displayName: input.displayName }),
-            ...(Object.keys(config).length === 0 ? {} : { config }),
-            ...(environment === undefined || environment.length === 0 ? {} : { environment }),
-          };
-          const wantsInstall =
-            driver === "acpRegistry" && config.source !== "local" && (input.install ?? true);
-          const installed = wantsInstall ? yield* install(instance, instanceId) : undefined;
-          yield* save({ operation: "create", instanceId, instance }, {}, authorize);
-          const linked =
-            input.linkTo === undefined
-              ? undefined
-              : yield* link(input.linkTo, instanceId, authorize);
-          return applied("add", {
-            instance: summarize(instanceId, instance),
-            ...(linked === undefined ? {} : { linked }),
-            ...(installed === undefined ? {} : { installed }),
-          });
-        }
-        case "link": {
-          const linked = yield* link(
-            request.input.instanceId,
-            request.input.siblingInstanceId,
-            authorize,
-          );
-          const sibling = resolveEntry(
-            (yield* current).providerInstances,
-            request.input.siblingInstanceId,
-          );
-          return applied("link", {
-            instance:
-              sibling === undefined ? null : summarize(request.input.siblingInstanceId, sibling),
-            linked,
-          });
-        }
-        case "remove": {
-          const { instanceId } = request.input;
-          if (!Object.hasOwn(instances, instanceId))
-            return yield* invalid(
-              `Provider instance ${instanceId} has no Settings entry to remove.`,
-            );
-          yield* save({ operation: "remove", instanceId }, {}, authorize);
-          return applied("remove", { instance: null });
-        }
+        const { displayName: _name, accentColor: _color, ...rest } = base;
+        const displayName =
+          input.displayName === null ? undefined : (input.displayName ?? base.displayName);
+        const accentColor =
+          input.accentColor === null ? undefined : (input.accentColor ?? base.accentColor);
+        const merged =
+          input.config === undefined ? base.config : mergeConfig(base.config, input.config);
+        // Legacy entries keep enabled inside config; turning one on must clear that flag too.
+        const config =
+          input.enabled === true && isRecord(merged) && merged.enabled === false
+            ? mergeConfig(merged, { enabled: null })
+            : merged;
+        const environment = mergeEnvironment(base.environment, input.environment);
+        const next: ProviderInstanceConfig = {
+          ...rest,
+          ...(displayName === undefined ? {} : { displayName }),
+          ...(accentColor === undefined ? {} : { accentColor }),
+          ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
+          ...(config === undefined ? {} : { config }),
+          ...(environment === undefined ? {} : { environment }),
+        };
+        const installed =
+          input.install === true ? yield* install(next, input.instanceId) : undefined;
+        const patch: ServerSettingsPatch =
+          input.defaultModel === undefined
+            ? {}
+            : {
+                defaultModelSelection: {
+                  instanceId: input.instanceId,
+                  model: input.defaultModel.model,
+                  ...(input.defaultModel.options === undefined
+                    ? {}
+                    : { options: input.defaultModel.options }),
+                },
+              };
+        yield* save(
+          { operation: "upsert", instanceId: input.instanceId, instance: next },
+          patch,
+          authorize,
+        );
+        return applied("update", {
+          instance: summarize(input.instanceId, next),
+          ...(installed === undefined ? {} : { installed }),
+        });
       }
-    });
+      case "add": {
+        const { input } = request;
+        const driver = input.driver ?? (input.acpAgentId === undefined ? undefined : "acpRegistry");
+        if (driver === undefined)
+          return yield* invalid("Pass driver, or acpAgentId for an ACP Registry agent.");
+        if (!DRIVER_KINDS.has(driver))
+          return yield* invalid(
+            `GOAT has no provider driver ${driver}. goat_provider_addable_list lists them.`,
+          );
+        if (input.acpAgentId !== undefined && driver !== "acpRegistry")
+          return yield* invalid("acpAgentId needs the acpRegistry driver.");
+        const config = mergeConfig(
+          input.acpAgentId !== undefined
+            ? { source: "registry", agentId: input.acpAgentId, distribution: "auto" }
+            : driver === "codex"
+              ? { setupMode: "existing" }
+              : {},
+          input.config,
+        );
+        const instanceId = input.instanceId ?? uniqueId(instances, input.acpAgentId ?? driver);
+        if (Object.hasOwn(instances, instanceId))
+          return yield* invalid(
+            `Provider instance ${instanceId} already exists. Change it with goat_provider_update.`,
+          );
+        const environment = mergeEnvironment(undefined, input.environment);
+        const instance: ProviderInstanceConfig = {
+          driver: ProviderDriverKind.make(driver),
+          enabled: input.enabled ?? true,
+          ...(input.displayName === undefined ? {} : { displayName: input.displayName }),
+          ...(Object.keys(config).length === 0 ? {} : { config }),
+          ...(environment === undefined || environment.length === 0 ? {} : { environment }),
+        };
+        const wantsInstall =
+          driver === "acpRegistry" && config.source !== "local" && (input.install ?? true);
+        const installed = wantsInstall ? yield* install(instance, instanceId) : undefined;
+        yield* save({ operation: "create", instanceId, instance }, {}, authorize);
+        const linked =
+          input.linkTo === undefined ? undefined : yield* link(input.linkTo, instanceId, authorize);
+        return applied("add", {
+          instance: summarize(instanceId, instance),
+          ...(linked === undefined ? {} : { linked }),
+          ...(installed === undefined ? {} : { installed }),
+        });
+      }
+      case "link": {
+        const linked = yield* link(
+          request.input.instanceId,
+          request.input.siblingInstanceId,
+          authorize,
+        );
+        const sibling = resolveEntry(
+          (yield* current).providerInstances,
+          request.input.siblingInstanceId,
+        );
+        return applied("link", {
+          instance:
+            sibling === undefined ? null : summarize(request.input.siblingInstanceId, sibling),
+          linked,
+        });
+      }
+      case "remove": {
+        const { instanceId } = request.input;
+        if (!Object.hasOwn(instances, instanceId))
+          return yield* invalid(`Provider instance ${instanceId} has no Settings entry to remove.`);
+        yield* save({ operation: "remove", instanceId }, {}, authorize);
+        return applied("remove", { instance: null });
+      }
+    }
+  });
 
-  const forward = (
+  const forward = Effect.fn("ProviderSettings.forward")(function* (
     request: ProviderSettingsRequest,
     host: string,
     authorize: Effect.Effect<RuntimeMode, OrchestratorMcpFailure>,
-  ) =>
-    Effect.gen(function* () {
-      const { host: _host, ...args } = request.input;
-      const raw = yield* dispatch
-        .callHostTool(
-          {
-            host,
-            tool: TOOLS[request.action],
-            arguments: args,
-            writes: true,
-            timeoutMs: REMOTE_DEADLINE_MS,
-            approvals: false,
-            // Reached only after this machine admitted the caller or a person's approval.
-            providersManage: true,
-            requireReady: true,
-          },
-          authorize,
-        )
-        .pipe(
-          Effect.mapError((error) =>
-            error instanceof Dispatch.SshRemoteDispatchError
-              ? failure(
-                  error.reason === "invalid_request" || error.reason === "host_unknown"
-                    ? "invalid_request"
-                    : "orchestration_error",
-                  error.reason === "remote_refused" && error.remoteCode === undefined
-                    ? `${host} refused ${TOOLS[request.action]}: ${error.message} Update GOAT there if it does not have this tool yet.`
-                    : error.message,
-                )
-              : error,
-          ),
-        );
-      const result = yield* decodeRemote(raw).pipe(
-        Effect.mapError(() =>
-          failure(
-            "orchestration_error",
-            `Update GOAT on ${host}: it returned an unreadable result.`,
-          ),
+  ) {
+    const { host: _host, ...args } = request.input;
+    const raw = yield* dispatch
+      .callHostTool(
+        {
+          host,
+          tool: TOOLS[request.action],
+          arguments: args,
+          writes: true,
+          timeoutMs: REMOTE_DEADLINE_MS,
+          approvals: false,
+          // Reached only after this machine admitted the caller or a person's approval.
+          providersManage: true,
+          requireReady: true,
+        },
+        authorize,
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          error instanceof Dispatch.SshRemoteDispatchError
+            ? failure(
+                error.reason === "invalid_request" || error.reason === "host_unknown"
+                  ? "invalid_request"
+                  : "orchestration_error",
+                error.reason === "remote_refused" && error.remoteCode === undefined
+                  ? `${host} refused ${TOOLS[request.action]}: ${error.message} Update GOAT there if it does not have this tool yet.`
+                  : error.message,
+              )
+            : error,
         ),
       );
-      return { ...result, host };
-    });
+    const result = yield* decodeRemote(raw).pipe(
+      Effect.mapError(() =>
+        failure("orchestration_error", `Update GOAT on ${host}: it returned an unreadable result.`),
+      ),
+    );
+    return { ...result, host };
+  });
 
-  const requestApproval = (request: ProviderSettingsRequest, scope: McpInvocationScope) =>
-    Effect.gen(function* () {
-      if (scope.thread === undefined) return yield* denied("Only a thread can ask for approval.");
-      yield* authorizeApprovalRequest(scope).pipe(
-        Effect.mapError((error) => denied(error.message)),
+  const requestApproval = Effect.fn("ProviderSettings.requestApproval")(function* (
+    request: ProviderSettingsRequest,
+    scope: McpInvocationScope,
+  ) {
+    if (scope.thread === undefined) return yield* denied("Only a thread can ask for approval.");
+    yield* authorizeApprovalRequest(scope).pipe(Effect.mapError((error) => denied(error.message)));
+    const view = yield* threads
+      .getThreadSnapshot(scope.thread.threadId)
+      .pipe(
+        Effect.mapError(() => failure("orchestration_error", "The calling thread is unavailable.")),
       );
-      const view = yield* threads
-        .getThreadSnapshot(scope.thread.threadId)
-        .pipe(
-          Effect.mapError(() =>
-            failure("orchestration_error", "The calling thread is unavailable."),
-          ),
-        );
-      const run = view.projection.runs.at(-1);
-      if (!run || run.rootNodeId === null)
-        return yield* invalid("Ask again from a thread with an active turn.");
-      const where = request.input.host ?? (yield* HostProcess.Hostname);
-      const handoff = yield* handoffs
-        .create({
-          kind: "approval",
-          title: "Change provider settings?",
-          reason: "An agent asked to change provider settings.",
-          requestedBy: {
-            threadId: scope.thread.threadId,
-            providerInstanceId: scope.thread.providerInstanceId,
-            path: PROVIDER_SETTINGS_HANDOFF_PATH,
-          },
-          target: { environmentId: scope.environmentId, path: PROVIDER_SETTINGS_HANDOFF_PATH },
-          runId: run.id,
-          nodeId: run.rootNodeId,
-          human: {
-            location: `On ${where}: ${describeRequest(request)} GOAT applies it when you approve.`,
-          },
-          args: { version: 1, request },
-          expiresAt: DateTime.add(yield* DateTime.now, { minutes: 30 }),
-        })
-        .pipe(Effect.mapError(() => failure("orchestration_error", "Could not ask for approval.")));
-      yield* audit(
-        { actor: `thread:${scope.thread.threadId}`, profile: "approval" },
-        request,
-        "needs_human",
-        handoff.handoffId,
-      );
-      return {
-        kind: "needs_human" as const,
-        handoff,
-        next: { after: "approval" as const, call: "goat_provider_diagnose" as const },
-        ...(request.input.host === undefined ? {} : { host: request.input.host }),
-      };
-    });
+    const run = view.projection.runs.at(-1);
+    if (!run || run.rootNodeId === null)
+      return yield* invalid("Ask again from a thread with an active turn.");
+    const where = request.input.host ?? (yield* HostProcess.Hostname);
+    const handoff = yield* handoffs
+      .create({
+        kind: "approval",
+        title: "Change provider settings?",
+        reason: "An agent asked to change provider settings.",
+        requestedBy: {
+          threadId: scope.thread.threadId,
+          providerInstanceId: scope.thread.providerInstanceId,
+          path: PROVIDER_SETTINGS_HANDOFF_PATH,
+        },
+        target: { environmentId: scope.environmentId, path: PROVIDER_SETTINGS_HANDOFF_PATH },
+        runId: run.id,
+        nodeId: run.rootNodeId,
+        human: {
+          location: `On ${where}: ${describeRequest(request)} GOAT applies it when you approve.`,
+        },
+        args: { version: 1, request },
+        expiresAt: DateTime.add(yield* DateTime.now, { minutes: 30 }),
+      })
+      .pipe(Effect.mapError(() => failure("orchestration_error", "Could not ask for approval.")));
+    yield* audit(
+      { actor: `thread:${scope.thread.threadId}`, profile: "approval" },
+      request,
+      "needs_human",
+      handoff.handoffId,
+    );
+    return {
+      kind: "needs_human" as const,
+      handoff,
+      next: { after: "approval" as const, call: "goat_provider_diagnose" as const },
+      ...(request.input.host === undefined ? {} : { host: request.input.host }),
+    };
+  });
 
   const manage = Effect.fn("ProviderSettings.manage")(function* (
     request: ProviderSettingsRequest,
@@ -702,69 +691,39 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const execute = (
+  const execute = Effect.fn("ProviderSettings.execute")(function* (
     path: typeof PROVIDER_SETTINGS_HANDOFF_PATH | typeof PROVIDER_SETUP_HANDOFF_PATH,
     entry: {
       readonly handoff: Handoff;
       readonly args: Readonly<Record<string, unknown>>;
       readonly approvedBySessionId: AuthSessionId;
     },
-  ) =>
-    Effect.gen(function* () {
-      const person = { actor: `client:${entry.approvedBySessionId}`, profile: "person" };
-      const expiresAt = entry.handoff.expiresAt;
-      if (
-        expiresAt !== null &&
-        DateTime.toEpochMillis(expiresAt) <= DateTime.toEpochMillis(yield* DateTime.now)
-      )
-        return yield* new HandoffError({ reason: "invalid_request" });
-      if (path === PROVIDER_SETUP_HANDOFF_PATH) {
-        // A setup approval for an instance turns it on; adding and signing in happen in the window.
-        const intent = yield* decodeSetupIntent(entry.args).pipe(
-          Effect.mapError(() => new HandoffError({ reason: "invalid_request" })),
-        );
-        if (intent.instanceId === undefined) return;
-        const entryNow = resolveEntry(
-          (yield* current.pipe(Effect.mapError(() => new HandoffError({ reason: "unavailable" }))))
-            .providerInstances,
-          intent.instanceId,
-        );
-        if (entryNow === undefined || entryNow.enabled === true) return;
-        const request: ProviderSettingsRequest = {
-          action: "update",
-          input: { instanceId: intent.instanceId, enabled: true },
-        };
-        const outcome = yield* Effect.exit(
-          applyLocal(request, approverHolds(entry.approvedBySessionId, [AuthProvidersManageScope])),
-        );
-        yield* audit(
-          person,
-          request,
-          Exit.isSuccess(outcome) ? "applied" : "failed",
-          entry.handoff.handoffId,
-        );
-        if (Exit.isFailure(outcome)) return yield* new HandoffError({ reason: "invalid_request" });
-        return;
-      }
-      const { request } = yield* decodeApproval(entry.args).pipe(
+  ) {
+    const person = { actor: `client:${entry.approvedBySessionId}`, profile: "person" };
+    const expiresAt = entry.handoff.expiresAt;
+    if (
+      expiresAt !== null &&
+      DateTime.toEpochMillis(expiresAt) <= DateTime.toEpochMillis(yield* DateTime.now)
+    )
+      return yield* new HandoffError({ reason: "invalid_request" });
+    if (path === PROVIDER_SETUP_HANDOFF_PATH) {
+      // A setup approval for an instance turns it on; adding and signing in happen in the window.
+      const intent = yield* decodeSetupIntent(entry.args).pipe(
         Effect.mapError(() => new HandoffError({ reason: "invalid_request" })),
       );
-      const scopes: ReadonlyArray<AuthEnvironmentScope> =
-        request.action === "update" && request.input.defaultModel !== undefined
-          ? [AuthProvidersManageScope, AuthSettingsWriteScope]
-          : [AuthProvidersManageScope];
-      const host = request.input.host;
+      if (intent.instanceId === undefined) return;
+      const entryNow = resolveEntry(
+        (yield* current.pipe(Effect.mapError(() => new HandoffError({ reason: "unavailable" }))))
+          .providerInstances,
+        intent.instanceId,
+      );
+      if (entryNow === undefined || entryNow.enabled === true) return;
+      const request: ProviderSettingsRequest = {
+        action: "update",
+        input: { instanceId: intent.instanceId, enabled: true },
+      };
       const outcome = yield* Effect.exit(
-        host === undefined
-          ? applyLocal(request, approverHolds(entry.approvedBySessionId, scopes))
-          : forward(
-              request,
-              host,
-              approverHolds(entry.approvedBySessionId, scopes).pipe(
-                Effect.as("full-access" as RuntimeMode),
-                Effect.mapError(() => denied("The approving person cannot manage providers.")),
-              ),
-            ),
+        applyLocal(request, approverHolds(entry.approvedBySessionId, [AuthProvidersManageScope])),
       );
       yield* audit(
         person,
@@ -773,7 +732,36 @@ const make = Effect.gen(function* () {
         entry.handoff.handoffId,
       );
       if (Exit.isFailure(outcome)) return yield* new HandoffError({ reason: "invalid_request" });
-    });
+      return;
+    }
+    const { request } = yield* decodeApproval(entry.args).pipe(
+      Effect.mapError(() => new HandoffError({ reason: "invalid_request" })),
+    );
+    const scopes: ReadonlyArray<AuthEnvironmentScope> =
+      request.action === "update" && request.input.defaultModel !== undefined
+        ? [AuthProvidersManageScope, AuthSettingsWriteScope]
+        : [AuthProvidersManageScope];
+    const host = request.input.host;
+    const outcome = yield* Effect.exit(
+      host === undefined
+        ? applyLocal(request, approverHolds(entry.approvedBySessionId, scopes))
+        : forward(
+            request,
+            host,
+            approverHolds(entry.approvedBySessionId, scopes).pipe(
+              Effect.as("full-access" as RuntimeMode),
+              Effect.mapError(() => denied("The approving person cannot manage providers.")),
+            ),
+          ),
+    );
+    yield* audit(
+      person,
+      request,
+      Exit.isSuccess(outcome) ? "applied" : "failed",
+      entry.handoff.handoffId,
+    );
+    if (Exit.isFailure(outcome)) return yield* new HandoffError({ reason: "invalid_request" });
+  });
 
   const consume = (
     path: typeof PROVIDER_SETTINGS_HANDOFF_PATH | typeof PROVIDER_SETUP_HANDOFF_PATH,
@@ -797,18 +785,20 @@ const make = Effect.gen(function* () {
   return ProviderSettings.of({
     manage,
     presentDiagnosis,
-    respond: (input, sessionId) =>
-      Effect.gen(function* () {
-        const handoff = yield* handoffs.respond(input, sessionId);
-        const path = handoff.target.path;
-        if (!isAppliedPath(path) || handoff.state !== "completed") return handoff;
-        const entry = (yield* handoffs.completedProviderContinuations(path)).find(
-          (candidate) => candidate.handoff.handoffId === handoff.handoffId,
-        );
-        if (entry === undefined) return handoff;
-        yield* consume(path, entry);
-        return handoff;
-      }).pipe(lock.withPermits(1)),
+    respond: Effect.fn("ProviderSettings.respond")(function* (
+      input: HandoffRespondInput,
+      sessionId: AuthSessionId,
+    ) {
+      const handoff = yield* handoffs.respond(input, sessionId);
+      const path = handoff.target.path;
+      if (!isAppliedPath(path) || handoff.state !== "completed") return handoff;
+      const entry = (yield* handoffs.completedProviderContinuations(path)).find(
+        (candidate) => candidate.handoff.handoffId === handoff.handoffId,
+      );
+      if (entry === undefined) return handoff;
+      yield* consume(path, entry);
+      return handoff;
+    }, lock.withPermits(1)),
     resumeContinuations: Effect.gen(function* () {
       for (const path of paths)
         for (const entry of yield* handoffs.completedProviderContinuations(path))

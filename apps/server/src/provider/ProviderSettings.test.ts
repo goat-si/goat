@@ -181,6 +181,8 @@ const setup = Effect.fn("ProviderSettingsTest.setup")(function* (fixture: Fixtur
               }),
           }),
           Layer.mock(SessionStore.SessionStore)({
+            cookieName: "goat_session",
+            legacyCookieName: undefined,
             listActive: () =>
               Effect.succeed([
                 {
@@ -391,17 +393,17 @@ it.effect("adds Devin from the ACP Registry and links it to Devin Cloud", () =>
       );
       expect(fixture.prepared).toEqual(["devin"]);
       const instances = yield* fixture.instances;
-      expect(instances.devin).toMatchObject({
+      expect(instances[ProviderInstanceId.make("devin")]).toMatchObject({
         driver: "acpRegistry",
         enabled: true,
         config: { source: "registry", agentId: "devin", distribution: "auto" },
       });
-      expect(instances.devinCloud).toEqual({
+      expect(instances[ProviderInstanceId.make("devinCloud")]).toEqual({
         driver: "devinCloud",
         enabled: true,
         config: { siblingInstanceId: "devin" },
       });
-      assert.strictEqual(result.kind, "applied");
+      assert(result.kind === "applied");
       expect(result.installed).toEqual({ agentId: "devin", version: "3000.11.1" });
       expect(result.instance?.environment).toEqual(["DEVIN_TOKEN"]);
       expect(result.linked?.instanceId).toBe("devinCloud");
@@ -484,7 +486,7 @@ it.effect("approving provider setup for an instance turns that instance on", () 
         { threadId, handoffId: TurnItemId.make("handoff:1"), action: "completed" },
         "person-session" as never,
       );
-      expect((yield* fixture.instances).cursor?.enabled).toBe(true);
+      expect((yield* fixture.instances)[ProviderInstanceId.make("cursor")]?.enabled).toBe(true);
     }),
   ),
 );
