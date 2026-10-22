@@ -29,27 +29,21 @@ import {
   decodeCheckpoint,
   decodeFailureCode,
   decodeFailureEnvironment,
-  decodeHoldClass,
   decodeLocalIntent,
   decodeOperation,
   decodeReport,
-  decodeTicket,
   executionCodec,
   fenceCodec,
   handleCodec,
   headsCodec,
-  holdRearmResult,
   hubEntryCodec,
-  hubReceiptCodec,
   identityCodec,
   lineageForRevision,
   localMetadataCodec,
   metadataCodec,
   metadataOf,
   payloadCodec,
-  projectionCodec,
   provenanceCodec,
-  pullRetryCodec,
   receiptCodec,
   resolutionCodec,
   resolutionPayloadCodec,
@@ -58,28 +52,22 @@ import {
   snapshotId,
   stagedCheckpointCodec,
   stored,
-  storedTicketRowCodec,
   stringArrayCodec,
   suppressionCodec,
   suppressionKeyCodec,
   threadCodec,
   workMetadataCodec,
-  workRows,
 } from "./store/StoreCodecs.ts";
-import type { WorkRow } from "./store/StoreCodecs.ts";
 import {
   AdminRecordSchema,
   CheckpointTokenGuardSchema,
-  HoldClass,
   HubAttemptReplay,
   LocalMemoryIntent,
   MemoryCapacityError,
   MemoryStorageError,
   MemoryStoreConflict,
   MemoryWork,
-  TicketRowSchema,
   Transaction,
-  emptyPullRetry,
   hasSourceEvidence,
   hashText,
   resolutionReportId,
@@ -92,10 +80,6 @@ import type {
   HubCheckpointHandle,
   HubMember,
   IntentIdentityInput,
-  MemoryHoldClass,
-  TicketKey,
-  TicketOwner,
-  TicketRow,
 } from "./store/StoreModel.ts";
 import type { MemoryStoreShape } from "./store/StoreShape.ts";
 import { makeStoreKernel } from "./store/StoreKernel.ts";
@@ -117,6 +101,9 @@ import { makeProjectBindings } from "./store/ProjectBindings.ts";
 import { makeStorageMaintenance } from "./store/StorageMaintenance.ts";
 import { makeCompaction } from "./store/Compaction.ts";
 import { makeRevertIntents } from "./store/RevertIntents.ts";
+import { makeClaimCandidates } from "./store/ClaimCandidates.ts";
+import { makeSyncHolds } from "./store/SyncHolds.ts";
+import { makeResolutionTickets } from "./store/ResolutionTickets.ts";
 
 export { decodeCompactReceipt, encodeCompactReceipt } from "./store/CompactReceipt.ts";
 export { ImportCompletedNoopCodec, ImportNoopResultCodec } from "./store/StoreCodecs.ts";
@@ -200,7 +187,6 @@ const make = Effect.gen(function* () {
   const {
     receipt,
     readAncestry,
-    readPending,
     readItem,
     readResolutionSnapshot,
     readResolutionHeads,
@@ -275,7 +261,6 @@ const make = Effect.gen(function* () {
     commitThreadHook,
     dueWork,
     claimWork,
-    clearTerminalSubmission,
     finishWork,
   } = workQueue;
   const outbox = makeOutbox(kernel, coreReads, revertResults, itemWrites, importLineage, workQueue);
@@ -313,295 +298,52 @@ const make = Effect.gen(function* () {
   const compaction = makeCompaction(kernel);
   const { prunePayloads, forgetLocalIntent, cleanupDerived } = compaction;
   const revertIntents = makeRevertIntents(kernel, coreReads, revertResults, itemWrites);
-  const { stageRevertIntent, storeUsageForRevert } = revertIntents;
+  const { stageRevertIntent } = revertIntents;
+  const claimCandidates = makeClaimCandidates(kernel, coreReads, itemWrites, workQueue);
+  const {
+    readDueClaimCandidates,
+    findClaimCandidate,
+    recoverClaimCandidates,
+    claimCandidate,
+    retryClaimCandidate,
+    completeClaimCandidate,
+    persistResolutionTicket,
+  } = claimCandidates;
+  const syncHolds = makeSyncHolds(kernel, coreReads);
+  const {
+    acquireSyncWorkTx,
+    retrySyncWorkTx,
+    readPullRetry,
+    readPersistedHoldClasses,
+    writePullRetryTx,
+    readWorkHold,
+    rearmSyncHoldsTx,
+  } = syncHolds;
+  const resolutionTickets = makeResolutionTickets(
+    kernel,
+    coreReads,
+    workQueue,
+    claimCandidates,
+    revertIntents,
+    syncHolds,
+  );
+  const {
+    prepareClaimAttemptTx,
+    readRecoverableResolutionTickets,
+    acquireResolutionTicketTx,
+    transitionResolutionTicketTx,
+    reconcileResolutionSubmissionTx,
+    retireRejectedSubmissionTx,
+    renewResolutionTicketTx,
+    failResolutionTicketTx,
+    holdClaimCandidateTx,
+    holdResolutionAttemptTx,
+    rearmResolutionHoldsTx,
+    persistResolutionSubmissionTx,
+    listMaterializableIntents,
+    assignIntentIdentityTx,
+  } = resolutionTickets;
 
-  const unresolvedSubmission = (
-    space: string | ReturnType<typeof sql.unsafe>,
-    memoryId: string | ReturnType<typeof sql.unsafe>,
-  ) => sql`EXISTS (
-    SELECT 1 FROM memory_outbox r WHERE r.space=${space} AND r.memory_id=${memoryId}
-    AND r.kind='resolve' AND r.status IN ('pending','retry','running')
-    AND (json_extract(r.ticket_json,'$.submission') IS NOT NULL
-      OR json_extract(r.ticket_json,'$.approval.outcome') != 'rejected') LIMIT 1
-  )`;
-  const readDueClaimCandidates = Effect.fn("MemoryStore.readDueClaimCandidates")(function* (
-    limit: number,
-    now: number,
-    memorySpaceId: M.MemorySpaceId,
-  ) {
-    return yield* workRows(
-      yield* stored(
-        "claim-candidates",
-        sql<WorkRow>`SELECT o.* FROM memory_outbox o JOIN memory_items i ON i.space=o.space AND i.memory_id=o.memory_id WHERE o.space=${memorySpaceId} AND o.kind='claim' AND o.status IN ('pending','retry') AND o.next_attempt_at<=${now} AND i.status='quarantined' AND NOT ${unresolvedSubmission(sql.unsafe("o.space"), sql.unsafe("o.memory_id"))} AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=i.space AND f.memory_id=i.memory_id) AND NOT EXISTS (SELECT 1 FROM json_each(i.availability_json,'$.reasons') r WHERE r.value IN ('scanner_pending','secret_detected','missing_parent','dependency_invalidated','forget_pending')) ORDER BY o.next_attempt_at,o.id LIMIT ${Math.max(0, Math.min(limit, M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS))}`,
-      ),
-    );
-  });
-  const findClaimCandidate: MemoryStore["Service"]["findClaimCandidate"] = Effect.fn(
-    "MemoryStore.findClaimCandidate",
-  )(function* (input) {
-    let candidateId = input.candidateId;
-    if (candidateId === undefined) {
-      const tickets = yield* stored(
-        "claim-ticket-key",
-        sql<{
-          ticket_json: string | null;
-        }>`SELECT ticket_json FROM memory_outbox WHERE id=${`resolve:${input.memorySpaceId}:${input.attemptId}`} AND space=${input.memorySpaceId}`,
-      );
-      if (!tickets[0]?.ticket_json) return null;
-      const row = yield* storedTicketRowCodec.decode(tickets[0].ticket_json, strict);
-      candidateId = `claim:${input.memorySpaceId}:${row.ticket.memoryId}:${hashText(yield* headsCodec.encode(row.ticket.conflictHeadSet))}`;
-    }
-    const rows = yield* stored(
-      "claim-keyed",
-      sql<WorkRow>`SELECT o.* FROM memory_outbox o WHERE o.id=${candidateId} AND o.space=${input.memorySpaceId} AND o.kind='claim' AND json_extract(o.frozen_claim_json,'$.attemptId')=${input.attemptId}`,
-    );
-    return (yield* workRows(rows))[0] ?? null;
-  });
-  const recoverClaimCandidates = Effect.fn("MemoryStore.recoverClaimCandidates")(function* (
-    now: number,
-  ) {
-    yield* transact(
-      Effect.gen(function* () {
-        // Each sweep freezes its tail for a cycle, so continuously appended rows
-        // cannot postpone revisiting an older frontier or orphan forever.
-        const advance = (dimension: string, value: number) =>
-          stored(
-            "claim-sweep-advance",
-            sql`INSERT INTO memory_quota_counters(space,dimension,scope_key,value) VALUES ('_claim_recovery',${dimension},'',${value}) ON CONFLICT(space,dimension,scope_key) DO UPDATE SET value=excluded.value`,
-          );
-        const sweep = Effect.fnUntraced(function* (
-          dimension: string,
-          table: "memory_items" | "memory_outbox",
-        ) {
-          const rows = yield* stored(
-            "claim-sweep-cursor",
-            sql<{
-              dimension: string;
-              value: number;
-            }>`SELECT dimension,value FROM memory_quota_counters WHERE space='_claim_recovery' AND dimension IN (${dimension},${`${dimension}_upper`}) AND scope_key=''`,
-          );
-          let after = rows.find((r) => r.dimension === dimension)?.value ?? 0;
-          let upper = rows.find((r) => r.dimension === `${dimension}_upper`)?.value ?? 0;
-          if (after >= upper) {
-            after = 0;
-            const tail = yield* stored(
-              "claim-sweep-upper",
-              sql.unsafe<{ rowid: number }>(
-                `SELECT rowid FROM ${table} ORDER BY rowid DESC LIMIT 1`,
-              ),
-            );
-            upper = tail[0]?.rowid ?? 0;
-            yield* advance(`${dimension}_upper`, upper);
-          }
-          return { after, upper };
-        });
-        const cancel = Effect.fnUntraced(function* (id: string) {
-          const tickets = yield* stored(
-            "claim-recovery-ticket",
-            sql<{
-              ticket_json: string;
-            }>`SELECT ticket_json FROM memory_outbox WHERE id=${id} AND kind='resolve' AND ticket_json IS NOT NULL`,
-          );
-          if (tickets[0]) {
-            const row = yield* storedTicketRowCodec.decode(tickets[0].ticket_json, strict);
-            if (row.submission || (row.approval && row.approval.outcome !== "rejected")) {
-              if (!row.reconcileRequired) {
-                // Recovery invalidates generation, never the durable result. Do not hydrate bodies.
-                yield* stored(
-                  "claim-recovery-reconcile",
-                  sql`UPDATE memory_outbox SET ticket_json=${yield* storedTicketRowCodec.encode({ ...row, reconcileRequired: true, version: row.version + 1 })},sync_version=sync_version+1 WHERE id=${id} AND sync_version=${row.version}`,
-                );
-              }
-              return;
-            }
-          }
-          yield* clearTerminalSubmission(id);
-          yield* stored(
-            "claim-cancel",
-            sql`UPDATE memory_outbox SET status='cancelled',claimed_by=NULL,claimed_until=NULL,terminal_at=${now},sync_version=sync_version+CASE WHEN kind='claim' THEN 1 ELSE 0 END WHERE id=${id}`,
-          );
-        });
-        const frontier = yield* sweep("frontier", "memory_items");
-        const rows = yield* stored(
-          "claim-frontiers",
-          sql<{
-            rowid: number;
-            space: string;
-            memory_id: string;
-            item_json: string;
-          }>`SELECT rowid,space,memory_id,item_json FROM memory_items WHERE rowid>${frontier.after} AND rowid<=${frontier.upper} ORDER BY rowid LIMIT ${M.MEMORY_PAGE_MAX_ITEMS}`,
-        );
-        yield* advance("frontier", rows.at(-1)?.rowid ?? frontier.upper);
-        for (const row of rows) {
-          const item = yield* projectionCodec.decode(row.item_json, strict);
-          const unusable = item.localAvailability.reasons.some((r) =>
-            [
-              "scanner_pending",
-              "secret_detected",
-              "missing_parent",
-              "dependency_invalidated",
-              "forget_pending",
-            ].includes(r),
-          );
-          const eligible =
-            item.status === "quarantined" &&
-            !unusable &&
-            !(yield* readPending(item.memorySpaceId, item.memoryId));
-          const work = yield* stored(
-            "claim-frontier-work",
-            sql<WorkRow>`SELECT * FROM memory_outbox WHERE space=${row.space} AND memory_id=${row.memory_id} AND kind IN ('claim','resolve') AND status NOT IN ('completed','cancelled','failed') ORDER BY id LIMIT ${M.MEMORY_WORK_MAX_PENDING_ITEMS}`,
-          );
-          for (const candidate of yield* workRows(work)) {
-            const heads =
-              candidate.metadata.kind === "claim"
-                ? candidate.metadata.sortedHeads
-                : candidate.metadata.kind === "resolve" && "ticket" in candidate.metadata
-                  ? candidate.metadata.ticket.conflictHeadSet
-                  : [];
-            if (
-              !eligible ||
-              item.status !== "quarantined" ||
-              !sameHeadSet(heads, item.conflict.heads)
-            )
-              yield* cancel(candidate.id);
-            else if (
-              candidate.kind === "claim" &&
-              candidate.status === "running" &&
-              candidate.claimedUntil !== null &&
-              candidate.claimedUntil <= now
-            ) {
-              yield* stored(
-                "claim-recovery",
-                sql`UPDATE memory_outbox SET status='retry',claimed_by=NULL,claimed_until=NULL WHERE id=${candidate.id}`,
-              );
-            }
-          }
-          if (!eligible || item.status !== "quarantined") continue;
-          if (
-            (yield* stored(
-              "claim-recovery-barrier",
-              sql`SELECT 1 WHERE ${unresolvedSubmission(row.space, row.memory_id)}`,
-            )).length
-          )
-            continue;
-          const headSetDigest = hashText(yield* headsCodec.encode(item.conflict.heads));
-          const candidateId = `claim:${row.space}:${row.memory_id}:${headSetDigest}`;
-          // An exposure hold can clear without changing heads. Its cancelled
-          // attempt stays fenced, but the eligible frontier may start a new one.
-          yield* stored(
-            "claim-rearm",
-            sql`UPDATE memory_outbox SET status='pending',frozen_claim_json=NULL,sync_version=sync_version+1,terminal_at=NULL,next_attempt_at=${now},claimed_by=NULL,claimed_until=NULL WHERE id=${candidateId} AND kind='claim' AND status='cancelled'`,
-          );
-          yield* enqueueWork({
-            id: candidateId,
-            space: row.space,
-            memoryId: item.memoryId,
-            kind: "claim",
-            status: "pending",
-            metadata: {
-              kind: "claim",
-              conflictId: item.conflict.conflictId,
-              sortedHeads: item.conflict.heads,
-              headSetDigest,
-            },
-            payloadRef: null,
-            attempt: 0,
-            nextAttemptAt: now,
-            claimedBy: null,
-            claimedUntil: null,
-          });
-        }
-        const orphan = yield* sweep("orphan", "memory_outbox");
-        // Bound inspected history before filtering kinds. Unrelated rows still
-        // advance the frozen cursor but never reach the work metadata decoder.
-        const work = yield* stored(
-          "claim-gone",
-          sql<{
-            rowid: number;
-            id: string | null;
-            gone: number;
-          }>`WITH page AS MATERIALIZED (
-            SELECT rowid FROM memory_outbox WHERE rowid>${orphan.after} AND rowid<=${orphan.upper}
-            ORDER BY rowid LIMIT ${M.MEMORY_PAGE_MAX_ITEMS}
-          ) SELECT page.rowid,o.id,NOT EXISTS(SELECT 1 FROM memory_items i WHERE i.space=o.space AND i.memory_id=o.memory_id) AS gone
-          FROM page LEFT JOIN memory_outbox o ON o.rowid=page.rowid AND o.kind IN ('claim','resolve')
-          ORDER BY page.rowid`,
-        );
-        yield* advance("orphan", work.at(-1)?.rowid ?? orphan.upper);
-        for (const row of work)
-          if (row.id !== null && row.gone) {
-            const candidate = yield* readWork(row.id);
-            if (
-              candidate &&
-              ["claim", "resolve"].includes(candidate.kind) &&
-              !["completed", "cancelled", "failed"].includes(candidate.status)
-            )
-              yield* cancel(row.id);
-          }
-      }),
-    );
-  });
-  const claimCandidate = Effect.fn("MemoryStore.claimCandidate")(function* (
-    id: string,
-    epoch: number,
-    now: number,
-  ) {
-    const rows = yield* stored(
-      "claim-cas",
-      sql`UPDATE memory_outbox SET status='running',claimed_by=${String(epoch)},claimed_until=${now + M.MEMORY_LEASE_MS},attempt=attempt+1 WHERE id=${id} AND attempt<2147483647 AND kind='claim' AND status IN ('pending','retry') AND next_attempt_at<=${now} AND NOT ${unresolvedSubmission(sql.unsafe("memory_outbox.space"), sql.unsafe("memory_outbox.memory_id"))} AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=memory_outbox.space AND f.memory_id=memory_outbox.memory_id) RETURNING id`,
-    );
-    return rows.length === 1;
-  });
-  const retryClaimCandidate = Effect.fn("MemoryStore.retryClaimCandidate")(function* (
-    id: string,
-    nextAttemptAt: number,
-    _failure: M.MemoryFailureCode,
-    leaseExpiresAt?: number,
-  ) {
-    yield* stored(
-      "claim-retry",
-      sql`UPDATE memory_outbox SET status='retry',next_attempt_at=${Math.max(nextAttemptAt, leaseExpiresAt ?? 0)},claimed_by=NULL,claimed_until=NULL WHERE id=${id} AND kind='claim'`,
-    );
-  });
-  const completeClaimCandidate = (id: string) => finishWork(id, "completed");
-  const persistResolutionTicket = Effect.fn("MemoryStore.persistResolutionTicket")(function* (
-    input: M.MemoryResolutionLease,
-  ) {
-    yield* transact(
-      Effect.gen(function* () {
-        const ticket = yield* stored("ticket-codec", decodeTicket(input, strict));
-        yield* enqueueWork({
-          id: `resolve:${ticket.memorySpaceId}:${ticket.attemptId}`,
-          space: ticket.memorySpaceId,
-          memoryId: ticket.memoryId,
-          kind: "resolve",
-          status: "pending",
-          metadata: { kind: "resolve", ticket },
-          payloadRef: null,
-          attempt: 0,
-          nextAttemptAt: 0,
-          claimedBy: null,
-          claimedUntil: null,
-        });
-        const row: TicketRow = {
-          ticket,
-          version: 0,
-          state: "recoverable",
-          owner: null,
-          coordinatorEpoch: 0,
-          ownedUntil: null,
-          nextAttemptAt: 0,
-          submission: null,
-          submissionDigest: null,
-          approval: null,
-        };
-        yield* stored(
-          "ticket-initialize",
-          sql`UPDATE memory_outbox SET ticket_json=${yield* codec(TicketRowSchema).encode(row)} WHERE id=${`resolve:${ticket.memorySpaceId}:${ticket.attemptId}`} AND ticket_json IS NULL`,
-        );
-      }),
-    );
-  });
   const normalizeExpiredReports = Effect.fn("MemoryStore.normalizeExpiredReports")(function* (
     now: number,
     owner?: M.EnvironmentId,
@@ -1436,822 +1178,6 @@ const make = Effect.gen(function* () {
     if (rows.length !== 1) return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
   });
 
-  const acquireSyncWorkTx: MemoryStore["Service"]["acquireSyncWorkTx"] = Effect.fn(
-    "MemoryStore.acquireSyncWorkTx",
-  )(function* (input) {
-    yield* Transaction;
-    if (input.ownedUntil <= input.now) return null;
-    const op = yield* readWorkOperation(input.workId);
-    if (
-      !op ||
-      op.operationId !== input.operationId ||
-      hashText(M.encodeMemoryOperation(op)) !== input.operationDigest
-    )
-      return null;
-    const rows = yield* stored(
-      "sync-acquire",
-      sql`
-      UPDATE memory_outbox SET status='running', claimed_by=${input.owner}, claimed_until=${input.ownedUntil},
-        sync_version=sync_version+1, operation_digest=${input.operationDigest}, attempt=min(attempt+1,2147483647)
-      WHERE id=${input.workId} AND kind IN ('sync','revert_intent') AND sync_version=${input.expectedVersion}
-        AND (operation_digest IS NULL OR operation_digest=${input.operationDigest}) AND next_attempt_at<=${input.now}
-        AND (status IN ('pending','retry') OR (status='running' AND claimed_until<=${input.now})) RETURNING id`,
-    );
-    return rows.length
-      ? {
-          workId: input.workId,
-          operationId: input.operationId,
-          operationDigest: input.operationDigest,
-          owner: input.owner,
-          version: input.expectedVersion + 1,
-          ownedUntil: input.ownedUntil,
-        }
-      : null;
-  });
-  const retrySyncWorkTx: MemoryStore["Service"]["retrySyncWorkTx"] = Effect.fn(
-    "MemoryStore.retrySyncWorkTx",
-  )(function* (input) {
-    yield* Transaction;
-    const o = input.ownership;
-    if ((input.nextAttemptAt === Number.MAX_SAFE_INTEGER) !== (input.holdClass !== undefined))
-      return yield* new MemoryStoreConflict({ code: "invalid_output" });
-    if (input.nextAttemptAt < input.now) return false;
-    const rows = yield* stored(
-      "sync-retry",
-      sql`
-      UPDATE memory_outbox SET status='retry', next_attempt_at=${input.nextAttemptAt}, failure_code=${input.failureCode},hold_class=${input.holdClass ?? null}, claimed_by=NULL, claimed_until=NULL, sync_version=sync_version+1
-      WHERE id=${o.workId} AND kind IN ('sync','revert_intent') AND status='running' AND claimed_by=${o.owner}
-        AND sync_version=${o.version} AND operation_digest=${o.operationDigest} AND claimed_until=${o.ownedUntil} AND claimed_until>${input.now} RETURNING id`,
-    );
-    return rows.length === 1;
-  });
-  const readPullRetry: MemoryStore["Service"]["readPullRetry"] = Effect.fn(
-    "MemoryStore.readPullRetry",
-  )(function* (input) {
-    const rows = yield* stored(
-      "pull-retry",
-      sql<{
-        pull_retry_json: string | null;
-      }>`SELECT pull_retry_json FROM memory_sync_cursors WHERE space=${input.memorySpaceId} AND hub_environment_id=${input.hubEnvironmentId}`,
-    );
-    return rows[0]?.pull_retry_json
-      ? yield* pullRetryCodec.decode(rows[0].pull_retry_json, strict)
-      : emptyPullRetry;
-  });
-  // Discovery observes presence, not rearm authority. Outbox work belongs to
-  // the space; only pull retry is scoped to the current hub binding.
-  const readPersistedHoldClasses: MemoryStore["Service"]["readPersistedHoldClasses"] = Effect.fn(
-    "MemoryStore.readPersistedHoldClasses",
-  )(function* (input) {
-    // Observational probes need no write transaction or checkpoint accounting.
-    // Rearm authority and mutations are checked separately inside transact.
-    const pull = yield* readPullRetry(input);
-    const classes: MemoryHoldClass[] = [];
-    for (const holdClass of HoldClass.literals) {
-      const held = yield* stored(
-        "persisted-hold-discovery",
-        sql`SELECT 1 FROM memory_outbox INDEXED BY memory_outbox_held_class
-              WHERE space=${input.memorySpaceId} AND hold_class=${holdClass}
-                AND hold_class IS NOT NULL AND next_attempt_at=9007199254740991
-                AND kind IN ('sync','revert_intent','claim','resolve')
-                AND status IN ('pending','retry','running') LIMIT 1`,
-      );
-      if (
-        held.length ||
-        (pull.nextAttemptAt === Number.MAX_SAFE_INTEGER && pull.holdClass === holdClass)
-      )
-        classes.push(holdClass);
-    }
-    return classes;
-  });
-  const writePullRetryTx: MemoryStore["Service"]["writePullRetryTx"] = Effect.fn(
-    "MemoryStore.writePullRetryTx",
-  )(function* (input) {
-    yield* Transaction;
-    const current = yield* readPullRetry(input);
-    if (current.version !== input.expectedVersion) return null;
-    if (
-      (input.retry.nextAttemptAt === Number.MAX_SAFE_INTEGER) !==
-      (input.retry.holdClass !== null)
-    )
-      return yield* new MemoryStoreConflict({ code: "invalid_output" });
-    const next = { ...input.retry, version: current.version + 1 };
-    const json = yield* pullRetryCodec.encode(next);
-    const rows = yield* stored(
-      "pull-retry-write",
-      sql`INSERT INTO memory_sync_cursors(space,hub_environment_id,after_sequence,bootstrap_state,pull_retry_json)
-      VALUES (${input.memorySpaceId},${input.hubEnvironmentId},0,'unbound',${json})
-      ON CONFLICT(space,hub_environment_id) DO UPDATE SET pull_retry_json=excluded.pull_retry_json
-      WHERE coalesce(json_extract(memory_sync_cursors.pull_retry_json,'$.version'),0)=${input.expectedVersion} RETURNING space`,
-    );
-    return rows.length === 1 ? next : null;
-  });
-  const readWorkHold: MemoryStore["Service"]["readWorkHold"] = Effect.fn(
-    "MemoryStore.readWorkHold",
-  )(function* (workId) {
-    const rows = yield* stored(
-      "work-hold",
-      sql<{
-        hold_class: string | null;
-        failure_code: string | null;
-      }>`SELECT hold_class,failure_code FROM memory_outbox WHERE id=${workId}`,
-    );
-    const row = rows[0];
-    if (!row) return null;
-    return {
-      holdClass: row.hold_class
-        ? yield* stored("hold-codec", decodeHoldClass(row.hold_class))
-        : null,
-      failureCode: row.failure_code
-        ? yield* stored("failure-codec", decodeFailureCode(row.failure_code))
-        : null,
-    };
-  });
-  // Page the existing ID primary key before applying class/space/state filters. Filtering in
-  // SQL would make LIMIT bound matches rather than inspected history, and can force a sort.
-  const readHoldRearmPage = (afterId: string, limit: number) =>
-    stored(
-      "hold-rearm-page",
-      sql<{
-        id: string;
-        space: string;
-        kind: string;
-        status: string;
-        next_attempt_at: number;
-        hold_class: string | null;
-      }>`SELECT id,space,kind,status,next_attempt_at,hold_class
-      FROM memory_outbox WHERE id>${afterId} ORDER BY id LIMIT ${Math.max(0, Math.min(limit, M.MEMORY_PAGE_MAX_ITEMS))}`,
-    );
-  const rearmSyncHoldsTx: MemoryStore["Service"]["rearmSyncHoldsTx"] = Effect.fn(
-    "MemoryStore.rearmSyncHoldsTx",
-  )(function* (input) {
-    yield* Transaction;
-    const rows = yield* readHoldRearmPage(input.afterId, input.limit);
-    const changed: string[] = [];
-    for (const row of rows) {
-      if (
-        row.space !== input.memorySpaceId ||
-        !["sync", "revert_intent"].includes(row.kind) ||
-        row.status !== "retry" ||
-        row.next_attempt_at !== Number.MAX_SAFE_INTEGER ||
-        row.hold_class !== input.holdClass
-      )
-        continue;
-      const updated = yield* stored(
-        "sync-hold-rearm",
-        sql`UPDATE memory_outbox SET hold_class=NULL,failure_code=NULL,next_attempt_at=${input.now},sync_version=sync_version+1 WHERE id=${row.id} RETURNING id`,
-      );
-      if (updated.length) changed.push(row.id);
-    }
-    return holdRearmResult(rows, changed, input.limit);
-  });
-
-  const encodeTicketRow = (row: TicketRow) =>
-    storedTicketRowCodec.encode({
-      ...row,
-      submission: row.submission
-        ? {
-            ...row.submission,
-            operation: metadataOf(row.submission.operation),
-          }
-        : null,
-    });
-  const submissionMatchesTicket = (
-    submission: M.MemoryHubApplyResolutionInput,
-    ticket: M.MemoryResolutionLease,
-  ) => {
-    const op = submission.operation;
-    return (
-      op.kind === "resolve" &&
-      submission.memorySpaceId === ticket.memorySpaceId &&
-      submission.attemptId === ticket.attemptId &&
-      submission.holderEnvironmentId === ticket.holderEnvironmentId &&
-      op.memorySpaceId === ticket.memorySpaceId &&
-      op.memoryId === ticket.memoryId &&
-      op.originEnvironmentId === ticket.holderEnvironmentId &&
-      op.conflictId === ticket.conflictId &&
-      op.fencingToken === ticket.fencingToken &&
-      op.resolution.fencingToken === ticket.fencingToken &&
-      op.resolution.resolvingEnvironmentId === ticket.holderEnvironmentId &&
-      sameHeadSet(op.expectedHeads, ticket.conflictHeadSet) &&
-      sameHeadSet(op.revision.parents, ticket.conflictHeadSet) &&
-      sameHeadSet(op.resolution.inputRevisionIds, ticket.conflictHeadSet) &&
-      JSON.stringify(op.resolution.requestedModelSelection) ===
-        JSON.stringify(ticket.frozenDefaultModelSelection)
-    );
-  };
-  const decodeTicketRow = Effect.fnUntraced(function* (json: string) {
-    const row = yield* stored("ticket-decode", storedTicketRowCodec.decode(json, strict));
-    if (!row.submission) return { ...row, submission: null };
-    const bodies = yield* stored(
-      "ticket-body",
-      sql<{
-        body_json: string;
-      }>`SELECT body_json FROM memory_payloads WHERE space=${row.ticket.memorySpaceId} AND payload_ref=${`submission:${row.ticket.attemptId}`}`,
-    );
-    if (!bodies[0])
-      return yield* new MemoryStorageError({ stage: "ticket-payload", cause: undefined });
-    const submission = yield* stored(
-      "ticket-submission",
-      codec(M.MemoryHubApplyResolutionInput).decode(bodies[0].body_json, strict),
-    );
-    if (
-      !submissionMatchesTicket(submission, row.ticket) ||
-      hashText(M.encodeMemoryOperation(submission.operation)) !== row.submissionDigest ||
-      (yield* metadataCodec.encode(metadataOf(submission.operation))) !==
-        (yield* metadataCodec.encode(row.submission.operation))
-    )
-      return yield* new MemoryStorageError({ stage: "ticket-payload-identity", cause: undefined });
-    return { ...row, submission };
-  });
-  const prepareClaimAttemptTx: MemoryStore["Service"]["prepareClaimAttemptTx"] = Effect.fn(
-    "MemoryStore.prepareClaimAttemptTx",
-  )(function* (input) {
-    yield* Transaction;
-    const now = yield* Clock.currentTimeMillis;
-    const rows = yield* stored(
-      "claim-prepare",
-      sql<WorkRow & { sync_version: number; frozen_claim_json: string | null }>`
-      SELECT o.* FROM memory_outbox o JOIN memory_items i ON i.space=o.space AND i.memory_id=o.memory_id
-      WHERE o.id=${input.candidateId} AND o.space=${input.memorySpaceId} AND o.kind='claim' AND o.sync_version=${input.expectedGeneration}
-      AND o.status IN ('pending','retry','running') AND o.next_attempt_at<=${now} AND i.status='quarantined' AND NOT ${unresolvedSubmission(sql.unsafe("o.space"), sql.unsafe("o.memory_id"))}
-      AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=i.space AND f.memory_id=i.memory_id)`,
-    );
-    const row = rows[0];
-    if (!row || row.memory_id === null) return null;
-    const current = yield* loadAggregate(
-      input.memorySpaceId,
-      M.MemoryId.make(row.memory_id),
-      {},
-      {},
-    );
-    if (
-      !sameHeadSet(current.heads, input.conflictHeads) ||
-      current.item?.localAvailability.reasons.some((r) =>
-        [
-          "scanner_pending",
-          "secret_detected",
-          "missing_parent",
-          "dependency_invalidated",
-          "forget_pending",
-        ].includes(r),
-      )
-    )
-      return null;
-    const work = (yield* workRows(rows))[0]!;
-    if (work.metadata.kind !== "claim") return null;
-    if (row.frozen_claim_json)
-      return {
-        claim: yield* claimCodec.decode(row.frozen_claim_json, strict),
-        generation: row.sync_version,
-      };
-    if (!input.proposedClaim) return null;
-    const claim = yield* stored(
-      "claim-input",
-      claimCodec.decode(yield* claimCodec.encode(input.proposedClaim), strict),
-    );
-    if (
-      claim.memorySpaceId !== input.memorySpaceId ||
-      claim.memoryId !== row.memory_id ||
-      claim.conflictId !== work.metadata.conflictId ||
-      !sameHeadSet(claim.conflictHeadSet, input.conflictHeads)
-    )
-      return yield* new MemoryStoreConflict({ code: "conflict_changed" });
-    const claimed = yield* stored(
-      "claim-persist",
-      sql`UPDATE memory_outbox SET frozen_claim_json=${yield* claimCodec.encode(claim)} WHERE id=${input.candidateId} AND sync_version=${input.expectedGeneration} AND frozen_claim_json IS NULL RETURNING id`,
-    );
-    return claimed.length ? { claim, generation: input.expectedGeneration } : null;
-  });
-  const readRecoverableResolutionTickets: MemoryStore["Service"]["readRecoverableResolutionTickets"] =
-    Effect.fn("MemoryStore.readRecoverableResolutionTickets")(function* (input) {
-      const rows = yield* stored(
-        "ticket-recovery",
-        sql<{
-          ticket_json: string;
-        }>`SELECT ticket_json FROM memory_outbox WHERE space=${input.memorySpaceId} AND kind='resolve' AND status NOT IN ('cancelled','completed','failed') AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=memory_outbox.space AND f.memory_id=memory_outbox.memory_id) AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=memory_outbox.space AND t.memory_id=memory_outbox.memory_id) AND ticket_json IS NOT NULL AND json_extract(ticket_json,'$.state')!='terminal' AND json_extract(ticket_json,'$.nextAttemptAt')<=${input.now} AND (json_extract(ticket_json,'$.ownedUntil') IS NULL OR json_extract(ticket_json,'$.ownedUntil')<=${input.now}) ORDER BY next_attempt_at,id LIMIT ${Math.max(0, Math.min(input.limit, M.MEMORY_PAGE_MAX_ITEMS))}`,
-      );
-      return yield* Effect.forEach(rows, (row) => decodeTicketRow(row.ticket_json));
-    });
-  const ticketId = (key: TicketKey) => `resolve:${key.memorySpaceId}:${key.attemptId}`;
-  const readTicket = Effect.fnUntraced(function* (key: TicketKey) {
-    const rows = yield* stored(
-      "ticket-read",
-      sql<{
-        ticket_json: string | null;
-      }>`SELECT ticket_json FROM memory_outbox WHERE id=${ticketId(key)} AND status NOT IN ('cancelled','completed','failed') AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=memory_outbox.space AND f.memory_id=memory_outbox.memory_id) AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=memory_outbox.space AND t.memory_id=memory_outbox.memory_id)`,
-    );
-    return rows[0]?.ticket_json ? yield* decodeTicketRow(rows[0].ticket_json) : null;
-  });
-  const ownedTicket = Effect.fnUntraced(function* (o: TicketOwner, now: number) {
-    const row = yield* readTicket(o);
-    return row &&
-      row.state !== "terminal" &&
-      row.version === o.version &&
-      row.owner === o.owner &&
-      row.coordinatorEpoch === o.coordinatorEpoch &&
-      row.ownedUntil !== null &&
-      row.ownedUntil > now
-      ? row
-      : null;
-  });
-  const writeTicket = Effect.fnUntraced(function* (
-    key: TicketKey,
-    row: TicketRow,
-    expectedVersion: number,
-  ) {
-    const changed = yield* stored(
-      "ticket-write",
-      sql`UPDATE memory_outbox SET ticket_json=${yield* encodeTicketRow(row)},sync_version=${row.version},next_attempt_at=${row.nextAttemptAt} WHERE id=${ticketId(key)} AND sync_version=${expectedVersion} RETURNING id`,
-    );
-    return changed.length ? row : null;
-  });
-  const acquireResolutionTicketTx: MemoryStore["Service"]["acquireResolutionTicketTx"] = Effect.fn(
-    "MemoryStore.acquireResolutionTicketTx",
-  )(function* (input) {
-    yield* Transaction;
-    const row = yield* readTicket(input.key);
-    if (
-      !row ||
-      row.state === "terminal" ||
-      row.version !== input.expectedVersion ||
-      row.nextAttemptAt > input.now ||
-      (row.ownedUntil !== null && row.ownedUntil > input.now) ||
-      input.ownedUntil <= input.now
-    )
-      return null;
-    return yield* writeTicket(
-      input.key,
-      {
-        ...row,
-        version: row.version + 1,
-        owner: input.owner,
-        coordinatorEpoch: input.coordinatorEpoch,
-        ownedUntil: input.ownedUntil,
-      },
-      row.version,
-    );
-  });
-  const transitionResolutionTicketTx: MemoryStore["Service"]["transitionResolutionTicketTx"] =
-    Effect.fn("MemoryStore.transitionResolutionTicketTx")(function* (input) {
-      yield* Transaction;
-      const row = yield* ownedTicket(input.ownership, input.now);
-      if (!row) return null;
-      if (input.retireClaim) {
-        const definitiveRejected =
-          input.approval?.outcome === "rejected" &&
-          row.submission !== null &&
-          input.approval.operationId === row.submission.operation.operationId &&
-          input.approval.memoryId === row.ticket.memoryId &&
-          input.approval.operationDigest === row.submissionDigest &&
-          (!row.approval ||
-            (row.approval.outcome === "rejected" &&
-              row.approval.operationDigest === input.approval.operationDigest &&
-              row.approval.operationId === input.approval.operationId));
-        if (
-          input.nextState !== "terminal" ||
-          input.retireClaim.attemptId !== row.ticket.attemptId ||
-          ((row.approval || input.approval || row.state === "submitting") && !definitiveRejected)
-        )
-          return yield* new MemoryStoreConflict({ code: "revision_changed" });
-        const retired = yield* stored(
-          "claim-retire",
-          sql`UPDATE memory_outbox SET frozen_claim_json=NULL,sync_version=sync_version+1,status='retry',claimed_by=NULL,claimed_until=NULL,next_attempt_at=${input.nextAttemptAt}
-        WHERE space=${input.ownership.memorySpaceId} AND kind='claim' AND ${input.retireClaim.candidateId === undefined ? sql`1` : sql`id=${input.retireClaim.candidateId}`} AND sync_version=${input.retireClaim.expectedGeneration}
-        AND json_extract(frozen_claim_json,'$.attemptId')=${input.retireClaim.attemptId} RETURNING id`,
-        );
-        if (retired.length !== 1) return null;
-      }
-      const next: TicketRow = {
-        ...row,
-        state: input.nextState,
-        version: row.version + 1,
-        ownedUntil: input.ownedUntil,
-        nextAttemptAt: input.nextAttemptAt,
-        approval: input.approval ?? row.approval,
-        owner: input.ownedUntil === null ? null : row.owner,
-      };
-      const updated = yield* writeTicket(input.ownership, next, row.version);
-      if (updated && input.nextState === "terminal") {
-        yield* clearTerminalSubmission(ticketId(input.ownership));
-        yield* stored(
-          "terminal-resolution-work",
-          sql`UPDATE memory_outbox SET status=${updated.approval?.outcome === "rejected" ? "failed" : "completed"},terminal_at=${input.now} WHERE id=${ticketId(input.ownership)}`,
-        );
-        return {
-          ...updated,
-          state: "terminal" as const,
-          version: updated.version + 1,
-          submission: null,
-          submissionDigest: null,
-          owner: null,
-          ownedUntil: null,
-        };
-      }
-      return updated;
-    });
-  const reconcileResolutionSubmissionTx: MemoryStore["Service"]["reconcileResolutionSubmissionTx"] =
-    Effect.fn("MemoryStore.reconcileResolutionSubmissionTx")(function* (input) {
-      yield* Transaction;
-      const row = yield* ownedTicket(input.ownership, input.now);
-      if (!row?.submission || !row.submissionDigest) return null;
-      const op = row.submission.operation;
-      // All receipt sources are uniquely keyed by (space, operationId). Absence is uncertainty,
-      // including compacted/offline logs; a changed frontier alone is never negative proof.
-      const receipts = yield* stored(
-        "resolution-admission-keyed",
-        sql<{ operation_digest: string; receipt_json: string }>`
-        SELECT operation_digest,receipt_json FROM memory_events WHERE memory_space_id=${input.ownership.memorySpaceId} AND operation_id=${op.operationId}
-        UNION ALL SELECT operation_digest,receipt_json FROM memory_compact_receipts WHERE space=${input.ownership.memorySpaceId} AND operation_id=${op.operationId}
-        UNION ALL SELECT json_extract(record_json,'$.receipt.operationDigest'),json_extract(record_json,'$.receipt') FROM memory_import_keys WHERE space=${input.ownership.memorySpaceId} AND key_kind='hubReceipt' AND key=${op.operationId} LIMIT 3`,
-      );
-      let admitted: M.MemoryHubReceipt | undefined;
-      for (const canonical of receipts) {
-        if (canonical.operation_digest !== row.submissionDigest)
-          return yield* new MemoryStoreConflict({ code: "operation_id_reused" });
-        const value = yield* receiptCodec.decode(canonical.receipt_json, strict);
-        if ("hubSequence" in value) {
-          if (
-            admitted &&
-            (yield* hubReceiptCodec.encode(admitted)) !== (yield* hubReceiptCodec.encode(value))
-          )
-            return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-          admitted = value;
-        }
-      }
-      const evidence = admitted ?? row.approval ?? input.rejection;
-      const result = evidence
-        ? yield* hubReceiptCodec.decode(yield* hubReceiptCodec.encode(evidence), strict)
-        : undefined;
-      if (!result) return { outcome: "uncertain" as const, row };
-      if (
-        result.operationId !== op.operationId ||
-        result.memoryId !== row.ticket.memoryId ||
-        result.operationDigest !== row.submissionDigest ||
-        !M.validateMemoryResolutionApproval(
-          op.kind,
-          op.kind === "resolve" ? op.resolution.resolutionId : null,
-          result,
-        )
-      )
-        return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-      if (
-        input.rejection &&
-        (input.rejection.outcome !== "rejected" ||
-          input.rejection.operationId !== op.operationId ||
-          input.rejection.operationDigest !== row.submissionDigest ||
-          input.rejection.memoryId !== row.ticket.memoryId)
-      )
-        return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-      if (result.outcome !== "rejected") {
-        if (result.hubSequence === null)
-          return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-        const updated = yield* writeTicket(
-          input.ownership,
-          { ...row, state: "approved", approval: result, version: row.version + 1 },
-          row.version,
-        );
-        return updated ? { outcome: "admitted" as const, row: updated, receipt: result } : null;
-      }
-      if (row.approval && row.approval.outcome !== "rejected")
-        return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-      const candidateId = `claim:${row.ticket.memorySpaceId}:${row.ticket.memoryId}:${hashText(yield* headsCodec.encode(row.ticket.conflictHeadSet))}`;
-      yield* stored(
-        "reconcile-rejected-claim",
-        sql`UPDATE memory_outbox SET frozen_claim_json=NULL,sync_version=sync_version+1,status='retry',terminal_at=NULL,claimed_by=NULL,claimed_until=NULL,next_attempt_at=${input.now} WHERE id=${candidateId} AND kind='claim' AND json_extract(frozen_claim_json,'$.attemptId')=${row.ticket.attemptId}`,
-      );
-      const updated = yield* transitionResolutionTicketTx({
-        ownership: input.ownership,
-        now: input.now,
-        nextState: "terminal",
-        ownedUntil: null,
-        nextAttemptAt: input.now,
-        approval: result,
-      });
-      if (!updated) return yield* new MemoryStoreConflict({ code: "fenced" });
-      return { outcome: "retired" as const, row: updated };
-    });
-  const retireRejectedSubmissionTx: MemoryStore["Service"]["retireRejectedSubmissionTx"] =
-    Effect.fn("MemoryStore.retireRejectedSubmissionTx")(function* (input) {
-      yield* Transaction;
-      const row = yield* ownedTicket(input.ownership, input.now);
-      if (!row) return null;
-      const rejection = yield* hubReceiptCodec.decode(
-        yield* hubReceiptCodec.encode(input.rejection),
-        strict,
-      );
-      if (
-        rejection.outcome !== "rejected" ||
-        !row.submission ||
-        rejection.operationId !== row.submission.operation.operationId ||
-        rejection.memoryId !== row.ticket.memoryId ||
-        rejection.operationDigest !== row.submissionDigest ||
-        (row.approval && row.approval.outcome !== "rejected") ||
-        input.nextAttemptAt < input.now
-      )
-        return yield* new MemoryStoreConflict({ code: "revision_changed" });
-      return yield* transitionResolutionTicketTx({
-        ownership: input.ownership,
-        nextState: "terminal",
-        now: input.now,
-        ownedUntil: null,
-        nextAttemptAt: input.nextAttemptAt,
-        approval: rejection,
-        retireClaim: {
-          candidateId: input.candidateId,
-          expectedGeneration: input.expectedGeneration,
-          attemptId: row.ticket.attemptId,
-        },
-      });
-    });
-  const renewResolutionTicketTx: MemoryStore["Service"]["renewResolutionTicketTx"] = Effect.fn(
-    "MemoryStore.renewResolutionTicketTx",
-  )(function* (input) {
-    yield* Transaction;
-    const row = yield* ownedTicket(input.ownership, input.now);
-    if (
-      !row ||
-      row.state === "terminal" ||
-      row.ticket.expiresAtHubTime !== input.expectedExpiresAtHubTime
-    )
-      return null;
-    const renewed = yield* stored("renewed-ticket-codec", decodeTicket(input.renewedLease, strict));
-    const old = row.ticket;
-    if (
-      renewed.memorySpaceId !== old.memorySpaceId ||
-      renewed.memoryId !== old.memoryId ||
-      renewed.conflictId !== old.conflictId ||
-      renewed.attemptId !== old.attemptId ||
-      renewed.holderEnvironmentId !== old.holderEnvironmentId ||
-      renewed.fencingToken !== old.fencingToken ||
-      renewed.claimedAtHubTime !== old.claimedAtHubTime ||
-      renewed.attemptDeadlineHubTime !== old.attemptDeadlineHubTime ||
-      !sameHeadSet(renewed.conflictHeadSet, old.conflictHeadSet) ||
-      (yield* selectionCodec.encode(renewed.frozenDefaultModelSelection)) !==
-        (yield* selectionCodec.encode(old.frozenDefaultModelSelection)) ||
-      Date.parse(renewed.expiresAtHubTime) < Date.parse(old.expiresAtHubTime)
-    )
-      return yield* new MemoryStoreConflict({ code: "fenced" });
-    return yield* writeTicket(
-      input.ownership,
-      { ...row, ticket: renewed, version: row.version + 1 },
-      row.version,
-    );
-  });
-  const failResolutionTicketTx: MemoryStore["Service"]["failResolutionTicketTx"] = Effect.fn(
-    "MemoryStore.failResolutionTicketTx",
-  )(function* (input) {
-    yield* Transaction;
-    const row = yield* ownedTicket(input.ownership, input.now);
-    if (!row || row.state === "terminal" || row.approval) return null;
-    if (
-      input.nextAttemptAt < input.now ||
-      (input.nextAttemptAt === Number.MAX_SAFE_INTEGER) !== (input.holdClass !== undefined)
-    )
-      return yield* new MemoryStoreConflict({ code: "invalid_output" });
-    // An uncertain submission is preserved and is never announced as a failed conflict.
-    if (input.reportConflictFailure && row.submission)
-      return yield* new MemoryStoreConflict({ code: "revision_changed" });
-    const next = yield* writeTicket(
-      input.ownership,
-      {
-        ...row,
-        version: row.version + 1,
-        state: row.submission ? "submitting" : "recoverable",
-        owner: null,
-        ownedUntil: null,
-        nextAttemptAt: input.nextAttemptAt,
-      },
-      row.version,
-    );
-    if (!next) return null;
-    yield* stored(
-      "ticket-failure",
-      sql`UPDATE memory_outbox SET hold_class=${input.holdClass ?? null},failure_code=${input.failureCode} WHERE id=${ticketId(input.ownership)} AND sync_version=${next.version}`,
-    );
-    if (input.reportConflictFailure) {
-      const reportId = hashText(
-        `${row.ticket.memorySpaceId}:${row.ticket.attemptId}:conflict-failed`,
-      );
-      yield* stored(
-        "conflict-failure-report",
-        sql`INSERT INTO memory_report_outbox(report_id,space,memory_id,operation_id,resolution_id,attempt_id,resolving_environment_id,outcome,state,failure_code,created_at,report_kind,report_approved,attempts_known)
-        SELECT ${reportId},${row.ticket.memorySpaceId},${row.ticket.memoryId},${row.ticket.attemptId},NULL,${row.ticket.attemptId},${row.ticket.holderEnvironmentId},'failed','pending',${input.failureCode},${input.now},'conflict_failure',1,1
-        WHERE NOT EXISTS (SELECT 1 FROM memory_import_keys WHERE space=${row.ticket.memorySpaceId} AND key_kind='report_delivered' AND key=${reportId}) ON CONFLICT(report_id) DO NOTHING`,
-      );
-      yield* markRunnable;
-    }
-    return next;
-  });
-  const holdClaimCandidateTx: MemoryStore["Service"]["holdClaimCandidateTx"] = Effect.fn(
-    "MemoryStore.holdClaimCandidateTx",
-  )(function* (input) {
-    yield* Transaction;
-    const rows = yield* stored(
-      "claim-hold",
-      sql`UPDATE memory_outbox SET status='retry',hold_class=${input.holdClass},failure_code=${input.failureCode},next_attempt_at=${Number.MAX_SAFE_INTEGER},claimed_by=NULL,claimed_until=NULL
-      WHERE id=${input.candidateId} AND space=${input.memorySpaceId} AND kind='claim' AND status='running' AND sync_version=${input.expectedGeneration}
-      AND attempt=${input.expectedAttempt} AND json_extract(frozen_claim_json,'$.attemptId')=${input.attemptId} AND claimed_by=${String(input.coordinatorEpoch)} AND claimed_until>${input.now} RETURNING id`,
-    );
-    return rows.length === 1;
-  });
-  const holdResolutionAttemptTx: MemoryStore["Service"]["holdResolutionAttemptTx"] = Effect.fn(
-    "MemoryStore.holdResolutionAttemptTx",
-  )(function* (input) {
-    yield* Transaction;
-    const row = yield* ownedTicket(input.ownership, input.now);
-    // Submitted work needs reconciliation. A permanent refusal must never retire its
-    // frozen attempt or manufacture a failure report, including approval-only rows.
-    if (!row || row.submission || row.submissionDigest || row.approval) return null;
-    const candidateId = `claim:${row.ticket.memorySpaceId}:${row.ticket.memoryId}:${hashText(yield* headsCodec.encode(row.ticket.conflictHeadSet))}`;
-    if (input.candidateId !== candidateId) return null;
-    const changed = yield* stored(
-      "resolution-attempt-hold",
-      sql`UPDATE memory_outbox SET status='retry',hold_class=${input.holdClass},failure_code=${input.failureCode},next_attempt_at=${Number.MAX_SAFE_INTEGER},claimed_by=NULL,claimed_until=NULL
-      WHERE id=${input.candidateId} AND space=${row.ticket.memorySpaceId} AND memory_id=${row.ticket.memoryId} AND kind='claim'
-      AND sync_version=${input.expectedGeneration} AND attempt=${input.expectedAttempt}
-      AND json_extract(frozen_claim_json,'$.attemptId')=${row.ticket.attemptId}
-      AND ((status='running' AND claimed_by=${String(input.ownership.coordinatorEpoch)} AND claimed_until>${input.now})
-        OR (status='retry' AND claimed_by IS NULL AND claimed_until IS NULL)) RETURNING id`,
-    );
-    if (changed.length !== 1) return null;
-    const held = yield* failResolutionTicketTx({
-      ownership: input.ownership,
-      now: input.now,
-      failureCode: input.failureCode,
-      nextAttemptAt: Number.MAX_SAFE_INTEGER,
-      holdClass: input.holdClass,
-      reportConflictFailure: false,
-    });
-    // Fail, rather than return null, after the first write so the enclosing Tx rolls
-    // both rows back if the ticket CAS unexpectedly loses its fence.
-    if (!held) return yield* new MemoryStoreConflict({ code: "fenced" });
-    return held;
-  });
-  const rearmResolutionHoldsTx: MemoryStore["Service"]["rearmResolutionHoldsTx"] = Effect.fn(
-    "MemoryStore.rearmResolutionHoldsTx",
-  )(function* (input) {
-    yield* Transaction;
-    const rows = yield* readHoldRearmPage(input.afterId, input.limit);
-    const changed: string[] = [];
-    for (const row of rows) {
-      if (
-        row.space !== input.memorySpaceId ||
-        !["claim", "resolve"].includes(row.kind) ||
-        ["cancelled", "completed", "failed"].includes(row.status) ||
-        row.next_attempt_at !== Number.MAX_SAFE_INTEGER ||
-        row.hold_class !== input.holdClass
-      )
-        continue;
-      if (row.kind === "resolve") {
-        const tickets = yield* stored(
-          "held-ticket",
-          sql<{
-            ticket_json: string | null;
-          }>`SELECT ticket_json FROM memory_outbox WHERE id=${row.id}`,
-        );
-        if (!tickets[0]?.ticket_json) continue;
-        // Rearm is scheduling-only. Decode persisted metadata without reading uncertain
-        // submission bodies; retain that metadata and digest byte-for-byte in the next row.
-        const ticket = yield* stored(
-          "held-ticket-metadata",
-          storedTicketRowCodec.decode(tickets[0].ticket_json, strict),
-        );
-        if (
-          ticket.state === "terminal" ||
-          ticket.approval ||
-          (ticket.ownedUntil !== null && ticket.ownedUntil > input.now)
-        )
-          continue;
-        const next = {
-          ...ticket,
-          version: ticket.version + 1,
-          owner: null,
-          ownedUntil: null,
-          nextAttemptAt: input.now,
-        };
-        const advanced = yield* stored(
-          "held-ticket-rearm",
-          sql`UPDATE memory_outbox SET ticket_json=${yield* storedTicketRowCodec.encode(next)},sync_version=${next.version},next_attempt_at=${input.now}
-          WHERE id=${row.id} AND sync_version=${ticket.version} RETURNING id`,
-        );
-        if (!advanced.length) continue;
-      }
-      const updated = yield* stored(
-        "resolution-hold-rearm",
-        sql`UPDATE memory_outbox SET hold_class=NULL,failure_code=NULL,next_attempt_at=${input.now},claimed_by=NULL,claimed_until=NULL WHERE id=${row.id} AND hold_class=${input.holdClass} RETURNING id`,
-      );
-      if (updated.length) changed.push(row.id);
-    }
-    return holdRearmResult(rows, changed, input.limit);
-  });
-  const persistResolutionSubmissionTx: MemoryStore["Service"]["persistResolutionSubmissionTx"] =
-    Effect.fn("MemoryStore.persistResolutionSubmissionTx")(function* (input) {
-      yield* Transaction;
-      const row = yield* ownedTicket(input.ownership, yield* Clock.currentTimeMillis);
-      if (!row) return yield* new MemoryStoreConflict({ code: "fenced" });
-      const submission = yield* stored(
-        "submission-codec",
-        submissionDecode(input.submission, strict),
-      );
-      if (
-        !submissionMatchesTicket(submission, row.ticket) ||
-        hashText(M.encodeMemoryOperation(submission.operation)) !== input.digest
-      )
-        return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-      if (
-        row.submission &&
-        (row.submissionDigest !== input.digest ||
-          (yield* codec(M.MemoryHubApplyResolutionInput).encode(row.submission)) !==
-            (yield* codec(M.MemoryHubApplyResolutionInput).encode(submission)))
-      )
-        return yield* new MemoryStoreConflict({ code: "operation_id_reused" });
-      if (row.submission) return row;
-      const op = submission.operation;
-      if (op.kind !== "resolve")
-        return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-      const payloadRef = `submission:${row.ticket.attemptId}`;
-      const body = yield* codec(M.MemoryHubApplyResolutionInput).encode(submission);
-      const usage = yield* storeUsageForRevert(op.memorySpaceId);
-      if (usage.bytes + new TextEncoder().encode(body).length > M.MEMORY_WORK_MAX_PAYLOAD_BYTES)
-        return yield* new MemoryStoreConflict({ code: "capacity_exceeded" });
-      yield* stored(
-        "submission-body",
-        sql`INSERT INTO memory_payloads(space,payload_ref,memory_id,body_json,dependencies_json,purge_eligible_after) VALUES (${op.memorySpaceId},${payloadRef},${op.memoryId},${body},${yield* headsCodec.encode(op.payload.derivedFromMemoryRevisions)},${Date.parse(row.ticket.attemptDeadlineHubTime) + M.MEMORY_REPLACED_PAYLOAD_RETENTION_MS})`,
-      );
-      yield* stored(
-        "submission-ref",
-        sql`UPDATE memory_outbox SET payload_ref=${payloadRef} WHERE id=${ticketId(input.ownership)} AND sync_version=${row.version}`,
-      );
-      const updated = yield* writeTicket(
-        input.ownership,
-        {
-          ...row,
-          state: "submitting",
-          version: row.version + 1,
-          submission,
-          submissionDigest: input.digest,
-        },
-        row.version,
-      );
-      if (!updated) return yield* new MemoryStoreConflict({ code: "fenced" });
-      return updated;
-    });
-  const listMaterializableIntents: MemoryStore["Service"]["listMaterializableIntents"] = Effect.fn(
-    "MemoryStore.listMaterializableIntents",
-  )(function* (environment, limit) {
-    const rows = yield* stored(
-      "intent-list",
-      sql<{
-        metadata_json: string;
-        body_json: string;
-      }>`SELECT o.metadata_json,p.body_json FROM memory_outbox o JOIN memory_payloads p ON p.space=o.space AND p.payload_ref=o.payload_ref WHERE o.space=${`_local:${environment}`} AND o.kind='admin' AND o.status IN ('pending','retry') AND json_extract(o.metadata_json,'$.kind')='localIntent' ORDER BY o.id LIMIT ${Math.max(0, Math.min(limit, M.MEMORY_PAGE_MAX_ITEMS))}`,
-    );
-    return yield* Effect.forEach(rows, (row) =>
-      Effect.gen(function* () {
-        const {
-          kind: _kind,
-          mapping: _mapping,
-          ...intent
-        } = yield* localMetadataCodec.decode(row.metadata_json, strict);
-        return { ...intent, payload: yield* payloadCodec.decode(row.body_json, strict) };
-      }),
-    );
-  });
-  const assignIntentIdentityTx: MemoryStore["Service"]["assignIntentIdentityTx"] = Effect.fn(
-    "MemoryStore.assignIntentIdentityTx",
-  )(function* (input) {
-    yield* Transaction;
-    const id = `local:${input.environmentId}:${input.intentId}`;
-    const rows = yield* stored(
-      "intent-assign",
-      sql<{
-        metadata_json: string;
-        body_json: string;
-      }>`SELECT o.metadata_json,p.body_json FROM memory_outbox o JOIN memory_payloads p ON p.space=o.space AND p.payload_ref=o.payload_ref WHERE o.id=${id} AND o.status!='cancelled'`,
-    );
-    if (!rows[0]) return yield* new MemoryStoreConflict({ code: "not_found" });
-    const metadata = yield* localMetadataCodec.decode(rows[0].metadata_json, strict);
-    if (metadata.environmentId !== input.environmentId)
-      return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-    const mapping = metadata.mapping ?? {
-      memorySpaceId: input.memorySpaceId,
-      operationId: input.operationId,
-      revisionId: input.revisionId,
-    };
-    if (mapping.memorySpaceId !== input.memorySpaceId)
-      return yield* new MemoryStoreConflict({ code: "space_mismatch" });
-    if (!metadata.mapping)
-      yield* stored(
-        "intent-assigned",
-        sql`UPDATE memory_outbox SET metadata_json=${yield* localMetadataCodec.encode({ ...metadata, mapping })} WHERE id=${id}`,
-      );
-    const { kind: _kind, mapping: _mapping, ...intent } = metadata;
-    return {
-      ...mapping,
-      intent: { ...intent, payload: yield* payloadCodec.decode(rows[0].body_json, strict) },
-    };
-  });
   type MemberRow = {
     space: string;
     environment: string;
@@ -3474,7 +2400,6 @@ const make = Effect.gen(function* () {
   });
   const hubReceiptDecode = Schema.decodeUnknownEffect(M.MemoryHubReceipt);
   const hubEntryDecode = Schema.decodeUnknownEffect(M.MemoryHubEntry);
-  const submissionDecode = Schema.decodeUnknownEffect(M.MemoryHubApplyResolutionInput);
   const readHubReceiptTx: MemoryStore["Service"]["readHubReceiptTx"] = Effect.fn(
     "MemoryStore.readHubReceiptTx",
   )(function* (space, operationId) {
