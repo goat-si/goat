@@ -187,6 +187,73 @@ describe("ssh tunnel scripts", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
+  it("installs and runs the release archive without Node, npm, or npx", () => {
+    const script = SshTunnel.buildRemoteGoatRunnerScript(ARCHIVE);
+
+    assert.include(script, "GOAT_ARCHIVE_VERSION='1.2.3-preview.20260911.4'");
+    assert.include(script, "GOAT_NODE_SCRIPT_PATH=''");
+    assert.include(
+      script,
+      "GOAT_RELEASE_BASE_URL='https://github.com/goat-si/goat-releases/releases/download'",
+    );
+    assert.include(
+      script,
+      'GOAT_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$GOAT_ARCHIVE_VERSION"',
+    );
+    assert.include(
+      script,
+      'GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.tar.gz"',
+    );
+    assert.include(script, "SHA256SUMS");
+    assert.include(script, 'exec "$GOAT_RUNTIME_DIR/goat" "$@"');
+    assert.notInclude(script, "npx");
+    assert.notInclude(script, "npm exec");
+    assert.notInclude(script, "t3@latest");
+    assert.notInclude(script, 'exec t3 "$@"');
+    // Concurrent launches serialize on a per-version directory lock and recheck
+    // the completion marker after acquiring it.
+    assert.include(
+      script,
+      'GOAT_LOCK="$HOME/.goat/runtime/goat/versions/.$GOAT_ARCHIVE_VERSION.install.lock"',
+    );
+    // Publish the pid before the atomic move, and pin stale cleanup to a cwd.
+    assert.include(script, 'mv "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK"');
+    assert.include(script, 'cd "$GOAT_LOCK" 2>/dev/null || exit 0');
+    assert.include(script, 'if kill -0 "$GOAT_LOCK_OWNER" 2>/dev/null; then exit 2; fi');
+    assert.include(script, 'elif [ "$GOAT_LOCK_UNOWNED" -lt 4 ]; then');
+    assert.include(script, 'if [ "$GOAT_LOCK_WAITED" -ge 360 ]; then');
+    assert.include(script, '"$GOAT_STAGING/SHA256SUMS" 30');
+    assert.include(script, '"$GOAT_STAGING/$GOAT_ARCHIVE" 240');
+    assert.notInclude(script, "-mmin");
+    assert.equal(script.split("if ! goat_runtime_ready; then").length - 1, 2);
+    assert.isBelow(
+      script.indexOf('"$GOAT_STAGING/goat" --version'),
+      script.indexOf('> "$GOAT_STAGING/.install-complete"'),
+    );
+    // Node discovery is defined for the dev path but only ever invoked inside
+    // the node-script branch, which the archive path skips entirely.
+    assert.equal(script.split("ensure_remote_node_path || true").length - 1, 1);
+    assert.isBelow(
+      script.indexOf("ensure_remote_node_path || true"),
+      script.indexOf('exec node "$GOAT_NODE_SCRIPT_PATH" "$@"'),
+    );
+    assert.isBelow(
+      script.indexOf('exec node "$GOAT_NODE_SCRIPT_PATH" "$@"'),
+      script.indexOf("GOAT_ARCHIVE_VERSION="),
+    );
+
+    const launch = SshTunnel.buildRemoteLaunchScript({
+      ...ARCHIVE,
+      releaseBaseUrl: "https://mirror.example/goat/",
+    });
+    assert.include(launch, "GOAT_ARCHIVE_MODE=1");
+    assert.include(launch, "GOAT_RELEASE_BASE_URL='https://mirror.example/goat'");
+    assert.include(launch, '"$RUNNER_FILE" __ssh-helper pick-port "$PORT_FILE"');
+    assert.include(launch, '"$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT"');
+    assert.include(launch, "__ssh-helper protocol --runtime-file");
+    assert.include(SshTunnel.buildRemoteLaunchScript(NODE_SCRIPT), "GOAT_ARCHIVE_MODE=0");
+  });
+
   it("rejects archive versions that are not a single exact version segment", () => {
     for (const archiveVersion of [
       "../other",
