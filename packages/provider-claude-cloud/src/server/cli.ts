@@ -223,23 +223,19 @@ const visible = (raw: string) =>
   // eslint-disable-next-line no-control-regex -- Strip the native PTY's control sequences.
   raw.replace(/\u001b\[[0-9;?>]*[A-Za-z]|\u001b\][^\u0007]*\u0007/g, "").replace(/\s+/g, "");
 
-/** Settled ticks with no output at all before a key is taken as dropped and sent again. */
-const DROPPED_AFTER = 8;
-
 /**
  * Walks Claude's trust dialog onto "Yes, I trust this folder" and confirms it. Claude drops keys
  * sent while it is still setting up its terminal, so a key goes out only on a settled screen.
  * Each key is judged on the whole settled redraw that followed it: a full repaint places the
  * marker, and a marker-only redraw (what Claude paints for an arrow key) moves it one option.
- * Silence means the key was dropped and it is sent again; any other output is inconclusive and
- * nothing more is sent. Enter goes out only while the marker is known to be on "Yes".
+ * A key is never sent again on silence: if it did land but redrew late, a second key could move
+ * past "Yes". Without a conclusive redraw nothing more is sent and the launch submits nothing. Enter goes out only while the marker is known to be on "Yes".
  * Returns true once it has.
  */
 const makeTrustAnswer = () => {
   let dialog: { readonly yes: number; marked: number } | undefined;
   let sentAt = 0;
   let pending: 1 | -1 | undefined;
-  let silent = 0;
   let lost = false;
   return (raw: string, from: number, settled: boolean, write: (keys: string) => void) => {
     if (!settled || lost) return false;
@@ -252,20 +248,13 @@ const makeTrustAnswer = () => {
       const repainted = trustDialog(redraw);
       if (repainted) dialog.marked = repainted.marked;
       else if (visible(redraw) === "❯") dialog.marked += pending;
-      else if (redraw === "") {
-        silent += 1;
-        if (silent >= DROPPED_AFTER) {
-          silent = 0;
-          write(pending === 1 ? DOWN : UP);
-        }
-        return false;
-      } else {
+      else if (redraw === "") return false;
+      else {
         // The screen no longer tells where the marker is; never guess at Enter.
         lost = true;
         return false;
       }
       pending = undefined;
-      silent = 0;
     }
     sentAt = raw.length;
     if (dialog.marked === dialog.yes) {

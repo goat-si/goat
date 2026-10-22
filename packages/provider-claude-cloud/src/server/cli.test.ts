@@ -1010,12 +1010,12 @@ it.effect("a key Claude dropped is sent again; Enter waits until the marker is o
       h.fake.emit(NATIVE_TRUST_DIALOG);
       yield* TestClock.adjust("500 millis");
       expect(h.fake.writes).toEqual([DOWN, DOWN]);
-      // Silence: still dropped, so after two quiet seconds it goes once more.
-      yield* TestClock.adjust("2 seconds");
-      expect(h.fake.writes).toEqual([DOWN, DOWN, DOWN]);
+      // Silence is never answered with another key: a late redraw could mean it already moved.
+      yield* TestClock.adjust("5 seconds");
+      expect(h.fake.writes).toEqual([DOWN, DOWN]);
       h.fake.emit(NATIVE_TRUST_MOVED);
       yield* TestClock.adjust("500 millis");
-      expect(h.fake.writes).toEqual([DOWN, DOWN, DOWN, "\r"]);
+      expect(h.fake.writes).toEqual([DOWN, DOWN, "\r"]);
       h.fake.emit(RECEIPT);
       expect((yield* Fiber.join(fiber)).receipt.taskId).toBe("session_ABC123");
     }),
