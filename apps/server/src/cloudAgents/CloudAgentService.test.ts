@@ -575,6 +575,35 @@ it.effect(
     }),
 );
 
+it.effect("a Claude Cloud dry run says folder trust is accepted automatically", () =>
+  Effect.gen(function* () {
+    const world = makeWorld();
+    world.readyDrivers.add("claudeCloud");
+    yield* run(
+      world,
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        const input = { repo: "goat-si/goat", prompt: "Probe", dryRun: true } as const;
+        const claude = yield* service.launch(
+          scope("full-access"),
+          { ...input, provider: "claudeCloud" },
+          full,
+        );
+        const cursor = yield* service.launch(
+          scope("full-access"),
+          { ...input, provider: "cursorCloud" },
+          full,
+        );
+        assert.deepEqual(
+          [claude.dryRun, claude.holder.ready, claude.note, cursor.note],
+          [true, true, CloudAgents.CLAUDE_TRUST_NOTE, undefined],
+        );
+        assert.equal(world.launches.length, 0);
+      }),
+    );
+  }),
+);
+
 it.effect("launches on the chosen holder: dry run, a preferred host, and this environment", () =>
   Effect.gen(function* () {
     const world = makeWorld();

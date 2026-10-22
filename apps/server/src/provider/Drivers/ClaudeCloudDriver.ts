@@ -11,12 +11,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as DateTime from "effect/DateTime";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { ChildProcessSpawner } from "effect/process";
+import * as SqlClient from "effect/sql/SqlClient";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import type { ProviderDriver } from "@goat/provider-core/server/driver";
 import { ProviderDriverError } from "@goat/provider-core/server/errors";
+import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentity";
 import {
@@ -27,6 +29,8 @@ import {
 import { resolveClaudeCloudLogin } from "./ClaudeCloudLogin.ts";
 import * as PullRequests from "../../pullRequest/PullRequestService.ts";
 import * as Projection from "../../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
+import { MainCheckoutUnknownError, makeClaudeCloudFolderTrust } from "./ClaudeCloudFolderTrust.ts";
 
 const DRIVER = ProviderDriverKind.make("claudeCloud");
 const decodeSettings = Schema.decodeSync(ClaudeCloudSettings);
@@ -37,7 +41,9 @@ export type ClaudeCloudDriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
   | PtyAdapter.PtyAdapter
   | PullRequests.PullRequestService
-  | Projection.ProjectionStoreV2;
+  | Projection.ProjectionStoreV2
+  | ProjectStore.ProjectStoreV2
+  | SqlClient.SqlClient;
 
 export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudDriverEnv> = {
   driverKind: DRIVER,
@@ -53,6 +59,8 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
       const host = yield* ProviderHost.ProviderHost;
       const pullRequests = yield* PullRequests.PullRequestService;
       const projection = yield* Projection.ProjectionStoreV2;
+      const projectStore = yield* ProjectStore.ProjectStoreV2;
+      const sql = yield* SqlClient.SqlClient;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const path = yield* Path.Path;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -160,10 +168,52 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
             }),
         ),
       );
+      // Null only when Git says the folder is outside any repository; anything else fails, so an
+      // unknown trust root never authorizes an answer.
+      const mainCheckout = (cwd: string) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const child = yield* spawner.spawn(
+              ChildProcess.make(
+                "git",
+                ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                { cwd, shell: false, stdin: "ignore" },
+              ),
+            );
+            const [code, output, errors] = yield* Effect.all(
+              [
+                child.exitCode,
+                collectUint8StreamText({ stream: child.stdout, maxBytes: 4096 }),
+                collectUint8StreamText({ stream: child.stderr, maxBytes: 4096 }),
+              ],
+              { concurrency: "unbounded" },
+            );
+            const commonDir = output.text.trim();
+            if (Number(code) === 0 && path.basename(commonDir) === ".git")
+              return path.dirname(commonDir);
+            if (Number(code) === 128 && /not a git repository/i.test(errors.text)) return null;
+            return yield* new MainCheckoutUnknownError({});
+          }),
+        ).pipe(
+          Effect.timeout("5 seconds"),
+          Effect.mapError((cause) => new MainCheckoutUnknownError({ cause })),
+        );
+      const folderTrust = makeClaudeCloudFolderTrust({
+        instanceId,
+        sql,
+        projects: projectStore,
+        projection,
+        fileSystem,
+        path,
+        resolveLogin,
+        cli: operations,
+        mainCheckout,
+      });
       const orchestrationAdapter = yield* makeClaudeCloudAdapter({
         instanceId,
         resolveLogin,
         resolveControlCwd,
+        folderTrust: folderTrust.policy,
         observe: (input) =>
           pullRequests.findCloudSessionPullRequest(input).pipe(
             Effect.mapError(
@@ -217,6 +267,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
         },
         snapshot,
         orchestrationAdapter,
+        folderTrust: folderTrust.capability,
         textGeneration: {
           generateCommitMessage: () => unsupportedText("commitMessage"),
           generatePrContent: () => unsupportedText("prContent"),

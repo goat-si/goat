@@ -132,6 +132,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.cloudMachinesForget]: AuthSettingsWriteScope,
   [WS_METHODS.cloudMachinesDismissUnconfirmed]: AuthSettingsWriteScope,
   [WS_METHODS.cloudMachinesEnsureReady]: AuthSettingsWriteScope,
+  [WS_METHODS.cloudAgentsAcceptFolderTrust]: AuthSettingsWriteScope,
   [WS_METHODS.hubNodesList]: AuthOrchestrationReadScope,
   [WS_METHODS.hubNodesSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.hubNodesCheck]: AuthOrchestrationReadScope,

@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -13,7 +14,10 @@ import {
   parseAuthEffect,
   readStartReceipt,
   readSendReceipt,
-  trustRequired,
+  trustDialog,
+  trustOption,
+  trustPrompt,
+  trustRefusal,
   cleanOutput,
   redact,
   SESSION_ID,
@@ -24,6 +28,13 @@ export interface ClaudeCloudLogin {
   readonly binary: string;
   readonly environment: NodeJS.ProcessEnv;
   readonly binding: string;
+}
+/**
+ * Present when GOAT may answer Claude Code's folder trust prompt for this folder. Each answer is
+ * reported so the caller can record it.
+ */
+export interface ClaudeCloudTrust {
+  readonly onAccepted: () => void;
 }
 const LIMIT = 64 * 1024;
 const unknownSubmission = (cause?: unknown) =>
@@ -57,6 +68,7 @@ export class ClaudeCloudCli extends Context.Service<
       login: ClaudeCloudLogin,
       cwd: string,
       prompt: string,
+      trust?: ClaudeCloudTrust,
     ) => Effect.Effect<
       {
         readonly receipt: { taskId: string; url: string; title: string };
@@ -65,6 +77,11 @@ export class ClaudeCloudCli extends Context.Service<
       ClaudeCloudError,
       Scope.Scope
     >;
+    /** Answers the folder trust prompt in interactive Claude without starting a session. */
+    readonly acceptTrust: (
+      login: ClaudeCloudLogin,
+      cwd: string,
+    ) => Effect.Effect<void, ClaudeCloudError>;
     readonly send: (
       login: ClaudeCloudLogin,
       cwd: string,
@@ -186,6 +203,151 @@ export const probeReadiness = Effect.fn("ClaudeCloudCli.readiness")(
   ),
 );
 
+const MAX_TRUST_ANSWERS = 3;
+const trustFailure = (
+  cwd: string,
+  outcome: "rejected" | "uncertain",
+  reason?: "folder_untrusted",
+) =>
+  new ClaudeCloudError({
+    detail: `Claude Code hasn't trusted this folder yet. Open it once with \`claude\` in ${cwd}, accept the trust prompt, then try again.`,
+    outcome,
+    ...(reason === undefined ? {} : { reason }),
+  });
+
+const UP = "\u001b[A";
+const DOWN = "\u001b[B";
+
+/** Text a redraw leaves on screen, without cursor movement or erasing spaces. */
+const visible = (raw: string) =>
+  // eslint-disable-next-line no-control-regex -- Strip the native PTY's control sequences.
+  raw.replace(/\u001b\[[0-9;?>]*[A-Za-z]|\u001b\][^\u0007]*\u0007/g, "").replace(/\s+/g, "");
+
+/**
+ * Walks Claude's trust dialog onto "Yes, I trust this folder" and confirms it. Claude drops keys
+ * sent while it is still setting up its terminal, so a key goes out only on a settled screen.
+ * Each key is judged on the whole settled redraw that followed it: a full repaint places the
+ * marker, and a marker-only redraw (what Claude paints for an arrow key) moves it one option.
+ * A key is never sent again on silence: if it did land but redrew late, a second key could move
+ * past "Yes". Without a conclusive redraw nothing more is sent and the launch submits nothing. Enter goes out only while the marker is known to be on "Yes".
+ * Returns true once it has.
+ */
+const makeTrustAnswer = () => {
+  let dialog: { readonly yes: number; marked: number } | undefined;
+  let sentAt = 0;
+  let pending: 1 | -1 | undefined;
+  let lost = false;
+  return (raw: string, from: number, settled: boolean, write: (keys: string) => void) => {
+    if (!settled || lost) return false;
+    if (dialog === undefined) {
+      const found = trustDialog(raw.slice(from));
+      if (!found) return false;
+      dialog = { ...found };
+    } else if (pending !== undefined) {
+      const redraw = raw.slice(sentAt);
+      const repainted = trustDialog(redraw);
+      if (repainted) dialog.marked = repainted.marked;
+      else if (visible(redraw) === "❯") dialog.marked += pending;
+      else if (redraw === "") return false;
+      else {
+        // The screen no longer tells where the marker is; never guess at Enter.
+        lost = true;
+        return false;
+      }
+      pending = undefined;
+    }
+    sentAt = raw.length;
+    if (dialog.marked === dialog.yes) {
+      dialog = undefined;
+      write("\r");
+      return true;
+    }
+    pending = dialog.yes > dialog.marked ? 1 : -1;
+    write(pending === 1 ? DOWN : UP);
+    return false;
+  };
+};
+
+/** Output that stopped changing for one tick is a settled screen. */
+const SETTLE = "250 millis";
+
+/**
+ * One owned PTY. Release kills it and waits for its real exit, escalating to SIGKILL, before
+ * dropping listeners, so interruption and timeouts never orphan the process.
+ */
+const ownPty = Effect.fnUntraced(function* (
+  pty: PtyAdapter.PtyAdapter["Service"],
+  input: PtyAdapter.PtySpawnInput,
+  handlers: {
+    readonly data: (chunk: string, process: PtyAdapter.PtyProcess) => void;
+    readonly exit: (event: PtyAdapter.PtyExitEvent) => void;
+    readonly exited: () => boolean;
+    readonly listeners: Set<() => void>;
+  },
+) {
+  return yield* Effect.acquireRelease(
+    Effect.gen(function* () {
+      const process = yield* pty.spawn(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ClaudeCloudError({
+              detail:
+                "Could not start the sibling Claude CLI in a PTY. Check its binary path and this environment's PTY support.",
+              outcome: "rejected",
+              cause,
+            }),
+        ),
+      );
+      const offExit = process.onExit(handlers.exit);
+      const offData = process.onData((chunk) => handlers.data(chunk, process));
+      return { process, offExit, offData };
+    }),
+    ({ process, offExit, offData }) =>
+      Effect.gen(function* () {
+        const waitForExit = Effect.callback<void>((resume) => {
+          const finished = () => {
+            if (handlers.exited()) resume(Effect.void);
+          };
+          handlers.listeners.add(finished);
+          finished();
+          return Effect.sync(() => {
+            handlers.listeners.delete(finished);
+          });
+        });
+        if (!handlers.exited()) {
+          try {
+            process.kill();
+          } catch {
+            /* Escalate after the grace period; retain ownership until actual exit. */
+          }
+        }
+        yield* waitForExit.pipe(
+          Effect.timeout("2 seconds"),
+          Effect.catchTags({
+            TimeoutError: () =>
+              Effect.sync(() => {
+                if (!handlers.exited()) {
+                  try {
+                    process.kill("SIGKILL");
+                  } catch {
+                    /* Retain ownership until this process reports actual exit. */
+                  }
+                }
+              }).pipe(Effect.andThen(waitForExit)),
+          }),
+        );
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            offData();
+            offExit();
+            handlers.listeners.clear();
+          }),
+        ),
+      ),
+  );
+});
+
 const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const pty = yield* PtyAdapter.PtyAdapter;
@@ -193,10 +355,263 @@ const make = Effect.gen(function* () {
     effect: Effect.Effect<A, E, ChildProcessSpawner.ChildProcessSpawner>,
   ) => Effect.provideService(effect, ChildProcessSpawner.ChildProcessSpawner, spawner);
 
+  /** Opens interactive Claude in the folder only to answer its trust prompt, then closes it. */
+  const acceptTrust = Effect.fn("ClaudeCloudCli.acceptTrust")(function* (
+    login: ClaudeCloudLogin,
+    cwd: string,
+  ) {
+    const environment = yield* checkLogin(login);
+    let raw = "";
+    let confirmed = false;
+    let exit: PtyAdapter.PtyExitEvent | undefined;
+    let pty_: PtyAdapter.PtyProcess | undefined;
+    let seen = 0;
+    const answer = makeTrustAnswer();
+    const listeners = new Set<() => void>();
+    const notify = () => {
+      for (const listener of listeners) listener();
+    };
+    const refused = (detail: string) =>
+      new ClaudeCloudError({ detail, outcome: "rejected", reason: "folder_untrusted" });
+    const until = (done: () => boolean) =>
+      Effect.callback<void>((resume) => {
+        const listener = () => {
+          if (done()) resume(Effect.void);
+        };
+        listeners.add(listener);
+        listener();
+        return Effect.sync(() => {
+          listeners.delete(listener);
+        });
+      });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* ownPty(
+          pty,
+          { shell: login.binary, args: [], cwd, cols: 120, rows: 30, env: environment },
+          {
+            data: (chunk, process) => {
+              if (raw.length <= LIMIT) raw = (raw + chunk).slice(0, LIMIT + 1);
+              pty_ = process;
+              notify();
+            },
+            exit: (event) => {
+              exit = event;
+              notify();
+            },
+            exited: () => exit !== undefined,
+            listeners,
+          },
+        );
+        yield* Effect.sync(() => {
+          const settled = raw.length === seen;
+          seen = raw.length;
+          if (!confirmed && pty_ && !exit)
+            confirmed = answer(raw, 0, settled, (keys) => pty_!.write(keys));
+          notify();
+        }).pipe(Effect.repeat(Schedule.spaced(SETTLE)), Effect.forkScoped);
+        yield* until(() => confirmed || exit !== undefined).pipe(
+          Effect.timeout("30 seconds"),
+          Effect.catchTags({
+            TimeoutError: () =>
+              Effect.fail(
+                refused(
+                  "Claude Code did not show its folder trust prompt. Open the folder once with claude to finish its setup.",
+                ),
+              ),
+          }),
+        );
+        if (!confirmed)
+          return yield* refused(
+            "Claude Code exited before showing its folder trust prompt. Open the folder once with claude to finish its setup.",
+          );
+        // Declining closes Claude at once; trusting keeps it open on its prompt.
+        const closed = yield* until(() => exit !== undefined).pipe(
+          Effect.timeout("3 seconds"),
+          Effect.as(true),
+          Effect.catchTags({ TimeoutError: () => Effect.succeed(false) }),
+        );
+        if (closed)
+          return yield* refused(
+            "Claude Code closed instead of trusting the folder. Open it once with claude and choose Yes, I trust this folder.",
+          );
+      }),
+    );
+  });
+
+  const startOnce = Effect.fn("ClaudeCloudCli.startOnce")(function* (
+    login: ClaudeCloudLogin,
+    cwd: string,
+    prompt: string,
+    trust: ClaudeCloudTrust | undefined,
+  ) {
+    const environment = yield* checkLogin(login);
+    // The supported optional --cloud value is bound with =, so leading flags remain prompt data.
+    let raw = "";
+    let receipt: ReturnType<typeof readStartReceipt>;
+    let exit: PtyAdapter.PtyExitEvent | undefined;
+    let failure: ClaudeCloudError | undefined;
+    // Output before this offset belongs to trust prompts GOAT already answered.
+    let trustFrom = 0;
+    let answers = 0;
+    let answer = makeTrustAnswer();
+    const listeners = new Set<() => void>();
+    const notify = () => {
+      for (const listener of listeners) listener();
+    };
+    let seen = 0;
+    let current: PtyAdapter.PtyProcess | undefined;
+    const answerTrust = (bounded: string, settled: boolean) => {
+      const process = current;
+      if (!trust || receipt || failure || !process) return;
+      if (answers >= MAX_TRUST_ANSWERS) {
+        if (trustOption(bounded.slice(trustFrom)))
+          failure = new ClaudeCloudError({
+            detail: `Claude Code kept asking to trust ${cwd} after GOAT accepted it ${MAX_TRUST_ANSWERS} times. No prompt was sent.`,
+            outcome: "rejected",
+          });
+        return;
+      }
+      if (!answer(bounded, trustFrom, settled, (keys) => process.write(keys))) return;
+      answers += 1;
+      trustFrom = bounded.length;
+      answer = makeTrustAnswer();
+      trust.onAccepted();
+    };
+    const inspect = (settled = false) => {
+      const bounded = raw.slice(0, LIMIT);
+      const normalized = cleanOutput(bounded);
+      // Preserve the first independently validated receipt even if the same chunk contains
+      // overflow, trust, conflicting identities, or a later diagnostic. Admission is durable
+      // before exited reports those failures; malformed/unaccepted output is never admission.
+      if (!receipt) {
+        const firstEnd = /^\s*Resume with:\s*claude --teleport session_[A-Za-z0-9]+\s*\n/m.exec(
+          normalized,
+        );
+        if (firstEnd) {
+          try {
+            receipt = readStartReceipt(normalized.slice(0, firstEnd.index + firstEnd[0].length));
+          } catch (cause) {
+            failure = unknownSubmission(cause);
+          }
+        }
+      }
+      try {
+        const complete = readStartReceipt(bounded);
+        if (complete && receipt && complete.taskId !== receipt.taskId)
+          failure = unknownSubmission();
+        receipt ??= complete;
+      } catch (cause) {
+        failure = unknownSubmission(cause);
+      }
+      if (raw.length > LIMIT || raw.includes("\uFFFD")) failure = unknownSubmission();
+      answerTrust(bounded, settled);
+      const pending = bounded.slice(trustFrom);
+      if (!failure && trustRefusal(pending))
+        failure = receipt
+          ? trustFailure(cwd, "uncertain")
+          : trustFailure(cwd, "rejected", "folder_untrusted");
+      // A receipt after a refusal is no refusal: the session may exist, so nothing is retried.
+      if (receipt && failure?.reason === "folder_untrusted")
+        failure = trustFailure(cwd, "uncertain");
+      // With a trust policy, a prompt still rendering its options is answered on a later chunk.
+      if (!failure && trustPrompt(pending) && (!trust || receipt))
+        failure = trustFailure(cwd, receipt ? "uncertain" : "rejected");
+      const diagnostic = /^\s*Error:\s*(.+)\n/m.exec(normalized)?.[1];
+      if (diagnostic && !failure)
+        failure = new ClaudeCloudError({
+          detail:
+            redact(diagnostic, login.environment) || "Claude could not confirm cloud submission.",
+          outcome: "uncertain",
+        });
+      notify();
+    };
+    // The exit listener belongs to the process resource. Keep it until release sees real exit,
+    // including interruption/timeout, before releasing its listeners and the caller's scope.
+    yield* ownPty(
+      pty,
+      {
+        shell: login.binary,
+        args: [`--cloud=${prompt}`],
+        cwd,
+        cols: 120,
+        rows: 30,
+        env: environment,
+      },
+      {
+        data: (chunk, process) => {
+          if (raw.length <= LIMIT) raw = (raw + chunk).slice(0, LIMIT + 1);
+          current = process;
+          inspect();
+        },
+        exit: (event) => {
+          exit = event;
+          if (!raw.endsWith("\n")) raw += "\n";
+          inspect();
+        },
+        exited: () => exit !== undefined,
+        listeners,
+      },
+    );
+    // Keys go out only on a settled screen; see makeTrustAnswer.
+    if (trust)
+      yield* Effect.sync(() => {
+        const settled = raw.length === seen;
+        seen = raw.length;
+        if (!exit) inspect(settled);
+      }).pipe(Effect.repeat(Schedule.spaced(SETTLE)), Effect.forkScoped);
+    const wait = <A>(decide: () => Effect.Effect<A, ClaudeCloudError> | undefined) =>
+      Effect.callback<A, ClaudeCloudError>((resume) => {
+        const listener = () => {
+          const value = decide();
+          if (value) resume(value);
+        };
+        listeners.add(listener);
+        listener();
+        return Effect.sync(() => {
+          listeners.delete(listener);
+        });
+      }).pipe(
+        Effect.timeout("60 seconds"),
+        Effect.mapError((cause) =>
+          isClaudeCloudError(cause)
+            ? cause
+            : trust && failure?.reason === "folder_untrusted" && !exit
+              ? // Still running after refusing: its outcome is unknown, so no retry.
+                unknownSubmission(cause)
+              : (failure ??
+                // A trust dialog that never finished rendering sent nothing.
+                (!receipt && trustPrompt(raw.slice(trustFrom))
+                  ? trustFailure(cwd, "rejected")
+                  : unknownSubmission(cause))),
+        ),
+      );
+    const observed = yield* wait(() => {
+      if (receipt) return Effect.succeed(receipt);
+      // A refusal is final only once this process has really exited with nothing more to say.
+      if (trust && failure?.reason === "folder_untrusted" && !exit) return undefined;
+      if (failure) return Effect.fail(failure);
+      if (exit) return Effect.fail(unknownSubmission());
+      return undefined;
+    });
+    return {
+      receipt: observed,
+      exited: wait(() => {
+        if (failure) return Effect.fail(failure);
+        if (exit)
+          // node-pty reports signal 0 for a normal Unix exit; other adapters omit it.
+          return exit.exitCode === 0 && (exit.signal === null || exit.signal === 0)
+            ? Effect.void
+            : Effect.fail(unknownSubmission());
+        return undefined;
+      }),
+    };
+  });
+
   return ClaudeCloudCli.of({
     readiness: (login, cwd) => provideSpawner(probeReadiness(login, cwd)),
-    start: Effect.fn("ClaudeCloudCli.start")(function* (login, cwd, prompt) {
-      const environment = yield* checkLogin(login);
+    acceptTrust,
+    start: Effect.fn("ClaudeCloudCli.start")(function* (login, cwd, prompt, trust) {
       // --cloud accepts IDs and URLs as well as descriptions. Never reinterpret a create as attach.
       if (
         !prompt.trim() ||
@@ -209,171 +624,30 @@ const make = Effect.gen(function* () {
           outcome: "rejected",
         });
       }
-      // The supported optional --cloud value is bound with =, so leading flags remain prompt data.
-      let raw = "";
-      let receipt: ReturnType<typeof readStartReceipt>;
-      let exit: PtyAdapter.PtyExitEvent | undefined;
-      let failure: ClaudeCloudError | undefined;
-      const listeners = new Set<() => void>();
-      const notify = () => {
-        for (const listener of listeners) listener();
-      };
-      const inspect = () => {
-        const bounded = raw.slice(0, LIMIT);
-        const normalized = cleanOutput(bounded);
-        // Preserve the first independently validated receipt even if the same chunk contains
-        // overflow, trust, conflicting identities, or a later diagnostic. Admission is durable
-        // before exited reports those failures; malformed/unaccepted output is never admission.
-        if (!receipt) {
-          const firstEnd = /^\s*Resume with:\s*claude --teleport session_[A-Za-z0-9]+\s*\n/m.exec(
-            normalized,
-          );
-          if (firstEnd) {
-            try {
-              receipt = readStartReceipt(normalized.slice(0, firstEnd.index + firstEnd[0].length));
-            } catch (cause) {
-              failure = unknownSubmission(cause);
-            }
-          }
-        }
-        try {
-          const complete = readStartReceipt(bounded);
-          if (complete && receipt && complete.taskId !== receipt.taskId)
-            failure = unknownSubmission();
-          receipt ??= complete;
-        } catch (cause) {
-          failure = unknownSubmission(cause);
-        }
-        if (raw.length > LIMIT || raw.includes("\uFFFD")) failure = unknownSubmission();
-        if (trustRequired(bounded) && !failure)
-          failure = new ClaudeCloudError({
-            detail: `Claude Code hasn't trusted this folder yet. Open it once with \`claude\` in ${cwd}, accept the trust prompt, then try again.`,
-            outcome: receipt ? "uncertain" : "rejected",
-          });
-        const diagnostic = /^\s*Error:\s*(.+)\n/m.exec(normalized)?.[1];
-        if (diagnostic && !failure)
-          failure = new ClaudeCloudError({
-            detail:
-              redact(diagnostic, login.environment) || "Claude could not confirm cloud submission.",
-            outcome: "uncertain",
-          });
-        notify();
-      };
-      // The exit listener belongs to the process resource. Keep it until release sees real exit,
-      // including interruption/timeout, before releasing its listeners and the caller's scope.
-      yield* Effect.acquireRelease(
-        Effect.gen(function* () {
-          const process = yield* pty
-            .spawn({
-              shell: login.binary,
-              args: [`--cloud=${prompt}`],
-              cwd,
-              cols: 120,
-              rows: 30,
-              env: environment,
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ClaudeCloudError({
-                    detail:
-                      "Could not start the sibling Claude CLI in a PTY. Check its binary path and this environment's PTY support.",
-                    outcome: "rejected",
-                    cause,
-                  }),
-              ),
-            );
-          const offExit = process.onExit((event) => {
-            exit = event;
-            if (!raw.endsWith("\n")) raw += "\n";
-            inspect();
-          });
-          const offData = process.onData((chunk) => {
-            if (raw.length <= LIMIT) raw = (raw + chunk).slice(0, LIMIT + 1);
-            inspect();
-          });
-          return { process, offExit, offData };
-        }),
-        ({ process, offExit, offData }) =>
-          Effect.gen(function* () {
-            const waitForExit = Effect.callback<void>((resume) => {
-              const finished = () => {
-                if (exit) resume(Effect.void);
-              };
-              listeners.add(finished);
-              finished();
-              return Effect.sync(() => {
-                listeners.delete(finished);
-              });
-            });
-            if (!exit) {
-              try {
-                process.kill();
-              } catch {
-                /* Escalate after the grace period; retain ownership until actual exit. */
-              }
-            }
-            yield* waitForExit.pipe(
-              Effect.timeout("2 seconds"),
-              Effect.catchTags({
-                TimeoutError: () =>
-                  Effect.sync(() => {
-                    if (!exit) {
-                      try {
-                        process.kill("SIGKILL");
-                      } catch {
-                        /* Retain ownership until this process reports actual exit. */
-                      }
-                    }
-                  }).pipe(Effect.andThen(waitForExit)),
-              }),
-            );
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                offData();
-                offExit();
-                listeners.clear();
-              }),
-            ),
-          ),
+      const first = yield* startOnce(login, cwd, prompt, trust).pipe(Effect.result);
+      if (first._tag === "Success") return first.success;
+      // A refusal starts nothing, so trusting the folder and starting once more is safe.
+      if (
+        !trust ||
+        first.failure.reason !== "folder_untrusted" ||
+        first.failure.outcome !== "rejected"
+      )
+        return yield* first.failure;
+      yield* acceptTrust(login, cwd);
+      trust.onAccepted();
+      return yield* startOnce(login, cwd, prompt, trust).pipe(
+        Effect.mapError((error) =>
+          error.reason === "folder_untrusted"
+            ? new ClaudeCloudError({
+                detail: `Claude Code still refuses ${cwd} after GOAT accepted its trust prompt. No prompt was sent.`,
+                outcome: "rejected",
+                reason: "folder_untrusted",
+              })
+            : error,
+        ),
       );
-      const wait = <A>(decide: () => Effect.Effect<A, ClaudeCloudError> | undefined) =>
-        Effect.callback<A, ClaudeCloudError>((resume) => {
-          const listener = () => {
-            const value = decide();
-            if (value) resume(value);
-          };
-          listeners.add(listener);
-          listener();
-          return Effect.sync(() => {
-            listeners.delete(listener);
-          });
-        }).pipe(
-          Effect.timeout("60 seconds"),
-          Effect.mapError((cause) =>
-            isClaudeCloudError(cause) ? cause : (failure ?? unknownSubmission(cause)),
-          ),
-        );
-      const observed = yield* wait(() => {
-        if (receipt) return Effect.succeed(receipt);
-        if (failure) return Effect.fail(failure);
-        if (exit) return Effect.fail(unknownSubmission());
-        return undefined;
-      });
-      return {
-        receipt: observed,
-        exited: wait(() => {
-          if (failure) return Effect.fail(failure);
-          if (exit)
-            // node-pty reports signal 0 for a normal Unix exit; other adapters omit it.
-            return exit.exitCode === 0 && (exit.signal === null || exit.signal === 0)
-              ? Effect.void
-              : Effect.fail(unknownSubmission());
-          return undefined;
-        }),
-      };
     }),
+
     send: Effect.fn("ClaudeCloudCli.send")(function* (login, cwd, taskId, message) {
       if (!SESSION_ID.test(taskId) || !message.trim())
         return yield* new ClaudeCloudError({

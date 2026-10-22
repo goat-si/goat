@@ -65,6 +65,7 @@ function FleetThreadRow({ thread }: { readonly thread: FleetThread }) {
             driverKind={thread.agentDriver}
             displayName={thread.agentLabel}
             iconClassName="size-3.5"
+            focusable
           />
         ) : null}
         {thread.ref === null && thread.reportedBy !== null

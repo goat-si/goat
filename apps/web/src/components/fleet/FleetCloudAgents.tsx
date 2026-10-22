@@ -44,6 +44,7 @@ export function FleetCloudAgents({
               driverKind={ProviderDriverKind.make(group.provider)}
               displayName={group.label}
               iconClassName="size-3.5"
+              focusable
             />
             <span className="text-sm font-medium">{group.label}</span>
             <span className="ml-auto text-xs text-muted-foreground tabular-nums">
@@ -53,7 +54,7 @@ export function FleetCloudAgents({
           <ul className="flex flex-col">
             {group.runs.map((run) => (
               <li key={run.key}>
-                <FleetCloudRunRow run={run} />
+                <FleetCloudRunRow run={run} provider={group.provider} label={group.label} />
               </li>
             ))}
           </ul>
@@ -63,10 +64,25 @@ export function FleetCloudAgents({
   );
 }
 
-function FleetCloudRunRow({ run }: { readonly run: FleetCloudRun }) {
+function FleetCloudRunRow({
+  run,
+  provider,
+  label,
+}: {
+  readonly run: FleetCloudRun;
+  readonly provider: FleetCloudAgentGroup["provider"];
+  readonly label: string;
+}) {
   return (
     <div className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent">
       <span aria-hidden className={cn("size-2 shrink-0 rounded-full", RUN_DOT[run.state])} />
+      <ProviderInstanceIcon
+        driverKind={ProviderDriverKind.make(provider)}
+        displayName={label}
+        holder={run.holder}
+        iconClassName="size-4"
+        focusable
+      />
       <Link
         to="/$environmentId/$threadId"
         params={buildThreadRouteParams(run.ref)}

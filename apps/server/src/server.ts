@@ -1266,6 +1266,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
           layerPullRequestService.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
         ),
         Layer.provide(ProjectionStoreV2.layer),
+        // Stateless reads over the database; Claude Cloud checks folders against projects.
+        Layer.provide(ProjectStore.layer),
       ),
       layerMemorySnapshotWithDependencies,
     ),

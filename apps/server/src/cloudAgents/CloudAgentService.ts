@@ -87,6 +87,10 @@ const decodeRegister = Schema.decodeUnknownEffect(CloudRunRegisterResult);
 const failure = (code: OrchestratorMcpFailure["code"], message: string) =>
   new OrchestratorMcpFailure({ code, message });
 
+/** Claude Cloud never stops on the folder trust prompt; the dry run says so up front. */
+export const CLAUDE_TRUST_NOTE =
+  "If Claude Code asks to trust the project folder, GOAT accepts it automatically; no one needs to click.";
+
 /** These describe the caller, not a host, so they fail the whole call. */
 const callerFailure = (error: OrchestratorMcpFailure) =>
   error.code === "capability_denied" ||
@@ -541,7 +545,12 @@ const make = Effect.gen(function* () {
       const holder = yield* pick(scope, input.provider, input.holder);
       if (holder.host !== null)
         yield* permissions.require(scope, "cloud.launch", { host: holder.host });
-      if (input.dryRun === true) return { holder, dryRun: true };
+      if (input.dryRun === true)
+        return {
+          holder,
+          dryRun: true,
+          ...(input.provider === "claudeCloud" ? { note: CLAUDE_TRUST_NOTE } : {}),
+        };
       if (holder.host !== null) {
         if (effective.enabled)
           return yield* failure(

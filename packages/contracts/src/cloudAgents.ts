@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { SshHostAlias, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  ProjectId,
+  SshHostAlias,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { OrchestrationV2CloudTask } from "./orchestrationV2.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -14,6 +20,34 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const CloudAgentProvider = Schema.Literals(["claudeCloud", "cursorCloud", "devinCloud"]);
 export type CloudAgentProvider = typeof CloudAgentProvider.Type;
+
+/**
+ * Claude Cloud starts from a project folder, and Claude Code asks once per folder whether to
+ * trust it. GOAT answers that prompt itself for its own projects; this is what a person sees.
+ */
+export const CloudFolderTrust = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  projectId: ProjectId,
+  title: Schema.String,
+  path: Schema.String,
+  /** What Claude Code's own config says; null when it cannot be read. */
+  trusted: Schema.NullOr(Schema.Boolean),
+  /** The last time GOAT accepted this folder's trust prompt. */
+  acceptedByGoatAt: Schema.NullOr(IsoDateTime),
+});
+export type CloudFolderTrust = typeof CloudFolderTrust.Type;
+
+export const CloudFolderTrustListInput = Schema.Struct({});
+export const CloudFolderTrustListResult = Schema.Struct({
+  folders: Schema.Array(CloudFolderTrust),
+});
+export type CloudFolderTrustListResult = typeof CloudFolderTrustListResult.Type;
+
+export const CloudFolderTrustAcceptInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  projectId: ProjectId,
+});
+export type CloudFolderTrustAcceptInput = typeof CloudFolderTrustAcceptInput.Type;
 export const CLOUD_AGENT_PROVIDERS: ReadonlyArray<CloudAgentProvider> = [
   "claudeCloud",
   "cursorCloud",

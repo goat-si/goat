@@ -16,6 +16,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Adapter from "@goat/provider-core/server/ProviderAdapter";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { CLOUD_DELIVERY_REJECTED_CODE } from "@goat/provider-core/server/cloudTask";
 import {
   makeProviderFailure,
@@ -157,6 +158,18 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
     { readonly prUrl: string; readonly branch: string; readonly summary: string } | null,
     ClaudeCloudError
   >;
+  /**
+   * Folders whose Claude Code trust prompt GOAT answers on its own, and where each answer is
+   * recorded. Without it, a trust prompt rejects the launch.
+   */
+  readonly folderTrust?: {
+    readonly allowed: (cwd: string) => Effect.Effect<boolean>;
+    readonly record: (input: {
+      readonly cwd: string;
+      readonly threadId: Turn["threadId"];
+      readonly prompts: number;
+    }) => Effect.Effect<void>;
+  };
 }) {
   const cli = yield* Cli.ClaudeCloudCli;
   return Adapter.ProviderAdapterV2.of({
@@ -652,9 +665,64 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
               },
             };
             yield* commit(i, thread);
+            const trustAllowed =
+              options.folderTrust === undefined
+                ? false
+                : yield* options.folderTrust.allowed(launchSource.cwd);
+            let trustPrompts = 0;
+            const recordTrust = Effect.suspend(() =>
+              trustPrompts === 0
+                ? Effect.void
+                : Effect.gen(function* () {
+                    const at = yield* DateTime.now;
+                    yield* publish({
+                      type: "turn_item.updated",
+                      driver: DRIVER,
+                      turnItem: {
+                        id: IdAllocator.derive.turnItemFromProviderItem({
+                          driver: DRIVER,
+                          nativeItemId: `folder-trust:${turnId}`,
+                        }),
+                        threadId: i.threadId,
+                        runId: i.runId,
+                        nodeId: i.rootNodeId,
+                        providerThreadId: i.providerThread.id,
+                        providerTurnId: turnId,
+                        nativeItemRef: null,
+                        parentItemId: null,
+                        ordinal: 0,
+                        status: "completed",
+                        title: "Folder trusted",
+                        startedAt: at,
+                        completedAt: at,
+                        updatedAt: at,
+                        type: "system_notice",
+                        message: `Claude Code asked to trust ${launchSource.cwd}. GOAT accepted it automatically.`,
+                      },
+                    });
+                    yield* options.folderTrust!.record({
+                      cwd: launchSource.cwd,
+                      threadId: i.threadId,
+                      prompts: trustPrompts,
+                    });
+                  }),
+            );
             yield* Effect.scoped(
               Effect.gen(function* () {
-                const handle = yield* cli.start(current, launchSource.cwd, i.message.text);
+                const handle = yield* cli
+                  .start(
+                    current,
+                    launchSource.cwd,
+                    i.message.text,
+                    trustAllowed
+                      ? {
+                          onAccepted: () => {
+                            trustPrompts += 1;
+                          },
+                        }
+                      : undefined,
+                  )
+                  .pipe(Effect.ensuring(recordTrust));
                 const now = yield* DateTime.now;
                 thread = {
                   ...thread,
