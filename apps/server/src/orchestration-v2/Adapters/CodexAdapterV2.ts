@@ -112,6 +112,7 @@ import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import {
   buildCodexAdditionalContext,
+  buildCodexDevelopmentContext,
   buildCodexDeveloperInstructions,
 } from "../../provider/CodexDeveloperInstructions.ts";
 import {
@@ -821,7 +822,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
               computerUse: input.computerUse ?? false,
             },
           )
-        : undefined;
+        : buildCodexDevelopmentContext();
     const memoryContext =
       input.memoryContext === undefined
         ? input.clearMemoryContext
@@ -835,12 +836,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
               )).renderedText,
             },
           };
-    const additionalContext =
-      goatContext === undefined &&
-      Object.keys(appContext).length === 0 &&
-      Object.keys(memoryContext).length === 0
-        ? undefined
-        : { ...goatContext, ...appContext, ...memoryContext };
+    const additionalContext = { ...goatContext, ...appContext, ...memoryContext };
     const collaborationMode: CodexSchema.ClientRequest__CollaborationMode | undefined =
       input.runtimePolicy.interactionMode !== "plan" && developerInstructions === undefined
         ? undefined

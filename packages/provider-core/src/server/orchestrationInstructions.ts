@@ -153,9 +153,10 @@ export function goatOrchestrationPromptForFirstRun(input: {
   readonly runOrdinal: number;
   readonly hasGoatMcp: boolean;
 }): string {
-  return input.runOrdinal === 1
-    ? prependGoatInstructions(input.prompt, input.hasGoatMcp)
-    : input.prompt;
+  if (input.runOrdinal !== 1) return input.prompt;
+  // Without GOAT MCP, keep a leading native slash command where the provider expects it.
+  if (!input.hasGoatMcp && input.prompt.trimStart().startsWith("/")) return input.prompt;
+  return prependGoatInstructions(input.prompt, input.hasGoatMcp);
 }
 
 export function goatOrchestrationSystemPrompt(hasGoatMcp: boolean): string {

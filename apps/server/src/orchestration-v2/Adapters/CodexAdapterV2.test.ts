@@ -78,6 +78,7 @@ import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
+import { buildCodexDevelopmentContext } from "../../provider/CodexDeveloperInstructions.ts";
 import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
 
@@ -313,6 +314,7 @@ describe("CodexAdapterV2 runtime policy", () => {
         appContext,
       });
       assert.deepEqual(alone.additionalContext, {
+        ...buildCodexDevelopmentContext(),
         "mcp_app_todos_list_todos_item-1": { kind: "untrusted", value: "Filtered to overdue" },
       });
       const withGoat = yield* CodexAdapterV2.buildCodexTurnStartParams({
@@ -329,6 +331,28 @@ describe("CodexAdapterV2 runtime policy", () => {
       });
       assert.isDefined(withGoat.additionalContext?.["t3_code_runtime"]);
     }),
+  );
+
+  it.effect(
+    "sends the development discipline on every turn and orchestration only with GOAT MCP",
+    () =>
+      Effect.gen(function* () {
+        const turn = (hasGoatMcp: boolean) =>
+          CodexAdapterV2.buildCodexTurnStartParams({
+            nativeThreadId: "native-development-context",
+            codexInput: [{ type: "text", text: "fix the bug" }],
+            runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+            hasGoatMcp,
+          });
+        assert.deepEqual((yield* turn(false)).additionalContext, buildCodexDevelopmentContext());
+        const withGoat = (yield* turn(true)).additionalContext;
+        assert.deepEqual(
+          withGoat?.t3_code_development,
+          buildCodexDevelopmentContext().t3_code_development,
+        );
+        assert.isDefined(withGoat?.t3_code_orchestration_01);
+      }),
   );
 });
 

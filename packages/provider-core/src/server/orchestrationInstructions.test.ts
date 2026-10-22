@@ -82,6 +82,10 @@ describe("T3 orchestration provider instructions", () => {
       goatOrchestrationPromptForFirstRun({ prompt: "Fix it.", runOrdinal: 2, hasGoatMcp: false }),
       "Fix it.",
     );
+    assert.equal(
+      goatOrchestrationPromptForFirstRun({ prompt: "/review", runOrdinal: 1, hasGoatMcp: false }),
+      "/review",
+    );
   });
 });
 
