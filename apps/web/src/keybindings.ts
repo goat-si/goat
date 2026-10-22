@@ -19,6 +19,7 @@ import {
   type ShortcutModifierStateLike,
 } from "@goat/shared/keybindings";
 import { isElectron } from "./env";
+import { isNotesPageOpen } from "./notes/notesPageVisibility";
 import { projectScriptIdFromCommand } from "./projectScripts";
 
 export type { ShortcutEventLike, ShortcutModifierStateLike } from "@goat/shared/keybindings";
@@ -62,6 +63,7 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
     isWeb: !isElectron,
     isDesktop: isElectron,
     editableFocus: false,
+    notesPageOpen: isNotesPageOpen(),
     ...options?.context,
   };
 }
@@ -187,6 +189,44 @@ export function resolveShortcutCommand(
     return binding.command;
   }
   return null;
+}
+
+/**
+ * Shortcuts for a page-scoped command whose when-clause holds, ignoring rules declared later.
+ * The server backfills new defaults ahead of persisted rules, so on existing installs a page
+ * command such as notes.new sits before the global chat.new on the same keys; the page that
+ * owns the command still has to win while it is open.
+ */
+function pageCommandShortcuts(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): KeybindingShortcut[] {
+  const context = resolveContext(options);
+  return keybindings
+    .filter((binding) => binding.command === command && matchesWhenClause(binding.whenAst, context))
+    .map((binding) => shortcutForContext(binding, context));
+}
+
+export function matchesPageCommand(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): boolean {
+  const platform = resolvePlatform(options);
+  return pageCommandShortcuts(keybindings, command, options).some((shortcut) =>
+    matchesKeybindingShortcut(event, shortcut, platform),
+  );
+}
+
+export function pageCommandShortcutLabel(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): string | null {
+  const shortcut = pageCommandShortcuts(keybindings, command, options).at(-1);
+  return shortcut ? formatShortcutLabel(shortcut, resolvePlatform(options)) : null;
 }
 
 export function resolveChatShortcutCommand(

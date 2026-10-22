@@ -19,6 +19,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { isTrailingDoubleClick } from "../Sidebar.logic";
 import { Toggle } from "../ui/toggle";
@@ -79,6 +80,8 @@ interface ChatHeaderProps {
   onToggleSideChat?: (() => void) | undefined;
   sideChatOpen?: boolean | undefined;
   sideChatShortcutLabel?: string | null | undefined;
+  /** Rendered by the caller so the header stays free of the notes data layer. */
+  notesButton?: ReactNode;
 }
 
 function resolveRenameCommit(input: {
@@ -114,6 +117,7 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleSideChat,
   sideChatOpen = false,
   sideChatShortcutLabel = null,
+  notesButton = null,
 }: ChatHeaderProps) {
   const relatedThreadLink = parentThreadLink ?? (onOpenScopedThread ? launcherThreadLink : null);
   const launcherOnly =
@@ -480,6 +484,7 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {notesButton}
       {onToggleSideChat ? (
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>

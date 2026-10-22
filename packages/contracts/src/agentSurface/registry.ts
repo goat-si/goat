@@ -3557,6 +3557,21 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { idempotentHint: false, openWorldHint: false },
   }),
+  "note.update": entry({
+    resource: "note",
+    verb: "update",
+    name: "goat_note_update",
+    toolkit: "note",
+    summary: "Pin a note or link a thread for reference.",
+    description:
+      "Pin/unpin a note or link/unlink a thread for reference without changing its body or status. Pass pinned, relate or unrelate with the note path. Thread references contain threadId and host (null for this environment). No baseRevision is needed because the body is untouched.",
+    effect: "write",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "note.move": entry({
     resource: "note",
     verb: "move",

@@ -2122,6 +2122,7 @@ export const layerWsRpc = (
         [WS_METHODS.notesList]: (input) => notes.list(input),
         [WS_METHODS.notesRead]: (input) => notes.read(input),
         [WS_METHODS.notesWrite]: (input) => notes.write(input, "user"),
+        [WS_METHODS.notesUpdate]: (input) => notes.update(input),
         [WS_METHODS.notesMove]: (input) => notes.move(input, "user"),
         [WS_METHODS.notesDelete]: (input) => notes.delete(input),
         [WS_METHODS.notesSubscribe]: () => notes.subscribe,

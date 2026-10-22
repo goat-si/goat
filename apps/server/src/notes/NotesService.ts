@@ -7,6 +7,7 @@ import * as NodeFSP from "node:fs/promises";
 import {
   NOTE_BODY_MAX_BYTES,
   NOTE_TITLE_MAX_LENGTH,
+  NOTE_PREVIEW_MAX_LENGTH,
   NoteConflictError,
   NoteError,
   NoteFolder,
@@ -21,6 +22,8 @@ import {
   type NotesMoveInput,
   type NotesReadInput,
   type NotesWriteInput,
+  type NotesUpdateInput,
+  type NoteThreadRef,
   type NoteSummary,
   type NoteThreadLink,
   type ThreadResult,
@@ -37,6 +40,7 @@ import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as Projections from "../orchestration-v2/ProjectionStore.ts";
 import * as ServerConfig from "../config.ts";
 import { parseNote, serializeNote, type NoteContents } from "./frontmatter.ts";
 import * as NotesGit from "./NotesGit.ts";
@@ -49,10 +53,34 @@ const isFolder = Schema.is(NoteFolder);
 const LIST_LIMIT = 500;
 const MAX_FILE_BYTES = NOTE_BODY_MAX_BYTES + 256 * 1024;
 const summary = ({ body: _body, ...note }: NoteDocument): NoteSummary => note;
-const displayTitle = (title: string) => {
-  if (title.length <= NOTE_TITLE_MAX_LENGTH) return title;
-  const cut = title.slice(0, NOTE_TITLE_MAX_LENGTH - 1);
+const displayText = (text: string, maxLength: number) => {
+  if (text.length <= maxLength) return text;
+  const cut = text.slice(0, maxLength - 1);
   return `${/[\uD800-\uDBFF]$/u.test(cut) ? cut.slice(0, -1) : cut}…`;
+};
+const displayTitle = (title: string) => displayText(title, NOTE_TITLE_MAX_LENGTH);
+const stripMarkers = (line: string) =>
+  line
+    .trim()
+    .replace(/^(?:(?:#{1,6}|[-*+>]|\d+\.)\s+|\[[ xX]\]\s*)+/u, "")
+    .trim();
+const bodySummary = (body: string, fallback: string) => {
+  const lines = body.split(/\r?\n/u);
+  const heading = /^#{1,6}\s+(.+?)\s*#*\s*$/mu.exec(body);
+  const titleIndex = heading
+    ? body.slice(0, heading.index).split("\n").length - 1
+    : lines.findIndex((line) => line.trim().length > 0);
+  const title = heading?.[1] ?? (titleIndex < 0 ? fallback : stripMarkers(lines[titleIndex]!));
+  const preview = lines
+    .filter((line, index) => index !== titleIndex && !/^\s*(?:`{3,}|~{3,})/u.test(line))
+    .map(stripMarkers)
+    .join(" ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return {
+    title: displayTitle(title || fallback),
+    preview: displayText(preview, NOTE_PREVIEW_MAX_LENGTH),
+  };
 };
 const sha256 = (bytes: Uint8Array) => NodeCrypto.createHash("sha256").update(bytes).digest("hex");
 
@@ -65,6 +93,7 @@ export class NotesService extends Context.Service<
       input: NotesWriteInput,
       author: NoteAuthor,
     ) => Effect.Effect<NoteDocument, NoteError | NoteConflictError>;
+    readonly update: (input: NotesUpdateInput) => Effect.Effect<NoteDocument, NoteError>;
     readonly move: (
       input: NotesMoveInput,
       author: NoteAuthor,
@@ -101,6 +130,7 @@ const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const git = yield* NotesGit.NotesGit;
   const results = yield* NoteResults.NoteResults;
+  const projections = yield* Projections.ProjectionStoreV2;
   const lock = yield* Semaphore.make(1);
   const events = yield* PubSub.unbounded<NotesEvent>();
   yield* Effect.addFinalizer(() => PubSub.shutdown(events));
@@ -283,9 +313,9 @@ const make = Effect.gen(function* () {
         const document: NoteDocument = {
           path: name,
           folder: name.includes("/") ? name.split("/")[0]! : null,
-          title: displayTitle(
-            /^#{1,6}\s+(.+?)\s*#*\s*$/mu.exec(contents.body)?.[1] ?? path.basename(name, ".md"),
-          ),
+          ...bodySummary(contents.body, path.basename(name, ".md")),
+          pinned: contents.pinned,
+          related: contents.related,
           status: contents.status,
           threads: contents.threads,
           updatedBy: contents.updatedBy,
@@ -516,7 +546,7 @@ const make = Effect.gen(function* () {
             : Effect.fail(storage),
       ),
     );
-  /** link and complete own no user revision, so a racing edit makes them read again. */
+  /** Header updates, link and complete own no user revision, so a racing edit makes them read again. */
   const rereadOnConflict = <A>(effect: Effect.Effect<A, NoteError | NoteConflictError>) =>
     effect.pipe(
       Effect.retry({ times: 3, while: (error) => error._tag === "NoteConflictError" }),
@@ -623,6 +653,8 @@ const make = Effect.gen(function* () {
               body: input.body,
               status: input.status ?? existing?.contents.status ?? "idea",
               threads: existing?.contents.threads ?? [],
+              pinned: existing?.contents.pinned ?? false,
+              related: existing?.contents.related ?? [],
               updatedBy: author,
             },
             existing?.document.revision ?? null,
@@ -630,6 +662,57 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.flatMap(enrich));
+  const update = Effect.fn("NotesService.update")(function* (input: NotesUpdateInput) {
+    return yield* lock
+      .withPermits(1)(
+        rereadOnConflict(
+          Effect.gen(function* () {
+            const source = yield* load(input.path);
+            const sameRef = (left: NoteThreadRef, right: NoteThreadRef) =>
+              left.threadId === right.threadId && left.host === right.host;
+            const pinned = input.pinned ?? source.contents.pinned;
+            let related = source.contents.related;
+            const ref = input.relate;
+            if (
+              ref &&
+              ![...source.contents.threads, ...related].some((entry) => sameRef(entry, ref))
+            ) {
+              if (ref.host === null) {
+                const thread = yield* projections.getThread(ref.threadId).pipe(
+                  Effect.catchTags({
+                    ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+                  }),
+                  Effect.mapError(() => storage),
+                );
+                if (!thread || thread.deletedAt !== null)
+                  return yield* new NoteError({
+                    reason: "not_found",
+                    message: "The thread was not found in this environment.",
+                    path: input.path,
+                  });
+              }
+              related = [...related, ref];
+            }
+            if (input.unrelate) {
+              const ref = input.unrelate;
+              related = related.filter((entry) => !sameRef(entry, ref));
+            }
+            if (
+              pinned === source.contents.pinned &&
+              related.length === source.contents.related.length &&
+              related.every((entry, index) => sameRef(entry, source.contents.related[index]!))
+            )
+              return source.document;
+            return yield* persist(
+              input.path,
+              { ...source.contents, pinned, related },
+              source.document.revision,
+            );
+          }),
+        ),
+      )
+      .pipe(Effect.flatMap(enrich));
+  });
   const move: NotesService["Service"]["move"] = (input, author) =>
     lock
       .withPermits(1)(
@@ -840,6 +923,7 @@ const make = Effect.gen(function* () {
     list,
     read,
     write,
+    update,
     move,
     delete: remove,
     subscribe,

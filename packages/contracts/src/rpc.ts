@@ -148,6 +148,7 @@ import {
   NotesWorkTargetsInput,
   NotesWorkTargetsResult,
   NotesWriteInput,
+  NotesUpdateInput,
 } from "./notes.ts";
 import {
   AuthAccessStreamError,
@@ -733,6 +734,7 @@ export const WS_METHODS = {
   notesList: "notes.list",
   notesRead: "notes.read",
   notesWrite: "notes.write",
+  notesUpdate: "notes.update",
   notesMove: "notes.move",
   notesDelete: "notes.delete",
   notesSubscribe: "notes.subscribe",
@@ -2801,6 +2803,11 @@ const WsNotesWriteRpc = Rpc.make(WS_METHODS.notesWrite, {
   success: NoteDocument,
   error: NoteRpcErrors,
 });
+const WsNotesUpdateRpc = Rpc.make(WS_METHODS.notesUpdate, {
+  payload: NotesUpdateInput,
+  success: NoteDocument,
+  error: NoteRpcErrors,
+});
 const WsNotesMoveRpc = Rpc.make(WS_METHODS.notesMove, {
   payload: NotesMoveInput,
   success: NoteDocument,
@@ -2838,6 +2845,7 @@ export const WsNotesRpcGroup = RpcGroup.make(
   WsNotesListRpc,
   WsNotesReadRpc,
   WsNotesWriteRpc,
+  WsNotesUpdateRpc,
   WsNotesMoveRpc,
   WsNotesDeleteRpc,
   WsNotesSubscribeRpc,

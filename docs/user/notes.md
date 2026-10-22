@@ -1,6 +1,12 @@
 # Notes
 
-Notes are markdown documents kept on the GOAT server you connect to (your hub). People and agents edit the same files, and a note can start work in a thread and follow it until it is done. Open **Notes** from the sidebar or the command palette on web and desktop, or from the notes button on the mobile home screen.
+Notes are markdown documents kept on the GOAT server you connect to (your hub). People and agents edit the same files, and a note can start work in a thread and follow it until it is done. Open **Notes** from the rail on web and desktop or from the command palette, or from the notes button on the mobile home screen. If you hid it from the rail, turn it back on with **+** at the bottom of the rail.
+
+## Writing and finding notes
+
+Press **⌘N** (**Ctrl+N** on Windows and Linux) on the Notes page, choose **New note**, or run **New note** from the command palette. The note opens ready to type; its first line becomes the title. New notes are saved as `Untitled.md`; choose **Rename or move** from the note's **⋯** menu to give the file a name or put it in a folder.
+
+The list shows pinned notes first, then everything else with the most recently changed on top. Press **/** to search titles, text, and folders, use the arrow keys to move through the list, and press **Enter** to start typing in the selected note. **Esc** in a note returns to the list. Pin a note with the pin button next to its status; pins are kept in the file, so they show on every device.
 
 ## Where notes live
 
@@ -12,6 +18,8 @@ The top of each file holds a small header that GOAT keeps up to date:
 ---
 status: idea # idea, doing or done
 threads: [...] # threads started from this note
+related: [...] # threads linked to the note
+pinned: true # only while the note is pinned
 updatedBy: user # user or agent
 ---
 ```
@@ -24,7 +32,7 @@ On web and desktop, notes open in a rich editor with headings, lists, checklists
 
 ## When someone else changed the note
 
-Every save names the version it started from. If the note changed in the meantime, GOAT does not overwrite it. You see **This note changed** with both versions and the lines that differ. Choose **Use theirs** to take the current file and drop your draft, or **Keep mine** to save your version over it. If it changes again before you decide, GOAT asks again.
+Every save names the version it started from. If the note's text or status changed in the meantime, GOAT does not overwrite it; a pin or link made elsewhere only changes the header, so your edit carries on. You see **This note changed** with both versions and the lines that differ. Choose **Use theirs** to take the current file and drop your draft, or **Keep mine** to save your version over it. If it changes again before you decide, GOAT asks again.
 
 Agents follow the same rule: an agent whose write is refused reads the note again and reapplies its change.
 
@@ -40,6 +48,10 @@ When the thread finishes and its agent reports success, the note moves to **done
 
 If the machine is offline, nothing starts and the note says the host is unavailable; try again once it is back. If starting work on another machine loses its answer, GOAT does not start a second copy on its own. Check that machine's threads, then choose **Start again** if nothing started.
 
+## Link notes to a thread
+
+On web and desktop, the notes button in a thread's header shows how many notes are linked to the thread. Open it to jump to a note, link an existing note, unlink one, or create **New note for this thread**, which goes in the folder named after the thread's project when that name works as a folder. A linked thread appears under **Threads** in the note. Linking never changes the note's status; only threads started with **Start work** do. The button appears on threads that run on your hub, where the notes live.
+
 ## For agents
 
-Agents use the `goat_note_list`, `goat_note_read`, `goat_note_write`, and `goat_note_move` tools. A write needs the revision from the last read; a refused write means the note changed, so the agent reads it again and retries.
+Agents use the `goat_note_list`, `goat_note_read`, `goat_note_write`, `goat_note_update`, and `goat_note_move` tools. A write needs the revision from the last read; a refused write means the note changed, so the agent reads it again and retries. `goat_note_update` pins a note or links a thread without touching its text.

@@ -61,6 +61,7 @@ import {
   ChevronRightIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
+  FileTextIcon,
   FolderGitIcon as FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
@@ -1625,7 +1626,7 @@ function OpenCommandPaletteDialog(props: {
     value: "action:notes",
     searchTerms: ["notes", "markdown", "ideas", "notebook"],
     title: "Open notes",
-    icon: <MessageCircleQuestionIcon className={ITEM_ICON_CLASS} />,
+    icon: <FileTextIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/notes", search: {} });
     },
@@ -1636,7 +1637,7 @@ function OpenCommandPaletteDialog(props: {
       value: "action:new-note",
       searchTerms: ["new note", "create note", "idea", "markdown"],
       title: "New note",
-      icon: <MessageCircleQuestionIcon className={ITEM_ICON_CLASS} />,
+      icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/notes", search: { create: true } });
       },

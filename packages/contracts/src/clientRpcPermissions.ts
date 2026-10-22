@@ -112,6 +112,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.notesWorkTargets]: AuthOrchestrationReadScope,
   [WS_METHODS.notesWorkTargetProjects]: AuthOrchestrationReadScope,
   [WS_METHODS.notesWrite]: AuthOrchestrationOperateScope,
+  [WS_METHODS.notesUpdate]: AuthOrchestrationOperateScope,
   [WS_METHODS.notesMove]: AuthOrchestrationOperateScope,
   [WS_METHODS.notesDelete]: AuthOrchestrationOperateScope,
   [WS_METHODS.notesStartWork]: AuthOrchestrationOperateScope,
