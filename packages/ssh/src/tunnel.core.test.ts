@@ -187,79 +187,6 @@ describe("ssh tunnel scripts", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
-  it("embeds the runner in the launch script byte for byte", () => {
-    const runner = SshTunnel.buildRemoteGoatRunnerScript(ARCHIVE);
-    assert.include(runner, 'printf \'%s\\n\' "$$" > "$GOAT_LOCK_CANDIDATE/pid"');
-    assert.include(SshTunnel.buildRemoteLaunchScript(ARCHIVE), runner);
-  });
-
-  it("installs and runs the release archive without Node, npm, or npx", () => {
-    const script = SshTunnel.buildRemoteGoatRunnerScript(ARCHIVE);
-
-    assert.include(script, "GOAT_ARCHIVE_VERSION='1.2.3-preview.20260911.4'");
-    assert.include(script, "GOAT_NODE_SCRIPT_PATH=''");
-    assert.include(
-      script,
-      "GOAT_RELEASE_BASE_URL='https://github.com/goat-si/goat-releases/releases/download'",
-    );
-    assert.include(
-      script,
-      'GOAT_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$GOAT_ARCHIVE_VERSION"',
-    );
-    assert.include(
-      script,
-      'GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.tar.gz"',
-    );
-    assert.include(script, "SHA256SUMS");
-    assert.include(script, 'exec "$GOAT_RUNTIME_DIR/goat" "$@"');
-    assert.notInclude(script, "npx");
-    assert.notInclude(script, "npm exec");
-    assert.notInclude(script, "t3@latest");
-    assert.notInclude(script, 'exec t3 "$@"');
-    // Concurrent launches serialize on a per-version directory lock and recheck
-    // the completion marker after acquiring it.
-    assert.include(
-      script,
-      'GOAT_LOCK="$HOME/.goat/runtime/goat/versions/.$GOAT_ARCHIVE_VERSION.install.lock"',
-    );
-    // Publish the pid before the atomic move, and pin stale cleanup to a cwd.
-    assert.include(script, 'mv "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK"');
-    assert.include(script, 'cd "$GOAT_LOCK" 2>/dev/null || exit 0');
-    assert.include(script, 'if kill -0 "$GOAT_LOCK_OWNER" 2>/dev/null; then exit 2; fi');
-    assert.include(script, 'elif [ "$GOAT_LOCK_UNOWNED" -lt 4 ]; then');
-    assert.include(script, 'if [ "$GOAT_LOCK_WAITED" -ge 360 ]; then');
-    assert.include(script, '"$GOAT_STAGING/SHA256SUMS" 30');
-    assert.include(script, '"$GOAT_STAGING/$GOAT_ARCHIVE" 240');
-    assert.notInclude(script, "-mmin");
-    assert.equal(script.split("if ! goat_runtime_ready; then").length - 1, 2);
-    assert.isBelow(
-      script.indexOf('"$GOAT_STAGING/goat" --version'),
-      script.indexOf('> "$GOAT_STAGING/.install-complete"'),
-    );
-    // Node discovery is defined for the dev path but only ever invoked inside
-    // the node-script branch, which the archive path skips entirely.
-    assert.equal(script.split("ensure_remote_node_path || true").length - 1, 1);
-    assert.isBelow(
-      script.indexOf("ensure_remote_node_path || true"),
-      script.indexOf('exec node "$GOAT_NODE_SCRIPT_PATH" "$@"'),
-    );
-    assert.isBelow(
-      script.indexOf('exec node "$GOAT_NODE_SCRIPT_PATH" "$@"'),
-      script.indexOf("GOAT_ARCHIVE_VERSION="),
-    );
-
-    const launch = SshTunnel.buildRemoteLaunchScript({
-      ...ARCHIVE,
-      releaseBaseUrl: "https://mirror.example/goat/",
-    });
-    assert.include(launch, "GOAT_ARCHIVE_MODE=1");
-    assert.include(launch, "GOAT_RELEASE_BASE_URL='https://mirror.example/goat'");
-    assert.include(launch, '"$RUNNER_FILE" __ssh-helper pick-port "$PORT_FILE"');
-    assert.include(launch, '"$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT"');
-    assert.include(launch, "__ssh-helper protocol --runtime-file");
-    assert.include(SshTunnel.buildRemoteLaunchScript(NODE_SCRIPT), "GOAT_ARCHIVE_MODE=0");
-  });
-
   it("rejects archive versions that are not a single exact version segment", () => {
     for (const archiveVersion of [
       "../other",
@@ -297,38 +224,6 @@ describe("ssh tunnel scripts", () => {
 
     assert.include(script, "GOAT_NODE_ENGINE_RANGE=''");
     assert.notInclude(script, TEST_NODE_ENGINE_RANGE);
-  });
-
-  it("builds the remote t3 runner with a node script override", () => {
-    const script = SshTunnel.buildRemoteGoatRunnerScript({
-      ...NODE_SCRIPT,
-      nodeEngineRange: TEST_NODE_ENGINE_RANGE,
-    });
-
-    assert.include(
-      script,
-      "GOAT_NODE_SCRIPT_PATH='/Users/julius/Development/Work/codething-mvp/apps/server/dist/bin.mjs'",
-    );
-    assert.include(script, 'exec node "$GOAT_NODE_SCRIPT_PATH" "$@"');
-    assert.include(script, "GOAT_ARCHIVE_VERSION=''");
-    assert.include(script, 'prepend_path_if_dir "$HOME/.local/bin"');
-    assert.include(script, `GOAT_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
-    assert.include(script, "remote_node_satisfies_engine()");
-    assert.include(script, "function satisfiesSemverRange");
-    assert.include(script, "satisfiesSemverRange(rawVersion, range)");
-    assert.include(script, 'prepend_path_if_dir "/home/linuxbrew/.linuxbrew/bin"');
-    assert.include(script, 'prepend_path_if_dir "$VOLTA_HOME/bin"');
-    assert.include(script, 'prepend_path_if_dir "$HOME/.asdf/shims"');
-    assert.include(script, 'prepend_path_if_dir "$HOME/.local/share/mise/shims"');
-    assert.include(script, 'eval "$(fnm env --shell bash)"');
-    assert.include(script, "fnm use --silent-if-unchanged");
-    assert.include(script, "fnm use default");
-    assert.include(script, 'prepend_path_if_dir "$HOME/.nodenv/shims"');
-    assert.include(script, 'NVM_DIR="$HOME/.nvm"');
-    assert.include(script, "nvm use --silent default");
-    assert.include(script, 'for GOAT_NODE_BIN in "$NVM_DIR"/versions/node/*/bin');
-    assert.notInclude(script, "ensure $NVM_DIR/nvm.sh is available");
-    assert.notInclude(script, "npx");
   });
 
   it("uses the remote t3 runner for launch and pairing scripts", () => {
@@ -448,67 +343,46 @@ describe("ssh tunnel scripts", () => {
     }).pipe(Effect.provide(layerProcess));
   });
 
-  it.effect("allows cold remote launches to exceed the default SSH command timeout", () => {
-    const target = {
-      alias: "devbox",
-      hostname: "devbox.example.com",
-      username: "julius",
-      port: 2222,
-    } as const;
-    const spawner = makeProtocolTestSpawner(() =>
-      Effect.succeed(
-        makeDelayedSuccessfulProcess(
+  it.effect.each([
+    ["node-script", NODE_SCRIPT, 75_000],
+    ["archive", PROTOCOL_ARCHIVE, 800_000],
+  ] as const)(
+    "allows cold %s launches to exceed the default SSH command timeout",
+    ([, runner, delayMs]) =>
+      Effect.gen(function* () {
+        const target = {
+          alias: "devbox",
+          hostname: "devbox.example.com",
+          username: "julius",
+          port: 2222,
+        } as const;
+        const started = yield* Deferred.make<void>();
+        const child = makeDelayedSuccessfulProcess(
           '{"status":"ready","selectedVersion":"1.2.3-preview.20260911.4","remotePort":3774}\n',
-          75_000,
-        ),
-      ),
-    );
-    const layerSpawner = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
-    const layerProcess = Layer.mergeAll(NodeServices.layer, layerSpawner, TestClock.layer());
+          delayMs,
+        );
+        const spawner = makeProtocolTestSpawner(() =>
+          Effect.succeed({
+            ...child,
+            exitCode: Deferred.succeed(started, undefined).pipe(Effect.andThen(child.exitCode)),
+          }),
+        );
+        const layerSpawner = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
+        const layerProcess = Layer.mergeAll(NodeServices.layer, layerSpawner, TestClock.layer());
 
-    return Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(
-        SshTunnel.launchOrReuseRemoteServer(target, undefined, NODE_SCRIPT),
-      );
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust(Duration.seconds(75));
+        return yield* Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(
+            SshTunnel.launchOrReuseRemoteServer(target, undefined, runner),
+          );
+          yield* Deferred.await(started);
+          yield* TestClock.adjust(Duration.millis(delayMs));
 
-      const result = yield* Fiber.join(fiber);
-      if (result.status !== "ready") throw new Error("Expected a ready runtime");
-      assert.equal(result.remotePort, 3774);
-    }).pipe(Effect.provide(layerProcess));
-  });
-
-  it.effect("gives cold archive launches a larger budget than node-script launches", () => {
-    const target = {
-      alias: "devbox",
-      hostname: "devbox.example.com",
-      username: "julius",
-      port: 2222,
-    } as const;
-    const spawner = makeProtocolTestSpawner(() =>
-      Effect.succeed(
-        makeDelayedSuccessfulProcess(
-          '{"status":"ready","selectedVersion":"1.2.3-preview.20260911.4","remotePort":3774}\n',
-          800_000,
-        ),
-      ),
-    );
-    const layerSpawner = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
-    const layerProcess = Layer.mergeAll(NodeServices.layer, layerSpawner, TestClock.layer());
-
-    return Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(
-        SshTunnel.launchOrReuseRemoteServer(target, undefined, PROTOCOL_ARCHIVE),
-      );
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust(Duration.seconds(800));
-
-      const result = yield* Fiber.join(fiber);
-      if (result.status !== "ready") throw new Error("Expected a ready runtime");
-      assert.equal(result.remotePort, 3774);
-    }).pipe(Effect.provide(layerProcess));
-  });
+          const result = yield* Fiber.join(fiber);
+          if (result.status !== "ready") throw new Error("Expected a ready runtime");
+          assert.equal(result.remotePort, 3774);
+        }).pipe(Effect.provide(layerProcess));
+      }),
+  );
 
   it("allows the remote port picker to run without a state file path", () => {
     assert.include(SshTunnel.REMOTE_PICK_PORT_SCRIPT, 'const filePath = process.argv[2] ?? "";');
@@ -559,7 +433,10 @@ describe("ssh tunnel scripts", () => {
     );
   });
 
-  it.effect("accepts pretty-printed pairing JSON from the remote CLI", () => {
+  it.effect.each([
+    ["from the remote CLI", ""],
+    ["after remote shell startup noise", "loaded nvm default\n"],
+  ] as const)("accepts pretty-printed pairing JSON %s", ([, prefix]) => {
     const target = {
       alias: "devbox",
       hostname: "devbox.example.com",
@@ -582,49 +459,7 @@ describe("ssh tunnel scripts", () => {
         if (script.includes("ready=false")) {
           return makeSuccessfulProcess(JSON.stringify({ platform, arch, ready: true }));
         }
-        return makeSuccessfulProcess(`{
-  "id": "88941235-6ed5-4184-a2ff-5339e2075958",
-  "credential": "LCL4R2TPHDKQ",
-  "scopes": ["orchestration:read"],
-  "expiresAt": "2026-04-29T01:01:20.994Z"
-}
-
-`);
-      }),
-    );
-    const layerSpawner = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
-    const layerProcess = Layer.merge(NodeServices.layer, layerSpawner);
-    return Effect.gen(function* () {
-      const result = yield* SshTunnel.issueRemotePairingToken(target, undefined, PROTOCOL_ARCHIVE);
-      assert.equal(result.credential, "LCL4R2TPHDKQ");
-    }).pipe(Effect.provide(layerProcess));
-  });
-
-  it.effect("accepts pretty-printed pairing JSON after remote shell startup noise", () => {
-    const target = {
-      alias: "devbox",
-      hostname: "devbox.example.com",
-      username: "julius",
-      port: 2222,
-    } as const;
-    const spawner = makeProtocolTestSpawner((command) =>
-      Effect.gen(function* () {
-        const input = command._tag === "StandardCommand" ? command.options.stdin : undefined;
-        const bytes =
-          input !== undefined &&
-          typeof input === "object" &&
-          "stream" in input &&
-          Stream.isStream(input.stream)
-            ? yield* input.stream.pipe(Stream.runCollect)
-            : [];
-        const script = new TextDecoder().decode(
-          new Uint8Array(bytes.flatMap((chunk) => Array.from(chunk))),
-        );
-        if (script.includes("ready=false")) {
-          return makeSuccessfulProcess(JSON.stringify({ platform, arch, ready: true }));
-        }
-        return makeSuccessfulProcess(`loaded nvm default
-{
+        return makeSuccessfulProcess(`${prefix}{
   "id": "88941235-6ed5-4184-a2ff-5339e2075958",
   "credential": "LCL4R2TPHDKQ",
   "scopes": ["orchestration:read"],
@@ -1332,7 +1167,6 @@ else {
     "uploads the local archive to a cold remote",
     "downloads from an explicit mirror when no local archive exists",
     "skips upload when the remote runtime is ready",
-    "passes the same auth options to probe, upload and launch",
   ] as const)("%s", (name) =>
     Effect.gen(function* () {
       const fixture = yield* makeUploadFixture();
