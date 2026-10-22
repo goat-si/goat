@@ -272,8 +272,8 @@ const isGitCommandError = Schema.is(GitCommandError);
 
 /**
  * Most preparation failures are a request this machine cannot satisfy, such as a missing
- * base ref. A stalled Git command is a slow or stuck host instead, which a later attempt
- * can get past, so it is retryable and must not read as a bad request.
+ * base ref. A stalled or timed-out Git command is a slow or stuck host instead, which a
+ * later attempt can get past, so it is retryable and must not read as a bad request.
  */
 export function preparationFailureClass(error: unknown): {
   readonly class: "validation_error" | "unknown";
@@ -281,9 +281,11 @@ export function preparationFailureClass(error: unknown): {
   readonly retryable: boolean;
 } {
   const cause = isThreadLaunchError(error) ? error.cause : error;
-  return isGitCommandError(cause) && cause.reason === "stalled"
-    ? { class: "unknown", code: "git_stalled", retryable: true }
-    : { class: "validation_error", code: null, retryable: false };
+  if (isGitCommandError(cause) && cause.reason === "stalled")
+    return { class: "unknown", code: "git_stalled", retryable: true };
+  if (isGitCommandError(cause) && cause.reason === "timed_out")
+    return { class: "unknown", code: "git_timed_out", retryable: true };
+  return { class: "validation_error", code: null, retryable: false };
 }
 
 const make = Effect.gen(function* () {

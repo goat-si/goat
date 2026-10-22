@@ -367,6 +367,7 @@ export const GitCommandFailureReason = Schema.Literals([
   "remote_unreachable",
   "stalled",
   "tag_would_be_clobbered",
+  "timed_out",
 ]);
 export type GitCommandFailureReason = typeof GitCommandFailureReason.Type;
 

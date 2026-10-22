@@ -67,6 +67,9 @@ const gitProcesses = Semaphore.makeUnsafe(8);
 // Silence, not total time, marks a stuck checkout: a Windows checkout under real-time
 // scanning or a hook installing dependencies can print steadily for many minutes.
 const WORKTREE_ADD_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
+// The first fetch after a long gap can pull thousands of new refs for minutes while
+// printing progress the whole time, so the worktree base fetch also stops only on silence.
+const WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
 const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
@@ -1218,6 +1221,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             () =>
               new GitCommandError({
                 ...gitCommandContext(commandInput),
+                reason: "timed_out",
                 detail: "Git command timed out.",
               }),
           ),
@@ -4700,6 +4704,131 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return remoteNames.includes(remoteName) ? { remoteName, branchName } : null;
     });
 
+  /**
+   * Removes the temporary packs fetches leave in objects/pack when they are killed. Only
+   * files untouched for a whole stall window go, because a fetch still receiving data
+   * keeps writing its own. Best effort: a pack that cannot be read or removed stays.
+   */
+  const removeStaleTemporaryPacks = Effect.fn("GitVcsDriver.removeStaleTemporaryPacks")(
+    function* (cwd: string, untouchedForMs: number) {
+      const packDirectory = path.resolve(
+        cwd,
+        (yield* runGitStdout("GitVcsDriver.removeStaleTemporaryPacks", cwd, [
+          "rev-parse",
+          "--git-path",
+          "objects/pack",
+        ])).trim(),
+      );
+      const now = yield* Clock.currentTimeMillis;
+      let removed = 0;
+      for (const name of yield* fileSystem.readDirectory(packDirectory)) {
+        if (!name.startsWith("tmp_pack_") && !name.startsWith("tmp_idx_")) continue;
+        const file = path.join(packDirectory, name);
+        const { mtime } = yield* fileSystem.stat(file);
+        if (Option.isNone(mtime) || now - mtime.value.getTime() < untouchedForMs) continue;
+        yield* fileSystem.remove(file);
+        removed += 1;
+      }
+      return removed;
+    },
+    Effect.catch((cause) =>
+      Effect.logWarning("Could not remove stale temporary packs", { cause }).pipe(Effect.as(0)),
+    ),
+  );
+
+  /**
+   * Fetches one branch for a new worktree. Unlike other fetches it has no fixed time limit:
+   * it fails only after WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS without output, and a stalled
+   * fetch is retried once after the packs it abandoned are cleared. Tags are left out; a
+   * worktree base never needs them and they can be most of a first fetch.
+   */
+  const fetchWorktreeBase = Effect.fn("GitVcsDriver.fetchWorktreeBase")(function* (
+    input: GitVcsDriver.GitFetchWorktreeBaseCommitInput,
+    remoteName: string,
+    branch: string,
+  ) {
+    const args = [
+      "fetch",
+      "--progress",
+      "--no-tags",
+      "--",
+      remoteName,
+      `+refs/heads/${branch}:refs/remotes/${remoteName}/${branch}`,
+    ];
+    const onLine = input.onOutputLine;
+    const once = executeGitWithStableDiagnostics(
+      "GitVcsDriver.fetchWorktreeBase",
+      input.cwd,
+      args,
+      {
+        env: STATUS_UPSTREAM_REFRESH_ENV,
+        allowNonZeroExit: true,
+        stallTimeoutMs: WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS,
+        ...(onLine === undefined
+          ? {}
+          : { progress: { onStdoutLine: onLine, onStderrLine: onLine } }),
+      },
+    );
+    // Another fetch in the same repository can win the race for the tracking ref.
+    const run = once.pipe(
+      Effect.flatMap((result) =>
+        result.exitCode !== 0 && isRefLockFailure(result.stderr) ? once : Effect.succeed(result),
+      ),
+    );
+    const result = yield* run.pipe(
+      Effect.catchIf(
+        (error) => error.reason === "stalled",
+        (stall) =>
+          Effect.gen(function* () {
+            const removed = yield* removeStaleTemporaryPacks(
+              input.cwd,
+              WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS,
+            );
+            yield* Effect.logWarning("Worktree base fetch stalled; retrying once", {
+              cwd: input.cwd,
+              remoteName,
+              branch,
+              detail: stall.detail,
+              removedTemporaryPacks: removed,
+            });
+            if (onLine !== undefined) {
+              yield* onLine(
+                `${stall.detail} Retrying once${removed === 0 ? "" : ` after removing ${removed} abandoned temporary pack file${removed === 1 ? "" : "s"}`}.`,
+              );
+            }
+            return yield* run.pipe(
+              Effect.mapError((retryError) =>
+                retryError.reason === "stalled"
+                  ? new GitCommandError({
+                      ...gitCommandContext({
+                        operation: "GitVcsDriver.fetchWorktreeBase",
+                        cwd: input.cwd,
+                        args,
+                      }),
+                      reason: "stalled",
+                      detail: `${retryError.detail} It had already stalled once and was retried.`,
+                    })
+                  : retryError,
+              ),
+            );
+          }),
+      ),
+    );
+    if (result.exitCode === 0) return true;
+    if (
+      result.stderr.split(/\r?\n/).includes(`fatal: couldn't find remote ref refs/heads/${branch}`)
+    ) {
+      return false;
+    }
+    return yield* new GitCommandError({
+      ...gitCommandContext({ operation: "GitVcsDriver.fetchWorktreeBase", cwd: input.cwd, args }),
+      detail: fetchFailureDetail(result.stderr) ?? `git fetch ${remoteName} failed`,
+      ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+      stdoutLength: result.stdout.length,
+      stderrLength: result.stderr.length,
+    });
+  });
+
   const fetchWorktreeBaseCommit: GitVcsDriver.GitVcsDriver["Service"]["fetchWorktreeBaseCommit"] =
     Effect.fn("fetchWorktreeBaseCommit")(function* (input) {
       const target = yield* resolveWorktreeBaseRemote(input);
@@ -4707,7 +4836,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const { remoteName, branchName } = target;
       const remoteRefName = `${remoteName}/${branchName}`;
       // A missing remote branch can leave a stale tracking ref; never resolve it.
-      if (!(yield* fetchRemote({ cwd: input.cwd, remoteName, refName: remoteRefName }))) {
+      if (!(yield* fetchWorktreeBase(input, remoteName, branchName))) {
         return null;
       }
       const resolved = yield* executeGit(
