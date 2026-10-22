@@ -24,7 +24,7 @@ export const remoteReportFailure = (error: RemoteReportService.RemoteReportError
               : "invalid_request",
     message:
       error.reason === "not_bound"
-        ? "This thread was not launched with an origin report binding."
+        ? "This thread has no origin to report to: it was not launched from another machine or by a thread on this machine."
         : error.reason === "thread_deleted"
           ? "The bound thread was deleted."
           : error.reason === "access_denied"

@@ -2446,7 +2446,7 @@ export const agentSurfaceRegistry = {
     summary:
       "Report progress, a result, failure or a need for human input to the origin of this thread.",
     description:
-      "Report progress, a result, failure or a need for human input to the origin of this thread. Only available inside a thread launched with an origin binding. The summary is data; a completed report is a claim and does not stop the run. Maximum 4000 characters.",
+      "Report progress, a result, failure or a need for human input to the origin of this thread. A thread launched from another machine reports to that origin. A thread launched by a thread on this machine (goat_thread_launch, delegate_task) has no origin binding, so its report goes to that launcher instead and the result says delivery: launcher; needs_input wakes the launcher, other reports reach its next turn. A thread nobody launched gets thread_not_found. The summary is data; a completed report is a claim and does not stop the run. Maximum 4000 characters.",
     effect: "write",
     capability: "none",
     capabilityReason: "Reports to this thread's own origin.",

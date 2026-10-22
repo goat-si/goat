@@ -441,6 +441,11 @@ wake or prompt delivery. `goat_ssh_reports` reads the origin's bounded dispatch
 status list. Run-end notifications are controlled separately by
 `notifyOnCompletion` and the launch watch.
 
+A thread launched on the same machine (`goat_thread_launch`, `delegate_task`) has
+no origin binding. Its `goat_origin_report` goes to the launching thread instead,
+found the way question escalation finds it: `needs_input` wakes the launcher and
+other reports wait in its inbox for its next turn.
+
 A thread launched this way may name a host its own machine cannot reach in
 `goat_thread_send`. The origin then delivers that send as the launcher thread,
 within the launcher's modes, and the remote agent gets `delivery: "relayed"`.

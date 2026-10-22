@@ -55,7 +55,14 @@ export const RemoteOriginReportInput = Schema.Struct({
   summary: Summary,
 });
 export type RemoteOriginReportInput = typeof RemoteOriginReportInput.Type;
-export const RemoteOriginReportResult = Schema.Struct({ sequence: NonNegativeInt });
+export const RemoteOriginReportResult = Schema.Struct({
+  sequence: NonNegativeInt,
+  /**
+   * `launcher`: the thread has no origin binding, so the report went to the thread that
+   * launched it on this machine. Absent when it went to the origin.
+   */
+  delivery: Schema.optional(Schema.Literal("launcher")),
+});
 export type RemoteOriginReportResult = typeof RemoteOriginReportResult.Type;
 /**
  * What still holds a finished run's thread open: provider background work and a
