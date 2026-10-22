@@ -313,11 +313,18 @@ covers the mapping.
 **Now.** [registry.ts](../../packages/contracts/src/agentSurface/registry.ts) holds
 one entry per tool: resource, verb, legacy name, toolkit, summary, model-facing
 description, effect, `hostRoutable`, `requires` (`thread | client | either`),
-`dryRun`, `humanSteps`, and MCP hints. Toolkits read their names and descriptions
+`dryRun`, `humanSteps`, `capability`, and MCP hints. Toolkits read their names and descriptions
 from it. Registration takes read and destructive hints from each handler's
 `McpToolAccess` declaration, and the parity test checks that every assembled tool
 has an entry, every entry resolves a schema, and effects agree with access.
 Schemas stay with their toolkits.
+
+Every write names the goatclaw capability a caller's profile needs to run it, or
+`none` with `capabilityReason` saying what bounds it instead: the caller's own
+thread or browser, a person who completes the step, or another grant such as
+`memory:write`. The type refuses a write without one. Tools whose thread callers
+only ask a person, such as provider sign-in and sync, declare `none` so a profile
+never preempts the person's decision.
 
 **Proposed.** Add the `idempotency`, `pagination`, and `operation` fields, and run
 each entry's examples as tests.
