@@ -2,6 +2,7 @@ import { EnvironmentId, MessageId, RunId, ScheduledTaskId, ThreadId } from "@goa
 import type { LegendListRef } from "@legendapp/list/react";
 import { createRef, Profiler, type ComponentProps, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 
@@ -490,5 +491,38 @@ describe("MessagesTimeline scroll position", () => {
       ).toBeLessThanOrEqual(1),
     );
     expect(screen.text()).toContain("Paragraph 11.29");
+  });
+  it("leaves a reader who scrolled up in place while rows keep settling", async () => {
+    const props = baseProps();
+    const entries = Array.from({ length: 12 }, (_, index) =>
+      message(
+        Array.from({ length: 30 }, (_, line) => `Paragraph ${index}.${line}`).join("\n\n"),
+        { role: "assistant" },
+        `message-${index}`,
+      ),
+    );
+    await using screen = await renderTimeline(entries, props);
+    await vi.waitFor(() => expect(props.listRef.current?.getScrollableNode()).toBeTruthy());
+    const viewport: HTMLElement = props.listRef.current!.getScrollableNode();
+    const distanceFromEnd = () =>
+      viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThanOrEqual(1));
+    // Follow is still on here, as in the moment before ChatView commits the
+    // cancellation the gesture triggers.
+    await userEvent.wheel(viewport, { delta: { y: -2000 } });
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeGreaterThan(viewport.clientHeight));
+    let passes = 0;
+    const grow = new ResizeObserver(() => {
+      if (passes === 6) return;
+      passes += 1;
+      const rows = screen.container.querySelectorAll("[data-timeline-root]");
+      const late = document.createElement("div");
+      late.style.height = "120px";
+      rows[rows.length - 1]?.append(late);
+    });
+    grow.observe(viewport.firstElementChild!);
+    using _grow = { [Symbol.dispose]: () => grow.disconnect() };
+    await vi.waitFor(() => expect(passes).toBe(6));
+    expect(distanceFromEnd()).toBeGreaterThan(viewport.clientHeight);
   });
 });
