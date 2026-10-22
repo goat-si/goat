@@ -1,64 +1,69 @@
 # Agent surface
 
 > **요약 (Korean summary)**
-> GOAT의 에이전트 표면(MCP 106개 도구, `goat` CLI, 문서)을 작은 균일 문법 위로 다시 세우는 설계안이다.
-> 모든 기능은 `resource.verb` 경로 하나로 식별되고, 같은 레지스트리에서 MCP 도구 이름, CLI 명령, `--help`, 참조 문서, `llms.txt`가 생성된다.
-> 결과는 `ok | error | needs_human` 세 갈래 봉투로 통일하고, 사람이 꼭 해야 하는 단계(OAuth, 디바이스 코드, 시크릿, 승인, 2FA)는 `handoff` 레코드로 넘겨 사람이 끝내면 서버가 작업을 이어서 완료한다. 자격 증명은 에이전트를 거치지 않는다.
-> `goat_describe`와 작은 평가기 `goat_eval`(JSON 형식, 호출 32회 상한, 개별 호출과 같은 권한 검사)이 "Lisp 같은 작은 코어" 역할을 한다.
-> 이미 `goat_<resource>_<verb>` 형태인 58개 이름은 그대로 두고, 나머지 48개만 별칭과 함께 새 이름으로 옮긴다.
-> CLI 설치(macOS/Linux/Windows)는 이미 Settings에 있으므로 이를 확장하고, 첫 소비자는 Claude Cloud·Devin Cloud 프로바이더 설정이다.
-> 12개의 작은 PR로 단계적으로 배포하며 각 PR은 단독으로 배포 가능하다.
+> GOAT의 에이전트 표면(MCP 도구 191개, `goat` CLI, 문서)을 작은 균일 문법 위로 다시 세우는 설계다.
+> 레지스트리(`resource.verb` 경로, 패리티 테스트 포함)와 사람 핸드오프 레코드는 이미 배포되었다.
+> 결과는 `ok | error | needs_human` 세 갈래로 유지하고, 끝나지 않은 작업은 반드시 `meta.operation` 핸들을 붙여 `operation.read/wait/cancel`로 다룬다.
+> 오류 코드에 `resource_exhausted`, `failed_precondition`, `unknown_outcome`을 더하고, 재시도 가능 여부는 호출마다 계산한다. 도메인 사유는 변환 전에 보존한다.
+> `clientRequestId`는 인자 다이제스트와 함께 원자적으로 예약하고, 결과가 기록되기 전에 끊긴 키는 `unknown_outcome`으로 남겨 자동 재실행을 막는다.
+> `goat_call`은 직접 MCP 호출과 같은 단일 검사 경로를 쓰고, `goat_eval`은 측정으로 필요가 입증될 때까지 보류한다.
+> 런타임 승인은 사람의 클라이언트 세션 또는 `orchestration:operate`와 `orchestration:approve`를 모두 가진 외부 MCP 클라이언트만, 그 밖의 사람 단계는 사람의 클라이언트 세션만 해결한다.
+> 생성된 참조 문서는 저장소에 커밋하지 않고 실행 중인 서버가 제공한다. 결정 기록(D1–D15)과 선행 사례 비교를 끝에 둔다.
 
-Status: proposal. Nothing below is implemented unless a paragraph is marked **Now**.
-
-This page uses two labels. **Now** describes `dev` at `a0b5b0ed3`, with source
-paths and lines. **Proposed** is design that does not exist yet. Unlabeled text in a
-Proposed section is also proposal.
+This page uses two labels. **Now** describes `dev` as of 2026-10-23 with source
+paths. **Proposed** is design that does not exist yet. Unlabeled text in a Proposed
+section is also proposal. The [rollout](#rollout) table is the one place that
+tracks which parts have shipped.
 
 ## Why this exists
 
-An agent working in GOAT today has three surfaces that grew separately: 106 MCP
-tools, a server CLI built for operators, and prose docs. They disagree in naming,
-result shape, and coverage, and each one is maintained by hand.
+An agent working in GOAT meets three surfaces that grew separately: MCP tools, a
+server CLI built for operators, and prose docs. They disagree in naming, result
+shape, retry behavior, and coverage.
 
-**Now.** The 106 tools are declared with `Tool.make` across 16 toolkit directories under
-`apps/server/src/mcp/toolkits/`. Fifty-eight are named `goat_*`; the rest use
-bare prefixes (`preview_*`, `device_*`, `channel_*`, `html_*`) or verb-first
-names (`delegate_task`, `list_scheduled_tasks`, `link_pull_request`). ADR-0007
-renamed the old `t3_*` tools to `goat_*` and left the others alone
-([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)). The
-hand-written tool reference in
-[orchestrator-mcp-server.md](../orchestration-v2/orchestrator-mcp-server.md)
-(693 lines) covers about twenty of them. Drift already shows in small places:
-`DesktopCliCommandStateSchema` still documents the installed command as `t3`
-(`packages/contracts/src/ipc.ts:370`) while the installer links `goat`
-(`apps/desktop/src/app/DesktopCliCommand.ts:167`).
+**Now.** `/mcp` mounts 191 tools: 179 `Tool.make` declarations and 12
+`Tool.dynamic` ones, of which 123 are named `goat_*`. Every tool has a registry
+entry, and a test fails when the assembled catalog and the registry disagree
+([agentSurface.test.ts](../../apps/server/src/mcp/agentSurface.test.ts)). The
+generated [audit](./agent-surface-audit.md) measures the rest: few mutating tools
+accept `clientRequestId`, most input parameters have no description, and no CLI
+command has a usage example. Failures come in more than ten unrelated shapes, and
+a step that needs a person reaches the agent in nine different contracts (see
+[Human steps](#human-steps)).
 
-The goal is a surface where an agent can find, call, and chain every capability
-without reading source, where steps that need a person go to that person and come
-back, and where the documentation is generated from the code that runs.
+The goal is a surface where an agent can find, call, retry, and chain every
+capability without reading source, where steps that need a person go to that
+person and come back, and where reference documentation comes from the code that
+runs.
 
 ## Design rules
 
 1. **One registry.** Every capability has one entry. MCP names, CLI commands,
-   help text, reference docs, and `llms.txt` are derived from it.
-2. **Small core.** Three meta tools (`goat_describe`, `goat_call`, `goat_eval`)
-   plus the handoff verbs make every other capability reachable as data.
+   help text, served reference docs, and `llms.txt` are derived from it.
+2. **Small core.** Two meta tools (`goat_describe`, `goat_call`) and the
+   operation verbs make every other capability reachable as data.
 3. **Additive.** New names and envelopes are added beside the old ones. Old names
    keep working through a deprecation window.
-4. **No new authority.** Composition, the CLI, and handoffs reuse the existing
-   access checks. Nothing in this design lets an agent widen its own grant.
+4. **No new authority.** Meta tools, the CLI, and handoffs run the same checks a
+   direct call runs. Nothing here lets an agent widen its own grant.
 5. **People finish human steps.** OAuth codes, device codes, secrets, approvals,
-   and second factors are shown only on human surfaces and never returned to the
-   agent.
+   and second factors reach a person's session and never a thread credential.
+6. **Every write says whether a retry is safe.** A write takes a deduplication
+   key or is marked unsafe to retry, and the envelope never calls a write that
+   may have applied retryable.
+7. **One owner per human interaction.** Each kind of human step has one durable
+   record that holds its state, expiry, and continuation. Other surfaces project it.
 
 ## Grammar
 
 ### Paths
 
-**Proposed.** A capability is identified by a path `resource.verb`. Resources are
-lower snake case nouns (`thread`, `pending_request`, `pull_request`). Verbs come
-from a small standard set when one fits:
+**Now.** A capability is identified by `resource.verb`. The registry stores the
+two parts as separate fields, because names such as
+`goat_preview_recording_start` cannot be split reliably from the string
+([registry.ts](../../packages/contracts/src/agentSurface/registry.ts)).
+
+Verbs come from a small standard set when one fits:
 
 | Verb                | Meaning                                                      | Effect class |
 | ------------------- | ------------------------------------------------------------ | ------------ |
@@ -70,677 +75,631 @@ from a small standard set when one fits:
 | `watch` / `unwatch` | Subscribe the calling thread to changes                      | write        |
 | `wait`              | Block until a state is reached, with a timeout               | read         |
 | `run`               | Trigger a resource that already exists (a schedule, a check) | write        |
+| `cancel`            | Ask running work to stop; cooperative                        | write        |
 
-A domain verb (`thread.send`, `thread.interrupt`, `preview.click`) is allowed when
-no standard verb fits, but it must declare its effect class. The registry stores
-resource and verb as separate fields, because names like
-`goat_preview_recording_start` cannot be split reliably from the string.
+A domain verb (`thread.send`, `preview.click`, `decision.answer`) is allowed when
+no standard verb fits, and the registry records its effect class. `forget` stays
+distinct from `cancel` and `delete`: it stops GOAT observing something and leaves
+it running, as `cloud_agent.run_forget` does.
+
+**Proposed.** Some shipped paths use a near synonym of a standard verb, such as
+`decision.get`, `thread.configuration`, `provider.sync_status`, and
+`origin.reports_wait`. At the listing flip they become `read`, `wait`, or a `list`
+on a sub-resource, and the old path stays as an alias. The registry and the audit
+page are the catalog; this page keeps the rules.
 
 Three projections come from a path:
 
-| Surface     | `thread.send`              | `pending_request.respond`              |
-| ----------- | -------------------------- | -------------------------------------- |
-| MCP tool    | `goat_thread_send`         | `goat_pending_request_respond`         |
-| CLI         | `goat thread send`         | `goat pending-request respond`         |
-| Docs anchor | `reference/thread.md#send` | `reference/pending-request.md#respond` |
+| Surface  | `thread.send`      | `pending_request.respond`      |
+| -------- | ------------------ | ------------------------------ |
+| MCP tool | `goat_thread_send` | `goat_pending_request_respond` |
+| CLI      | `goat thread send` | `goat pending-request respond` |
 
-### Common arguments
+### Reserved arguments
 
-**Now.** Several conventions already exist, unevenly:
+**Now.** Unknown top-level arguments are refused before the handler runs, so a
+misspelled `hostId` cannot silently run locally (`undeclaredArgumentsResult` in
+[McpHttpServer.ts](../../apps/server/src/mcp/McpHttpServer.ts)). Other
+conventions are uneven. Paging uses numeric offsets, string cursors, a bare
+`limit`, or nothing, and `thread.list` across hosts returns a truncated top N with
+no way to continue. Deduplication has different lifetimes: orchestration command
+receipts are durable, while remote sends remember 1,000 request ids in memory
+(`SENT_REQUEST_CACHE_LIMIT` in
+[HostThreadsMcpService.ts](../../apps/server/src/mcp/HostThreadsMcpService.ts)).
+Some writes deduplicate by a natural key instead, such as
+`cloud_agent.run_register` by provider run id.
 
-- `clientRequestId` for retry safety appears in 8 input schemas in
-  `packages/contracts/src/orchestratorMcp.ts`.
-- `host` routes a call to an SSH host. Unknown top-level arguments are refused
-  before the handler runs, so a misspelled `hostId` cannot silently run locally
-  (`apps/server/src/mcp/McpHttpServer.ts:805-855`).
-- Paging uses numeric offsets (`orchestratorMcp.ts:486`, `:525`;
-  `apps/server/src/mcp/toolkits/previewControls/tools.ts:30`) and, for host
-  fan-out, an encoded string (`orchestratorMcp.ts:569`).
-- Only `goat_worktree_cleanup` offers `dryRun`
-  (`apps/server/src/mcp/toolkits/worktree/tools.ts:137`).
+**Proposed.** The registry layer validates these before the handler runs:
 
-**Proposed.** Every registry entry gets the same reserved arguments, validated by
-the registry layer before the handler runs:
+| Argument          | Applies to                          | Rule                                                    |
+| ----------------- | ----------------------------------- | ------------------------------------------------------- |
+| `host`            | Entries marked `hostRoutable`       | Routed by the origin; see [Remote hosts](#remote-hosts) |
+| `clientRequestId` | Writes marked `idempotency: "key"`  | See [Idempotency](#idempotency)                         |
+| `dryRun`          | Writes marked `dryRun: "supported"` | Returns `{plan}` and changes nothing                    |
+| `cursor`, `limit` | Every `list`                        | See [Paging](#paging)                                   |
 
-| Argument          | Applies to                   | Rule                                                                                                                              |
-| ----------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `host`            | Entries marked host-routable | Unchanged routing through `SshRemoteDispatch`                                                                                     |
-| `clientRequestId` | Every write                  | Same id from the same caller returns the first result for 24 hours                                                                |
-| `dryRun`          | Every write that can plan    | Returns `{plan: [...]}` and changes nothing. Entries that cannot plan are marked `dryRun: "unsupported"`, and the call is refused |
-| `cursor`, `limit` | Every `list`                 | Cursor is an opaque string; result carries `nextCursor` (string or null)                                                          |
+The registry gains three fields so tools state these properties and tests check
+them: `idempotency: "key" | "natural" | "none"`, `pagination: "cursor" | "limit" |
+"none"`, and `operation`, the operation kind an entry returns when its work can
+outlive the call. A test fails when an entry claims `"key"` and its input schema
+has no `clientRequestId`.
 
-Writes that go through orchestration already get a command receipt in the event
-sink. Writes that do not (settings, worktree removal, preview actions) get a small
-receipt table keyed by `(caller, path, clientRequestId)`.
+### Idempotency
 
-### Result envelope
+**Proposed.** A write that takes `clientRequestId` follows the rules payment APIs
+settled on ([Stripe](https://docs.stripe.com/api/idempotent_requests),
+[AIP-155](https://google.aip.dev/155)):
 
-**Now.** `McpServer.toolkit` serializes each result as JSON text
-(`McpHttpServer.ts:650-653`). Failures are returned values of
-`OrchestratorMcpFailure {code, message}` with 18 codes
-(`packages/contracts/src/orchestratorMcp.ts:1093-1122`); preview tools,
-secret requests (`packages/contracts/src/secretRequest.ts:19-31`), and provider
-setup (`packages/contracts/src/providerSetup.ts:189-200`) each have their own
-failure types. Nothing says whether a failure is worth retrying.
+- The key is scoped to `(environment, caller principal, path, clientRequestId)`.
+  For a thread the principal is the thread id; for an outside client it is the
+  session subject.
+- The first call reserves the key in the same transaction that admits the write,
+  and stores a digest of the canonical arguments with it.
+- A repeat with the same digest returns the stored envelope. A repeat while the
+  first is still running returns `conflict` with reason `in_progress`. A repeat
+  with a different digest returns `conflict` with reason `idempotency_mismatch`
+  and runs nothing.
+- A reservation whose work started but whose outcome was never recorded (the
+  server crashed, or a remote stopped answering after dispatch) is `unknown`. A
+  repeat returns `unknown_outcome` and does not dispatch again until a
+  reconciliation read settles it. Where the downstream accepts its own key, the
+  write passes one derived from the reservation, as cloud machine creation
+  already journals its create before sending
+  ([CloudMachineService.ts](../../apps/server/src/cloudMachines/CloudMachineService.ts)).
+- Authorization is checked again on replay. A caller that lost its grant gets
+  `permission_denied`, never the stored result.
+- Keys live at least 24 hours. Orchestration receipts keep their current,
+  longer life.
 
-**Proposed.** New entry points return one envelope:
+### Paging
+
+**Proposed.** Paging follows MCP's cursor rules
+([pagination](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination)).
+The cursor is an opaque string, and `limit` is a maximum that the server may
+undercut. The result carries `nextCursor`; a missing or null value means the end.
+An unreadable cursor is `invalid_request` with reason `invalid_cursor`. Legacy
+numeric offsets stay accepted under legacy names. A fan-out list that cannot
+continue across hosts returns `truncated: true` and the hosts it skipped, never a
+cursor it cannot honor.
+
+## Result envelope
+
+**Now.** Most tool results are JSON in one text block; some add `structuredContent` or image blocks, such as preview snapshots. Failures come as `OrchestratorMcpFailure`
+with 21 codes ([orchestratorMcp.ts](../../packages/contracts/src/orchestratorMcp.ts))
+and as separate families for preview, secrets, provider setup, SSH hosts, SSH
+workspaces, cloud machines, memory, notes, channels, worktrees, devices, and pull
+requests. Some refusals arrive inside a successful value, such as fleet
+`status: "refused"`. Several handlers collapse domain codes before they leave the
+toolkit: cloud machine errors become `invalid_request` or `orchestration_error`
+([ssh/handlers.ts](../../apps/server/src/mcp/toolkits/ssh/handlers.ts)), and
+provider errors lose their codes the same way
+([provider/handlers.ts](../../apps/server/src/mcp/toolkits/provider/handlers.ts)).
+
+**Proposed.** `goat_call`, the CLI's `--json` output, and canonical names after
+the flip return one envelope:
 
 ```ts
 type Result<A> =
-  | { status: "ok"; value: A; meta?: { nextCursor?: string | null; receipt?: string } }
-  | {
-      status: "error";
-      error: {
-        code: ErrorCode;
-        reason: string;
-        message: string;
-        retryable: boolean;
-        details?: unknown;
-      };
-    }
-  | { status: "needs_human"; handoff: HandoffSummary };
+  | { status: "ok"; value: A; meta?: Meta }
+  | { status: "error"; error: AgentError; meta?: Meta }
+  | { status: "needs_human"; handoff: HandoffSummary; next?: NextCall; meta?: Meta };
+
+// What the agent calls after the person acts, when the server does not continue by itself.
+type NextCall = { after: "approval" | "terminal" | "input"; path: string; args?: unknown };
+
+type AgentError = {
+  code: ErrorCode;
+  reason: string; // the domain code, unchanged
+  message: string;
+  retryable: boolean; // computed for this call
+  retryAfterMs?: number;
+  details?: unknown;
+};
+
+type Meta = {
+  nextCursor?: string | null;
+  operation?: OperationRef; // required while accepted work is unfinished
+  host?: string; // where a routed call ran
+  content?: unknown[]; // non-text blocks, such as screenshots, as the tool returned them
+  deprecated?: string; // canonical path when called by a legacy name
+};
 ```
 
-`needs_human` is a third status because the call has not failed. An agent that
-only checks for errors would treat a pending login as a failure and retry it,
-starting a second login flow.
+`needs_human` is its own status because the call has not failed: an agent that
+treats a pending login as an error would retry it and start a second flow.
+`next` carries today's `next.call` hints in registry-path form, such as
+`provider.addable_list` after setup or `ssh.host_prepare` after key
+registration. Long-running work gets no fourth status. Accepting it succeeded, so the result is
+`ok`, and `meta.operation` is then required: an `ok` without it means the work is
+done. Callers learn completion only from the operation (see
+[Long-running work](#long-running-work)).
 
-`ErrorCode` is a closed set: `invalid_request`, `unauthenticated`,
-`permission_denied`, `not_found`, `conflict`, `unavailable`, `timeout`,
-`expired`, `cancelled`, `internal`. `reason` keeps the specific code, so no
-information is lost:
+`ErrorCode` is a closed set. The first ten come from the original proposal; the
+last three name cases the live surface already produces:
 
-| Today                                                                                                      | `code`              | `retryable`   |
-| ---------------------------------------------------------------------------------------------------------- | ------------------- | ------------- |
-| `capability_denied`, `runtime_mode_escalation_denied`, `interaction_mode_escalation_denied`                | `permission_denied` | no            |
-| `thread_credential_required`                                                                               | `unauthenticated`   | no            |
-| `task_not_found`, `thread_not_found`, `run_not_found`                                                      | `not_found`         | no            |
-| `parent_not_active`, `task_not_cancellable`, `thread_not_sendable`, `thread_not_interruptible`, `not_home` | `conflict`          | no            |
-| `provider_unavailable`, `model_unavailable`, `host_unavailable`                                            | `unavailable`       | yes           |
-| `invalid_request`, `target_required`                                                                       | `invalid_request`   | no            |
-| `orchestration_error`                                                                                      | `internal`          | yes, once     |
-| Secret `ref_expired`                                                                                       | `expired`           | no; ask again |
+| Code                  | Means                                                         | Examples today                                                |
+| --------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- |
+| `invalid_request`     | The arguments are wrong                                       | `target_required`, `invalid_cursor`                           |
+| `unauthenticated`     | No usable credential for this call                            | `thread_credential_required`, cloud `invalid_key`             |
+| `permission_denied`   | The credential, profile, or mode forbids it                   | `capability_denied`, `runtime_mode_escalation_denied`         |
+| `not_found`           | The target does not exist here                                | `thread_not_found`, `host_unknown`                            |
+| `conflict`            | The target's state changed or forbids this now; re-read first | `thread_not_sendable`, `head_changed`, `idempotency_mismatch` |
+| `unavailable`         | A dependency did not answer before anything ran               | `provider_unavailable`, `host_unreachable`                    |
+| `timeout`             | A bounded wait ended; the work may still be running           | preview `Timeout`, SSH `start_timeout`                        |
+| `expired`             | A handle or grant aged out                                    | `ref_expired`, `approval_expired`                             |
+| `cancelled`           | Stopped by request or declined by a person                    | SSH `cancelled`, `declined`                                   |
+| `internal`            | A bug or storage failure                                      | `orchestration_error`, `storage_failed`                       |
+| `resource_exhausted`  | A limit or capacity was reached; may clear later              | `host_pressure`, the lane limit, memory `capacity_exceeded`   |
+| `failed_precondition` | Something must change first, often an update or a person      | a remote too old, `RecordingDesktopUpdateRequired`            |
+| `unknown_outcome`     | A write may or may not have happened                          | `launchMayHaveStarted`, SSH handoff `launch_uncertain`        |
 
-Legacy tool names keep their current result shapes until they are removed. The
-envelope applies to `goat_call`, `goat_eval`, the CLI's `--json` output, and
-canonical names after the listing flip (phase 11).
+`retryable` is computed per call. It is true only when repeating the request
+cannot duplicate an effect: the path is a read, the write carried a
+`clientRequestId` the server deduplicates, or the error proves nothing ran.
+`unknown_outcome` is never retryable, and its `details.reconcile` names the read
+that settles it. A dispatch error that says `launchMayHaveStarted`
+([SshRemoteDispatch.ts](../../apps/server/src/sshRemote/SshRemoteDispatch.ts))
+maps to `unknown_outcome`.
+
+Classification needs the facts before they are lost. Handlers keep the domain
+reason, whether execution may have started, and any retry delay as structured
+fields on the failure; mapping to an `ErrorCode` happens once, in the envelope
+layer. The mapping is a table keyed by each domain's declared literals, and a test
+enumerates every failure union in contracts and fails on a literal with no row.
+Tag-name pattern matching is not used, since a new tag would be classified by
+accident. Refusals that arrive inside a successful value become `error`, or
+`needs_human` when a person can clear them.
+
+Legacy tool names keep their current result shapes until they are removed.
+
+## Long-running work
+
+**Now.** Each domain starts and observes long work its own way:
+
+| Work                   | Handle                     | Observe                       | Stop                        | Survives restart |
+| ---------------------- | -------------------------- | ----------------------------- | --------------------------- | ---------------- |
+| Provider sync          | `handoffId`, then `syncId` | `goat_provider_sync_status`   | `goat_provider_sync_cancel` | No               |
+| SSH prepare and update | host alias                 | `goat_ssh_host_status`        | `goat_ssh_host_forget`      | Yes              |
+| Delegated task         | `taskId`                   | `task_status`, wait mode      | `task_cancel`               | Yes              |
+| Thread or cloud launch | `threadId`                 | `goat_thread_status`, watches | `goat_thread_interrupt`     | Yes              |
+| Cloud machine create   | machine id once it answers | `goat_cloud_machine_list`     | `goat_cloud_machine_stop`   | Partly           |
+| Worktree cleanup       | none; blocks               | none                          | none                        | n/a              |
+
+Provider sync keeps its operations, pending approvals, and the mapping from
+handoff to sync in memory
+([ProviderHostSync.ts](../../apps/server/src/provider/ProviderHostSync.ts)). After
+a restart its status tool cannot tell an accepted sync from one that never
+existed, and an approval card can outlive the work it would start.
+
+**Proposed.** One reference type and three verbs over the stores that already own
+the work:
+
+```ts
+type OperationRef = {
+  operationId: string;
+  kind: string; // provider_sync, ssh_setup, task, thread_run, cloud_machine, ...
+  state: "queued" | "running" | "waiting_human" | "succeeded" | "failed" | "cancelled" | "unknown";
+  cancellable: boolean;
+  pollAfterMs?: number;
+};
+```
+
+- `operationId` is an opaque token the server signs with the environment's key.
+  It carries the kind, the native id, the environment, the caller principal, and
+  the issue time. It names a target and grants nothing.
+- `operation.read` and `operation.wait { timeoutMs ≤ 300000 }` call the kind's
+  existing status path, and `operation.cancel` calls its existing cancel path,
+  through the invocation function. Each verb therefore runs exactly the checks of
+  the tool it replaces: cancel is a write and needs the domain's write
+  authorization, runtime mode, and profile, the same as `goat_provider_sync_cancel`
+  or `task_cancel` today.
+- A valid token whose store has no record reports `unknown`: the server issued it,
+  so the work may have happened. A token that fails verification is `not_found`.
+  A token older than its kind's retention is `expired`. Kinds with in-memory stores
+  give `unknown` after a restart until they persist.
+- A terminal operation carries the envelope its work produced.
+- `cancellable` comes from the kind; `operation.cancel` on a kind without cancel
+  is `failed_precondition`. Cancel is cooperative and may end in another terminal
+  state, as in MCP tasks and LSP. `forget` stops observing and leaves work running.
+- `waiting_human` links the open handoff, so "a person must act, then the server
+  continues" is one handle.
+
+This mirrors Google's long-running operations ([AIP-151](https://google.aip.dev/151))
+and the MCP tasks extension. It implements neither protocol; [D15](#decision-log)
+covers the mapping.
 
 ## Registry
 
-**Now.** Names are string literals inside each `tools.ts`, except
-`CHANNEL_MCP_TOOL_NAMES` (`packages/contracts/src/channelGateway.ts:320`). Tool
-annotations already record read-only, destructive, idempotent, and open-world
-hints (`McpHttpServer.ts:676-680`). Access is declared per handler with
-`McpToolAccess` (`reads`, `readsAsCaller`, `writes`, `writesThreads`,
-`startsThreads`, `writesEnvironment`, `removesCheckouts`;
-`apps/server/src/mcp/McpToolAccess.ts:136-304`), and `/mcp` registers only
-toolkits that went through that declaration
-(`McpHttpServer.ts:868-882`).
+**Now.** [registry.ts](../../packages/contracts/src/agentSurface/registry.ts) holds
+one entry per tool: resource, verb, legacy name, toolkit, summary, model-facing
+description, effect, `hostRoutable`, `requires` (`thread | client | either`),
+`dryRun`, `humanSteps`, and MCP hints. Toolkits read their names and descriptions
+from it. Registration takes read and destructive hints from each handler's
+`McpToolAccess` declaration, and the parity test checks that every assembled tool
+has an entry, every entry resolves a schema, and effects agree with access.
+Schemas stay with their toolkits.
 
-**Proposed.** Add `packages/contracts/src/agentSurface/registry.ts`, a typed table
-with one entry per capability:
-
-```ts
-{
-  path: "thread.send",
-  legacyNames: ["goat_thread_send"],
-  summary: "Send a message to a thread.",       // one line, used in lists and --help
-  description: "...",                            // the model-facing text
-  effect: "write",                               // read | write | destructive
-  hostRoutable: true,
-  dryRun: "unsupported",
-  requires: "thread",                            // thread | client | either
-  examples: [{ title: "...", args: {...}, expect: { status: "ok" } }],
-  related: ["thread.wait", "thread.read"],
-  since: "0.9.0",
-}
-```
-
-Each `tools.ts` reads its name and description from the registry, the way the
-channel toolkit already reads `CHANNEL_MCP_TOOL_NAMES`. A rename is then a
-one-line change in contracts and a one-token change in the toolkit, which keeps
-merge conflicts with upstream T3 Code small. The registry holds no schemas;
-schemas stay in contracts beside their tools and the registry refers to them.
-
-The access class shown to agents is read from the `McpToolAccess` declaration
-at registration. A test fails when the registry's `effect` disagrees with it,
-so documentation cannot claim a tool is read-only while its handler writes.
-
-## Naming map
-
-**Proposed.** The 58 `goat_*` names already parse as `goat_<resource>_<verb>`
-and keep their names. The other 48 get canonical names, and their old names
-become aliases. Grouped by resource:
-
-| Resource             | Today                                                                                                                                                                                                                                               | Canonical MCP name                                                                             | Source                                                                   |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `thread`             | `goat_thread_list`, `_read`, `_update`, `_send`, `_wait`, `_interrupt`, `_status`, `_watch`, `_unwatch`, `_watch_list`                                                                                                                              | unchanged                                                                                      | `toolkits/orchestrator/tools.ts:217-354`                                 |
-| `thread`             | `goat_thread_organize`, `_configuration`, `_configure`, `_fork`, `_merge_back`, `_transfers`, `_search`, `_report_result`                                                                                                                           | unchanged                                                                                      | `toolkits/thread/tools.ts:38-268`                                        |
-| `thread`             | `goat_thread_launch`                                                                                                                                                                                                                                | unchanged                                                                                      | `toolkits/project/tools.ts:201`                                          |
-| `thread`             | `goat_thread_send_attachments`                                                                                                                                                                                                                      | unchanged                                                                                      | `toolkits/attachment/tools.ts:47`                                        |
-| `thread`             | `create_threads`                                                                                                                                                                                                                                    | `goat_thread_create_many`                                                                      | `toolkits/orchestrator/tools.ts:204`                                     |
-| `task`               | `delegate_task`, `task_status`, `task_cancel`                                                                                                                                                                                                       | `goat_task_create`, `goat_task_read`, `goat_task_cancel`                                       | `toolkits/orchestrator/tools.ts:90-117`                                  |
-| `workflow`           | `goat_workflow_stop`                                                                                                                                                                                                                                | unchanged                                                                                      | `toolkits/orchestrator/tools.ts:129`                                     |
-| `provider`           | `orchestrator_capabilities`                                                                                                                                                                                                                         | `goat_provider_list`                                                                           | `toolkits/orchestrator/tools.ts:77`                                      |
-| `schedule`           | `schedule_task`, `list_scheduled_tasks`, `update_scheduled_task`, `delete_scheduled_task`, `run_scheduled_task_now`                                                                                                                                 | `goat_schedule_create`, `_list`, `_update`, `_delete`, `_run`                                  | `toolkits/orchestrator/tools.ts:141-180`, `toolkits/thread/tools.ts:251` |
-| `handoff`            | `request_secret`                                                                                                                                                                                                                                    | `goat_handoff_create` with `kind: "secret"` (phase 6)                                          | `toolkits/orchestrator/tools.ts:192`                                     |
-| `queue`              | `goat_queue_list`, `_read`, `_edit`, `_cancel`, `_reorder`, `_promote_to_steer`                                                                                                                                                                     | unchanged                                                                                      | `toolkits/thread/tools.ts:87-130`                                        |
-| `pending_request`    | `goat_pending_request_list`, `_read`, `_respond`                                                                                                                                                                                                    | unchanged                                                                                      | `toolkits/thread/tools.ts:147-165`                                       |
-| `project`            | `goat_project_list`, `_read`, `_create`, `_update`, `_delete`, `_clone`                                                                                                                                                                             | unchanged                                                                                      | `toolkits/project/tools.ts:57-110`                                       |
-| `worktree`           | `goat_worktree_handoff`, `_status`, `_list`, `_inventory`, `_remove`, `_cleanup`                                                                                                                                                                    | unchanged                                                                                      | `toolkits/worktree/tools.ts:37-135`                                      |
-| `environment`        | `goat_environment_read`, `goat_environment_preferences_update`                                                                                                                                                                                      | unchanged                                                                                      | `toolkits/environment/tools.ts:46-60`                                    |
-| `host`               | `goat_host_status`                                                                                                                                                                                                                                  | unchanged                                                                                      | `toolkits/hostStatus/tools.ts:8`                                         |
-| `cloud_agent`        | `goat_cloud_holders`, `goat_cloud_launch`, `goat_cloud_run_register`, `_run_list`, `_run_forget` ([credential holders](./cloud-credential-holders.md))                                                                                              | unchanged                                                                                      | `toolkits/provider/tools.ts`                                             |
-| `connection`         | `goat_connection_list`, `_add_ssh`, `_remove`                                                                                                                                                                                                       | unchanged                                                                                      | `toolkits/connection/tools.ts:24-51`                                     |
-| `ssh`                | [SSH toolkit](../../apps/server/src/mcp/toolkits/ssh/tools.ts) and [callable registry](../../packages/contracts/src/agentSurface/registry.ts)                                                                                                       | SSH setup and runtime approvals resume on the server; status observes progress                 | `toolkits/ssh/tools.ts`                                                  |
-| `origin`             | `goat_origin_report`, `goat_origin_reports_wait`                                                                                                                                                                                                    | unchanged                                                                                      | `toolkits/remoteReport/tools.ts:22-29`                                   |
-| `attachment`         | `goat_attachment_prepare_upload`, `goat_attachment_discard`                                                                                                                                                                                         | unchanged                                                                                      | `toolkits/attachment/tools.ts:33-40`                                     |
-| `preview`            | `goat_preview_list`, `goat_preview_close`                                                                                                                                                                                                           | unchanged                                                                                      | `toolkits/previewControls/tools.ts:25-40`                                |
-| `preview`            | `preview_status`, `_open`, `_dialog`, `_navigate`, `_resize`, `_set_appearance`, `_snapshot`, `_click`, `_type`, `_hover`, `_select`, `_drag`, `_upload`, `_press`, `_scroll`, `_evaluate`, `_wait_for`, `_recording_start`, `_recording_stop` (19) | `goat_preview_<same verb>`                                                                     | `toolkits/preview/tools.ts:65-305`                                       |
-| `device`             | `device_list`, `_open`, `_screenshot`, `_close`                                                                                                                                                                                                     | `goat_device_<same verb>`                                                                      | `toolkits/device/tools.ts:37-85`                                         |
-| `html`               | `html_preview`, `html_render`                                                                                                                                                                                                                       | `goat_html_preview`, `goat_html_render`                                                        | `toolkits/html/tools.ts:25-74`                                           |
-| `pull_request`       | `link_pull_request`, `unlink_pull_request`, `list_thread_pull_requests`, `watch_pull_request`, `unwatch_pull_request`                                                                                                                               | `goat_pull_request_link`, `_unlink`, `_list`, `_watch`, `_unwatch`                             | `toolkits/pullRequests/tools.ts:278-336`                                 |
-| `pull_request_guide` | `write_pull_request_guides`, `read_pull_request_guide`                                                                                                                                                                                              | `goat_pull_request_guide_update`, `_read`                                                      | `toolkits/pullRequests/tools.ts:384-400`                                 |
-| `channel`            | `channel_ingest`, `channel_input_get`, `channel_task_get`, `channel_task_list`, `channel_task_report`                                                                                                                                               | `goat_channel_ingest`, `goat_channel_input_read`, `goat_channel_task_read`, `_list`, `_report` | `packages/contracts/src/channelGateway.ts:320-326`                       |
-
-New entries: `goat_describe`, `goat_call`, `goat_eval`, `goat_handoff_{create,list,read,wait,cancel}`,
-`goat_provider_{diagnose,addable_list,setup_open,login_start,login_status,login_cancel}`.
-
-Renames are 1:1 with identical schemas. Merging tools that overlap (for example
-`goat_thread_watch` and `watch_pull_request` into one `watch` resource) is out
-of scope until the registry has run for a release.
-
-### Aliases and deprecation
-
-**Now.** History recorded under `t3_*` names still renders because presentation
-maps old names onto current ones
-(`packages/shared/src/goatMcpToolPresentation.ts:102`, `:429`), and SSH dispatch
-calls tools on remote GOAT servers by name, so an older remote only answers to
-the names it shipped with
-([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)).
-
-**Proposed.** Deprecation runs in three steps, each one release:
-
-1. **Resolve.** `goat_describe`, `goat_call`, `goat_eval`, and the CLI accept
-   both names. `tools/list` is unchanged.
-2. **Flip.** `tools/list` shows canonical names. Legacy names stay callable but
-   unlisted, and their results carry `deprecated: "<canonical>"`. Presentation
-   maps them for history. Provider instructions
-   (`packages/provider-core/src/server/orchestrationInstructions.ts`) switch to
-   canonical names in the same PR.
-3. **Retire.** Legacy names stop being accepted from local callers. Remote
-   dispatch keeps translating canonical to legacy when the remote's
-   `serverVersion` (from `goat_environment_read`) predates the flip.
+**Proposed.** Add the `idempotency`, `pagination`, and `operation` fields, and run
+each entry's examples as tests.
 
 ## Discovery: `goat_describe`
 
-**Now.** An agent learns tools from `tools/list`: 106 names with long
-descriptions, all loaded into context. Whether a tool works for this caller
-(thread-only tools refuse outside clients, `McpToolAccess.ts:132`; read-only
-clients cannot write, `McpInvocationContext.ts:49`) is found out by calling it.
+**Now.** An agent learns tools from `tools/list`: 191 names with long
+descriptions, all loaded into context. Whether a tool works for this caller is
+found out by calling it.
 
-**Proposed.** `goat_describe { path? }` answers at three depths:
+**Proposed.** `goat_describe { path?, query?, host? }` answers at three depths:
 
-- No path: resources with one-line summaries, the handoff kinds, and the
-  evaluator's forms. About 1,500 tokens.
-- A resource (`"thread"`): its verbs with summaries and effect classes.
+- No path: resources with one-line summaries, the human-step kinds, and the
+  operation verbs, in a fixed order, plus `surfaceVersion`, a hash of the
+  registry that tells clients and prompt caches when it changed.
+- A resource (`"thread"`): its verbs with summaries, effect classes, and
+  `idempotency`.
 - A full path (`"thread.send"`): input and output JSON Schema, effect class,
-  reserved arguments it accepts, tested examples, related paths, legacy names,
-  and `available: { now: boolean, reason?: string }` computed for this caller.
+  reserved arguments, examples, related paths, legacy names, and
+  `available: { now: boolean, reason?: string }` computed for this caller,
+  including goatclaw profile capabilities and lanes left.
 
-The same function backs `goat describe` and `goat <resource> <verb> --help`.
+`query` ranks paths by text, the way a `search_tools` tool with a detail level
+keeps large tool sets out of context
+([Anthropic](https://www.anthropic.com/engineering/code-execution-with-mcp)).
+`host` describes a remote's registry, which may be older. The same function backs
+`goat describe` and `goat <resource> <verb> --help`.
 
 **Proposed (later).** A `core` listing profile shows only the meta tools, the
-handoff tools, and the dozen most used tools, with everything else reachable
-through `goat_call`. It is opt-in per provider instance and is measured against
-the full listing before it becomes a default.
+operation verbs, and the most used tools. It is opt-in per provider instance and
+measured against the full listing before it becomes a default.
 
-## Composition: `goat_call` and `goat_eval`
+## Calling: `goat_call`
 
-**Now.** `goat acp-mcp-call <tool> <json>` already calls any tool from a terminal,
-authenticated by `GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`
-(`apps/server/src/cli/acpMcpBridge.ts:25-35`,
-`apps/server/src/mcp/AcpMcpStdioBridge.ts:416-470`). There is no way to chain
-calls without a model round trip per step.
+**Now.** `goat acp-mcp-call <tool> <json>` calls any tool from a terminal with
+`GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`
+([AcpMcpStdioBridge.ts](../../apps/server/src/mcp/AcpMcpStdioBridge.ts)).
 
 **Proposed.** `goat_call { path, args }` runs one registry entry and returns the
-envelope. `goat_eval { program, dryRun?, clientRequestId? }` runs a small program.
+envelope. It uses the one invocation function that direct MCP calls, the CLI, and
+any later composition also use. That function runs argument refusal, the entry's
+`McpToolAccess` declaration against the caller's `McpInvocationContext`, domain
+admission (goatclaw profile, lane claims, human-only rules), and host routing, in
+that order. `goat_call` has no access class of its own. Declaring it
+`readsAsCaller` would be wrong twice: that declaration requires a thread
+credential, so it would refuse outside clients that may call the same tools
+directly, and it narrows nothing
+([McpToolAccess.ts](../../apps/server/src/mcp/McpToolAccess.ts)).
 
-### Syntax
+A test calls every registry entry directly and through `goat_call` with the same
+caller and asserts identical refusals.
 
-Programs are JSON so models emit them reliably and the server validates them with
-a schema. The CLI also accepts an S-expression form that compiles to the same JSON.
+## Composition: `goat_eval`
 
-| Form      | JSON                                             | S-expression                 |
-| --------- | ------------------------------------------------ | ---------------------------- |
-| Call      | `{"call": "thread.list", "args": {"limit": 5}}`  | `(thread.list :limit 5)`     |
-| Bind      | `{"let": [["t", <expr>]], "in": <expr>}`         | `(let ((t <expr>)) <expr>)`  |
-| Reference | `{"ref": "t.value.threads.0.threadId"}`          | `t.value.threads.0.threadId` |
-| Sequence  | `{"seq": [<expr>, ...]}`                         | `(seq <expr> ...)`           |
-| Map       | `{"map": <expr>, "as": "x", "do": <expr>}`       | `(map (x <expr>) <expr>)`    |
-| Branch    | `{"if": <expr>, "then": <expr>, "else": <expr>}` | `(if <expr> <expr> <expr>)`  |
-| Literal   | any JSON value under `{"quote": ...}`            | `'(...)`                     |
+**Proposed, gated.** `goat_eval` would run a small program of calls in one
+request. It is built only if measurement shows it pays: on a fixed set of
+multi-step tasks (wait for a project's running threads, sync a provider to every
+host, fan a review out to three models), agents on providers without code
+execution must spend at least a third fewer model turns with it than with
+`goat_call` alone, with no rise in failed runs. Agents whose harness runs code,
+such as Codex code mode or a shell with `goat call`, already compose calls in a
+language they write well, which is the finding behind Cloudflare's
+[Code Mode](https://blog.cloudflare.com/code-mode/) and Anthropic's code-execution
+work. If it is built, these rules hold.
 
-`if` tests `status == "ok"` or a boolean. There are no user functions, no
-recursion, and no loops other than `map` over a value that already exists, so
-every program terminates.
+- **Syntax.** JSON only, validated by a schema. Forms: `call`, `let`, `ref` (an
+  array path such as `["t", "value", "threads", 0, "threadId"]`, so keys with
+  dots stay addressable), `seq`, `map`, `if` (on `status == "ok"` or a boolean),
+  `eq`, `not`, and `quote`. No user functions, no recursion, and no loop except
+  `map` over an existing value, so every program ends.
+- **Limits.** 32 calls in total, counting each `map` item; depth 8; `map` input
+  at most 16 items, and a longer one is `resource_exhausted` rather than a silent
+  cut; 120 s wall time with any `wait` clamped to the time left; 256 KB of
+  results; 16 KB of program. `map` runs items in order, one at a time.
+- **Authority.** Each step goes through the invocation function, so every gate
+  applies per step: the credential is checked before each step, a `map` over
+  `task.create` claims one lane per child through the existing reservation, and a
+  step with `host` is routed with the caller's ceiling. The program holds no lane
+  and no grant.
+- **Journal.** Each run has an `evalRunId`. Every completed step, reads included,
+  is stored with its result under its structural id (position in the program plus
+  `map` index) and a digest of its resolved arguments. On resume, completed read
+  results, branch choices, and `map` bindings are fixed: they come from the
+  journal and are never re-read. Write keys come from `(evalRunId, structural
+  id)`, never from a call counter.
+- **Suspension.** A step that returns `needs_human` ends the run with that status
+  and its `evalRunId`, and its journal entry holds the handoff. On
+  `goat_eval { resume: evalRunId }` the evaluator reads that handoff instead of
+  calling the step again. Declined or expired becomes the step's `error`. Completed
+  with a server-side continuation means the step's result is that operation's
+  final envelope, waited on within the wall time. Completed without one, as with
+  `provider.setup_open`, means the step's result is `ok` with the completed
+  handoff summary and the `next` the step returned. The evaluator never runs
+  `next` and never issues the original step again, since many human-step tools
+  open a new flow on every call. A program that wants the follow-up calls it
+  explicitly as a later step, which is journaled and admitted like any other call:
+  `ssh.host_prepare` after key registration is a write and passes write
+  admission. The server never continues a program by itself.
+- **Cancellation.** Cancelling the request stops before the next step and still
+  returns the journal so far with `cancelled`, as LSP requires of a cancelled
+  request. A program is not a transaction and stops at the first `error`.
 
-Example: wait for every running thread in a project.
+## Human steps
 
-```json
-{
-  "let": [["ts", { "call": "thread.list", "args": { "projectId": "p1", "status": "running" } }]],
-  "in": {
-    "map": { "ref": "ts.value.threads" },
-    "as": "t",
-    "do": {
-      "call": "thread.wait",
-      "args": { "threadId": { "ref": "t.threadId" }, "timeoutMs": 60000 }
-    }
-  }
-}
-```
+**Now.** One durable [Handoff](../../packages/contracts/src/handoff.ts) record
+exists. Its `kind` is the modality (`oauth`, `device_code`, `terminal`, `secret`,
+`approval`, `mfa`), and its `target.path` is what the person is deciding
+(`ssh.host_add`, `provider.setup`, `computer_use.grant`). Human instructions and
+continuation arguments are stored apart, encrypted, and returned only over
+authenticated client RPC. Agents get `HandoffSummary`.
 
-### Limits
+Around it, a human step reaches an agent in several shapes:
 
-| Limit             | Value                                |
-| ----------------- | ------------------------------------ |
-| Calls per program | 32                                   |
-| Nesting depth     | 8                                    |
-| `map` width       | 16 items                             |
-| Wall time         | 120 s; `wait` calls count against it |
-| Result size       | 256 KB, then truncated with a marker |
-| Program size      | 16 KB                                |
+| Flow                         | Agent sees                                        | Who resolves                          | What continues                                       |
+| ---------------------------- | ------------------------------------------------- | ------------------------------------- | ---------------------------------------------------- |
+| SSH trust, key, update       | `needs_human` with `next.call`                    | person with environment scopes        | server continues prepare and update; trust only pins |
+| Provider sync                | `needs_human` with `next.call`                    | person with `providers:manage`        | server runs the sync under the approver's session    |
+| Provider setup, Codex home   | `needs_human` with `next.call`                    | person with `providers:manage`        | person finishes in the app; agent calls again        |
+| Computer use                 | `needs_human` beside `available` and `refused`    | person with settings authority        | an admission lease; tools attach next turn           |
+| Sign-in by a managing client | `{kind: "flow"}` with `continueIn`                | the session that started it           | a server fiber, in memory                            |
+| Secrets                      | a blocking result with `secretRef`                | person in the thread                  | agent uses the ref in a later call                   |
+| Runtime approvals, questions | a pending request by `requestId`                  | person, or an outside approver client | the provider run                                     |
+| Decisions                    | `DecisionItem` by id                              | agent or person, per item             | answer delivered as a thread message                 |
+| Cloud launch consent         | `capability_denied` text telling the agent to ask | person answering a decision `approve` | agent calls launch again with `decisionId`           |
 
-### Permission model
-
-Each `call` goes through the same path a direct MCP call takes: argument refusal,
-the `McpToolAccess` declaration, and the caller's `McpInvocationContext`. The
-evaluator is declared `readsAsCaller` and adds no authority. A test calls every
-registry entry once directly and once through `goat_eval` with the same caller
-and asserts identical refusals.
-
-Writes inside a program get derived idempotency keys
-(`hash(program clientRequestId, call index)`), so retrying a whole program
-replays completed writes from receipts. A program is not a transaction. It stops
-at the first `error` and returns every step's envelope. With `dryRun`, reads run
-and writes return their plans.
-
-If a step returns `needs_human`, the program suspends and returns that handoff.
-When the handoff completes, `goat_handoff_wait` re-runs the program from the
-start, and completed steps come back from receipts.
-
-## Human handoff
-
-**Now.** Three mechanisms already hand work to a person, each with its own shape:
-
-- **Secrets.** `request_secret` shows a private card in the thread; the saved
-  value stays on the server under a one-use `secretRef` that expires after 24
-  hours (`apps/server/src/secrets/SecretRequests.ts:41`, `:209-240`). Cards exist
-  on web (`apps/web/src/components/chat/SecretRequestCard.tsx`) and mobile
-  (`apps/mobile/src/features/threads/SecretRequestCard.tsx`).
-- **Provider sign-in.** The `provider.auth.*` and `provider.install.*` RPCs
-  model browser, device-code, terminal, and credential interactions with phases
-  `idle → starting → waiting → verifying → succeeded | failed | cancelled`, an
-  `expiresAt`, and a `credentialOwner`
-  (`packages/contracts/src/providerSetup.ts:46-141`,
-  `packages/contracts/src/rpc.ts:472-486`). They need `providers:manage`
-  (`apps/server/src/auth/RpcAuthorization.ts:85-99`). Thread MCP credentials
-  carry only preview and orchestration capabilities
-  ([orchestrator-mcp-server.md](../orchestration-v2/orchestrator-mcp-server.md#transport-and-authentication)),
-  so agents cannot start any of these today.
-- **Approvals and questions.** Approvals are human-only; an outside MCP client
-  token with `orchestration:approve` is the one exception
-  (`apps/server/src/mcp/toolkits/thread/tools.ts:147-173`,
-  `apps/server/src/cli/auth.ts:267-330`).
-
-### Record
-
-**Proposed.** One `Handoff` record generalizes these. It is persisted through
-orchestration events, so it survives restarts and reaches every client the way
-thread state does.
-
-```ts
-{
-  handoffId, kind,            // oauth | device_code | terminal | secret | approval | mfa
-  title, reason,              // reason is the agent's sentence, shown to the person
-  requestedBy: { threadId, providerInstanceId, path },
-  target: { environmentId, path, args },   // what resumes, e.g. provider.verify
-  state, expiresAt, createdAt, resolvedAt?, resolvedBy?,   // resolvedBy: client label, never a credential
-  human: { url?, userCode?, command?, fields? }            // human surfaces only
-}
-```
-
-States: `pending → opened → completed | declined | expired | cancelled | failed`.
-`opened` means a person viewed it, so the agent can tell an unseen request from
-one in progress.
-
-### What the agent sees
-
-The agent receives `HandoffSummary`: id, kind, title, state, `expiresAt`, and
-the target path. It never receives `human`. A device code or sign-in URL is the
-person's consent step; an agent holding a browser profile that is already signed
-in could otherwise complete it alone. This follows the rule already written on
-`ProviderSetupError`: never include OAuth codes, URLs, or native token data
-(`providerSetup.ts:189`).
-
-Completing or declining a handoff is a human verb. It requires a client session,
-and thread credentials cannot hold it. Outside clients with
-`orchestration:approve` keep their current approval power for `kind: "approval"`
-only.
-
-### Resume
-
-For SSH setup and runtime updates, the call returns the shared SSH
-`kind: "needs_human"` result with a handoff summary. The server's
-[SshHostSetup](../../apps/server/src/sshRemote/SshHostSetup.ts) continuation worker
-resumes approved `ssh.host_prepare` and `ssh.runtime_update` targets after
-rechecking the approving session's target permissions. An approved `ssh.host_add`
-fingerprint only pins the host; the agent calls the tool again, which reruns the
-preflight before anything is installed. Fingerprints remain private human data; agents see
-only that the host key needs review. Key-registration instructions run in the person's
-terminal on the environment's owning machine; completion triggers another key-auth
-check, not an assumption that registration succeeded.
-
-Preparation and idle updates return their first actual phase or terminal outcome
-while a server job continues. Agents observe progress with SSH host status; thread
-cards use authenticated handoff progress lookup, including after completion and
-remount. Runtime `ready` with setup diagnosis still pending is intermediate: wait
-for the current operation's setup completion or recovery result. An earlier provider
-summary cannot complete a new setup operation.
-
-The general continuation, wait, and wake behavior below remains proposed. It is
-not provided by the SSH-specific worker:
-
-- `goat_handoff_wait { handoffId, timeoutMs ≤ 300000 }` returns the final
-  envelope of `target` once the handoff completes, or the current state on
-  timeout.
-- An agent that ends its turn is woken with a message when the handoff resolves,
-  using the wake path launch watches already use
-  (`apps/server/src/mcp/LaunchWatchService.ts`).
-- Creating a handoff is idempotent on `(threadId, kind, target)`: a second
-  request returns the pending one. A thread may hold at most three pending
-  handoffs.
-
-### Expiry
-
-| Kind                   | Default lifetime                                       |
-| ---------------------- | ------------------------------------------------------ |
-| `device_code`, `oauth` | The provider's `expiresAt`, else 15 minutes            |
-| `terminal`, `mfa`      | 15 minutes                                             |
-| `secret`               | 1 hour to answer; the saved ref keeps today's 24 hours |
-| `approval`             | Until the requesting turn ends                         |
-
-SSH targets have a 24-hour lifetime and survive the requesting run ending.
-Immediate runtime-update approval must also be executed within ten minutes of
-approval, with the same host generation and target build; otherwise it must be
-requested again. See [Handoffs](../../apps/server/src/handoffs/Handoffs.ts) for the
-SSH expiry and acknowledgement rules. The table above describes the proposed
-general lifetimes.
-
-An expired handoff returns `error.code: "expired"` from the proposed `wait` path.
-The agent may create a new one.
-
-### Surfaces
-
-| Surface         | Behavior                                                                                                                                                                                            |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Web and desktop | A card in the requesting thread, generalized from `SecretRequestCard`, plus a count in the sidebar inbox                                                                                            |
-| Mobile          | The same card in the thread feed and a push notification (see [mobile notifications](../user/mobile-notifications.md))                                                                              |
-| CLI             | `goat handoff list` and `goat handoff open <id>`, which runs the human step in the person's own terminal: opens the URL, prints the device code, or runs the provider's login command interactively |
-| Remote          | A handoff on an SSH host appears on the origin machine's clients through the existing remote report path                                                                                            |
-
-### Audit
-
-Every state change is an event with its actor: the agent thread that created it,
-and the client label that opened, completed, or declined it. The activity log
-shows them (see [activity log](../user/activity-log.md)). Secret values, codes, and
-URLs are never written to events.
-
-## Documentation from the registry
-
-**Now.** Agent-facing docs are hand-written: per-tool sections in
-[orchestrator-mcp-server.md](../orchestration-v2/orchestrator-mcp-server.md), the
-prefix table in [structure/mcp-toolkits.md](../../structure/mcp-toolkits.md), and
-CLI help strings in each `apps/server/src/cli/*.ts`. Nothing checks them against
-the code.
-
-**Proposed.** `vp run agent-surface:gen` writes, from the registry and the
-contract schemas:
-
-- `docs/reference/agent-surface/<resource>.md`, one page per resource;
-- `docs/llms.txt`, a compact index (path, one line, effect class) with links;
-- the CLI's help text and a `goat.1` man page bundled with the app.
-
-The server also serves `/llms.txt` filtered to what the calling credential can
-use.
-
-CI fails when:
-
-1. a registered MCP tool has no registry entry, or an entry has no tool
-   (enumerated from the assembled `/mcp` layer in a test);
-2. `agent-surface:gen --check` produces a diff;
-3. an entry's `effect` disagrees with its `McpToolAccess` declaration;
-4. any example fails when run against the in-memory server harness the toolkit
-   tests already use (`apps/server/src/mcp/toolkits/core.test.ts`).
-
-The per-tool sections of `orchestrator-mcp-server.md` are then replaced by links,
-and the page keeps only lifecycle and policy.
-
-This conflicts with the repository rule against documenting every method
-([AGENTS.md](../../AGENTS.md#documentation)). Generated reference pages would
-be the second allowed catalog after `structure/`, and they need maintainer
-sign-off.
-
-## The `goat` command
-
-**Now.**
-
-- The desktop app writes a launcher to `<GOAT home>/bin/goat` (`goat.cmd` on
-  Windows) at every start, best-effort, and rewrites it when the app updates
-  (`apps/desktop/src/app/DesktopCliShim.ts:136-193`).
-- **Settings → General → About → Install** links the launcher into the first
-  writable folder among `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`,
-  and `~/bin` on macOS (`~/.local/bin` and `~/bin` on Linux), or adds its folder
-  to the user `PATH` on Windows
-  (`apps/desktop/src/app/DesktopCliCommand.ts:27-56`, `:225-255`;
-  [install guide](../user/install.md#the-goat-command)). It refuses when another
-  `goat` would shadow it. **Remove** undoes only what it added.
-- Bare `goat` runs the server (`apps/server/src/binCli.ts:58-60`). The
-  subcommands are operator tools: `serve`, `start`, `pair`, `auth`,
-  `project`, `service`, `update`, `uninstall`, `connect`, `trace`, and
-  others (`binCli.ts:61-88`). `acp-mcp-call` is unlisted.
-
-### Install, update, uninstall
+Three gaps follow. A handoff resolving does not wake the thread that asked; it
+only updates the card. Provider sync approvals live in memory. Approval policy
+differs by path: pending-question MCP lets an outside client holding
+`orchestration:approve` answer provider approvals
+([PendingQuestionsMcpService.ts](../../apps/server/src/mcp/PendingQuestionsMcpService.ts)),
+while the decision inbox treats every MCP caller as an agent and refuses it for
+human-required items, including the same approvals projected there
+([DecisionInbox.ts](../../apps/server/src/goatclaw/DecisionInbox.ts)).
 
 **Proposed.**
 
-| Platform            | Install                                                                                                                                  | Update                                            | Uninstall                                                                                                |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| macOS               | Keep the Settings action and offer it once in the welcome wizard. No admin prompt; if no PATH folder is writable, show the launcher path | Automatic: the launcher is rewritten at app start | Settings → Remove. Deleting the app leaves a dangling link, which `goat` reports and Settings can remove |
-| Linux `.deb`/`.rpm` | The package installs `/usr/bin/goat` pointing at the launcher                                                                            | Package manager                                   | Package removal                                                                                          |
-| Linux AppImage      | The Settings action (the launcher mounts the AppImage, `DesktopCliShim.ts:158-164`)                                                      | Automatic                                         | Settings → Remove                                                                                        |
-| Windows             | Keep the user `PATH` entry                                                                                                               | Automatic                                         | Settings → Remove, and the uninstaller removes the recorded PATH entry                                   |
+- **Owners.** Handoffs own anything with private instructions or a server-side
+  continuation. The decision inbox owns decisions and projects runtime requests
+  and open handoffs for display. Neither copies the other's state.
+- **One status.** Every flow above in which a person must act returns
+  `needs_human` with a `HandoffSummary`, plus `meta.operation` when the server
+  continues the work. Decisions and questions an agent may answer keep their
+  current shapes; only human-required items change. Cloud launch consent
+  becomes a handoff targeting `cloud_agent.launch`, whose approval binds a digest
+  of the launch arguments and the credential holder; a different launch needs a
+  new approval.
+- **Who resolves.** One predicate, used by pending requests, the decision inbox,
+  handoffs, aliases, and `goat_call`:
+  - A runtime approval may be resolved by a person's client session, or by an
+    outside MCP client session whose `approvals` flag is set, which requires both
+    `orchestration:operate` and `orchestration:approve`
+    ([EnvironmentAuth.ts](../../apps/server/src/auth/EnvironmentAuth.ts)), and which
+    still passes live write authorization. A person mints that client on purpose
+    from the local CLI for a tool they control; it proves the client was trusted,
+    not that a person answered each approval. The decision inbox accepts the same
+    clients for projected approvals, through the same predicate.
+  - Every other human step (human-required questions, secrets, sign-in, host
+    trust, computer use, billing consent) needs a person's client session.
+  - A thread credential resolves none of them, whatever its scopes.
+- **Wake.** When a handoff a thread created resolves or expires, that thread is
+  woken through the launch-watch wake path
+  ([LaunchWatchService.ts](../../apps/server/src/mcp/LaunchWatchService.ts)).
+- **Confidentiality by credential.** Thread credentials never receive codes, URLs,
+  fingerprints, or terminal output. A client session that owns a sign-in flow may,
+  because that session is the person's own surface; managing-client sign-in
+  already works this way.
+- **Expiry** stays per target. Provider and computer-use handoffs run on a clock
+  because people answer after the asking turn ends. SSH targets last 24 hours. An
+  approval tied to a run ends with it.
 
-The npm package keeps its `goat` and `t3` bins and keeps bare `goat` starting a
-server, so `npx t3` users see no change. The desktop launcher sets
-`GOAT_CLI_LAUNCHER=1`; with it, bare `goat` prints help instead of starting a
-second server against the app's home.
+Every state change is an event with its actor: the thread that asked, and the
+client label that opened, completed, or declined it. Secret values, codes, and
+URLs never enter events. A handoff on an SSH host appears on the origin's clients
+through the remote report path; `goat handoff list` and `goat handoff open <id>`
+give the person a terminal route.
 
-### Command tree
+## Remote hosts
+
+**Now.** `host` on a host-routable tool sends the call over SSH or to a linked
+host. Writes forward the caller's runtime ceiling. Since
+[#758](https://github.com/goat-si/goat/pull/758), a follow-up `thread.send` with
+`host` also forwards the caller's goatclaw ceiling as `permissionProfileCeiling`,
+and the origin refuses a destination that has not shown it enforces ceilings
+instead of falling back to the relay, which would deliver without one. Remote
+servers answer only to the tool names they shipped with
+([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)).
+
+**Proposed.**
+
+- Forwarding stays with the origin server. A meta tool, the CLI, or a composed
+  step names a `host`, and the origin's router builds the ceiling, claims the
+  lane, and translates canonical names to legacy ones when the remote's
+  `serverVersion` predates the listing flip.
+- `meta.host` says where a call ran. Remote errors keep their `reason` and gain
+  `details.host`.
+- A remote too old for a requested feature answers `failed_precondition` with
+  reason `remote_outdated`. It never falls back to running locally.
+
+## Audit
+
+**Now.** Each MCP call records one anonymous `mcp.tool.invoked` analytics event
+with no ids or text. Orchestration receipts record commands. The decision inbox
+keeps an append-only audit of actor, profile, action, target, and outcome, and
+handoff transitions are events with actors.
+
+**Proposed.** Analytics stays anonymous. Every write through the invocation
+function records principal, profile id, effective ceiling, host, path, argument
+digest, receipt id, and outcome in the receipts table that also serves
+idempotency, so one table answers who did what, under which grant, and where.
+Composed runs add their `evalRunId` to each step. Spans are named
+`AgentSurface.call` and `AgentSurface.eval`, and remote dispatch carries
+`traceparent`.
+
+## Reference documentation
+
+**Now.** [agent-surface-audit.md](./agent-surface-audit.md) is generated from the
+registries; `pnpm agent-surface:check` checks it for drift but is not yet wired into CI. Tool reference prose is
+still hand-written in
+[orchestrator-mcp-server.md](../orchestration-v2/orchestrator-mcp-server.md).
+
+**Proposed.** The running server is the reference. `goat_describe`, `/llms.txt`
+filtered to what the calling credential can use, and generated `--help` all read
+the registry, so they cannot drift from it, and they show what this caller on this
+version can do. Per-resource reference pages are not committed to the repository:
+the [documentation rules](../../AGENTS.md#documentation) allow one catalog, which
+the registry already is. CI fails when an entry's effect disagrees with its access
+declaration, when the audit page drifts, or when an example fails against the toolkit test harness. The
+hand-written tool sections in `orchestrator-mcp-server.md` shrink to lifecycle
+and policy once describe ships.
+
+## The `goat` command
+
+**Now.** The desktop app writes a launcher to `<GOAT home>/bin/goat` (`goat.cmd`
+on Windows) at start and rewrites it on update
+([DesktopCliShim.ts](../../apps/desktop/src/app/DesktopCliShim.ts)). **Settings →
+General → About → Install** links it into the first writable folder among
+`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, and `~/bin` on macOS
+(`~/.local/bin` and `~/bin` on Linux), or adds its folder to the user `PATH` on
+Windows ([DesktopCliCommand.ts](../../apps/desktop/src/app/DesktopCliCommand.ts);
+[install guide](../user/install.md#the-goat-command)). Bare `goat` runs the
+server; the subcommands are operator tools.
+
+**Proposed.**
 
 ```text
 goat <resource> <verb> [args] [--json] [--host <alias>] [--dry-run] [--request-id <id>]
-goat describe [path]
+goat describe [path] [--query <text>]
 goat call <path> [json | -]
-goat eval [file | -] [--sexp]
+goat operation read|wait|cancel <id>
 goat handoff list | open <id> | decline <id>
 goat login | logout | whoami
 goat serve | start | pair | auth | service | update | uninstall | connect | ...   (unchanged)
 ```
 
-Resource commands are generated from the registry. `goat call` replaces
-`acp-mcp-call`, which stays as an alias. `goat project` already has
-`add`, `remove`, and `rename` (`apps/server/src/cli/project.ts:456-585`); they
-become aliases of `create`, `delete`, and `update` from the registry.
+Resource commands and `--help` are generated from the registry. `goat call`
+replaces `acp-mcp-call`, which stays as an alias. `--json` prints the envelope as
+one JSON document on stdout, with logs on stderr. Exit codes: `0` ok, `1` error,
+`2` usage, `3` needs_human, `4` retryable error, `5` unknown outcome. An `ok` that
+carries an operation exits `0` and prints the operation id. `goat operation wait`
+maps the operation's state: `succeeded` exits `0`, `failed` and `cancelled`
+exit `1`, `waiting_human` exits `3`, `unknown` exits `5`, and a wait that
+times out while the work is still `queued` or `running` exits `6`.
 
-### Help and output
-
-- `--help` is generated: summary, usage, arguments with types and defaults, the
-  tested examples, effect class, availability for the current credential,
-  related commands, and legacy names.
-- Default output is a short human rendering. `--json` prints the envelope
-  exactly, one JSON document on stdout. Logs go to stderr.
-- Exit codes: `0` ok, `1` error, `2` usage, `3` needs_human (stderr says how
-  to finish it), `4` retryable error.
-- Arguments: flags for top-level scalar fields, `--args <json>` or stdin for the
-  rest.
+The npm package keeps its `goat` and `t3` bins, and bare `goat` keeps starting a
+server, so `npx t3` users see no change. The desktop launcher marks itself so that
+bare `goat` from it prints help instead of starting a second server. Linux
+packages gain `/usr/bin/goat`, and the welcome wizard offers the install once.
 
 ### Credentials
 
-The CLI resolves a credential in this order:
+The CLI resolves a credential for the origin server only:
 
-1. `GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`, which GOAT already
-   sets for ACP agents. The proposal sets them for every provider's subprocess
-   and terminal, so `goat` inside a thread has exactly that thread's grant.
-2. A session from `goat login`, which pairs the CLI with the local desktop server
-   through the existing pairing flow and stores the token in the OS keychain.
-3. `--host` reaches SSH hosts through the same routing as MCP.
+1. `GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`, which GOAT sets for
+   agent subprocesses and terminals, so `goat` inside a thread has exactly that
+   thread's grant. When they are present and invalid, the CLI fails; it never falls
+   back to a stored login, which could carry more authority.
+2. A session from `goat login`, which pairs with the local server and must yield an
+   `mcp-client` credential, the only outside subject `/mcp` accepts
+   ([EnvironmentAuth.ts](../../apps/server/src/auth/EnvironmentAuth.ts)).
 
-One gap must be stated plainly. `goat auth client create` opens the environment's
-state directly and can mint a token with `orchestration:approve`
-(`apps/server/src/cli/auth.ts:36-48`, `:267-330`). An agent with full-access
-shell can run it today, and it can also read the state directory itself, so the
-real boundary is the OS user and the runtime mode. The CLI will refuse
-credential-minting commands when a thread credential is present in its
-environment and ask the person to run them. That check stops mistakes, but
-removing the variable defeats it. Runtime-mode sandboxing is what enforces the
+`--host` is routing, not a credential. The CLI sends the call with `host` to the
+origin, which applies lane admission and ceiling forwarding; calling a remote
+directly would skip both.
+
+`goat auth client create` opens the environment's state directly and can mint a
+token with approval scope. An agent with a full-access shell can run it, and can
+read the state directory itself, so the real boundary is the OS user and the
+runtime mode. The CLI refuses credential-minting commands when a thread credential
+is in its environment. That stops mistakes; runtime-mode sandboxing enforces the
 boundary.
 
 ## Worked example: provider setup
 
-**Now.** Claude Cloud uses a local Claude instance's binary and claude.ai login,
-named by `sourceInstanceId` (default `claudeAgent`;
-`packages/contracts/src/settings.ts:734-750`). Readiness runs `claude --version`,
-`--help`, and `claude auth status`, and requires `authMethod: "claude.ai"`;
-otherwise it reports "Run claude auth login --claudeai on this environment's
-machine" (`packages/provider-claude-cloud/src/server/cli.ts:142-160`). The
-driver reports `setup: { canAuthenticate: false, canInstall: false }`
-(`apps/server/src/provider/Drivers/ClaudeCloudDriver.ts:174`). Devin Cloud reuses
-an ACP Registry Devin instance named by `siblingInstanceId`
-(`packages/provider-devin-cloud/src/settings.ts:11`). Agents can inspect provider
-availability through `orchestrator_capabilities` and request CLI installation
-and sign-in across hosts through `provider.sync`.
+**Now.** This flow is shipped and is the model for the rest.
 
-**Now.** `provider.host_matrix` (`goat_provider_host_matrix`) reads installed
-versions and sign-in state across this machine and SSH hosts. `provider.sync`
-(`goat_provider_sync`, write) installs with the vendor's official npm package or
-OS-specific script, matching this machine's version by default (latest if absent;
-Cursor's installer always installs latest), then starts sign-in on each host.
-Thread agents receive a `needs_human` approval handoff targeting
-`provider.host_sync`; the approver needs `providers:manage`, and execution uses
-their session. Follow approval with `goat_provider_sync_status` by `handoffId`,
-then use its `syncId` for `goat_provider_sync_cancel` if needed. Cancellation
-stops unfinished work but keeps completed installs.
+- `provider.diagnose` explains why a provider is not ready, here or on an SSH host
+  through [ProviderDiagnosisRouting](../../apps/server/src/provider/ProviderDiagnosisRouting.ts).
+  Claude Cloud and Devin Cloud follow a sibling instance (`sourceInstanceId`,
+  `siblingInstanceId`), so signing in to the sibling is the fix.
+- `provider.setup_open` returns `needs_human` with a `provider.setup` handoff. The
+  person finishes in the add-provider window the model picker's **+** opens, under
+  their own session, and the agent calls `provider.addable_list` again.
+- `provider.login_start` gives thread agents the same handoff. A client holding
+  `providers:manage` starts the flow under its own session, and only that session
+  can read or cancel it
+  ([providerAuthFlow](../../packages/provider-core/src/server/providerAuthFlow.ts)).
+  Results go through `redactProviderAuthState`
+  ([providerOnboarding.ts](../../packages/contracts/src/providerOnboarding.ts)).
+- `provider.sync` installs CLIs and starts sign-in across hosts after a person with
+  `providers:manage` approves. It runs under the approver's session, and each
+  remote installs and stores credentials itself; credentials are never copied
+  between machines ([ProviderHostSync](../../apps/server/src/provider/ProviderHostSync.ts)).
 
-Each remote runs its own `goat_provider_sync` locally. Installer output stays
-there; only a device code and vendor page (Codex's `codex login --device-auth`)
-or an allowlisted vendor sign-in page (Cursor) can be relayed. Other flows ask
-the person to run the vendor's terminal command or finish in GOAT on that host.
-Sign-in details are visible only to the requester, approver, or a
-`providers:manage` caller. Credentials are never copied between machines. See
-[ProviderHostSync](../../apps/server/src/provider/ProviderHostSync.ts) and its
-[installer and login rules](../../apps/server/src/provider/ProviderHostSyncRecipes.ts).
+Asking for any of these approvals needs only a running, writable thread
+credential. What runs after approval is authorized against the approving person's
+session ([SshHostAuthorization.ts](../../apps/server/src/sshRemote/SshHostAuthorization.ts)).
 
-Every provider write needs a live `providers:manage` grant, on the remote too.
-The origin asks the remote for an SSH-issued session carrying
-`providers:manage` only for calls it has already authorized against the
-caller's (or approver's) live `providers:manage`, so the remote can attribute
-the write instead of trusting any full-access outside client. A remote too old
-to issue that scope fails the call rather than falling back.
-
-Requesting an approval card (provider setup, login, sync, Codex home, SSH host
-trust, SSH runtime update now) needs only a running, writable thread
-credential, which carries `orchestration:read` and never
-`orchestration:operate`. What runs after approval is authorized against the
-approving person's session. See
-[authorizeApprovalRequest](../../apps/server/src/sshRemote/SshHostAuthorization.ts).
-
-**Single environment.** Five entries add providers and sign in on the caller's own
-environment:
-
-| Path                    | Effect | Does                                                                                                          |
-| ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------- |
-| `provider.addable_list` | read   | Every driver this environment can add, its install state, how it signs in, and its configured instances       |
-| `provider.setup_open`   | write  | Creates a `provider.setup` handoff that opens the add-provider window, preselecting a driver or instance      |
-| `provider.login_start`  | write  | Thread agents get the same handoff; a client holding `providers:manage` starts the flow under its own session |
-| `provider.login_status` | read   | The redacted phase of a flow the caller's own session started                                                 |
-| `provider.login_cancel` | write  | Cancels that flow                                                                                             |
-
-Thread credentials never hold `providers:manage`, so an agent cannot install a
-CLI or sign in. It gets `needs_human` with a `provider.setup` handoff, and the
-person finishes in the same add-provider window the model picker's **+** opens,
-under their own session. The handoff is the only way an agent reaches that
-window: it renders as a card in the thread, opening it needs `providers:manage`
-on its origin environment, and the preselection travels in the encrypted human
-payload. Its title, reason, and instructions are server text built from driver
-metadata, so an agent cannot put a link or command in front of the person. It
-expires on a 30-minute clock, since the person often finishes after the
-requesting turn ends.
-
-A sign-in flow is owned by the auth session that started it
-([providerAuthFlow](../../packages/provider-core/src/server/providerAuthFlow.ts)), so
-another session that replays its `flowId` sees no flow. MCP results go through
-`redactProviderAuthState` in
-[providerOnboarding](../../packages/contracts/src/providerOnboarding.ts): a device
-code and its https verification URL are meant for the person and pass; browser
-authorization and callback URLs, terminal output, and credential fields stay
-with the client that owns the flow, and the result says `continueIn: "app"`.
-
-Claude Code signs in with its own `claude auth login` in a PTY that the app
-renders, and the Claude CLI writes the credentials
-(`credentialOwner: "provider"`). Claude Cloud and Devin Cloud follow their
-sibling instance, so signing in to the sibling is the fix.
-
-The callable provider diagnosis path accepts an SSH host and uses
-[ProviderDiagnosisRouting](../../apps/server/src/provider/ProviderDiagnosisRouting.ts)
-to inspect that host's own providers. It requires a ready runtime; a stopped or
-unprepared host returns instructions to prepare it and check status, without
-waiting for installation or silently diagnosing the local environment.
-Callable `provider.sync` installs CLIs and starts sign-in across hosts, with
-installation and credential storage on each destination machine; the onboarding
-entries above act on the caller's own environment.
-See the [registry](../../packages/contracts/src/agentSurface/registry.ts) for current
-callable paths and human steps, and the [SSH ownership map](../../structure/ssh.md#host-trust-and-forgetting)
-for trust, key registration, and forget boundaries.
+**Proposed.** Three things change. `provider.sync` returns
+`meta.operation` (kind `provider_sync`) and either persists or reports `unknown`
+after a restart. The requesting thread is woken when the card resolves. The
+per-flow `next.call` hints become the operation, so the agent waits on one handle.
 
 ## Rollout
 
-Each PR ships on its own and leaves `tools/list` unchanged until phase 11.
+Each PR ships on its own and leaves `tools/list` unchanged until the flip.
 
-| #   | PR                                                                 | Ships                                                                                     | Proof                                                                                        |
-| --- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| 1   | `feat(contracts): agent surface registry`                          | Registry with all 106 entries; toolkits read names from it                                | Parity test: assembled `/mcp` tools equal registry entries; `effect` matches `McpToolAccess` |
-| 2   | `feat(server): goat_describe`                                      | Describe tool and `goat describe`                                                         | Tests per depth; availability for thread vs outside callers                                  |
-| 3   | `docs: generate agent surface reference`                           | Generated pages, `llms.txt`, drift check in CI; trims hand-written tool sections          | `agent-surface:gen --check`; examples run in the harness                                     |
-| 4   | `feat(server): goat_call and result envelope`                      | `goat_call`, error mapping, `goat call` (`acp-mcp-call` alias)                            | Mapping table tests for each failure type                                                    |
-| 5   | `feat(cli): resource commands from the registry`                   | `goat <resource> <verb>`, `--json`, exit codes, launcher help, credential order           | CLI tests in `apps/server/src/cli`; snapshot of generated help                               |
-| 6   | `feat: handoff record and cards`                                   | Handoff events, web/mobile cards; `request_secret` becomes `kind: "secret"`               | State machine tests draining the effect worker; one web and one mobile pass                  |
-| 7   | `feat: handoff wait, wake, and CLI`                                | `goat_handoff_wait`, wake on resolve, `goat handoff`, push                                | Deferred-based tests; no sleeps                                                              |
-| 8   | `feat(providers): provider.diagnose`                               | Read-only diagnosis for Claude Cloud and Devin Cloud                                      | Driver readiness fixtures                                                                    |
-| 9   | `feat(providers): setup, login, verify through handoffs`           | The worked example end to end                                                             | Replay harness; manual run on one machine                                                    |
-| 10  | `feat(server): goat_eval`                                          | Evaluator with limits and S-expression CLI input                                          | Permission equivalence test over every entry; limit tests                                    |
-| 11  | `feat(mcp): list canonical tool names`                             | Listing flip, hidden legacy names, presentation map, instruction text, remote translation | Old-remote compatibility test in `SshRemoteDispatch` tests                                   |
-| 12  | `feat(desktop): goat command on Linux packages and welcome wizard` | `/usr/bin/goat` in packages, wizard offer                                                 | `DesktopCliCommand` tests; package install check                                             |
+| #   | Ships                                                                         | State                                                                                                                                                                      |
+| --- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Registry and parity test                                                      | Shipped ([#211](https://github.com/goat-si/goat/pull/211))                                                                                                                 |
+| 2   | Handoff record, cards, SSH continuations                                      | Shipped ([#212](https://github.com/goat-si/goat/pull/212))                                                                                                                 |
+| 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774) |
+| 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                 |
+| 5   | One invocation function, `goat_call`, `goat_describe`                         | Proposed                                                                                                                                                                   |
+| 6   | Idempotency receipts with digest, unknown state, audit columns                | Proposed                                                                                                                                                                   |
+| 7   | Operations over existing stores; durable provider sync                        | Proposed                                                                                                                                                                   |
+| 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
+| 9   | Registry-generated CLI commands and credentials                               | Proposed                                                                                                                                                                   |
+| 10  | Listing flip, verb normalization, remote name translation                     | Proposed                                                                                                                                                                   |
+| 11  | `goat_eval`                                                                   | Gated on measurement                                                                                                                                                       |
 
-Testing follows the repository rules: focused tests for each behavior, effect
-worker draining instead of sleeps, and one real-client pass for the handoff cards
-(`test-goat-app` for web, `test-goat-mobile` for mobile).
+Testing follows the repository rules: focused tests per behavior, effect worker
+draining instead of sleeps, and one real-client pass for cards.
+
+## Prior art
+
+| Source                                                                                                                                     | Lesson                                                                                                                         | Used for                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| [MCP 2026-07-28 changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)                                             | Results carry `resultType` (`complete` or `input_required`); tasks became an extension; tool lists come in deterministic order | `needs_human` as a result; stable describe |
+| [MCP 2025-06-18 changelog](https://modelcontextprotocol.io/specification/2025-06-18/changelog)                                             | JSON-RPC batching was removed                                                                                                  | No batch protocol; composition is explicit |
+| [MCP tasks extension](https://modelcontextprotocol.io/extensions/tasks/overview)                                                           | A durable handle with `working`, `input_required`, and terminal states; cooperative cancel                                     | Operation states and cancel                |
+| [MCP URL-mode elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation)                                    | Sensitive input must not pass through the client                                                                               | Confidentiality by credential              |
+| [MCP pagination](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination)                                     | Opaque cursors; server page size; a bad cursor is invalid params                                                               | Paging                                     |
+| [LSP 3.17](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/)                                    | A cancelled request still answers, possibly with partial results; `ContentModified` asks the client to re-read                 | Cancelled journal; `conflict`              |
+| [JSON-RPC 2.0](https://www.jsonrpc.org/specification)                                                                                      | Batches are unordered and not transactional                                                                                    | Sequential `map`; "not a transaction"      |
+| [AIP-151](https://google.aip.dev/151), [AIP-155](https://google.aip.dev/155), [AIP-193](https://google.aip.dev/193)                        | One operation interface; request ids guarantee idempotency; errors keep a stable reason with metadata                          | Operations; `clientRequestId`; `reason`    |
+| [Stripe](https://docs.stripe.com/api/idempotent_requests)                                                                                  | Keys compare parameters and reject a mismatch; 24-hour retention                                                               | Digest and mismatch                        |
+| [Temporal](https://docs.temporal.io/activity-definition)                                                                                   | Replay from recorded history; a crash after a side effect and before its record needs a downstream key                         | Journal; unknown reservations              |
+| [Cloudflare Code Mode](https://blog.cloudflare.com/code-mode/), [Anthropic](https://www.anthropic.com/engineering/code-execution-with-mcp) | Models compose tools better in code; tool search with detail levels saves most of the context                                  | Gate `goat_eval`; `query`                  |
+| [R7RS Scheme](https://small.r7rs.org/)                                                                                                     | A few special forms suffice when the host supplies primitives                                                                  | The eval forms                             |
+
+## Decision log
+
+| #   | Decision                                                                                                                            | Why                                                                                                                                              | Rejected                                       |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| D1  | Three statuses; unfinished work is `ok` with a required `meta.operation`                                                            | Accepting work succeeded; a fourth status splits every caller's branch; a required handle keeps "accepted" from reading as "done"                | A `running` status                             |
+| D2  | Add `resource_exhausted`, `failed_precondition`, `unknown_outcome`; compute `retryable` per call; keep reasons in handlers          | The surface already produces these; per-code retry flags would retry launches that may have started; a classifier cannot recover collapsed codes | Folding them into `unavailable` and `conflict` |
+| D3  | `clientRequestId` reserves atomically with an argument digest; unrecorded outcomes stay `unknown`                                   | Replaying a stored result for other arguments corrupts silently; redispatch after a crash duplicates side effects                                | "Same id returns the first result"             |
+| D4  | Opaque cursors; fan-out lists that cannot continue say `truncated`                                                                  | One shape; no false continuation                                                                                                                 | Numeric offsets everywhere                     |
+| D5  | `operation.*` over existing stores with signed handles                                                                              | Smallest change giving one handle; a signature separates "issued but lost" from "never issued"                                                   | A new operations table first                   |
+| D6  | One invocation function for direct calls, `goat_call`, the CLI, and composition                                                     | Equivalence by construction; `readsAsCaller` would refuse outside clients                                                                        | Meta tools with their own access class         |
+| D7  | Gates apply per step; composition holds no lane or grant                                                                            | Lanes and ceilings are claimed by the work they bound                                                                                            | Pre-admitting a whole program                  |
+| D8  | Gate `goat_eval` on a stated measurement; if built: JSON, array refs, ordered `map`, fixed journal, no server-run programs          | Code-mode harnesses already compose; replay by call index after fresh reads can reuse a receipt for a different call                             | S-expression syntax; replay by index           |
+| D9  | Handoffs own continuations, the inbox owns decisions; all human steps return `needs_human`; one resolver predicate; wake on resolve | Nine contracts today; the two approval paths disagree; agents parse prose to learn a person must act                                             | A third store; leaving the paths inconsistent  |
+| D10 | `goat_describe` adds `query`, `surfaceVersion`, `host`, and availability per caller                                                 | Progressive discovery; cache safety; remotes differ                                                                                              | Loading every schema                           |
+| D11 | `read` and `cancel` are standard verbs; synonyms normalize at the flip                                                              | `get` and `read` both exist today                                                                                                                | Renaming now                                   |
+| D12 | The CLI authenticates to the origin only and fails closed; `--host` is routing                                                      | Ceiling forwarding and lane admission happen at the origin                                                                                       | Local credentials for remotes                  |
+| D13 | Write receipts double as the audit; spans and `traceparent` across hosts                                                            | One record answers who, under which grant, and where                                                                                             | Ids in analytics                               |
+| D14 | Served reference (describe, `/llms.txt`, `--help`) instead of committed pages                                                       | The registry is the catalog; committed pages would be a second one                                                                               | `docs/reference/` pages                        |
+| D15 | Stay independent of MCP versions; `operation` can map to MCP tasks and `needs_human` to `input_required` later                      | MCP removed sessions and moved tasks in 2026-07-28; tracking each revision would churn the surface                                               | Adopting the tasks extension now               |
 
 ## Open questions
 
-- Whether `tools/list` should move to the `core` profile by default. This needs
-  measurements of tool-selection quality per provider before deciding.
-- How long a legacy name must stay callable for SSH hosts that update rarely.
-- Whether generated reference pages live in `docs/reference/` or are served only
-  by the running server.
+- Which providers the `goat_eval` measurement runs on, and who owns the task set.
+- Whether `tools/list` should move to the `core` profile by default.
+- How long a legacy name stays callable for SSH hosts that update rarely.
