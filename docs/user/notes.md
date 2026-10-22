@@ -4,9 +4,9 @@ Notes are markdown documents kept on the GOAT server you connect to (your hub). 
 
 ## Writing and finding notes
 
-Press **⌘N** (**Ctrl+N** on Windows and Linux) on the Notes page, choose **New note**, or run **New note** from the command palette. The note opens ready to type; its first line becomes the title. New notes are saved as `Untitled.md`; choose **Rename or move** from the note's **⋯** menu to give the file a name or put it in a folder.
+Press **⌘N** (**Ctrl+N** on Windows and Linux) on the Notes page, choose **New note**, or run **New note** from the command palette. The note opens ready to type. Its first heading becomes the title, or its first line when it has no heading. New notes are saved as `Untitled.md`; choose **Rename or move** from the note's **⋯** menu to give the file a name or put it in a folder.
 
-The list shows pinned notes first, then everything else with the most recently changed on top. Press **/** to search titles, text, and folders, use the arrow keys to move through the list, and press **Enter** to start typing in the selected note. **Esc** in a note returns to the list. Pin a note with the pin button next to its status; pins are kept in the file, so they show on every device.
+The list shows pinned notes first, then everything else with the most recently changed on top. Press **/** to search titles, folders, and the opening text of each note, use the arrow keys to move through the list, and press **Enter** to start typing in the selected note. **Esc** in a note returns to the list. Pin a note with the pin button next to its status; pins are kept in the file, so they show on every device.
 
 ## Where notes live
 

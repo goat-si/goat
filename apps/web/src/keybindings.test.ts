@@ -550,18 +550,9 @@ describe("new note shortcut", () => {
 
   it("still belongs to the Notes page when an upgrade backfilled it ahead of chat.new", () => {
     // The server prepends defaults missing from an existing keybindings.json.
-    const backfilled = compile([
-      {
-        shortcut: modShortcut("n"),
-        command: "notes.new",
-        whenAst: whenIdentifier("notesPageOpen"),
-      },
-      {
-        shortcut: modShortcut("n"),
-        command: "chat.new",
-        whenAst: whenNot(whenIdentifier("terminalFocus")),
-      },
-    ]);
+    const notesRule = DEFAULT_RESOLVED_KEYBINDINGS.find((rule) => rule.command === "notes.new")!;
+    const others = DEFAULT_RESOLVED_KEYBINDINGS.filter((rule) => rule.command !== "notes.new");
+    const backfilled = [notesRule, ...others];
     const options = { platform: "MacIntel", context: { notesPageOpen: true } } as const;
     assert.isTrue(matchesPageCommand(modN, backfilled, "notes.new", options));
     assert.strictEqual(pageCommandShortcutLabel(backfilled, "notes.new", options), "⌘N");
@@ -571,6 +562,17 @@ describe("new note shortcut", () => {
         context: { notesPageOpen: false },
       }),
     );
+  });
+
+  it("yields to a later shortcut the person bound themselves", () => {
+    const notesRule = DEFAULT_RESOLVED_KEYBINDINGS.find((rule) => rule.command === "notes.new")!;
+    const custom = [
+      notesRule,
+      ...compile([{ shortcut: modShortcut("n"), command: "terminal.toggle" }]),
+    ];
+    const options = { platform: "MacIntel", context: { notesPageOpen: true } } as const;
+    assert.isFalse(matchesPageCommand(modN, custom, "notes.new", options));
+    assert.isNull(pageCommandShortcutLabel(custom, "notes.new", options));
   });
 });
 

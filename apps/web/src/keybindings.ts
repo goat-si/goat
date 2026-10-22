@@ -10,6 +10,7 @@ import {
   type ThreadJumpKeybindingCommand,
 } from "@goat/contracts";
 import {
+  DEFAULT_RESOLVED_KEYBINDINGS,
   isMacPlatform,
   matchesKeybindingShortcut,
   matchesKeybindingShortcutModifiers,
@@ -191,21 +192,46 @@ export function resolveShortcutCommand(
   return null;
 }
 
+const ruleIdentity = (rule: ResolvedKeybindingRule) =>
+  JSON.stringify([
+    rule.command,
+    rule.shortcut.key,
+    rule.shortcut.modKey,
+    rule.shortcut.metaKey,
+    rule.shortcut.ctrlKey,
+    rule.shortcut.shiftKey,
+    rule.shortcut.altKey,
+    rule.whenAst ?? null,
+  ]);
+const BUILT_IN_RULES = new Set(DEFAULT_RESOLVED_KEYBINDINGS.map(ruleIdentity));
+
 /**
- * Shortcuts for a page-scoped command whose when-clause holds, ignoring rules declared later.
- * The server backfills new defaults ahead of persisted rules, so on existing installs a page
- * command such as notes.new sits before the global chat.new on the same keys; the page that
- * owns the command still has to win while it is open.
+ * Shortcuts for a page-scoped command whose when-clause holds. The server backfills new
+ * defaults ahead of persisted rules, so on existing installs notes.new sits before the default
+ * chat.new on the same keys. Later built-in defaults therefore do not shadow the page's
+ * command; any rule the person added or changed still does, as everywhere else.
  */
 function pageCommandShortcuts(
   keybindings: ResolvedKeybindingsConfig,
   command: KeybindingCommand,
   options?: ShortcutMatchOptions,
 ): KeybindingShortcut[] {
+  const platform = resolvePlatform(options);
   const context = resolveContext(options);
-  return keybindings
-    .filter((binding) => binding.command === command && matchesWhenClause(binding.whenAst, context))
-    .map((binding) => shortcutForContext(binding, context));
+  const claimed = new Set<string>();
+  const shortcuts: KeybindingShortcut[] = [];
+  for (let index = keybindings.length - 1; index >= 0; index -= 1) {
+    const binding = keybindings[index];
+    if (!binding || !matchesWhenClause(binding.whenAst, context)) continue;
+    const shortcut = shortcutForContext(binding, context);
+    const conflictKey = shortcutConflictKey(shortcut, platform);
+    if (binding.command === command) {
+      if (!claimed.has(conflictKey)) shortcuts.push(shortcut);
+    } else if (!BUILT_IN_RULES.has(ruleIdentity(binding))) {
+      claimed.add(conflictKey);
+    }
+  }
+  return shortcuts;
 }
 
 export function matchesPageCommand(
@@ -225,7 +251,7 @@ export function pageCommandShortcutLabel(
   command: KeybindingCommand,
   options?: ShortcutMatchOptions,
 ): string | null {
-  const shortcut = pageCommandShortcuts(keybindings, command, options).at(-1);
+  const shortcut = pageCommandShortcuts(keybindings, command, options)[0];
   return shortcut ? formatShortcutLabel(shortcut, resolvePlatform(options)) : null;
 }
 

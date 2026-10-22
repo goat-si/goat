@@ -102,12 +102,43 @@ it("hides linking against a hub that predates it", async () => {
   delete (legacy as { pinned?: boolean }).pinned;
   await using screen = await setup([legacy]);
   await userEvent.click(screen.getByRole("button", { name: "Notes for this thread" }));
-  await expect
-    .element(page.getByRole("button", { name: "New note for this thread" }))
-    .toBeVisible();
+  await expect.element(page.getByText("No notes linked to this thread yet.")).toBeVisible();
   await expect
     .element(page.getByRole("searchbox", { name: "Find a note to link" }))
     .not.toBeInTheDocument();
+  // A note created there could not be linked, so the thread does not offer one.
+  await expect
+    .element(page.getByRole("button", { name: "New note for this thread" }))
+    .not.toBeInTheDocument();
+});
+
+it("links the first note created from a thread on a hub with no notes yet", async () => {
+  await using screen = await setup([]);
+  state.write.mockResolvedValue({ ok: true, value: { ...note("goat/Untitled.md", "Untitled") } });
+  state.update.mockResolvedValue({ ok: true, value: note("goat/Untitled.md", "Untitled") });
+  await userEvent.click(screen.getByRole("button", { name: "Notes for this thread" }));
+  await userEvent.click(page.getByRole("button", { name: "New note for this thread" }));
+  await expect.poll(() => state.navigate.mock.calls.length).toBe(1);
+  expect(state.update).toHaveBeenCalledWith({
+    environmentId,
+    input: { path: "goat/Untitled.md", relate: here },
+  });
+  expect(state.navigate).toHaveBeenCalledWith({
+    to: "/notes",
+    search: { path: "goat/Untitled.md" },
+  });
+});
+
+it("keeps the new note and says so when linking it fails", async () => {
+  await using screen = await setup([]);
+  state.write.mockResolvedValue({ ok: true, value: note("goat/Untitled.md", "Untitled") });
+  state.update.mockResolvedValue({ ok: false, error: new Error("Hub went away") });
+  await userEvent.click(screen.getByRole("button", { name: "Notes for this thread" }));
+  await userEvent.click(page.getByRole("button", { name: "New note for this thread" }));
+  await expect
+    .element(page.getByRole("alert"))
+    .toHaveTextContent("Created goat/Untitled.md, but it is not linked yet. Hub went away");
+  expect(state.navigate).not.toHaveBeenCalled();
 });
 
 it("stays out of threads on machines other than the notes hub", async () => {

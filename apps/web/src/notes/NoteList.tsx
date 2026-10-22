@@ -17,7 +17,7 @@ export function NoteList(props: {
   query: string;
   onQueryChange: (query: string) => void;
   onSelect: (path: string, options?: { replace?: boolean }) => void;
-  onOpenEditor: () => void;
+  onOpenEditor: (path: string) => void;
   onCreate: (() => void) | null;
   createShortcut: string | null;
   className?: string;
@@ -38,15 +38,17 @@ export function NoteList(props: {
     if (path && path !== props.selectedPath) props.onSelect(path, { replace: true });
   };
   const onRowKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (event.key === "Escape" || (event.key === "ArrowUp" && index === 0)) {
+      event.preventDefault();
+      searchRef.current?.focus();
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       focusRow(index + (event.key === "ArrowDown" ? 1 : -1));
     } else if (event.key === "Enter" || event.key === "ArrowRight") {
       event.preventDefault();
-      props.onSelect(event.currentTarget.dataset.noteRow!);
-      props.onOpenEditor();
-    } else if (event.key === "Escape" || (event.key === "ArrowUp" && index === 0)) {
-      searchRef.current?.focus();
+      const path = event.currentTarget.dataset.noteRow!;
+      props.onSelect(path);
+      props.onOpenEditor(path);
     }
   };
   const selectedIndex = ordered.findIndex((note) => note.path === props.selectedPath);
@@ -123,7 +125,7 @@ export function NoteList(props: {
                 props.onSelect(pathToOpen);
               } else if (event.key === "Enter" && ordered[0]) {
                 props.onSelect(ordered[0].path);
-                props.onOpenEditor();
+                props.onOpenEditor(ordered[0].path);
               } else if (event.key === "Escape" && props.query) {
                 event.preventDefault();
                 props.onQueryChange("");

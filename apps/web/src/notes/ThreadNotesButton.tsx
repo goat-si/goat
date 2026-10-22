@@ -77,8 +77,10 @@ function ThreadNotes(props: {
       environmentId: props.environmentId,
       input: { path, [change]: ref },
     });
-    if (!result.ok) setError(noteErrorMessage(result.error));
-    return result.ok;
+    if (result.ok) return null;
+    const message = noteErrorMessage(result.error);
+    setError(message);
+    return message;
   };
   const createForThread = async () => {
     setError(null);
@@ -89,7 +91,15 @@ function ThreadNotes(props: {
       setError(noteErrorMessage(created.error));
       return;
     }
-    if (editable) await relate(created.value.path, "relate");
+    // Support is read from the new note itself: the list may have been empty a moment ago.
+    if (canUpdate && created.value.pinned !== undefined) {
+      const failure = await relate(created.value.path, "relate");
+      // The note exists either way; it stays in the list below so linking can be retried.
+      if (failure) {
+        setError(`Created ${created.value.path}, but it is not linked yet. ${failure}`);
+        return;
+      }
+    }
     setOpen(false);
     void navigate({ to: "/notes", search: { path: created.value.path } });
   };
@@ -188,7 +198,7 @@ function ThreadNotes(props: {
               </ul>
             </div>
           )}
-          {canWrite && (
+          {canWrite && (editable || notes.length === 0) && (
             <Button size="sm" variant="outline" onClick={() => void createForThread()}>
               <PlusIcon aria-hidden />
               New note for this thread

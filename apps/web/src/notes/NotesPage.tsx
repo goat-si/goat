@@ -2,7 +2,7 @@ import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { FileTextIcon } from "~/components/solar";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { Button } from "../components/ui/button";
 import {
@@ -49,9 +49,15 @@ export function NotesPage(props: { path?: string; create?: boolean }) {
   );
 }
 
-function focusNoteEditor() {
-  document.querySelector<HTMLElement>("[data-note-editor] [contenteditable=true]")?.focus();
+function focusNoteEditor(): boolean {
+  const editor = document.querySelector<HTMLElement>("[data-note-editor] [contenteditable=true]");
+  editor?.focus();
+  return editor !== null;
 }
+
+const rowFor = (path: string) =>
+  document.querySelector<HTMLElement>(`[data-note-row="${CSS.escape(path)}"]`);
+const focusSearch = () => document.querySelector<HTMLInputElement>("[data-notes-search]")?.focus();
 
 function EnvironmentNotes(props: {
   environmentId: EnvironmentId;
@@ -67,12 +73,17 @@ function EnvironmentNotes(props: {
   const registry = useContext(RegistryContext);
   const [query, setQuery] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
-  const [createdPath, setCreatedPath] = useState<string | null>(null);
+  // The note whose editor takes focus when it mounts: a new note, or one opened with Enter
+  // before its body loaded.
+  const [focusPath, setFocusPath] = useState<string | null>(null);
+  // The row to focus once the list is visible again, after Escape on a narrow screen.
+  const returnTo = useRef<string | null>(null);
   const notes = list.data?.notes ?? [];
   const ready = list.data?.ready === true;
   const createNote = useCreateNote(props.environmentId, notes);
   const select = (path: string | undefined, options?: { replace?: boolean }) => {
     if (path && path === props.path) retryFailedNoteRead(registry, props.environmentId, path);
+    setFocusPath(null);
     void navigate({
       to: "/notes",
       search: path ? { path } : {},
@@ -84,7 +95,7 @@ function EnvironmentNotes(props: {
     setCreateError(null);
     void createNote().then((result) => {
       if (result.ok) {
-        setCreatedPath(result.value.path);
+        setFocusPath(result.value.path);
         void navigate({
           to: "/notes",
           search: { path: result.value.path },
@@ -126,7 +137,7 @@ function EnvironmentNotes(props: {
         !isEditableFocused(event.target)
       ) {
         event.preventDefault();
-        document.querySelector<HTMLInputElement>("[data-notes-search]")?.focus();
+        focusSearch();
       }
     };
     // Capture runs before the app-wide new-thread handler, which shares mod+n by default.
@@ -136,10 +147,29 @@ function EnvironmentNotes(props: {
   const createShortcut = pageCommandShortcutLabel(keybindings, "notes.new", {
     context: { notesPageOpen: true },
   });
-  const focusSelectedRow = () => {
-    if (!props.path) return;
-    document.querySelector<HTMLElement>(`[data-note-row="${CSS.escape(props.path)}"]`)?.focus();
+  const openEditor = (path: string) => {
+    if (path === props.path && focusNoteEditor()) return;
+    setFocusPath(path);
   };
+  const exitEditor = () => {
+    const path = props.path;
+    if (!path) return;
+    const row = rowFor(path);
+    const listHidden =
+      document.querySelector<HTMLElement>("nav[aria-label=Notes]")?.offsetParent === null;
+    if (listHidden) {
+      returnTo.current = path;
+      void navigate({ to: "/notes", search: {} });
+    } else if (row) row.focus();
+    else focusSearch();
+  };
+  useEffect(() => {
+    if (props.path || returnTo.current === null) return;
+    const row = rowFor(returnTo.current);
+    returnTo.current = null;
+    if (row) row.focus();
+    else focusSearch();
+  }, [props.path]);
   const empty = ready && notes.length === 0;
   const emptyState = (
     <NotesEmpty
@@ -157,7 +187,7 @@ function EnvironmentNotes(props: {
         query={query}
         onQueryChange={setQuery}
         onSelect={select}
-        onOpenEditor={() => requestAnimationFrame(focusNoteEditor)}
+        onOpenEditor={openEditor}
         onCreate={canCreate ? create : null}
         createShortcut={createShortcut}
         className={
@@ -210,9 +240,9 @@ function EnvironmentNotes(props: {
             summary={notes.find((note) => note.path === props.path)}
             removed={list.data?.removedPaths.has(props.path) ?? false}
             supportsUpdate={notes.some((note) => note.pinned !== undefined)}
-            autoFocus={props.path === createdPath}
+            autoFocus={props.path === focusPath}
             onSelect={select}
-            onExitEditor={focusSelectedRow}
+            onExitEditor={exitEditor}
           />
         ) : ready ? (
           emptyState

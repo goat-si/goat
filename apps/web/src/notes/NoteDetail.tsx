@@ -53,6 +53,7 @@ export function NoteLoader(props: NotePaneProps & { path: string }) {
   const error = query.error;
   return (
     <>
+      {!document && <BackToNotes className="mx-4 mt-3" />}
       {error && (
         <div
           role="alert"
@@ -82,7 +83,6 @@ function NoteDetail(props: NotePaneProps & { document: NoteDocument }) {
   const write = useNoteCommand(notesRpc.write);
   const read = useNoteCommand(notesRpc.read);
   const update = useNoteCommand(notesRpc.update);
-  const navigate = useNavigate();
   const readCurrent = useStableCallback((path: string) =>
     read({ environmentId: props.environmentId, input: { path } }),
   );
@@ -105,6 +105,8 @@ function NoteDetail(props: NotePaneProps & { document: NoteDocument }) {
   const [start, setStart] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const environments = useFleetEnvironments();
+  // Focus only on the first mount; an editor remounted by a reload must not take focus back.
+  const [focusOnMount] = useState(props.autoFocus);
   const dirty = isNoteDirty(state);
   useEffect(() => {
     session.receive(props.document);
@@ -180,15 +182,7 @@ function NoteDetail(props: NotePaneProps & { document: NoteDocument }) {
   return (
     <article className="flex min-w-0 flex-1 flex-col" aria-label="Selected note">
       <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-2 gap-y-1 px-4 pt-3 pb-1 md:px-8 md:pt-5">
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          className="md:hidden"
-          aria-label="Back to notes"
-          onClick={() => void navigate({ to: "/notes", search: {} })}
-        >
-          <ArrowLeftIcon aria-hidden />
-        </Button>
+        <BackToNotes />
         <p className="min-w-0 truncate text-xs text-muted-foreground">
           {state.document.folder ? <span>{state.document.folder} / </span> : null}
           {fileName}
@@ -303,7 +297,7 @@ function NoteDetail(props: NotePaneProps & { document: NoteDocument }) {
         key={state.editorVersion}
         body={state.body}
         editable={canWrite && !props.removed}
-        autoFocus={props.autoFocus}
+        autoFocus={focusOnMount && state.editorVersion === 0}
         onChange={(body) => session.edit(body)}
         onExit={props.onExitEditor}
       />
@@ -376,6 +370,23 @@ function NoteDetail(props: NotePaneProps & { document: NoteDocument }) {
         />
       )}
     </article>
+  );
+}
+
+/** The list and the note share the screen below md; this is the way back to the list there. */
+function BackToNotes(props: { className?: string }) {
+  const navigate = useNavigate();
+  return (
+    <div className={cn("md:hidden", props.className)}>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label="Back to notes"
+        onClick={() => void navigate({ to: "/notes", search: {} })}
+      >
+        <ArrowLeftIcon aria-hidden />
+      </Button>
+    </div>
   );
 }
 
