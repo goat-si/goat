@@ -1,8 +1,7 @@
 import type { LegendListRef } from "@legendapp/list/react";
 import { useEffect, type RefObject } from "react";
 import { observeResize } from "../../lib/observeResize";
-
-const UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
+import { createUpwardScrollDetector } from "./timelineScrollTarget";
 
 /**
  * Holds a following timeline at its measured end while content settles.
@@ -30,24 +29,20 @@ export function useTimelineEndPin({
   useEffect(() => {
     const content = scrollNode?.firstElementChild;
     if (!scrollNode || !content || !enabled) return;
-    // Follow turns off through a React commit; a gesture that can carry the
-    // view up must stop pinning before that lands, until the view is back at the end.
+    // Follow turns off through a React commit. A scroll that actually carried
+    // the view up stops pinning before that lands; scroll events run before
+    // resize observation in each frame. Content shrinking above is not the user.
     let released = false;
     const distanceFromEnd = () =>
       scrollNode.scrollHeight - scrollNode.clientHeight - scrollNode.scrollTop;
-    const release = () => {
-      released = true;
-    };
-    const onWheel = (event: WheelEvent) => {
-      if (event.deltaY < 0) release();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (UPWARD_KEYS.has(event.key)) release();
-    };
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.target === scrollNode) release();
-    };
+    const scrolledUp = createUpwardScrollDetector({
+      top: scrollNode.scrollTop,
+      height: scrollNode.scrollHeight,
+    });
     const onScroll = () => {
+      if (scrolledUp({ top: scrollNode.scrollTop, height: scrollNode.scrollHeight })) {
+        released = true;
+      }
       if (released && distanceFromEnd() <= 1) released = false;
     };
     // Only growth after follow turns on is ours to correct: an explicit
@@ -59,24 +54,17 @@ export function useTimelineEndPin({
       height = scrollNode.scrollHeight;
       viewportHeight = scrollNode.clientHeight;
       const viewport: HTMLElement | undefined = listRef.current?.getScrollableNode();
-      if (released || !viewport) return;
       const distance = distanceFromEnd();
+      if (distance <= 1) released = false;
+      if (released || !viewport) return;
       if (distance <= 1 || (smooth && distance <= viewportHeight)) return;
       viewport.scrollTop = viewport.scrollHeight;
     };
-    scrollNode.addEventListener("wheel", onWheel, { passive: true });
-    scrollNode.addEventListener("touchmove", release, { passive: true });
-    scrollNode.addEventListener("pointerdown", onPointerDown, { passive: true });
     scrollNode.addEventListener("scroll", onScroll, { passive: true });
-    scrollNode.ownerDocument.addEventListener("keydown", onKeyDown);
     const stopObserving = observeResize([scrollNode, content], pin);
     return () => {
       stopObserving();
-      scrollNode.removeEventListener("wheel", onWheel);
-      scrollNode.removeEventListener("touchmove", release);
-      scrollNode.removeEventListener("pointerdown", onPointerDown);
       scrollNode.removeEventListener("scroll", onScroll);
-      scrollNode.ownerDocument.removeEventListener("keydown", onKeyDown);
     };
   }, [enabled, listRef, scrollNode, smooth]);
 }
