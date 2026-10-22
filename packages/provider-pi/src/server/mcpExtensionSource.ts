@@ -3,6 +3,7 @@
  * `@earendil-works/pi-coding-agent` and `typebox` from the user's pi install.
  */
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { COMPUTER_USE_INSTRUCTIONS } from "@goat/provider-core/server/runtimeInstructions";
 
 export const PI_GOAT_MCP_EXTENSION_FILENAME = "pi-goat-mcp-extension.ts";
@@ -39,6 +40,7 @@ const EXTENSION_PATH_ENV = ${JSON.stringify(GOAT_PI_MCP_EXTENSION_PATH_ENV)};
 const CUA_ENV = ${JSON.stringify(GOAT_CUA_MCP_ENV)};
 const CUA_GATE_ENV = ${JSON.stringify(GOAT_CUA_GATE_ENV)};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(GOAT_ORCHESTRATION_INSTRUCTIONS.trim())};
+const DEVELOPMENT_INSTRUCTIONS = ${JSON.stringify(GOAT_DEVELOPMENT_INSTRUCTIONS)};
 const COMPUTER_USE_INSTRUCTIONS = ${JSON.stringify(COMPUTER_USE_INSTRUCTIONS)};
 const PROTOCOL = "2025-06-18";
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -483,6 +485,15 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
         "warning",
       );
     });
+    // The development discipline does not depend on GOAT's tools, so it still applies here.
+    pi.on("before_agent_start", async (event) => {
+      const sections = event.systemPromptOptions?.sections;
+      if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
+        sections.goat_code_development = DEVELOPMENT_INSTRUCTIONS;
+        return undefined;
+      }
+      return { systemPrompt: event.systemPrompt + "\\n\\n" + DEVELOPMENT_INSTRUCTIONS };
+    });
     return;
   }
 
@@ -659,6 +670,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
       // A full prompt override bypasses Pi's later section rendering.
+      sections.goat_code_development = DEVELOPMENT_INSTRUCTIONS;
       sections.goat_code_orchestration = ORCHESTRATION_INSTRUCTIONS;
       if (withComputerUse) sections.goat_computer_use = COMPUTER_USE_INSTRUCTIONS;
       else delete sections.goat_computer_use;
@@ -667,6 +679,8 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     return {
       systemPrompt:
         event.systemPrompt +
+        "\\n\\n" +
+        DEVELOPMENT_INSTRUCTIONS +
         "\\n\\n" +
         ORCHESTRATION_INSTRUCTIONS +
         (withComputerUse ? "\\n\\n" + COMPUTER_USE_INSTRUCTIONS : ""),
