@@ -397,7 +397,10 @@ describe("deriveMessagesTimelineRows", () => {
       if (notice?.kind !== "work") throw new Error("Expected a notice work entry");
       expect(notice.entry.projectedItem).toBe(source);
       expect(notice.entry.sourceActivityKind).toBe("runtime.warning");
-      expect(workEntryDisplayLabel(notice.entry, undefined)).toBe(message);
+      expect(workEntryDisplayLabel(notice.entry, undefined)).toBe(
+        "Claude changed its safety mode.",
+      );
+      expect(notice.entry.detail).toBe("Review the active permission settings before continuing.");
       expect(workEntryDisplayIndicatesToolFailure(notice.entry)).toBe(false);
       const rows = deriveMessagesTimelineRows({
         timelineEntries: [
