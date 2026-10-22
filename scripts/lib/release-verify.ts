@@ -437,13 +437,19 @@ export const writePayloadReport = Effect.fn("writePayloadReport")(function* (
   if (allProblems.length) return yield* new ReleaseVerificationError({ problems: allProblems });
 });
 
+/** The electron-updater manifest prefix: stable releases publish latest*.yml, nightlies nightly*.yml. */
+export function updateManifestPrefix(version: string): "latest" | "nightly" {
+  return /^\d+\.\d+\.\d+$/.test(version) ? "latest" : "nightly";
+}
+
 export function requiredReleaseAssets(version: string): string[] {
+  const prefix = updateManifestPrefix(version);
   const names = [
     runtimeManifestAssetName(version),
-    "nightly-mac.yml",
-    "nightly.yml",
-    "nightly-linux.yml",
-    "nightly-linux-arm64.yml",
+    `${prefix}-mac.yml`,
+    `${prefix}.yml`,
+    `${prefix}-linux.yml`,
+    `${prefix}-linux-arm64.yml`,
     "install.sh",
     "install.ps1",
     "install-goat-server.sh",
@@ -689,14 +695,15 @@ export const assembleRelease = Effect.fn("assembleRelease")(function* (
         ),
       );
       // Electron-updater must retain every updateable container for each architecture.
+      const prefix = updateManifestPrefix(version);
       const expected = assets.filter((asset) =>
-        name === "nightly-mac.yml"
+        name === `${prefix}-mac.yml`
           ? /^GOAT-.*\.(?:zip|dmg)$/.test(asset.name)
-          : name === "nightly.yml"
+          : name === `${prefix}.yml`
             ? /^GOAT-.*\.exe$/.test(asset.name)
-            : name === "nightly-linux-arm64.yml"
+            : name === `${prefix}-linux-arm64.yml`
               ? /^GOAT-.*-arm64\.AppImage$/.test(asset.name)
-              : name === "nightly-linux.yml"
+              : name === `${prefix}-linux.yml`
                 ? /^GOAT-.*-x86_64\.AppImage$/.test(asset.name)
                 : false,
       );
