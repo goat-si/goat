@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act } from "react";
 import { afterEach, expect, it } from "vite-plus/test";
 import { WS_METHODS, type MemoryHubDiagnostics } from "@goat/contracts";

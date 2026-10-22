@@ -52,6 +52,21 @@ ACP fallback: some ACP agents accept the injected MCP server but fail to expose 
 
 When a chart, table, diagram, image collage, or mockup would say more than prose, build a self-contained HTML page, check it with \`html_preview\`, then publish it with \`html_render\` before your final reply. The reader sees the page above that reply, so don't announce or restate it; add only what it doesn't say.`,
   `- When model options are requested or the child keeps the parent's provider instance and model with nonempty \`inheritedOptions\` from \`orchestrator_capabilities\`, use \`delegate_task\` even for native-supported models. Native subagents cannot reliably apply GOAT model options. Read the selected model's descriptors from \`orchestrator_capabilities\` and put settings in \`target.options\`, not only in the prompt. Claude commonly uses {"effort":"max","fastMode":true}; Codex uses {"reasoningEffort":"max","serviceTier":"priority"}. Do not translate max to high or ignore unsupported settings: report a capability mismatch. Options inherit only for the same provider instance and model; explicit entries override individual values, and [] or {} clears them. Check the returned providerInstanceId, model, and options against the requested selection.`,
+  `### Check load before heavy lanes
+
+Installs, browser test suites, typecheck, lint, knip and builds can saturate a machine, and several at once have stalled GOAT itself. Before starting heavy or parallel lanes, call \`goat_host_status\` with \`placement:{}\` (add \`providerInstanceId\`, \`driver\` or \`platform\` when the lane needs one) and start each lane on the first eligible host it ranks; each host's \`pressure\` is \`ok\`, \`elevated\`, or \`critical\`. Keep new heavy work off an elevated host and start none on a critical one: queue it or run it where the ranking points. A launch onto a pressured host returns \`pressure\` advice beside its result. When a host you run work on comes under pressure, GOAT tells this thread with a "Resource pressure:" notice that names the busy work and hosts with room; pause or queue new heavy lanes there and start the next ones elsewhere, and let running lanes finish unless the user asks otherwise. On a busy machine, run heavy checks one at a time.`,
+  `### Choose dispatch or native for each lane
+
+A lane is one unit of child work: \`research\`, \`implement\`, \`review\`, \`verify\`, \`merge\`, or \`sweep\`. Run each lane one of two ways:
+
+- GOAT dispatch (\`delegate_task\`, \`goat_thread_launch\`, \`goat_ssh_thread_launch\`) takes any provider, model, and host, and can have its own worktree. It is durable, shows in Fleet, and outlives this thread.
+- Native subagents (Codex \`spawn_agent\`, Claude Code Task) run this provider on this machine and share this thread's sandbox, checkout, and history. They are the cheapest to start.
+
+Dispatch through GOAT when the lane needs a provider, model, or model options that native tools cannot give it; another host (\`goat_ssh_thread_launch\`); its own worktree, branch, or PR (\`delegate_task\` with \`isolation:"worktree"\`, or \`goat_thread_launch\`); or to outlive this thread or be steered by a person. Implement and merge lanes almost always qualify.
+
+Use native subagents for quick research, reading, or review in this checkout with this provider, and for many short parallel probes that need this thread's context. In Codex multi-agent v2, \`spawn_agent\` with \`fork_turns\` omitted or \`"all"\` forks the full history and keeps the shared prompt prefix cached. Such a fork keeps this thread's model and reasoning effort; for a different model set \`fork_turns:"none"\` or dispatch through GOAT.
+
+Your permission profile's lane limit (\`maxLanes\`) covers both ways, so count running native subagents with dispatched lanes. Every lane ends with a result: a dispatched lane calls \`goat_thread_report_result\`, a native subagent returns its answer, and you fold each into your own report. A manager reports to its supervisor with \`goat_origin_report\` and raises decisions it cannot make with \`goat_decision_request\`.`,
 ];
 
 export const GOAT_ORCHESTRATION_INSTRUCTIONS = `

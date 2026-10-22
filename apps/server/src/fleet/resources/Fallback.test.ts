@@ -53,6 +53,7 @@ const shell = (overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
 
 const run = (ordinal: number, status: string, modelSelection: typeof opus) => ({
   id: RunId.make("run:" + ordinal),
+  rootNodeId: null,
   ordinal,
   status,
   startedAt: ordinal,
@@ -61,6 +62,7 @@ const run = (ordinal: number, status: string, modelSelection: typeof opus) => ({
 });
 
 interface World {
+  stopped: boolean;
   shell: OrchestrationV2ThreadShell;
   runs: ReadonlyArray<ReturnType<typeof run>>;
   refuse: ReadonlySet<string>;
@@ -70,6 +72,7 @@ interface World {
   readonly commands: Array<OrchestrationV2ServerCommand>;
 }
 const makeWorld = (overrides: Partial<World> = {}): World => ({
+  stopped: false,
   shell: shell(),
   runs: [run(1, "completed", opus), run(2, "failed", opus)],
   refuse: new Set(),
@@ -110,13 +113,39 @@ const threadChain: FleetSettings = {
 const threadsLayer = (world: World) =>
   Layer.mock(ThreadManagement.ThreadManagementService)({
     getThreadShell: () => Effect.sync(() => world.shell),
-    getThreadRecords: (() => Effect.sync(() => ({ runs: world.runs }))) as never,
+    getThreadRecords: (() =>
+      Effect.sync(() => ({
+        runs: world.runs,
+        providerSessions: [],
+        turnItems: [
+          ...(world.stopped ? [{ runId, type: "run_interrupt_request" }] : []),
+          {
+            id: "failure",
+            runId,
+            nodeId: null,
+            type: "error",
+            status: "failed",
+            ordinal: 1,
+            updatedAt: DateTime.makeUnsafe(FAILED_AT),
+            failure: {
+              class: world.shell.lastErrorClass,
+              message: "Failed",
+              ...(world.shell.usageLimitResetAt == null
+                ? {}
+                : { resetAt: world.shell.usageLimitResetAt }),
+            },
+          },
+        ],
+      }))) as never,
     receiptStatus: (commandId) => Effect.sync(() => world.receipts.get(commandId) ?? null),
     isProviderInstanceEnabledForProject: ({ instanceId }) =>
       Effect.sync(() => !world.disabledForProject.has(instanceId)),
     dispatch: (command) =>
       Effect.suspend(() => {
-        const target = "modelSelection" in command ? command.modelSelection : undefined;
+        const target =
+          command.type === "thread.model-selection.set" || command.type === "provider.switch"
+            ? command.modelSelection
+            : undefined;
         if (target !== undefined) world.selects.push(command.commandId + " " + target.model);
         if (target !== undefined && world.refuse.has(target.model)) {
           world.receipts.set(command.commandId, "rejected");
@@ -148,7 +177,7 @@ const summary = (commands: ReadonlyArray<OrchestrationV2ServerCommand>) =>
   commands.map((command) =>
     command.type === "thread.notice.record"
       ? "notice: " + command.message
-      : "modelSelection" in command && command.modelSelection !== undefined
+      : command.type === "thread.model-selection.set" || command.type === "provider.switch"
         ? command.type + " " + command.modelSelection.model
         : command.type,
   );
@@ -161,6 +190,79 @@ const withClock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   TestClock.setTime(NOW).pipe(Effect.andThen(effect));
 
 describe("Fallback.continueThread", () => {
+  it.effect(
+    "does not switch a successfully continued run again after restart or model changes",
+    () => {
+      const world = makeWorld();
+      return withClock(
+        Effect.gen(function* () {
+          assert.isTrue(yield* continueOnce.pipe(Effect.provide(layer(world, threadChain))));
+          const commands = [...world.commands];
+          world.shell = shell();
+          assert.isTrue(
+            yield* continueOnce.pipe(
+              Effect.provide(
+                layer(world, {
+                  fallbackChains: {
+                    replacement: { steps: [opus, sol], scope: "goals_and_threads" },
+                  },
+                }),
+              ),
+            ),
+          );
+          assert.deepEqual(world.commands, commands);
+        }),
+      );
+    },
+  );
+
+  it.effect("does not continue a run reached by Stop", () => {
+    const world = makeWorld({ stopped: true });
+    return withClock(
+      continueOnce.pipe(
+        Effect.map((switched) => {
+          assert.isFalse(switched);
+          assert.deepEqual(world.commands, []);
+        }),
+        Effect.provide(layer(world, threadChain)),
+      ),
+    );
+  });
+
+  it.effect.each(["provider_error", "transport_error", "unknown", "permission_error"] as const)(
+    "only switches explicitly configured failure classes: %s",
+    (failure) =>
+      withClock(
+        Effect.gen(function* () {
+          for (const on of [undefined, ["provider_error", "transport_error"] as const]) {
+            const world = makeWorld({
+              shell: shell({ lastErrorClass: failure, usageLimitResetAt: null }),
+            });
+            const switched = yield* continueOnce.pipe(
+              Effect.provide(
+                layer(world, {
+                  fallbackChains: {
+                    selected: {
+                      steps: [opus, opus2],
+                      scope: "goals_and_threads",
+                      ...(on ? { on } : {}),
+                    },
+                  },
+                }),
+              ),
+            );
+            const expected =
+              on !== undefined && (failure === "provider_error" || failure === "transport_error");
+            assert.equal(switched, expected);
+            assert.equal(world.selects.length, expected ? 1 : 0);
+            assert.equal(
+              world.commands.filter((command) => command.type === "message.dispatch").length,
+              expected ? 1 : 0,
+            );
+          }
+        }),
+      ),
+  );
   it.effect(
     "switches a usage-limited thread to the next step with a notice and a continuation",
     () => {

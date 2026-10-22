@@ -927,7 +927,7 @@ describe("duplicates and restarts (scenario 2)", () => {
         assert.strictEqual(resultsTo(harness.slackSent, "result").length, 1);
         assert.strictEqual(
           resultsTo(harness.slackSent, "result")[0]?.message.text,
-          "Done: recover result\nRecovered result.",
+          "Done: recover result\nRecovered result.\nReported tests: not reported\nGOAT check: pending",
         );
       }),
     ).pipe(Effect.provide(harness.layer));
@@ -2031,8 +2031,14 @@ describe("channel worker memory grants", () => {
         }
         yield* runtime.drain;
         const task = yield* onlyTask;
-        assert.strictEqual(task.status, "running");
         assert.include(task.requester.grantedScopes, "memory:write");
+        if (change === "removed") {
+          assert.strictEqual(task.status, "failed");
+          assert.isUndefined(task.target);
+          assert.lengthOf(harness.world.launches, 0);
+          return;
+        }
+        assert.strictEqual(task.status, "running");
         const expected = change === "read" ? "read" : undefined;
         assert.strictEqual(task.target?.memoryGrantCeiling, expected);
         assert.strictEqual(harness.world.launches[0]?.initialMessage?.memoryGrantCeiling, expected);
@@ -2556,6 +2562,7 @@ describe("completion (scenario 5)", () => {
       assert.strictEqual(held?.task.status, "running");
       assert.strictEqual(held?.completionHold, "background");
       assert.deepStrictEqual(held?.task.observed, {
+        result: { runId: task.worker!.runId!, observedCheckPending: true },
         pullRequests: [{ repository: link.repository, number: 123, url: link.url, watching: true }],
         needsYou: [],
       });
@@ -2567,6 +2574,7 @@ describe("completion (scenario 5)", () => {
       assert.strictEqual(done?.task.status, "completed");
       assert.isUndefined(done?.completionHold);
       assert.deepStrictEqual(done?.task.observed, {
+        result: { runId: task.worker!.runId!, observedCheckPending: true },
         pullRequests: [
           { repository: link.repository, number: 123, url: link.url, watching: false },
         ],
@@ -3035,9 +3043,14 @@ describe("completion (scenario 5)", () => {
       const current = yield* onlyTask;
       assert.strictEqual(current.status, "waiting_input");
       assert.deepStrictEqual(current.openQuestions, waiting.openQuestions);
-      assert.strictEqual(current.version, waiting.version);
+      assert.strictEqual(current.version, waiting.version + 1);
       assert.isFalse(yield* ledger.hasTaskEvent(proposalId));
-      assert.isFalse(yield* ledger.hasTaskEvent(taskEventIdFor(task.taskId, waiting.version + 1)));
+      assert.deepStrictEqual(current.observed?.result, {
+        runId: current.worker!.runId!,
+        observedCheckPending: true,
+      });
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).version, current.version);
       assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
       assert.strictEqual(resultsTo(harness.slackSent, "question").length, 1);
     }).pipe(Effect.provide(harness.layer));

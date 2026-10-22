@@ -161,6 +161,7 @@ function LocalSettingsRouteScreen() {
 }
 
 function SettingsIndexSections() {
+  const navigation = useNavigation();
   const { supported: goatBotHomeSupported } = useMobileGoatBotHomeSettings();
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
   const noServerTargets = selectedTargets.length === 0;
@@ -194,6 +195,16 @@ function SettingsIndexSections() {
         {goatBotHomeSupported ? (
           <SettingsRow icon="text.bubble" label="GOAT Bot" target="SettingsGoatBot" />
         ) : null}
+        <SettingsRow
+          icon="questionmark.bubble"
+          label="Decision inbox"
+          onPress={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsDecisionInbox" },
+            })
+          }
+        />
         <SettingsRow icon="clock" label="Scheduled tasks" target="SettingsScheduledTasks" />
       </SettingsSection>
 

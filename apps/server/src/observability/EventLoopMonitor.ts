@@ -37,8 +37,15 @@ export class EventLoopMonitor extends Context.Reference<{
    * first, so a stall that ended just before a client reconnected is included.
    */
   readonly latestNoticeableStall: Effect.Effect<ServerEventLoopStall | undefined>;
+  /** The latest stall over the 2 s threshold, from the 30-second timer; reading it does not sample. */
+  readonly latestStall: Effect.Effect<
+    { readonly delayMs: number; readonly atMs: number } | undefined
+  >;
 }>("goat/observability/EventLoopMonitor", {
-  defaultValue: () => ({ latestNoticeableStall: Effect.succeed(undefined) }),
+  defaultValue: () => ({
+    latestNoticeableStall: Effect.succeed(undefined),
+    latestStall: Effect.succeed(undefined),
+  }),
 }) {}
 
 /** Delay in ns, active time in ms, CPU in µs. */
@@ -155,6 +162,9 @@ const layerWith = (
       const latestNoticeableStall = yield* Ref.make<
         { readonly stall: ServerEventLoopStall; readonly detectedAtMs: number } | undefined
       >(undefined);
+      const latestStall = yield* Ref.make<
+        { readonly delayMs: number; readonly atMs: number } | undefined
+      >(undefined);
       const stallSink = yield* Effect.try(
         () =>
           new RotatingFileSink({
@@ -178,6 +188,7 @@ const layerWith = (
         const { utilization, usage, rssBytes, loadAverage, cpuCount } = readings;
         const now = yield* DateTime.now;
         const detectedAt = DateTime.formatIso(now);
+        yield* Ref.set(latestStall, { delayMs: delayMaxMs, atMs: DateTime.toEpochMillis(now) });
         if (delayMaxMs >= NOTICEABLE_STALL_MS) {
           yield* Ref.set(latestNoticeableStall, {
             detectedAtMs: DateTime.toEpochMillis(now),
@@ -235,6 +246,7 @@ const layerWith = (
           const ageMs = DateTime.toEpochMillis(yield* DateTime.now) - latest.detectedAtMs;
           return ageMs <= NOTICEABLE_STALL_MAX_AGE_MS ? latest.stall : undefined;
         }),
+        latestStall: Ref.get(latestStall),
       });
     }),
   );

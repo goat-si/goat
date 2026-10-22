@@ -81,7 +81,8 @@
         "packages/contracts/src/channelCommon.ts",
         "packages/contracts/src/channelGateway.ts",
         "packages/contracts/src/ipc.ts",
-        "packages/contracts/src/hubProxy.ts"
+        "packages/contracts/src/hubProxy.ts",
+        "packages/contracts/src/quotaPool.ts"
       ]
     },
     {
@@ -118,6 +119,8 @@
         "packages/shared/src/opencodexCompat.ts",
         "packages/shared/src/sshFailure.ts",
         "packages/shared/src/cliRelease.ts",
+        "packages/shared/src/cuaDriverRelease.ts",
+        "packages/shared/src/cuaDriverManifest.ts",
         "packages/shared/src/path.ts",
         "packages/shared/src/themePalettes.ts",
         "apps/server/src/orchestration-v2/ThreadCommandExecutor.ts"
@@ -156,6 +159,17 @@
         "apps/server/src/vcs/GitVcsDriver.ts",
         "apps/server/src/provider/OpenCodexRoute.ts",
         "apps/server/src/opencodex/OpenCodexInventory.ts",
+        "apps/server/src/hub/HubParity.ts",
+        "apps/server/src/hub/parity.ts",
+        "apps/server/src/hub/HubDown.ts",
+        "apps/server/src/hub/hubDownPolicy.ts",
+        "apps/server/src/hub/localRoutes.ts",
+        "apps/server/src/hub/HubMembership.ts",
+        "apps/server/src/hub/HubOcx.ts",
+        "apps/server/src/hub/OpenCodexManagedUpdate.ts",
+        "apps/server/src/hub/opencodexUpdatePlan.ts",
+        "packages/contracts/src/hubParity.ts",
+        "packages/contracts/src/hubDevice.ts",
         "apps/server/src/provider/builtInDrivers.ts",
         "apps/server/src/provider/Drivers/CodexDriver.ts",
         "apps/server/src/provider/Drivers/ClaudeDriver.ts",
@@ -191,7 +205,9 @@
         "packages/source-control-testing",
         "packages/contracts",
         "packages/contracts/src/codexRoute.ts",
-        "apps/server/src/hubProxy"
+        "apps/server/src/hubProxy",
+        "apps/server/src/cua/",
+        "packages/contracts/src/cua.ts"
       ]
     },
     {
@@ -220,7 +236,7 @@
       "path": "channels.md",
       "tier": 3,
       "title": "Channels and GOAT Bot",
-      "scope": "The channel ledger, Slack, MCP, and iMessage ingress, and the GOAT Bot thread clients render.",
+      "scope": "The channel ledger, worker verification evidence, channel ingress, and the GOAT Bot thread clients render.",
       "documents": [
         "packages/contracts/src/channelCommon.ts",
         "packages/contracts/src/settings.ts",
@@ -236,6 +252,8 @@
         "apps/server/src/persistence/Migrations/071_ChannelLedger.ts",
         "apps/server/src/channels/ChannelReceptionService.ts",
         "apps/server/src/channels/ChannelDispatcher.ts",
+        "apps/server/src/channels/ChannelRemoteWorkers.ts",
+        "apps/server/src/channels/channelDispatchAuthority.ts",
         "apps/server/src/channels/ChannelBotRegistry.ts",
         "apps/server/src/channels/ChannelBotTimeline.ts",
         "packages/client-runtime/src/goatBot/",
@@ -299,6 +317,12 @@
         "packages/ssh/src/tunnel.ts",
         "apps/desktop/src/ssh/DesktopSshEnvironment.ts",
         "apps/server/src/sshRemote/SshRemoteDispatch.ts",
+        "apps/server/src/project/RepositoryInventory.ts",
+        "apps/server/src/mcp/RepositoryLaunchMcpService.ts",
+        "packages/contracts/src/repositoryInventory.ts",
+        "packages/contracts/src/repositoryReference.ts",
+        "apps/server/src/project/RepositoryReferences.ts",
+        "apps/server/src/mcp/RepositoryReferenceMcpService.ts",
         "apps/server/src/sshRemote/SshHostSetup.ts",
         "apps/server/src/sshRemote/SshDeviceAdd.ts",
         "apps/server/src/provider/ProviderDiagnosisRouting.ts",
@@ -342,7 +366,17 @@
         "apps/server/src/persistence/Migrations/074_RemoteReportRelay.ts",
         "apps/server/src/mcp/OrchestratorMcpService.ts",
         "apps/server/src/mcp/toolkits/remoteReport/tools.ts",
-        "packages/contracts/src/remoteReports.ts"
+        "packages/contracts/src/remoteReports.ts",
+        "apps/server/src/goatclaw/PermissionProfiles.ts",
+        "apps/server/src/persistence/Migrations/097_PermissionProfiles.ts",
+        "packages/contracts/src/permissionProfiles.ts",
+        "apps/server/src/fleet/pressure/HostPressureMonitor.ts",
+        "apps/server/src/fleet/pressure/PressureNudger.ts",
+        "packages/contracts/src/hostPressure.ts",
+        "apps/server/src/goatclaw/DecisionInbox.ts",
+        "apps/server/src/persistence/Migrations/098_DecisionInbox.ts",
+        "packages/contracts/src/decisions.ts",
+        "apps/server/src/goatclaw/RoleTemplates.ts"
       ]
     },
     {
@@ -389,7 +423,10 @@
         "apps/desktop/src/preload.ts",
         "apps/desktop/src/ssh/DesktopSshEnvironment.ts",
         "packages/ssh",
-        "apps/desktop/src/app/DesktopClerk.ts"
+        "apps/desktop/src/app/DesktopClerk.ts",
+        "apps/desktop/src/cua/",
+        "scripts/build-desktop-artifact.ts",
+        "patches/@ubjs__node@0.31.0-3.patch"
       ]
     },
     {

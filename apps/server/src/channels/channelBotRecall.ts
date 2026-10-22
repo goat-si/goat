@@ -11,6 +11,7 @@ import type {
   ChannelTask,
   ChannelTaskPullRequest,
 } from "@goat/contracts";
+import { channelEvidenceLabels } from "@goat/shared/channelEvidence";
 
 /** Each read result is cut to this many characters before a pass sees it. */
 export const RECALL_RESULT_CHARS = 4_000;
@@ -152,6 +153,7 @@ export const taskDigest = (task: ChannelTask): string => {
       ? ["  the worker ended without filing a final report"]
       : []),
     ...(prs.length === 0 ? [] : ["  pull requests: " + prs.join(", ")]),
+    ...channelEvidenceLabels(task.observed?.result).map((label) => "  " + label),
     ...task.openQuestions.map((question) => "  open question: " + question.text),
     ...(task.completedAt === undefined ? [] : ["  ended " + task.completedAt.slice(0, 16)]),
   ];
@@ -185,7 +187,10 @@ export const journalFor = (
       (task.resultSummary === undefined || task.resultSummary.trim() === ""
         ? ""
         : " — " + cut(task.resultSummary.replace(/\s+/gu, " ").trim(), JOURNAL_RESULT_CHARS)) +
-      (prs.length === 0 ? "" : " — " + prs.join(", "));
+      (prs.length === 0 ? "" : " — " + prs.join(", ")) +
+      (task.observed?.result === undefined
+        ? ""
+        : " — " + channelEvidenceLabels(task.observed.result).join("; "));
     if (used + line.length + 1 > chars) break;
     lines.push(line);
     used += line.length + 1;

@@ -1,3 +1,5 @@
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import * as Invocation from "../mcp/McpInvocationContext.ts";
 import {
   MEMORY_MCP_TOOLS,
   MEMORY_ADMINISTRATION_MCP_TOOLS,
@@ -61,6 +63,7 @@ import * as Claims from "../orchestration-v2/AttachmentClaims.ts";
 import * as ServerConfig from "../config.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import { AcpMcpBridgeError, callAcpMcpTool, listAcpMcpTools } from "../mcp/AcpMcpStdioBridge.ts";
+import { remoteDeadlineMessage, remoteUnavailableMessage } from "./remoteFailureCopy.ts";
 import {
   buildRemoteBrowseScript,
   parseRemoteBrowseOutput,
@@ -164,6 +167,11 @@ type SshDispatchDestination =
   | { readonly host: string; readonly target?: undefined }
   | { readonly target: DesktopSshEnvironmentTarget; readonly host?: undefined };
 export type SshLaunchInput = SshDispatchDestination & {
+  /** Recovery may renew its accepted session, but never prepare a runtime or register a project. */
+  readonly requireReady?: true;
+  /** Use only a cached session; never prepare a host, issue a session, or register a project. */
+  readonly existingSessionOnly?: true;
+  readonly permissionProfileCeiling?: import("@goat/contracts").PermissionProfile;
   readonly memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling;
   readonly cwd: string;
   readonly workspace: SshLaunchWorkspace;
@@ -234,6 +242,9 @@ export interface SshHostToolCall {
    */
   readonly providersManage?: boolean;
   readonly requireReady?: true;
+  /** Refuse when no current session already carries exactly this caller's authority. */
+  readonly existingSessionOnly?: true;
+  readonly memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling;
 }
 
 export class SshRemoteDispatch extends Context.Service<
@@ -642,6 +653,7 @@ const validateSshLaunchAttachments = Effect.fn("SshRemoteDispatch.validateSshLau
 );
 
 const make = Effect.gen(function* () {
+  const permissions = yield* Profiles.PermissionProfiles;
   const manager = yield* SshTunnel.SshEnvironmentManager;
   const runtime = yield* Effect.context<RuntimeServices>();
   const config = yield* ServerConfig.ServerConfig;
@@ -715,12 +727,21 @@ const make = Effect.gen(function* () {
       : cloudMachines.value.owns(target.alias).pipe(
           Effect.flatMap((owned) =>
             owned
-              ? cloudMachines.value.ensureReady(target.alias as CloudMachineAlias, { wake })
+              ? Effect.gen(function* () {
+                  const scope = yield* Effect.serviceOption(Invocation.McpInvocationContext);
+                  if (wake && Option.isSome(scope))
+                    yield* permissions.require(scope.value, "boat.start", { host: target.alias });
+                  return yield* cloudMachines.value.ensureReady(target.alias as CloudMachineAlias, {
+                    wake,
+                  });
+                })
               : Effect.void,
           ),
           Effect.asVoid,
           Effect.mapError((error) =>
-            failure("host_unavailable", `${target.alias}: ${error.message}`),
+            error._tag === "OrchestratorMcpFailure"
+              ? failure("remote_refused", error.message)
+              : failure("host_unavailable", `${target.alias}: ${error.message}`),
           ),
         );
 
@@ -889,9 +910,12 @@ const make = Effect.gen(function* () {
       readonly path?: string | undefined;
       readonly showHidden?: boolean | undefined;
       readonly limit?: number | undefined;
+      readonly requireReady?: true;
     },
   ) {
-    yield* readyCloudTarget(target, true);
+    if (input.requireReady)
+      yield* withRuntime(manager.readyEnvironment(target)).pipe(sshFailed(target.alias));
+    else yield* readyCloudTarget(target, true);
     const limit = Math.min(Math.max(input.limit ?? DEFAULT_BROWSE_LIMIT, 0), MAX_BROWSE_LIMIT);
     const result = yield* withRuntime(
       manager.runRemoteScript(target, {
@@ -937,8 +961,18 @@ const make = Effect.gen(function* () {
     memoryGrantCeiling: import("@goat/contracts").MemoryTaskGrantCeiling = "none",
     requireReady?: true,
     providersManage = false,
+    existingSessionOnly = false,
   ) {
     const key = sessionKey(target, ceiling, approvals, memoryGrantCeiling, providersManage);
+    if (existingSessionOnly) {
+      const cached = sessions.get(key);
+      const now = yield* Clock.currentTimeMillis;
+      if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now) return cached;
+      return yield* failure(
+        "host_unavailable",
+        "No existing GOAT session permits this operation; reconnect explicitly.",
+      );
+    }
     const gate = sessionLocks.get(key) ?? Semaphore.makeUnsafe(1);
     sessionLocks.set(key, gate);
     const work = Effect.gen(function* () {
@@ -1311,12 +1345,13 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const findProject = Effect.fn("SshRemoteDispatch.findProject")(function* (
+  const findProject = Effect.fn("SshRemoteDispatch.findProject")(function* <E = never, R = never>(
     remote: {
       readonly target: DesktopSshEnvironmentTarget;
       readonly httpBaseUrl: string;
       readonly ceiling: RuntimeMode;
       readonly token: string;
+      readonly beforeToolCall?: Effect.Effect<void, E, R>;
     },
     folder: SshBrowseResult,
   ) {
@@ -1528,7 +1563,13 @@ const make = Effect.gen(function* () {
     // project is created, and a worktree needs an explicit baseRef.
     const linkedPath = Option.isSome(linked) ? linkedHostFolder(target.alias, input.cwd) : null;
     if (typeof linkedPath === "string") return yield* failure("invalid_request", linkedPath);
-    const folder = linkedPath ?? (yield* browseTarget(target, { path: input.cwd, limit: 0 }));
+    const folder =
+      linkedPath ??
+      (yield* browseTarget(target, {
+        path: input.cwd,
+        limit: 0,
+        ...(input.existingSessionOnly || input.requireReady ? { requireReady: true as const } : {}),
+      }));
     const broad = input.allowBroadWorkspaceRoot === true ? null : broadWorkspaceRoot(folder);
     if (broad !== null) {
       return yield* failure(
@@ -1592,9 +1633,11 @@ const make = Effect.gen(function* () {
           remoteServerVersion: linked.value.host.serverVersion,
           remoteServerKind: undefined,
         }
-      : yield* withRuntime(manager.ensureEnvironment(target, AGENT_CONNECTION)).pipe(
-          sshFailed(target.alias),
-        );
+      : yield* withRuntime(
+          input.existingSessionOnly || input.requireReady
+            ? manager.readyEnvironment(target)
+            : manager.ensureEnvironment(target, AGENT_CONNECTION),
+        ).pipe(sshFailed(target.alias));
     if ("type" in bootstrap)
       return yield* failure(
         "host_unavailable",
@@ -1613,13 +1656,22 @@ const make = Effect.gen(function* () {
     const memoryGrantCeiling = input.memoryGrantCeiling ?? "none";
     const session = Option.isSome(linked)
       ? yield* linkedSession(linked.value, input.callerRuntimeMode, memoryGrantCeiling)
-      : yield* sessionFor(target, input.callerRuntimeMode, false, memoryGrantCeiling);
+      : yield* sessionFor(
+          target,
+          input.callerRuntimeMode,
+          false,
+          memoryGrantCeiling,
+          input.existingSessionOnly || input.requireReady ? true : undefined,
+          false,
+          input.existingSessionOnly === true,
+        );
     const remote = {
       target,
       httpBaseUrl: bootstrap.httpBaseUrl,
       ceiling: input.callerRuntimeMode,
       memoryGrantCeiling,
       token: session.token,
+      ...(input.existingSessionOnly || input.requireReady ? { beforeToolCall: beforeLaunch } : {}),
     };
     if (!session.ceilingApplied && input.runtimeMode !== "approval-required") {
       return yield* failure(
@@ -1639,6 +1691,12 @@ const make = Effect.gen(function* () {
     let project = yield* findProject(remote, folder);
     let projectCreated = false;
     if (project === undefined) {
+      if (input.existingSessionOnly || input.requireReady) {
+        return yield* failure(
+          "remote_refused",
+          "Automatic placement requires an existing remote project.",
+        );
+      }
       if (Option.isSome(linked)) {
         return yield* failure(
           "remote_refused",
@@ -1679,7 +1737,18 @@ const make = Effect.gen(function* () {
     // Each attempt admits memory from its current catalog; cached declarations are
     // only for optional lineage/UI arguments when an ordinary launch cannot list.
     const launchAdmission = Effect.fn("SshRemoteDispatch.launchAdmission")(function* () {
+      if (input.existingSessionOnly || input.requireReady) yield* beforeLaunch;
       const { capabilities, declared } = yield* remoteLaunchArguments(remote);
+      if (
+        input.permissionProfileCeiling !== undefined &&
+        capabilities?.declared.has("permissionProfileCeiling") !== true
+      )
+        return yield* new SshRemoteDispatchError({
+          reason: "remote_refused",
+          remoteCode: "permission_profile_unsupported",
+          message:
+            "Remote GOAT cannot preserve a permission profile ceiling; enable goatclaw on an updated destination.",
+        });
       if (capabilities === null && input.memoryGrantCeiling !== undefined)
         return yield* memoryRefusal("Remote task memory admission could not be verified.");
       if (
@@ -1742,6 +1811,9 @@ const make = Effect.gen(function* () {
             title: input.title,
             workspaceStrategy,
             runtimeMode: input.runtimeMode,
+            ...(input.permissionProfileCeiling === undefined
+              ? {}
+              : { permissionProfileCeiling: input.permissionProfileCeiling }),
             ...memoryArguments,
             ...(input.interactionMode === undefined
               ? {}
@@ -1908,7 +1980,7 @@ const make = Effect.gen(function* () {
             );
           return Effect.fail(
             error.kind === "transport" || error.kind === "http"
-              ? failure("host_unavailable", `GOAT on ${alias} is unavailable: ${describe(error)}`)
+              ? failure("host_unavailable", remoteUnavailableMessage(alias, error))
               : failure(
                   "remote_refused",
                   `GOAT on ${alias} could not run ${call.tool}: ${describe(error)}`,
@@ -1919,7 +1991,7 @@ const make = Effect.gen(function* () {
       if (Option.isNone(answer))
         return yield* failure(
           "host_unavailable",
-          `${alias} did not answer ${call.tool} within ${Math.round(call.timeoutMs / 1000)}s.`,
+          remoteDeadlineMessage(alias, call.tool, call.timeoutMs),
         );
       const result = readRemoteToolResult(call.tool, answer.value);
       if (!result.ok)
@@ -1939,13 +2011,14 @@ const make = Effect.gen(function* () {
     if (Option.isSome(linked)) return yield* callLinkedHostTool(linked.value, call, authorize);
     const target = yield* resolveHost(call.host);
     const ceiling = yield* authorize;
-    if (call.requireReady !== true) yield* readyCloudTarget(target, false);
+    const requireReady = call.requireReady === true || call.existingSessionOnly === true;
+    if (!requireReady) yield* readyCloudTarget(target, false);
     const bootstrap = yield* withRuntime(
-      call.requireReady
+      requireReady
         ? manager.readyEnvironment(target)
         : manager.ensureEnvironment(target, AGENT_CONNECTION),
     ).pipe(
-      call.requireReady === true
+      requireReady
         ? Effect.mapError(() =>
             failure(
               "host_unavailable",
@@ -1982,9 +2055,10 @@ const make = Effect.gen(function* () {
           target,
           ceiling,
           call.approvals === true,
-          "none",
-          call.requireReady,
+          call.memoryGrantCeiling ?? "none",
+          requireReady ? true : undefined,
           call.providersManage === true,
+          call.existingSessionOnly === true,
         ).pipe(unavailable(target.alias));
         attemptedToken = session.token;
         if (call.writes && !session.ceilingApplied) {
@@ -2003,7 +2077,7 @@ const make = Effect.gen(function* () {
         if (Option.isNone(answer)) {
           return yield* failure(
             "host_unavailable",
-            `${target.alias} did not answer ${call.tool} within ${Math.round(call.timeoutMs / 1000)}s.`,
+            remoteDeadlineMessage(target.alias, call.tool, call.timeoutMs),
           );
         }
         const result = readRemoteToolResult(call.tool, answer.value);
@@ -2019,19 +2093,26 @@ const make = Effect.gen(function* () {
         Effect.catch((error) => {
           if (!(error instanceof AcpMcpBridgeError)) return Effect.fail(error);
           if (error.kind === "http" && error.status === 401) {
-            // Revoked or expired on the remote: issue a fresh session once.
+            // A strict caller must reconnect explicitly even if another call replaced this token.
             if (attemptedToken !== undefined) {
               invalidateSession(
                 sessionKey(
                   target,
                   ceiling,
                   call.approvals === true,
-                  "none",
+                  call.memoryGrantCeiling ?? "none",
                   call.providersManage === true,
                 ),
                 attemptedToken,
               );
             }
+            if (call.existingSessionOnly)
+              return Effect.fail(
+                failure(
+                  "remote_refused",
+                  `${target.alias} rejected the existing GOAT session; reconnect explicitly.`,
+                ),
+              );
             return retried
               ? Effect.fail(
                   failure(
@@ -2051,10 +2132,7 @@ const make = Effect.gen(function* () {
           }
           return Effect.fail(
             error.kind === "transport" || error.kind === "http"
-              ? failure(
-                  "host_unavailable",
-                  `GOAT on ${target.alias} is unavailable: ${describe(error)}`,
-                )
+              ? failure("host_unavailable", remoteUnavailableMessage(target.alias, error))
               : failure(
                   "remote_refused",
                   `GOAT on ${target.alias} could not run ${call.tool}: ${describe(error)}`,
@@ -2062,7 +2140,7 @@ const make = Effect.gen(function* () {
           );
         }),
       );
-    if (call.requireReady !== true) return yield* attempt(false);
+    if (!requireReady) return yield* attempt(false);
     return yield* attempt(false).pipe(
       Effect.timeoutOption(call.timeoutMs),
       Effect.flatMap((answer) =>
@@ -2161,6 +2239,7 @@ const layerManager = Layer.unwrap(
 );
 
 export const layer = Layer.effect(SshRemoteDispatch, make).pipe(
+  Layer.provide(Profiles.layer),
   Layer.provide(layerManager),
   Layer.provide(NetService.layer),
 );

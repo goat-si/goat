@@ -241,6 +241,7 @@ function makeCheckpoint(input: {
   readonly status: OrchestrationV2Checkpoint["status"];
   readonly files: OrchestrationV2Checkpoint["files"];
   readonly capturedAt: DateTime.Utc;
+  readonly replicationEvidence?: OrchestrationV2Checkpoint["replicationEvidence"];
 }): OrchestrationV2Checkpoint {
   return {
     id: input.id,
@@ -255,6 +256,9 @@ function makeCheckpoint(input: {
     status: input.status,
     files: input.files,
     capturedAt: input.capturedAt,
+    ...(input.replicationEvidence === undefined
+      ? {}
+      : { replicationEvidence: input.replicationEvidence }),
   };
 }
 
@@ -430,26 +434,26 @@ export const layer: Layer.Layer<
             });
           }
 
-          const captureStatus = yield* checkpointStore
+          const captured = yield* checkpointStore
             .captureCheckpoint({
               cwd: input.scope.cwd,
               checkpointRef,
             })
             .pipe(
-              Effect.as("ready" as const),
+              Effect.map((evidence) => ({ status: "ready" as const, evidence })),
               Effect.catchTags({
-                VcsUnsupportedOperationError: () => Effect.succeed("missing" as const),
+                VcsUnsupportedOperationError: () => Effect.succeed({ status: "missing" as const }),
               }),
               Effect.catch((cause) =>
                 Effect.logWarning("orchestration V2 checkpoint capture failed", {
                   scopeId: input.scope.id,
                   checkpointRef,
                   cause: String(cause),
-                }).pipe(Effect.as("error" as const)),
+                }).pipe(Effect.as({ status: "error" as const })),
               ),
             );
 
-          if (captureStatus !== "ready") {
+          if (captured.status !== "ready") {
             return makeCheckpoint({
               id: checkpointId,
               scope: input.scope,
@@ -459,7 +463,7 @@ export const layer: Layer.Layer<
               ordinalWithinScope: input.ordinalWithinScope,
               appRunOrdinal: input.appRunOrdinal,
               ref: checkpointRef,
-              status: captureStatus,
+              status: captured.status,
               files: [],
               capturedAt: input.capturedAt,
             });
@@ -535,6 +539,7 @@ export const layer: Layer.Layer<
             appRunOrdinal: input.appRunOrdinal,
             ref: checkpointRef,
             status: "ready",
+            ...(captured.evidence === undefined ? {} : { replicationEvidence: captured.evidence }),
             files,
             capturedAt: input.capturedAt,
           });

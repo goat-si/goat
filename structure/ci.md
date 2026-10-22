@@ -5,13 +5,13 @@ nightlies after a manual goat-ci run on `dev`, and `close-outside-prs.yml` close
 forks whose authors lack write access. Every upstream workflow is disabled on GitHub. The pre-push hook
 `.vite-hooks/goat-workflow-guard.mjs` refuses a push that carries any other enabled workflow, and
 holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate` and `result`, the pinned
-`ubuntu-24.04` image, the EPYC self-hosted labels, or the trusted-run expression below, the `push`, `pull_request`, and
+`ubuntu-24.04` image, the EPYC self-hosted labels, or the trusted-run expressions below, the `push`, `pull_request`, and
 `workflow_dispatch` triggers, and an allowlist of actions.
 A new check is therefore a matrix task of `ci`. Any other new workflow, a
 `pull_request_target` trigger outside `close-outside-prs.yml`, or
 `actions/github-script` does not pass the guard.
 
-Every goat-ci job carries one `runs-on` expression. A manual run, or a pull request whose head
+Every goat-ci job picks its runner with a `runs-on` expression. A manual run, or a pull request whose head
 branch lives in goat-si/goat, runs on the EPYC self-hosted runners; a pull request from a fork runs
 on GitHub-hosted `ubuntu-24.04`, so fork code never reaches EPYC. The free plan caps hosted
 concurrency at about 20 jobs, which a few full pull request runs saturate, while EPYC carries two
@@ -19,6 +19,15 @@ dozen runners. The trust test lives in that expression, so the guard pins its ex
 runners persist between jobs and give jobs no sudo: each keeps its caches in its own HOME, and the
 steps that install packages or unlock the runner account for the test sshd run on hosted runners
 only.
+
+The `ci` matrix takes runners labelled `epyc`. `goat-scope`, `goat-screenshot-gate` and
+`goat-ci-result` take the same expression with the label `epyc-light`, which
+`goat-epyc-23` and `goat-epyc-24` carry instead of `epyc`. A matrix job never lands on them, so
+these short jobs start within seconds even while every matrix runner is busy; on the shared pool
+`goat-ci-result` waited half an hour for one. The guard holds the gate jobs to that expression
+or `ubuntu-24.04` and keeps the matrix off it. Custom labels live on GitHub, so a runner
+re-registered with its default labels rejoins the matrix pool; restore one with
+`gh api -X PUT repos/goat-si/goat/actions/runners/<id>/labels -f 'labels[]=goat' -f 'labels[]=epyc-light'`.
 
 `close-outside-prs.yml` is the one `pull_request_target` workflow. It runs from the repository's default branch (`main`)
 with a write token, so the guard pins it to the `opened` and `reopened` events and to
@@ -65,6 +74,10 @@ copy, and the guard does not allow `schedule`. The daily full run is therefore a
 `lane=all` dispatch on `dev` (`gh workflow run goat-ci.yml --ref dev`) from a scheduler outside
 GitHub. Moving it into the workflow means promoting `goat-ci.yml` to `main` and allowing `schedule`
 in the guard.
+
+Pull requests merge when `goat-ci-result` is green on their exact head, without first catching up
+with `dev`, so batch merging also runs `lane=all` on `dev` after about every five merges
+([merging](../docs/operations/merging.md)).
 
 ## PR screenshot gate
 

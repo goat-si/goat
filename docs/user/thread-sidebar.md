@@ -155,6 +155,12 @@ Use **Go to thread** for more context or to
 [attach files to an answer](./question-attachments.md). A request whose provider session cannot
 resume stays listed with answering turned off.
 
+For durable requests with a recommendation and an expiry, open **Settings → Decision inbox**.
+It includes pending thread requests from the selected environments. Choose an option and explain your
+answer; the asking thread receives the result. Expired requests never choose an option automatically.
+Mobile shows this list read-only; use web or desktop to answer durable requests. Complex thread
+questions can still be answered in their asking thread.
+
 ### See everything running
 
 On web and desktop, **Fleet** in the rail beside the thread sidebar shows how many threads are
@@ -166,6 +172,11 @@ leaves once it finishes and stays while it needs an approval or answer; open fin
 from the sidebar. Only top-level threads count: subagents are part of their parent's work, and
 archived threads do not count. Work an environment started on an SSH host you are not connected
 to appears as last reported by that environment.
+Subagents a provider starts itself, such as Codex agents and Claude Code tasks, appear as a
+**+N** beside their thread while they work; hover it to see each one and what it is doing.
+The machine count includes only GOAT servers that answer. Machines the page shows without
+counting, such as an unreachable server, a stopped Boat machine, or an SSH host another machine
+reported, are listed behind the **+N** beside the count.
 
 A machine in the graph turns amber, orange, or red as it gets busier, and a machine near its
 limit catches fire. Heat comes from the same reading as **Settings → Connections → Hosts**: CPU
@@ -174,10 +185,22 @@ one is high. A machine that stopped answering shows no heat until it reports aga
 
 At the top, **Fleet telemetry** shows CPU, memory, and load for each machine over the last ten
 minutes, provider quota, runs started and finished in the last hour, and alerts for machines that
-are reconnecting, unreachable, or on a different GOAT version. It uses the same reading as the
+are reconnecting, unreachable, under heavy load, or on a different GOAT version. It uses the same reading as the
 graph's heat, refreshed every 15 seconds while the page is open. A machine shows "No metrics"
 when no connected machine reports on it. Collapse the panel to a one-line summary; it stays
 collapsed until you open it again.
+
+Alerts say how long a problem has lasted and offer one next step. A connection that takes more
+than 30 seconds offers **Retry**. A connected machine that stops answering for 10 seconds says
+so, with the likely cause: CPU load, or a state database whose thread history is over that
+machine's history budget. History over budget offers **Compact**, which runs that machine's
+history cleanup now; on databases created before online space reclamation, the file shrinks
+after `goat doctor` runs there. Hover a machine to see its history and memory against their
+budgets and how many idle threads are archived; an archived thread comes back when you open it.
+A memory store over its 100 MiB budget links to **Settings → Memory**. GOAT servers left
+behind by test runs, whose launcher exited and whose home is deleted or temporary, appear as one
+item with **Clean up**; it stops only those processes, never a server with a real home. When
+there are more than three alerts, **+N more** opens the rest with their actions.
 
 Below the list, **Connections** shows your saved machines with the same controls as
 **Settings → Connections**: switch one off, check its routes and permissions, remove it, or pair

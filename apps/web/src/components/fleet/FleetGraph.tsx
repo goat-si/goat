@@ -408,9 +408,12 @@ export const FleetGraph = memo(function FleetGraph(props: {
   readonly onSelectMachine: (machineId: string) => void;
   /** How hard each machine is working, by machine id; absent draws every node normal. */
   readonly heat?: ReadonlyMap<string, FleetMachineHeat>;
+  /** Connection attempts that have run long: their edges stop moving and say so. */
+  readonly slowMachineIds?: ReadonlySet<string>;
 }) {
   const { snapshot, connections, currentMachineId, selectedMachineId, onSelectMachine, heat } =
     props;
+  const slow = props.slowMachineIds;
   const [wrapperRef, width] = useElementWidth();
   const svgRef = useRef<SVGSVGElement>(null);
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
@@ -538,7 +541,10 @@ export const FleetGraph = memo(function FleetGraph(props: {
                     <path
                       d={entry.edge}
                       fill="none"
-                      className={cn(link.className, link.animated && !reduced && "fleet-flow")}
+                      className={cn(
+                        link.className,
+                        link.animated && !reduced && !slow?.has(machine!.id) && "fleet-flow",
+                      )}
                       strokeWidth={1.4}
                       strokeDasharray={link.dash}
                     />
@@ -663,6 +669,7 @@ export const FleetGraph = memo(function FleetGraph(props: {
                   halo={infoHalo}
                   machine={machinesById.get(entry.layout.id)!}
                   connection={connections.get(entry.layout.id) ?? UNKNOWN_FLEET_CONNECTION}
+                  slow={slow?.has(entry.layout.id) === true}
                   heat={heat?.get(entry.layout.id) ?? NO_FLEET_HEAT}
                   current={currentMachineId === entry.layout.id}
                   selected={selectedMachineId === entry.layout.id}
@@ -750,6 +757,8 @@ function MachineNode(props: {
   readonly halo: string;
   readonly machine: FleetMachine;
   readonly connection: FleetConnection;
+  /** The connection attempt has run long. */
+  readonly slow: boolean;
   readonly heat: FleetMachineHeat;
   /** The machine this app runs on. */
   readonly current: boolean;
@@ -778,9 +787,8 @@ function MachineNode(props: {
     connection.state === "unknown"
       ? []
       : [
-          connection.reason === null
-            ? connection.label
-            : connection.label + ": " + connection.reason,
+          (props.slow ? "Still connecting" : connection.label) +
+            (connection.reason === null ? "" : ": " + connection.reason),
         ];
   const description = [
     current ? THIS_MACHINE : null,

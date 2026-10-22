@@ -19,6 +19,10 @@ const goatCiHostedRunner = "ubuntu-24.04";
 // hosted image (#426). The trust test is the expression itself, so it is pinned whole.
 const goatCiTrustedRunner =
   '(github.event_name == \'workflow_dispatch\' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(\'["self-hosted","linux","x64","goat","epyc"]\') || \'ubuntu-24.04\'';
+// The gate jobs take the epyc-light runners, which carry no epyc label, so they never queue behind
+// the ci matrix. Only those jobs may use them, and they may use nothing else on EPYC.
+const goatCiLightRunner = goatCiTrustedRunner.replace('"epyc"]', '"epyc-light"]');
+const goatCiGateJobs = new Set(["scope", "screenshot-gate", "result"]);
 // goat-scope picks the matrix, ci runs it, goat-ci-result aggregates.
 const goatCiJobs = new Set(["scope", "ci", "screenshot-gate", "result"]);
 // No Actions artifacts anywhere: goat-si is on the free plan and a full artifact
@@ -152,13 +156,19 @@ function validateWorkflow(source, yaml) {
       return refuse(`jobs.${name}.container and jobs.${name}.services are forbidden`);
     }
     const runners = job["runs-on"];
-    const trusted =
+    const isExpression = (expected) =>
       typeof runners === "string" &&
       runners.trim().startsWith("${{") &&
-      normalizeExpression(runners) === goatCiTrustedRunner;
-    if (
+      normalizeExpression(runners) === expected;
+    if (goatCiGateJobs.has(name)) {
+      if (runners !== goatCiHostedRunner && !isExpression(goatCiLightRunner)) {
+        return refuse(
+          `jobs.${name}.runs-on must be ${goatCiHostedRunner} or the trusted-run epyc-light expression`,
+        );
+      }
+    } else if (
       runners !== goatCiHostedRunner &&
-      !trusted &&
+      !isExpression(goatCiTrustedRunner) &&
       (!Array.isArray(runners) ||
         runners.length !== 5 ||
         new Set(runners).size !== 5 ||

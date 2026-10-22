@@ -563,6 +563,8 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
         Effect.flatMap((patch) => updateSettings(patch, authorizeAtCommit)),
       ),
     updateProviderInstance: () => Effect.die("Unexpected provider mutation"),
+    checkpointReplicationPermit: () =>
+      Effect.die("checkpoint replication is not used by this fixture"),
     withSettingsSnapshot: (use) => Ref.get(settings).pipe(Effect.flatMap(use)),
     streamChanges: Stream.fromPubSub(settingsChanges),
     subscribeChanges: PubSub.subscribe(settingsChanges).pipe(

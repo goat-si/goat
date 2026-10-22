@@ -10,6 +10,7 @@ import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapter
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ChannelDispatcher from "../channels/ChannelDispatcher.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
 import * as SlackChannelSettings from "../channels/SlackChannelSettings.ts";
@@ -32,6 +33,7 @@ import { assert, it } from "@effect/vitest";
 import { AgentScope } from "@goat/shared/AgentScope";
 import {
   RunId,
+  OrchestratorMcpFailure,
   type OrchestrationV2Run,
   CommandId,
   MessageId,
@@ -75,6 +77,7 @@ import { TestClock } from "effect/testing";
 import { HttpServer } from "effect/http";
 
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
@@ -98,6 +101,7 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
@@ -543,6 +547,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
+  readonly cuaDriverLayer?: Layer.Layer<CuaDriver.CuaDriver>;
   readonly projectionReads?: { getThread: number; getThreadShell: number };
   readonly beforeGetThread?: Ref.Ref<Effect.Effect<void>>;
   readonly fileSystem?: FileSystem.FileSystem;
@@ -660,6 +665,7 @@ function layerTest(input: {
           layerConfiguredStores,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
+          ...(input.cuaDriverLayer === undefined ? [] : [input.cuaDriverLayer]),
         ),
       ),
     ),
@@ -1663,6 +1669,62 @@ it.effect(
             mcpConfigs,
           }),
         ),
+      );
+    }),
+);
+
+it.effect.each([
+  ["a limit", Effect.succeed(2), 2],
+  [
+    "an unreadable limit",
+    Effect.fail(new OrchestratorMcpFailure({ code: "orchestration_error", message: "down" })),
+    0,
+  ],
+] as const)(
+  "ProviderSessionManagerV2 hands the adapter %s from the goatclaw profile",
+  ([, lookup, expected]) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const asked = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
+      const unused = () => Effect.die("unused");
+      const profiles = PermissionProfiles.PermissionProfiles.of({
+        resolve: unused,
+        check: unused,
+        require: unused,
+        assertTarget: unused,
+        recheck: unused,
+        requireCloudApproval: unused,
+        claim: unused,
+        complete: unused,
+        release: unused,
+        bind: unused,
+        nativeSubagentLimit: (threadId) =>
+          Ref.update(asked, (threads) => [...threads, threadId]).pipe(Effect.andThen(lookup)),
+      });
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-subagents");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.equal((yield* Ref.get(mcpConfigs))[0]?.nativeSubagentLimit, expected);
+        assert.deepEqual(yield* Ref.get(asked), [threadId]);
+        yield* manager.close(providerSessionId);
+      });
+      yield* effect.pipe(
+        Effect.provide(layerTest({ state, idleTimeoutMs: 1_000, mcpConfigs })),
+        Effect.provideService(PermissionProfiles.PermissionProfiles, profiles),
       );
     }),
 );
@@ -5145,6 +5207,7 @@ it.effect.each(turnStartMemoryCases)(
           if (testCase.kind === "channel") {
             const taskId = ChannelTaskId.make("memory-channel-task");
             const dispatcherLayer = ChannelDispatcher.layer.pipe(
+              Layer.provide(Layer.mock(UsageLimitSources.UsageLimitSources)({})),
               Layer.provide(
                 Layer.mergeAll(
                   Layer.mock(ChannelLedger.ChannelLedger)({
@@ -5874,5 +5937,79 @@ it.effect(
       });
 
       yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 decides computer use again on every turn of a live session",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const enabled = yield* Ref.make(false);
+      const acquires = yield* Ref.make(0);
+      const cuaDriver = {
+        command: "/resources/cua-driver",
+        args: ["mcp"],
+        environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+      };
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-cua");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const turn = (policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy) =>
+          manager
+            .open({ threadId, providerSessionId, modelSelection, runtimePolicy: policy })
+            .pipe(Effect.andThen(mcpSessions.read(threadId)));
+
+        // Opened while computer use is off.
+        assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
+        // Enabled later: the same session's next turn carries the driver.
+        yield* Ref.set(enabled, true);
+        assert.deepEqual((yield* turn(runtimePolicy))?.cuaDriver, cuaDriver);
+        assert.equal(yield* Ref.get(acquires), 1);
+        // Plan and read-only turns never get it, and never start the driver.
+        assert.isUndefined((yield* turn({ ...runtimePolicy, interactionMode: "plan" }))?.cuaDriver);
+        assert.isUndefined(
+          (yield* turn({ ...runtimePolicy, sandboxPolicy: "read-only" }))?.cuaDriver,
+        );
+        assert.equal(yield* Ref.get(acquires), 1);
+        // Disabled again: the next turn drops it.
+        yield* Ref.set(enabled, false);
+        assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
+
+        yield* manager.close(providerSessionId);
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 1_000,
+            cuaDriverLayer: Layer.succeed(
+              CuaDriver.CuaDriver,
+              CuaDriver.CuaDriver.of({
+                enabled: Ref.get(enabled),
+                acquire: Ref.updateAndGet(acquires, (count) => count + 1).pipe(
+                  Effect.as(Option.some(cuaDriver)),
+                ),
+                lastFailure: Effect.succeed(Option.none()),
+                status: Effect.succeed({ platform: "darwin", running: true }),
+                computerUse: Effect.die("unused"),
+                admitEnable: Effect.die("unused"),
+              }),
+            ),
+          }),
+        ),
+      );
     }),
 );

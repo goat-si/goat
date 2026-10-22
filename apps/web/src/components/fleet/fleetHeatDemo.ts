@@ -7,6 +7,7 @@ import {
 import { fleetMachineHeat, type FleetMachineHeat } from "@goat/client-runtime/state/fleet-heat";
 import {
   EnvironmentId,
+  NodeId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -14,6 +15,7 @@ import {
   type CloudMachineAlias,
   type EnvironmentMachineKind,
   type HostStatusEntry,
+  type RemoteLaunch,
 } from "@goat/contracts";
 
 import {
@@ -79,6 +81,24 @@ const MACHINE_KINDS: Readonly<Record<string, EnvironmentMachineKind>> = {
 };
 
 const BOAT_AGENT_ALIAS = "boat-bx_23456789" as CloudMachineAlias;
+/** The demo's GOAT server that does not answer, so it is drawn but not counted. */
+const UNREACHABLE = "clisu-oracle";
+/** A plain SSH host only a dispatcher knows about: drawn and listed, never counted. */
+const SSH_ONLY_HOST = "gpu-box";
+
+function reportedLaunch(host: string): RemoteLaunch {
+  return {
+    host,
+    threadId: null,
+    title: "Nightly eval",
+    launcherThreadId: ThreadId.make("demo-launcher"),
+    source: "thread",
+    state: "running",
+    latest: null,
+    hostUnavailableSince: null,
+    updatedAt: "2026-10-20T00:00:00.000Z",
+  };
+}
 
 function boatMachine(alias: CloudMachineAlias, label: string, state: CloudMachine["state"]) {
   return {
@@ -137,6 +157,23 @@ function demoMachines(): ReadonlyArray<{
   ];
 }
 
+/** Native subagents on one demo thread, so its row shows the "+N" they collapse into. */
+const DEMO_NATIVE_SUBAGENTS: NonNullable<FleetShell["nativeSubagents"]> = [
+  {
+    id: NodeId.make("demo-native-1"),
+    childThreadId: null,
+    title: "/root/reader",
+    status: "running",
+  },
+  {
+    id: NodeId.make("demo-native-2"),
+    childThreadId: null,
+    title: "/root/tester",
+    status: "running",
+  },
+  { id: NodeId.make("demo-native-3"), childThreadId: null, title: "Explore", status: "waiting" },
+];
+
 function runningShell(environmentId: EnvironmentId, id: string): FleetShell {
   const at = "2026-10-20T00:00:00.000Z";
   return {
@@ -156,6 +193,7 @@ function runningShell(environmentId: EnvironmentId, id: string): FleetShell {
     hasPendingUserInput: false,
     pendingSubagentRequest: null,
     pendingBackgroundTasks: [],
+    nativeSubagents: id === "macmini-0" ? DEMO_NATIVE_SUBAGENTS : [],
     archivedAt: null,
     deletedAt: null,
     sideChatOf: null,
@@ -170,6 +208,8 @@ function runningShell(environmentId: EnvironmentId, id: string): FleetShell {
  * A fixed fleet with one machine in each heat tier, one with stale metrics, one with none, and
  * two Boat machines (one running and connected, one stopped and only reported), so a burning node
  * and Boat's states can be shown deterministically.
+ * It also has a server reached through two routes, a saved server that does not answer, and an
+ * SSH host a dispatcher reported, so the count of answering servers can be checked against them.
  * Dev builds draw it at `/fleet?fleetDemo=heat`; the graph's browser test uses it too.
  */
 export function fleetHeatDemo(): {
@@ -182,9 +222,11 @@ export function fleetHeatDemo(): {
   const environments: FleetEnvironment[] = MACHINES.map(({ id }) => ({
     environmentId: EnvironmentId.make(id),
     label: id,
-    sshAliases: [id === "boat-agent" ? BOAT_AGENT_ALIAS : id],
+    sshAliases:
+      id === "boat-agent" ? [BOAT_AGENT_ALIAS] : id === "macmini" ? [id, id + ".tailnet"] : [id],
     os: id.startsWith("mac") ? "darwin" : "linux",
     machineKind: MACHINE_KINDS[id] ?? "server",
+    connected: id !== UNREACHABLE,
   }));
   const shells = MACHINES.flatMap(({ id, running }) =>
     Array.from({ length: running }, (_, index) =>
@@ -198,7 +240,7 @@ export function fleetHeatDemo(): {
     remote: [
       {
         dispatcherEnvironmentId: environments[3]!.environmentId,
-        launches: [],
+        launches: [reportedLaunch(SSH_ONLY_HOST)],
         cloudMachines: [
           boatMachine(BOAT_AGENT_ALIAS, "boat-agent", "running"),
           boatMachine("boat-bx_3456789a" as CloudMachineAlias, "nightly-ci", "archived"),
@@ -212,9 +254,19 @@ export function fleetHeatDemo(): {
     snapshot.machines.map((machine) => [machine.id, fleetMachineHeat(entries.get(machine.label))]),
   );
   const connected = presentFleetConnection({ phase: "connected", error: null, unreachable: false });
+  const unreachable = presentFleetConnection({
+    phase: "reconnecting",
+    error: "Host did not answer",
+    unreachable: true,
+  });
   const connections = new Map<string, FleetConnection>();
   for (const machine of snapshot.machines) {
-    const live = machine.label === "boat-agent" ? connected : null;
+    const live =
+      machine.label === UNREACHABLE
+        ? unreachable
+        : machine.label === "boat-agent"
+          ? connected
+          : null;
     const connection = presentFleetMachineConnection(machine.boat, live);
     if (connection !== UNKNOWN_FLEET_CONNECTION) connections.set(machine.id, connection);
   }

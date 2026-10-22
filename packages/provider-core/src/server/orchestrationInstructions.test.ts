@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { LaneKind } from "@goat/contracts";
 import {
   GOAT_ORCHESTRATION_INSTRUCTIONS,
   GOAT_ORCHESTRATION_SECTIONS,
@@ -71,6 +72,29 @@ it("explains question decisions and question-aware waits", () => {
     "Only local user-input questions still arrive.",
     'SSH-host questions then need `goat_thread_wait({host})` or `goat_pending_request_list({scope:"launched", hosts})`. Approvals are no longer reported; check `goat_thread_read` or tell the user the thread may be waiting.',
     "Forward to the user any decision your own user has not authorized, such as pushing, deploying, sending outside, or starting new work beyond the request.",
+  ]) {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, text);
+  }
+});
+
+it("asks agents to check host pressure before heavy lanes", () => {
+  assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "`goat_host_status` with `placement:{}`");
+  assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, '"Resource pressure:"');
+});
+
+it("names every lane kind and routes each lane to dispatch or a native subagent", () => {
+  for (const kind of LaneKind.literals) {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, `\`${kind}\``);
+  }
+  for (const text of [
+    "### Choose dispatch or native for each lane",
+    "`goat_ssh_thread_launch`); its own worktree, branch, or PR",
+    "to outlive this thread or be steered by a person",
+    "Native subagents (Codex `spawn_agent`, Claude Code Task)",
+    '`fork_turns` omitted or `"all"` forks the full history',
+    "`maxLanes`) covers both ways",
+    "`goat_thread_report_result`",
+    "`goat_origin_report`",
   ]) {
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, text);
   }

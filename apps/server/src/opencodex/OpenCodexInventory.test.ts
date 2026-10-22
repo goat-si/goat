@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { OpenCodexInventorySnapshot } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as ByteSize from "effect/ByteSize";
 import * as Context from "effect/Context";
@@ -17,6 +18,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as Inventory from "./OpenCodexInventory.ts";
+import parityFixture from "../hub/fixtures/parity.json" with { type: "json" };
 import fleet from "./fixtures/fleet.json" with { type: "json" };
 
 const decodeSnapshot = Schema.decodeUnknownEffect(OpenCodexInventorySnapshot);
@@ -27,6 +29,7 @@ const decodeSnapshot = Schema.decodeUnknownEffect(OpenCodexInventorySnapshot);
 const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
   options: {
     fixture?: typeof fleet.home | undefined;
+    files?: Record<string, string>;
     platform?: NodeJS.Platform;
     config?: unknown;
     binaries?: ReadonlyArray<{ path: string; output: string; code?: number }>;
@@ -39,6 +42,7 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
     link?: unknown;
     service?: unknown;
     managed?: boolean;
+    hostname?: string;
   } = {},
 ) {
   const fixture = options.fixture;
@@ -70,7 +74,7 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
       }),
     readFileString: (file) => {
       reads.push(file);
-      return Effect.succeed(config);
+      return Effect.succeed(options.files?.[file] ?? config);
     },
     exists: (file) =>
       Effect.succeed(
@@ -92,13 +96,15 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
             : options.command
               ? yield* options.command(input)
               : (JSON.stringify(
-                  input.args[0] === "link"
-                    ? (options.link ?? fixture?.link)
-                    : input.args[0] === "connect"
-                      ? (options.connect ?? fixture?.connect)
-                      : input.args[0] === "service"
-                        ? (options.service ?? fixture?.service)
-                        : fixture?.status,
+                  input.args[0] === "provider"
+                    ? { configured: [] }
+                    : input.args[0] === "link"
+                      ? (options.link ?? fixture?.link)
+                      : input.args[0] === "connect"
+                        ? (options.connect ?? fixture?.connect)
+                        : input.args[0] === "service"
+                          ? (options.service ?? fixture?.service)
+                          : fixture?.status,
                 ) ?? "");
         return {
           stdout,
@@ -128,6 +134,7 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
   };
   const context = yield* Layer.build(
     Inventory.layer.pipe(
+      Layer.provide(NodeCrypto.layer),
       Layer.provide(Layer.succeed(FileSystem.FileSystem, fs)),
       Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner)),
       Layer.provide(
@@ -137,6 +144,7 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
       Layer.provide(Layer.succeed(HostProcess.HomeDirectory, "/fixture")),
       Layer.provide(Layer.succeed(HostProcess.WorkingDirectory, "/fixture")),
       Layer.provide(Layer.succeed(HostProcess.Platform, options.platform ?? "darwin")),
+      Layer.provide(Layer.succeed(HostProcess.Hostname, options.hostname ?? "fixture-home")),
       Layer.provide(
         Layer.succeed(HostProcess.Environment, {
           PATH: "/shim:/usr/bin",
@@ -197,8 +205,30 @@ it.effect.each(["macmini-ts", "lidge-ts", "mac-studio"] as const)(
         childSettingsApplied: name === "mac-studio",
       });
       expect(result.runtime.version).toBe(name === "mac-studio" ? "2.86.0" : "2.83.0");
-      expect(reads).toEqual(["/fixture/.opencodex/config.json"]);
+      expect(reads).toEqual([
+        "/fixture/.opencodex/config.json",
+        "/fixture/.opencodex/link/home-codex-settings.json",
+      ]);
     }),
+);
+
+it.effect("the Home names itself and a Child names its Home only from its own link's record", () =>
+  Effect.gen(function* () {
+    const home = yield* setup({ fixture: fleet.home, hostname: " jun-mbp\u0007 " });
+    expect((yield* home.inventory.read).link.homeName).toBe("jun-mbp");
+
+    const record = JSON.stringify(parityFixture.settingsRecord);
+    const child = (linkId: string) =>
+      setup({
+        fixture: fleet["mac-studio"],
+        config: { ...fleet["mac-studio"].config, client: { transport: "link", link: { linkId } } },
+        files: { "/fixture/.opencodex/link/home-codex-settings.json": record },
+      }).pipe(Effect.flatMap(({ inventory }) => inventory.read));
+    const own = yield* child(parityFixture.settingsRecord.linkId);
+    expect(own.link.homeName).toBe("fixture-home");
+    expect(yield* decodeSnapshot(own)).toEqual(own);
+    expect((yield* child("lnk_other")).link.homeName).toBeUndefined();
+  }),
 );
 
 it.effect("missing OpenCodex and a missing Windows binary report none", () =>
@@ -392,5 +422,222 @@ it.effect("a hanging PATH shim cannot hide a verified Desktop binary", () =>
       { path: "/fixture/.opencodex-desktop/bin/ocx", version: "2.89.0" },
     ]);
     expect(result.link.links).toHaveLength(5);
+  }),
+);
+
+it.effect(
+  "parity makes one non-billed models GET, hashes catalog and the actual P6 record, and observes health role/start",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(100_000);
+      const home = yield* setup({
+        fixture: fleet.home,
+        response: (url) =>
+          new Response(
+            JSON.stringify(
+              url.endsWith("/v1/models")
+                ? { data: [{ id: "b" }, { id: "a" }] }
+                : url.endsWith("/healthz")
+                  ? { ...fleet.home.health, uptime: 10, instanceId: "fixture-home-instance" }
+                  : fleet.home.ready,
+            ),
+          ),
+      });
+      const child = yield* setup({
+        fixture: fleet["mac-studio"],
+        config: {
+          ...fleet["mac-studio"].config,
+          client: { transport: "link", link: { linkId: parityFixture.settingsRecord.linkId } },
+        },
+        files: {
+          "/fixture/.opencodex/link/home-codex-settings.json": JSON.stringify(
+            parityFixture.settingsRecord,
+          ),
+        },
+        response: (url) =>
+          new Response(
+            JSON.stringify(
+              url.endsWith("/v1/models")
+                ? { data: [{ id: "a" }, { id: "b" }], apiKey: "fixture-private" }
+                : url.endsWith("/healthz")
+                  ? { ...fleet["mac-studio"].health, uptime: 10 }
+                  : fleet["mac-studio"].ready,
+            ),
+            {
+              headers: { "x-opencodex-served-by": "fixture-home-instance" },
+            },
+          ),
+      });
+      const expected = yield* home.inventory.readParity;
+      const result = yield* child.inventory.readParity;
+      expect(result.parityEvidence).toMatchObject({
+        healthRole: "client",
+        observedAt: 100_000,
+        startedAt: 90_000,
+        childLinkId: parityFixture.settingsRecord.linkId,
+        settingsLinkId: parityFixture.settingsRecord.linkId,
+        modelsStatus: 200,
+        servedBy: "fixture-home-instance",
+        localProviderCount: 0,
+      });
+      expect(result.parityEvidence?.settingsDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(result.parityEvidence?.settingsDigest).toBe(expected.parityEvidence?.settingsDigest);
+      expect(result.parityEvidence?.catalogDigest).toBe(expected.parityEvidence?.catalogDigest);
+      expect(child.requests.filter(({ url }) => url.endsWith("/v1/models"))).toHaveLength(1);
+      expect(child.reads).toContain("/fixture/.opencodex/link/home-codex-settings.json");
+      expect(JSON.stringify(result)).not.toContain("fixture-private");
+      expect(
+        child.commands.every(({ args }) =>
+          ["--version", "status", "link", "connect", "service", "provider"].includes(args[0]!),
+        ),
+      ).toBe(true);
+      expect(yield* decodeSnapshot(result)).toEqual(result);
+    }),
+);
+
+it.effect(
+  "parity rejects wrong health role, malformed settings, redirects and foreign model bodies without inferring success",
+  () =>
+    Effect.gen(function* () {
+      const { inventory, requests } = yield* setup({
+        fixture: fleet["mac-studio"],
+        response: (url) =>
+          new Response(
+            JSON.stringify(
+              url.endsWith("/healthz")
+                ? { service: "other", role: "client" }
+                : url.endsWith("/v1/models")
+                  ? { data: "not-models" }
+                  : fleet["mac-studio"].ready,
+            ),
+          ),
+      });
+      const result = yield* inventory.readParity;
+      expect(result.runtime.healthy).toBe(false);
+      expect(result.parityEvidence?.healthRole).toBeUndefined();
+      expect(result.parityEvidence?.settingsDigest).toBeUndefined();
+      expect(result.parityEvidence?.catalogDigest).toBeUndefined();
+      expect(requests.filter(({ url }) => url.endsWith("/v1/models"))).toHaveLength(1);
+    }),
+);
+
+it.effect.each(["missing Home", "invalid timestamp", "unknown document field"])(
+  "parity rejects a settings record with %s",
+  (scenario) =>
+    Effect.gen(function* () {
+      const original = parityFixture.settingsRecord;
+      const record =
+        scenario === "missing Home"
+          ? { ...original, document: { version: 1, settings: original.document.settings } }
+          : scenario === "invalid timestamp"
+            ? { ...original, fetchedAt: "not-a-time" }
+            : { ...original, document: { ...original.document, unsupported: true } };
+      const { inventory } = yield* setup({
+        fixture: fleet["mac-studio"],
+        files: { "/fixture/.opencodex/link/home-codex-settings.json": JSON.stringify(record) },
+      });
+      expect((yield* inventory.readParity).parityEvidence?.settingsDigest).toBeUndefined();
+    }),
+);
+
+it.effect(
+  "unknown optional uptime and apply metadata skip freshness without erasing core health/link evidence",
+  () =>
+    Effect.gen(function* () {
+      const { inventory } = yield* setup({
+        fixture: fleet.home,
+        link: {
+          ...fleet.home.link,
+          links: fleet.home.link.links.map((link) => ({ ...link, lastApplyAt: "unknown" })),
+        },
+        response: (url) =>
+          new Response(
+            JSON.stringify(
+              url.endsWith("/healthz") ? { ...fleet.home.health, uptime: null } : fleet.home.ready,
+            ),
+          ),
+      });
+      const snapshot = yield* inventory.readParity;
+      expect(snapshot.runtime.healthy).toBe(true);
+      expect(snapshot.link.links).toHaveLength(5);
+      expect(snapshot.link.links.every(({ lastApplyAt }) => lastApplyAt === undefined)).toBe(true);
+      expect(snapshot.parityEvidence?.startedAt).toBeUndefined();
+    }),
+);
+
+it.effect.each(["configured", "active", "inactive"])(
+  "P8 distinguishes %s providers from proven active leakage",
+  (state) =>
+    Effect.gen(function* () {
+      const { inventory } = yield* setup({
+        fixture: fleet["mac-studio"],
+        command: (input) =>
+          Effect.succeed(
+            JSON.stringify(
+              input.args[0] === "provider"
+                ? {
+                    configured: [
+                      {
+                        name: "fixture-provider",
+                        ...(state === "configured" ? {} : { active: state === "active" }),
+                      },
+                    ],
+                  }
+                : input.args[0] === "link"
+                  ? fleet["mac-studio"].link
+                  : fleet["mac-studio"].status,
+            ),
+          ),
+      });
+      expect((yield* inventory.readParity).parityEvidence?.localProviderCount).toBe(
+        state === "configured" ? undefined : state === "active" ? 1 : 0,
+      );
+    }),
+);
+
+it.effect("a Child reads its own row of the Home's OCX-11 fallback view by link id", () =>
+  Effect.gen(function* () {
+    // The shape of OpenCodex buildFallbackState for a passive read through the link: no aliases.
+    const view = (localFallback: boolean) => ({
+      schema: "ocx.fallback/1",
+      source: "home",
+      global: { model: true, provider: true },
+      providers: {},
+      routes: {},
+      devices: [
+        {
+          id: "lnk_51d15fa48b90b40e",
+          kind: "link",
+          localFallback: !localFallback,
+          model: null,
+          provider: null,
+        },
+        { id: "lnk_781ccea3cdb84745", kind: "link", localFallback, model: null, provider: false },
+      ],
+      last: null,
+      recent: [],
+    });
+    const studio = (fallback: unknown) =>
+      ({
+        ...fleet["mac-studio"],
+        status: {
+          ...fleet["mac-studio"].status,
+          remoteHub: { link: { linkId: "lnk_781ccea3cdb84745" } },
+          ...(fallback === undefined ? {} : { fallback }),
+        },
+      }) as unknown as typeof fleet.home;
+    const granted = yield* setup({ fixture: studio(view(true)) });
+    expect((yield* granted.inventory.read).fallback).toEqual({
+      source: "home",
+      localFallback: true,
+    });
+    const denied = yield* setup({ fixture: studio(view(false)) });
+    expect((yield* denied.inventory.read).fallback).toEqual({
+      source: "home",
+      localFallback: false,
+    });
+    // OpenCodex before OCX-11 says nothing, which GOAT treats as not allowed.
+    const older = yield* setup({ fixture: studio(undefined) });
+    expect((yield* older.inventory.read).fallback).toBeUndefined();
   }),
 );

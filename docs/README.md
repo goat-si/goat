@@ -16,12 +16,14 @@
 - [Import browser sessions](./user/browser-import.md)
 - [Use GOAT as your default browser](./user/default-browser.md)
 - [Devices](./user/devices.md)
+- [Computer use](./user/computer-use.md)
 - [Usage and limits](./user/usage.md)
 - [Product usage data](./user/telemetry.md)
 - [Remote access](./user/remote-access.md)
 - [T3 Connect troubleshooting](./user/t3-connect-troubleshooting.md)
 - [Outside agents (MCP)](./user/outside-agents.md)
 - [Fleet goals](./user/fleet-goals.md)
+- [Hub](./user/hub.md)
 - [Slack](./user/slack.md)
 - [Running in the background](./user/background-service.md)
 - [Updating GOAT](./user/updating.md)
@@ -67,6 +69,7 @@ source alone does not explain. Most code changes do not need an internal documen
 ### Runbooks
 
 - [Development and local builds](./operations/development.md)
+- [Merging pull requests](./operations/merging.md)
 - [T3 Connect setup](./operations/connect-setup.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)

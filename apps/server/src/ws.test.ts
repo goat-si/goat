@@ -1,3 +1,4 @@
+import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
@@ -7,6 +8,8 @@ import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
 import * as CodexRouteService from "./provider/CodexRouteService.ts";
 import * as Handoffs from "./handoffs/Handoffs.ts";
 import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
+import * as HubParity from "./hub/HubParity.ts";
+import * as HubMembership from "./hub/HubMembership.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
@@ -87,6 +90,7 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -488,6 +492,8 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(CodexRouteService.CodexRouteService)({}),
   Layer.mock(Handoffs.Handoffs)({}),
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
+  Layer.mock(HubParity.HubParity)({}),
+  Layer.mock(HubMembership.HubMembership)({}),
   Layer.mock(HubNodes.HubNodes)({}),
   Layer.mock(HubProxySessions.HubProxySessions)({}),
   Layer.mock(MemorySyncService.MemorySyncService)({}),
@@ -551,7 +557,9 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
+  Layer.mock(DecisionInbox.DecisionInbox)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
+  Layer.mock(StrayProcesses.StrayProcesses)({}),
   Layer.mock(WorktreeCheckoutHealth.WorktreeCheckoutHealth)({
     current: Effect.succeed(null),
     subscribeChanges: Effect.succeed(Stream.empty),
@@ -613,7 +621,10 @@ it.effect(
           getProviders: Effect.succeed([]),
           streamChanges: Stream.never,
         }),
-        Layer.mock(UsageLimitSources.UsageLimitSources)({ streamChanges: Stream.make([]) }),
+        Layer.mock(UsageLimitSources.UsageLimitSources)({
+          streamChanges: Stream.make([]),
+          projectProviders: (providers) => Effect.succeed(providers),
+        }),
         Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
           resolveTargets: () => Effect.succeed([]),
         }),

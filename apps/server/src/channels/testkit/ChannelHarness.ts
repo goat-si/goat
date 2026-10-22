@@ -38,6 +38,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as ServerConfig from "../../config.ts";
+import * as UsageLimitSources from "../../usage/UsageLimitSources.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as MemoryService from "../../memory/MemoryService.ts";
 import * as MemorySyncService from "../../memory/MemorySyncService.ts";
@@ -53,6 +54,7 @@ import * as ProviderReplayHarness from "../../orchestration-v2/testkit/ProviderR
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ManagedProjectFolders from "../../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import * as ProjectCloneTracker from "../../project/ProjectCloneTracker.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import * as WorktreeSetupTracker from "../../project/WorktreeSetupTracker.ts";
@@ -227,6 +229,7 @@ export type ChannelServicesLayer = Layer.Layer<
 /** A machine whose SSH config lists no hosts: every task stays on this machine. */
 const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
   listHosts: () => Effect.succeed([]),
+  connectedHosts: Effect.succeed([]),
 });
 
 /** A provider account on this machine as placement sees it: signed in, with one weekly window. */
@@ -236,6 +239,8 @@ export interface FakeProviderInstance {
   /** The weekly window's use; absent when the account reports no quota. */
   readonly weeklyUsedPercent?: number;
   readonly resetsAt?: string;
+  readonly ready?: boolean;
+  readonly missing?: boolean;
 }
 
 const fakeInstance = (instance: FakeProviderInstance) =>
@@ -245,18 +250,18 @@ const fakeInstance = (instance: FakeProviderInstance) =>
     displayName: instance.displayName,
     enabled: true,
     snapshot: {
-      getSnapshot: Effect.succeed({
+      getSnapshot: Effect.map(DateTime.now, (now) => ({
         enabled: true,
         installed: true,
-        status: "ready",
-        auth: { status: "authenticated" },
+        status: instance.ready === false ? "error" : "ready",
+        auth: { status: instance.ready === false ? "unauthenticated" : "authenticated" },
         // No models listed, so any model counts as offered.
         models: [],
         ...(instance.weeklyUsedPercent === undefined
           ? {}
           : {
               usageLimits: {
-                checkedAt: "2026-10-12T00:00:00.000Z",
+                checkedAt: DateTime.formatIso(now),
                 windows: [
                   {
                     id: "weekly",
@@ -268,13 +273,14 @@ const fakeInstance = (instance: FakeProviderInstance) =>
                 ],
               },
             }),
-      }),
+      })),
     },
   }) as never;
 
 export function makeHarness(
   options: {
     readonly projects?: number;
+    readonly repositoryIdentity?: import("@goat/contracts").RepositoryIdentity;
     /**
      * Provider accounts on this machine. By default only the configured one exists and it lists
      * no models, so any model counts as offered and placement has nothing to choose.
@@ -328,6 +334,12 @@ export function makeHarness(
     ServerSettings.layerTest({
       textGenerationModelSelection: modelSelection,
       defaultRuntimeMode: "full-access",
+      providerInstances: Object.fromEntries(
+        (options.providerInstances ?? []).map((instance) => [
+          instance.instanceId,
+          { driver: ProviderDriverKind.make("codex"), config: {}, enabled: true },
+        ]),
+      ),
     });
   const layerRealThreads = ThreadManagement.layer.pipe(
     Layer.provide(layerOrchestrator),
@@ -586,6 +598,9 @@ export function makeHarness(
   ];
 
   const layerExternal = Layer.mergeAll(
+    Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+      resolve: () => Effect.succeed(options.repositoryIdentity ?? null),
+    }),
     Layer.mock(TextGeneration.TextGeneration)({
       generateChannelReception: (input) => script.current(input.input),
     }),
@@ -599,12 +614,18 @@ export function makeHarness(
           (instance) => instance.instanceId === instanceId,
         );
         return Effect.succeed(
-          listed !== undefined
-            ? fakeInstance(listed)
-            : ({ snapshot: { getSnapshot: Effect.succeed({ models: [] }) } } as never),
+          listed?.missing
+            ? undefined
+            : listed !== undefined
+              ? fakeInstance(listed)
+              : fakeInstance({ instanceId }),
         );
       },
-      listInstances: Effect.succeed((options.providerInstances ?? []).map(fakeInstance)),
+      listInstances: Effect.succeed(
+        (options.providerInstances ?? [{ instanceId: "codex" }])
+          .filter((instance) => !instance.missing)
+          .map(fakeInstance),
+      ),
     }),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(environmentId),
@@ -676,6 +697,12 @@ export function makeHarness(
 
   const layerChannels = (options.channelsLayer ?? ChannelLayers.layerServices).pipe(
     Layer.provide(
+      Layer.mock(UsageLimitSources.UsageLimitSources)({
+        quotaPool: Effect.succeed(undefined),
+        projectProviders: (providers) => Effect.succeed(providers),
+      }),
+    ),
+    Layer.provide(
       Layer.mergeAll(
         layerThreads,
         layerLaunch,
@@ -713,6 +740,7 @@ export function makeHarness(
     Layer.provideMerge(layerExternal),
     Layer.provideMerge(layerLaunch),
     Layer.provideMerge(EffectOutbox.layer.pipe(Layer.provide(layerDatabase))),
+    Layer.provideMerge(layerDatabase),
   );
   /** Removes a project from this machine's catalog, as if it was deleted while work waited. */
   const removeProject = (id: ProjectId) => {

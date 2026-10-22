@@ -36,6 +36,7 @@ import {
   type ChannelOutboundKind,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
+import { channelEvidenceLabels } from "@goat/shared/channelEvidence";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   classifyTextGenerationFailure,
@@ -1253,6 +1254,9 @@ const make = Effect.gen(function* () {
                       questionId: question.questionId,
                       text: question.text,
                     })),
+                    ...(task.observed?.result === undefined
+                      ? {}
+                      : { evidence: channelEvidenceLabels(task.observed.result) }),
                   })),
                   allowedTargets: targets,
                   ...(hosts.length === 0 ? {} : { allowedHosts: hosts }),
@@ -1732,6 +1736,13 @@ const make = Effect.gen(function* () {
 
   const narrationFor = (task: ChannelTask, event: ChannelLedger.ChannelPendingEvent["event"]) => {
     switch (event.type) {
+      case "task.dispatch.claimed":
+        return event.payload.target.placementReason === undefined
+          ? undefined
+          : {
+              kind: "receipt" as const,
+              text: task.title + " → " + event.payload.target.placementReason,
+            };
       case "task.completed":
         // A turn's summary is GOAT Bot's own answer, written for the person on the bot's model.
         if (task.kind === "turn") {
@@ -1791,6 +1802,22 @@ const make = Effect.gen(function* () {
           stored.task,
           pending.event.payload.observed.needsYou,
         );
+        const result = pending.event.payload.observed.result;
+        if (result?.observedCheck !== undefined && result.observedCheck.status !== "running") {
+          deliveries.push(
+            replyDelivery({
+              causeKey: "narration:" + pending.event.eventId + ":evidence",
+              destination: stored.task.originAddress,
+              kind: "receipt",
+              text:
+                "Check evidence for " +
+                stored.task.title +
+                "\n" +
+                channelEvidenceLabels(result).join("\n"),
+              task: stored.task,
+            }),
+          );
+        }
         yield* ledger.completeNarration({ owner, sequence: pending.sequence, deliveries, now });
         yield* wake.wake;
         return;
@@ -1831,7 +1858,12 @@ const make = Effect.gen(function* () {
           causeKey: "narration:" + pending.event.eventId + ":origin",
           destination: origin,
           kind: base.kind,
-          text: worded,
+          text: [
+            worded,
+            ...(base.kind === "result" || base.kind === "failure"
+              ? channelEvidenceLabels(task.observed?.result)
+              : []),
+          ].join("\n"),
           task,
           mentionActorId: mentionFor(origin, task.requester.externalActorId),
           options: "options" in base ? base.options : undefined,

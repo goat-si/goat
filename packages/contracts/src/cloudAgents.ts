@@ -62,6 +62,8 @@ export const CloudHolder = Schema.Struct({
   runtime: CloudHolderRuntime,
   /** Cloud runs this holder is following now; launches go to the least loaded holder. */
   activeRuns: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  /** The hub, holding cloud launches by default (`hub.cloudHolder`). Older hosts omit it. */
+  hub: Schema.optional(Schema.Boolean),
 });
 export type CloudHolder = typeof CloudHolder.Type;
 
@@ -102,6 +104,10 @@ export const CloudLaunchInput = Schema.Struct({
   }),
   notifyWebhook: Schema.optional(Schema.Boolean).annotate({
     description: "Also post run.completed to the completion webhook (completionWebhook.url).",
+  }),
+  decisionId: Schema.optional(TrimmedNonEmptyString).annotate({
+    description:
+      'With goatclaw on, a launch the person did not ask for in this turn needs their approval: open a decision with goat_decision_request offering an option with id "approve", and pass its id once a person chose it. Each approval starts one launch.',
   }),
 });
 export type CloudLaunchInput = typeof CloudLaunchInput.Type;

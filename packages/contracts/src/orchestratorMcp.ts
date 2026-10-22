@@ -33,6 +33,7 @@ import {
   ProviderApprovalDecision,
 } from "./providerPolicy.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { HostPressureAdvice } from "./hostPressure.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import {
   ThreadLinkedPullRequest,
@@ -40,6 +41,7 @@ import {
   ThreadPullRequestLinkSource,
 } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
+import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import { OrchestrationSearchThreadsInput } from "./threadSearch.ts";
 import {
@@ -307,6 +309,8 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
     description:
       "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later task_status reads return false and use status for liveness.",
   }),
+  /** Set when this machine is under resource pressure; see goat_host_status placement. */
+  pressure: Schema.optional(HostPressureAdvice),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
 
@@ -767,6 +771,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;
 
 export const OrchestratorMcpThreadReadResult = Schema.Struct({
+  replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   host: OrchestratorMcpResultHost,
   thread: OrchestratorMcpThreadDetail,
@@ -869,6 +874,8 @@ export const OrchestratorMcpThreadPhase = Schema.Literals([
 export type OrchestratorMcpThreadPhase = typeof OrchestratorMcpThreadPhase.Type;
 
 export const OrchestratorMcpThreadStatusResult = Schema.Struct({
+  remoteUnavailable: Schema.optional(Schema.Boolean),
+  replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   host: OrchestratorMcpResultHost,
   threadId: ThreadId,
@@ -934,6 +941,7 @@ export type OrchestratorMcpThreadStatusResult = typeof OrchestratorMcpThreadStat
  * once when its host stays unreachable.
  */
 export const OrchestratorMcpThreadWatch = Schema.Struct({
+  replicaStatus: Schema.optional(ThreadReplicaStatus),
   host: OrchestratorMcpResultHost,
   threadId: ThreadId,
   title: Schema.NullOr(Schema.String),
@@ -950,6 +958,7 @@ export type OrchestratorMcpThreadWatch = typeof OrchestratorMcpThreadWatch.Type;
 export const OrchestratorMcpThreadWatchInput = Schema.Struct({
   threadId: ThreadId,
   host: Schema.optional(OrchestratorMcpHost),
+  checkpointReplication: Schema.optional(Schema.Literals(["on", "off"])),
 });
 export type OrchestratorMcpThreadWatchInput = typeof OrchestratorMcpThreadWatchInput.Type;
 
@@ -1191,6 +1200,8 @@ export const OrchestratorMcpFailureCode = Schema.Literals([
   "conflict",
   // GOAT Bot runs on another environment in this cluster; the message names it.
   "not_home",
+  // fleet.pressure.admission is "block" and the target host is critical.
+  "host_pressure",
 ]);
 export type OrchestratorMcpFailureCode = typeof OrchestratorMcpFailureCode.Type;
 

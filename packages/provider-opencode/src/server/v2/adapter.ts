@@ -36,6 +36,7 @@ import {
   type ProviderInstanceId,
   type RunId,
   type RuntimeRequestId,
+  ThreadId,
 } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -326,6 +327,8 @@ interface ThreadState {
         readonly endpoint: string;
       }
     | undefined;
+  /** The managed Cua Driver as registered for this thread; `key` names its daemon generation. */
+  cua: { readonly name: string; readonly directory: string; readonly key: string } | undefined;
   instructions: string | undefined;
   /** Digest of the last successfully installed value; memory bodies are never retained locally. */
   memoryDigest: string | undefined;
@@ -383,25 +386,45 @@ export const goatMcpServerName = Effect.fn("goatMcpServerName")(function* (threa
 });
 
 /**
+ * The thread's managed Cua Driver, registered per directory beside its GOAT
+ * server. Always a digest: a readable id would exceed OpenCode's 64-character
+ * tool namespace with this longer prefix.
+ */
+export const cuaMcpServerName = Effect.fn("cuaMcpServerName")(function* (threadId: string) {
+  const crypto = yield* Crypto.Crypto;
+  const digest = yield* crypto
+    .digest("SHA-256", new TextEncoder().encode(threadId))
+    .pipe(Effect.orDie);
+  return `${McpProviderSession.CUA_MCP_SERVER_NAME}-${Hex.encode(digest).slice(0, 16)}`;
+});
+
+/**
  * The rules that keep T3's MCP servers to their own thread, after the mode's:
  * the last matching rule wins, so every thread's T3 server is denied and then
- * this thread's own is allowed again, in every mode.
+ * this thread's own is allowed again, in every mode. Cua Drivers are registered
+ * per directory, so every turn denies all of them, including a turn excluded from
+ * computer use (Plan, read-only) that would otherwise inherit full access's
+ * `* allow`, and only a turn with the driver allows its own exact server.
  */
-const mcpRules = (mcpServerName: string | null): ReadonlyArray<Rule> =>
-  mcpServerName === null
-    ? []
+const mcpRules = (
+  names: { readonly goat: string; readonly cua: string | null } | null,
+): ReadonlyArray<Rule> =>
+  names === null
+    ? [rule(`${McpProviderSession.CUA_MCP_SERVER_NAME}-*`, "deny")]
     : [
         // A reused daemon can still carry registrations from before the rename.
         { action: "t3-code-*", resource: "*", effect: "deny" },
         { action: "goat-*", resource: "*", effect: "deny" },
-        { action: `${mcpServerName}_*`, resource: "*", effect: "allow" },
+        { action: `${names.goat}_*`, resource: "*", effect: "allow" },
+        rule(`${McpProviderSession.CUA_MCP_SERVER_NAME}-*`, "deny"),
+        ...(names.cua === null ? [] : [rule(`${names.cua}_*`, "allow")]),
       ];
 
 const sessionRules = (
   policy: RulesPolicy,
   paths: ReadonlyArray<Rule>,
   grants: ReadonlyArray<Rule>,
-  mcpServerName: string | null,
+  mcpServerNames: { readonly goat: string; readonly cua: string | null } | null,
 ): ReadonlyArray<Rule> => [
   ...(policy.runtimeMode === "full-access"
     ? [rule("*", "allow")]
@@ -415,7 +438,7 @@ const sessionRules = (
   // are never denied: the free tier refuses sessions whose rules deny them.
   ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
   ...paths,
-  ...mcpRules(mcpServerName),
+  ...mcpRules(mcpServerNames),
 ];
 
 const sameRules = (left: ReadonlyArray<Rule> | undefined, right: ReadonlyArray<Rule>) =>
@@ -703,6 +726,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   const driver = OPENCODE_PROVIDER;
   const mcpServerNameFor = (threadId: string) =>
     goatMcpServerName(threadId).pipe(Effect.provideService(Crypto.Crypto, crypto));
+  const cuaServerNameFor = (threadId: string) =>
+    cuaMcpServerName(threadId).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
   const borrow = Effect.gen(function* () {
     const lent = yield* Deferred.make<
@@ -802,6 +827,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       stoppedChildren: new Set(),
       strandedSteers: new Set(),
       mcp: undefined,
+      cua: undefined,
       instructions: undefined,
       memoryDigest: undefined,
     });
@@ -2722,7 +2748,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       currentScope = scope;
       yield* Scope.close(previous, Exit.void);
       // A restarted server forgot T3's MCP servers; the next turn adds them again.
-      for (const state of threads.values()) state.mcp = undefined;
+      for (const state of threads.values()) {
+        state.mcp = undefined;
+        state.cua = undefined;
+      }
       yield* lock.withPermit(reconcile).pipe(Effect.timeout(RECONCILE_TIMEOUT));
       return stream;
     }).pipe(
@@ -2856,7 +2885,15 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         policy,
         paths,
         policy.runtimeMode === "full-access" ? [] : thread.grants,
-        appThreadId === null ? null : yield* mcpServerNameFor(appThreadId),
+        appThreadId === null
+          ? null
+          : {
+              goat: yield* mcpServerNameFor(appThreadId),
+              cua:
+                (yield* mcpSessions.read(ThreadId.make(appThreadId)))?.cuaDriver === undefined
+                  ? null
+                  : yield* cuaServerNameFor(appThreadId),
+            },
       );
     });
 
@@ -3103,7 +3140,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     yield* Effect.addFinalizer(() =>
       Effect.forEach(
-        [...threads.values()].flatMap((state) => (state.mcp === undefined ? [] : [state.mcp])),
+        [...threads.values()].flatMap((state) => [
+          ...(state.mcp === undefined ? [] : [state.mcp]),
+          ...(state.cua === undefined ? [] : [state.cua]),
+        ]),
         removeMcp,
         { concurrency: 8, discard: true },
       ),
@@ -3169,6 +3209,50 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           );
         if (mcpAvailable) state.mcp = wanted;
       }
+      // The managed Cua Driver follows the same per-directory registration; a
+      // new daemon generation replaces the old entry, and a failed add only
+      // leaves computer use out of this turn.
+      const cuaDriver = mcpAvailable ? mcpSession?.cuaDriver : undefined;
+      const wantedCua =
+        cuaDriver === undefined
+          ? undefined
+          : {
+              name: yield* cuaServerNameFor(turnInput.threadId),
+              directory,
+              key: McpProviderSession.cuaDriverKey(cuaDriver),
+            };
+      if (
+        state.cua !== undefined &&
+        (wantedCua === undefined ||
+          state.cua.directory !== wantedCua.directory ||
+          state.cua.key !== wantedCua.key)
+      ) {
+        yield* removeMcp(state.cua);
+        state.cua = undefined;
+      }
+      if (cuaDriver !== undefined && wantedCua !== undefined && state.cua === undefined) {
+        const config = McpProviderSession.cuaOpenCodeMcpConfig(cuaDriver);
+        const added = yield* client.mcp
+          .add({
+            server: wantedCua.name,
+            location: { directory },
+            config: new Mcp.LocalConfig({
+              type: "local",
+              command: config.command,
+              environment: config.environment,
+            }),
+          })
+          .pipe(
+            Effect.timeout(INVENTORY_TIMEOUT),
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not add Cua Driver to OpenCode.", cause).pipe(
+                Effect.as(false),
+              ),
+            ),
+          );
+        if (added) state.cua = wantedCua;
+      }
       const availability = McpProviderSession.memoryToolAvailability(
         mcpAvailable &&
           state.mcp !== undefined &&
@@ -3179,7 +3263,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           : undefined,
       );
       const instructions = [
-        buildRuntimeInstructions({ harness: "OpenCode", model: turnInput.modelSelection.model }),
+        buildRuntimeInstructions({
+          harness: "OpenCode",
+          model: turnInput.modelSelection.model,
+          computerUse: state.cua !== undefined,
+        }),
         goatOrchestrationSystemPrompt(mcpAvailable),
         availability.read || availability.write || availability.source
           ? `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`
@@ -3969,6 +4057,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           threads.delete(child);
         }
         if (state.mcp !== undefined) yield* removeMcp(state.mcp);
+        if (state.cua !== undefined) yield* removeMcp(state.cua);
       }),
       respondToRuntimeRequest: Effect.fn("OpenCode2Adapter.respondToRuntimeRequest")(
         function* (requestInput) {

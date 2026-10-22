@@ -95,7 +95,12 @@ const browserTestProject = {
   // Pre-bundled so a late first import does not trigger a mid-run reload. The
   // dependency scan misses autocomplete because tests reach it only through lazy imports.
   optimizeDeps: {
-    include: ["vite-plus/test/browser", "@base-ui/react/autocomplete", "@effect/vitest"],
+    include: [
+      "vite-plus/test/browser",
+      "@base-ui/react/autocomplete",
+      "@effect/vitest",
+      "zustand/vanilla",
+    ],
   },
   test: {
     name: "browser",

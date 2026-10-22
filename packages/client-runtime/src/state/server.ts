@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type DecisionListInput,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -22,7 +23,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import {
   createAtomCommandScheduler,
@@ -904,6 +905,11 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:worktrees-directory-setting:${environmentId}`),
     ),
   );
+  const computerUseSettingAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => get(settingsValueAtom(environmentId))?.enableCua ?? false).pipe(
+      Atom.withLabel(`environment-data:server:computer-use-setting:${environmentId}`),
+    ),
+  );
   const usagePricesAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const overrides = get(settingsValueAtom(environmentId))?.usagePriceOverrides ?? {};
@@ -1045,6 +1051,26 @@ export function createServerEnvironmentAtoms<R, E>(
       onSuccess: refreshCloudMachines,
     });
 
+  const listDecisions = createEnvironmentRpcCommand(runtime, {
+    label: "environment-data:decision:list",
+    tag: WS_METHODS.decisionList,
+  });
+  const queryDecisions = Effect.fn("DecisionInbox.list")(function* (target: {
+    environmentId: EnvironmentId;
+    input: DecisionListInput;
+  }) {
+    const registry = yield* AtomRegistry.AtomRegistry;
+    const result = yield* Effect.promise(() => listDecisions.run(registry, target));
+    return result._tag === "Success" ? result.value : yield* Effect.failCause(result.cause);
+  });
+  const decisionItems = createEnvironmentQueryAtomFamily(runtime, {
+    label: "environment-data:decision:list:query",
+    idleTtlMs: 0,
+    execute: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
+      queryDecisions(target),
+    refreshTrigger: (target) => listDecisions.permissionAtom(target.environmentId),
+  });
+
   return {
     cloudMachines,
     cloudAgentRuns,
@@ -1065,6 +1091,18 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverRunStorageCleanup,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    /** Runs that machine's history compaction now; Fleet offers it when storage is over budget. */
+    compactStorage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:compact-storage",
+      tag: WS_METHODS.serverCompactStorage,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
+    /** Stops the stray GOAT servers that machine's host status lists. */
+    cleanUpStrayProcesses: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:clean-up-stray-processes",
+      tag: WS_METHODS.serverCleanUpStrayProcesses,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     databaseStorage,
     databaseCompactionRecommendations,
     storageCleanupReport: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
@@ -1079,6 +1117,13 @@ export function createServerEnvironmentAtoms<R, E>(
       idleTtlMs: 0,
       staleTimeMs: 5_000,
       refreshTrigger: ({ environmentId }) => worktreesDirectorySettingAtom(environmentId),
+    }),
+    /** Driver readiness on the host; rechecked whenever computer use is turned on or off. */
+    computerUse: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:computer-use",
+      tag: WS_METHODS.serverCheckComputerUse,
+      idleTtlMs: 0,
+      refreshTrigger: ({ environmentId }) => computerUseSettingAtom(environmentId),
     }),
     updateStateAtom,
     settingsValueAtom,
@@ -1189,6 +1234,28 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:remote-launches",
       tag: WS_METHODS.remoteLaunchesList,
       staleTimeMs: 5_000,
+    }),
+    decisionItems: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
+      decisionItems({ environmentId: target.environmentId, input: target }),
+    answerDecision: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:decision:answer",
+      tag: WS_METHODS.decisionAnswer,
+    }),
+    verifyHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-verify",
+      tag: WS_METHODS.hubDeviceVerify,
+    }),
+    joinHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-join",
+      tag: WS_METHODS.hubDeviceJoin,
+    }),
+    leaveHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-leave",
+      tag: WS_METHODS.hubDeviceLeave,
+    }),
+    repairHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-repair",
+      tag: WS_METHODS.hubDeviceRepair,
     }),
     scheduledTaskWebhookDeliveries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-deliveries",

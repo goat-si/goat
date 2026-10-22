@@ -82,6 +82,9 @@ export function captureReplicaScript(input: {
   readonly replicaRef: string;
   readonly maxBundleBytes: number;
   readonly maxUntrackedFileBytes: number;
+  /** Ordinary watches export the immutable completed checkpoint, never the later live tree. */
+  readonly checkpointRef?: string;
+  readonly expectedCheckpointOid?: string;
 }): string {
   return String.raw`set -eu
 umask 077
@@ -90,6 +93,7 @@ branch=${shellInput(input.branch ?? "")}
 replica_ref=${shellInput(input.replicaRef)}
 max_bundle=${byteLimit(input.maxBundleBytes)}
 max_untracked=${byteLimit(input.maxUntrackedFileBytes)}
+checkpoint_ref=${shellInput(input.checkpointRef ?? "")}
 case "$replica_ref" in refs/goat/replicas/*) ;; *) exit 1 ;; esac
 git check-ref-format "$replica_ref"
 if [ -n "$branch" ]; then git check-ref-format "refs/heads/$branch"; fi
@@ -97,7 +101,7 @@ cd "$cwd"
 unset GIT_INDEX_FILE
 export GIT_OPTIONAL_LOCKS=0
 tmp=$(mktemp -d "${"${"}TMPDIR:-/tmp}/goat-replica.XXXXXX")
-trap 'rm -rf "$tmp"' 0
+trap 'if [ -n "$checkpoint_ref" ] && [ -n "${"${"}commit:-}" ]; then git -c core.hooksPath=/dev/null update-ref -d "$replica_ref" "$commit" >/dev/null 2>&1 || true; fi; rm -rf "$tmp"' 0
 trap 'exit 1' HUP INT TERM
 if [ -n "$branch" ]; then
   git worktree list --porcelain -z > "$tmp/worktrees"
@@ -117,6 +121,34 @@ fi
 worktree=$(cat "$tmp/worktree"; printf '.')
 worktree=${"${"}worktree%.}
 cd "$worktree"
+if [ -n "$checkpoint_ref" ]; then
+  case "$checkpoint_ref" in refs/goat/checkpoints/*|refs/t3/checkpoints/*|refs/goat/orchestration-v2/checkpoints/*|refs/t3/orchestration-v2/checkpoints/*) ;; *) exit 1 ;; esac
+  git check-ref-format "$checkpoint_ref"
+  commit=$(git rev-parse --verify "$checkpoint_ref^{commit}")
+  if [ "$commit" != ${shellInput(input.expectedCheckpointOid ?? "")} ]; then
+    printf 'GOAT_REPLICA_CHECKPOINT_IDENTITY_MISMATCH\n'
+    exit 0
+  fi
+  head=$(git rev-parse --verify "$commit^1")
+  : > "$tmp/excluded"
+  git diff-tree --no-commit-id --name-only -r -z --diff-filter=A "$head" "$commit" > "$tmp/added"
+  xargs -0 sh -c ${quote(String.raw`set -eu
+tmp=$1
+limit=$2
+commit=$3
+shift 3
+for file do
+  excluded=0
+  case "${"${"}file##*/}" in .env|.env.*|*.pem|*.key|*.p12|id_rsa*|id_ed25519*) excluded=1 ;; esac
+  size=$(git cat-file -s "$commit:$file")
+  if [ "$size" -gt "$limit" ]; then excluded=1; fi
+  if [ "$excluded" -eq 1 ]; then printf '%s\000' "$file" >> "$tmp/excluded"; fi
+done`)} sh "$tmp" "$max_untracked" "$commit" < "$tmp/added"
+if [ -s "$tmp/excluded" ]; then
+  printf 'GOAT_REPLICA_EXCLUDED_FILES\n'
+  exit 0
+fi
+else
 head=$(git rev-parse --verify HEAD)
 index=$(git rev-parse --git-path index)
 if [ -f "$index" ]; then cp "$index" "$tmp/index"; fi
@@ -147,7 +179,8 @@ export GIT_AUTHOR_EMAIL='replica@goat.invalid' GIT_COMMITTER_EMAIL='replica@goat
 # Stable metadata makes retries of an unchanged tree produce the same commit.
 export GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' GIT_COMMITTER_DATE='2000-01-01T00:00:00Z'
 commit=$(printf 'GOAT channel replica\n' | git -c commit.gpgSign=false commit-tree "$tree" -p "$head")
-git update-ref --no-deref "$replica_ref" "$commit"
+fi
+git -c core.hooksPath=/dev/null update-ref --no-deref "$replica_ref" "$commit"
 if ! git bundle create "$tmp/bundle" "$replica_ref" --not --remotes 2> "$tmp/bundle-error"; then
   if [ -n "$(git rev-list -1 "$replica_ref" --not --remotes)" ]; then
     cat "$tmp/bundle-error" >&2
@@ -181,6 +214,8 @@ export type ReplicaOutput =
     }
   | { readonly type: "too_large"; readonly bytes: number }
   | { readonly type: "no_worktree" }
+  | { readonly type: "excluded_files" }
+  | { readonly type: "checkpoint_identity_mismatch" }
   | { readonly type: "invalid" };
 
 function decodeBase64(value: string): NodeBuffer.Buffer | null {
@@ -198,6 +233,9 @@ function parseBytes(value: string): number | null {
 
 export function parseReplicaOutput(stdout: string): ReplicaOutput {
   const output = stdout.replaceAll("\r\n", "\n").replace(/\n$/u, "");
+  if (output === "GOAT_REPLICA_EXCLUDED_FILES") return { type: "excluded_files" };
+  if (output === "GOAT_REPLICA_CHECKPOINT_IDENTITY_MISMATCH")
+    return { type: "checkpoint_identity_mismatch" };
   if (output === "GOAT_REPLICA_NO_WORKTREE") return { type: "no_worktree" };
   const tooLarge = /^GOAT_REPLICA_TOO_LARGE (\d+)$/u.exec(output);
   if (tooLarge) {
@@ -244,6 +282,9 @@ export function applyReplicaScript(input: {
   readonly bundleBase64: string;
   readonly replicaRef: string;
   readonly targetRef: string;
+  readonly fetchRemotes?: boolean;
+  readonly expectedCommitOid?: string;
+  readonly expectedHeadOid?: string;
 }): string {
   const bundleBase64 = input.bundleBase64.replace(/\r?\n/gu, "");
   if (bundleBase64.length === 0 || decodeBase64(bundleBase64) === null) {
@@ -262,7 +303,7 @@ cd "$cwd"
 tmp=$(mktemp -d "${"${"}TMPDIR:-/tmp}/goat-replica.XXXXXX")
 trap 'rm -rf "$tmp"' 0
 trap 'exit 1' HUP INT TERM
-git fetch --quiet --all >&2 || true
+${input.fetchRemotes === false ? "" : "git fetch --quiet --all >&2 || true"}
 cat > "$tmp/base64" <<'GOAT_REPLICA_DATA'
 ${bundleBase64}
 GOAT_REPLICA_DATA
@@ -278,6 +319,7 @@ fi
 oid=$(git bundle list-heads "$tmp/bundle" "$replica_ref" | awk '{print $1}')
 case "$oid" in ''|*[!0-9a-f]*) exit 1 ;; esac
 case ${"${"}#oid} in 40|64) ;; *) exit 1 ;; esac
+${input.expectedCommitOid === undefined ? "" : `if [ "$oid" != ${shellInput(input.expectedCommitOid)} ]; then printf 'GOAT_REPLICA_IDENTITY_MISMATCH\\n'; exit 0; fi`}
 existing=$(git rev-parse --verify "$target_ref" 2>/dev/null || true)
 if [ -n "$existing" ] && [ "$existing" != "$oid" ]; then
   printf 'GOAT_REPLICA_REF_CONFLICT\n'
@@ -286,6 +328,9 @@ fi
 if [ -z "$existing" ]; then
   # Fetching directly into target_ref could fast-forward an existing ref after a race.
   git fetch --quiet --no-tags --no-write-fetch-head "$tmp/bundle" "$replica_ref"
+fi
+${input.expectedHeadOid === undefined ? "" : `if [ "$(git rev-parse --verify "$oid^1")" != ${shellInput(input.expectedHeadOid)} ]; then printf 'GOAT_REPLICA_IDENTITY_MISMATCH\\n'; exit 0; fi`}
+if [ -z "$existing" ]; then
   if ! git update-ref --no-deref "$target_ref" "$oid" '' 2>/dev/null; then
     if [ "$(git rev-parse --verify "$target_ref" 2>/dev/null || true)" != "$oid" ]; then
       printf 'GOAT_REPLICA_REF_CONFLICT\n'

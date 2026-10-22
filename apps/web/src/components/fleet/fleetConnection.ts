@@ -32,6 +32,10 @@ export interface FleetConnection {
   readonly label: string;
   /** The classified failure, when there is one. */
   readonly reason: string | null;
+  /** The step an attempt in progress has reached, such as "Opening connection". */
+  readonly step?: string | null;
+  /** When this client first saw the connection in this state (epoch ms), for elapsed time. */
+  readonly since?: number;
 }
 
 export const UNKNOWN_FLEET_CONNECTION: FleetConnection = Object.freeze({
@@ -100,6 +104,10 @@ export function presentFleetMachineConnection(
 }
 
 export type FleetConnectionTone = "success" | "warning" | "destructive" | "muted";
+
+/** In flight: the states that show elapsed time and turn slow after a while. */
+export const isFleetConnectionWait = (state: FleetConnectionState) =>
+  state === "connecting" || state === "reconnecting";
 
 /** A shape that tells states apart without color. */
 export type FleetConnectionShape = "dot" | "arc" | "half" | "ring" | "square" | "alert";

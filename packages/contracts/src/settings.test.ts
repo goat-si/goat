@@ -1,4 +1,9 @@
-import { MemoryHubSettings, MemoryHubSettingsUpdateInput } from "./memory.ts";
+import {
+  MemoryHubSettings,
+  MemoryHubSettingsUpdateInput,
+  ORCHESTRATION_HISTORY_BUDGET_BYTES,
+  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
+} from "./memory.ts";
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
@@ -47,6 +52,9 @@ describe("storage cleanup settings", () => {
       worktreeKeepWhen: "uncommitted-changes",
       browserArtifactsAfterDays: null,
       logsAfterDays: null,
+      historyBudgetBytes: ORCHESTRATION_HISTORY_BUDGET_BYTES,
+      historyArchiveAfterDays: ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
+      historyArchiveDeleteAfterDays: null,
     });
   });
 
@@ -711,5 +719,36 @@ describe("automatic server updates", () => {
   it.each(["false", null, 0])("rejects a non-boolean value %s", (automaticServerUpdates) => {
     expect(() => decodeServerSettings({ automaticServerUpdates })).toThrow();
     expect(() => decodeServerSettingsPatch({ automaticServerUpdates })).toThrow();
+  });
+});
+
+describe("channel automatic placement settings", () => {
+  it("requires an explicit opt-in and uses normal settings write permission", () => {
+    expect(decodeServerSettings({}).channelAutoPlacement).toBe(false);
+    const patch = decodeServerSettingsPatch({ channelAutoPlacement: true });
+    expect(patch.channelAutoPlacement).toBe(true);
+    expect(requiredScopesForServerSettingsPatch(patch)).toContain("settings:write");
+    expect(
+      decodeServerSettings(encodeServerSettings(decodeServerSettings(patch))).channelAutoPlacement,
+    ).toBe(true);
+    expect(decodeServerSettingsPatch({ channelAutoPlacement: false }).channelAutoPlacement).toBe(
+      false,
+    );
+  });
+});
+
+describe("host checkpoint replication settings", () => {
+  it("keeps omission distinct from on and off and preserves host placement fields", () => {
+    expect(decodeServerSettings({}).fleet.hosts).toBeUndefined();
+    const fleet = {
+      hosts: { box: { maxThreads: 4, allowGoals: false, checkpointReplication: "off" } },
+    };
+    expect(
+      decodeServerSettings(encodeServerSettings(decodeServerSettings({ fleet }))).fleet,
+    ).toEqual(fleet);
+    expect(decodeServerSettingsPatch({ fleet })).toEqual({ fleet });
+    expect(() =>
+      decodeServerSettings({ fleet: { hosts: { box: { checkpointReplication: "automatic" } } } }),
+    ).toThrow();
   });
 });

@@ -1,3 +1,5 @@
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import { goatclawRoleBrief, goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
 import {
   OrchestratorMcpFailure,
   MessageId,
@@ -48,9 +50,11 @@ type Modes = {
 
 /** Server-set only: a registered cloud run's stable thread, imported task and launcher name. */
 export interface CloudRunLaunch {
-  readonly threadId: ThreadId;
+  readonly threadId?: ThreadId;
   readonly importedNativeThread?: ThreadLaunch.ThreadLaunchInput["importedNativeThread"];
   readonly externalLauncher?: string;
+  /** The caller already passed the cloud launch approval for this launch. */
+  readonly approved?: true;
 }
 
 export class ThreadLaunchMcpService extends Context.Service<
@@ -130,6 +134,7 @@ export const admitRemoteMemoryGrantCeiling = (
   });
 
 const make = Effect.gen(function* () {
+  const permissions = yield* Profiles.PermissionProfiles;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   const projects = yield* Project.ProjectService;
@@ -174,11 +179,11 @@ const make = Effect.gen(function* () {
       });
   });
   return ThreadLaunchMcpService.of({
-    launch: (scope, rawInput, { runtimeMode, interactionMode }, cloudRun) =>
+    launch: (scope, rawInput, { runtimeMode: requestedRuntimeMode, interactionMode }, cloudRun) =>
       Effect.gen(function* () {
         // The checkout is checked and recorded as given, so it must already be native here.
         const platform = yield* HostProcess.Platform;
-        const input =
+        const nativeInput =
           rawInput.workspaceStrategy?.type === "existing_worktree"
             ? {
                 ...rawInput,
@@ -191,6 +196,27 @@ const make = Effect.gen(function* () {
                 },
               }
             : rawInput;
+        const effective = yield* permissions.resolve(
+          scope,
+          requestedRuntimeMode,
+          rawInput.permissionProfileCeiling,
+        );
+        const role = rawInput.goatclawRole;
+        if (role !== undefined && !effective.enabled)
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "goatclaw is off, so role launches are unavailable.",
+          });
+        if (role !== undefined && nativeInput.message === undefined)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "A goatclaw role launch needs message: the task the role works on.",
+          });
+        const input =
+          role === undefined || nativeInput.message === undefined
+            ? nativeInput
+            : { ...nativeInput, message: goatclawRoleBrief(role, nativeInput.message) };
+        const runtimeMode = effective.runtimeMode;
         const context = yield* readCaller();
         const { caller } = context;
         const forwarded = input.memoryGrantCeiling;
@@ -307,6 +333,20 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(unavailable));
         const capabilities = yield* adapter.getCapabilities().pipe(Effect.mapError(unavailable));
         const cloud = capabilities.sessions.executionLocation === "cloud";
+        if (cloud) {
+          const effective = yield* permissions.require(scope, "cloud.launch", {
+            forwarded: input.permissionProfileCeiling,
+            runtimeMode,
+          });
+          // Following a run registered from outside starts nothing billable.
+          if (
+            cloudRun?.approved !== true &&
+            cloudRun?.importedNativeThread?.cloudTask === undefined
+          )
+            yield* permissions.requireCloudApproval(scope, effective, {
+              target: `thread:${modelSelection.instanceId}`,
+            });
+        }
         if (input.workspaceStrategy?.type === "existing_worktree") {
           const project = yield* readProject;
           if (project === undefined)
@@ -415,13 +455,21 @@ const make = Effect.gen(function* () {
                 ),
           (route) =>
             Effect.gen(function* () {
+              const admitted = yield* permissions.claim(scope, {
+                id: commandId,
+                childThreadId: threadId,
+                runtimeMode,
+                worktree: input.workspaceStrategy?.type === "worktree",
+                forwarded: input.permissionProfileCeiling,
+                ...(role === undefined ? {} : { profileId: goatclawRoleTemplate(role).profileId }),
+              });
               const launch = ThreadMessageIntake.launchThread({
                 commandId,
                 threadId,
                 projectId,
                 title: input.title,
                 modelSelection,
-                runtimeMode,
+                runtimeMode: admitted.runtimeMode,
                 interactionMode,
                 workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
                 ...(!startsRun
@@ -491,8 +539,18 @@ const make = Effect.gen(function* () {
                   return unavailable();
                 }),
               );
+              const protectedLaunch = launch.pipe(
+                Effect.tap(() =>
+                  admitted.enabled ? permissions.complete(commandId) : Effect.void,
+                ),
+                Effect.onError(() =>
+                  admitted.enabled
+                    ? permissions.release(commandId, true).pipe(Effect.ignore)
+                    : Effect.void,
+                ),
+              );
               const result = yield* report === undefined
-                ? launch
+                ? protectedLaunch
                 : Effect.gen(function* () {
                     const reports = yield* RemoteReportService.RemoteReportService;
                     // The binding commits before the agent can run. Only a launch that
@@ -502,7 +560,7 @@ const make = Effect.gen(function* () {
                       reports.bind(threadId, report).pipe(
                         Effect.mapError(unavailable),
                         Effect.andThen(
-                          restore(launch).pipe(
+                          restore(protectedLaunch).pipe(
                             Effect.onError(() =>
                               context.threads.getThreadShell(threadId).pipe(
                                 Effect.flatMap((shell) =>
@@ -614,4 +672,4 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(ThreadLaunchMcpService, make);
+export const layer = Layer.effect(ThreadLaunchMcpService, make).pipe(Layer.provide(Profiles.layer));

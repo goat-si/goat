@@ -1,3 +1,6 @@
+import { DecisionToolkit } from "./toolkits/decision/tools.ts";
+import * as DecisionHandlers from "./toolkits/decision/handlers.ts";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   OrchestratorMcpFailure,
   PreviewAutomationError,
@@ -27,6 +30,8 @@ import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 import * as MemoryAdministrationHandlers from "./toolkits/memoryAdministration/handlers.ts";
 import { MemoryAdministrationToolkit } from "./toolkits/memoryAdministration/tools.ts";
 import * as NoteHandlers from "./toolkits/note/handlers.ts";
+import * as ComputerUseHandlers from "./toolkits/computerUse/handlers.ts";
+import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -36,6 +41,10 @@ import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as HubParity from "../hub/HubParity.ts";
+import * as HubMembership from "../hub/HubMembership.ts";
+import * as HubOcx from "../hub/HubOcx.ts";
+import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
@@ -49,6 +58,12 @@ import {
 } from "../telemetry/ProviderDimensions.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
+import * as RepositoryInventory from "../project/RepositoryInventory.ts";
+import * as RepositoryReferences from "../project/RepositoryReferences.ts";
+import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.ts";
+import { validateRepositoryReferenceArguments } from "./repositoryReferenceArguments.ts";
+import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
+import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
@@ -899,6 +914,7 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
 });
 
 const encodeOrchestratorMcpFailure = Schema.encodeSync(OrchestratorMcpFailure);
+const encodeReferenceRefusal = Schema.encodeSync(Schema.fromJsonString(OrchestratorMcpFailure));
 
 const undeclaredArgumentsResult = (
   tool: string,
@@ -980,7 +996,29 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                   (key) => !Object.hasOwn(properties, key),
                 );
                 return undeclared.length === 0
-                  ? registration.handle(payload)
+                  ? validateRepositoryReferenceArguments(registration.tool.name, payload).pipe(
+                      Effect.matchEffect({
+                        onSuccess: () => registration.handle(payload),
+                        onFailure: () =>
+                          Effect.succeed(
+                            new McpSchema.CallToolResult({
+                              isError: true,
+                              content: [
+                                {
+                                  type: "text",
+                                  text: encodeReferenceRefusal(
+                                    new OrchestratorMcpFailure({
+                                      code: "invalid_request",
+                                      message:
+                                        "Invalid repository reference scope. Unknown fields, writes and runtime filesystem grants are refused.",
+                                    }),
+                                  ),
+                                },
+                              ],
+                            }),
+                          ),
+                      }),
+                    )
                   : Effect.succeed(
                       undeclaredArgumentsResult(
                         registration.tool.name,
@@ -1225,6 +1263,7 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
 /** The registration layers mounted by /mcp, including image and memory tools.
  * Kept separate from domain construction so catalog contracts can be checked without live state. */
 export const catalogRegistrations = {
+  decision: toolkitRegistration(DecisionToolkit, DecisionHandlers.layer),
   htmlRender: toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender),
   htmlPreview: imageToolRegistration(registerHtmlPreview(), HtmlHandlers.layerPreview),
   previewStandard: toolkitRegistration(PreviewStandardToolkit, PreviewHandlers.layerStandard),
@@ -1245,6 +1284,7 @@ export const catalogRegistrations = {
   ssh: toolkitRegistration(SshToolkit, SshHandlers.layer),
   attachment: toolkitRegistration(AttachmentToolkit, AttachmentHandlers.layer),
   note: toolkitRegistration(NoteToolkit, NoteHandlers.layer),
+  computerUse: toolkitRegistration(ComputerUseToolkit, ComputerUseHandlers.layer),
   channel: toolkitRegistration(ChannelToolkit, ChannelHandlers.layer),
   pullRequests: toolkitRegistration(PullRequestsToolkit, PullRequestsHandlers.layer),
   deviceStandard: toolkitRegistration(DeviceStandardToolkit, DeviceHandlers.layerStandard),
@@ -1306,18 +1346,27 @@ const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
  * RemoteDispatchCoordinator are left to the caller, like `layer`.
  */
 export const layerHostStatusService = HostStatusMcpService.layer.pipe(
-  Layer.provide(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),
+  Layer.provideMerge(
+    HubMembership.layer.pipe(Layer.provide(HubOcx.layer), Layer.provide(Profiles.layer)),
+  ),
+  Layer.provide(RepositoryInventory.layer),
+  Layer.provideMerge(OpenCodexManagedUpdate.layer),
+  Layer.provideMerge(HubParity.layer),
+  // Shared with the hub-down policy, so both read one inventory cache.
+  Layer.provideMerge(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
   Layer.provide(RemoteReportService.layer),
   Layer.provide(ThreadResultService.layer),
+  // Its own pressure rides on this machine's entry; the nudger reads the same monitor.
+  Layer.provideMerge(HostPressureMonitor.layer),
 );
 
 /** Reads HostStatusMcpService from the server's context; see `layerHostStatusService`. */
 const layerHostStatusToolkit = catalogRegistrations.hostStatus;
 
 /** goat_goal_*. The server provides GoalService with the controller (fleet/goals/GoalLayers). */
-export const layerFleetToolkit = catalogRegistrations.fleet;
+export const layerFleetToolkit = catalogRegistrations.fleet.pipe(Layer.provide(Profiles.layer));
 /** Reads Placement and FallbackChains from the server's context, like host status. */
 const layerFleetResourcesToolkit = catalogRegistrations.fleetResources;
 
@@ -1328,7 +1377,15 @@ const layerFleetResourcesToolkit = catalogRegistrations.fleetResources;
  */
 export const layerProviderToolkit = catalogRegistrations.provider;
 
+const layerRepositoryReferences = RepositoryReferenceMcpService.layer.pipe(
+  Layer.provide(RepositoryReferences.layer),
+  Layer.provide(RepositoryInventory.layer),
+  Layer.provide(HostThreadsMcpService.layer),
+  Layer.provide(OrchestratorMcpService.layer),
+);
+
 const layerProjectRegistration = catalogRegistrations.project.pipe(
+  Layer.provide(layerRepositoryReferences),
   Layer.provide(ThreadLaunchMcpService.layer),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
@@ -1338,7 +1395,11 @@ export const layerConnectionToolkit = catalogRegistrations.connection;
 
 const layerRemoteReportRegistration = catalogRegistrations.remoteReport;
 
-const layerSshToolkitRegistration = catalogRegistrations.ssh;
+const layerSshToolkitRegistration = catalogRegistrations.ssh.pipe(
+  Layer.provide(Profiles.layer),
+  Layer.provide(layerRepositoryReferences),
+  Layer.provide(RepositoryLaunchMcpService.layer),
+);
 
 export const layerAttachmentToolkit = catalogRegistrations.attachment;
 
@@ -1364,12 +1425,14 @@ export const layerMcpTransport = McpServer.layerHttp({
 }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 export const layer = Layer.mergeAll(
+  catalogRegistrations.decision,
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,
   layerAttachmentToolkit,
   layerChannelToolkit,
   catalogRegistrations.note,
+  catalogRegistrations.computerUse,
   layerProjectRegistration,
   layerEnvironmentToolkit,
   layerHostStatusToolkit,

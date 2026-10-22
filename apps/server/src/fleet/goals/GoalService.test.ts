@@ -1,3 +1,5 @@
+import * as SqlClient from "effect/sql/SqlClient";
+import * as ServerSettings from "../../serverSettings.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -30,17 +32,25 @@ const modes = new Map<
   ["thread:admin", { runtimeMode: "full-access", interactionMode: "default" }],
 ]);
 
-const services = goalServiceLayer.pipe(
-  Layer.provideMerge(goalStoreLayer),
-  Layer.provideMerge(SqlitePersistence.layerMemory),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(
-    Layer.mock(ThreadManagement.ThreadManagementService)({
-      getThreadShell: (threadId) =>
-        Effect.succeed(liveThreadShell(threadId, modes.get(threadId) ?? {})),
-    }),
-  ),
-);
+const servicesFor = (profile?: string) =>
+  goalServiceLayer.pipe(
+    Layer.provide(
+      ServerSettings.layerTest({
+        goatclaw: { enabled: profile !== undefined, defaultProfile: profile ?? "worker" },
+      }),
+    ),
+    Layer.provideMerge(goalStoreLayer),
+    Layer.provideMerge(SqlitePersistence.layerMemory),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provide(
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: (threadId) =>
+          Effect.succeed(liveThreadShell(threadId, modes.get(threadId) ?? {})),
+      }),
+    ),
+  );
+
+const services = servicesFor();
 
 const scopeOf = (threadId: string | null): McpInvocationScope => ({
   environmentId: EnvironmentId.make("env:test"),
@@ -213,3 +223,18 @@ describe("GoalService", () => {
       }).pipe(Effect.provide(services)),
   );
 });
+
+it.effect.each(["worker", "manager"])(
+  "goal apply enforces profile %s at the service boundary",
+  (profile) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+    VALUES ('thread:owner', 'project:test', 'Caller', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`;
+      const result = yield* apply("thread:owner", input()).pipe(Effect.result);
+      if (profile === "worker") {
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(result.failure.message).toContain("goals.apply");
+      } else expect(result._tag).toBe("Success");
+    }).pipe(Effect.provide(servicesFor(profile))),
+);

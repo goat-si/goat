@@ -450,6 +450,9 @@ export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitReco
  */
 const SideChatOf = Schema.optional(Schema.NullOr(ThreadId));
 
+export const OrchestrationV2ThreadHistoryArchive = Schema.Literals(["archived", "deleted"]);
+export type OrchestrationV2ThreadHistoryArchive = typeof OrchestrationV2ThreadHistoryArchive.Type;
+
 export function isSideChatThread(thread: {
   readonly sideChatOf?: ThreadId | null | undefined;
 }): boolean {
@@ -477,6 +480,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   /** Who started this thread's cloud run outside GOAT, such as "Grok Bot"; descriptive only. */
   externalLauncher: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+  /**
+   * Where the thread's tool history lives when not in the database: `archived` restores when the
+   * thread is opened, `deleted` is gone. Absent while the history is in the database.
+   */
+  historyArchive: Schema.optional(OrchestrationV2ThreadHistoryArchive),
   sideChatOf: SideChatOf,
   forkedFrom: Schema.NullOr(
     Schema.Union([
@@ -1405,6 +1413,13 @@ export const OrchestrationV2Checkpoint = Schema.Struct({
   ordinalWithinScope: NonNegativeInt,
   appRunOrdinal: Schema.NullOr(PositiveInt),
   ref: CheckpointRef,
+  /** Producer-returned evidence; absence keeps legacy local checkpoints usable, but not replicable. */
+  replicationEvidence: Schema.optional(
+    Schema.Struct({
+      commitOid: Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u)),
+      complete: Schema.Boolean,
+    }),
+  ),
   status: Schema.Literals(["ready", "missing", "error", "stale"]),
   files: Schema.Array(OrchestrationV2CheckpointFileSummary),
   capturedAt: Schema.DateTimeUtc,
@@ -2064,6 +2079,15 @@ export const OrchestrationV2LatestVisibleMessageSummary = Schema.Struct({
 export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
+/** A provider-native subagent (Codex spawn_agent, Claude Task) still working for this thread. */
+export const OrchestrationV2NativeSubagentSummary = Schema.Struct({
+  id: NodeId,
+  childThreadId: Schema.NullOr(ThreadId),
+  title: Schema.NullOr(Schema.String),
+  status: Schema.Literals(["pending", "running", "waiting"]),
+});
+export type OrchestrationV2NativeSubagentSummary = typeof OrchestrationV2NativeSubagentSummary.Type;
+
 export const OrchestrationV2ThreadShell = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -2083,6 +2107,11 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   /** Who started this thread's cloud run outside GOAT, such as "Grok Bot"; descriptive only. */
   externalLauncher: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+  /**
+   * Where the thread's tool history lives when not in the database: `archived` restores when the
+   * thread is opened, `deleted` is gone. Absent while the history is in the database.
+   */
+  historyArchive: Schema.optional(OrchestrationV2ThreadHistoryArchive),
   sideChatOf: SideChatOf,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
@@ -2112,6 +2141,10 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestUserAuthoredMessageAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   hasActionableProposedPlan: Schema.Boolean,
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  /** Fleet groups these under the thread and goatclaw counts them as lanes. */
+  nativeSubagents: Schema.optional(Schema.Array(OrchestrationV2NativeSubagentSummary)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   providerInstanceHistory: Schema.optional(Schema.Array(ProviderInstanceId)).pipe(
@@ -2996,6 +3029,8 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request (#8160); absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Records where the tool history lives; null means back in the database. Server-issued. */
+    historyArchive: Schema.optional(Schema.NullOr(OrchestrationV2ThreadHistoryArchive)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),

@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {

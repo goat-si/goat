@@ -7,6 +7,10 @@
       "types": "./src/opencodexCompat.ts",
       "import": "./src/opencodexCompat.ts"
     },
+    "./channelEvidence": {
+      "types": "./src/channelEvidence.ts",
+      "import": "./src/channelEvidence.ts"
+    },
     "./sshFailure": {
       "types": "./src/sshFailure.ts",
       "import": "./src/sshFailure.ts"
@@ -14,6 +18,14 @@
     "./sshDestination": {
       "types": "./src/sshDestination.ts",
       "import": "./src/sshDestination.ts"
+    },
+    "./cuaDriverRelease": {
+      "types": "./src/cuaDriverRelease.ts",
+      "import": "./src/cuaDriverRelease.ts"
+    },
+    "./cuaDriverManifest": {
+      "types": "./src/cuaDriverManifest.ts",
+      "import": "./src/cuaDriverManifest.ts"
     },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",

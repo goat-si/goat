@@ -1,3 +1,4 @@
+import * as Decisions from "./decisions.ts";
 import {
   HandoffReadInput,
   HandoffRespondInput,
@@ -6,6 +7,7 @@ import {
   HandoffError,
 } from "./handoff.ts";
 import * as Memory from "./memory.ts";
+import { CuaHostStatus } from "./cua.ts";
 import {
   SshHostAddInput,
   SshPreflightInput,
@@ -410,8 +412,16 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
-import { GoatHostStatusResult, ServerGetHostStatusInput } from "./hostStatus.ts";
+import {
+  GoatHostStatusResult,
+  HostMaintenanceError,
+  HostStorageHealth,
+  HostStrayCleanupResult,
+  ServerGetHostStatusInput,
+} from "./hostStatus.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
+import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
+import { HubDeviceOperationInput, HubDeviceOperationResult } from "./hubDevice.ts";
 import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
@@ -644,6 +654,7 @@ export const WS_METHODS = {
   deviceAction: "device.action",
 
   serverProbe: "server.probe",
+  serverCheckComputerUse: "server.checkComputerUse",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -656,6 +667,8 @@ export const WS_METHODS = {
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetWorktreesDirectoryStatus: "server.getWorktreesDirectoryStatus",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
+  serverCompactStorage: "server.compactStorage",
+  serverCleanUpStrayProcesses: "server.cleanUpStrayProcesses",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
@@ -674,6 +687,10 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetHostResources: "server.getHostResources",
   serverGetHostStatus: "server.getHostStatus",
+  hubDeviceVerify: "hub.deviceVerify",
+  hubDeviceJoin: "hub.deviceJoin",
+  hubDeviceLeave: "hub.deviceLeave",
+  hubDeviceRepair: "hub.deviceRepair",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
@@ -699,6 +716,11 @@ export const WS_METHODS = {
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
   // Markdown notes on this environment
+  decisionList: "decision.list",
+  decisionGet: "decision.get",
+  decisionRequest: "decision.request",
+  decisionAnswer: "decision.answer",
+  decisionWithdraw: "decision.withdraw",
   notesList: "notes.list",
   notesRead: "notes.read",
   notesWrite: "notes.write",
@@ -814,6 +836,12 @@ const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, 
 const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   payload: Schema.Struct({}),
   success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerCheckComputerUseRpc = Rpc.make(WS_METHODS.serverCheckComputerUse, {
+  payload: Schema.Struct({}),
+  success: CuaHostStatus,
   error: EnvironmentAuthorizationError,
 });
 
@@ -1006,6 +1034,19 @@ const WsServerGetDatabaseStorageRpc = Rpc.make(WS_METHODS.serverGetDatabaseStora
   error: EnvironmentAuthorizationError,
 });
 
+/** Runs the scheduled history compaction now; a call during a run joins it. */
+const WsServerCompactStorageRpc = Rpc.make(WS_METHODS.serverCompactStorage, {
+  payload: Schema.Struct({}),
+  success: HostStorageHealth,
+  error: Schema.Union([HostMaintenanceError, EnvironmentAuthorizationError]),
+});
+
+const WsServerCleanUpStrayProcessesRpc = Rpc.make(WS_METHODS.serverCleanUpStrayProcesses, {
+  payload: Schema.Struct({}),
+  success: HostStrayCleanupResult,
+  error: Schema.Union([HostMaintenanceError, EnvironmentAuthorizationError]),
+});
+
 const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   payload: Schema.Struct({}),
   success: ServerSettings,
@@ -1123,6 +1164,29 @@ const WsServerGetHostStatusRpc = Rpc.make(WS_METHODS.serverGetHostStatus, {
   success: GoatHostStatusResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
+
+/** Read-only parity checks for one device, the same as goat_hub_device_verify. */
+const WsHubDeviceVerifyRpc = Rpc.make(WS_METHODS.hubDeviceVerify, {
+  payload: GoatHubDeviceVerifyInput,
+  success: GoatHubDeviceVerifyResult,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+
+/** The same operations as goat_hub_device_join, _leave and _repair, for a person in a client. */
+const hubDeviceOperation = (
+  tag:
+    | typeof WS_METHODS.hubDeviceJoin
+    | typeof WS_METHODS.hubDeviceLeave
+    | typeof WS_METHODS.hubDeviceRepair,
+) =>
+  Rpc.make(tag, {
+    payload: HubDeviceOperationInput,
+    success: HubDeviceOperationResult,
+    error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+  });
+const WsHubDeviceJoinRpc = hubDeviceOperation(WS_METHODS.hubDeviceJoin);
+const WsHubDeviceLeaveRpc = hubDeviceOperation(WS_METHODS.hubDeviceLeave);
+const WsHubDeviceRepairRpc = hubDeviceOperation(WS_METHODS.hubDeviceRepair);
 
 const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProcessResourceHistory, {
   payload: ServerProcessResourceHistoryInput,
@@ -2420,6 +2484,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 // Register core handlers in smaller layers to stay below TypeScript's instantiation-depth limit.
 export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
+  WsServerCheckComputerUseRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
@@ -2451,6 +2516,8 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetStorageCleanupReportRpc,
   WsServerGetWorktreesDirectoryStatusRpc,
   WsServerGetDatabaseStorageRpc,
+  WsServerCompactStorageRpc,
+  WsServerCleanUpStrayProcessesRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerDiscoverSourceControlRpc,
@@ -2469,6 +2536,10 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetHostResourcesRpc,
   WsServerGetHostStatusRpc,
+  WsHubDeviceVerifyRpc,
+  WsHubDeviceJoinRpc,
+  WsHubDeviceLeaveRpc,
+  WsHubDeviceRepairRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
@@ -2739,7 +2810,37 @@ export const WsNotesRpcGroup = RpcGroup.make(
   WsNotesWorkTargetProjectsRpc,
 ).middleware(RpcScopeAuthorization);
 
-export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup).merge(WsNotesRpcGroup);
+const decisionRpcErrors = Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]);
+export const WsDecisionRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.decisionList, {
+    payload: Decisions.DecisionListInput,
+    success: Decisions.DecisionListResult,
+    error: decisionRpcErrors,
+  }),
+  Rpc.make(WS_METHODS.decisionGet, {
+    payload: Decisions.DecisionGetInput,
+    success: Decisions.DecisionItem,
+    error: decisionRpcErrors,
+  }),
+  Rpc.make(WS_METHODS.decisionRequest, {
+    payload: Decisions.DecisionRequestInput,
+    success: Decisions.DecisionItem,
+    error: decisionRpcErrors,
+  }),
+  Rpc.make(WS_METHODS.decisionAnswer, {
+    payload: Decisions.DecisionAnswerInput,
+    success: Decisions.DecisionItem,
+    error: decisionRpcErrors,
+  }),
+  Rpc.make(WS_METHODS.decisionWithdraw, {
+    payload: Decisions.DecisionGetInput,
+    success: Decisions.DecisionItem,
+    error: decisionRpcErrors,
+  }),
+).middleware(RpcScopeAuthorization);
+export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
+  .merge(WsNotesRpcGroup)
+  .merge(WsDecisionRpcGroup);
 
 const MemoryRpcErrors = Schema.Union([Memory.MemoryRpcError, EnvironmentAuthorizationError]);
 const MemoryImportRpcErrors = Schema.Union([

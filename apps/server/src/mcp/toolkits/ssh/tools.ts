@@ -1,7 +1,9 @@
+import * as Crypto from "effect/Crypto";
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as SshDeviceAdd from "../../../sshRemote/SshDeviceAdd.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
-import { RemoteReportDeliveryMode, RemoteDispatchView } from "@goat/contracts";
+import { GoatclawRole, RemoteReportDeliveryMode, RemoteDispatchView } from "@goat/contracts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
 import {
   AuthMcpClientAccess,
@@ -9,6 +11,7 @@ import {
   CloudMachineAlias,
   CloudMachinesCreateInput,
   CloudMachinesListResult,
+  HostPressureAdvice,
   ModelSelection,
   ProjectId,
   ThreadId,
@@ -16,6 +19,8 @@ import {
   OrchestratorMcpFailure,
   ProviderInteractionMode,
   RuntimeMode,
+  RepositoryLaunchSelection,
+  RepositoryReferences,
   TrimmedNonEmptyString,
   SshLaunchWorkspace,
   SshWorkspaceCode,
@@ -35,6 +40,8 @@ import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
+import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 import { McpAttachmentInput } from "../attachment/input.ts";
@@ -45,6 +52,8 @@ const shared = {
   failureMode: "return" as const,
   dependencies: [
     McpInvocationContext.McpInvocationContext,
+    Profiles.PermissionProfiles,
+    Crypto.Crypto,
     ThreadManagementService.ThreadManagementService,
     SshRemoteDispatch.SshRemoteDispatch,
     SshHostSetup.SshHostSetup,
@@ -197,8 +206,18 @@ const SshBrowseTool = Tool.make(agentSurfaceRegistry["ssh.browse"].name, {
 
 const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].name, {
   ...shared,
+  dependencies: [
+    ...shared.dependencies,
+    RepositoryLaunchMcpService.RepositoryLaunchMcpService,
+    RepositoryReferenceMcpService.RepositoryReferenceMcpService,
+  ],
   description: agentSurfaceRegistry["ssh.thread_launch"].description,
   parameters: Schema.Struct({
+    repository: Schema.optional(RepositoryLaunchSelection).annotate({
+      description:
+        "Verify this normalized origin key at the selected absolute cwd (or existing_worktree path) before launch. Refuses missing, mismatched or unsupported inventory; suggests matching local/explicit candidateHosts checkouts. Does not fetch, install, or choose a host.",
+    }),
+    references: Schema.optional(RepositoryReferences),
     host: TrimmedNonEmptyString.annotate({
       description:
         "An SSH host alias from goat_ssh_host_list, or a linked host name from goat_host_link_list.",
@@ -212,6 +231,12 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     projectTitle: Schema.optional(TrimmedNonEmptyString),
     modelSelection: Schema.optional(ModelSelection),
     runtimeMode: Schema.optional(RuntimeMode),
+    goatclawRole: Schema.optional(
+      GoatclawRole.annotate({
+        description:
+          "Only while goatclaw is on: launch as a goatclaw role (supervisor, domain-manager, merge-manager, issue-sweeper). The remote enforces that role's permission profile narrowed by yours, and message is preceded by the role's instructions and report protocol. Needs message.",
+      }),
+    ),
     interactionMode: Schema.optional(ProviderInteractionMode),
     attachments: Schema.optional(Schema.Array(McpAttachmentInput).check(Schema.isMaxLength(8))),
     standingInstructions: Schema.optional(
@@ -264,6 +289,8 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     /** Whether the calling thread will be told when the remote thread finishes. */
     watching: Schema.Boolean,
     notes: Schema.Array(Schema.String),
+    /** Set when that host was under resource pressure at its last status read. */
+    pressure: Schema.optional(HostPressureAdvice),
   }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.thread_launch"]));
 
@@ -315,6 +342,7 @@ const cloudShared = {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     CloudMachineService.CloudMachineService,
+    Profiles.PermissionProfiles,
   ],
 };
 const CloudAliasParameters = Schema.Struct({

@@ -78,6 +78,12 @@ export const workerLaunchIdsFor = (taskId: ChannelTaskId, generation: number) =>
   messageId: MessageId.make(stableId("channel-worker-message", [taskId, String(generation)])),
 });
 
+/**
+ * Whether a thread is a channel task's worker, from its id alone. The id is fixed when the
+ * thread is created, before its first turn and before the ledger records the binding.
+ */
+export const isChannelWorkerThreadId = (threadId: string) => threadId.startsWith("channel-worker:");
+
 export const answerForwardIdsFor = (eventId: ChannelTaskEventId) => ({
   commandId: CommandId.make(stableId("channel-answer", [eventId])),
   messageId: MessageId.make(stableId("channel-answer-message", [eventId])),

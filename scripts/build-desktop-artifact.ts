@@ -23,6 +23,7 @@ import { fromYaml } from "@goat/shared/schemaYaml";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@goat/shared/relayAuth";
 import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
+import { cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" with { type: "json" };
@@ -47,6 +48,7 @@ import {
 } from "./lib/brand-assets.ts";
 import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
+import { windowsSystemTar } from "./lib/windows-tar.ts";
 import {
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
@@ -478,7 +480,10 @@ const WINDOWS_DESKTOP_BUILD_PREREQUISITES = [
     id: "msvc",
     description: "Visual Studio Build Tools with C++, Windows SDK, and Spectre libraries",
   },
-  { id: "tar", description: "tar to inspect the bundled WSL runtime archive" },
+  {
+    id: "tar",
+    description: "tar.exe to extract Cua Driver and inspect the bundled WSL runtime archive",
+  },
 ] as const;
 
 export class WindowsDesktopBuildPrerequisitesMissingError extends Schema.TaggedError<WindowsDesktopBuildPrerequisitesMissingError>()(
@@ -1061,6 +1066,10 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/LICENSE-T3CODE.txt",
   "!apps/desktop/gnome-extension",
   "!apps/desktop/gnome-extension/**/*",
+  "!apps/desktop/prod-resources/cua-driver",
+  "!apps/desktop/prod-resources/cua-driver/**/*",
+  "!apps/desktop/resources/cua-driver",
+  "!apps/desktop/resources/cua-driver/**/*",
 ] as const;
 // Windows terminal helpers cannot run on macOS and slow signing and notarization.
 export const MAC_FILE_EXCLUSIONS = [
@@ -1159,6 +1168,7 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
+  { from: "apps/desktop/prod-resources/cua-driver", to: "cua-driver" },
   {
     from: "apps/desktop/prod-resources/cursor-sdk",
     to: "node_modules/@cursor",
@@ -1717,9 +1727,14 @@ export function createStagePatchedDependencies(
   dependencies: Record<string, unknown>,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(patchedDependencies).filter(([patchKey]) =>
-      Object.hasOwn(dependencies, getPatchedDependencyPackageName(patchKey)),
-    ),
+    Object.entries(patchedDependencies).filter(([patchKey]) => {
+      const name = getPatchedDependencyPackageName(patchKey);
+      // The Cua SDK's transitive loader needs the ASAR path fix too.
+      return (
+        Object.hasOwn(dependencies, name) ||
+        (name === "@ubjs/node" && Object.hasOwn(dependencies, "@trycua/cua-driver"))
+      );
+    }),
   );
 }
 
@@ -2274,7 +2289,7 @@ function windowsVswherePrerequisiteScript(arch: typeof BuildArch.Type): string {
 }
 
 export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBuild")(
-  function* (input: { readonly arch: typeof BuildArch.Type; readonly bundlesWslRuntime: boolean }) {
+  function* (input: { readonly arch: typeof BuildArch.Type }) {
     const rustTarget = resolveResourceMonitorRustTargets("win", input.arch)[0]!;
     const reuseResourceMonitor = yield* Config.Boolean("GOAT_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
       Config.withDefault(false),
@@ -2301,9 +2316,7 @@ export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBu
               ]),
               "Visual Studio Build Tools",
             ),
-        tar: input.bundlesWslRuntime
-          ? desktopBuildProbeSucceeds(ChildProcess.make("tar.exe", ["--version"]), "tar")
-          : Effect.succeed(true),
+        tar: desktopBuildProbeSucceeds(ChildProcess.make("tar.exe", ["--version"]), "tar"),
       },
       { concurrency: "unbounded" },
     );
@@ -2740,6 +2753,134 @@ export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (inp
   );
 });
 
+class CuaDriverArtifactError extends Schema.TaggedError<CuaDriverArtifactError>()(
+  "CuaDriverArtifactError",
+  { message: Schema.String },
+) {}
+
+export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageRoot: string;
+  readonly stageResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const release = cuaDriverRelease(
+    input.platform === "mac" ? "darwin" : input.platform === "win" ? "win32" : "linux",
+    input.arch === "universal" ? "arm64" : input.arch,
+  );
+  if (!release) {
+    return yield* new CuaDriverArtifactError({ message: "Unsupported Cua Driver build target." });
+  }
+  const cacheDir = path.join(input.repoRoot, "node_modules/.cache/goat/cua-driver");
+  const archivePath = path.join(cacheDir, release.archiveName);
+  const verified = Effect.fn("verifyCuaDriverArchive")(function* (file: string) {
+    if (!(yield* fs.exists(file))) return false;
+    if (Number((yield* fs.stat(file)).size) !== release.bytes) return false;
+    const hash = NodeCrypto.createHash("sha256");
+    yield* fs
+      .stream(file)
+      .pipe(Stream.runForEach((chunk) => Effect.sync(() => hash.update(chunk))));
+    return hash.digest("hex") === release.sha256;
+  });
+  yield* fs.makeDirectory(cacheDir, { recursive: true });
+  if (!(yield* verified(archivePath))) {
+    yield* fs.remove(archivePath, { force: true });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const temporary = yield* fs.makeTempDirectoryScoped({ directory: cacheDir });
+        const downloadPath = path.join(temporary, release.archiveName);
+        yield* runCommand(
+          ChildProcess.make("curl", [
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--connect-timeout",
+            "30",
+            "--max-time",
+            "600",
+            "--retry",
+            "3",
+            "--output",
+            downloadPath,
+            release.url,
+          ]),
+          { label: "download Cua Driver", verbose: input.verbose },
+        );
+        if (!(yield* verified(downloadPath))) {
+          return yield* new CuaDriverArtifactError({
+            message: `Cua Driver archive failed size/SHA-256 verification: ${release.archiveName}`,
+          });
+        }
+        yield* fs.rename(downloadPath, archivePath);
+      }),
+    );
+  }
+  yield* fs.makeDirectory(input.stageRoot, { recursive: true });
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const extracted = yield* fs.makeTempDirectoryScoped({ directory: input.stageRoot });
+      const hostPlatform = yield* HostProcess.Platform;
+      const command =
+        release.format === "zip" && hostPlatform !== "win32"
+          ? ChildProcess.make("unzip", ["-q", archivePath, "-d", extracted])
+          : ChildProcess.make(hostPlatform === "win32" ? windowsSystemTar() : "tar", [
+              "-xf",
+              archivePath,
+              "-C",
+              extracted,
+            ]);
+      yield* runCommand(command, { label: "extract Cua Driver", verbose: input.verbose });
+      const requiredFiles = [
+        release.executable,
+        ...(input.platform === "win"
+          ? ["cua-driver-uia.exe", "cua-cursor-theme.exe"]
+          : input.platform === "linux"
+            ? [
+                "cua-cursor-theme",
+                "wayland-helper/install.sh",
+                "wayland-helper/winrects@cua/metadata.json",
+                "wayland-helper/winrects@cua/extension.js",
+              ]
+            : []),
+      ];
+      for (const file of requiredFiles) {
+        if ((yield* fs.stat(path.join(extracted, file))).type !== "File") {
+          return yield* new CuaDriverArtifactError({
+            message: `Cua Driver release is missing ${file}.`,
+          });
+        }
+      }
+      yield* fs.makeDirectory(input.stageResourcesDir, { recursive: true });
+      const destination = path.join(input.stageResourcesDir, "cua-driver");
+      yield* fs.remove(destination, { recursive: true, force: true });
+      if (input.platform === "mac") {
+        yield* fs.copyFile(path.join(extracted, release.executable), destination);
+        yield* fs.chmod(destination, 0o755);
+      } else {
+        yield* fs.makeDirectory(destination, { recursive: true });
+        // SDK libraries come from the app's npm dependencies, not this release.
+        const entries =
+          input.platform === "linux"
+            ? [release.executable, "cua-cursor-theme", "wayland-helper"]
+            : requiredFiles;
+        for (const entry of entries) {
+          yield* fs.copy(path.join(extracted, entry), path.join(destination, entry));
+        }
+        if (input.platform === "linux") {
+          for (const executable of [release.executable, "cua-cursor-theme"]) {
+            yield* fs.chmod(path.join(destination, executable), 0o755);
+          }
+        }
+      }
+    }),
+  );
+});
+
 const generateMacIconSet = Effect.fn("build-desktop-artifact.generateMacIconSet")(function* (
   sourcePng: string,
   targetIcns: string,
@@ -2953,6 +3094,64 @@ const validateBundledClientAssets = Effect.fn("build-desktop-artifact.validateBu
   },
 );
 
+/** The sandboxed preload bundles in apps/desktop/dist-electron (see apps/desktop/vite.config.ts). */
+export const SANDBOXED_PRELOADS = [
+  "preload.cjs",
+  "preview-pick-preload.cjs",
+  "preview-pip-preload.cjs",
+  "mac-permission-preload.cjs",
+] as const;
+
+// The parameters Electron's sandbox wraps around a preload's source.
+const SANDBOXED_PRELOAD_PARAMETERS = [
+  "require",
+  "process",
+  "Buffer",
+  "global",
+  "setImmediate",
+  "clearImmediate",
+  "exports",
+  "module",
+] as const;
+
+/** Why Electron's sandbox would refuse this preload source, or undefined when it parses. */
+export function sandboxedPreloadSyntaxError(source: string): string | undefined {
+  try {
+    // Parses only: the function is never called.
+    Function(...SANDBOXED_PRELOAD_PARAMETERS, source);
+    return undefined;
+  } catch (error) {
+    return error instanceof SyntaxError ? error.message : undefined;
+  }
+}
+
+export class SandboxedPreloadInvalidError extends Schema.TaggedError<SandboxedPreloadInvalidError>()(
+  "SandboxedPreloadInvalidError",
+  { problems: Schema.Array(Schema.String) },
+) {
+  override get message(): string {
+    return [
+      "Electron's sandbox cannot load these preload bundles:",
+      ...this.problems.map((problem) => "  - " + problem),
+    ].join("\n");
+  }
+}
+
+const validateSandboxedPreloads = Effect.fn("build-desktop-artifact.validateSandboxedPreloads")(
+  function* (desktopDist: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const problems: string[] = [];
+    for (const name of SANDBOXED_PRELOADS) {
+      const problem = sandboxedPreloadSyntaxError(
+        yield* fs.readFileString(path.join(desktopDist, name)),
+      );
+      if (problem !== undefined) problems.push(name + ": " + problem);
+    }
+    if (problems.length > 0) return yield* new SandboxedPreloadInvalidError({ problems });
+  },
+);
+
 export function resolveDesktopRuntimeDependencies(
   dependencies: Record<string, string> | undefined,
   catalog: Record<string, string>,
@@ -3086,7 +3285,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // not inflate the loose-file count and slow NSIS installation.
     ...(platform === "win"
       ? { asar: { smartUnpack: false }, asarUnpack: [WINDOWS_NATIVE_ASAR_UNPACK_GLOB] }
-      : {}),
+      : {
+          asarUnpack: [
+            "**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}",
+            "**/node_modules/@ubjs/node-*/**/*.node",
+          ],
+        }),
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
       ...(sshRuntimeBundled ? SSH_RUNTIME_EXTRA_RESOURCES : []),
@@ -3574,7 +3778,12 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   yield* fs.copy(input.serverDistDir, path.join(serverStageDir, "apps/server/dist"));
 
   const sidecarDependencies = {
-    ...input.runtimeExternalDependencies,
+    // The desktop host owns Cua; this server reaches it through telemetry IPC.
+    ...Object.fromEntries(
+      Object.entries(input.runtimeExternalDependencies).filter(
+        ([name]) => name !== "@trycua/cua-driver",
+      ),
+    ),
     ...resolveFffNativeDependencies("win", input.arch, input.fffNodeVersion),
   };
   const sidecarPatchedDependencies = createStagePatchedDependencies(
@@ -3979,13 +4188,18 @@ export const validateWindowsPackagedPayload = Effect.fn(
       );
     }
 
+    const hostPlatform = yield* HostProcess.Platform;
     const listing = yield* spawnAndCollectOutput(
-      ChildProcess.make("tar", ["-tzf", WSL_RUNTIME_ARCHIVE_NAME], {
-        cwd: resourcesDir,
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      }),
+      ChildProcess.make(
+        hostPlatform === "win32" ? windowsSystemTar() : "tar",
+        ["-tzf", WSL_RUNTIME_ARCHIVE_NAME],
+        {
+          cwd: resourcesDir,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      ),
     ).pipe(Effect.mapError(invalidWslRuntime));
     if (listing.exitCode !== 0) {
       return yield* invalidWslRuntime(
@@ -4069,10 +4283,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   if (hostPlatform === "win32" && options.platform === "win") {
     yield* preflightWindowsDesktopBuild({
       arch: options.arch,
-      bundlesWslRuntime: bundlesWslRuntime({
-        platform: options.platform,
-        runtimeArchivePath: options.wslRuntime,
-      }),
     });
   }
   const workspaceConfig = yield* readWorkspaceConfig();
@@ -4228,6 +4438,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   yield* applyWebBrandAssets(webAssetBrand, "apps/server/dist/client");
   yield* Effect.log(`[desktop-artifact] Applied ${webAssetBrand} web client branding.`);
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
+  yield* validateSandboxedPreloads(distDirs.desktopDist);
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
   if (options.platform !== "win") {
@@ -4276,6 +4487,14 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   }
   yield* stageBrowserSecret({
     repoRoot,
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+    verbose: options.verbose,
+  });
+  yield* stageCuaDriverExecutable({
+    repoRoot,
+    stageRoot,
     stageResourcesDir,
     platform: options.platform,
     arch: options.arch,

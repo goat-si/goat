@@ -222,6 +222,7 @@ export function cursorMcpServers(
         Authorization: session.authorizationHeader,
       },
     },
+    ...McpProviderSession.cuaStdioMcpServers(session),
   };
 }
 
@@ -878,6 +879,8 @@ interface CursorLiveAgent {
   readonly cwd: string | null;
   readonly mcpAuthorization: string | undefined;
   readonly mcpEndpoint: string | undefined;
+  /** The Cua Driver the agent was opened with (`cuaDriverKey`); empty when none. */
+  readonly cuaDriverKey: string;
   readonly nativeThreadId: string;
   readonly session: CursorAgentSdk.CursorAgentSdkSession;
 }
@@ -2136,7 +2139,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             existing.nativeThreadId === openInput.agentId &&
             existing.cwd === openInput.runtimePolicy.cwd &&
             existing.mcpAuthorization === mcpSession?.authorizationHeader &&
-            existing.mcpEndpoint === mcpSession?.endpoint
+            existing.mcpEndpoint === mcpSession?.endpoint &&
+            // Servers are fixed when the agent opens; computer use changes reopen it.
+            existing.cuaDriverKey === McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver)
           ) {
             return existing;
           }
@@ -2179,6 +2184,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             session: sdkSession,
             mcpAuthorization: mcpSession?.authorizationHeader,
             mcpEndpoint: mcpSession?.endpoint,
+            cuaDriverKey: McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver),
           } satisfies CursorLiveAgent;
           yield* Ref.set(liveAgent, next);
           return next;
@@ -2288,7 +2294,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           } else memoryToolClaims.delete(nativeId);
           const text = [
             userText,
-            buildRuntimeInstructions({ harness: "Cursor", model: turnInput.modelSelection.model }),
+            buildRuntimeInstructions({
+              harness: "Cursor",
+              model: turnInput.modelSelection.model,
+              computerUse: agent !== null && agent.cuaDriverKey !== "",
+            }),
             announceMemoryTools
               ? `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`
               : undefined,

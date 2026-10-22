@@ -2,6 +2,8 @@ import {
   MemoryHubSettings,
   MemoryOwnerSourceReadPolicy,
   DEFAULT_MEMORY_OWNER_SOURCE_READ_POLICY,
+  ORCHESTRATION_HISTORY_BUDGET_BYTES,
+  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
 } from "./memory.ts";
 import * as Predicate from "effect/Predicate";
 import { EasDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
@@ -38,6 +40,8 @@ import {
 } from "./model.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { FleetSettings } from "./fleetResources.ts";
+import { GoatclawSettings, GoatclawSettingsPatch } from "./permissionProfiles.ts";
+import { HubSettings, HubSettingsPatch } from "./hubSettings.ts";
 import { ProjectScript, type ProjectMutation } from "./project.ts";
 import { DEFAULT_RUNTIME_MODE, RuntimeMode } from "./providerPolicy.ts";
 import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./browserProfile.ts";
@@ -321,6 +325,26 @@ export type ModelPreferences = {
   readonly providerModelPreferences: typeof ProviderModelPreferences.Type;
 };
 
+/** "later" was closed without an answer; neither it nor "answered" is asked again. */
+export const FirstRunPromptState = Schema.Literals(["pending", "answered", "later"]);
+export type FirstRunPromptState = typeof FirstRunPromptState.Type;
+
+const firstRunPrompt = FirstRunPromptState.pipe(
+  Schema.withDecodingDefault(Effect.succeed("pending" as const)),
+);
+
+/**
+ * Questions the desktop asks once per profile. Only the record is shared: each answer lives in
+ * the setting its prompt changes, and each prompt stays independent of the others.
+ */
+export const FirstRunPrompts = Schema.Struct({
+  computerUse: firstRunPrompt,
+  opencodex: firstRunPrompt,
+  goatclaw: firstRunPrompt,
+});
+export type FirstRunPrompts = typeof FirstRunPrompts.Type;
+export type FirstRunPromptId = keyof FirstRunPrompts;
+
 export const ClientSettingsSchema = Schema.Struct({
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
@@ -492,6 +516,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  firstRunPrompts: FirstRunPrompts.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /** Before firstRunPrompts; hydration folds it into firstRunPrompts.computerUse. */
+  computerUsePrompt: Schema.optionalKey(Schema.Literals(["pending", "enabled", "later"])),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Opt-in TeX typesetting in rendered Markdown. Off keeps math parsing and
   // KaTeX out of the render path entirely.
@@ -1020,6 +1047,9 @@ const StorageRetentionDays = Schema.NullOr(
 const SettledWorktreeRetentionDays = Schema.NullOr(
   Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 3650 })),
 );
+const HistoryBudgetBytes = Schema.Int.check(
+  Schema.isBetween({ minimum: 268435456, maximum: 1099511627776 }),
+);
 
 export const WorktreeKeepWhen = Schema.Literals([
   "any-local-files",
@@ -1172,6 +1202,10 @@ export const DatabaseStorageStatus = Schema.Struct({
   incrementalVacuumEnabled: Schema.Boolean,
   /** Command to run on the host to reclaim the space offline. */
   compactCommand: Schema.String,
+  /** Threads whose tool history sits in compressed archive files. Absent on older servers. */
+  archivedThreads: Schema.optional(Schema.Number),
+  /** Bytes of those archive files, outside the database. Absent on older servers. */
+  archiveBytes: Schema.optional(Schema.Number),
 });
 export type DatabaseStorageStatus = typeof DatabaseStorageStatus.Type;
 
@@ -1266,6 +1300,22 @@ export const StorageCleanupSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   logsAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** Above this, compaction trims bulky tool output in threads idle for a week, oldest first. */
+  historyBudgetBytes: HistoryBudgetBytes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(ORCHESTRATION_HISTORY_BUDGET_BYTES)),
+  ),
+  /**
+   * Threads idle this many days keep their messages in the database and move tool calls,
+   * output and reasoning to a compressed archive that is restored when the thread is opened.
+   * Null keeps every thread in the database.
+   */
+  historyArchiveAfterDays: StorageRetentionDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS)),
+  ),
+  /** Archives older than this many days are deleted for good. Null, the default, keeps them. */
+  historyArchiveDeleteAfterDays: StorageRetentionDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
@@ -1347,6 +1397,8 @@ export const ServerSettings = Schema.Struct({
   goatBotModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** Allow channel work to use already-connected machines with the same repository. */
+  channelAutoPlacement: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   memoryHubVersion: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   memoryHub: MemoryHubSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({ mode: "disabled" as const })),
@@ -1409,6 +1461,7 @@ export const ServerSettings = Schema.Struct({
   projectSettingsFolded: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 
   enableAgentDeviceAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  enableCua: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
    * Kept separate from agent access so enabling the user's Device panel does
    * not also grant providers control of simulators and emulators.
@@ -1423,6 +1476,8 @@ export const ServerSettings = Schema.Struct({
   compactIdleThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  goatclaw: GoatclawSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  hub: HubSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   fleet: FleetSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
@@ -1691,6 +1746,7 @@ export const ServerSettingsOperation = Schema.Literals([
   "write-secret",
   "write-file",
   "prepare-directory",
+  "enable-computer-use",
 ]);
 export type ServerSettingsOperation = typeof ServerSettingsOperation.Type;
 
@@ -1699,15 +1755,26 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
   {
     settingsPath: Schema.String,
     operation: ServerSettingsOperation,
-    code: Schema.optionalKey(Schema.Literal("provider_instance_busy")),
+    code: Schema.optionalKey(
+      Schema.Literals([
+        "provider_instance_busy",
+        "computer_use_unavailable",
+        "computer_use_install_failed",
+      ]),
+    ),
     providerInstanceId: Schema.optional(Schema.String),
     environmentVariable: Schema.optional(Schema.String),
+    /** Why computer use cannot run on this host, written for users. */
+    reason: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
     if (this.code === "provider_instance_busy") {
       return "End this instance's active sessions before changing its model route.";
+    }
+    if (this.code === "computer_use_unavailable" || this.code === "computer_use_install_failed") {
+      return this.reason ?? "Computer use cannot run on this host.";
     }
     const provider =
       this.providerInstanceId === undefined ? "" : ` for provider ${this.providerInstanceId}`;
@@ -1778,6 +1845,9 @@ const ServerSettingsPatchFields = Schema.Struct({
       worktreeUnchanged: Schema.optionalKey(Schema.Boolean),
       browserArtifactsAfterDays: Schema.optionalKey(StorageRetentionDays),
       logsAfterDays: Schema.optionalKey(StorageRetentionDays),
+      historyBudgetBytes: Schema.optionalKey(HistoryBudgetBytes),
+      historyArchiveAfterDays: Schema.optionalKey(StorageRetentionDays),
+      historyArchiveDeleteAfterDays: Schema.optionalKey(StorageRetentionDays),
     }),
   ),
   worktreesDirectory: Schema.optionalKey(TrimmedString),
@@ -1785,6 +1855,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   memoryEnabled: Schema.optionalKey(Schema.Boolean),
   memoryModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   goatBotModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  channelAutoPlacement: Schema.optionalKey(Schema.Boolean),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
@@ -1824,6 +1895,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   ),
   enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
   enableDeviceSupport: Schema.optionalKey(Schema.Boolean),
+  enableCua: Schema.optionalKey(Schema.Boolean),
   deviceOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
   deviceHosts: Schema.optionalKey(SshDeviceHostConfigs),
   easDeviceHosts: Schema.optionalKey(EasDeviceHostConfigs),
@@ -1835,6 +1907,8 @@ const ServerSettingsPatchFields = Schema.Struct({
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   /** Each top-level key it names replaces the stored one (see FleetSettings). */
   fleet: Schema.optionalKey(FleetSettings),
+  goatclaw: Schema.optionalKey(GoatclawSettingsPatch),
+  hub: Schema.optionalKey(HubSettingsPatch),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),
@@ -2065,6 +2139,7 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
+  firstRunPrompts: Schema.optionalKey(FirstRunPrompts),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
 });

@@ -974,6 +974,41 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             }),
           );
         }
+        // Computer use is an addition: a server that cannot add it still runs
+        // the session, and the prompt only advertises it once it is attached.
+        // Each turn reconciles it, so enabling or disabling reaches this
+        // session on its next turn.
+        let installedCuaKey = "";
+        const syncCuaDriver = Effect.fn("OpenCodeAdapterV2.syncCuaDriver")(function* (
+          threadId: ThreadId,
+        ) {
+          if (!hasGoatMcp) return false;
+          const cuaDriver = (yield* mcpSessions.read(threadId))?.cuaDriver;
+          const wanted = McpProviderSession.cuaDriverKey(cuaDriver);
+          if (wanted === installedCuaKey) return wanted !== "";
+          if (cuaDriver === undefined) {
+            yield* OpenCodeRuntime.runOpenCodeSdk("mcp.disconnect", () =>
+              client.mcp.disconnect({ name: McpProviderSession.CUA_MCP_SERVER_NAME }),
+            ).pipe(Effect.ignore({ log: true }));
+            installedCuaKey = "";
+            return false;
+          }
+          const added = yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
+            client.mcp.add({
+              name: McpProviderSession.CUA_MCP_SERVER_NAME,
+              config: McpProviderSession.cuaOpenCodeMcpConfig(cuaDriver),
+            }),
+          ).pipe(
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not add Cua Driver to OpenCode.", cause).pipe(
+                Effect.as(false),
+              ),
+            ),
+          );
+          installedCuaKey = added ? wanted : "";
+          return added;
+        });
 
         const now = yield* DateTime.now;
         let sessionEntity: OrchestrationV2ProviderSession = {
@@ -3309,6 +3344,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 buildRuntimeInstructions({
                   harness: "OpenCode",
                   model: turnInput.modelSelection.model,
+                  computerUse: yield* syncCuaDriver(turnInput.threadId),
                 }),
               ]
                 .filter(Boolean)

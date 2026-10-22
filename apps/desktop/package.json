@@ -1,6 +1,6 @@
 {
   "name": "@goat/desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "main": "dist-electron/boot.cjs",
@@ -22,6 +22,7 @@
     "@goat/ssh": "workspace:*",
     "@goat/tailscale": "workspace:*",
     "@napi-rs/keyring": "^1.3.0",
+    "@trycua/cua-driver": "catalog:",
     "dbus-next": "0.10.2",
     "effect": "catalog:",
     "electron": "44.9.3",

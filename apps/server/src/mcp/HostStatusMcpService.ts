@@ -22,15 +22,24 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
+import * as CuaDriver from "../cua/CuaDriver.ts";
+import * as StrayProcesses from "../diagnostics/StrayProcesses.ts";
+import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as HubParity from "../hub/HubParity.ts";
+import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
+import * as DatabaseStorage from "../persistence/DatabaseStorage.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
+import * as RepositoryInventory from "../project/RepositoryInventory.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import {
   countHostThreads,
+  runningSubagents,
   HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS,
   hostStatusProviders,
   hostStatusQuotas,
@@ -71,6 +80,8 @@ export interface HostStatusMcpServiceShape {
   readonly read: (
     scope: McpInvocationScope,
     input: GoatHostStatusInput,
+    /** Repository diagnosis must not acquire a stopped runtime; ordinary status keeps its existing behavior. */
+    options?: { readonly requireReady?: true },
   ) => Effect.Effect<GoatHostStatusResult, OrchestratorMcpFailure>;
   /**
    * The same read for a signed-in GOAT client, such as the web Hosts panel.
@@ -94,12 +105,25 @@ export class HostStatusMcpService extends Context.Service<
 
 const make = Effect.gen(function* () {
   const resources = yield* HostResources.HostResources;
+  const repositories = yield* RepositoryInventory.RepositoryInventory;
   const registry = yield* ProviderRegistry.ProviderRegistry;
+  const usageSources = yield* UsageLimitSources.UsageLimitSources;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const hosts = yield* HostThreadsMcpService.HostThreadsMcpService;
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const opencodex = yield* OpenCodexInventory.OpenCodexInventory;
+  const parity = yield* HubParity.HubParity;
+  // Optional so layers built for one tool need not schedule OpenCodex updates.
+  const opencodexUpdate = yield* Effect.serviceOption(
+    OpenCodexManagedUpdate.OpenCodexManagedUpdate,
+  );
+  // Optional so layers built for one tool need not run storage passes or process scans.
+  const storage = yield* Effect.serviceOption(DatabaseStorage.DatabaseStorage);
+  const strays = yield* Effect.serviceOption(StrayProcesses.StrayProcesses);
+  const pressureMonitor = yield* Effect.serviceOption(HostPressureMonitor.HostPressureMonitor);
   const clock = yield* Clock.Clock;
+  // Optional so tests and builds without the driver keep reporting the rest.
+  const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const lastRefreshAt = yield* Ref.make(Number.NEGATIVE_INFINITY);
   const known = yield* Ref.make(new Map<string | null, HostStatusEntry>());
   /** Per caller and host, so a slow host's connection keeps going between polls instead of restarting. */
@@ -134,51 +158,74 @@ const make = Effect.gen(function* () {
       );
       providers = yield* registry.getProviders;
     }
+    const projected = yield* usageSources.projectProviders(providers);
+    const quotaPool = yield* usageSources.quotaPool;
     return {
-      quotas: hostStatusQuotas(providers, refreshed),
+      quotas: hostStatusQuotas(projected, refreshed),
       providers: hostStatusProviders(providers),
+      ...(quotaPool === undefined ? {} : { quotaPool }),
     };
   });
 
-  const readLocal = Effect.fn("HostStatus.readLocal")(function* () {
+  const readLocal = Effect.fn("HostStatus.readLocal")(function* (
+    includeRepositories = false,
+    parityEvidence = false,
+  ) {
     const snapshot = yield* resources.read;
     const platform = yield* HostProcess.Platform;
     const shells = yield* threads
-      .listProjectThreads({ projectId: undefined, includeSubagents: false })
+      .listProjectThreads({ projectId: undefined, includeSubagents: true })
       .pipe(
         Effect.mapError(() =>
           failure("orchestration_error", "Could not count threads on this machine."),
         ),
       );
+    // Both are the last periodic reading; neither measures anything on this call.
+    const storageHealth = Option.isSome(storage) ? yield* storage.value.health : null;
+    const strayScan = Option.isSome(strays) ? yield* strays.value.latest : null;
+    const pressure =
+      pressureMonitor._tag === "Some" ? yield* pressureMonitor.value.current : undefined;
+    const updateStatus =
+      opencodexUpdate._tag === "Some" ? yield* opencodexUpdate.value.status : undefined;
     const entry = {
       host: null,
       reachability: "ok" as const,
       serverVersion: packageJson.version,
       protocol: servedRuntimeProtocolRanges(),
+      ...(includeRepositories ? { repositories: yield* repositories.read } : {}),
       metrics: {
         ...snapshot,
         platform,
-        threads: countHostThreads(shells),
+        // Display counts still leave subagents out; the OpenCodex idle check needs them.
+        threads: { ...countHostThreads(shells), subagentsRunning: runningSubagents(shells) },
         ...(yield* readQuotas()),
-        opencodex: yield* opencodex.read,
+        ...(cua._tag === "Some" ? { computerUse: yield* cua.value.computerUse } : {}),
+        opencodex: yield* parityEvidence ? parity.readLocal : opencodex.read,
+        ...(storageHealth === null ? {} : { storage: storageHealth }),
+        ...(strayScan === null ? {} : { strays: strayScan }),
       },
+      ...(pressure === undefined ? {} : { pressure }),
+      ...(updateStatus === undefined ? {} : { opencodexUpdate: updateStatus }),
     } satisfies HostStatusEntry;
     yield* remember(null, entry);
     return entry;
   });
 
-  const localEntry = readLocal().pipe(
-    Effect.catch((error) =>
-      Ref.get(known).pipe(
-        Effect.map((current) => unreachableHostStatus(null, error.message, current.get(null))),
+  const localEntry = (includeRepositories = false, parityEvidence = false) =>
+    readLocal(includeRepositories, parityEvidence).pipe(
+      Effect.catch((error) =>
+        Ref.get(known).pipe(
+          Effect.map((current) => unreachableHostStatus(null, error.message, current.get(null))),
+        ),
       ),
-    ),
-  );
+    );
 
   const readRemoteOnce = Effect.fn("HostStatus.readRemoteOnce")(function* (
     scope: McpInvocationScope,
     host: string,
     failInvalid: boolean,
+    includeRepositories: boolean,
+    requireReady: boolean,
   ) {
     return yield* hosts
       .readOnHost(
@@ -186,13 +233,19 @@ const make = Effect.gen(function* () {
         {
           host,
           tool: "goat_host_status",
-          arguments: { local: true },
+          arguments: { local: true, ...(includeRepositories ? { repositories: true } : {}) },
           timeoutMs: HOST_STATUS_REMOTE_TIMEOUT_MS,
+          ...(requireReady ? { requireReady: true as const } : {}),
         },
         decodeStatus,
       )
       .pipe(
         Effect.map((result) => tagRemoteHostStatus(result, host)),
+        Effect.flatMap((entry) =>
+          parity
+            .latest(host)
+            .pipe(Effect.map((result) => (result ? { ...entry, parity: result } : entry))),
+        ),
         Effect.tap((entry) => (entry.reachability === "ok" ? remember(host, entry) : Effect.void)),
         Effect.catch((error) => {
           if (callerFailure(error) || (failInvalid && error.code === "invalid_request")) {
@@ -217,12 +270,24 @@ const make = Effect.gen(function* () {
     scope: McpInvocationScope,
     host: string,
     failInvalid: boolean,
+    includeRepositories: boolean,
+    requireReady: boolean,
   ) {
-    const key = scope.requestNamespace + "\u0000" + host + (failInvalid ? "\u0000named" : "");
+    const key =
+      scope.requestNamespace +
+      "\u0000" +
+      host +
+      (failInvalid ? "\u0000named" : "") +
+      (includeRepositories ? "\u0000repos" : "") +
+      (requireReady ? "\u0000ready" : "");
     const running = yield* FiberMap.get(remoteReads, key);
     const fiber = Option.isSome(running)
       ? running.value
-      : yield* FiberMap.run(remoteReads, key, readRemoteOnce(scope, host, failInvalid));
+      : yield* FiberMap.run(
+          remoteReads,
+          key,
+          readRemoteOnce(scope, host, failInvalid, includeRepositories, requireReady),
+        );
     const answer = yield* Fiber.join(fiber).pipe(
       Effect.timeoutOption(HOST_STATUS_REMOTE_TIMEOUT_MS),
     );
@@ -236,22 +301,45 @@ const make = Effect.gen(function* () {
   });
 
   const read: HostStatusMcpServiceShape["read"] = Effect.fn("HostStatus.read")(
-    function* (scope, input) {
+    function* (scope, input, options) {
       if (input.local === true && input.host !== undefined) {
         return yield* failure("invalid_request", "Pass either host or local:true, not both.");
       }
-      if (input.local === true) return { hosts: [yield* localEntry] };
+      if (input.parityEvidence && input.local !== true)
+        return yield* failure("invalid_request", "Parity evidence requires local:true.");
+      if (input.local === true)
+        return { hosts: [yield* localEntry(input.repositories, input.parityEvidence)] };
       if (input.host !== undefined)
         return {
           hosts: [
-            markHostCompatibility(yield* readRemote(scope, input.host, true), LOCAL_COMPATIBILITY),
+            markHostCompatibility(
+              yield* readRemote(
+                scope,
+                input.host,
+                true,
+                input.repositories === true,
+                options?.requireReady === true,
+              ),
+              LOCAL_COMPATIBILITY,
+            ),
           ],
         };
       const aliases = [...(yield* dispatch.connectedHosts)].toSorted();
       const [local, remote] = yield* Effect.all(
         [
-          localEntry,
-          Effect.forEach(aliases, (host) => readRemote(scope, host, false), { concurrency: 4 }),
+          localEntry(input.repositories),
+          Effect.forEach(
+            aliases,
+            (host) =>
+              readRemote(
+                scope,
+                host,
+                false,
+                input.repositories === true,
+                options?.requireReady === true,
+              ),
+            { concurrency: 4 },
+          ),
         ],
         { concurrency: "unbounded" },
       );

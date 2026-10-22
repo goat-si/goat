@@ -240,6 +240,48 @@ Agent work on the host keeps running while you are away. A rejected SSH key, a
 changed host key, or a runtime that refuses this app stops retrying until you
 choose **Reconnect**; the connection's status says what to fix.
 
+### Recovering a watched thread while its host is offline
+
+Ask the launching agent to enable checkpoint copies for a remote watch with
+`goat_thread_watch {host, threadId, checkpointReplication: "on"}`. To set the policy for
+an entire host, use `goat_thread_replication_set {host, checkpointReplication: "on"}`.
+Turning the host setting `"off"` stops new copies for both channel tasks and ordinary
+watches. Existing channel tasks keep their previous default when the setting is omitted;
+ordinary watches require opt-in. Recovery is owned by the launching GOAT thread;
+launcherless webhook watches keep their existing reporting behavior. These operations
+require full access, and changing the
+host policy also requires permission to write settings. Checkpoint replication and recovery are unavailable while goatclaw permission profiles are enabled; profile ceilings and lane accounting are not yet supported by these operations. Remote capture and recovery use only
+an existing authorized connection; reconnect explicitly if its session is missing or expired.
+
+Copies are taken after completed checkpoints, not continuously. `goat_thread_watch_list`
+and `goat_thread_status` show the latest copy and any skipped capture. To recover, ask the
+launching agent to call `goat_thread_handoff_host` with `fromReplicatedCheckpoint: true`, the
+source `host` and `threadId`, the copy's run as `expectedRunId`, and a registered
+`destinationProjectId`. Add `destinationHost` for another machine; omit it to recover here.
+The destination must already be ready, identify the same repository, and use an enabled
+provider that runs in its local worktree; cloud providers are not recovery destinations. The destination must also have the shared base commits; if they are missing, fetch them
+there and request recovery again. Recovery does not fetch from or contact the source.
+Automatic moves remain off.
+
+Recovery starts a new thread in an isolated worktree with the copied unpushed commits and
+uncommitted file contents. Staging selections are not preserved. It carries bounded
+conversation context, not the provider's full session or attachments. Copies are limited to
+8 MiB; snapshots containing excluded or oversized new files are skipped. Turning copying off
+discards in-flight copies and keeps the last admitted copy. Recovery refuses copies older than
+seven days. Older checkpoints without completeness evidence, nested repositories and submodules
+are not eligible; complete another supported checkpoint before relying on recovery.
+
+A refused destination can be corrected and requested again. A known successful recovery is
+returned on retry even if that destination is now offline. Checkpoint contents expire
+independently of the small recovery records, so an existing launch can still be reconciled.
+
+The disconnected source may still perform external actions. GOAT fences its reports and
+tries to interrupt only its recorded old run after reconnecting; this does not guarantee
+that external side effects happened only once. Interruption waits while the launcher is in
+plan mode or its authorized connection is unavailable. If recovery reports `launch_unknown`, retry
+the same recovery to reconcile it rather than starting a separate launch. An empty destination
+thread is not proof that its recovery run started.
+
 On Linux and macOS hosts, provider CLIs must be on the `PATH` of a
 non-interactive login shell there; check with:
 
@@ -352,6 +394,31 @@ SSH keys and the host's projects and files, and stops a runtime only when GOAT o
 it and no work is running.
 
 ### Start a worktree on a saved SSH host
+
+Before asking an agent to start work on another machine, it can check registered
+checkouts with `goat_host_status {host, repositories:true}`. The inventory includes
+local Git state; ahead/behind does not fetch from the remote, and unknown dependency
+freshness does not mean dependencies are installed. An agent can pass the inventory's
+origin key as `repository: {key, candidateHosts}` to `goat_ssh_thread_launch` to
+refuse an unverified checkout and report matching candidates. This check does not
+copy uncommitted work or prepare stopped hosts. Use the canonical checkout path from
+the inventory; diagnosis does not browse aliases or wake candidate hosts.
+
+To give a worker sibling source code without mounting the sibling checkout, add
+`references: [{mode:"snapshot", repositoryKey:"example.com/team/sibling", files:["src/api.ts"]}]`
+to `goat_thread_launch` or `goat_ssh_thread_launch`. The worker receives the requested
+committed text, including local unpushed commits; dirty files are excluded. Use `checkout`
+from the inventory when more than one checkout matches, and `revision` to pin a local
+commit. For an SSH launch, an omitted source `host` means the selected host; `host:null`
+means the caller's machine. The source must already be ready and support snapshots.
+
+`goat_repository_snapshot` previews the same read. Capturing source requires an existing
+file-read grant or full-access caller authority, checked again before returning content.
+Snapshots support up to eight files, 16 KiB per file, 32 KiB per repository and 64 KiB per
+brief. Secret paths and credential-like assignments (including prefixed keys such as
+`DB_PASSWORD` and `AWS_SECRET_ACCESS_KEY`, with quoted or unquoted values after `:` or `=`), symlinks, submodules, binary content
+and partial clones are refused. This copies data only: it grants no source filesystem or
+host credential, and does not restrict permissions a worker already had.
 
 In the desktop app, save the host in **Settings → Connections**, then open a new
 thread in a project on this device. In the workspace menu, choose **Worktree on SSH**

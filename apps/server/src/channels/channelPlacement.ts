@@ -1,8 +1,8 @@
 /**
  * Where a channel task runs, chosen by remaining subscription quota and current load.
  *
- * A pure function so the same rule serves this machine, a named SSH host, and later a
- * repository-aware host filter (#218) that narrows the candidates before they are scored.
+ * The caller first limits candidates to ready accounts and eligible repositories, so the same
+ * rule serves this machine, a named SSH host, and opt-in placement across connected hosts.
  * The scoring follows GOAT Anywhere's router (lidge-jun/goat-anywhere `web/lib/router.ts`
  * at e551966): the busiest quota window counts, an account that reports nothing counts as
  * moderately used, and every task already running on a candidate adds a fixed penalty so
@@ -11,10 +11,13 @@
  * @module channelPlacement
  */
 
+import type { QuotaPool } from "@goat/contracts";
+
 /** Assumed use of an account that reports no quota windows. */
-const UNKNOWN_QUOTA_PERCENT = 35;
+export const UNKNOWN_QUOTA_PERCENT = 35;
 /** Added per task already running on the candidate. */
-const LOAD_PENALTY = 40;
+export const LOAD_PENALTY = 40;
+const QUOTA_MAX_AGE_MS = 5 * 60 * 1000;
 /** Reasons are cut to this length; the chip has room for one short line. */
 const PLACEMENT_REASON_CHARS = 200;
 
@@ -22,6 +25,7 @@ export interface PlacementWindow {
   readonly label: string;
   readonly usedPercent: number;
   readonly resetsAt?: string | undefined;
+  readonly scopeModel?: string | undefined;
 }
 
 export interface PlacementCandidate<A> {
@@ -34,8 +38,12 @@ export interface PlacementCandidate<A> {
   readonly preferred: boolean;
   /** Null when the account reports no quota. */
   readonly windows: ReadonlyArray<PlacementWindow> | null;
+  readonly checkedAt?: string | undefined;
   /** Tasks already running where this candidate would run. */
   readonly activeTasks: number;
+  readonly model?: string | undefined;
+  readonly quotaPool?: QuotaPool["providers"][number] | undefined;
+  readonly accountRef?: string | undefined;
 }
 
 export interface Placement<A> {
@@ -52,12 +60,40 @@ const exhaustedWindow = (window: PlacementWindow, now: number) => {
   return Number.isNaN(resets) || resets > now;
 };
 
+export function placementWindows(
+  candidate: PlacementCandidate<unknown>,
+): ReadonlyArray<PlacementWindow> {
+  const pool = candidate.quotaPool;
+  const windows =
+    pool === undefined
+      ? (candidate.windows ?? [])
+      : (candidate.accountRef === undefined
+          ? pool.pooled.windows
+          : (pool.accounts.find((account) => account.accountRef === candidate.accountRef)
+              ?.windows ?? [])
+        ).flatMap((window) => {
+          const usedPercent = window.exhausted === true ? 100 : window.usedPercent;
+          return usedPercent === undefined ? [] : [{ ...window, usedPercent }];
+        });
+  return windows.filter((window) => {
+    if (window.scopeModel === undefined) return true;
+    const model = candidate.model?.split("/").at(-1);
+    if (window.scopeModel === model || window.scopeModel === candidate.model) return true;
+    // OpenCodex also proves Claude family scopes; versioned models in that family share the limit.
+    if (window.scopeModel.startsWith("family:")) {
+      const family = window.scopeModel.slice("family:".length);
+      return model === family || model?.startsWith(`claude-${family}-`) === true;
+    }
+    return false;
+  });
+}
+
 export const isExhausted = (candidate: PlacementCandidate<unknown>, now: number) =>
-  candidate.windows?.some((window) => exhaustedWindow(window, now)) ?? false;
+  placementWindows(candidate).some((window) => exhaustedWindow(window, now));
 
 /** The busiest window, rounded, or null when none is reported. */
 export const busiestWindow = (candidate: PlacementCandidate<unknown>) => {
-  const windows = candidate.windows ?? [];
+  const windows = placementWindows(candidate);
   if (windows.length === 0) return null;
   const top = windows.reduce((left, right) =>
     right.usedPercent > left.usedPercent ? right : left,
@@ -83,9 +119,22 @@ const usedText = (window: { readonly label: string; readonly usedPercent: number
  * the reason says so. Undefined when there are no candidates.
  */
 export function choosePlacement<A>(
-  candidates: ReadonlyArray<PlacementCandidate<A>>,
+  input: ReadonlyArray<PlacementCandidate<A>>,
   now: number,
 ): Placement<A> | undefined {
+  const candidates = input.map((candidate) => {
+    const stale =
+      candidate.checkedAt !== undefined &&
+      (!Number.isFinite(Date.parse(candidate.checkedAt)) ||
+        now - Date.parse(candidate.checkedAt) > QUOTA_MAX_AGE_MS);
+    const windows = placementWindows(candidate).filter(
+      (window) =>
+        (window.resetsAt === undefined || !(Date.parse(window.resetsAt) <= now)) &&
+        (!stale || exhaustedWindow(window, now)),
+    );
+    // Score the filtered pool reading instead of reading the original pool again.
+    return { ...candidate, quotaPool: undefined, windows: windows.length ? windows : null };
+  });
   if (candidates.length === 0) return undefined;
   const open = candidates.filter((candidate) => !isExhausted(candidate, now));
   const allExhausted = open.length === 0;
@@ -115,10 +164,15 @@ export function choosePlacement<A>(
   }
   const skipped = candidates.filter((candidate) => isExhausted(candidate, now));
   // Nothing reported and nothing moved: the requester has nothing to read.
-  if (chosen.preferred && candidates.every((candidate) => candidate.windows === null)) {
+  if (
+    chosen.host === null &&
+    chosen.preferred &&
+    candidates.every((candidate) => placementWindows(candidate).length === 0)
+  ) {
     return { chosen, reason: undefined };
   }
-  if (candidates.length === 1 && used === null) return { chosen, reason: undefined };
+  if (chosen.host === null && candidates.length === 1 && used === null)
+    return { chosen, reason: undefined };
 
   const parts = [labelOf(chosen)];
   if (used !== null) {

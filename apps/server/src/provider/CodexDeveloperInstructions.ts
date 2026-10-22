@@ -1,7 +1,10 @@
 import { MEMORY_DATA_BOUNDARY_REMINDER } from "@goat/provider-core/server/memoryContext";
 import type { ProviderInteractionMode } from "@goat/contracts";
 import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
-import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import {
+  buildRuntimeInstructions,
+  COMPUTER_USE_INSTRUCTIONS,
+} from "@goat/provider-core/server/runtimeInstructions";
 
 import {
   GOAT_BROWSER_TOOL_INSTRUCTIONS,
@@ -22,6 +25,8 @@ The \`goat\` MCP server also exposes \`device_*\` tools for iOS Simulators and A
 export interface GoatToolAvailability {
   readonly browser: boolean;
   readonly device: boolean;
+  /** The managed `cua-driver` MCP server is attached to this turn. */
+  readonly computerUse?: boolean;
 }
 
 const normalizeAvailability = (
@@ -224,6 +229,15 @@ export function buildCodexAdditionalContext(
       kind: "application",
       value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
     },
+    // Its own entry keeps the runtime entry under the per-entry cap.
+    ...(typeof toolsAvailable !== "boolean" && toolsAvailable.computerUse === true
+      ? {
+          t3_code_runtime_computer_use: {
+            kind: "application" as const,
+            value: COMPUTER_USE_INSTRUCTIONS,
+          },
+        }
+      : {}),
     ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
   };
 }

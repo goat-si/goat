@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { isElectron } from "../../env";
+import { useNowWhile } from "../../hooks/useNowWhile";
 import { cn } from "../../lib/utils";
 import { useFleetCloudAgents, useFleetSnapshot } from "../../state/fleet";
 import { useFleetHostMetrics } from "../../state/fleetHostMetrics";
@@ -20,10 +21,17 @@ import { FleetCloudAgents } from "./FleetCloudAgents";
 import { FleetConsoleSlot } from "./FleetConsoleSlot";
 import { FleetGraph } from "./FleetGraph";
 import { fleetMachineSubtitle } from "./describeMachine";
-import { fleetConnectionLegend, UNKNOWN_FLEET_CONNECTION } from "./fleetConnection";
+import {
+  fleetConnectionLegend,
+  isFleetConnectionWait,
+  UNKNOWN_FLEET_CONNECTION,
+} from "./fleetConnection";
 import { FleetConnectionIcon } from "./FleetConnectionGlyph";
+import { fleetUncountedMachines } from "./fleetCount";
 import { fleetHeatDemo } from "./fleetHeatDemo";
+import { slowConnectionWaits } from "./fleetTelemetry";
 import { FleetThreadList, STATE_DOT, STATE_LABEL } from "./FleetThreadList";
+import { FleetUncountedHosts } from "./FleetUncountedHosts";
 
 const plural = (count: number, one: string, many = one + "s") =>
   count + " " + (count === 1 ? one : many);
@@ -71,6 +79,14 @@ export function FleetPage() {
   const { snapshot, connections, currentMachineId, loading } =
     demo === null ? live : { ...demo, loading: false };
   const heat = demo?.heat ?? liveHeat;
+  // A coarse check while an attempt has not yet turned slow; nothing ticks once it has.
+  const waiting = [...connections.values()].some((connection) =>
+    isFleetConnectionWait(connection.state),
+  );
+  const now = useNowWhile(waiting, 5_000);
+  const slowIds = [...slowConnectionWaits(connections, now)].join("\n");
+  // Derived from the joined ids, so the compiler keeps one Set until the slow set changes.
+  const slowMachineIds = new Set(slowIds === "" ? [] : slowIds.split("\n"));
   const [selected, setSelected] = useState<string | null>(null);
   const selectedMachine = snapshot.machines.find((machine) => machine.id === selected) ?? null;
   const toggleMachine = (machineId: string) =>
@@ -90,6 +106,7 @@ export function FleetPage() {
     tier !== "normal" && [...heat.values()].some((entry) => entry.tier === tier) ? [tier] : [],
   );
   const { totals } = snapshot;
+  const uncounted = fleetUncountedMachines(snapshot.machines, connections);
 
   return (
     <SidebarInset>
@@ -102,13 +119,14 @@ export function FleetPage() {
             <FleetConsoleSlot snapshot={snapshot} connections={connections} heat={heat} />
             <p className="text-sm text-muted-foreground" role="status">
               {totals.running + totals.attention === 0
-                ? "Nothing running on " + plural(totals.machines, "machine") + "."
+                ? "Nothing running on " + plural(totals.machines, "machine")
                 : plural(totals.running, "thread") +
                   " running, " +
                   totals.attention +
                   " need you, on " +
-                  plural(totals.machines, "machine") +
-                  "."}
+                  plural(totals.machines, "machine")}
+              {uncounted.length > 0 ? " " : null}
+              <FleetUncountedHosts hosts={uncounted} />.
               {totals.reported > 0
                 ? " " +
                   plural(totals.reported, "launch", "launches") +
@@ -124,6 +142,7 @@ export function FleetPage() {
                 selectedMachineId={selected}
                 onSelectMachine={toggleMachine}
                 heat={heat}
+                slowMachineIds={slowMachineIds}
               />
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-4 py-2 text-xs text-muted-foreground">
                 {(["running", "attention", "reported"] as const).map((state) => (

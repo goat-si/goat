@@ -1,3 +1,4 @@
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CLOUD_AGENT_PROVIDERS,
   type CloudAgentProvider,
@@ -50,6 +51,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as Project from "../project/ProjectService.ts";
 import * as HostSync from "../provider/ProviderHostSync.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as SshDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import {
   CAN_FOLLOW_REGISTERED,
@@ -221,6 +223,8 @@ export const listCloudRuns = (input: CloudRunListInput) =>
   );
 
 const make = Effect.gen(function* () {
+  const permissions = yield* Profiles.PermissionProfiles;
+  const settings = yield* ServerSettings.ServerSettingsService;
   const hostSync = yield* HostSync.ProviderHostSync;
   const registry = yield* ProviderRegistry.ProviderRegistry;
   const hosts = yield* HostThreads.HostThreadsMcpService;
@@ -285,14 +289,22 @@ const make = Effect.gen(function* () {
       holderFromCloudCell({ provider: driver, host, runtime, cell: cloud[driver] }),
     );
 
-  const notReadyLocal = (provider: CloudAgentProvider | undefined): ReadonlyArray<CloudHolder> =>
-    providersOf(provider).map((driver) => ({
-      provider: driver,
-      host: null,
-      ready: false,
-      runtime: "current" as const,
-      reason: "Could not read this environment's provider settings.",
-    }));
+  /** The hub keeps its claim when its matrix fails, so the launch cannot drift to another account. */
+  const notReadyLocal = (provider: CloudAgentProvider | undefined) =>
+    settings.getSettings.pipe(
+      Effect.map(({ hub }) => hub.enabled && hub.cloudHolder === "hub"),
+      Effect.orElseSucceed(() => false),
+      Effect.map((hub): ReadonlyArray<CloudHolder> =>
+        providersOf(provider).map((driver) => ({
+          provider: driver,
+          host: null,
+          ready: false,
+          runtime: "current" as const,
+          reason: "Could not read this environment's provider settings.",
+          ...(hub ? { hub: true } : {}),
+        })),
+      ),
+    );
 
   const localHolders = Effect.fn("CloudAgentService.localHolders")(function* (
     scope: McpInvocationScope,
@@ -303,12 +315,13 @@ const make = Effect.gen(function* () {
         const row = result.rows.find((item) => item.host === null) ?? result.rows[0];
         return row?.cloud === undefined
           ? notReadyLocal(provider)
-          : holdersFromCloud(row.cloud, null, "current", provider);
+          : Effect.succeed(holdersFromCloud(row.cloud, null, "current", provider));
       }),
+      Effect.flatten,
       Effect.catch((error) =>
         error._tag === "EnvironmentAuthorizationError"
           ? Effect.fail(failure("capability_denied", error.message))
-          : Effect.succeed(notReadyLocal(provider)),
+          : notReadyLocal(provider),
       ),
     );
   });
@@ -512,9 +525,17 @@ const make = Effect.gen(function* () {
 
   const launch: CloudAgentServiceShape["launch"] = Effect.fn("CloudAgentService.launch")(
     function* (scope, input, modes) {
+      const effective = yield* permissions.require(scope, "cloud.launch");
       const holder = yield* pick(scope, input.provider, input.holder);
+      if (holder.host !== null)
+        yield* permissions.require(scope, "cloud.launch", { host: holder.host });
       if (input.dryRun === true) return { holder, dryRun: true };
       if (holder.host !== null) {
+        if (effective.enabled)
+          return yield* failure(
+            "capability_denied",
+            "Remote cloud holders cannot yet preserve goatclaw lane accounting. Select a local holder, or launch a profiled thread on the holder with goat_ssh_thread_launch.",
+          );
         const result = yield* hosts.writeOnHost(
           scope,
           {
@@ -529,6 +550,11 @@ const make = Effect.gen(function* () {
       const project = yield* projectFor(input.repo);
       const instanceId = holder.instanceId ?? ProviderInstanceId.make(input.provider);
       const started = yield* modes;
+      const model = yield* modelFor(instanceId);
+      yield* permissions.requireCloudApproval(scope, effective, {
+        decisionId: input.decisionId,
+        target: `${input.provider}@local`,
+      });
       const launched = yield* launches
         .launch(
           scope,
@@ -536,7 +562,7 @@ const make = Effect.gen(function* () {
             projectId: project.id,
             title:
               input.title ?? `${CLOUD_AGENT_LABELS[input.provider]}: ${input.prompt.slice(0, 60)}`,
-            modelSelection: { instanceId, model: yield* modelFor(instanceId) },
+            modelSelection: { instanceId, model },
             workspaceStrategy: {
               type: "root",
               ...(input.branch === undefined ? {} : { branch: input.branch }),
@@ -546,6 +572,7 @@ const make = Effect.gen(function* () {
             ...(input.notifyWebhook === undefined ? {} : { notifyWebhook: input.notifyWebhook }),
           },
           started,
+          { approved: true },
         )
         .pipe(Effect.mapError(mapLaunchError));
       return {
@@ -753,4 +780,4 @@ const make = Effect.gen(function* () {
   return CloudAgentService.of({ holders, launch, register, list, forget });
 });
 
-export const layer = Layer.effect(CloudAgentService, make);
+export const layer = Layer.effect(CloudAgentService, make).pipe(Layer.provide(Profiles.layer));

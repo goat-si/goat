@@ -376,6 +376,17 @@ export interface OrchestratorV2DispatchResult {
   readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
 }
 
+/** Server-only precondition checked under the command lock before fallback changes a selection. */
+export const FallbackSelectionSource = Context.Reference<
+  | {
+      readonly runId: RunId;
+      readonly modelSelection: ModelSelection;
+    }
+  | undefined
+>("goat/orchestration-v2/Orchestrator/FallbackSelectionSource", {
+  defaultValue: () => undefined,
+});
+
 export interface OrchestratorV2Shape {
   readonly resumeQueuedRuns: Effect.Effect<number, OrchestratorV2Error>;
   readonly recoverDelegatedTasks: Effect.Effect<void>;
@@ -489,6 +500,25 @@ export class OrchestratorV2 extends Context.Service<OrchestratorV2, Orchestrator
 ) {}
 
 /** Run ordinals can skip values: a queued run moves past newer runs when it starts. */
+/** A metadata update that only records where the tool history lives. */
+function isHistoryArchiveOnlyUpdate(
+  command: Extract<OrchestrationV2Command, { readonly type: "thread.metadata.update" }>,
+): boolean {
+  const {
+    type: _type,
+    commandId: _commandId,
+    threadId: _threadId,
+    historyArchive,
+    ...rest
+  } = command;
+  return historyArchive !== undefined && Object.values(rest).every((value) => value === undefined);
+}
+
+function withoutHistoryArchive<T extends { readonly historyArchive?: unknown }>(thread: T) {
+  const { historyArchive: _historyArchive, ...rest } = thread;
+  return rest;
+}
+
 function nextRunOrdinal(projection: Pick<OrchestrationV2ThreadProjection, "runs">): number {
   return projection.runs.reduce((max, run) => Math.max(max, run.ordinal), 0) + 1;
 }
@@ -2963,6 +2993,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} is deleted.`,
       });
     }
+    if (command.type === "thread.model-selection.set" || command.type === "provider.switch") {
+      const source = yield* FallbackSelectionSource;
+      if (source !== undefined) {
+        const { runs, runtimeRequests } = yield* projectionStore
+          .getThreadRecords(command.threadId, ["runs", "runtimeRequests"])
+          .pipe(mapDispatchError(command));
+        const latest = latestExecutedRun(runs);
+        const now = yield* DateTime.now;
+        if (
+          latest?.id !== source.runId ||
+          latest.status !== "failed" ||
+          !modelSelectionsEqual(thread.modelSelection, source.modelSelection) ||
+          (yield* stopReachedRun(command, command.threadId, source.runId)) ||
+          runs.some((run) => run.status === "queued") ||
+          runtimeRequests.some((request) => request.status === "pending") ||
+          thread.archivedAt !== null ||
+          thread.settledOverride === "settled" ||
+          (thread.snoozedUntil != null &&
+            DateTime.toEpochMillis(thread.snoozedUntil) > DateTime.toEpochMillis(now))
+        )
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The fallback source changed before model selection.",
+          });
+      }
+    }
     if (
       command.type === "thread.pull-request.watch" &&
       command.watching &&
@@ -3514,7 +3571,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     requestId: command.commandId,
                   };
           return {
-            ...thread,
+            ...(command.historyArchive === null ? withoutHistoryArchive(thread) : thread),
             ...(command.title === undefined ? {} : { title: command.title }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.limitRecovery !== undefined &&
@@ -3567,7 +3624,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               : command.regenerateTitle === false || command.title !== undefined
                 ? { titleRegeneration: null }
                 : {}),
-            updatedAt: now,
+            ...(command.historyArchive == null ? {} : { historyArchive: command.historyArchive }),
+            // Moving history to or from the archive is housekeeping, not activity: keeping
+            // updatedAt keeps the thread idle and in place in every list.
+            updatedAt: isHistoryArchiveOnlyUpdate(command) ? thread.updatedAt : now,
           };
         }
         case "thread.pull-request.link":
@@ -5230,6 +5290,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const latest = latestExecutedRun(projection.runs);
       if (
         latest?.id !== command.automatedContinuationOfRunId ||
+        (yield* stopReachedRun(command, command.threadId, latest.id)) ||
+        (command.modelSelection !== undefined &&
+          !modelSelectionsEqual(command.modelSelection, projection.thread.modelSelection)) ||
         latest.status !== "failed" ||
         projection.runs.some((run) => run.status === "queued") ||
         projection.thread.archivedAt !== null ||
@@ -10410,7 +10473,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly now: DateTime.Utc;
   }) {
     const { command, events, thread, run, now } = input;
-    if (run.rootNodeId === null || run.providerThreadId === null) return;
+    // Startup failures can be recoverable before a provider thread has attached.
+    if (run.rootNodeId === null) return;
     const pendingItems = (yield* Ref.get(events)).flatMap((event) =>
       event.type === "turn-item.updated" ? [event.payload] : [],
     );

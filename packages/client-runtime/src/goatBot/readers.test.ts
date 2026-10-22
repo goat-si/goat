@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   OrchestrationV2TurnItemJson,
   ThreadId,
+  RunId,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
@@ -40,6 +41,7 @@ describe("presentTaskChip", () => {
       updatedAt: "2026-10-12T12:01:00.000Z",
       summary: null,
       attentionLabel: null,
+      evidenceLabels: [],
       pullRequests: [],
       target: { kind: "thread", environmentId: "env", threadId: "worker" },
     });
@@ -152,6 +154,17 @@ describe("presentTaskChip", () => {
         chip({ originKind: "slack", worker, placementReason: "Codex · 46% weekly used" }),
       ).sourceLabel,
     ).toBe("Slack · Jun · on mac-studio · Codex · 46% weekly used");
+    expect(
+      presentTaskChip(chip({ worker, placementReason: "mac-studio · Codex · 20% weekly used" }))
+        .sourceLabel,
+    ).toBe("Jun · on mac-studio · Codex · 20% weekly used");
+    expect(
+      presentTaskChip({
+        ...noWorker,
+        status: "dispatching",
+        placementReason: "mac-studio · Codex · 20% weekly used",
+      }).sourceLabel,
+    ).toBe("Jun · mac-studio · Codex · 20% weekly used");
   });
 
   it("counts open questions and drops an empty summary", () => {
@@ -401,5 +414,81 @@ describe("memory report navigation", () => {
   });
   it("does not create navigation from malformed metadata", () => {
     expect(timeline({ ...memory, memoryId: "malformed" })[0]).not.toHaveProperty("memory");
+  });
+});
+
+describe("reported tests and observed checks", () => {
+  const evidenceChip = (
+    observedCheck: NonNullable<NonNullable<ChannelTaskChip["observed"]>["result"]>["observedCheck"],
+    pending = false,
+  ) =>
+    chip({
+      status: "completed",
+      completionReport: "present",
+      observed: {
+        pullRequests: [],
+        needsYou: [],
+        result: {
+          runId: RunId.make("run-check"),
+          tests: { ok: true, passed: 12 },
+          observedCheckPending: pending,
+          ...(observedCheck === undefined ? {} : { observedCheck }),
+        },
+      },
+    });
+  it.each([
+    ["running", null, "GOAT check: running"],
+    ["completed", 0, "GOAT check: passed"],
+    ["completed", 3, "GOAT check: failed (exit 3)"],
+    ["completed", null, "GOAT check: finished without an exit code"],
+    ["timed_out", null, "GOAT check: timed out"],
+    ["interrupted", null, "GOAT check: interrupted"],
+    ["skipped", null, "GOAT check: skipped"],
+  ] as const)("keeps Done and reported pass beside %s / %s", (status, exitCode, label) => {
+    const card = presentTaskChip(
+      evidenceChip({
+        status,
+        exitCode,
+        command: "vp test run",
+        durationMs: null,
+        at: "2026-10-12T00:00:00.000Z",
+      }),
+    );
+    expect(card.statusLabel).toBe("Done");
+    expect(card.tone).toBe("success");
+    expect(card.evidenceLabels).toEqual(["Reported tests: passed", label]);
+  });
+  it("never presents an absent check as a pass and retains diagnostic skip reasons", () => {
+    expect(
+      presentTaskChip(
+        chip({
+          observed: {
+            pullRequests: [],
+            needsYou: [],
+            result: { runId: RunId.make("older-run"), tests: { ok: true } },
+          },
+        }),
+      ).evidenceLabels,
+    ).toEqual(["Reported tests: passed", "GOAT check: not available"]);
+    expect(presentTaskChip(evidenceChip(undefined, true)).evidenceLabels).toEqual([
+      "Reported tests: passed",
+      "GOAT check: pending",
+    ]);
+    expect(presentTaskChip(evidenceChip(undefined)).evidenceLabels).toEqual([
+      "Reported tests: passed",
+      "GOAT check: not run",
+    ]);
+    expect(
+      presentTaskChip(
+        evidenceChip({
+          status: "skipped",
+          skipReason: "shared-checkout",
+          command: "vp test run",
+          exitCode: null,
+          durationMs: null,
+          at: "2026-10-12T00:00:00.000Z",
+        }),
+      ).evidenceLabels,
+    ).toEqual(["Reported tests: passed", "GOAT check: skipped (shared checkout)"]);
   });
 });

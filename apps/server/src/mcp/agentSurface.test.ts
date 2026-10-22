@@ -1,3 +1,8 @@
+import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.ts";
+import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
+import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
+import { DecisionToolkit } from "./toolkits/decision/tools.ts";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 import * as NotesService from "../notes/NotesService.ts";
 import * as SshDeviceAdd from "../sshRemote/SshDeviceAdd.ts";
@@ -29,6 +34,8 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Settings from "../serverSettings.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
+import * as HubParity from "../hub/HubParity.ts";
+import * as HubMembership from "../hub/HubMembership.ts";
 import * as GoalService from "../fleet/goals/GoalService.ts";
 import * as FleetFallback from "../fleet/resources/Fallback.ts";
 import * as FleetPlacement from "../fleet/resources/Placement.ts";
@@ -89,10 +96,15 @@ import { RemoteReportToolkit } from "./toolkits/remoteReport/tools.ts";
 import { SshToolkit } from "./toolkits/ssh/tools.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
 
 const toolkits = {
+  decision: DecisionToolkit,
   attachment: AttachmentToolkit,
   channel: ChannelToolkit,
+  computerUse: ComputerUseToolkit,
   note: NoteToolkit,
   connection: ConnectionToolkit,
   device: DeviceToolkit,
@@ -122,12 +134,16 @@ const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistrations))
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const dependencies = Layer.mergeAll(
+  Layer.mock(DecisionInbox.DecisionInbox)({}),
+  Layer.mock(Profiles.PermissionProfiles)({}),
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
   Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({}),
   Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
   Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+  Layer.mock(ComputerUseLeases.ComputerUseLeases)({ proxy: undefined }),
+  Layer.mock(Handoffs.Handoffs)({}),
   ServerConfig.layerTest("/tmp/agent-surface-catalog", "/tmp/agent-surface-catalog").pipe(
     Layer.provide(Path.layer),
     Layer.provide(FileSystem.layerNoop({ makeDirectory: () => Effect.void })),
@@ -149,6 +165,8 @@ const dependencies = Layer.mergeAll(
   Layer.mock(Settings.ServerSettingsService)({}),
   Layer.mock(ThreadCommandExecutor.ThreadCommandExecutor)({}),
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
+  Layer.mock(HubParity.HubParity)({}),
+  Layer.mock(HubMembership.HubMembership)({}),
   Layer.mock(GoalService.GoalService)({}),
   Layer.mock(FleetFallback.FallbackChains)({}),
   Layer.mock(FleetPlacement.Placement)({}),
@@ -192,6 +210,8 @@ const dependencies = Layer.mergeAll(
   Layer.mock(Rescheduler.Rescheduler)({}),
   Layer.mock(SshHostSetup.SshHostSetup)({}),
   Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+  Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+  Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
   Layer.mock(LaunchWatchService.LaunchWatchService)({}),
   Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
   Layer.mock(PendingQuestionsMcpService.PendingQuestionsMcpService)({}),
@@ -221,7 +241,7 @@ const client = McpSchema.McpServerClient.of({
 });
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(174); // Includes current memory, browser, provider, SSH runtime, GOAT Bot home, fleet goal, resource and health, and notes tools.
+  expect(entries).toHaveLength(190); // Includes current memory, browser, provider, SSH runtime, GOAT Bot home, fleet goal, resource and health, notes, hub, permission profile, computer use, decision, and lane tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);

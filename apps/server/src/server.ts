@@ -1,3 +1,7 @@
+import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
+import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
+import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
+import * as PendingQuestionsMcpService from "./mcp/PendingQuestionsMcpService.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the closed import factory requires a synchronous UUID callback.
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -28,11 +32,13 @@ import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.
 import * as GoalLayers from "./fleet/goals/GoalLayers.ts";
 import * as FleetHealth from "./fleet/health/layer.ts";
 import * as HandoffExpiry from "./handoffs/HandoffExpiry.ts";
+import * as HubDown from "./hub/HubDown.ts";
 import * as HubNodeRepository from "./hubNodes/HubNodeRepository.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
 import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
 import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
+import * as ThreadReplicaService from "./mcp/ThreadReplicaService.ts";
 import * as McpToolAccess from "./mcp/McpToolAccess.ts";
 import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
 import * as ThreadLaunchMcpService from "./mcp/ThreadLaunchMcpService.ts";
@@ -70,6 +76,9 @@ import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQ
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as ThreadArchiveGate from "./orchestration-v2/ThreadArchiveGate.ts";
+import * as ThreadHistoryArchive from "./orchestration-v2/ThreadHistoryArchive.ts";
+import * as ThreadHistoryArchiveLabels from "./orchestration-v2/ThreadHistoryArchiveLabels.ts";
 import * as ProviderDiagnosisRouting from "./provider/ProviderDiagnosisRouting.ts";
 import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
 import * as RemoteDispatchCoordinator from "./remoteReports/RemoteDispatchCoordinator.ts";
@@ -149,10 +158,14 @@ import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as ServerConfig from "./config.ts";
+import * as CuaDriver from "./cua/CuaDriver.ts";
+import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
+import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
@@ -160,6 +173,7 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as FleetFallback from "./fleet/resources/Fallback.ts";
+import * as FleetPressure from "./fleet/pressure/PressureNudger.ts";
 import * as FleetPlacement from "./fleet/resources/Placement.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -345,10 +359,29 @@ const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
 // move lock. It gets the power monitor background policy uses, so suspend and resume reach it.
 const layerFleetHealth = FleetHealth.layer.pipe(Layer.provide(layerHostPowerMonitor));
 
+// Notices to orchestrating threads and launch advice; reads the monitor host status exposes.
+const layerPressureAdmission = FleetPressure.layerAdmission.pipe(
+  Layer.provide(HostPressureMonitor.layer),
+);
+const layerFleetPressure = FleetPressure.layer.pipe(
+  Layer.provide(layerFleetHealth),
+  Layer.provideMerge(layerPressureAdmission),
+);
+const layerThreadReplicas = ThreadReplicaService.layer.pipe(Layer.provide(layerPressureAdmission));
+const layerLaunchWatches = LaunchWatchService.layer.pipe(
+  Layer.provideMerge(layerThreadReplicas),
+  Layer.provide(layerPressureAdmission),
+);
+
 // Reuses DesktopTelemetryReceiverLayerLive: a fresh receiver layer here
 // would open a second reader on the desktop telemetry fd.
 const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
+);
+
+const layerCuaDriver = CuaDriver.layer.pipe(
+  Layer.provide(layerDesktopTelemetryReceiver),
+  Layer.provide(layerServerSettings),
 );
 
 const layerBackground = BackgroundPolicy.layer.pipe(
@@ -1106,10 +1139,13 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   WorktreeCheckoutHealth.layer.pipe(Layer.provide(ProcessRunner.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
+    Layer.provide(ThreadHistoryArchive.layer),
     Layer.provide(
       Layer.merge(EventStoreV2.layerFromOrchestrationEventStore, ProjectionStoreV2.layer),
     ),
   ),
+  ThreadHistoryArchiveLabels.layer.pipe(Layer.provide(ThreadHistoryArchive.layer)),
+  StrayProcesses.layer.pipe(Layer.provide(ProcessRunner.layer)),
   layerThreadPullRequestWorker,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
@@ -1169,7 +1205,27 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerCloudMachines),
   // Hosts linked over HTTPS, for the same SshRemoteDispatch builds and the MCP link tools.
   Layer.provideMerge(LinkedHosts.layer),
-  Layer.provideMerge(layerOrchestrationApplication),
+  Layer.provideMerge(
+    DecisionInbox.layerRunning.pipe(
+      Layer.provideMerge(DecisionInbox.layer),
+      Layer.provide(PermissionProfiles.layer),
+      Layer.provide(
+        PendingQuestionsMcpService.layer.pipe(
+          Layer.provide(HostThreadsMcpService.layer),
+          Layer.provide(
+            OrchestratorMcpService.layer.pipe(
+              Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+            ),
+          ),
+          Layer.provide(ThreadResultService.layer),
+        ),
+      ),
+      Layer.provide(RemoteDispatchCoordinator.layer),
+      Layer.provide(layerLaunchWatches),
+      Layer.provide(SshRemoteDispatch.layer),
+      Layer.provideMerge(layerOrchestrationApplication),
+    ),
+  ),
   Layer.provideMerge(
     RuntimeDrain.layer.pipe(
       // One instance, shared with the auto-update scheduler, so arbitration sees its target.
@@ -1182,17 +1238,18 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ),
   ),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
-  Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  // pipe takes at most 20 steps, so the Cua Driver joins this merge.
+  Layer.provideMerge(
+    Layer.mergeAll(ProjectStore.layer, ThreadSearch.layer, layerCuaDriver, ComputerUseLeases.layer),
+  ),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),
   Layer.provideMerge(layerVcs),
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
   Layer.provideMerge(layerPersistence),
-  Layer.provideMerge(
-    Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
-  ),
-  Layer.provideMerge(ProviderRegistry.layer),
+  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer)),
+  Layer.provideMerge(Layer.merge(ProviderRegistry.layer, UsageLimitSources.layer)),
   (application) =>
     provideMemorySnapshot(
       application,
@@ -1319,13 +1376,16 @@ const layerMakeRoutes = Layer.mergeAll(
     Ws.layer,
   ),
   Layer.mergeAll(
-    McpHttpServer.layer.pipe(Layer.provide(layerFleetHealth)),
+    McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
+    ComputerUseLeaseRoute.layer,
     layerMemoryToolkits,
     McpHttpServer.layerProviderToolkit,
     HandoffExpiry.layer,
     // Fleet goals act through the same launch, watch and dispatch services as these tools.
     McpHttpServer.layerFleetToolkit.pipe(
-      Layer.provide(GoalLayers.layer.pipe(Layer.provideMerge(layerFleetHealth))),
+      Layer.provide(
+        GoalLayers.layer.pipe(Layer.provide(HubDown.layer), Layer.provideMerge(layerFleetHealth)),
+      ),
     ),
   ).pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
@@ -1401,7 +1461,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
-  Layer.provide(LaunchWatchService.layer),
+  Layer.provide(layerLaunchWatches),
   Layer.provide(SshRemoteDispatch.layer),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
@@ -1433,6 +1493,12 @@ const layerMakeServer = Layer.unwrap(
     const activation = yield* Deferred.make<void>();
     const awaitActivation = Deferred.await(activation);
     const layerActivation = Layer.succeed(ServerActivation.ServerActivation, awaitActivation);
+    // One slot for the whole server: every projection store reads through it, and the archive
+    // service fills it once it has loaded which threads are archived.
+    const layerArchiveGate = Layer.succeed(
+      ThreadArchiveGate.ThreadArchiveGate,
+      ThreadArchiveGate.makeThreadArchiveGateSlot(),
+    );
     const runtimeStateParked = yield* Deferred.make<void>();
     const tailscaleParked = yield* Deferred.make<void>();
     const cloudLinkParked = yield* Deferred.make<void>();
@@ -1587,6 +1653,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(layerRuntimeServices),
       Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(layerServerEnvironment))),
       Layer.provide(layerActivation),
+      Layer.provide(layerArchiveGate),
       Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),
       Layer.provide(

@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { connectionRoutes } from "@goat/client-runtime/connection";
+import { connectionProgressLabel, connectionRoutes } from "@goat/client-runtime/connection";
 import {
   buildFleet,
   createFleetSummaryAtom,
@@ -19,6 +19,7 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import {
+  isFleetConnectionWait,
   presentFleetConnection,
   presentFleetMachineConnection,
   UNKNOWN_FLEET_CONNECTION,
@@ -113,18 +114,39 @@ export function useFleetSummary(): FleetSummary {
 
 /**
  * Only what the graph shows of a connection, so the page rebuilds when a host's
- * state or reason changes, not on every step of a connection attempt.
+ * state, reason or named step changes, not on every retry countdown tick. It keeps when the
+ * state began, so a wait can say how long it has lasted.
  */
 const fleetConnectionAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make((get): FleetConnection | null => {
     const connection = get(environmentPresentations.presentationAtom(environmentId))?.connection;
-    const next = connection === undefined ? null : presentFleetConnection(connection);
+    const presented = connection === undefined ? null : presentFleetConnection(connection);
     const previous = Option.getOrNull(get.self<FleetConnection | null>());
+    const step =
+      presented === null || connection === undefined || !isFleetConnectionWait(presented.state)
+        ? null
+        : connection.retryAt != null
+          ? "Waiting to retry"
+          : connectionProgressLabel({ ...connection, retryAt: null }, 0);
+    const next =
+      presented === null
+        ? null
+        : {
+            ...presented,
+            step,
+            since:
+              previous !== null &&
+              previous.state === presented.state &&
+              previous.since !== undefined
+                ? previous.since
+                : Date.now(),
+          };
     return previous !== null &&
       next !== null &&
       previous.state === next.state &&
       previous.label === next.label &&
-      previous.reason === next.reason
+      previous.reason === next.reason &&
+      previous.step === next.step
       ? previous
       : next;
   }).pipe(Atom.withLabel(`fleet-connection:${environmentId}`)),
@@ -190,6 +212,7 @@ function snapshotKey(
       machine.label,
       machine.subtitle,
       machine.boat,
+      machine.answering,
       machine.os,
       machine.machineKind,
       machine.running,
@@ -205,7 +228,13 @@ function snapshotKey(
         agent.reported,
       ]),
     ]),
-    snapshot.threads.map((thread) => [thread.key, thread.title, thread.state, thread.agentKey]),
+    snapshot.threads.map((thread) => [
+      thread.key,
+      thread.title,
+      thread.state,
+      thread.agentKey,
+      thread.subagents.map((subagent) => [subagent.key, subagent.title, subagent.status]),
+    ]),
   ]);
 }
 

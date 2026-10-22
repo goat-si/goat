@@ -19,7 +19,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import { readObservedCheck } from "./ObservedCheckService.ts";
+import { readObservedCheck, readObservedCheckState } from "./ObservedCheckService.ts";
 
 export class ThreadResultError extends Schema.TaggedError<ThreadResultError>()(
   "ThreadResultError",
@@ -122,11 +122,8 @@ const ReportRow = Schema.Struct({
 const decodeRows = Schema.decodeUnknownEffect(Schema.Array(ReportRow));
 const encodeReport = Schema.encodeEffect(Schema.fromJsonString(ThreadResultReport));
 
-/**
- * The report an agent stored for one run, or null when it never reported. Channel settlement
- * and remote run observation read this without the rest of the merged result.
- */
-export const readStoredThreadResultReport = (threadId: ThreadId, runId: RunId) =>
+/** The agent's report is independent of any check the host runs. */
+const readStoredThreadResultReport = (threadId: ThreadId, runId: RunId) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const rows = yield* sql`
@@ -139,6 +136,31 @@ export const readStoredThreadResultReport = (threadId: ThreadId, runId: RunId) =
       : ({ report: row.reportJson, reportedAt: row.reportedAt } satisfies StoredThreadResultReport);
   }).pipe(Effect.mapError((cause) => new ThreadResultError({ reason: "storage", cause })));
 
+/** Reuses an already-read projection when observing local or remote channel workers. */
+export const readThreadResult = Effect.fn("ThreadResultService.readThreadResult")(function* (
+  thread: Pick<OrchestrationV2AppThread, "id" | "branch" | "pullRequests" | "linkedPullRequest">,
+  run: Pick<OrchestrationV2Run, "id" | "status">,
+) {
+  const checkState = yield* readObservedCheckState(thread.id, run.id).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("thread check evidence unreadable", {
+        threadId: thread.id,
+        runId: run.id,
+        cause,
+      }).pipe(Effect.as({ check: null, pending: true })),
+    ),
+  );
+  return {
+    ...buildThreadResult({
+      thread,
+      run,
+      stored: yield* readStoredThreadResultReport(thread.id, run.id),
+      observedCheck: checkState.check,
+    }),
+    observedCheckPending: run.status === "completed" && checkState.pending,
+  };
+});
+
 const make = Effect.gen(function* () {
   const reports = yield* PubSub.unbounded<ThreadId>();
   yield* Effect.addFinalizer(() => PubSub.shutdown(reports));
@@ -149,10 +171,6 @@ const make = Effect.gen(function* () {
   const load = (threadId: ThreadId) =>
     threads.getThreadRecords(threadId, ["runs"]).pipe(Effect.mapError(storage));
 
-  const storedReport = (threadId: ThreadId, runId: RunId) =>
-    readStoredThreadResultReport(threadId, runId).pipe(
-      Effect.provideService(SqlClient.SqlClient, sql),
-    );
   const observedCheck = (threadId: ThreadId, runId: RunId) =>
     readObservedCheck(threadId, runId).pipe(
       Effect.provideService(SqlClient.SqlClient, sql),
@@ -169,12 +187,9 @@ const make = Effect.gen(function* () {
         ? ThreadManagementService.latestRun(records)
         : records.runs.find((candidate) => candidate.id === runId);
     if (run === undefined) return null;
-    return buildThreadResult({
-      thread: records.thread,
-      run,
-      stored: yield* storedReport(threadId, run.id),
-      observedCheck: yield* observedCheck(threadId, run.id),
-    });
+    return yield* readThreadResult(records.thread, run).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+    );
   });
 
   const report = Effect.fn("ThreadResultService.report")(function* (

@@ -7,6 +7,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShell,
   ThreadId,
+  type ThreadResult,
   RemoteReportBindingInput,
   RemoteReport,
   RemoteRelaySend,
@@ -33,7 +34,7 @@ import {
   isTerminalRunStatus,
   pendingUserInputRequestIdsForRun,
 } from "../orchestration-v2/ThreadManagementService.ts";
-import { readStoredThreadResultReport } from "../threadResults/ThreadResultService.ts";
+import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import {
   completionHoldCount,
   needsYouFromRuntimeRequests,
@@ -319,7 +320,11 @@ const make = Effect.gen(function* () {
         let watchedChildThreadIds: ReadonlyArray<ThreadId> = [];
         // A live run's open questions; what still holds a finished run's thread open; and what
         // the thread shows besides its run status, read as the origin reads a local worker.
-        const runState = (run: OrchestrationV2Run, shell: OrchestrationV2ThreadShell) =>
+        const runState = (
+          run: OrchestrationV2Run,
+          shell: OrchestrationV2ThreadShell,
+          result: ThreadResult | null,
+        ) =>
           Effect.gen(function* () {
             const requests = yield* orchestrator
               .getThreadRecords(binding.threadId, ["runtimeRequests", "subagents"])
@@ -365,7 +370,7 @@ const make = Effect.gen(function* () {
                         },
                         run.id,
                       ),
-                observation: observeWorker({ pullRequests, needsYou }),
+                observation: observeWorker({ pullRequests, needsYou, result }),
               };
             }
             const records = yield* orchestrator
@@ -388,6 +393,7 @@ const make = Effect.gen(function* () {
                 continuationPending,
               },
               observation: observeWorker({
+                result,
                 pullRequests,
                 needsYou: [...needsYou, ...(limit?.needsYou === undefined ? [] : [limit.needsYou])],
                 usageLimitResetAt: limit?.resetAt,
@@ -424,6 +430,14 @@ const make = Effect.gen(function* () {
               .pipe(Effect.mapError(unavailable));
             const run = records.runs.find((candidate) => candidate.id === runId);
             if (run === undefined) return yield* new RemoteReportError({ reason: "run_not_found" });
+            const result = yield* readThreadResult(shell, run).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+              Effect.catch((cause) =>
+                isTerminalRunStatus(run.status)
+                  ? Effect.fail(unavailable(cause))
+                  : Effect.succeed(null),
+              ),
+            );
             let summary: string | null = null;
             let reported: RemoteReportedOutcome | undefined;
             if (isTerminalRunStatus(run.status)) {
@@ -444,14 +458,10 @@ const make = Effect.gen(function* () {
                   .at(-1)
                   ?.text.slice(0, REMOTE_REPORT_SUMMARY_MAX_CHARS) ?? null;
               // The origin settles a completed run from the worker's own report.
-              const stored = yield* readStoredThreadResultReport(binding.threadId, runId).pipe(
-                Effect.provideService(SqlClient.SqlClient, sql),
-                Effect.mapError(unavailable),
-              );
-              if (stored !== null) {
-                const reportedSummary = stored.report.summary?.trim();
+              if (result !== null && result.reportedAt !== null && result.outcome !== null) {
+                const reportedSummary = result.summary?.trim();
                 reported = {
-                  outcome: stored.report.outcome,
+                  outcome: result.outcome,
                   ...(reportedSummary === undefined || reportedSummary === ""
                     ? {}
                     : { summary: reportedSummary.slice(0, REMOTE_REPORT_SUMMARY_MAX_CHARS) }),
@@ -462,7 +472,7 @@ const make = Effect.gen(function* () {
               runId,
               status: run.status,
               summary,
-              ...(yield* runState(run, shell)),
+              ...(yield* runState(run, shell, result)),
               ...(reported === undefined ? {} : { reported }),
             };
           }

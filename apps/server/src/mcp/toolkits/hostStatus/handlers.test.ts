@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
+import * as HubParity from "../../../hub/HubParity.ts";
 import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -27,10 +28,12 @@ const outsideCaller = (
 const testLayer = (
   caller: McpInvocationContext.McpInvocationScope,
   read: HostStatusMcpService.HostStatusMcpServiceShape["read"],
+  verify: HubParity.HubParity["Service"]["verify"] = () => Effect.die("Unexpected verify"),
 ) =>
   McpToolAccess.HandlersLayer.layer(Handlers.layer).pipe(
     Layer.provideMerge(Layer.succeed(McpInvocationContext.McpInvocationContext, caller)),
     Layer.provideMerge(liveThreadsLayer),
+    Layer.provideMerge(Layer.mock(HubParity.HubParity)({ verify })),
     Layer.provideMerge(Layer.mock(HostStatusMcpService.HostStatusMcpService)({ read })),
   );
 
@@ -112,3 +115,45 @@ it.effect("lets a live thread caller read one host", () => {
     ),
   );
 });
+
+it.effect("parity verification refuses a read-only client before reaching SSH", () =>
+  Effect.gen(function* () {
+    const toolkit = yield* HostStatusToolkit;
+    const result = yield* toolkit
+      .handle("goat_hub_device_verify", { deviceAlias: "mac-studio" })
+      .pipe(Stream.unwrap, Stream.runCollect);
+    expect(result.at(-1)?.result).toMatchObject({ code: "capability_denied" });
+  }).pipe(
+    Effect.provide(testLayer(outsideCaller("read-only"), () => Effect.die("Unexpected status"))),
+  ),
+);
+
+it.effect("a full-access caller receives the service verdict without repair", () =>
+  Effect.gen(function* () {
+    const toolkit = yield* HostStatusToolkit;
+    const result = yield* toolkit
+      .handle("goat_hub_device_verify", { deviceAlias: "mac-studio" })
+      .pipe(Stream.unwrap, Stream.runCollect);
+    expect(result.at(-1)?.result).toEqual({
+      deviceAlias: "mac-studio",
+      parity: { verdict: "unproven", checkedAt: 0, failingCheckIds: [], checks: [] },
+    });
+  }).pipe(
+    Effect.provide(
+      testLayer(
+        outsideCaller("full-access"),
+        () => Effect.die("Unexpected status"),
+        (alias, scope) => {
+          expect(alias).toBe("mac-studio");
+          expect(scope.requestNamespace).toBe("client:host-status");
+          return Effect.succeed({
+            verdict: "unproven",
+            checkedAt: 0,
+            failingCheckIds: [],
+            checks: [],
+          });
+        },
+      ),
+    ),
+  ),
+);

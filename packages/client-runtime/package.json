@@ -67,6 +67,10 @@
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
     },
+    "./computerUseGrant": {
+      "types": "./src/computerUseGrant.ts",
+      "default": "./src/computerUseGrant.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"
@@ -370,6 +374,14 @@
     "./state/fleet-heat": {
       "types": "./src/state/fleetHeat.ts",
       "default": "./src/state/fleetHeat.ts"
+    },
+    "./state/fleet-host-health": {
+      "types": "./src/state/fleetHostHealth.ts",
+      "default": "./src/state/fleetHostHealth.ts"
+    },
+    "./state/hub-fleet": {
+      "types": "./src/state/hubFleet.ts",
+      "default": "./src/state/hubFleet.ts"
     },
     "./state/host-metrics": {
       "types": "./src/state/host-metrics.ts",

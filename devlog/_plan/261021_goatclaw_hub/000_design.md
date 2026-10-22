@@ -553,8 +553,10 @@ interface PermissionProfile {
 ```
 
 Built-ins: `observer` (read only); `worker` (launch, worktree, open PRs, 3 lanes); `manager` (adds remote
-launch and goals, 6 lanes); `merge-manager` (manager plus `pr.merge`, which squashes only green, mergeable PRs
-with no changes requested); `owner` (everything). `cloud.launch` and `boat.start` are only in `owner`. Checked at
+launch and goals, 6 lanes); `merge-manager` (manager plus `pr.merge`, which squashes only PRs whose exact head has
+a green `goat-ci-result`, that are not `CONFLICTING` (behind `dev` is fine, see
+[merging](../../../docs/operations/merging.md)), and that have no changes requested); `owner` (everything).
+`cloud.launch` and `boat.start` are only in `owner`. Checked at
 claim time and again on every action, as ADR-0016 does.
 
 ### 8.2 Decision inbox

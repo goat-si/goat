@@ -2419,6 +2419,109 @@ describe("OpenCodeAdapterV2", () => {
       ),
   );
 
+  it.effect("adds the Cua Driver for the turns that have it and disconnects it after", () =>
+    Effect.gen(function* () {
+      const suffix = "cua-driver";
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const nativeEvents = asyncEventStream();
+      const payloads: Array<{ system?: string; messageID: string }> = [];
+      const config = {
+        environmentId: EnvironmentId.make("fixture"),
+        threadId: ThreadId.make(`thread-opencode-${suffix}`),
+        providerSessionId: `session-opencode-${suffix}`,
+        providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
+        endpoint: "http://fixture.invalid/mcp",
+        authorizationHeader: "Bearer cua-fixture",
+        browserToolsAvailable: false,
+      };
+      const cuaDriver = {
+        command: "/resources/cua-driver",
+        args: ["mcp"],
+        environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+      };
+      yield* sessions.set(config);
+      const registrations: Array<{ name: string; config?: unknown }> = [];
+      const disconnects: Array<{ name: string }> = [];
+      // An owned server: an external one cannot be given host stdio servers.
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        suffix,
+        "cua-root",
+        {
+          event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+          mcp: {
+            add: async (input: { name: string }) => {
+              registrations.push(input);
+              return { data: true };
+            },
+            disconnect: async (input: { name: string }) => {
+              disconnects.push(input);
+              return { data: true };
+            },
+          },
+          session: {
+            create: async () => ({ data: { id: "cua-root", time: { created: 1, updated: 1 } } }),
+            get: async () => ({ data: { id: "cua-root", time: { created: 1, updated: 1 } } }),
+            promptAsync: async (input: { system?: string; messageID: string }) => {
+              payloads.push(input);
+              return { data: true };
+            },
+            abort: async () => ({ data: true }),
+          },
+        },
+        { external: false },
+      );
+      const turn = (text: string) =>
+        Effect.gen(function* () {
+          yield* harness.startTurn(text);
+          const terminal = yield* harness.runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+          const messageID = payloads.at(-1)!.messageID;
+          for (const event of [
+            {
+              type: "message.updated",
+              properties: {
+                sessionID: "cua-root",
+                info: { id: messageID, role: "user", time: { created: 1 } },
+              },
+            },
+            {
+              type: "session.status",
+              properties: { sessionID: "cua-root", status: { type: "busy" } },
+            },
+            {
+              type: "session.status",
+              properties: { sessionID: "cua-root", status: { type: "idle" } },
+            },
+          ])
+            yield* Effect.promise(() => nativeEvents.push(event));
+          yield* Fiber.join(terminal);
+          return payloads.at(-1)?.system ?? "";
+        });
+      // Enabled after the session opened: the next turn adds the driver.
+      yield* sessions.set({ ...config, cuaDriver });
+      assert.include(yield* turn("first"), "<computer_use>");
+      assert.deepEqual(registrations.at(-1), {
+        name: "cua-driver",
+        config: {
+          type: "local",
+          command: ["/resources/cua-driver", "mcp"],
+          environment: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
+        },
+      });
+      assert.include(yield* turn("still attached"), "<computer_use>");
+      assert.equal(registrations.filter((entry) => entry.name === "cua-driver").length, 1);
+      yield* sessions.set(config);
+      assert.notInclude(yield* turn("detached"), "<computer_use>");
+      assert.deepEqual(disconnects, [{ name: "cua-driver" }]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
   it.effect.each([
     { external: false, withCredential: true },
     { external: true, withCredential: true },

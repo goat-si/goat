@@ -1,3 +1,4 @@
+import * as PermissionSettings from "../serverSettings.ts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Schema from "effect/Schema";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -452,7 +453,9 @@ it.effect("shares the dispatch manager", () =>
       }).pipe(
         Effect.provide(
           SshHostSetup.layer.pipe(
-            Layer.provideMerge(SshRemoteDispatch.layer),
+            Layer.provideMerge(
+              SshRemoteDispatch.layer.pipe(Layer.provide(PermissionSettings.layerTest())),
+            ),
             Layer.provide(dependencies),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "ssh-host-setup-" })),
             Layer.provide(FetchHttpClient.layer),

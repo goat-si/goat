@@ -20,7 +20,17 @@ import { SLACK_CHANNEL_WS_METHODS } from "./slackChannel.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.decisionList]: AuthOrchestrationReadScope,
+  [WS_METHODS.decisionGet]: AuthOrchestrationReadScope,
+  [WS_METHODS.decisionRequest]: AuthOrchestrationOperateScope,
+  [WS_METHODS.decisionAnswer]: AuthOrchestrationOperateScope,
+  [WS_METHODS.decisionWithdraw]: AuthOrchestrationOperateScope,
   [WS_METHODS.sshHostStatus]: AuthOrchestrationReadScope,
+  // It reaches the device with this machine's SSH keys, like the host-status fan-out.
+  [WS_METHODS.hubDeviceVerify]: AuthOrchestrationOperateScope,
+  [WS_METHODS.hubDeviceJoin]: AuthOrchestrationOperateScope,
+  [WS_METHODS.hubDeviceLeave]: AuthOrchestrationOperateScope,
+  [WS_METHODS.hubDeviceRepair]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerHostMatrix]: AuthOrchestrationReadScope,
   [WS_METHODS.providerHostSyncStart]: AuthProvidersManageScope,
   [WS_METHODS.providerHostSyncStatus]: AuthOrchestrationReadScope,
@@ -57,6 +67,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
 
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
+  [WS_METHODS.serverCompactStorage]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.serverCleanUpStrayProcesses]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
   [WS_METHODS.pullRequestsRunAction]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsUpdate]: AuthSourceControlWriteScope,

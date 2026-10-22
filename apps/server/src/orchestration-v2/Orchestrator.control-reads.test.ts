@@ -36,6 +36,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ThreadArchiveGate from "./ThreadArchiveGate.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ProviderSessions from "./ProviderSessionManager.ts";
@@ -1754,3 +1755,54 @@ it.effect("explicit settle clears snooze atomically and stays idempotent after r
     assert.deepInclude((yield* projections.getThreadProjection(threadId)).thread, active);
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect("records a thread's history archive state without making it look active", () => {
+  const slot = ThreadArchiveGate.makeThreadArchiveGateSlot();
+  const restored: string[] = [];
+  slot.install((threadId) => Effect.sync(() => restored.push(threadId)));
+  return Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:history-archive-state");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-history-archive-state"),
+      threadId,
+      projectId: ProjectId.make("project:history-archive-state"),
+      title: "Old work",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const created = yield* projections.getThreadShell(threadId);
+    assert.isDefined(created?.updatedAt);
+    yield* TestClock.adjust("40 days");
+    restored.length = 0;
+    for (const [index, state] of (["archived", null, "deleted"] as const).entries()) {
+      // Recording the state reads the thread; that read must not restore the history.
+      yield* orchestrator
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`history-archive-state-${index}`),
+          threadId,
+          historyArchive: state,
+        })
+        .pipe(Effect.provideService(ThreadArchiveGate.SkipThreadArchiveRestore, true));
+      const shell = yield* projections.getThreadShell(threadId);
+      assert.equal(shell?.historyArchive, state ?? undefined);
+      assert.deepEqual(shell?.updatedAt, created?.updatedAt);
+    }
+    assert.deepEqual(restored, []);
+    // Any other read of the thread restores first.
+    yield* projections.getThread(threadId);
+    assert.deepEqual(restored, [threadId]);
+  }).pipe(
+    Effect.provide(
+      layerTest.pipe(Layer.provide(Layer.succeed(ThreadArchiveGate.ThreadArchiveGate, slot))),
+    ),
+  );
+});

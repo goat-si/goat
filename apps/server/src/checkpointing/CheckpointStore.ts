@@ -1,4 +1,8 @@
-import { VcsUnsupportedOperationError, type CheckpointRef } from "@goat/contracts";
+import {
+  VcsUnsupportedOperationError,
+  type CheckpointRef,
+  type OrchestrationV2Checkpoint,
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -49,7 +53,10 @@ export class CheckpointStore extends Context.Service<
 
     readonly captureCheckpoint: (
       input: CaptureCheckpointInput,
-    ) => Effect.Effect<void, CheckpointStoreError>;
+    ) => Effect.Effect<
+      NonNullable<OrchestrationV2Checkpoint["replicationEvidence"]> | void,
+      CheckpointStoreError
+    >;
 
     readonly hasCheckpointRef: (
       input: Omit<RestoreCheckpointInput, "fallbackToHead">,

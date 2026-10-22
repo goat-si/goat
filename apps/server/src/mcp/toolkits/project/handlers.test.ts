@@ -1,3 +1,5 @@
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
+import * as ThreadReplicaService from "../../ThreadReplicaService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -58,6 +60,7 @@ const localAdapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
 /** Launch handlers resolve their service from the tool invocation context. */
 const withLaunchService = <A, E, R>(dependencies: Layer.Layer<A, E, R>) =>
   ThreadLaunchMcpService.layer.pipe(
+    Layer.provideMerge(Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({})),
     Layer.provide(
       Layer.mock(ProviderAdapters.ProviderAdapterRegistryV2)({
         get: () => Effect.succeed(localAdapter),
@@ -83,6 +86,7 @@ const launchWatches = (
   registerInterrupted = false,
 ) =>
   Layer.mock(LaunchWatchService.LaunchWatchService)({
+    find: () => Effect.succeed(null),
     register: (input) =>
       registerInterrupted
         ? Effect.interrupt
@@ -107,7 +111,7 @@ const launchWatches = (
             webhookTarget: { type: "named" as const, name: input.notifyTarget?.name ?? "" },
           }),
     releaseRoute: (route) => Effect.sync(() => void released.push(route)),
-  });
+  }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})));
 
 /** Launches from a T3 thread caller over mocks; returns what the handler did. */
 const launchFromThread = (params: {

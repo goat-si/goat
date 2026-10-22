@@ -1,3 +1,4 @@
+import * as PermissionSettings from "../serverSettings.ts";
 /**
  * Live check against a real second machine. Skipped unless GOAT_REMOTE_LIVE_HOST names an SSH
  * alias whose GOAT already runs (it is reused, never restarted) and GOAT_REMOTE_LIVE_PROJECT_ID
@@ -77,6 +78,7 @@ const harnessFor = () => {
   const harness = makeHarness({
     // The real SSH path: the remote's GOAT is reused, never restarted.
     sshRemote: SshRemoteDispatch.layer.pipe(
+      Layer.provide(PermissionSettings.layerTest()),
       Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-remote-live-" })),
       Layer.provide(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer)),
       Layer.orDie,

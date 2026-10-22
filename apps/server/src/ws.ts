@@ -1,11 +1,14 @@
+import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
   HubProxyRpcError,
   OrchestrationDispatchCommandError,
   SLACK_CHANNEL_WS_METHODS,
+  ServerSettingsError,
 } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
+import * as Clock from "effect/Clock";
 import { installRelayClient } from "./cloud/installRelayClient.ts";
 import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
 import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
@@ -31,8 +34,10 @@ import {
   AssetWorkspaceContextResolutionError,
   AuthAccessStreamError,
   AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
   authScopeResponse,
   AuthSessionId,
+  type HubDeviceOperationInput,
   ChatAttachmentId,
   ClientConnectionMethod,
   ClientDeviceType,
@@ -70,6 +75,7 @@ import {
   WS_METHODS,
   WsChannelRpcGroup,
   WsCoreRpcGroup,
+  WsDecisionRpcGroup,
   WsCoreServerRpcGroup,
   WsCoreWorkspaceRpcGroup,
   WsHubNodesRpcGroup,
@@ -144,7 +150,7 @@ import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLate
 import { latestProviderVersionCacheKeys } from "@goat/provider-core/server/maintenanceResolver";
 import * as RelayClient from "@goat/shared/relayClient";
 import { isTelemetryIdHash } from "@goat/shared/telemetryId";
-import { sameUsageLimitCommandCoverage, withUsageLimitsCommands } from "@goat/shared/usageLimits";
+import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
 import * as SqlClient from "effect/sql/SqlClient";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
@@ -172,6 +178,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerConfig from "./config.ts";
 import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
+import * as CuaDriver from "./cua/CuaDriver.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -186,6 +193,9 @@ import { refreshPushedPullRequests } from "./git/refreshPushedPullRequests.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
+import * as HubParity from "./hub/HubParity.ts";
+import * as HubMembership from "./hub/HubMembership.ts";
+import type { McpInvocationScope } from "./mcp/McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as DefectReporter from "./observability/DefectReporter.ts";
@@ -239,6 +249,7 @@ import {
 } from "./orchestration-v2/threadHistoryPaging.ts";
 import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -1310,6 +1321,7 @@ export const layerWsRpc = (
   Layer.unwrap(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const decisions = yield* DecisionInbox.DecisionInbox;
       const requireCatalogHost = RpcAuthorization.requireConnectionCatalogHost(currentSession);
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
@@ -1332,6 +1344,12 @@ export const layerWsRpc = (
         .getEnvironmentId;
       // Channel calls act for the authenticated session; nothing here comes from client input.
       const channelOwner = ownerFromSession(channelEnvironmentId, currentSession);
+      const decisionCaller = {
+        kind: "client",
+        environmentId: channelEnvironmentId,
+        sessionId: currentSessionId,
+        scopes: currentSession.scopes,
+      } satisfies DecisionInbox.DecisionCaller;
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
@@ -1425,7 +1443,30 @@ export const layerWsRpc = (
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
+      const strayProcesses = yield* StrayProcesses.StrayProcesses;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const requireComputerUseDisplay = Effect.serviceOption(CuaDriver.CuaDriver).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.void,
+            onSome: (driver) =>
+              driver.admitEnable.pipe(
+                Effect.mapError(
+                  (error) =>
+                    new ServerSettingsError({
+                      settingsPath: config.settingsPath,
+                      operation: "enable-computer-use",
+                      code:
+                        error.operation === "install"
+                          ? "computer_use_install_failed"
+                          : "computer_use_unavailable",
+                      reason: error.message,
+                    }),
+                ),
+              ),
+          }),
+        ),
+      );
       const memory = yield* MemoryService.MemoryService;
       const memorySync = yield* MemorySyncService.MemorySyncService;
       const ownerPolicy = yield* ServerSettings.MemoryOwnerSourceReadPolicyAdministration;
@@ -1549,6 +1590,31 @@ export const layerWsRpc = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const hostResources = yield* HostResources.HostResources;
       const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
+      const hubParity = yield* HubParity.HubParity;
+      const hubMembership = yield* HubMembership.HubMembership;
+      /** Hub reads stay read-only; membership changes write, so their decisions can be filed. */
+      const hubScope = (access: "read-only" | "full-access") =>
+        Effect.gen(function* () {
+          const environmentId = yield* serverEnvironment.getEnvironmentId;
+          const issuedAt = yield* Clock.currentTimeMillis;
+          return {
+            environmentId,
+            capabilities: new Set(["orchestration"] as const),
+            issuedAt,
+            requestNamespace: `client-session:${currentSessionId}`,
+            thread: undefined,
+            client: { sessionId: currentSessionId, label: "GOAT client", access },
+          } satisfies McpInvocationScope;
+        });
+      // settings:write is the decision inbox's owner rule; anyone else takes H3's agent path.
+      const hubPerson = currentSession.scopes.includes(AuthSettingsWriteScope)
+        ? { sessionId: currentSessionId, scopes: currentSession.scopes }
+        : undefined;
+      const hubMembershipOperation =
+        (operation: "join" | "leave" | "repair") => (input: HubDeviceOperationInput) =>
+          hubScope("full-access").pipe(
+            Effect.flatMap((scope) => hubMembership[operation](scope, input, hubPerson)),
+          );
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -1906,7 +1972,9 @@ export const layerWsRpc = (
         readonly usageLimitsCommand: boolean;
       }) {
         const keybindingsConfig = yield* keybindings.loadConfigState;
-        const currentProviders = yield* providerRegistry.getProviders;
+        const currentProviders = yield* providerRegistry.getProviders.pipe(
+          Effect.flatMap(usageLimitSources.projectProviders),
+        );
         const providers = options.usageLimitsCommand
           ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
           : currentProviders;
@@ -2097,6 +2165,13 @@ export const layerWsRpc = (
           slackChannelSettings.configure(input, channelOwner),
         [SLACK_CHANNEL_WS_METHODS.disconnect]: (input) => slackChannelSettings.disconnect(input),
         [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: () => slackChannelSettings.streamStatus(),
+      });
+      const decisionHandlers = WsDecisionRpcGroup.middleware(RpcInstrumentation).of({
+        [WS_METHODS.decisionList]: (input) => decisions.list(decisionCaller, input),
+        [WS_METHODS.decisionGet]: (input) => decisions.get(decisionCaller, input.id),
+        [WS_METHODS.decisionRequest]: (input) => decisions.create(decisionCaller, input),
+        [WS_METHODS.decisionAnswer]: (input) => decisions.answer(decisionCaller, input),
+        [WS_METHODS.decisionWithdraw]: (input) => decisions.withdraw(decisionCaller, input.id),
       });
       const handlers = ServerWsCoreRpcGroup.of({
         [WS_METHODS.connectionCatalogServe]: () =>
@@ -2428,6 +2503,15 @@ export const layerWsRpc = (
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
+        [WS_METHODS.serverCheckComputerUse]: (_input) =>
+          Effect.serviceOption(CuaDriver.CuaDriver).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.succeed({ platform: "other", running: false } as const),
+                onSome: (driver) => driver.status,
+              }),
+            ),
+          ),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
@@ -2598,7 +2682,7 @@ export const layerWsRpc = (
                 providers = yield* providerRegistry.refreshInstance(instance.instanceId);
               }
             }
-            return { providers };
+            return { providers: yield* usageLimitSources.projectProviders(providers) };
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
         [WS_METHODS.mcpAppsToolInfo]: (input) => mcpAppRequests.toolInfo(input),
@@ -2759,12 +2843,15 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.serverGetDatabaseStorage]: () => databaseStorage.status,
+        [WS_METHODS.serverCompactStorage]: () => databaseStorage.compactNow,
+        [WS_METHODS.serverCleanUpStrayProcesses]: () => strayProcesses.cleanUp,
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
         [WS_METHODS.serverUpdateSettings]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* ({ patch, providerInstanceMutation }) {
             yield* ServerSettings.rejectMemoryHubSettingsPatch(patch, config.settingsPath);
+            if (patch.enableCua === true) yield* requireComputerUseDisplay;
             const deviceHosts = patch.deviceHosts
               ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
                   Effect.provide(deviceHostContext),
@@ -2798,6 +2885,14 @@ export const layerWsRpc = (
               }),
             ),
           ),
+        [WS_METHODS.hubDeviceVerify]: (input) =>
+          hubScope("read-only").pipe(
+            Effect.flatMap((scope) => hubParity.verify(input.deviceAlias, scope)),
+            Effect.map((parity) => ({ deviceAlias: input.deviceAlias, parity })),
+          ),
+        [WS_METHODS.hubDeviceJoin]: hubMembershipOperation("join"),
+        [WS_METHODS.hubDeviceLeave]: hubMembershipOperation("leave"),
+        [WS_METHODS.hubDeviceRepair]: hubMembershipOperation("repair"),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>
@@ -3365,14 +3460,11 @@ export const layerWsRpc = (
                   Stream.fromEffect(providerRegistry.getProviders),
                   providerRegistry.streamChanges,
                 ),
-                usageLimitSources.streamChanges.pipe(
-                  Stream.changesWith(
-                    usageLimitsCommand ? sameUsageLimitCommandCoverage : () => true,
-                  ),
-                ),
+                usageLimitSources.streamChanges,
                 (providers, sources) =>
                   usageLimitsCommand ? withUsageLimitsCommands(providers, sources) : providers,
               ).pipe(
+                Stream.mapEffect(usageLimitSources.projectProviders),
                 // Both sides replay their current value, so the first pairing normally
                 // repeats the snapshot the client already holds. Compare against that
                 // snapshot rather than dropping blindly: a refresh that landed between
@@ -3510,6 +3602,7 @@ export const layerWsRpc = (
       });
       // toLayer derives services from every handler key, so narrow each part with Pick.
       return Layer.mergeAll(
+        WsDecisionRpcGroup.middleware(RpcInstrumentation).toLayer(decisionHandlers),
         WsHubNodesRpcGroup.middleware(RpcInstrumentation).toLayer(hubNodesHandlers),
         WsMemoryImportRpcGroup.middleware(RpcInstrumentation).toLayer(importHandlers),
         WsMemoryCoreRpcGroup.middleware(RpcInstrumentation).toLayer(memoryHandlers),
@@ -3567,6 +3660,8 @@ export const layer = Layer.unwrap(
     const notes = yield* NotesService.NotesService;
     const noteWork = yield* NoteWorkService.NoteWorkService;
     const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
+    const hubParityService = yield* HubParity.HubParity;
+    const hubMembershipService = yield* HubMembership.HubMembership;
     const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
@@ -3668,6 +3763,8 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(NoteWorkService.NoteWorkService, noteWork)),
               // The goat_host_status tool's instance, so both share last-known samples.
               Layer.provide(Layer.succeed(HostStatusMcpService.HostStatusMcpService, hostStatus)),
+              Layer.provide(Layer.succeed(HubParity.HubParity, hubParityService)),
+              Layer.provide(Layer.succeed(HubMembership.HubMembership, hubMembershipService)),
               Layer.provide(Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(

@@ -307,6 +307,8 @@ function makeMutableServerSettingsService(
           yield* PubSub.publish(changes, next);
           return next;
         }),
+      checkpointReplicationPermit: () =>
+        Effect.die("checkpoint replication is not used by this fixture"),
       withSettingsSnapshot: (use) => Ref.get(settingsRef).pipe(Effect.flatMap(use)),
       get streamChanges() {
         return Stream.fromPubSub(changes);
@@ -2215,6 +2217,8 @@ it.layer(
       const serverSettings = {
         ...settings,
         getSettings: readHydrationSettings,
+        checkpointReplicationPermit: () =>
+          Effect.die("checkpoint replication is not used by this fixture"),
         withSettingsSnapshot: (use) => readHydrationSettings.pipe(Effect.flatMap(use)),
         streamChanges: Stream.empty,
         subscribeChanges: Effect.gen(function* () {

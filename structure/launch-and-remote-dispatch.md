@@ -127,3 +127,55 @@ placement limits and fallback chains do not exist yet; the controller reaches th
 > Decision record: [ADR-0017](decisions/ADR-0017-agentic-self-healing.md)
 
 > Decision record: [ADR-0018](decisions/ADR-0018-agentic-resources-fallback.md)
+
+## Permission profiles
+
+With `goatclaw.enabled`, `apps/server/src/goatclaw/PermissionProfiles.ts` admits agent launches
+under the profiles in `packages/contracts/src/permissionProfiles.ts`. Current named settings
+intersect the inherited launch snapshot and the caller's runtime ceiling; changing the default
+does not reassign a child. Unknown stored profile ids refuse actions. Disabled policy keeps the
+existing paths.
+
+`apps/server/src/persistence/Migrations/097_PermissionProfiles.ts` stores bindings and lane
+reservations outside the orchestration event log. Admission commits before launch; pending and
+uncertain reservations retain capacity across restart. Local run projections and durable remote
+dispatches determine completion, so removing a launch watch grants no capacity. SSH requires
+a destination that accepts and enforces the inherited ceiling. Bulk creation, remote follow-up
+sends, and remote cloud-holder forwarding refuse while enabled until they preserve the same
+policy and accounting. Provider-native limits are outside this admission service.
+
+Role templates (`apps/server/src/goatclaw/RoleTemplates.ts`) are launch presets over these
+profiles: `goatclawRole` on `goat_thread_launch` and `goat_ssh_thread_launch` puts the role's
+preamble and shared report protocol in front of the message and has `claim` bind the child under
+the role's stored profile intersected with the caller's, so a role only narrows. The role-to-profile
+map lives in contracts beside the built-ins. Role launches refuse while goatclaw is off, which is how
+turning it off stops new managers while running ones finish. GOAT Bot turns start outside any MCP
+caller, so the dispatcher binds a full-access requester's turn to the supervisor profile with
+`bind` before launch; requesters linked lower keep the default profile.
+
+## Resource pressure
+
+Each server classifies its own load, CPU, memory, disk and event-loop stalls into `ok`,
+`elevated` or `critical` with hysteresis (`apps/server/src/fleet/pressure/HostPressureMonitor.ts`)
+and reports it as `pressure` in its own `goat_host_status` entry, so remote pressure arrives with
+the fan-out. `PressureNudger` tells the threads that started work on a pressured host, and their
+launchers, through the launch-report channel: critical wakes, other changes are notices, each host
+and level at most once per cooldown. It reads remote hosts only while a launch watch there still
+has runs to report. Launch tools return `pressure` advice from readings already held, and goal
+placement refuses a critical host. Settings: `fleet.pressure` in
+`packages/contracts/src/hostPressure.ts`.
+
+> Decision record: [ADR-0020](decisions/ADR-0020-host-pressure.md)
+
+## Durable decisions
+
+`apps/server/src/goatclaw/DecisionInbox.ts` and `packages/contracts/src/decisions.ts` keep durable
+requests alongside projections of pending provider questions. Projections retain the existing response
+path and its dispatch-time mode guard; approvals and questions above an agent's ceiling remain human-only.
+A client's owner override requires authenticated settings-write and orchestration-operate scopes.
+
+`apps/server/src/persistence/Migrations/098_DecisionInbox.ts` keeps decision state and append-only audit
+metadata outside the orchestration log. Answer delivery commits to an outbox before sending a stable
+thread message; the shared Scheduler retries each delivery independently. Projected answers keep an
+audit intent before dispatch and reconcile it from the committed command receipt, so restart cannot
+silently lose the answer's audit trail. Expiry closes requests without choosing a recommendation.
