@@ -57,6 +57,15 @@ export const SshProgressBinding = Schema.Struct({
   threadId: ThreadId,
 });
 export type SshProgressBinding = typeof SshProgressBinding.Type;
+/** Provider approvals whose approval the server applies, keeping their arguments until it does. */
+const PROVIDER_CONTINUATION_PATHS = [
+  "provider.home_request",
+  "provider.settings",
+  "provider.setup",
+] as const;
+export type ProviderContinuationPath = (typeof PROVIDER_CONTINUATION_PATHS)[number];
+const isProviderContinuationPath = (path: string): path is ProviderContinuationPath =>
+  (PROVIDER_CONTINUATION_PATHS as ReadonlyArray<string>).includes(path);
 const ContinuationPayload = Schema.Struct({
   version: Schema.Literal(1),
   kind: Schema.Literal("continuation"),
@@ -64,7 +73,7 @@ const ContinuationPayload = Schema.Struct({
   args: Schema.Record(Schema.String, Schema.Unknown),
   approvedBySessionId: Schema.optional(AuthSessionId),
   sshProgress: Schema.optional(SshProgressBinding),
-  namespace: Schema.optional(Schema.Literal("provider.home_request")),
+  namespace: Schema.optional(Schema.Literals(PROVIDER_CONTINUATION_PATHS)),
 });
 const PrivatePayload = Schema.fromJsonString(
   Schema.Union([
@@ -150,6 +159,18 @@ export class Handoffs extends Context.Service<
       HandoffError
     >;
     readonly finishProviderHomeContinuation: (
+      input: HandoffReadInput,
+    ) => Effect.Effect<void, HandoffError>;
+    /** Approved handoffs on a provider path whose change has not been applied yet. */
+    readonly completedProviderContinuations: (path: ProviderContinuationPath) => Effect.Effect<
+      ReadonlyArray<{
+        readonly handoff: Handoff;
+        readonly args: Readonly<Record<string, unknown>>;
+        readonly approvedBySessionId: AuthSessionId;
+      }>,
+      HandoffError
+    >;
+    readonly finishProviderContinuation: (
       input: HandoffReadInput,
     ) => Effect.Effect<void, HandoffError>;
     readonly completedSshContinuations: Effect.Effect<
@@ -320,7 +341,7 @@ const make = Effect.gen(function* () {
     }
     if (
       input.action === "completed" &&
-      (record.target.path.startsWith("ssh.") || record.target.path === "provider.home_request") &&
+      (record.target.path.startsWith("ssh.") || isProviderContinuationPath(record.target.path)) &&
       isHandoffPending(record.state)
     ) {
       const payload = yield* loadPrivate(input.handoffId);
@@ -410,9 +431,7 @@ const make = Effect.gen(function* () {
       yield* savePrivate(handoff.handoffId, {
         version: 1,
         kind: "continuation",
-        ...(input.target.path === "provider.home_request"
-          ? { namespace: "provider.home_request" as const }
-          : {}),
+        ...(isProviderContinuationPath(input.target.path) ? { namespace: input.target.path } : {}),
         human: input.human,
         args: input.args,
         ...(input.sshProgress === undefined ? {} : { sshProgress: input.sshProgress }),
@@ -466,7 +485,7 @@ const make = Effect.gen(function* () {
       }
     }
   });
-  const completedContinuations = (namespace: "ssh" | "provider.home_request") =>
+  const completedContinuations = (namespace: "ssh" | ProviderContinuationPath) =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
       const rows = yield* sql<{
@@ -487,7 +506,7 @@ const make = Effect.gen(function* () {
         if (
           namespace === "ssh"
             ? !handoff.target.path.startsWith("ssh.")
-            : handoff.target.path !== "provider.home_request"
+            : handoff.target.path !== namespace
         )
           continue;
         const payload = yield* loadPrivate(handoff.handoffId);
@@ -495,8 +514,7 @@ const make = Effect.gen(function* () {
           payload !== null &&
           "kind" in payload &&
           payload.kind === "continuation" &&
-          (namespace !== "provider.home_request" ||
-            payload.namespace === "provider.home_request") &&
+          (namespace === "ssh" || payload.namespace === namespace) &&
           payload.approvedBySessionId !== undefined
         )
           results.push({
@@ -510,10 +528,10 @@ const make = Effect.gen(function* () {
     });
   const completedSshContinuations = completedContinuations("ssh");
   const completedProviderHomeContinuations = completedContinuations("provider.home_request");
-  const finishProviderHomeContinuation = (input: HandoffReadInput) =>
+  const finishProviderContinuation = (input: HandoffReadInput) =>
     Effect.gen(function* () {
       const handoff = yield* read(input);
-      if (handoff.target.path !== "provider.home_request" || isHandoffPending(handoff.state))
+      if (!isProviderContinuationPath(handoff.target.path) || isHandoffPending(handoff.state))
         return;
       yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
     }).pipe(lock.withPermits(1));
@@ -659,7 +677,9 @@ const make = Effect.gen(function* () {
     answerSecret,
     completedSshContinuations,
     completedProviderHomeContinuations,
-    finishProviderHomeContinuation,
+    finishProviderHomeContinuation: finishProviderContinuation,
+    completedProviderContinuations: completedContinuations,
+    finishProviderContinuation,
     resolvedSshOutcomes,
     finishSshContinuation,
     bindSshContinuation,

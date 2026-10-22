@@ -32,6 +32,7 @@ import * as HomeRequests from "../provider/CodexHomeRequests.ts";
 import * as Routing from "../provider/ProviderDiagnosisRouting.ts";
 import * as HostSync from "../provider/ProviderHostSync.ts";
 import * as Onboarding from "../provider/ProviderOnboarding.ts";
+import * as ProviderSettingsService from "../provider/ProviderSettings.ts";
 import { ProviderToolkit } from "../mcp/toolkits/provider/tools.ts";
 import * as ProviderHandlers from "../mcp/toolkits/provider/handlers.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -848,6 +849,11 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
       Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),
       Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
       Layer.provide(Layer.mock(Onboarding.ProviderOnboarding)({})),
+      Layer.provide(
+        Layer.mock(ProviderSettingsService.ProviderSettings)({
+          presentDiagnosis: (result) => Effect.succeed(result),
+        }),
+      ),
       Layer.provide(layerFor(world)),
     );
     const call = (

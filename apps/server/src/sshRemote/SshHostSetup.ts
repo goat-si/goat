@@ -2,8 +2,11 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as MaintenanceAudit from "../maintenance/MaintenanceAudit.ts";
 import * as HomeRequests from "../provider/CodexHomeRequests.ts";
 import * as ProviderHostSync from "../provider/ProviderHostSync.ts";
+import * as ProviderSettings from "../provider/ProviderSettings.ts";
 import {
   EnvironmentAuthorizationError,
+  PROVIDER_SETTINGS_HANDOFF_PATH,
+  PROVIDER_SETUP_HANDOFF_PATH,
   SshHostProbeError,
   HandoffError,
   SshHostAddInput,
@@ -209,6 +212,7 @@ export const make = (
     const handoffs = yield* Handoffs.Handoffs;
     const providerHomeRequests = yield* Effect.serviceOption(HomeRequests.CodexHomeRequests);
     const providerHostSync = yield* Effect.serviceOption(ProviderHostSync.ProviderHostSync);
+    const providerSettings = yield* Effect.serviceOption(ProviderSettings.ProviderSettings);
     const threads = yield* Threads.ThreadManagementService;
     const environment = yield* Environment.ServerEnvironment;
     const diagnosis = yield* Diagnosis.ProviderDiagnosisRouting;
@@ -1550,7 +1554,11 @@ export const make = (
               : record.target.path === ProviderHostSync.HOST_SYNC_PATH &&
                   Option.isSome(providerHostSync)
                 ? providerHostSync.value.respondHandoff(input, sessionId)
-                : respondExisting(input, sessionId),
+                : (record.target.path === PROVIDER_SETTINGS_HANDOFF_PATH ||
+                      record.target.path === PROVIDER_SETUP_HANDOFF_PATH) &&
+                    Option.isSome(providerSettings)
+                  ? providerSettings.value.respond(input, sessionId)
+                  : respondExisting(input, sessionId),
           ),
         );
     const handoffProgress: SshHostSetup["Service"]["handoffProgress"] = (input, caller) =>

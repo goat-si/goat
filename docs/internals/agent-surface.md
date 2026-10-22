@@ -673,10 +673,23 @@ boundary.
   `providers:manage` approves. It runs under the approver's session, and each
   remote installs and stores credentials itself; credentials are never copied
   between machines ([ProviderHostSync](../../apps/server/src/provider/ProviderHostSync.ts)).
+- `provider.update`, `provider.add`, `provider.link`, and `provider.remove` change
+  provider settings here or on an SSH host through
+  [ProviderSettings](../../apps/server/src/provider/ProviderSettings.ts), which writes
+  with the same `updateProviderInstance` call Settings uses. A client holding a live
+  `providers:manage`, or a full-access/default thread whose goatclaw profile allows
+  `providers.manage`, applies the change itself. Any other thread gets a
+  `provider.settings` approval card that stores the exact request, and approving it
+  applies that request under the approver's session. `provider.diagnose` fixes that a
+  settings change resolves carry a `call` and become `actor: "agent"` for a caller
+  allowed to make it.
 
 Asking for any of these approvals needs only a running, writable thread
 credential. What runs after approval is authorized against the approving person's
 session ([SshHostAuthorization.ts](../../apps/server/src/sshRemote/SshHostAuthorization.ts)).
+A remote write runs under an SSH-issued `providers:manage` session that the origin
+requests only for a call it has already admitted, and a remote too old to issue one
+fails the call rather than falling back.
 
 **Proposed.** Three things change. `provider.sync` returns
 `meta.operation` (kind `provider_sync`) and either persists or reports `unknown`

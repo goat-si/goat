@@ -5,6 +5,7 @@ import * as CloudAgents from "../../../cloudAgents/CloudAgentService.ts";
 import * as Routing from "../../../provider/ProviderDiagnosisRouting.ts";
 import * as HostSync from "../../../provider/ProviderHostSync.ts";
 import * as Onboarding from "../../../provider/ProviderOnboarding.ts";
+import * as ProviderSettings from "../../../provider/ProviderSettings.ts";
 import * as McpInvocation from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { ProviderToolkit } from "./tools.ts";
@@ -59,6 +60,12 @@ const cloud = <A>(
     return yield* run(yield* CloudAgents.CloudAgentService, scope);
   });
 
+const manage = (request: ProviderSettings.ProviderSettingsRequest) =>
+  Effect.gen(function* () {
+    const scope = yield* McpInvocation.McpInvocationContext;
+    return yield* (yield* ProviderSettings.ProviderSettings).manage(request, scope);
+  });
+
 /**
  * Holder probing and the registration lock can wait, and the caller's modes can drop meanwhile,
  * so the full-access check runs again right before a thread starts, with the modes it finds.
@@ -100,6 +107,19 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
   goat_provider_login_cancel: McpToolAccess.writes((input) =>
     onboarding((service, scope) => service.loginCancel(input, scope)),
   ),
+  // The service decides between applying and asking a person, so these need no thread control.
+  goat_provider_update: McpToolAccess.writesWithCapability((input) =>
+    manage({ action: "update", input }),
+  ),
+  goat_provider_add: McpToolAccess.writesWithCapability((input) =>
+    manage({ action: "add", input }),
+  ),
+  goat_provider_link: McpToolAccess.writesWithCapability((input) =>
+    manage({ action: "link", input }),
+  ),
+  goat_provider_remove: McpToolAccess.destructive(
+    McpToolAccess.writesWithCapability((input) => manage({ action: "remove", input })),
+  ),
   goat_cloud_holders: McpToolAccess.readsOrReachesHost(
     (input) => input.local !== true,
     (input) => cloud((service, scope) => service.holders(scope, input)),
@@ -129,7 +149,8 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
     Effect.gen(function* () {
       const scope = yield* McpInvocation.McpInvocationContext;
       const routing = yield* Routing.ProviderDiagnosisRouting;
-      return yield* routing.diagnose(input, { kind: "mcp", scope }).pipe(
+      const settings = yield* ProviderSettings.ProviderSettings;
+      const result = yield* routing.diagnose(input, { kind: "mcp", scope }).pipe(
         Effect.mapError(
           (error) =>
             new OrchestratorMcpFailure({
@@ -143,6 +164,7 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
             }),
         ),
       );
+      return yield* settings.presentDiagnosis(result, scope);
     }),
   ),
 });

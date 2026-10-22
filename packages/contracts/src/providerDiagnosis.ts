@@ -32,6 +32,16 @@ export const ProviderDiagnosisFix = Schema.Struct({
   handoff: Schema.optionalKey(ProviderDiagnosisHandoffKind),
   /** A command the person runs in a terminal on the environment's machine. */
   command: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * The GOAT tool call that applies this fix. A caller allowed to manage providers makes it
+   * directly; any other thread agent gets an approval card from it.
+   */
+  call: Schema.optionalKey(
+    Schema.Struct({
+      tool: TrimmedNonEmptyString,
+      arguments: Schema.Record(Schema.String, Schema.Unknown),
+    }),
+  ),
 });
 export type ProviderDiagnosisFix = typeof ProviderDiagnosisFix.Type;
 
