@@ -38,6 +38,8 @@ import { useThreadListActions } from "./useThreadListActions";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { GoatBotScreen } from "../goat-bot/GoatBotScreen";
 import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
+import { useMobileGoatBotModelMenu } from "../goat-bot/useMobileGoatBotModel";
+import { GoatBotModelAndroidMenu } from "../goat-bot/GoatBotModelAndroidMenu";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 
 export function HomeRouteScreen() {
@@ -49,6 +51,7 @@ export function HomeRouteScreen() {
   const { layout, panes, primarySidebarSearchQuery, setPrimarySidebarSearchQuery, startNewTask } =
     useAdaptiveWorkspaceLayout();
   const botHome = useMobileGoatBotModeButton();
+  const botModel = useMobileGoatBotModelMenu();
   const compactBot = !layout.usesSplitView && botHome.mode === "bot";
   const projects = useProjects();
   // Streaming turns rewrite thread shells many times a second. While a Thread
@@ -200,6 +203,24 @@ export function HomeRouteScreen() {
                 onPress={botHome.toggle}
               />
             ) : null}
+            {botHome.mode === "bot" && botModel ? (
+              <Toolbar.Menu
+                title={botModel.label}
+                accessibilityLabel={botModel.accessibilityLabel}
+                disabled={botModel.disabled}
+              >
+                {botModel.items.map((item) => (
+                  <Toolbar.MenuAction
+                    key={item.id}
+                    isOn={item.selected}
+                    subtitle={item.subtitle}
+                    onPress={() => botModel.select(item.id)}
+                  >
+                    <Toolbar.Label>{item.title}</Toolbar.Label>
+                  </Toolbar.MenuAction>
+                ))}
+              </Toolbar.Menu>
+            ) : null}
             <Toolbar.Button
               accessibilityLabel="New task"
               icon="square.and.pencil"
@@ -220,6 +241,11 @@ export function HomeRouteScreen() {
                     },
                   ]
                 : []
+            }
+            trailing={
+              botHome.mode === "bot" && botModel ? (
+                <GoatBotModelAndroidMenu menu={botModel} />
+              ) : null
             }
           />
         ) : null}

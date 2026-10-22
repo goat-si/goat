@@ -18,6 +18,8 @@ import { SearchField } from "../../components/ui/SearchField";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { WorkspaceConnectionTitle } from "./WorkspaceConnectionTitle";
 import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
+import { useMobileGoatBotModelMenu } from "../goat-bot/useMobileGoatBotModel";
+import { GoatBotModelAndroidMenu } from "../goat-bot/GoatBotModelAndroidMenu";
 import { WorkspaceListToolbarRow } from "../workspace/WorkspaceListToolbarRow";
 import { useWorkspaceConnectionState } from "../../state/workspace";
 import { useToolbarLayout } from "../../components/ui/useToolbarLayout";
@@ -42,6 +44,7 @@ export function ThreadListToolbar(props: {
   const botKnown = props.botKnown ?? botMode.known;
   const toggleMode = props.onToggleHomeMode ?? botMode.toggle;
   const compactBot = mode === "bot" && !props.sidebar;
+  const botModel = useMobileGoatBotModelMenu();
   const navigation = useNavigation();
   const workspace = useWorkspaceTabs();
   const isTabActive = workspace?.isTabActive;
@@ -113,6 +116,7 @@ export function ThreadListToolbar(props: {
 
   const goatControls = (
     <>
+      {compactBot && botModel ? <GoatBotModelAndroidMenu menu={botModel} /> : null}
       {botKnown ? (
         <AndroidHeaderIconButton
           accessibilityLabel={
