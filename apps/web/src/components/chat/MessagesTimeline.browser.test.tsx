@@ -454,3 +454,41 @@ describe("GOAT MCP timeline tools", () => {
     expect(document.querySelector('svg[viewBox="2 2 20 20"]')).not.toBeNull();
   });
 });
+
+describe("MessagesTimeline scroll position", () => {
+  it("keeps a newly opened thread at its newest message while its rows settle", async () => {
+    const props = baseProps();
+    const entries = Array.from({ length: 12 }, (_, index) =>
+      message(
+        Array.from({ length: 30 }, (_, line) => `Paragraph ${index}.${line}`).join("\n\n"),
+        { role: "assistant" },
+        `message-${index}`,
+      ),
+    );
+    await using screen = await renderTimeline(entries, props);
+    await vi.waitFor(() => expect(props.listRef.current?.getScrollableNode()).toBeTruthy());
+    const viewport: HTMLElement = props.listRef.current!.getScrollableNode();
+    // Late content (decoded images, highlighted code, sized iframes) keeps
+    // growing rows above the end and the last row for a few frames after
+    // opening. Each pass lands as soon as the list has measured the previous one.
+    let passes = 0;
+    const grow = new ResizeObserver(() => {
+      if (passes === 6) return;
+      passes += 1;
+      for (const row of screen.container.querySelectorAll("[data-timeline-root]")) {
+        const late = document.createElement("div");
+        late.style.height = "120px";
+        row.append(late);
+      }
+    });
+    grow.observe(viewport.firstElementChild!);
+    using _grow = { [Symbol.dispose]: () => grow.disconnect() };
+    await vi.waitFor(() => expect(passes).toBe(6));
+    await vi.waitFor(() =>
+      expect(
+        viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+      ).toBeLessThanOrEqual(1),
+    );
+    expect(screen.text()).toContain("Paragraph 11.29");
+  });
+});
