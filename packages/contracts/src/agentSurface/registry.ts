@@ -644,9 +644,9 @@ export const agentSurfaceRegistry = {
     verb: "device_join",
     name: "goat_hub_device_join",
     toolkit: "hostStatus",
-    summary: "Join a device to this OpenCodex Home as a Remote Link Child.",
+    summary: "Join a device to this OpenCodex Home as a Remote Link Child or Hub client.",
     description:
-      "Join a device SSH alias to this machine's OpenCodex Home as a Remote Link Child, then verify P1–P8 parity and run repair steps 1–3 if it is not ok. The alias must be direct (no ProxyJump or ProxyCommand) and the device must already have OpenCodex. The Home's offered SSH fingerprint must match GOAT's pin for the alias and is passed to ocx link add as --expect-fingerprint. Needs hub.manage. Unless the caller's profile is owner, and whenever the pin is missing or differs, the first call returns state needs_human with a decisionId; once a person approves it in the decision inbox, call again with that decisionId. Hub-mode clients (Windows) are not joined here. GOAT never reads or stores link keys.",
+      "Join a device SSH alias to this machine's OpenCodex Home, then verify P1–P8 parity and run repair steps 1–3 if it is not ok. The device must already have OpenCodex. A platform check runs first: Windows (Git Bash, MSYS, Cygwin) joins as a Hub-mode client because Remote Link refuses it; transport remote-link on Windows is refused before any link is made. Pass transport hub-client for a device GOAT reaches only by password. Remote Link: the alias must be direct (no ProxyJump or ProxyCommand), and the Home's offered SSH fingerprint must match GOAT's pin and is passed to ocx link add as --expect-fingerprint. Hub client: this machine must run OpenCodex in Hub mode with public data and management origins; GOAT runs ocx hub invite here and gives the single-use code to ocx connect --pairing-code-stdin on the device over SSH stdin. Needs hub.manage. Unless the caller's profile is owner, and whenever a Remote Link pin is missing or differs, the first call returns state needs_human with a decisionId; once a person approves it in the decision inbox, call again with that decisionId. GOAT never reads or stores link keys, data keys or pairing codes.",
     effect: "write",
     hostRoutable: false,
     requires: "either",
@@ -659,9 +659,9 @@ export const agentSurfaceRegistry = {
     verb: "device_leave",
     name: "goat_hub_device_leave",
     toolkit: "hostStatus",
-    summary: "Remove a Remote Link Child from this OpenCodex Home.",
+    summary: "Remove a Remote Link Child or Hub client from this OpenCodex Home.",
     description:
-      "Remove a Remote Link Child, device first: over SSH, ocx disconnect and ocx restart on the device until its /healthz answers as standalone; then ocx link revoke --force on this Home, and check that ocx link status and the Home's ssh -R tunnels no longer show the link. If the device step fails, the Home link is left in place and the call returns state needs_human with a decisionId for an owner to approve a force-revoke. Needs hub.manage; unless the caller's profile is owner, the first call also returns needs_human with a decisionId to approve. Call again with an approved decisionId to continue.",
+      "Remove a device, device first: over SSH, ocx disconnect and ocx restart on the device until its /healthz answers as standalone. Then, for a Remote Link Child, ocx link revoke --force on this Home and a check that ocx link status and the Home's ssh -R tunnels no longer show the link; for a Hub client, ocx access key remove for its data key. If the device step fails, the hub's link or key is left in place and the call returns state needs_human with a decisionId for an owner to approve a force-revoke. Needs hub.manage; unless the caller's profile is owner, the first call also returns needs_human with a decisionId to approve. Call again with an approved decisionId to continue.",
     effect: "destructive",
     hostRoutable: false,
     requires: "either",

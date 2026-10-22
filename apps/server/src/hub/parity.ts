@@ -21,6 +21,8 @@ export function parityVerdict(input: {
   const source = home?.parityEvidence;
   const target = device?.parityEvidence;
   const link = home?.link.links.find(({ alias }) => alias === input.deviceAlias);
+  // A Hub client has no Remote Link record; its evidence is `ocx connect status` (design §1.4 P2).
+  const client = device?.hubClient;
   const checks: Array<HubParityResult["checks"][number]> = [];
   const add = (
     id: HubParityResult["checks"][number]["id"],
@@ -39,25 +41,19 @@ export function parityVerdict(input: {
         : "Device health does not report the client role.",
     );
 
-  if (!home?.runtime.healthy || home.link.role !== "home")
+  if (client) {
+    if (!home?.runtime.healthy || home.runtime.role !== "hub")
+      add("P2", "failed", "This machine is not serving as an OpenCodex Hub.");
+    else if (client.state !== "connected")
+      add("P2", "failed", `Hub client connection is ${client.state}.`);
+    else if (!client.apiKeyId) add("P2", "unproven", "Hub client reports no API key id.");
+    else add("P2", "ok", `Hub client is connected with data key ${client.apiKeyId}.`);
+  } else if (!home?.runtime.healthy || home.link.role !== "home")
     add("P2", "failed", "Home link status is unavailable.");
   else if (!home.link.available) add("P2", "unproven", "Home link status could not be read.");
   else if (!link) add("P2", "failed", "Home has no link record for this device.");
   else if (link.state !== "connected") add("P2", "failed", "Home tunnel is not connected.");
-  else if (device?.hubClient) {
-    const client = device.hubClient;
-    add(
-      "P2",
-      client.state !== "connected"
-        ? "failed"
-        : !link.apiKeyId || !client.apiKeyId
-          ? "unproven"
-          : link.apiKeyId === client.apiKeyId
-            ? "ok"
-            : "failed",
-      "Compare the Hub client's API key id with the Home record.",
-    );
-  } else if (!target?.childLinkId) add("P2", "unproven", "Child link identity is not reported.");
+  else if (!target?.childLinkId) add("P2", "unproven", "Child link identity is not reported.");
   else
     add(
       "P2",
@@ -82,7 +78,15 @@ export function parityVerdict(input: {
         : "Relayed catalog differs from Home.",
     );
 
-  if (device?.hubClient) {
+  if (target?.servedBy && source?.instanceId)
+    add(
+      "P4",
+      target.servedBy === source.instanceId ? "ok" : "failed",
+      target.servedBy === source.instanceId
+        ? "Response names this Home."
+        : "Response names a different Home.",
+    );
+  else if (client) {
     const served = originOf(target?.hubServerUrl);
     const advertised = originOf(source?.hubDataOrigin);
     if (served === undefined || advertised === undefined)
@@ -95,18 +99,11 @@ export function parityVerdict(input: {
           ? "Hub client uses this Home's data origin."
           : "Hub client uses another hub's data origin.",
       );
-  } else if (!target?.servedBy || !source?.instanceId)
+  } else
     add("P4", "unproven", "Served-by header or stable Home instance id is unavailable (OCX-2).");
-  else
-    add(
-      "P4",
-      target.servedBy === source.instanceId ? "ok" : "failed",
-      target.servedBy === source.instanceId
-        ? "Response names this Home."
-        : "Response names a different Home.",
-    );
 
-  if (target?.startedAt === undefined || link?.lastApplyAt === undefined)
+  if (client) add("P5", "skipped", "Hub clients receive no Home settings apply.");
+  else if (target?.startedAt === undefined || link?.lastApplyAt === undefined)
     add("P5", "skipped", "Runtime start or Home last-apply time is unavailable (OCX-6).");
   else
     add(
@@ -117,7 +114,9 @@ export function parityVerdict(input: {
         : "Device runtime predates Home apply.",
     );
 
-  if (device?.link.childSettingsApplied === false || (target && !target.settingsDigest))
+  if (client)
+    add("P6", "skipped", "Hub clients keep their own Codex settings; only Remote Link syncs them.");
+  else if (device?.link.childSettingsApplied === false || (target && !target.settingsDigest))
     add("P6", "failed", "Home Codex settings record is missing or unreadable; no sync is proven.");
   else if (
     target?.settingsLinkId &&

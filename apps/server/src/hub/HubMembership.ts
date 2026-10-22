@@ -4,6 +4,7 @@ import {
   type HubDeviceOperationInput,
   type HubDeviceOperationResult,
   type HubDeviceStep,
+  type HubDeviceTransport,
   type HubParityCheckId,
   type HubParityResult,
 } from "@goat/contracts";
@@ -25,8 +26,13 @@ import { HubOcx, HubOcxError, SAFE_ALIAS, type OcxOutput } from "./HubOcx.ts";
 const DECISION_TTL_MS = 24 * 60 * 60 * 1000;
 // OpenCodex's own enrollment deadline is 360 seconds; leave room for its cleanup.
 const LINK_ADD_TIMEOUT_MS = 420_000;
+// `ocx connect` exchanges the code, then waits up to 120 idle seconds for the catalog.
+const CONNECT_TIMEOUT_MS = 300_000;
 const HOME_TIMEOUT_MS = 60_000;
 const DEVICE_TIMEOUT_MS = 120_000;
+const WINDOWS_REFUSAL =
+  "Remote Link refuses Windows (remote_platform_unsupported); join it as a Hub-mode client with transport hub-client.";
+const PLATFORM_LABEL = { windows: "Windows", posix: "POSIX", unknown: "Platform unknown" };
 
 const LinkStatus = Schema.Struct({
   role: Schema.Literals(["standalone", "home", "child"]),
@@ -45,6 +51,13 @@ const Probe = Schema.Struct({
   keyType: Schema.String,
 });
 const Added = Schema.Struct({ linkId: Schema.String });
+/** `ocx connect status --json`; `transport: "link"` is a Remote Link Child's saved connection. */
+const Connection = Schema.Struct({
+  state: Schema.String,
+  transport: Schema.optional(Schema.String),
+  serverUrl: Schema.optional(Schema.String),
+  apiKeyId: Schema.optional(Schema.String),
+});
 const decodeJson = <A, I>(schema: Schema.Codec<A, I>, text: string) =>
   Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(schema))(text.trim()));
 
@@ -79,6 +92,16 @@ export interface HubPerson {
   readonly sessionId: string;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
 }
+interface Caller {
+  readonly actor: string;
+  readonly profile: string;
+  readonly owner: boolean;
+  readonly inbox: DecisionInbox.DecisionCaller;
+}
+/** What the Home holds for a member: a Remote Link record, or a Hub client's data key id. */
+type Member =
+  | { readonly kind: "remote-link"; readonly id: string; readonly tunnelPort?: number | undefined }
+  | { readonly kind: "hub-client"; readonly id: string };
 /** The decision context carries this line; an approval only counts for the same action and key. */
 export const decisionBinding = (
   action: "join" | "leave" | "leave-force" | "relink",
@@ -292,7 +315,11 @@ const make = Effect.gen(function* () {
     state: HubDeviceOperationResult["state"],
     message: string,
     steps: ReadonlyArray<HubDeviceStep>,
-    extra: { readonly parity?: HubParityResult; readonly decisionId?: string } = {},
+    extra: {
+      readonly parity?: HubParityResult;
+      readonly decisionId?: string;
+      readonly transport?: HubDeviceTransport;
+    } = {},
   ): HubDeviceOperationResult => ({
     deviceAlias: alias,
     action,
@@ -320,7 +347,9 @@ const make = Effect.gen(function* () {
     if (linkId === undefined) {
       steps.push({ step: "link_add", outcome: "failed", detail: phaseMessage(added.phase) });
       yield* audit(caller, `hub.${action}`, alias, "failed", decisionId);
-      return result(action, alias, "failed", phaseMessage(added.phase), steps);
+      return result(action, alias, "failed", phaseMessage(added.phase), steps, {
+        transport: "remote-link",
+      });
     }
     steps.push({ step: "link_add", outcome: "ok", detail: linkId });
     const verified = yield* ladder(
@@ -341,7 +370,7 @@ const make = Effect.gen(function* () {
         ? `${alias} is linked to this Home.`
         : `${alias} is linked, but ${verified.failingCheckIds.join(", ")} still fail.`,
       steps,
-      { parity: verified },
+      { parity: verified, transport: "remote-link" },
     );
   });
 
@@ -418,6 +447,134 @@ const make = Effect.gen(function* () {
   const homeUnavailable = (action: Action, alias: string, steps: ReadonlyArray<HubDeviceStep>) =>
     result(action, alias, "failed", "This machine's OpenCodex link status is unavailable.", steps);
 
+  const deviceConnection = Effect.fn("HubMembership.deviceConnection")(function* (alias: string) {
+    const output = yield* ocx.device(alias, ["connect", "status", "--json"], DEVICE_TIMEOUT_MS);
+    return output.code === 0 ? decodeJson(Connection, output.stdout) : undefined;
+  });
+
+  /** Asks an owner unless the caller is one; returns a result only when the call must stop. */
+  const gate = Effect.fn("HubMembership.gate")(function* (
+    caller: Caller,
+    action: Action,
+    alias: string,
+    decisionId: string | undefined,
+    binding: string,
+    request: { readonly title: string; readonly context: string; readonly reason: string },
+    approve: { readonly label: string; readonly consequence: string },
+    steps: ReadonlyArray<HubDeviceStep>,
+    transport: HubDeviceTransport,
+  ) {
+    if (decisionId !== undefined) {
+      yield* approved(caller.inbox, decisionId, binding);
+      return undefined;
+    }
+    if (caller.owner) return undefined;
+    const requested = yield* requestDecision(caller.inbox, {
+      title: request.title,
+      context: request.context,
+      binding,
+      approve: approve.label,
+      consequence: approve.consequence,
+    });
+    yield* audit(caller, `hub.${action}`, alias, "needs_decision", requested);
+    return result(action, alias, "needs_human", request.reason, steps, {
+      decisionId: requested,
+      transport,
+    });
+  });
+
+  /** Hub mode: mint a one-use invite here and redeem it on the device over GOAT SSH (§1.5). */
+  const joinHubClient = Effect.fn("HubMembership.joinHubClient")(function* (
+    scope: McpInvocationScope,
+    caller: Caller,
+    alias: string,
+    decisionId: string | undefined,
+    steps: HubDeviceStep[],
+  ) {
+    const transport = "hub-client" as const;
+    yield* ocx.device(alias, ["--version"], DEVICE_TIMEOUT_MS);
+    const current = yield* deviceConnection(alias);
+    if (current?.state === "connected") {
+      if (current.transport === "link")
+        return result(
+          "join",
+          alias,
+          "failed",
+          `${alias} still has a Remote Link connection to ${current.serverUrl ?? "another Home"}. Remove it on that Home first.`,
+          steps,
+          { transport },
+        );
+      const verified = yield* parity.verify(alias, scope);
+      return result(
+        "join",
+        alias,
+        finalState(verified),
+        `${alias} is already a Hub client; nothing was changed.`,
+        steps,
+        { parity: verified, transport },
+      );
+    }
+    const stopped = yield* gate(
+      caller,
+      "join",
+      alias,
+      decisionId,
+      decisionBinding("join", alias, transport),
+      {
+        title: `Join ${alias} to the hub as a Hub client`,
+        context: `Mints a single-use OpenCodex invite on this hub and redeems it on ${alias} over GOAT SSH. ${alias} gets its own data key and its model traffic goes through this hub.`,
+        reason: "Joining a device needs an owner's approval.",
+      },
+      { label: "Join as Hub client", consequence: `${alias} routes through this hub.` },
+      steps,
+      transport,
+    );
+    if (stopped !== undefined) return stopped;
+    yield* audit(caller, "hub.join", alias, "started", decisionId);
+    const handoff = yield* ocx.connectHubClient(alias, CONNECT_TIMEOUT_MS);
+    if (!handoff.minted) {
+      const detail =
+        handoff.phase === undefined
+          ? `ocx hub invite exited ${handoff.exit}. This machine must run OpenCodex in Hub mode with hub.dataPublicOrigin and hub.managementPublicOrigin set.`
+          : phaseMessage(handoff.phase);
+      steps.push({ step: "invite", outcome: "failed", detail });
+      yield* audit(caller, "hub.join", alias, "failed", decisionId);
+      return result("join", alias, "failed", detail, steps, { transport });
+    }
+    steps.push({
+      step: "invite",
+      outcome: "ok",
+      detail: `Single-use code for ${handoff.dataUrl}, expires ${handoff.expiresAt}.`,
+    });
+    if (handoff.connect.code !== 0) {
+      const detail = `ocx connect exited ${handoff.connect.code}; the unused code expires on its own.`;
+      steps.push({ step: "connect", outcome: "failed", detail });
+      yield* audit(caller, "hub.join", alias, "failed", decisionId);
+      return result("join", alias, "failed", detail, steps, { transport });
+    }
+    steps.push({ step: "connect", outcome: "ok", detail: handoff.dataUrl });
+    const verified = yield* ladder(
+      scope,
+      caller,
+      alias,
+      undefined,
+      yield* parity.verify(alias, scope),
+      steps,
+    );
+    const state = finalState(verified);
+    yield* audit(caller, "hub.join", alias, state, decisionId);
+    return result(
+      "join",
+      alias,
+      state,
+      state === "child"
+        ? `${alias} is a Hub client of this hub.`
+        : `${alias} is connected, but ${verified.failingCheckIds.join(", ")} still fail.`,
+      steps,
+      { parity: verified, transport },
+    );
+  });
+
   const join = Effect.fn("HubMembership.join")(function* (
     scope: McpInvocationScope,
     input: HubDeviceOperationInput,
@@ -427,14 +584,6 @@ const make = Effect.gen(function* () {
     const caller = yield* authorize(scope, alias, person);
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
-      if (!(yield* ocx.directAlias(alias)))
-        return result(
-          "join",
-          alias,
-          "failed",
-          `${alias} does not resolve to a direct SSH host. Use a direct Tailscale alias without ProxyJump or ProxyCommand.`,
-          steps,
-        );
       const status = yield* homeLinks();
       if (status === undefined) return homeUnavailable("join", alias, steps);
       if (status.role === "child")
@@ -453,15 +602,38 @@ const make = Effect.gen(function* () {
           finalState(verified),
           `${alias} is already linked; nothing was changed. Use goat_hub_device_repair if checks fail.`,
           steps,
-          { parity: verified },
+          { parity: verified, transport: "remote-link" },
         );
       }
+      // OpenCodex refuses a Windows Child only after issuing a key and starting a tunnel (OCX-9).
+      const platform = yield* ocx.devicePlatform(alias);
+      const transport = input.transport ?? (platform === "windows" ? "hub-client" : "remote-link");
+      if (transport === "remote-link" && platform === "windows") {
+        steps.push({ step: "preflight", outcome: "failed", detail: WINDOWS_REFUSAL });
+        return result("join", alias, "failed", WINDOWS_REFUSAL, steps, { transport });
+      }
+      steps.push({
+        step: "preflight",
+        outcome: "ok",
+        detail: `${PLATFORM_LABEL[platform ?? "unknown"]}; joining as ${transport}.`,
+      });
+      if (transport === "hub-client")
+        return yield* joinHubClient(scope, caller, alias, input.decisionId, steps);
+      if (!(yield* ocx.directAlias(alias)))
+        return result(
+          "join",
+          alias,
+          "failed",
+          `${alias} does not resolve to a direct SSH host. Use a direct Tailscale alias without ProxyJump or ProxyCommand.`,
+          steps,
+          { transport },
+        );
       // Ready means OpenCodex answers on the device; installing it is a separate, consented step.
       yield* ocx.device(alias, ["--version"], DEVICE_TIMEOUT_MS);
       const offered = yield* probe(alias);
       if (!offered.ok) {
         steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered.phase) });
-        return result("join", alias, "failed", phaseMessage(offered.phase), steps);
+        return result("join", alias, "failed", phaseMessage(offered.phase), steps, { transport });
       }
       steps.push({
         step: "probe",
@@ -486,7 +658,7 @@ const make = Effect.gen(function* () {
           consequence: `${alias} routes through this Home.`,
         });
         yield* audit(caller, "hub.join", alias, "needs_decision", decisionId);
-        return result("join", alias, "needs_human", reason, steps, { decisionId });
+        return result("join", alias, "needs_human", reason, steps, { decisionId, transport });
       }
       yield* audit(caller, "hub.join", alias, "started", input.decisionId);
       return yield* link(
@@ -506,6 +678,27 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /** The hub's half of a Hub client leaving: revoke its data key once the device is standalone. */
+  const revokeKey = Effect.fn("HubMembership.revokeKey")(function* (
+    id: string,
+    steps: HubDeviceStep[],
+  ) {
+    const revoked = yield* ocx.home(
+      ["access", "key", "remove", id, "--yes", "--json"],
+      HOME_TIMEOUT_MS,
+    );
+    steps.push(
+      revoked.code === 0
+        ? { step: "revoke", outcome: "ok", detail: id }
+        : {
+            step: "revoke",
+            outcome: "failed",
+            detail: `ocx access key remove exited ${revoked.code}.`,
+          },
+    );
+    return revoked.code === 0;
+  });
+
   const leave = Effect.fn("HubMembership.leave")(function* (
     scope: McpInvocationScope,
     input: HubDeviceOperationInput,
@@ -518,61 +711,71 @@ const make = Effect.gen(function* () {
       const status = yield* homeLinks();
       if (status === undefined) return homeUnavailable("leave", alias, steps);
       const record = status.links.find((entry) => entry.alias === alias);
-      if (record === undefined)
-        return result("leave", alias, "ready", `${alias} is not linked to this Home.`, steps);
-      const binding = decisionBinding("leave", alias, record.id);
-      const forceBinding = decisionBinding("leave-force", alias, record.id);
+      let member: Member;
+      if (record !== undefined)
+        member = { kind: "remote-link", id: record.id, tunnelPort: record.tunnelPort };
+      else {
+        const connection = yield* deviceConnection(alias);
+        if (
+          connection?.state !== "connected" ||
+          connection.transport === "link" ||
+          connection.apiKeyId === undefined
+        )
+          return result("leave", alias, "ready", `${alias} is not joined to this hub.`, steps);
+        member = { kind: "hub-client", id: connection.apiKeyId };
+      }
+      const transport = member.kind;
+      const what = member.kind === "remote-link" ? `link ${member.id}` : `data key ${member.id}`;
+      const binding = decisionBinding("leave", alias, member.id);
+      const forceBinding = decisionBinding("leave-force", alias, member.id);
       // A forced removal is only ever a person's answer to a device that could not be cleaned up.
       const forced =
         input.decisionId !== undefined &&
         (yield* inbox.get(caller.inbox, input.decisionId)).context
           .split("\n")
           .includes(forceBinding);
-      if (input.decisionId !== undefined)
-        yield* approved(caller.inbox, input.decisionId, forced ? forceBinding : binding);
-      else if (!caller.owner) {
-        const decisionId = yield* requestDecision(caller.inbox, {
+      const stopped = yield* gate(
+        caller,
+        "leave",
+        alias,
+        input.decisionId,
+        forced ? forceBinding : binding,
+        {
           title: `Remove ${alias} from the hub`,
-          context: `Revokes link ${record.id} on this Home and disconnects ${alias}, which returns to its own OpenCodex settings.`,
-          binding,
-          approve: "Remove it",
-          consequence: `${alias} stops routing through this Home.`,
-        });
-        yield* audit(caller, "hub.leave", alias, "needs_decision", decisionId);
-        return result(
-          "leave",
-          alias,
-          "needs_human",
-          "Removing a device needs an owner's approval.",
-          steps,
-          {
-            decisionId,
-          },
-        );
-      }
+          context: `Disconnects ${alias}, which returns to its own OpenCodex settings, then revokes ${what} on this hub.`,
+          reason: "Removing a device needs an owner's approval.",
+        },
+        { label: "Remove it", consequence: `${alias} stops routing through this hub.` },
+        steps,
+        transport,
+      );
+      if (stopped !== undefined) return stopped;
       yield* audit(caller, "hub.leave", alias, "started", input.decisionId);
       if (!forced) {
         const failure = yield* leaveDevice(alias, steps);
         if (failure !== undefined) {
           const decisionId = yield* requestDecision(caller.inbox, {
             title: `Force-remove ${alias} from the hub`,
-            context: `Cleaning up ${alias} failed: ${failure} The Home still holds link ${record.id}. Forcing revokes it on the Home without the device's help; ${alias} keeps its client settings until someone runs ocx disconnect and ocx restart there.`,
+            context: `Cleaning up ${alias} failed: ${failure} The hub still holds ${what}. Forcing revokes it here without the device's help; ${alias} keeps its client settings until someone runs ocx disconnect and ocx restart there.`,
             binding: forceBinding,
             approve: "Force-revoke",
-            consequence: `${alias} stops routing through this Home but keeps stale client settings.`,
+            consequence: `${alias} stops routing through this hub but keeps stale client settings.`,
           });
           yield* audit(caller, "hub.leave", alias, "needs_decision", decisionId);
           return result(
             "leave",
             alias,
             "needs_human",
-            `${failure} The Home link was left in place.`,
+            `${failure} The hub's ${what} was left in place.`,
             steps,
-            { decisionId },
+            { decisionId, transport },
           );
         }
       }
-      const clean = yield* revokeOnHome(alias, record, steps);
+      const clean =
+        member.kind === "remote-link"
+          ? yield* revokeOnHome(alias, member, steps)
+          : yield* revokeKey(member.id, steps);
       const revoked = steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok");
       const state = clean && !forced ? "ready" : revoked ? "degraded" : "failed";
       yield* audit(caller, "hub.leave", alias, state, input.decisionId);
@@ -583,11 +786,12 @@ const make = Effect.gen(function* () {
         state === "ready"
           ? `${alias} left the hub.`
           : !revoked
-            ? "The Home did not revoke the link."
+            ? `The hub did not revoke ${what}.`
             : forced
-              ? `The Home revoked the link; run ocx disconnect and ocx restart on ${alias} to finish.`
+              ? `The hub revoked ${what}; run ocx disconnect and ocx restart on ${alias} to finish.`
               : "The Home revoked the link, but a link record or tunnel remains.",
         steps,
+        { transport },
       );
     }).pipe(
       Effect.catchTags({

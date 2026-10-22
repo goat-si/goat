@@ -162,14 +162,15 @@ it.effect("old inventories never become ok from inferred role and record presenc
 const hubClientPair = (serverUrl: string | undefined, origin: string | undefined) => {
   const home = fleetSnapshot("home");
   const device = fleetSnapshot("macmini-ts");
+  const { childLinkId: _linkId, ...evidence } = device.parityEvidence!;
   return {
     home: {
       ...home,
+      runtime: { ...home.runtime, role: "hub" as const },
+      // A Hub client has no Remote Link record on the Home.
       link: {
         ...home.link,
-        links: home.link.links.map((link) =>
-          link.alias === "macmini-ts" ? { ...link, apiKeyId: "key_mini" } : link,
-        ),
+        links: home.link.links.filter((link) => link.alias !== "macmini-ts"),
       },
       parityEvidence: {
         ...home.parityEvidence!,
@@ -178,10 +179,10 @@ const hubClientPair = (serverUrl: string | undefined, origin: string | undefined
     },
     device: {
       ...device,
-      link: { ...device.link, role: "none" as const },
+      link: { ...device.link, role: "none" as const, childSettingsApplied: false },
       hubClient: { state: "connected" as const, apiKeyId: "key_mini" },
       parityEvidence: {
-        ...device.parityEvidence!,
+        ...evidence,
         ...(serverUrl === undefined ? {} : { hubServerUrl: serverUrl }),
       },
     },
@@ -201,5 +202,60 @@ it.effect.each([
     });
     expect(result.checks.find(({ id }) => id === "P2")?.status).toBe("ok");
     expect(result.checks.find(({ id }) => id === "P4")?.status).toBe(status);
+  }),
+);
+
+it.effect("a Hub client with no Remote Link record passes on connect status and its key id", () =>
+  Effect.sync(() => {
+    const result = parityVerdict({
+      deviceAlias: "macmini-ts",
+      checkedAt: 100_000,
+      ...hubClientPair("https://hub.tail.ts.net:8443", "https://hub.tail.ts.net:8443"),
+    });
+    expect(result.verdict).toBe("ok");
+    expect(result.checks.find(({ id }) => id === "P2")?.reason).toContain("key_mini");
+    // Settings sync and apply times are Remote Link only.
+    expect(result.checks.filter(({ status }) => status === "skipped").map(({ id }) => id)).toEqual([
+      "P5",
+      "P6",
+    ]);
+  }),
+);
+
+it.effect.each([
+  ["the hub is not in Hub mode", { role: "standalone" }, "connected", "key_mini"],
+  ["the client is disconnected", { role: "hub" }, "disconnected", "key_mini"],
+  ["the client key was rejected", { role: "hub" }, "invalid", "key_mini"],
+] as const)("a Hub client's P2 fails when %s", ([, runtime, state, apiKeyId]) =>
+  Effect.sync(() => {
+    const pair = hubClientPair("https://hub.tail.ts.net:8443", "https://hub.tail.ts.net:8443");
+    const result = parityVerdict({
+      deviceAlias: "macmini-ts",
+      checkedAt: 100_000,
+      home: { ...pair.home, runtime: { ...pair.home.runtime, ...runtime } },
+      device: { ...pair.device, hubClient: { state, apiKeyId } },
+    });
+    expect(result.verdict).toBe("broken");
+    expect(result.failingCheckIds).toEqual(["P2"]);
+  }),
+);
+
+it.effect("a served-by header proves a Hub client's P4 without an advertised origin", () =>
+  Effect.sync(() => {
+    const pair = hubClientPair(undefined, undefined);
+    const servedBy = pair.home.parityEvidence.instanceId!;
+    const result = parityVerdict({
+      deviceAlias: "macmini-ts",
+      checkedAt: 100_000,
+      home: pair.home,
+      device: {
+        ...pair.device,
+        parityEvidence: { ...pair.device.parityEvidence, servedBy },
+      },
+    });
+    expect(result.checks.find(({ id }) => id === "P4")).toMatchObject({
+      status: "ok",
+      reason: "Response names this Home.",
+    });
   }),
 );
