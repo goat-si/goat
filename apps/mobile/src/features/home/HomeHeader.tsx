@@ -5,6 +5,7 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
+import { useMobileGoatBotModelMenu } from "../goat-bot/useMobileGoatBotModel";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
@@ -20,6 +21,7 @@ export function HomeHeader(props: HomeHeaderProps) {
   const navigation = useNavigation<NativeStackNavigationProp<ParamListBase>>();
   const primaryColumn = use(NativePrimaryColumnContext);
   const showsThreads = mode === "bot" && primaryColumn?.selectedThreadKey == null;
+  const botModel = useMobileGoatBotModelMenu();
   return (
     <Toolbar placement="left">
       <Toolbar.Button
@@ -33,6 +35,24 @@ export function HomeHeader(props: HomeHeaderProps) {
           icon={showsThreads ? "list.bullet" : "bubble.left.and.bubble.right"}
           onPress={toggleMode}
         />
+      ) : null}
+      {showsThreads && botModel ? (
+        <Toolbar.Menu
+          title={botModel.label}
+          accessibilityLabel={botModel.accessibilityLabel}
+          disabled={botModel.disabled}
+        >
+          {botModel.items.map((item) => (
+            <Toolbar.MenuAction
+              key={item.id}
+              isOn={item.selected}
+              subtitle={item.subtitle}
+              onPress={() => botModel.select(item.id)}
+            >
+              <Toolbar.Label>{item.title}</Toolbar.Label>
+            </Toolbar.MenuAction>
+          ))}
+        </Toolbar.Menu>
       ) : null}
     </Toolbar>
   );

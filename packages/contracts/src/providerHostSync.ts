@@ -248,11 +248,27 @@ export type ProviderSyncStatusInput = typeof ProviderSyncStatusInput.Type;
 export const ProviderSyncCancelInput = Schema.Struct({ syncId: SyncId });
 export type ProviderSyncCancelInput = typeof ProviderSyncCancelInput.Type;
 
+/**
+ * declined, expired and cancelled: the approval handoff ended that way, so no sync will start.
+ * start_failed: the person approved but the sync could not start.
+ */
+export const ProviderHostSyncErrorCode = Schema.Literals([
+  "not_found",
+  "invalid_request",
+  "unavailable",
+  "denied",
+  "declined",
+  "expired",
+  "cancelled",
+  "start_failed",
+]);
+export type ProviderHostSyncErrorCode = typeof ProviderHostSyncErrorCode.Type;
+
 /** Safe text only: never installer output, credentials, or sign-in URLs. */
 export class ProviderHostSyncError extends Schema.TaggedError<ProviderHostSyncError>()(
   "ProviderHostSyncError",
   {
-    code: Schema.Literals(["not_found", "invalid_request", "unavailable", "denied"]),
+    code: ProviderHostSyncErrorCode,
     detail: Schema.String,
   },
 ) {

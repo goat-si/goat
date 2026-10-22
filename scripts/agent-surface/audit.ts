@@ -22,39 +22,13 @@ import {
   repoRoot,
   sourceFiles,
 } from "./inventory.ts";
+import { code, list, pct, table, TICK } from "./markdown.ts";
 
 const OUTPUT = "docs/internals/agent-surface-audit.md";
-const TICK = String.fromCharCode(96);
 
 const ref = (source: SourceRef | null) =>
   source ? source.path + ":" + source.line : "(not found)";
 const at = (file: string, pattern: RegExp) => ref(findLine(file, pattern));
-const code = (text: string) => TICK + text + TICK;
-const pct = (part: number, whole: number) =>
-  whole === 0 ? "0%" : Math.round((part / whole) * 100) + "%";
-const list = (names: ReadonlyArray<string>, max = 12) =>
-  names.length <= max
-    ? names.map(code).join(", ")
-    : names.slice(0, max).map(code).join(", ") + ", and " + (names.length - max) + " more";
-// Padded the way `vp fmt` pads Markdown tables, so the committed file is both
-// formatted and byte-identical to a fresh render.
-const table = (
-  head: ReadonlyArray<string>,
-  rows: ReadonlyArray<ReadonlyArray<string | number>>,
-) => {
-  const cells = [head, ...rows].map((row) => row.map((cell) => String(cell).replace(/\|/g, "\\|")));
-  const widths = head.map((_, column) =>
-    Math.max(3, ...cells.map((row) => [...(row[column] ?? "")].length)),
-  );
-  const line = (row: ReadonlyArray<string>) =>
-    "| " + widths.map((width, column) => (row[column] ?? "").padEnd(width)).join(" | ") + " |";
-  const [header = [], ...body] = cells;
-  return [
-    line(header),
-    "| " + widths.map((width) => "-".repeat(width)).join(" | ") + " |",
-    ...body.map(line),
-  ].join("\n");
-};
 
 interface Mention {
   readonly token: string;
@@ -580,7 +554,10 @@ function render(inventory: Inventory): string {
       " carries a machine " +
       code("code") +
       " (" +
-      at("packages/contracts/src/orchestratorMcp.ts", /export const OrchestratorMcpFailureCode/) +
+      at(
+        "packages/contracts/src/orchestratorMcpFailure.ts",
+        /export const OrchestratorMcpFailureCode/,
+      ) +
       "). Preview, device, worktree, and pull request failures are told apart by " +
       code("_tag") +
       " alone, and every preview tool advertises all of its toolkit's tags whether or not it can raise them.",
@@ -710,7 +687,10 @@ function render(inventory: Inventory): string {
       " and " +
       code("message") +
       " (" +
-      at("packages/contracts/src/orchestratorMcp.ts", /export class OrchestratorMcpFailure /) +
+      at(
+        "packages/contracts/src/orchestratorMcpFailure.ts",
+        /export class OrchestratorMcpFailure /,
+      ) +
       "): no retry hint, offending field, or next action. Recovery advice, where it exists, lives in message text.",
     "",
     "## Where a human is required",
@@ -760,7 +740,10 @@ function render(inventory: Inventory): string {
             " or " +
             code("interaction_mode_escalation_denied") +
             ". No tool requests approval, so the agent must stop and tell the user.",
-          at("packages/contracts/src/orchestratorMcp.ts", /"runtime_mode_escalation_denied"/),
+          at(
+            "packages/contracts/src/orchestratorMcpFailure.ts",
+            /"runtime_mode_escalation_denied"/,
+          ),
         ],
         [
           "Grant a capability or credential",
@@ -769,7 +752,7 @@ function render(inventory: Inventory): string {
             " or " +
             code("thread_credential_required") +
             "; the user resolves it in settings or by issuing a token.",
-          at("packages/contracts/src/orchestratorMcp.ts", /"thread_credential_required"/),
+          at("packages/contracts/src/orchestratorMcpFailure.ts", /"thread_credential_required"/),
         ],
         [
           "T3 Connect sign-in (OAuth or device code)",
