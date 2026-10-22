@@ -868,6 +868,99 @@ it.effect.each([599999, 600000, null, "revoked"] as const)(
     }),
 );
 
+it.effect.each(["declined", "expired", "cancelled"] as const)(
+  "a %s runtime update approval reaches the agent as a terminal error and never updates",
+  (state) =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      let updates = 0;
+      let acknowledgements = 0;
+      const operation = { operationId: "refused-op", generation: 1, stage: "runtime" as const };
+      let snapshot: SshHostResult = { kind: "ok", status: { ...stopped, setup: operation } };
+      const handoff: Handoff = {
+        handoffId: TurnItemId.make("refused-update"),
+        kind: "approval",
+        title: "Update box?",
+        reason: "Replace runtime",
+        requestedBy: {
+          threadId: ThreadId.make("caller"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          path: "ssh.runtime_update",
+        },
+        target: { environmentId: EnvironmentId.make("owner"), path: "ssh.runtime_update" },
+        dedupeKey: "test",
+        state,
+        createdAt: DateTime.subtract(now, { minutes: 15 }),
+        expiresAt: DateTime.add(now, { hours: 23 }),
+        resolvedAt: now,
+        actor: { type: "client", label: "Reviewer" },
+      };
+      const layer = SshHostSetup.layer.pipe(
+        Layer.provide(
+          Layer.mock(SessionStore.SessionStore)({
+            cookieName: "test",
+            legacyCookieName: undefined,
+            listActive: () => Effect.succeed([]),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(Handoffs.Handoffs)({
+            resolvedSshOutcomes: Effect.succeed([
+              {
+                handoff,
+                sshProgress: {
+                  host: "box",
+                  operationId: operation.operationId,
+                  aliasGeneration: operation.generation,
+                  environmentId: EnvironmentId.make("owner"),
+                  threadId: ThreadId.make("caller"),
+                },
+              },
+            ]),
+            completedSshContinuations: Effect.succeed([]),
+            finishSshContinuation: () => Effect.sync(() => void acknowledgements++),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+            publishSetupOutcome: (_host, _operation, outcome) =>
+              Effect.sync(() => {
+                if (outcome.kind === "error")
+                  snapshot = {
+                    kind: "ok",
+                    status: {
+                      ...stopped,
+                      state: "failed",
+                      setup: { ...operation, stage: "complete" },
+                      failure: { reason: outcome.reason, fix: outcome.fix },
+                      detail: outcome.message,
+                    },
+                  };
+                return true;
+              }),
+            runtimeStatus: () => Effect.sync(() => snapshot),
+            runtimeUpdate: () => Effect.sync(() => void updates++).pipe(Effect.as(snapshot)),
+          }),
+        ),
+        Layer.provide(dependencies),
+      );
+      const setup = Context.get(yield* Layer.build(layer), SshHostSetup.SshHostSetup);
+      yield* setup.resumeContinuations;
+      expect(updates).toBe(0);
+      expect(acknowledgements).toBe(1);
+      expect(yield* setup.status({ host: "box" })).toMatchObject({
+        status: {
+          state: "failed",
+          setup: { stage: "complete" },
+          failure: {
+            reason: state === "expired" ? "approval_expired" : "operation_failed",
+            fix: { actor: "human" },
+          },
+        },
+      });
+    }),
+);
+
 it.effect(
   "Forget fences an admitted job while its upload is still gated and removes only owned files",
   () =>

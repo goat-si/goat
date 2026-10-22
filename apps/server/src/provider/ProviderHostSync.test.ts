@@ -638,3 +638,10 @@ it.effect("installs with the official argv and never relays the installer's outp
     expect(wire).not.toContain("npm ERR");
   }).pipe(Effect.provide(layer));
 });
+
+// quarantine: #783 status by handoffId answers "not started yet, ask the person" after a decline or expiry.
+it.todo(
+  "a declined or expired sync approval reads as a terminal error from goat_provider_sync_status",
+);
+// quarantine: #783 a start failure after approval is only logged, so the agent never learns the sync failed.
+it.todo("a sync that fails to start after approval reports failed instead of not started");
