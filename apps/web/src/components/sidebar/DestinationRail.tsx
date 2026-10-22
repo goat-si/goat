@@ -5,6 +5,7 @@ import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
 import {
   createContext,
+  Fragment,
   lazy,
   memo,
   Suspense,
@@ -264,6 +265,10 @@ const DecisionsRailItem = memo(function DecisionsRailItem({ active }: { active: 
     </RailTooltip>
   );
 });
+
+// Rail items, Home included, above the divider. It follows position, not particular items, so
+// it stays put as people reorder or hide items.
+const RAIL_DIVIDER_AFTER = 5;
 
 const ADD_PROVIDER_BUTTON_ID = "destination-rail-add-provider";
 const CUSTOMIZE_RAIL_BUTTON_ID = "destination-rail-customize";
@@ -526,6 +531,7 @@ export const DestinationRail = memo(function DestinationRail() {
     primaryProviderReady,
   };
   const items = resolveRailItems(preferences ?? DEFAULT_RAIL_PREFERENCES, context);
+  const shownItems = items.filter((item) => item.shown);
 
   // Pinned when opened, and rendered outside the item list, so the wizard survives its rail
   // item hiding once a provider becomes ready mid-setup.
@@ -571,16 +577,14 @@ export const DestinationRail = memo(function DestinationRail() {
         </RailTooltip>
         {preferences === null
           ? null
-          : items
-              .filter((item) => item.shown)
-              .map((item) => (
-                <RailItem
-                  key={item.id}
-                  id={item.id}
-                  active={active}
-                  onAddProvider={openAddProvider}
-                />
-              ))}
+          : shownItems.map((item, index) => (
+              <Fragment key={item.id}>
+                <RailItem id={item.id} active={active} onAddProvider={openAddProvider} />
+                {index === RAIL_DIVIDER_AFTER - 2 && index < shownItems.length - 1 ? (
+                  <div aria-hidden className="my-1.5 h-px w-6 shrink-0 bg-border" />
+                ) : null}
+              </Fragment>
+            ))}
         <div className="flex-1" />
         <RailCustomizeMenu items={items} />
         <SidebarUpdatePill placement="rail" />
