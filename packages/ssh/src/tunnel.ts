@@ -31,11 +31,7 @@ import {
   SERVER_EXIT_CODE_DATABASE_AHEAD,
   buildSshKeyAuthInstructions,
 } from "@goat/contracts";
-import {
-  compareRuntimeProtocols,
-  ownRuntimeProtocolRanges,
-  SSH_RUNTIME_PROTOCOL_VERSION,
-} from "@goat/shared/sshRuntimeProtocol";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import {
   describeReadinessCause,
   waitForHttpReady as waitForHttpReadyShared,
@@ -52,7 +48,7 @@ import {
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { extractJsonObject, fromLenientJson } from "@goat/shared/schemaJson";
+import { fromLenientJson } from "@goat/shared/schemaJson";
 import { compareRuntimeBuilds, parseSemver, type RuntimeBuild } from "@goat/shared/semver";
 import * as Config from "effect/Config";
 import * as Cause from "effect/Cause";
@@ -85,6 +81,25 @@ import { readLocalRuntimeArchive } from "./runtimeArchive.ts";
 import { downloadRuntimeArchiveWithGh } from "./runtimeArchiveGh.ts";
 import { downloadRuntimeArchiveWithHttps } from "./runtimeArchiveHttp.ts";
 import { findPublishedRuntime, type PublishedRuntimeMiss } from "./runtimePublished.ts";
+import {
+  applyScriptPlaceholders,
+  decodeRemoteJsonOutput,
+  isNodeScriptRunner,
+  matchesSignals,
+  notifyRuntimePhase,
+  REMOTE_ARCHIVE_CHECKSUMS_SECONDS,
+  REMOTE_ARCHIVE_DOWNLOAD_SECONDS,
+  REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
+  REMOTE_ARCHIVE_LOCK_WAIT_SECONDS,
+  requestedRuntime,
+  RuntimeSignals,
+  shellSingleQuote,
+  sshTargetLogFields,
+  stripTrailingNewlines,
+  type PreparedRemoteRuntime,
+  type RemoteGoatRunnerOptions,
+  type SshRuntimeProgressCallback,
+} from "./remoteRuntime.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
 import {
   REMOTE_RUNTIME_CLEANUP_SCRIPT,
@@ -148,143 +163,9 @@ const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const TUNNEL_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
 const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
-// A cold archive launch also downloads and unpacks a ~70 MB release archive
-// and may wait on another installer's lock. The budgets nest: the checksum
-// file is tiny and the archive download is bounded; a waiter outlasts both
-// downloads plus extraction so it can reuse the result; and the SSH command
-// outlasts an install (own or waited-for) plus readiness, with slack for
-// verification and extraction, which have no timeout of their own.
-const REMOTE_ARCHIVE_CHECKSUMS_SECONDS = 30;
-const REMOTE_ARCHIVE_DOWNLOAD_SECONDS = 240;
-const REMOTE_ARCHIVE_LOCK_WAIT_SECONDS = 360;
-const REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS = 900_000;
 const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
 // Reserved by the folded launch protocol for re-entering preparation, never a launch failure.
 const REMOTE_RECONNECT_REPROBE_EXIT_CODE = 76;
-
-export interface RemoteGoatRunnerOptions {
-  readonly nodeScriptPath?: string | null;
-  readonly nodeEngineRange?: string | null;
-  readonly archiveVersion?: string | null;
-  /**
-   * Commit time (Unix seconds) of the build `archiveVersion` names. It orders that build against
-   * the host's when their versions cannot be ordered, such as two `0.1.0-dev.<sha>` builds.
-   */
-  readonly archiveCommitTime?: number;
-  /** Acquisition authority recorded only when an archive is installed. */
-  readonly archiveSource?: "bundle" | "cache" | "mirror" | "https" | "gh";
-  readonly releaseBaseUrl?: string | null;
-  /** Writable user cache; only this directory may receive gh downloads. */
-  readonly archiveDirectory?: string | null;
-  /** Read-only packaged archives. Never create, repair, or download into this directory. */
-  readonly bundledArchiveDirectory?: string | null;
-  /**
-   * Ask the host to download a published release itself before this client uploads one.
-   * The desktop app and the server's SSH dispatch set it; without it the client always
-   * acquires the archive and uploads it.
-   */
-  readonly hostDownload?: boolean;
-  /**
-   * When this build's own runtime cannot be acquired for a host that runs nothing usable,
-   * install the newest published runtime that is compatible with it instead. The desktop app
-   * and the server's SSH dispatch set it.
-   */
-  readonly publishedFallback?: boolean;
-  /** Local gh executable used for authenticated acquisition; defaults to PATH lookup. */
-  readonly ghCommand?: string | undefined;
-  /** Deadline for the best-effort post-install cleanup and fact warming round trip; 10 s by default. */
-  readonly cleanupTimeoutMs?: number | undefined;
-  /**
-   * Reuse the remote's existing `run-t3.sh` instead of replacing it. Pairing and
-   * MCP-session helpers set it so remote CLI commands run with the binary that
-   * matches the running server. A launch with it never installs, refreshes, or
-   * replaces the host's runtime.
-   */
-  readonly keepExistingRunner?: boolean | null;
-  /**
-   * The first connection per manager may refresh an older owned runtime once,
-   * when idle. Packaged desktop and the server's SSH dispatch set it.
-   */
-  readonly refreshOwnedRuntimeOnFirstConnection?: boolean;
-  /**
-   * The user confirmed replacing the live runtime even if its work outlasts the drain window.
-   * Without it an expired window cancels the replacement and the server keeps running.
-   */
-  readonly confirmReplacement?: boolean;
-  /** Drain window for a replacement, in seconds (default 60, at most 300). */
-  readonly replacementGraceSeconds?: number;
-  /**
-   * A person asked for this refresh. Only refreshes without it, and without
-   * `confirmReplacement`, are automatic and let the runtime arbitrate the target.
-   */
-  readonly manualRefresh?: boolean;
-  /**
-   * The protocol the candidate build speaks, when it is not this build's own: a runtime that
-   * replaces itself with a newer release builds the launch script on that release's behalf.
-   */
-  readonly candidateProtocol?: { readonly ssh: number; readonly orchestration: number };
-}
-
-export interface PreparedRemoteRuntime {
-  readonly runner: RemoteGoatRunnerOptions;
-  readonly version: string | null;
-  readonly requestedVersion: string | null;
-  readonly source: "requested" | "retained" | "live" | "installed";
-  readonly installedExecutableSha256?: string;
-  readonly requireInstalled: boolean;
-  /** This preparation uploaded the archive, so an older runtime may have just become garbage. */
-  readonly uploaded?: boolean;
-  readonly mayUpgradeOwnedServer: boolean;
-  /** SHA-256 of the retained run-t3.sh observed by preparation; null for other sources. */
-  readonly retainedRunnerSha256: string | null;
-  readonly refreshIfIdle?: boolean;
-  readonly expectedLiveVersion?: string;
-  readonly expectedLiveRunnerSha256?: string;
-  readonly upgradeFailure?: SshHostFailure;
-  /** Why a compatible live selection can be attached to, but cannot be updated. */
-  readonly updateBlocked?: string;
-  readonly reconnectProbe?: string;
-  readonly reconnectPending?: SshRuntimePendingReplacement;
-  readonly hostPlatform?: "darwin" | "linux" | "win32";
-  /**
-   * Set for a published fallback chosen because the host had no GOAT data. Launch refuses to
-   * start it if data appeared meanwhile, since that data may come from a newer build.
-   */
-  readonly requireFreshHost?: boolean;
-}
-const requestedRuntime = (runner: RemoteGoatRunnerOptions | undefined): PreparedRemoteRuntime => ({
-  runner: { ...runner },
-  version: isNodeScriptRunner(runner) ? null : runner?.archiveVersion?.trim() || null,
-  requestedVersion: isNodeScriptRunner(runner) ? null : runner?.archiveVersion?.trim() || null,
-  source: "requested",
-  requireInstalled: false,
-  retainedRunnerSha256: null,
-  mayUpgradeOwnedServer: runner?.keepExistingRunner !== true,
-});
-const RuntimeSignals = Schema.Struct({
-  serverVersion: Schema.String,
-  sshRuntimeProtocolVersion: Schema.optionalKey(Schema.Int),
-  orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
-  invalid: Schema.optionalKey(Schema.Boolean),
-});
-const CLIENT_PROTOCOL_RANGES = ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION);
-/**
- * Protocol ranges decide compatibility. Only a server too old to advertise both integers
- * (`unknown`) falls back to the exact release, since an identical build speaks identical protocols.
- */
-const matchesSignals = (signals: typeof RuntimeSignals.Type, requested: string) => {
-  if (signals.invalid) return false;
-  const verdict = compareRuntimeProtocols(CLIENT_PROTOCOL_RANGES, signals);
-  return (
-    verdict === "compatible" ||
-    (verdict === "unknown" &&
-      signals.serverVersion === requested &&
-      (signals.sshRuntimeProtocolVersion === undefined ||
-        signals.sshRuntimeProtocolVersion === SSH_RUNTIME_PROTOCOL_VERSION) &&
-      (signals.orchestrationProtocolVersion === undefined ||
-        signals.orchestrationProtocolVersion === ORCHESTRATION_PROTOCOL_VERSION))
-  );
-};
 
 export interface SshEnvironmentManagerOptions {
   readonly resolveCliRunner?: Effect.Effect<RemoteGoatRunnerOptions>;
@@ -342,19 +223,6 @@ type SshEnvironmentEffectError =
   | SshPasswordPromptError
   | NetService.NetError;
 
-function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
-  return {
-    alias: target.alias,
-    hostname: target.hostname,
-    username: target.username,
-    port: target.port,
-  };
-}
-
-function isNodeScriptRunner(runner: RemoteGoatRunnerOptions | undefined): boolean {
-  return Boolean(runner?.nodeScriptPath?.trim());
-}
-
 function sshRunnerLogFields(runner: RemoteGoatRunnerOptions | undefined) {
   if (runner?.nodeScriptPath?.trim()) {
     return { runner: "node-script", nodeScriptPath: runner.nodeScriptPath.trim() };
@@ -378,13 +246,6 @@ interface SshAuthAttemptInput<T> extends SshAuthOperationInput<T> {
   readonly promptCount: number;
   readonly authSecret: string | null;
 }
-
-export interface SshRuntimeProgress {
-  readonly target: DesktopSshEnvironmentTarget;
-  readonly phase: SshRuntimePhase;
-  readonly upload?: SshHostStatus["upload"];
-}
-export type SshRuntimeProgressCallback = (progress: SshRuntimeProgress) => void;
 export interface SshEnvironmentEnsureOptions {
   readonly preparedAttachmentId?: string;
   readonly onPreparationProgress?: (progress: DesktopSshPreparationProgress) => void;
@@ -395,20 +256,6 @@ export interface SshEnvironmentEnsureOptions {
   readonly refreshRuntime?: boolean;
   readonly confirmReplacement?: boolean;
   readonly onPhase?: SshRuntimeProgressCallback;
-}
-
-// Progress observers must never change the outcome of an SSH operation.
-function notifyRuntimePhase(
-  target: DesktopSshEnvironmentTarget,
-  phase: SshRuntimePhase,
-  onPhase?: SshRuntimeProgressCallback,
-  upload?: SshHostStatus["upload"],
-) {
-  try {
-    onPhase?.({ target, phase, ...(upload === undefined ? {} : { upload }) });
-  } catch {
-    // The requesting view may already have gone away.
-  }
 }
 
 /** Publications never resolve aliases or acquire installation locks; stale operations are ignored. */
@@ -572,26 +419,6 @@ const decodeRemoteClientSessionResult = Schema.decodeEffect(
   fromLenientJson(RemoteClientSessionResult),
 );
 
-const decodeRemoteJsonOutput = <A, E>(
-  stdout: string,
-  decode: (input: string) => Effect.Effect<A, E>,
-): Effect.Effect<A, E> =>
-  decode(stdout).pipe(
-    Effect.catch((error) =>
-      Effect.gen(function* () {
-        const jsonObject = extractJsonObject(stdout);
-        if (jsonObject === stdout.trim()) {
-          return yield* Effect.fail(error);
-        }
-        const exit = yield* Effect.exit(decode(jsonObject));
-        if (Exit.isSuccess(exit)) {
-          return exit.value;
-        }
-        return yield* Effect.fail(error);
-      }),
-    ),
-  );
-
 const decodeRemoteLaunchOutput = (stdout: string) =>
   decodeRemoteJsonOutput(stdout, decodeRemoteLaunchResult);
 
@@ -603,14 +430,6 @@ function normalizeSshErrorMessage(stderr: string, fallbackMessage: string): stri
   return cleaned.length > 0 ? cleaned : fallbackMessage;
 }
 
-function stripTrailingNewlines(value: string): string {
-  return value.replace(/\n+$/u, "");
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 function buildRemoteContendedOutput(
   pending: Pick<SshRuntimePendingReplacement, "replacement" | "requestedVersion" | "liveVersion">,
 ) {
@@ -620,19 +439,13 @@ if [ "$LOCK_DETAIL" = recovery-stale ]; then lock_pending_fields="$lock_pending_
 printf '{"status":"pending","pending":{%s}}\\n' "$lock_pending_fields"`;
 }
 
-function applyScriptPlaceholders(
-  template: string,
-  replacements: Readonly<Record<string, string>>,
-): string {
-  let result = template;
-  for (const [token, value] of Object.entries(replacements)) {
-    // A replacer function keeps `$$` and other `$` patterns in the value literal.
-    result = result.replaceAll(`@@${token}@@`, () => value);
-  }
-  return result;
-}
-
 export { describeReadinessCause };
+export type {
+  PreparedRemoteRuntime,
+  RemoteGoatRunnerOptions,
+  SshRuntimeProgress,
+  SshRuntimeProgressCallback,
+} from "./remoteRuntime.ts";
 
 export const REMOTE_PICK_PORT_SCRIPT = `const fs = require("node:fs");
 const net = require("node:net");

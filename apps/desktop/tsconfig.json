@@ -15,6 +15,7 @@
     "../../packages/ssh/src/errors.ts",
     "../../packages/ssh/src/master.ts",
     "../../packages/ssh/src/remoteNodeEngineCheck.ts",
+    "../../packages/ssh/src/remoteRuntime.ts",
     "../../packages/ssh/src/runtimeArchive.ts",
     "../../packages/ssh/src/runtimeArchiveGh.ts",
     "../../packages/ssh/src/runtimeArchiveHttp.ts",
