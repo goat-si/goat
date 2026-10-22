@@ -17,8 +17,10 @@ import {
   AuthOrchestrationOperateScope,
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
+  CommandId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  MessageId,
   ThreadId,
   type ProjectScript,
 } from "@goat/contracts";
@@ -811,6 +813,41 @@ function ThreadRouteContent(
     });
   };
   const startLocalThread = useAtomCommand(threadEnvironment.startTurn, "work locally");
+  const retryCloudRunCommand = useAtomCommand(threadEnvironment.startTurn, "retry the cloud run");
+  const retryingCloudRun = useRef(false);
+  const cloudRetry = composer.cloudRun?.retry ?? null;
+  // Same gates as sending a follow-up: operate scope and a follow-up the provider accepts.
+  const handleRetryCloudRun =
+    selectedThread &&
+    cloudRetry &&
+    canOperateThread &&
+    composer.cloudState.composerBlockReason === null
+      ? async () => {
+          if (retryingCloudRun.current) return;
+          retryingCloudRun.current = true;
+          const metadata = makeTurnCommandMetadata();
+          await retryCloudRunCommand({
+            environmentId: selectedThread.environmentId,
+            input: {
+              commandId: CommandId.make(metadata.commandId),
+              creationSource: "mobile",
+              threadId: selectedThread.id,
+              message: {
+                messageId: MessageId.make(metadata.messageId),
+                role: "user",
+                text: cloudRetry.text,
+                attachments: cloudRetry.attachments,
+              },
+              modelSelection: cloudRetry.modelSelection,
+              runtimeMode: selectedThread.runtimeMode,
+              interactionMode: selectedThread.interactionMode,
+              dispatchMode: "start",
+            },
+          }).finally(() => {
+            retryingCloudRun.current = false;
+          });
+        }
+      : null;
   const localResendBusy = useRef(false);
   const setupMessage = selectedThreadDetail?.messages.find((message) => message.role === "user");
   const handleWorkLocally = async () => {
@@ -935,6 +972,8 @@ function ThreadRouteContent(
           feedbackSubmissions={composer.feedbackSubmissions}
           onDismissFeedback={composer.dismissFeedback}
           cloudState={composer.cloudState}
+          cloudRun={composer.cloudRun}
+          onRetryCloudRun={handleRetryCloudRun}
           selectedThreadFeed={composer.selectedThreadFeed}
           pendingHandoff={composer.pendingHandoff}
           activityRun={composer.selectedThreadActivityRun}

@@ -1,4 +1,4 @@
-import type { CloudTaskState } from "@goat/client-runtime/state/cloud-task";
+import type { CloudRunCard, CloudTaskState } from "@goat/client-runtime/state/cloud-task";
 import { CloudTaskStatus } from "./CloudTaskStatus";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
@@ -182,6 +182,8 @@ import { useOfflineSnapshotAge } from "../connection/useOfflineSnapshotAge";
 
 export interface ThreadDetailScreenProps {
   readonly cloudState: CloudTaskState;
+  readonly cloudRun?: CloudRunCard | null;
+  readonly onRetryCloudRun?: (() => void) | null;
   readonly header?: React.ReactNode;
   readonly draftMode?: {
     readonly content: (
@@ -1656,8 +1658,11 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                           {`${props.environmentLabel ?? "This machine"} is offline · ${offlineSnapshotAge}`}
                         </Text>
                       )}
-                      {props.cloudState.cloudTask ? (
-                        <CloudTaskStatus task={props.cloudState.cloudTask} />
+                      {props.cloudRun ? (
+                        <CloudTaskStatus
+                          card={props.cloudRun}
+                          onRetry={props.onRetryCloudRun ?? null}
+                        />
                       ) : null}
                       {props.cloudState.composerBlockReason ? (
                         <View>
