@@ -459,8 +459,73 @@ it("leave asks first, and its result stays once the device is no longer listed",
   await userEvent.click(screen.getByRole("button", { name: "Disconnect and remove" }));
   const recent = screen.getByRole("region", { name: "Recent actions" });
   await expect.element(recent.getByText("lidge-ts left the hub.")).toBeVisible();
-  await expect.element(recent.getByText("Revoke on this Home")).toBeVisible();
+  await expect.element(recent.getByText("Revoke on this hub")).toBeVisible();
   await expect.element(recent.getByText("Standalone")).toBeVisible();
+});
+
+it("a Windows device joins as a Hub client, and a Hub client can be repaired or removed", async () => {
+  using fixture = setup();
+  const base = host("winbox");
+  const winbox: HostStatusEntry = {
+    ...base,
+    metrics: {
+      ...base.metrics!,
+      opencodex: {
+        ...opencodex("child"),
+        link: { ...opencodex("child").link, role: "none" },
+        hubClient: { state: "connected", apiKeyId: "key-winbox" },
+      },
+    },
+  };
+  fixture.registry.set(
+    fixture.source,
+    AsyncResult.success({
+      hosts: [
+        host(null),
+        host("macmini-ts", degraded),
+        host("lidge-ts"),
+        host("studio-win"),
+        winbox,
+      ],
+    }),
+  );
+  state.join.mockResolvedValueOnce(
+    success({
+      deviceAlias: "studio-win",
+      action: "join",
+      state: "child",
+      transport: "hub-client",
+      message: "studio-win is a Hub client of this hub.",
+      steps: [
+        { step: "preflight", outcome: "ok", detail: "Windows; joining as hub-client." },
+        {
+          step: "invite",
+          outcome: "ok",
+          detail: "Single-use code for https://hub.example.ts.net:8443, expires 12:05.",
+        },
+        { step: "connect", outcome: "ok", detail: "https://hub.example.ts.net:8443" },
+      ],
+      parity: ok,
+    }),
+  );
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <HubSettings />
+    </RegistryContext>,
+  );
+  const client = device(screen, "winbox");
+  await expect.element(client.getByText("Hub client")).toBeVisible();
+  await expect.element(client.getByRole("button", { name: "Repair" })).toBeVisible();
+  await expect.element(client.getByRole("button", { name: "Leave" })).toBeVisible();
+
+  const windows = device(screen, "studio-win");
+  await userEvent.click(windows.getByRole("button", { name: "Join" }));
+  const result = windows.getByRole("region", { name: "Join studio-win result" });
+  await expect.element(result.getByText("Platform check")).toBeVisible();
+  await expect.element(result.getByText("Hub invite")).toBeVisible();
+  await expect.element(result.getByText("ocx connect on device")).toBeVisible();
+  // No host key row: a Hub client join never probes one.
+  await expect.element(result.getByText("Host key")).not.toBeInTheDocument();
 });
 
 it("Add device to hub joins a typed alias and shows why it failed", async () => {
