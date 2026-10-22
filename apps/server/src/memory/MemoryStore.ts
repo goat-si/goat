@@ -18,7 +18,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
-import { encodeCompactReceipt } from "./store/CompactReceipt.ts";
 import { ftsMatchQuery } from "./store/SearchText.ts";
 import {
   ImportBatchCodec,
@@ -50,11 +49,9 @@ import {
   decodeReport,
   decodeScope,
   decodeTicket,
-  decodeWork,
   deferredCodec,
   deferredRowCodec,
   encodeSearchItem,
-  environmentOrdinalCodec,
   exclusionsCodec,
   executionCodec,
   fenceCodec,
@@ -115,13 +112,11 @@ import {
   MemoryStoreConflict,
   MemoryWork,
   PendingForgetIntent,
-  StoredReceipt,
   TicketRowSchema,
   Transaction,
   emptyPullRetry,
   hasSourceEvidence,
   hashText,
-  memorySuppressionRecords,
   resolutionReportId,
   sameHeadSet,
   strict,
@@ -134,14 +129,10 @@ import type {
   HubCheckpointHandle,
   HubMember,
   IntentIdentityInput,
-  MemoryAdmissionContext,
-  MemoryAggregate,
   MemoryDecision,
   MemoryDeferredWork,
   MemoryFtsState,
   MemoryHoldClass,
-  MemoryIndexTarget,
-  MemoryQuotaCharge,
   MemoryReadFilter,
   SyncWorkCandidate,
   ThreadLineage,
@@ -154,6 +145,10 @@ import { makeStoreKernel } from "./store/StoreKernel.ts";
 import { makeCoreReads } from "./store/CoreReads.ts";
 import { makeHistory } from "./store/History.ts";
 import { makeRevertResults } from "./store/RevertResults.ts";
+import { makeHubSnapshotReads } from "./store/HubSnapshotReads.ts";
+import { makeItemWrites } from "./store/ItemWrites.ts";
+import { makeAccounting } from "./store/Accounting.ts";
+import { makeFtsIndex } from "./store/FtsIndex.ts";
 
 export { decodeCompactReceipt, encodeCompactReceipt } from "./store/CompactReceipt.ts";
 export { ImportCompletedNoopCodec, ImportNoopResultCodec } from "./store/StoreCodecs.ts";
@@ -254,306 +249,23 @@ const make = Effect.gen(function* () {
   const { readResolutionInputsPage, readAccess, historyPage } = history;
   const revertResults = makeRevertResults(kernel);
   const { recordRevertResultTx, settleRevertResultTx } = revertResults;
+  const hubSnapshotReads = makeHubSnapshotReads(kernel);
+  const { handlesFor, snapshotPages, snapshotBytes } = hubSnapshotReads;
+  const itemWrites = makeItemWrites(kernel, coreReads, hubSnapshotReads);
+  const { putItem, enqueueWork, purge, writeSuppressions } = itemWrites;
+  const accounting = makeAccounting(kernel, coreReads, revertResults);
+  const {
+    reserve,
+    settleForgetExpansion,
+    readForgetReservation,
+    reservationForRevisions,
+    firstForgetReservation,
+    usage,
+    persistCompactReceipt,
+  } = accounting;
+  const ftsIndex = makeFtsIndex(kernel, coreReads);
+  const { index } = ftsIndex;
 
-  const putItem = Effect.fnUntraced(function* (
-    item: M.MemoryItem,
-    heads: ReadonlyArray<M.MemoryRevisionId>,
-    watermark: number,
-  ) {
-    const previous = yield* readItem(item.memorySpaceId, item.memoryId);
-    const pending = yield* readPending(item.memorySpaceId, item.memoryId);
-    const held =
-      pending && item.status !== "forgotten"
-        ? {
-            memorySpaceId: item.memorySpaceId,
-            memoryId: item.memoryId,
-            status: "blocked" as const,
-            scope: item.scope,
-            failureCode: "forget_pending" as const,
-            pendingSync: item.pendingSync,
-            localAvailability: {
-              ...item.localAvailability,
-              exposure: "held" as const,
-              reasons: [...new Set([...item.localAvailability.reasons, "forget_pending" as const])],
-            },
-          }
-        : item;
-    const scope =
-      held.status === "forgotten"
-        ? ((previous?.item.status !== "forgotten" ? previous?.item.scope : undefined) ?? {
-            kind: "user" as const,
-          })
-        : held.scope;
-    const generation = (previous?.generation ?? 0) + 1;
-    const safeProjection =
-      held.status === "active" ? (({ payload: _payload, ...rest }) => rest)(held) : held;
-    const scannerDeferred =
-      held.localAvailability.reasons.includes("scanner_pending") &&
-      !held.localAvailability.deferred.some((d) => d.kind === "scanner")
-        ? [
-            ...held.localAvailability.deferred,
-            {
-              kind: "scanner" as const,
-              state: "pending" as const,
-              reason: "scanner_pending" as const,
-              revisionId: heads.length === 1 ? heads[0]! : null,
-              generation,
-              sinceAtUtc: DateTime.formatIso(DateTime.makeUnsafe(0)),
-            },
-          ]
-        : held.localAvailability.deferred;
-    const indexDeferred =
-      heads.length === 1 &&
-      held.status !== "forgotten" &&
-      !scannerDeferred.some((d) => d.kind === "index")
-        ? [
-            ...scannerDeferred,
-            {
-              kind: "index" as const,
-              state: "pending" as const,
-              reason: "index_unavailable" as const,
-              revisionId: heads[0]!,
-              generation,
-              sinceAtUtc: DateTime.formatIso(DateTime.makeUnsafe(0)),
-            },
-          ]
-        : scannerDeferred;
-    const deferred = indexDeferred.map((d) => ({
-      ...d,
-      generation,
-      attempt: 0,
-      dueAt: 0,
-      lastAttemptAt: null,
-      claimedBy: null,
-      claimedUntil: null,
-    }));
-    yield* stored(
-      "projection",
-      sql`INSERT INTO memory_items (space,memory_id,scope_json,scope_key,heads_json,status,payload_ref,projection_watermark,item_json,availability_json,generation,deferred_json,cleanup_pending)
-      VALUES (${held.memorySpaceId},${held.memoryId},${yield* scopeCodec.encode(scope)},${scopeKey(scope)},${yield* headsCodec.encode(heads)},${held.status},${held.status === "active" ? held.revision.payloadRef : null},${watermark},${yield* projectionCodec.encode(safeProjection)},${yield* availabilityCodec.encode(held.localAvailability)},${generation},${yield* deferredCodec.encode(deferred)},${held.localAvailability.cleanupPending ? 1 : 0})
-      ON CONFLICT(space,memory_id) DO UPDATE SET scope_json=excluded.scope_json,scope_key=excluded.scope_key,heads_json=excluded.heads_json,status=excluded.status,payload_ref=excluded.payload_ref,projection_watermark=excluded.projection_watermark,item_json=excluded.item_json,availability_json=excluded.availability_json,generation=excluded.generation,deferred_json=excluded.deferred_json,cleanup_pending=excluded.cleanup_pending,index_state='pending'`,
-    );
-    if (deferred.some((d) => d.state === "pending")) yield* markRunnable;
-  });
-  const enqueueWork = Effect.fn("MemoryStore.enqueueWork")(function* (input: MemoryWork) {
-    const work = yield* stored("work-codec", decodeWork(input, strict));
-    const inserted = yield* stored(
-      "outbox",
-      sql`INSERT INTO memory_outbox (id,space,memory_id,kind,status,metadata_json,payload_ref,attempt,next_attempt_at,claimed_by,claimed_until) VALUES (${work.id},${work.space},${work.memoryId},${work.kind},${work.status},${yield* workMetadataCodec.encode(work.metadata)},${work.payloadRef},${work.attempt},${work.nextAttemptAt},${work.claimedBy},${work.claimedUntil}) ON CONFLICT(id) DO NOTHING RETURNING id`,
-    );
-    if (inserted.length && ["pending", "retry"].includes(work.status)) yield* markRunnable;
-  });
-  const purge = Effect.fnUntraced(function* (
-    space: M.MemorySpaceId,
-    id: M.MemoryId,
-    watermark: number,
-  ) {
-    const ids = [id];
-    const seen = new Set<string>();
-    while (ids.length) {
-      const current = ids.shift()!;
-      if (seen.has(current)) continue;
-      seen.add(current);
-      const hubExists = yield* stored(
-        "hub-purge-inventory",
-        sql`SELECT 1 FROM sqlite_master WHERE name='memory_hub_operations'`,
-      );
-      if (hubExists.length) {
-        const entries = yield* stored(
-          "hub-purge-tail",
-          sql<{
-            hub_sequence: number;
-            entry_json: string;
-          }>`SELECT hub_sequence,entry_json FROM memory_hub_operations WHERE space=${space} AND memory_id=${current}`,
-        );
-        for (const row of entries) {
-          const entry = yield* hubEntryCodec.decode(row.entry_json, strict);
-          if (entry.kind === "metadata") continue;
-          const op = entry.operation;
-          const compactRows = yield* stored(
-            "hub-purge-compact",
-            sql<{
-              compact_json: string;
-            }>`SELECT compact_json FROM memory_compact_receipts WHERE space=${space} AND operation_id=${op.operationId}`,
-          );
-          const redacted: M.MemoryHubEntry = {
-            kind: "metadata",
-            operationKind: op.kind,
-            memoryId: op.memoryId,
-            hubSequence: entry.hubSequence,
-            receipt: entry.receipt,
-            ...(compactRows[0]
-              ? { compactReceipt: yield* compactCodec.decode(compactRows[0].compact_json, strict) }
-              : {}),
-            ...(op.kind === "resolve" ? { resolutionId: op.resolution.resolutionId } : {}),
-            ...(op.kind === "forget" ? { tombstone: op.tombstone } : {}),
-          };
-          yield* stored(
-            "hub-purge-redact",
-            sql`UPDATE memory_hub_operations SET entry_json=${yield* hubEntryCodec.encode(redacted)},payload_ref=NULL WHERE hub_sequence=${row.hub_sequence}`,
-          );
-        }
-        const snapshots = yield* stored(
-          "hub-forget-snapshots",
-          sql<{
-            pending_key: string;
-            metadata_json: string;
-          }>`SELECT pending_key,metadata_json FROM memory_inbox_pending WHERE space=${space} AND reason='hub_snapshot'`,
-        );
-        const beforeSnapshotBytes = yield* snapshotBytes(space);
-        for (const row of snapshots) {
-          const page = yield* checkpointCodec.decode(row.metadata_json, strict);
-          const redacted: M.MemoryHubCheckpointPage = {
-            ...page,
-            items: page.items.map((item) =>
-              item.memoryId !== current || item.status === "forgotten"
-                ? item
-                : {
-                    memorySpaceId: space,
-                    memoryId: item.memoryId,
-                    status: "blocked" as const,
-                    scope: item.scope,
-                    pendingSync: false,
-                    failureCode: "source_invalidated" as const,
-                    localAvailability: {
-                      exposure: "held" as const,
-                      reasons: ["dependency_invalidated" as const],
-                      deferred: [],
-                      cleanupPending: false,
-                    },
-                  },
-            ),
-            revisions: page.revisions.map((pair) =>
-              pair.revision.memoryId === current ? { ...pair, payload: null } : pair,
-            ),
-            resolutions: page.resolutions.map((pair) =>
-              pair.resolution.memoryId === current ? { ...pair, payload: null } : pair,
-            ),
-            fences: page.fences.map((fence) =>
-              fence.memoryId === current ? { ...fence, activeLease: null } : fence,
-            ),
-          };
-          yield* stored(
-            "hub-forget-snapshot-redact",
-            sql`UPDATE memory_inbox_pending SET metadata_json=${yield* checkpointCodec.encode(redacted)} WHERE space=${space} AND pending_key=${row.pending_key}`,
-          );
-        }
-        const snapshotDelta = (yield* snapshotBytes(space)) - beforeSnapshotBytes;
-        // This is a release by approved delete, never a capacity re-admission.
-        yield* stored(
-          "hub-forget-snapshot-release",
-          sql`UPDATE memory_hub_retention SET published_pinned_bytes=max(0,published_pinned_bytes+${snapshotDelta}) WHERE space=${space}`,
-        );
-        yield* stored(
-          "hub-purge-relay",
-          sql`DELETE FROM memory_hub_source_reads WHERE space=${space} AND memory_id=${current}`,
-        );
-        yield* stored(
-          "hub-purge-lease",
-          sql`UPDATE memory_hub_leases SET lease_json=NULL WHERE space=${space} AND memory_id=${current}`,
-        );
-      }
-      yield* stored(
-        "purge-identity-lease",
-        sql`UPDATE memory_identity_ledger SET fence_json=json_set(fence_json,'$.activeLease',NULL) WHERE space=${space} AND memory_id=${current}`,
-      );
-      const dependents = yield* stored(
-        "dependencies",
-        sql<{
-          memory_id: string;
-        }>`SELECT DISTINCT p.memory_id FROM memory_payloads p JOIN json_each(p.dependencies_json) d JOIN memory_revisions r ON r.space=p.space AND r.revision_id=d.value WHERE p.space=${space} AND r.memory_id=${current}`,
-      );
-      for (const row of dependents)
-        ids.push(yield* stored("dependency-id", decodeMemoryId(row.memory_id)));
-      yield* stored(
-        "purge",
-        sql`DELETE FROM memory_payloads WHERE space=${space} AND memory_id=${current}`,
-      );
-      yield* stored(
-        "forget-revert-slot",
-        sql`UPDATE memory_resolutions SET revert_result_json='{"status":"forgotten"}'
-        WHERE space=${space} AND memory_id=${current} AND json_extract(revert_result_json,'$.status')='pending'`,
-      );
-      yield* stored(
-        "purge-revert",
-        sql`DELETE FROM memory_revert_intents WHERE space=${space} AND memory_id=${current}`,
-      );
-      yield* stored(
-        "purge-inbox",
-        sql`DELETE FROM memory_inbox_pending WHERE space=${space} AND memory_id=${current}`,
-      );
-      yield* stored(
-        "cancel-work",
-        // Forget syncs carry delete knowledge; a later purge of the same memory
-        // (an expansion or retry) must not cancel an earlier forget's delivery.
-        sql`UPDATE memory_outbox SET status='cancelled',payload_ref=NULL WHERE space=${space} AND memory_id=${current} AND status NOT IN ('completed','failed') AND NOT (kind='sync' AND json_extract(metadata_json,'$.kind')='forget')`,
-      );
-      yield* stored(
-        "purge-ticket-submission",
-        sql`UPDATE memory_outbox SET ticket_json=json_set(ticket_json,'$.submission',NULL,'$.state','terminal','$.owner',NULL,'$.ownedUntil',NULL,'$.version',sync_version+1),sync_version=sync_version+1,claimed_by=NULL,claimed_until=NULL,payload_ref=NULL WHERE space=${space} AND memory_id=${current} AND kind='resolve' AND ticket_json IS NOT NULL`,
-      );
-      yield* stored(
-        "cancel-claims",
-        sql`UPDATE memory_conflicts SET attempt_id=NULL WHERE space=${space} AND memory_id=${current}`,
-      );
-      const old = yield* readItem(space, current);
-      if (current !== id && old && old.item.status !== "forgotten") {
-        const blocked: M.MemoryItem = {
-          memorySpaceId: space,
-          memoryId: current,
-          status: "blocked",
-          scope: old.item.scope,
-          failureCode: "source_invalidated",
-          pendingSync: old.item.pendingSync,
-          localAvailability: {
-            exposure: "held",
-            reasons: ["dependency_invalidated"],
-            deferred: [],
-            cleanupPending: true,
-          },
-        };
-        yield* putItem(blocked, old.heads, watermark);
-        yield* emit({
-          memorySpaceId: space,
-          memoryId: current,
-          projectionWatermark: watermark,
-          kind: "invalidate",
-        });
-      }
-      const deleted =
-        yield* sql`DELETE FROM memory_items_fts WHERE rowid IN (SELECT rowid FROM memory_items WHERE space=${space} AND memory_id=${current})`.pipe(
-          Effect.as(true),
-          Effect.catch(() => Effect.succeed(false)),
-        );
-      const fenced = yield* readItem(space, current);
-      if (fenced && !deleted) {
-        const projection =
-          fenced.item.status === "active"
-            ? (({ payload: _payload, ...rest }) => rest)(fenced.item)
-            : fenced.item;
-        const availability = { ...projection.localAvailability, cleanupPending: true };
-        yield* stored(
-          "purge-observation",
-          sql`UPDATE memory_items SET item_json=${yield* projectionCodec.encode({ ...projection, localAvailability: availability })},availability_json=${yield* availabilityCodec.encode(availability)} WHERE space=${space} AND memory_id=${current}`,
-        );
-      }
-      yield* stored(
-        "purge-fence",
-        sql`UPDATE memory_items SET indexed_bytes=0,index_state=${deleted ? "pending" : "held"},indexed_revision=NULL,indexed_generation=NULL,cleanup_pending=${deleted ? 0 : 1} WHERE space=${space} AND memory_id=${current}`,
-      );
-    }
-  });
-  const writeSuppressions = Effect.fnUntraced(function* (t: M.MemoryTombstone) {
-    const records = memorySuppressionRecords(t);
-    for (const record of records) {
-      const json = yield* stored("suppression-codec", suppressionCodec.encode(record));
-      // Unique canonical encoded keys keep the permanent union outside bounded wire fragments.
-      yield* stored(
-        "suppression",
-        sql`INSERT INTO memory_import_keys (space,key_kind,key,memory_id,record_json) VALUES (${t.memorySpaceId},${record.kind},${hashText(yield* suppressionKeyCodec.encode(record.kind === "sourceKey" ? { kind: record.kind, value: record.sourceKey } : record.kind === "content" ? { kind: record.kind, value: record.content } : { kind: record.kind, value: record.exclusion }))},${t.memoryId},${json}) ON CONFLICT(space,key_kind,key) DO NOTHING`,
-      );
-    }
-  });
   const applyDecision = Effect.fn("MemoryStore.applyDecision")(function* (
     decision: MemoryDecision,
     expectedGeneration?: number,
@@ -2189,44 +1901,6 @@ const make = Effect.gen(function* () {
       }),
     );
   });
-  const reserve = Effect.fn("MemoryStore.reserve")(function* (
-    context: MemoryAdmissionContext,
-    charges: ReadonlyArray<MemoryQuotaCharge>,
-  ) {
-    return yield* transact(
-      Effect.gen(function* () {
-        const admitted: Array<{ charge: MemoryQuotaCharge; value: number }> = [];
-        const pending = new Map<string, number>();
-        for (const charge of charges) {
-          const rows = yield* stored(
-            "quota",
-            sql<{
-              value: number;
-            }>`SELECT value FROM memory_quota_counters WHERE space=${charge.space} AND dimension=${charge.dimension} AND scope_key=${charge.scopeKey}`,
-          );
-          const key = `${charge.space}:${charge.dimension}:${charge.scopeKey}`;
-          const value = (charge.current ?? pending.get(key) ?? rows[0]?.value ?? 0) + charge.delta;
-          if (
-            value < 0 ||
-            (context.kind !== "approvedReplica" && charge.delta > 0 && value > charge.limit)
-          )
-            return yield* new MemoryCapacityError({
-              dimension: charge.dimension,
-              limit: charge.limit,
-              current: value,
-            });
-          admitted.push({ charge, value });
-          pending.set(key, value);
-        }
-        for (const { charge, value } of admitted) {
-          yield* stored(
-            "quota-write",
-            sql`INSERT INTO memory_quota_counters (space,dimension,scope_key,value) VALUES (${charge.space},${charge.dimension},${charge.scopeKey},${value}) ON CONFLICT(space,dimension,scope_key) DO UPDATE SET value=excluded.value`,
-          );
-        }
-      }),
-    );
-  });
   const ftsState = Effect.fn("MemoryStore.ftsState")(function* (environment: M.EnvironmentId) {
     const rows = yield* stored(
       "fts-state",
@@ -2271,56 +1945,6 @@ const make = Effect.gen(function* () {
     yield* stored(
       "fts-state-write",
       sql`INSERT INTO memory_fts_maintenance_state (environment,state,changed_at,allocated_bytes,measured_at,measurement_status,merge_pending,changed_rows,last_merge_at) VALUES (${state.environment},${state.state},${state.changedAt},${state.allocatedBytes},${state.measuredAt},${state.measurementStatus},${state.mergePending ? 1 : 0},${state.changedRows},${state.lastMergeAt}) ON CONFLICT(environment) DO UPDATE SET state=excluded.state,changed_at=excluded.changed_at,allocated_bytes=excluded.allocated_bytes,measured_at=excluded.measured_at,measurement_status=excluded.measurement_status,merge_pending=excluded.merge_pending,changed_rows=excluded.changed_rows,last_merge_at=excluded.last_merge_at`,
-    );
-  });
-  const index = Effect.fn("MemoryStore.index")(function* (target: MemoryIndexTarget) {
-    return yield* transact(
-      Effect.gen(function* () {
-        const row = yield* readItem(target.memorySpaceId, target.memoryId);
-        if (
-          !row ||
-          row.generation !== target.generation ||
-          row.item.status !== "active" ||
-          row.item.revision.revisionId !== target.revisionId ||
-          row.heads.length !== 1 ||
-          (yield* readPending(target.memorySpaceId, target.memoryId))
-        )
-          return false;
-        const brake = yield* stored(
-          "fts-brake",
-          sql`SELECT 1 FROM memory_fts_maintenance_state WHERE state='braked' LIMIT 1`,
-        );
-        if (brake.length) return false;
-        const bytes = new TextEncoder().encode(row.item.payload.text).length;
-        const totals = yield* stored(
-          "index-budget",
-          sql<{
-            bytes: number;
-          }>`SELECT coalesce(sum(indexed_bytes),0) AS bytes FROM memory_items WHERE NOT(space=${target.memorySpaceId} AND memory_id=${target.memoryId})`,
-        );
-        if ((totals[0]?.bytes ?? 0) + bytes > M.MEMORY_FTS_INDEXED_TEXT_MAX_BYTES)
-          return yield* new MemoryCapacityError({
-            dimension: "ftsIndexedTextBytes",
-            limit: M.MEMORY_FTS_INDEXED_TEXT_MAX_BYTES,
-          });
-        yield* stored(
-          "fts-delete",
-          sql`DELETE FROM memory_items_fts WHERE rowid IN (SELECT rowid FROM memory_items WHERE space=${target.memorySpaceId} AND memory_id=${target.memoryId})`,
-        );
-        yield* stored(
-          "fts-insert",
-          sql`INSERT INTO memory_items_fts (rowid,body) SELECT rowid,${row.item.payload.text} FROM memory_items WHERE space=${target.memorySpaceId} AND memory_id=${target.memoryId} AND generation=${target.generation}`,
-        );
-        yield* stored(
-          "fts-fence",
-          sql`UPDATE memory_items SET index_state='ready',indexed_revision=${target.revisionId},indexed_generation=${target.generation},indexed_bytes=${bytes} WHERE space=${target.memorySpaceId} AND memory_id=${target.memoryId} AND generation=${target.generation}`,
-        );
-        yield* stored(
-          "fts-count",
-          sql`UPDATE memory_fts_maintenance_state SET changed_rows=changed_rows+1`,
-        );
-        return true;
-      }),
     );
   });
   const measureAllocation = Effect.fn("MemoryStore.measureAllocation")(function* () {
@@ -3644,177 +3268,6 @@ const make = Effect.gen(function* () {
     if (rows.length !== 1) return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
   });
 
-  const settleForgetExpansion = Effect.fn("MemoryStore.settleForgetExpansion")(function* (
-    space: M.MemorySpaceId,
-    result: StoredReceipt,
-  ) {
-    const original = yield* receipt(space, result.receipt.operationId);
-    if (!original || original.operationDigest !== result.operationDigest)
-      return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-    const prior = original.receipt.forgetExpansion;
-    const next = result.receipt.forgetExpansion;
-    if (
-      prior &&
-      (!next ||
-        prior.operationId !== next.operationId ||
-        prior.operationDigest !== next.operationDigest ||
-        prior.requestDigest !== next.requestDigest)
-    )
-      return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-    yield* stored(
-      "forget-expansion-result",
-      sql`UPDATE memory_events SET receipt_json=${yield* receiptCodec.encode(result.receipt)} WHERE memory_space_id=${space} AND operation_id=${result.receipt.operationId}`,
-    );
-    const compact = yield* stored(
-      "forget-expansion-compact",
-      sql<{
-        compact_json: string;
-      }>`SELECT compact_json FROM memory_compact_receipts WHERE space=${space} AND operation_id=${result.receipt.operationId}`,
-    );
-    if (compact[0]) {
-      const record = yield* compactCodec.decode(compact[0].compact_json, strict);
-      const receipt = yield* hubReceiptCodec.decode(
-        yield* receiptCodec.encode(result.receipt),
-        strict,
-      );
-      yield* persistCompactReceipt({ ...record, receipt });
-    }
-    return result;
-  });
-  const readForgetReservation = Effect.fn("MemoryStore.readForgetReservation")(function* (
-    space: M.MemorySpaceId,
-    id: M.MemoryId,
-  ) {
-    const rows = yield* stored(
-      "forget-reservation",
-      sql<{
-        bytes: number;
-        keys: number;
-      }>`SELECT max(0,reserve_bytes-${M.MEMORY_IDENTITY_CORE_MAX_BYTES}) AS bytes,reserve_keys AS keys FROM memory_identity_ledger WHERE space=${space} AND memory_id=${id}`,
-    );
-    return rows[0] ?? { bytes: 0, keys: 0 };
-  });
-  const reservationForRevisions = Effect.fn("MemoryStore.reservationForRevisions")(function* (
-    op: Pick<M.MemoryOperation, "memorySpaceId" | "memoryId" | "operationId">,
-    revisions: MemoryAggregate["revisions"],
-    includeRevisionLineage = true,
-  ) {
-    const records = new Map<string, M.MemorySuppressionRecord>();
-    for (const { revision, payload } of revisions) {
-      const { sourceThread, sourceWatermark } = revision.provenance;
-      if (!sourceThread || !sourceWatermark) continue;
-      for (const messageId of new Set((payload?.evidence ?? []).flatMap((e) => e.messageIds))) {
-        const exclusion = { sourceThread, sourceWatermark, messageIds: [messageId] };
-        const key = yield* exclusionsCodec.encode([exclusion]);
-        records.set(key, {
-          memorySpaceId: op.memorySpaceId,
-          memoryId: op.memoryId,
-          deleteOperationId: op.operationId,
-          kind: "sourceExclusion",
-          exclusion,
-        });
-      }
-    }
-    let bytes = 0;
-    for (const record of records.values())
-      bytes += new TextEncoder().encode(yield* suppressionCodec.encode(record)).length;
-    const lineage = new Map<string, M.MemoryImportLineageRecord>();
-    for (const record of [
-      ...(yield* readImportLineage(op.memorySpaceId, op.memoryId)),
-      ...(includeRevisionLineage
-        ? revisions.flatMap(({ revision }) => lineageForRevision(revision))
-        : []),
-    ])
-      lineage.set(M.memoryImportLineageRecordKey(record), record);
-    let lineageBytes = 0;
-    for (const record of lineage.values())
-      lineageBytes += new TextEncoder().encode(yield* lineageCodec.encode(record)).length + 64;
-    return {
-      bytes: Math.max(M.MEMORY_PAYLOAD_MAX_UTF8_BYTES, bytes) + lineageBytes,
-      keys: records.size + lineage.size,
-    };
-  });
-  const firstForgetReservation = Effect.fn("MemoryStore.firstForgetReservation")(function* (
-    op: M.MemoryOperation,
-  ) {
-    // Only source-attributed revisions contribute payload evidence to the reservation.
-    const current = yield* loadAggregate(
-      op.memorySpaceId,
-      op.memoryId,
-      {
-        when: hasSourceEvidence,
-      },
-      { importLineage: true },
-    );
-    return yield* reservationForRevisions(op, [
-      ...current.revisions,
-      ...(op.kind === "forget" ? [] : [{ revision: op.revision, payload: op.payload }]),
-    ]);
-  });
-  const usage = Effect.fn("MemoryStore.usage")(function* (
-    space: M.MemorySpaceId,
-    scope: M.MemoryScope,
-  ) {
-    const rows = yield* stored(
-      "usage-counters",
-      sql<{ space: string; dimension: string; scope_key: string; value: number }>`
-      SELECT space,dimension,scope_key,value FROM memory_quota_counters
-      WHERE (space=${space} OR space='_usage_environment')
-        AND dimension IN ('usage_items','usage_summaries','usage_live_bytes','usage_payload_bytes','usage_identities','usage_identity_bytes','usage_reserved_keys','usage_reserved_receipts','usage_keys','usage_key_bytes','usage_lineage_bytes','usage_work_items','usage_work_bytes','usage_log_rows','usage_log_bytes','usage_receipts','usage_receipt_bytes') AND scope_key IN ('',${scopeKey(scope)})`,
-    );
-    const get = (dimension: string, environment = false, scoped = false) =>
-      rows.find(
-        (r) =>
-          r.space === (environment ? "_usage_environment" : space) &&
-          r.dimension === `usage_${dimension}` &&
-          r.scope_key === (scoped ? scopeKey(scope) : ""),
-      )?.value ?? 0;
-    const extra = yield* stored(
-      "usage-existing-counters",
-      sql<{ space: string; dimension: string; value: number }>`
-      SELECT space,dimension,value FROM memory_quota_counters WHERE scope_key='' AND
-      ((space=${space} AND dimension IN ('import_metadata','report_items','report_bytes')) OR
-       (space='_hub_global' AND dimension='hub_private_metadata'))`,
-    );
-    const existing = (dimension: string) =>
-      extra.find((r) => r.dimension === dimension)?.value ?? 0;
-    const permanent = (environment = false) =>
-      get("identity_bytes", environment) +
-      get("key_bytes", environment) +
-      get("lineage_bytes", environment) +
-      get("receipt_bytes", environment) +
-      get("reserved_receipts", environment) * M.MEMORY_COMPACT_RECEIPT_MAX_BYTES;
-    return {
-      scopeItems: get("items", false, true),
-      scopeSummaries: get("summaries", false, true),
-      scopeExplicit: get("items", false, true) - get("summaries", false, true),
-      environmentItems: get("items", true),
-      environmentLiveBytes: get("live_bytes", true),
-      environmentHistoryBytes: get("payload_bytes", true) - get("live_bytes", true),
-      environmentLifetimeIds: get("identities", true),
-      environmentReceipts: get("receipts", true) + get("reserved_receipts", true),
-      environmentPermanentBytes: permanent(true) + existing("hub_private_metadata"),
-      spaceItems: get("items"),
-      lifetimeIds: get("identities"),
-      permanentBytes: permanent() + existing("import_metadata"),
-      receipts: get("receipts") + get("reserved_receipts"),
-      liveBytes: get("live_bytes"),
-      historyBytes: get("payload_bytes") - get("live_bytes"),
-      logicalBytes:
-        existing("import_metadata") +
-        get("payload_bytes") +
-        get("log_bytes") +
-        get("key_bytes") +
-        get("lineage_bytes"),
-      keys: get("keys") + get("reserved_keys"),
-      workItems: get("work_items"),
-      workBytes: get("work_bytes"),
-      reportItems: existing("report_items"),
-      reportBytes: existing("report_bytes"),
-      logRows: get("log_rows"),
-      logBytes: get("log_bytes"),
-    };
-  });
   const readImportRegistrationTx: ImportStorePorts["readImportRegistrationTx"] = Effect.fnUntraced(
     function* (input) {
       yield* Transaction;
@@ -4754,100 +4207,6 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const persistCompactReceipt = Effect.fn("MemoryStore.persistCompactReceipt")(function* (
-    input: M.MemoryCompactReceipt,
-  ) {
-    yield* transact(
-      Effect.gen(function* () {
-        const old = yield* receipt(input.memorySpaceId, input.receipt.operationId);
-        const json = yield* compactCodec.encode({
-          ...input,
-          receipt: {
-            ...input.receipt,
-            ...(!input.receipt.forgetExpansion && old?.receipt.forgetExpansion
-              ? { forgetExpansion: old.receipt.forgetExpansion }
-              : {}),
-            ...(old?.receipt.forgetRetryOf ? { forgetRetryOf: old.receipt.forgetRetryOf } : {}),
-          },
-        });
-        const record = yield* compactCodec.decode(json, strict);
-        if (record.operationKind === "revert" && record.revertsResolutionId)
-          yield* settleRevertResultTx(
-            record.memorySpaceId,
-            record.receipt.memoryId,
-            record.revertsResolutionId,
-            record.receipt,
-            record.revisionId,
-          );
-        const existing = yield* stored(
-          "compact-existing",
-          sql<{
-            compact_json: string;
-          }>`SELECT compact_json FROM memory_compact_receipts WHERE space=${record.memorySpaceId} AND operation_id=${record.receipt.operationId}`,
-        );
-        if (existing[0]) {
-          const prior = yield* compactCodec.decode(existing[0].compact_json, strict);
-          const preserved = {
-            ...prior,
-            receipt: {
-              ...prior.receipt,
-              ...(record.receipt.forgetExpansion
-                ? { forgetExpansion: record.receipt.forgetExpansion }
-                : {}),
-              ...(record.receipt.forgetRetryOf
-                ? { forgetRetryOf: record.receipt.forgetRetryOf }
-                : {}),
-            },
-          };
-          if ((yield* compactCodec.encode(preserved)) !== json)
-            return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-        }
-        if (
-          old &&
-          (old.operationDigest !== record.receipt.operationDigest ||
-            ("hubSequence" in old.receipt &&
-              old.receipt.hubSequence !== record.receipt.hubSequence))
-        )
-          return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
-        const ordinals = new Map<M.EnvironmentId, number>();
-        for (const environment of [
-          record.originEnvironmentId,
-          ...(record.reportGuard ? [record.reportGuard.resolvingEnvironmentId] : []),
-        ]) {
-          const existing = yield* stored(
-            "compact-environment",
-            sql<{
-              record_json: string;
-            }>`SELECT record_json FROM memory_import_keys WHERE space=${record.memorySpaceId} AND key_kind='environment' AND key=${environment}`,
-          );
-          let ordinal: number;
-          if (existing[0])
-            ordinal = yield* environmentOrdinalCodec.decode(existing[0].record_json, strict);
-          else {
-            const counts = yield* stored(
-              "compact-environment-count",
-              sql<{
-                count: number;
-              }>`SELECT count(*) AS count FROM memory_import_keys WHERE space=${record.memorySpaceId} AND key_kind='environment'`,
-            );
-            ordinal = counts[0]!.count + 1;
-            yield* stored(
-              "compact-environment-write",
-              sql`INSERT INTO memory_import_keys (space,key_kind,key,memory_id,record_json) VALUES (${record.memorySpaceId},'environment',${environment},${record.receipt.memoryId},${yield* environmentOrdinalCodec.encode(ordinal)})`,
-            );
-          }
-          ordinals.set(environment, ordinal);
-        }
-        const binary = encodeCompactReceipt(record, (id) => ordinals.get(id)!);
-        if (binary.length > M.MEMORY_COMPACT_RECEIPT_MAX_BYTES)
-          return yield* new MemoryStoreConflict({ code: "payload_too_large" });
-        yield* stored(
-          "compact-receipt-write",
-          sql`INSERT INTO memory_compact_receipts (space,operation_id,operation_digest,hub_sequence,receipt_json,compact_json,compact_blob,report_key) VALUES (${record.memorySpaceId},${record.receipt.operationId},${record.receipt.operationDigest},${record.receipt.hubSequence!},${yield* receiptCodec.encode(record.receipt)},${json},${binary},${record.reportGuard?.reportId ?? null}) ON CONFLICT(space,operation_id) DO UPDATE SET receipt_json=excluded.receipt_json,compact_json=excluded.compact_json,compact_blob=excluded.compact_blob`,
-        );
-      }),
-    );
-  });
   const prunePayloads = Effect.fn("MemoryStore.prunePayloads")(function* (
     now: number,
     limit: number,
@@ -7202,33 +6561,6 @@ const make = Effect.gen(function* () {
         ? yield* compactionCodec.decode(row.compaction_json, strict)
         : emptyCompaction,
     };
-  });
-  const handlesFor = Effect.fnUntraced(function* (space: M.MemorySpaceId) {
-    const rows = yield* stored(
-      "hub-handles-read",
-      sql<{
-        handles_json: string;
-      }>`SELECT handles_json FROM memory_hub_retention WHERE space=${space}`,
-    );
-    return rows[0] ? yield* handleCodec.decode(rows[0].handles_json, strict) : [];
-  });
-  const snapshotPages = Effect.fnUntraced(function* (space: M.MemorySpaceId, id: string) {
-    const rows = yield* stored(
-      "hub-snapshot-pages",
-      sql<{
-        metadata_json: string;
-      }>`SELECT metadata_json FROM memory_inbox_pending WHERE space=${space} AND checkpoint_id=${snapshotId(id)} AND reason='hub_snapshot' ORDER BY page_ordinal`,
-    );
-    return yield* Effect.forEach(rows, (row) => checkpointCodec.decode(row.metadata_json, strict));
-  });
-  const snapshotBytes = Effect.fnUntraced(function* (space: M.MemorySpaceId) {
-    const rows = yield* stored(
-      "hub-snapshot-bytes",
-      sql<{
-        bytes: number;
-      }>`SELECT coalesce(sum(length(CAST(metadata_json AS BLOB))),0) AS bytes FROM memory_inbox_pending WHERE space=${space} AND reason='hub_snapshot'`,
-    );
-    return rows[0]!.bytes;
   });
   const cursorFor = (id: string, ordinal: number) => hashText(`${id}:${ordinal}`);
   const buildHubSnapshot = Effect.fnUntraced(function* (
