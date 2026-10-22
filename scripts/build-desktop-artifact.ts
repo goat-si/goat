@@ -48,6 +48,7 @@ import {
 } from "./lib/brand-assets.ts";
 import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
+import { windowsSystemTar } from "./lib/windows-tar.ts";
 import {
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
@@ -2827,7 +2828,7 @@ export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(fu
       const command =
         release.format === "zip" && hostPlatform !== "win32"
           ? ChildProcess.make("unzip", ["-q", archivePath, "-d", extracted])
-          : ChildProcess.make(hostPlatform === "win32" ? "tar.exe" : "tar", [
+          : ChildProcess.make(hostPlatform === "win32" ? windowsSystemTar() : "tar", [
               "-xf",
               archivePath,
               "-C",
@@ -4132,7 +4133,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     const hostPlatform = yield* HostProcess.Platform;
     const listing = yield* spawnAndCollectOutput(
       ChildProcess.make(
-        hostPlatform === "win32" ? "tar.exe" : "tar",
+        hostPlatform === "win32" ? windowsSystemTar() : "tar",
         ["-tzf", WSL_RUNTIME_ARCHIVE_NAME],
         {
           cwd: resourcesDir,
