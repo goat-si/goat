@@ -2724,6 +2724,7 @@ const make = Effect.gen(function* () {
         const capabilities = yield* callHost(
           {
             host: state.host,
+            ...connectionFor(state, true),
             tool: "orchestrator_capabilities",
             arguments: {},
             writes: false,

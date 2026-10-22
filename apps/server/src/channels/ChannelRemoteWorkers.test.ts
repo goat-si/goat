@@ -164,6 +164,7 @@ class RemoteMachine {
   waitIdle = Deferred.makeUnsafe<void>();
   unreachableWaitCount = 0;
   /** A test observes the persisted brief before SSH accepts the launch. */
+  beforeReviewAuthorization: Effect.Effect<void> = Effect.void;
   beforeLaunch: ((input: SshRemoteDispatch.SshLaunchInput) => Effect.Effect<void>) | undefined;
   /** While true, every call fails as if SSH could not reach the host. */
   down = false;
@@ -390,6 +391,7 @@ class RemoteMachine {
           Effect.gen(function* () {
             const machine = machineFor(input.host);
             if (machine.down) return yield* machine.unreachable("down");
+            if (input.title.startsWith("Review:")) yield* machine.beforeReviewAuthorization;
             yield* beforeLaunch;
             if (machine.beforeLaunch !== undefined) yield* machine.beforeLaunch(input);
             machine.launches.push(input);
@@ -4581,7 +4583,7 @@ it.effect("automatic recovery refuses a different environment behind the same ho
 
 describe("independent remote channel review", () => {
   const reviewerModel = { instanceId: ProviderInstanceId.make("codex"), model: "review-model" };
-  const reviewHarness = () => {
+  const reviewHarness = (automatic = false) => {
     const machine = new RemoteMachine();
     machine.offeredModels = [
       { instance: "codex", model: "gpt-6.1-sol" },
@@ -4604,11 +4606,32 @@ describe("independent remote channel review", () => {
         defaultTarget: () => Effect.succeed(Option.none()),
       }),
     );
-    const harness = makeHarness({ sshRemote: machine.layer, channelsLayer });
+    if (automatic) machine.hostQuotas = { codex: 20 };
+    const harness = makeHarness({
+      sshRemote: machine.layer,
+      channelsLayer,
+      ...(automatic
+        ? {
+            repositoryIdentity: {
+              canonicalKey: "github.com/goat-si/goat",
+              locator: {
+                source: "git-remote" as const,
+                remoteName: "origin",
+                remoteUrl: "https://github.com/goat-si/goat.git",
+              },
+            },
+            settingsLayer: ServerSettings.layerTest({
+              channelAutoPlacement: true,
+              textGenerationModelSelection: modelSelection,
+            }).pipe(Layer.orDie),
+            providerInstances: [{ instanceId: "codex", weeklyUsedPercent: 80 }],
+          }
+        : {}),
+    });
     harness.script.current = remoteScript;
     return { machine, harness };
   };
-  const startReview = (machine: RemoteMachine) =>
+  const startReview = (machine: RemoteMachine, automatic = false) =>
     Effect.gen(function* () {
       const writes = yield* channelWriteMilestones;
       yield* setupBot;
@@ -4616,7 +4639,10 @@ describe("independent remote channel review", () => {
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const gateway = yield* ChannelGateway.ChannelGateway;
       yield* gateway.ingest(
-        slackInput("do@mac-studio: verify the guard", "remote-review"),
+        slackInput(
+          automatic ? "do: verify the guard" : "do@mac-studio: verify the guard",
+          "remote-review",
+        ),
         slackContext,
       );
       yield* runtime.drain;
@@ -4671,6 +4697,83 @@ describe("independent remote channel review", () => {
           ]
         : [],
     });
+
+  it.effect(
+    "keeps automatic review reads, launch and retired cleanup on ready existing sessions",
+    () => {
+      const { machine, harness } = reviewHarness(true);
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* startReview(machine, true);
+        assert.isDefined(task.target?.remote?.automatic);
+        const startCall = machine.calls.length;
+        yield* runtime.drain;
+        assert.lengthOf(machine.launches, 2);
+        assert.isTrue(machine.launches[1]!.requireReady);
+        assert.isUndefined(machine.launches[1]!.existingSessionOnly);
+        const correlation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(correlation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(false),
+        });
+        yield* runtime.drain;
+        yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS);
+        yield* runtime.drain;
+        const reviewCalls = machine.calls
+          .slice(startCall)
+          .filter(
+            (call) =>
+              call.tool === "goat_thread_read" ||
+              call.tool === "orchestrator_capabilities" ||
+              call.arguments.correlationId === correlation ||
+              call.arguments.threadId === machine.thread(correlation),
+          );
+        assert.isAbove(reviewCalls.length, 0);
+        assert.isTrue(reviewCalls.every((call) => call.requireReady));
+        assert.isTrue(
+          reviewCalls.some(
+            (call) => call.tool === "orchestrator_capabilities" && call.existingSessionOnly,
+          ),
+        );
+        assert.isTrue(
+          reviewCalls.some(
+            (call) => call.arguments.correlationId === correlation && call.existingSessionOnly,
+          ),
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("retires a pre-dispatch authority refusal and releases its review lane", () => {
+    const { machine, harness } = reviewHarness();
+    return Effect.gen(function* () {
+      const { runtime } = yield* startReview(machine);
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ goatclaw: { enabled: true, defaultProfile: "manager" } });
+      machine.beforeReviewAuthorization = (yield* ChannelLedger.ChannelLedger)
+        .unlinkIdentity({
+          connectionId: "slack-1",
+          externalActorId: "U1",
+        })
+        .pipe(Effect.asVoid, Effect.orDie);
+      yield* runtime.drain;
+      const done = yield* onlyTask;
+      assert.strictEqual(done.review?.verdict, "failed");
+      assert.lengthOf(machine.launches, 1);
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepStrictEqual(
+        yield* sql<{ count: number }>`SELECT COUNT(*) AS count FROM goatclaw_lane_reservations`,
+        [{ count: 0 }],
+      );
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.lengthOf(yield* ledger.listReviewCleanup("2099-01-01T00:00:00.000Z"), 0);
+      yield* runtime.drain;
+      assert.lengthOf(machine.launches, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("refuses unsupported restricted remote reviewers without broadening modes", () => {
     const { machine, harness } = reviewHarness();

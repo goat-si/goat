@@ -115,7 +115,7 @@ class WorkerWorld {
     Partial<
       Pick<
         OrchestrationV2ThreadShell,
-        "latestRunId" | "lastErrorClass" | "usageLimitResetAt" | "limitRecovery"
+        "latestRunId" | "lastErrorClass" | "usageLimitResetAt" | "limitRecovery" | "runtimeMode"
       >
     >
   >();
@@ -379,6 +379,10 @@ export function makeHarness(
               thread: {
                 id: threadId,
                 projectId,
+                runtimeMode:
+                  world.shells.get(threadId)?.runtimeMode ??
+                  world.launches.find((launch) => launch.threadId === threadId)?.runtimeMode ??
+                  "approval-required",
                 archivedAt: null,
                 deletedAt: null,
                 pullRequests: world.pullRequests.get(threadId) ?? [],

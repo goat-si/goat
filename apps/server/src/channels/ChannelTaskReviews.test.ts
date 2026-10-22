@@ -718,3 +718,99 @@ it.effect(
     }).pipe(Effect.provide(harness.layer));
   },
 );
+
+it.effect.each(["identity-revoked", "observer", "lane-limit"] as const)(
+  "refuses a review correction after current authority changes: %s",
+  (scenario) => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      const { runtime, task } = yield* start(harness);
+      const workerRun = harness.world.latestRun(task.worker!.threadId)!.id;
+      if (scenario === "lane-limit") {
+        harness.world.shells.set(task.worker!.threadId, { runtimeMode: "approval-required" });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO orchestration_v2_projection_threads
+          (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+          VALUES (${task.worker!.threadId}, ${task.target!.projectId}, 'Worker', 'codex', 'approval-required', 'default', ${now}, ${now}, '{}')`;
+      }
+      if (scenario === "identity-revoked") {
+        yield* (yield* ChannelLedger.ChannelLedger).unlinkIdentity({
+          connectionId: "slack-1",
+          externalActorId: "U1",
+        });
+      } else {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const policy = (yield* settings.getSettings).goatclaw;
+        yield* settings.updateSettings({
+          goatclaw: {
+            ...policy,
+            enabled: true,
+            defaultProfile: scenario === "observer" ? "observer" : "worker",
+            ...(scenario === "lane-limit"
+              ? {
+                  profiles: {
+                    ...policy.profiles,
+                    worker: { ...policy.profiles.worker!, maxLanes: 0 },
+                  },
+                }
+              : {}),
+          },
+        });
+      }
+      yield* finishReviewer(harness, task, blockers);
+      yield* runtime.drain;
+      const waiting = yield* onlyTask;
+      assert.strictEqual(waiting.status, "waiting_input");
+      assert.include(waiting.openQuestions[0]?.text ?? "", "permission");
+      assert.strictEqual(harness.world.latestRun(task.worker!.threadId)!.id, workerRun);
+      assert.isUndefined(
+        (yield* (yield* ChannelLedger.ChannelLedger).getTask(task.taskId))!.pendingAnswerMessageId,
+      );
+      yield* runtime.drain;
+      assert.strictEqual(harness.world.latestRun(task.worker!.threadId)!.id, workerRun);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect(
+  "admits one authorized review correction and replays its receipt without another run",
+  () => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      const { runtime, task } = yield* start(harness);
+      harness.world.shells.set(task.worker!.threadId, { runtimeMode: "approval-required" });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES (${task.worker!.threadId}, ${task.target!.projectId}, 'Worker', 'codex', 'approval-required', 'default', ${now}, ${now}, '{}')`;
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        goatclaw: { enabled: true, defaultProfile: "worker" },
+      });
+      yield* finishReviewer(harness, task, blockers);
+      yield* runtime.drain;
+      const corrected = harness.world.latestRun(task.worker!.threadId)!;
+      assert.notStrictEqual(corrected.id, task.worker!.runId);
+      assert.strictEqual(harness.world.sends.at(-1)?.expectedLatestRunId, task.worker!.runId);
+      const [replay] = yield* sql<{
+        sequence: number;
+        event_json: string;
+      }>`SELECT sequence, event_json FROM channel_task_events WHERE json_extract(event_json, '$.type') = 'task.followup.received' ORDER BY sequence DESC LIMIT 1`;
+      assert.isDefined(replay);
+      const sendsBeforeReplay = harness.world.sends.length;
+      yield* (yield* ChannelDispatcher.ChannelDispatcher).forward(
+        {
+          sequence: replay!.sequence,
+          event: eventDecoder(replay!.event_json),
+        },
+        runtime.ownerToken,
+      );
+      assert.strictEqual(harness.world.sends.length, sendsBeforeReplay + 1);
+      assert.strictEqual(harness.world.latestRun(task.worker!.threadId)!.id, corrected.id);
+      assert.strictEqual(harness.world.sends.at(-1)?.expectedLatestRunId, task.worker!.runId);
+      const reservations = yield* sql<{
+        pending: number;
+      }>`SELECT pending FROM goatclaw_lane_reservations WHERE child_thread_id = ${task.worker!.threadId}`;
+      assert.deepStrictEqual(reservations, [{ pending: 0 }]);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);

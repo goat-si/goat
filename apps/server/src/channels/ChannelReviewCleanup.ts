@@ -28,6 +28,7 @@ const Cleanup = Schema.Struct({
   projectId: ProjectId,
   threadId: ThreadId,
   host: Schema.optional(Schema.String),
+  requireReady: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode,
   createdAt: Schema.String,
   nextAttemptAt: Schema.String,
@@ -92,7 +93,8 @@ const make = Effect.gen(function* () {
       threadId: task.review!.threadId,
       ...(task.worker!.host === undefined ? {} : { host: task.worker!.host }),
       ...(readKey === undefined ? {} : { readKey }),
-      runtimeMode: task.requester.runtimeModeCeiling,
+      runtimeMode: "approval-required",
+      ...(task.target?.remote?.automatic === undefined ? {} : { requireReady: true }),
       createdAt: now,
       nextAttemptAt: now,
       attempts: 0,
@@ -188,6 +190,10 @@ const make = Effect.gen(function* () {
         ssh.callHostTool(
           {
             host: entry.host!,
+            ...(entry.requireReady === true
+              ? { requireReady: true as const, existingSessionOnly: true as const }
+              : {}),
+            memoryGrantCeiling: "none",
             tool,
             arguments: args,
             writes,

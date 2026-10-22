@@ -40,6 +40,10 @@ import { parseReviewDiff, reviewDiffScript } from "./channelReviewDiff.ts";
 export const REVIEW_TIMEOUT_MS = 20 * 60_000;
 const REMOTE_READ_MS = 15_000;
 const MAX_DIFF_LENGTH = 100_000;
+const automaticConnection = (task: ChannelTask, strict = false) =>
+  task.target?.remote?.automatic === undefined
+    ? {}
+    : { requireReady: true as const, ...(strict ? { existingSessionOnly: true as const } : {}) };
 const terminal = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 const ReviewResult = Schema.Struct({
   verdict: Schema.Literals(["pass", "blockers"]),
@@ -619,12 +623,21 @@ const make = Effect.gen(function* () {
       ssh.callHostTool(
         {
           host: target.host,
+          ...automaticConnection(task, tool === "orchestrator_capabilities"),
+          memoryGrantCeiling:
+            tool === "orchestrator_capabilities"
+              ? (task.target?.memoryGrantCeiling ?? "none")
+              : "none",
           tool,
           arguments: args,
           writes: false,
           timeoutMs: REMOTE_READ_MS,
         },
-        Effect.succeed(task.requester.runtimeModeCeiling),
+        Effect.succeed(
+          tool === "orchestrator_capabilities"
+            ? task.requester.runtimeModeCeiling
+            : "approval-required",
+        ),
       );
     const saved =
       (yield* ledger.getReviewDispatch(ids.correlationId)) ??
@@ -750,6 +763,7 @@ const make = Effect.gen(function* () {
       .launchThread(
         {
           host: target.host,
+          ...automaticConnection(task),
           cwd: target.cwd,
           workspace:
             worker.worktreePath === null
@@ -790,6 +804,7 @@ const make = Effect.gen(function* () {
                 () =>
                   new SshRemoteDispatch.SshRemoteDispatchError({
                     reason: "caller_changed",
+                    launchMayHaveStarted: false,
                     message: "Review permission profile changed.",
                   }),
               ),
@@ -797,6 +812,7 @@ const make = Effect.gen(function* () {
           if (!(yield* authorize(task, owner)))
             return yield* new SshRemoteDispatch.SshRemoteDispatchError({
               reason: "caller_changed",
+              launchMayHaveStarted: false,
               message: "Review authorization changed.",
             });
         }),
@@ -830,8 +846,10 @@ const make = Effect.gen(function* () {
     } else if (
       launched._tag === "Failure" &&
       launched.failure instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-      launched.failure.reason === "remote_refused" &&
-      launched.failure.launchMayHaveStarted !== true
+      ((launched.failure.reason === "remote_refused" &&
+        launched.failure.launchMayHaveStarted !== true) ||
+        (launched.failure.reason === "caller_changed" &&
+          launched.failure.launchMayHaveStarted === false))
     ) {
       yield* cleanup.notStarted(review.threadId, owner);
       yield* finish(
@@ -910,6 +928,8 @@ const make = Effect.gen(function* () {
           .callHostTool(
             {
               host: stored.task.worker.host,
+              ...automaticConnection(stored.task),
+              memoryGrantCeiling: stored.task.target?.memoryGrantCeiling ?? "none",
               tool: "goat_thread_read",
               arguments: { threadId: stored.task.worker.threadId, limit: 1 },
               writes: false,

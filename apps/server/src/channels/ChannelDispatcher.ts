@@ -50,6 +50,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   GOATCLAW_SUPERVISOR_ASKS,
@@ -1098,6 +1099,68 @@ const make = Effect.gen(function* () {
         yield* ledger.completeForward({ owner, sequence: pending.sequence });
         return;
       }
+      let deliveryMode = stored.task.requester.runtimeModeCeiling;
+      const correctionId =
+        event.payload.expectedWorkerRunId === undefined
+          ? undefined
+          : turnSteerIdsFor(event.payload.inputId).commandId;
+      if (correctionId !== undefined) {
+        const admission = yield* Effect.gen(function* () {
+          const requester = yield* requesterForDispatch(stored.task).pipe(
+            Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+          );
+          const bot = yield* ledger.getBot(stored.ownerId);
+          if (requester === undefined || bot === undefined || Option.isNone(records))
+            return undefined;
+          const scope: McpInvocationScope = {
+            environmentId: bot.bot.environmentId,
+            capabilities: new Set(["orchestration"]),
+            issuedAt: DateTime.toEpochMillis(yield* DateTime.now),
+            requestNamespace: correctionId,
+            thread: {
+              threadId: bot.bot.threadId,
+              providerSessionId: "channel-correction:" + stored.task.taskId,
+              providerInstanceId: target.modelSelection.instanceId,
+            },
+            client: undefined,
+          };
+          const currentMode = records.value.thread.runtimeMode;
+          const effective = yield* permissions.require(scope, "threads.launch", {
+            runtimeMode: requester.runtimeModeCeiling,
+          });
+          const ceiling = lowerRuntimeMode(requester.runtimeModeCeiling, effective.runtimeMode);
+          if (lowerRuntimeMode(currentMode, ceiling) !== currentMode) return undefined;
+          yield* permissions.assertTarget(scope, worker.threadId, ceiling, currentMode);
+          const claimed = yield* permissions.claim(scope, {
+            id: correctionId,
+            childThreadId: worker.threadId,
+            runtimeMode: currentMode,
+          });
+          return claimed.runtimeMode;
+        }).pipe(Effect.option);
+        if (Option.isNone(admission) || admission.value === undefined) {
+          yield* permissions.release(correctionId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ChannelLedger.ChannelLedgerError({
+                  reason: "persistence",
+                  detail: "Could not release correction admission.",
+                  cause,
+                }),
+            ),
+          );
+          const asked = yield* askRequester(
+            (yield* ledger.getTask(event.taskId)) ?? stored,
+            "Independent review found blockers, but current requester permission or the bot's permission profile does not permit an automatic correction. Choose how to continue in GOAT.",
+            owner,
+            { clearPendingAnswer: true },
+          );
+          if (asked !== undefined)
+            yield* ledger.completeForward({ owner, sequence: pending.sequence });
+          return;
+        }
+        deliveryMode = admission.value;
+      }
       const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
       const send = (attempt: "first" | "queued") => {
         const ids = turnSteerIdsFor(event.payload.inputId, attempt);
@@ -1120,7 +1183,7 @@ const make = Effect.gen(function* () {
           })
           .pipe(
             Effect.provideService(DispatchModeLimit, {
-              runtimeMode: stored.task.requester.runtimeModeCeiling,
+              runtimeMode: deliveryMode,
               interactionMode: "default",
               refused,
             }),
@@ -1131,6 +1194,26 @@ const make = Effect.gen(function* () {
         failure._tag === "OrchestratorCommandRejectedError" ||
         failure._tag === "OrchestratorCommandPreviouslyRejectedError";
       let sent = yield* send("first");
+      if (correctionId !== undefined) {
+        // Keep uncertain admission reserved for the same receipt's retry; only a
+        // successful send or a definitive refusal can settle its pending slot.
+        const settled =
+          sent._tag === "Success"
+            ? permissions.complete(correctionId, worker.threadId)
+            : rejected(sent.failure)
+              ? permissions.release(correctionId)
+              : Effect.void;
+        yield* settled.pipe(
+          Effect.mapError(
+            (cause) =>
+              new ChannelLedger.ChannelLedgerError({
+                reason: "persistence",
+                detail: "Could not settle correction admission.",
+                cause,
+              }),
+          ),
+        );
+      }
       // A rejected command id is refused for good, so a definite rejection gets one more attempt
       // under its own ids rather than retrying the same ones forever.
       if (
