@@ -35,12 +35,13 @@ export function useTimelineEndPin({
     let released = false;
     const distanceFromEnd = () =>
       scrollNode.scrollHeight - scrollNode.clientHeight - scrollNode.scrollTop;
-    const scrolledUp = createUpwardScrollDetector({
+    const measuredPosition = () => ({
       top: scrollNode.scrollTop,
       height: scrollNode.scrollHeight,
     });
+    let scrolledUp = createUpwardScrollDetector(measuredPosition());
     const onScroll = () => {
-      if (scrolledUp({ top: scrollNode.scrollTop, height: scrollNode.scrollHeight })) {
+      if (scrolledUp(measuredPosition())) {
         released = true;
       }
       if (released && distanceFromEnd() <= 1) released = false;
@@ -59,6 +60,9 @@ export function useTimelineEndPin({
       if (released || !viewport) return;
       if (distance <= 1 || (smooth && distance <= viewportHeight)) return;
       viewport.scrollTop = viewport.scrollHeight;
+      // Its scroll event arrives later and coalesces with any user scroll in
+      // between, so upward movement is measured from where the pin landed.
+      scrolledUp = createUpwardScrollDetector(measuredPosition());
     };
     scrollNode.addEventListener("scroll", onScroll, { passive: true });
     const stopObserving = observeResize([scrollNode, content], pin);
