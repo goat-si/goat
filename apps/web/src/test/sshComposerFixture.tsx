@@ -384,12 +384,16 @@ export async function setupSshComposer(realComposer = false) {
   }
   const registry = state.registry!;
   const get = registry.get.bind(registry);
-  vi.spyOn(registry, "get").mockImplementation(((atom: Atom.Atom<unknown>) =>
-    atom === environmentCatalog.catalogValueAtom
-      ? state.data!.catalog
-      : atom === vcsEnvironment.sshWorkspaceLaunch.permissionAtom(local)
-        ? true
-        : get(atom)) as typeof registry.get);
+  const getSpy = vi
+    .spyOn(registry, "get")
+    .mockImplementation(((atom: Atom.Atom<unknown>) =>
+      atom === environmentCatalog.catalogValueAtom
+        ? state.data!.catalog
+        : atom === vcsEnvironment.sshWorkspaceLaunch.permissionAtom(local)
+          ? true
+          : get(atom)) as typeof registry.get);
+  // The registry outlives one test; a spy left behind would wrap itself on the next setup.
+  stack.defer(() => getSpy.mockRestore());
   // Navigation hooks are mocked so both lanes can control completion and remounts.
   const { ThreadRouteView } = await import("~/components/ThreadRouteView");
   const screen = stack.use(await render(<div />, { router: false }));
