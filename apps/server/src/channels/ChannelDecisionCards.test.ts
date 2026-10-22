@@ -11,6 +11,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
+import { CHANNEL_COPY } from "./channelCopy.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
@@ -352,6 +353,38 @@ describe("decision cards", () => {
       assert.notInclude(seen, label.toLowerCase());
       assert.strictEqual(harness.world.launches.length, 1);
       assert.strictEqual(harness.world.launches[0]?.projectId, projectFor(label));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("tells a second answer to an answered question that it was not passed on", () => {
+    const harness = makeHarness({ projects: 2 });
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(slackInput("do: which repo?", "Ev-q"), slackContext);
+      yield* runtime.drain;
+      const asked = yield* onlyTask;
+      const questionId = asked.openQuestions[0]!.questionId;
+      const question = resultsTo(harness.slackSent, "question")[0];
+      const label = question!.message.text
+        .split("\n")
+        .find((line) => line.startsWith("1. "))!
+        .slice("1. ".length);
+      const answer = (key: string) =>
+        gateway.ingest(
+          { ...slackInput(label, key), intent: "answer", taskId: asked.taskId, questionId },
+          slackContext,
+        );
+      yield* answer("Ev-first");
+      yield* runtime.drain;
+      yield* answer("Ev-again");
+      yield* runtime.drain;
+      assert.strictEqual(harness.world.launches.length, 1);
+      assert.strictEqual(
+        resultsTo(harness.slackSent, "receipt").at(-1)?.message.text,
+        CHANNEL_COPY.questionAlreadyAnswered,
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 });
