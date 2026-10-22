@@ -10,7 +10,7 @@ import {
 } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
-import { makeProviderFailure } from "@goat/provider-core/server/failure";
+import { makeProviderFailure, makeProviderRetryTurnItem } from "@goat/provider-core/server/failure";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -83,6 +83,28 @@ export const capabilities = {
 } satisfies OrchestrationV2ProviderCapabilities;
 
 type Task = NonNullable<OrchestrationV2ProviderThread["cloudTask"]>;
+
+export const RETRY_PROMPT =
+  "Your previous run stopped because of an unexpected error before it finished. Continue the original task from where it stopped.";
+const RETRY_PROGRESS = "Cursor stopped on an unexpected error. GOAT retried once automatically.";
+// Errors a person has to fix; repeating the request cannot help.
+const PERMANENT_ERROR =
+  /auth|permission|forbidden|quota|limit|billing|payment|plan|invalid|not.?found|config/i;
+
+/**
+ * Cursor sometimes stops a fresh run with "The agent stopped because of an unexpected error",
+ * and Retry in Cursor then finishes it. A run that GOAT started gets that retry once, unless it
+ * already produced a branch or PR, was stopped, or failed for a reason a person must fix.
+ */
+export function shouldRetryCursorRun(task: Task, result: RunResult, stopRequested: boolean) {
+  if (result.status !== "error" || stopRequested) return false;
+  if (task.attach === "registered" || task.autoRetriedFromTaskId !== undefined) return false;
+  // Judge this run's own output; an earlier turn's PR stays on the task.
+  const { prUrl: _prUrl, branch: _branch, ...fresh } = task;
+  const output = resultTask(fresh, result);
+  if (output.prUrl !== undefined || output.branch !== undefined) return false;
+  return !PERMANENT_ERROR.test(result.error?.code ?? "");
+}
 type TurnInput = ProviderAdapter.ProviderAdapterV2TurnInput;
 type AttachInput = Omit<TurnInput, "message" | "cloudLaunchSource">;
 type Progress = { assistantText: string; text: string };
@@ -321,6 +343,53 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               }),
             );
           });
+        const retryItem = (ctx: Active, status: "running" | "completed", at: DateTime.Utc) =>
+          emit({
+            type: "turn_item.updated",
+            driver: DRIVER,
+            turnItem: makeProviderRetryTurnItem({
+              driver: DRIVER,
+              threadId: ctx.input.threadId,
+              runId: ctx.input.runId,
+              nodeId: ctx.input.rootNodeId,
+              providerThreadId: ctx.thread.id,
+              providerTurnId: ctx.turn.id,
+              itemOrdinal: ctx.input.providerTurnOrdinal * 100 + 2,
+              failure: makeProviderFailure({ class: "provider_error", message: RETRY_PROGRESS }),
+              retry: { attempt: 1, maxAttempts: 1, retryDelayMs: 0 },
+              status,
+              startedAt: at,
+              updatedAt: at,
+            }),
+          });
+        const retryOnce = (ctx: Active) =>
+          Effect.gen(function* () {
+            const failed = ctx.thread.cloudTask!;
+            const apiKey = yield* key;
+            const marked: Task = {
+              ...failed,
+              status: "submitting",
+              autoRetriedFromTaskId: failed.taskId,
+              progress: RETRY_PROGRESS,
+            };
+            // Spend the retry before sending: a restart in between reconciles as unknown.
+            yield* commit(ctx, marked);
+            yield* retryItem(ctx, "running", yield* DateTime.now);
+            const agent = yield* call("resume", () => sdk.resume(ctx.run.agentId, { apiKey }));
+            const sent = yield* call("send", () =>
+              agent.send(RETRY_PROMPT, {
+                model: cursorSdkModelSelection(ctx.input.modelSelection),
+                idempotencyKey: `goat:${instanceId}:${ctx.input.runId}:${ctx.input.attemptId}:retry`,
+              }),
+            ).pipe(Effect.ensuring(Effect.sync(() => agent.close())));
+            ctx.run = sent;
+            yield* commit(ctx, {
+              ...marked,
+              taskId: sent.id,
+              status: "running",
+              tracking: "polled",
+            });
+          });
         const finalize = (ctx: Active, result: RunResult) =>
           Effect.gen(function* () {
             if (ctx.finalized) return;
@@ -343,6 +412,9 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               completedAt: timestamp,
             } satisfies OrchestrationV2ProviderTurn;
             yield* commit(ctx, task, turn);
+            // A failed retry is reported by the terminal failure item, which shares this item's id.
+            if (status === "completed" && task.autoRetriedFromTaskId !== undefined)
+              yield* retryItem(ctx, "completed", timestamp);
             yield* emit(
               status === "failed"
                 ? {
@@ -376,7 +448,12 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
             while (!ctx.finalized) {
               const run = yield* fresh(ctx);
               if (run.status !== "running") {
-                yield* finalize(ctx, yield* call("result", () => run.wait()));
+                const result = yield* call("result", () => run.wait());
+                if (shouldRetryCursorRun(ctx.thread.cloudTask!, result, ctx.stopRequested)) {
+                  yield* retryOnce(ctx);
+                  continue;
+                }
+                yield* finalize(ctx, result);
                 return;
               }
               const task = ctx.thread.cloudTask!;

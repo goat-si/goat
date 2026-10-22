@@ -45,6 +45,10 @@ overrides do not apply to Cursor's cloud. Progress, summary, and returned PR or 
 links remain visible when connecting to the environment remotely. Cursor may create
 a draft PR; opening it does not mean its checks passed.
 
+If Cursor stops a run with an unexpected error before it opens a branch or PR, GOAT asks the
+same agent to continue once, and the thread shows the result of that retry. Errors you need to
+fix, such as sign-in, access, or usage limits, are not retried.
+
 Messages sent while a task is active wait for completion. Later messages continue
 in the same cloud agent using its original repository revision, without including
 subsequent local edits. **Stop** requests remote cancellation; GOAT marks cancellation

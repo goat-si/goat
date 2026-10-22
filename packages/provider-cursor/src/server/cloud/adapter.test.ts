@@ -29,6 +29,8 @@ import {
   makeCursorCloudAdapter,
   resultTask,
   progressText,
+  RETRY_PROMPT,
+  shouldRetryCursorRun,
 } from "./adapter.ts";
 import * as CursorCloudSdk from "./sdk.ts";
 
@@ -985,6 +987,130 @@ describe("Cursor Cloud adapter", () => {
       ]);
     }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
+  const unexpected: RunResult = {
+    id: runId,
+    status: "error",
+    error: { message: "The agent stopped because of an unexpected error." },
+  };
+  const sentArgs = (h: { send: { mock: { calls: unknown[] } } }) =>
+    h.send.mock.calls as unknown as ReadonlyArray<ReadonlyArray<unknown>>;
+  effectIt.effect(
+    "retries an unexpected Cursor error once and reports the retry's answer as the result",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness;
+        h.setResult(unexpected);
+        yield* h.runtime.startTurn(h.input);
+        yield* Deferred.await(h.streamStarted);
+        h.send.mockImplementationOnce(async () => {
+          h.setResult({ ...completed, id: "run-retry", result: "Four rules." });
+          return { ...h.nativeRun, id: "run-retry" };
+        });
+        yield* h.finish;
+        const events = yield* collectTerminal(h.runtime);
+        expect(h.resume).toHaveBeenCalledWith(agentId, { apiKey: "key-fixture" });
+        expect(sentArgs(h).map((args) => args[0])).toEqual(["Implement it", RETRY_PROMPT]);
+        expect(sentArgs(h)[1]?.[1]).toMatchObject({
+          idempotencyKey: `goat:${instanceId}:${appRunId}:attempt-fixture:retry`,
+        });
+        // The retry is spent before it is sent, then the new run is followed.
+        expect(h.commits.map((value) => [value.status, value.taskId])).toContainEqual([
+          "submitting",
+          runId,
+        ]);
+        expect(h.commits.at(-1)).toMatchObject({
+          status: "succeeded",
+          taskId: "run-retry",
+          autoRetriedFromTaskId: runId,
+          summary: "Four rules.",
+          prUrl: "https://github.com/fixture/repo/pull/7",
+        });
+        expect(h.commits.at(-1)).not.toHaveProperty("error");
+        const retryItems = events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "error"
+            ? [event.turnItem.status]
+            : [],
+        );
+        expect(retryItems).toEqual(["running", "completed"]);
+        expect(events.filter((event) => event.type === "turn.terminal")).toEqual([
+          expect.objectContaining({ status: "completed", failure: null }),
+        ]);
+      }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
+  effectIt.effect("a retry that fails again ends the turn failed without a second retry", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      h.setResult(unexpected);
+      yield* h.runtime.startTurn(h.input);
+      yield* Deferred.await(h.streamStarted);
+      h.send.mockImplementationOnce(async () => ({ ...h.nativeRun, id: "run-retry" }));
+      yield* h.finish;
+      const events = yield* collectTerminal(h.runtime);
+      expect(h.send).toHaveBeenCalledTimes(2);
+      expect(h.commits.at(-1)).toMatchObject({
+        status: "failed",
+        taskId: "run-retry",
+        autoRetriedFromTaskId: runId,
+      });
+      expect(events.filter((event) => event.type === "turn.terminal")).toEqual([
+        expect.objectContaining({ status: "failed" }),
+      ]);
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
+  effectIt.effect("a restarted observer of a retried run never retries again", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      h.setResult({ ...unexpected, id: "run-retry" });
+      const savedTask: Task = { ...task(), taskId: "run-retry", autoRetriedFromTaskId: runId };
+      const providerThread = {
+        ...h.thread,
+        nativeThreadRef: { driver: DRIVER, nativeId: agentId, strength: "strong" as const },
+        cloudTask: savedTask,
+      };
+      const { message: _message, cloudLaunchSource: _launchSource, ...attach } = h.input;
+      yield* h.runtime.resumeTurn!({ ...attach, providerThread, cloudTask: savedTask });
+      const events = yield* collectTerminal(h.runtime);
+      expect(h.getRun).toHaveBeenCalledWith("run-retry", expect.anything());
+      expect(h.send).not.toHaveBeenCalled();
+      expect(h.resume).not.toHaveBeenCalled();
+      expect(events.filter((event) => event.type === "turn.terminal")).toEqual([
+        expect.objectContaining({ status: "failed" }),
+      ]);
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
+  it.each<{ name: string; result: RunResult; retry: boolean }>([
+    { name: "an unexpected error", result: unexpected, retry: true },
+    {
+      name: "an error a person must fix",
+      result: { ...unexpected, error: { message: "No access.", code: "unauthenticated" } },
+      retry: false,
+    },
+    {
+      name: "an error after the run opened a PR",
+      result: { ...unexpected, git: completed.git! },
+      retry: false,
+    },
+    { name: "a cancelled run", result: { id: runId, status: "cancelled" as const }, retry: false },
+  ])("decides whether to retry $name", ({ result, retry }) => {
+    expect(shouldRetryCursorRun(task(), result, false)).toBe(retry);
+  });
+  it("never retries a stopped, registered, or already retried run", () => {
+    expect(shouldRetryCursorRun(task(), unexpected, true)).toBe(false);
+    expect(shouldRetryCursorRun({ ...task(), attach: "registered" }, unexpected, false)).toBe(
+      false,
+    );
+    expect(
+      shouldRetryCursorRun({ ...task(), autoRetriedFromTaskId: "run-0" }, unexpected, false),
+    ).toBe(false);
+    // An earlier turn's PR does not count as output of this run.
+    expect(
+      shouldRetryCursorRun(
+        { ...task(), prUrl: "https://github.com/fixture/repo/pull/1" },
+        unexpected,
+        false,
+      ),
+    ).toBe(true);
+  });
   it("does not accept another repository's result PR", () => {
     const output = resultTask(task(), {
       ...completed,

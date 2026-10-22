@@ -1077,6 +1077,11 @@ export const OrchestrationV2CloudTask = Schema.Struct({
   error: Schema.optional(Schema.String),
   updatedAt: IsoDateTime,
   /**
+   * The vendor run that stopped on an unexpected error and that GOAT retried once on its own.
+   * Present means this app run already spent its automatic retry.
+   */
+  autoRetriedFromTaskId: Schema.optional(TrimmedNonEmptyString),
+  /**
    * "registered": launched outside GOAT and registered afterwards. The first run attaches to
    * the task and never submits a prompt.
    */
