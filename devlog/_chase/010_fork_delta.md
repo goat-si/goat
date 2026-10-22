@@ -52,7 +52,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 ### `code-budgets` 파일 크기와 단언 ratchet
 
-- 커밋: 이 영역을 만든 PR
+- 커밋: #812
 - 경로: `oxlint-plugin-goat/{codeBudget.ts,code-budgets.json,update-code-budgets.ts,index.ts}`, `oxlint-plugin-goat/rules/code-budget.ts`, `vite.config.ts`, `docs/operations/{testing,code-quality}.md`, `AGENTS.md`
 - 정책: GOAT 전용. `goat/code-budget`은 1000줄 넘는 파일, baseline보다 커진 파일, 테스트 밖의 새 non-null 단언, 새 `any` 캐스트를 막는다. upstream의 플러그인 index와 lint 설정 변경은 받고 규칙 등록 한 줄씩을 다시 얹는다. upstream 머지가 baseline 파일을 키우면 `node oxlint-plugin-goat/update-code-budgets.ts`는 1로 끝난다. 머지 커밋에서 `--init`으로 baseline을 다시 쓰고, 올라간 항목이 upstream 줄에서 온 것인지 확인한다. GOAT 변경으로는 올리지 않는다.
 
