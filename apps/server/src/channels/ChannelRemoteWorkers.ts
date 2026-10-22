@@ -2780,9 +2780,6 @@ const make = Effect.gen(function* () {
       let origin: { scope: McpInvocationScope; effective: PermissionProfileView } | undefined;
       let correctionCleanup: { readonly key: ThreadId; readonly inserted: boolean } | undefined;
       const refuseCorrection = Effect.fn("ChannelRemoteWorkers.refuseCorrection")(function* () {
-        // A previous ambiguous send may already have started work. Its independent
-        // owner remains until observation proves that run settled.
-        if (correctionCleanup?.inserted) yield* cleanup.notStarted(correctionCleanup.key, owner);
         yield* askAgain(
           owner,
           stored,
@@ -2896,7 +2893,11 @@ const make = Effect.gen(function* () {
               runtimeMode: origin.effective.runtimeMode,
             })
             .pipe(Effect.option);
-          if (Option.isNone(claimed)) return yield* refuseCorrection();
+          if (Option.isNone(claimed)) {
+            // No send was attempted after this reservation was created.
+            if (correctionCleanup.inserted) yield* cleanup.notStarted(correctionCleanup.key, owner);
+            return yield* refuseCorrection();
+          }
           origin = { scope: origin.scope, effective: claimed.value };
         }
         yield* writeState(owner, stored.task.taskId, state.generation, (value) => ({
@@ -2906,6 +2907,7 @@ const make = Effect.gen(function* () {
           ].slice(-20),
         }));
       }
+      let sendAuthorizationRefused = false;
       const sent = yield* callHost(
         {
           host: state.host,
@@ -2958,10 +2960,33 @@ const make = Effect.gen(function* () {
             );
           }
           return ceiling;
-        }),
+        }).pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              sendAuthorizationRefused = true;
+            }),
+          ),
+        ),
       ).pipe(Effect.flatMap(decodeSent), Effect.result);
       if (sent._tag === "Failure") {
         const code = remoteCode(sent.failure);
+        const destinationRefused =
+          sent.failure instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+          sent.failure.reason === "remote_refused" &&
+          [
+            "capability_denied",
+            "invalid_request",
+            "runtime_mode_escalation_denied",
+            "interaction_mode_escalation_denied",
+          ].includes(code ?? "");
+        // Only failure of this send's pre-dispatch authorization or a definite
+        // destination refusal proves non-dispatch. A later identity read cannot.
+        if (
+          correctionCleanup?.inserted &&
+          (sendAuthorizationRefused || destinationRefused) &&
+          (yield* ledger.isOwner(owner))
+        )
+          yield* cleanup.notStarted(correctionCleanup.key, owner);
         if (
           expected !== undefined &&
           (code === "channel_correction_permission_denied" || code === "capability_denied")
@@ -2973,8 +2998,6 @@ const make = Effect.gen(function* () {
           if (current.value.thread.latestRunId !== expected)
             return yield* discardCorrection(current.value.thread.latestRunId);
           if (code === "invalid_request") {
-            if (correctionCleanup?.inserted)
-              yield* cleanup.notStarted(correctionCleanup.key, owner);
             yield* askAgain(
               owner,
               stored,
@@ -2988,7 +3011,6 @@ const make = Effect.gen(function* () {
           code === "runtime_mode_escalation_denied" ||
           code === "interaction_mode_escalation_denied"
         ) {
-          if (correctionCleanup?.inserted) yield* cleanup.notStarted(correctionCleanup.key, owner);
           // The remote thread's modes went above the requester's ceiling: keep the answer's intent.
           yield* askAgain(owner, stored, REMOTE_COPY.answerRefused(state.host, answer), {
             clearPendingAnswer: true,

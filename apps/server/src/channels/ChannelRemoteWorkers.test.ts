@@ -4784,6 +4784,102 @@ describe("independent remote channel review", () => {
     },
   );
 
+  it.effect.each(["requester-refused", "transient", "superseded"] as const)(
+    "retains correction ownership during same-attempt recovery: %s",
+    (scenario) => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task, correlation } = yield* startReview(machine);
+        yield* Fiber.await(machine.observerFiber!);
+        yield* runtime.drain;
+        machine.threadMode = "approval-required";
+        yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+          goatclaw: { enabled: true, defaultProfile: "manager" },
+        });
+        const reviewCorrelation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(reviewCorrelation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(true),
+        });
+        const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+        yield* reviews.reconcile(runtime.ownerToken);
+        yield* reviews.reconcile(runtime.ownerToken);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const [pending] = yield* ledger.listPendingForwards(50);
+        const recovering = yield* Deferred.make<Fiber.Fiber<unknown, unknown>>();
+        let identityReads = 0;
+        machine.beforeAuthorization = (call) =>
+          Effect.gen(function* () {
+            if (call.tool !== "goat_thread_read" || ++identityReads !== 2) return;
+            yield* Deferred.succeed(recovering, yield* Effect.withFiberSucceed((fiber) => fiber));
+            if (scenario === "requester-refused") {
+              yield* ledger
+                .unlinkIdentity({ connectionId: "slack-1", externalActorId: "U1" })
+                .pipe(Effect.orDie);
+            } else if (scenario === "transient") {
+              machine.threadReadDown = true;
+            } else {
+              const current = (yield* ledger.getTask(task.taskId).pipe(Effect.orDie))!;
+              yield* commitTransition(
+                ledger,
+                current,
+                { type: "task.cancelled", payload: { reason: "Retry requested." } },
+                { owner: runtime.ownerToken },
+              ).pipe(Effect.orDie);
+              yield* commitTransition(
+                ledger,
+                (yield* ledger.getTask(task.taskId).pipe(Effect.orDie))!,
+                { type: "task.retry.requested", payload: { generation: task.generation + 1 } },
+                { owner: runtime.ownerToken },
+              ).pipe(Effect.orDie);
+            }
+          });
+        machine.loseNextSendAnswer = true;
+        yield* (yield* ChannelRemoteWorkers).forward(pending!, runtime.ownerToken);
+        yield* Fiber.await(yield* Deferred.await(recovering));
+        assert.strictEqual(identityReads, 2);
+        const after = yield* onlyTask;
+        assert.strictEqual(
+          after.status,
+          scenario === "requester-refused"
+            ? "waiting_input"
+            : scenario === "transient"
+              ? "running"
+              : "received",
+        );
+        assert.lengthOf(after.openQuestions, scenario === "requester-refused" ? 1 : 0);
+        assert.lengthOf(machine.sends, 1);
+        assert.lengthOf(machine.runs(correlation), 2);
+        const sql = yield* SqlClient.SqlClient;
+        const lanes = () =>
+          sql<{ count: number }>`SELECT COUNT(*) AS count FROM goatclaw_lane_reservations`;
+        assert.deepStrictEqual(yield* lanes(), [{ count: 1 }]);
+        const restarted = yield* ChannelReviewCleanup.ChannelReviewCleanup.pipe(
+          Effect.provide(ChannelReviewCleanup.layer.pipe(Layer.provide(machine.layer))),
+        );
+        yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS);
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.deepStrictEqual(yield* lanes(), [{ count: 1 }]);
+        assert.lengthOf(
+          machine.interrupts.filter((call) => call.threadId === task.worker!.threadId),
+          0,
+        );
+        machine.finishRun(correlation, "completed", null, {
+          outcome: "succeeded",
+          summary: "Corrected.",
+        });
+        yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS * 2);
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.deepStrictEqual(yield* lanes(), [{ count: 0 }]);
+        assert.lengthOf(machine.runs(correlation), 2);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect.each([false, true, "revoked"] as const)(
     "retains one remote correction lane across accepted replay, lost reply=%s",
     (lostReply) => {
