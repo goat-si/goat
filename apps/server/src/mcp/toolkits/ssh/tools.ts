@@ -65,7 +65,7 @@ const shared = {
 
 const SshHost = Schema.Struct({
   alias: Schema.String,
-  source: Schema.Literals(["ssh-config", "known-hosts"]),
+  source: Schema.Literals(["ssh-config", "known-hosts", "cloud-machine"]),
   reachable: Schema.optional(Schema.Boolean),
   probeError: Schema.optional(Schema.String),
 });
@@ -87,7 +87,7 @@ const RemoteEntry = Schema.Struct({
 
 const HostAlias = TrimmedNonEmptyString.annotate({
   description:
-    "An SSH host alias from goat_ssh_host_list (this machine's ~/.ssh/config or known_hosts).",
+    "An SSH host alias from goat_ssh_host_list (this machine's ~/.ssh/config, known_hosts, or a cloud machine it manages).",
 });
 
 const SshHostListTool = Tool.make(agentSurfaceRegistry["ssh.host_list"].name, {

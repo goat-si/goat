@@ -27,9 +27,6 @@ import * as Schema from "effect/Schema";
 import * as NodeCrypto from "node:crypto";
 import * as ChannelLayers from "./channels/ChannelLayers.ts";
 import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
-import * as BoatClient from "./cloudMachines/BoatClient.ts";
-import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
-import * as CloudMachineSsh from "./cloudMachines/sshConfig.ts";
 import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
 import * as GoalLayers from "./fleet/goals/GoalLayers.ts";
 import * as FleetHealth from "./fleet/health/layer.ts";
@@ -91,7 +88,7 @@ import * as RuntimeControl from "./runtimeControl.ts";
 import * as RuntimeDrain from "./runtimeDrain.ts";
 import * as RuntimeIdentity from "./runtimeIdentity.ts";
 import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
-import * as SshRemoteDispatch from "./sshRemote/SshRemoteDispatch.ts";
+import * as SshRemoteDispatchLive from "./sshRemote/SshRemoteDispatchLive.ts";
 import * as GoatclawFleetSync from "./goatclaw/FleetSync.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
@@ -581,7 +578,7 @@ const layerDevice = DeviceService.layer.pipe(
 // SshRemoteDispatch layer reference as the MCP tools, so the proxy shares their tunnel manager.
 const layerHubProxy = HubProxySessions.layer.pipe(
   Layer.provideMerge(HubProxyNodes.layerFromHubNodes),
-  Layer.provide(SshRemoteDispatch.layer),
+  Layer.provide(SshRemoteDispatchLive.layer),
 );
 
 const layerWorkspaceEntries = WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer));
@@ -1127,11 +1124,6 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
   }),
 );
 
-const layerCloudMachines = CloudMachineService.layerWithoutDependencies.pipe(
-  Layer.provide(BoatClient.layer),
-  Layer.provide(CloudMachineSsh.layer()),
-);
-
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerMemoryStarted,
   layerMemorySync,
@@ -1194,7 +1186,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(
     ChannelLayers.layer.pipe(
       Layer.provide(RuntimeLayer.layerEventSink),
-      Layer.provide(SshRemoteDispatch.layer),
+      Layer.provide(SshRemoteDispatchLive.layer),
       // GOAT Bot searches memory when it answers; same references, so one memory instance.
       Layer.provide(Layer.merge(layerMemoryService, layerMemorySync)),
     ),
@@ -1203,12 +1195,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(
     HubNodes.layer.pipe(
       Layer.provide(HubNodeRepository.layer),
-      Layer.provide(SshRemoteDispatch.layer),
+      Layer.provide(SshRemoteDispatchLive.layer),
     ),
   ),
   // One cloud machine service for WS, MCP and both SshRemoteDispatch builds, so the
   // per-alias readiness lock and SSH cache invalidation span every caller.
-  Layer.provideMerge(layerCloudMachines),
+  Layer.provideMerge(SshRemoteDispatchLive.layerCloudMachines),
   // Hosts linked over HTTPS, for the same SshRemoteDispatch builds and the MCP link tools.
   Layer.provideMerge(LinkedHosts.layer),
   Layer.provideMerge(
@@ -1231,7 +1223,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       // The first build of the thread services, which layer memoization shares with every
       // later caller and the MCP tools, so goatclaw fleet sync must be here, not further up.
       Layer.provideMerge(GoatclawFleetSync.layer),
-      Layer.provide(SshRemoteDispatch.layer),
+      Layer.provide(SshRemoteDispatchLive.layer),
       Layer.provideMerge(layerOrchestrationApplication),
     ),
   ),
@@ -1480,7 +1472,7 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
   Layer.provide(layerLaunchWatches),
-  Layer.provide(SshRemoteDispatch.layer),
+  Layer.provide(SshRemoteDispatchLive.layer),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),

@@ -175,7 +175,7 @@ const requireSettingsWrite = McpInvocationContext.McpInvocationContext.pipe(
       new OrchestratorMcpFailure({
         code: "capability_denied",
         message:
-          "Changing cloud machines needs a caller allowed to change this machine's settings.",
+          "Changing cloud machines needs a caller allowed to change this machine's settings. Agent threads are not; ask the user to do it in Settings > Connections > Cloud machines.",
       });
     if (
       scope.readOnly ||
