@@ -1,4 +1,5 @@
 import * as Onboarding from "../../../provider/ProviderOnboarding.ts";
+import * as ProviderSettingsService from "../../../provider/ProviderSettings.ts";
 import * as DateTime from "effect/DateTime";
 import { ThreadId, ProviderInstanceId, TurnItemId } from "@goat/contracts";
 import * as HomeRequests from "../../../provider/CodexHomeRequests.ts";
@@ -44,6 +45,11 @@ it.effect.each([undefined, "box"])("uses one routing entry point for host=%s", (
       Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
       Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
       Layer.provide(Layer.mock(Onboarding.ProviderOnboarding)({})),
+      Layer.provide(
+        Layer.mock(ProviderSettingsService.ProviderSettings)({
+          presentDiagnosis: (result) => Effect.succeed(result),
+        }),
+      ),
       Layer.provide(Layer.mock(CloudAgents.CloudAgentService)({})),
       Layer.provide(
         Layer.mock(Routing.ProviderDiagnosisRouting)({
@@ -84,6 +90,11 @@ it.effect(
         Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
         Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
         Layer.provide(Layer.mock(Onboarding.ProviderOnboarding)({})),
+        Layer.provide(
+          Layer.mock(ProviderSettingsService.ProviderSettings)({
+            presentDiagnosis: (result) => Effect.succeed(result),
+          }),
+        ),
         Layer.provide(Layer.mock(CloudAgents.CloudAgentService)({})),
         Layer.provide(
           Layer.mock(Routing.ProviderDiagnosisRouting)({
@@ -139,6 +150,11 @@ it.effect(
         Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),
         Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
         Layer.provide(Layer.mock(Onboarding.ProviderOnboarding)({})),
+        Layer.provide(
+          Layer.mock(ProviderSettingsService.ProviderSettings)({
+            presentDiagnosis: (result) => Effect.succeed(result),
+          }),
+        ),
         Layer.provide(Layer.mock(CloudAgents.CloudAgentService)({})),
         Layer.provide(
           Layer.mock(HomeRequests.CodexHomeRequests)({

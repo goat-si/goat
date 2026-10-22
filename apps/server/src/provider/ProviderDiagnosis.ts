@@ -101,9 +101,23 @@ const agent = (
   extra: Omit<ProviderDiagnosisFix, "actor" | "instruction"> = {},
 ): ProviderDiagnosisFix => ({ actor: "agent", instruction, ...extra });
 
-/** Changing provider settings needs `providers:manage`, which agents lack; a person approves it. */
-const settingsChange = (instruction: string) =>
-  human(instruction, { path: "provider.setup", handoff: "approval" });
+type FixCall = NonNullable<ProviderDiagnosisFix["call"]>;
+
+/**
+ * A settings change. `call` is the provider tool that applies it; ProviderDiagnosisRouting hands
+ * it to the agent when the caller may manage providers, and otherwise a person approves it.
+ */
+const settingsChange = (instruction: string, call?: FixCall) =>
+  human(instruction, {
+    path: "provider.setup",
+    handoff: "approval",
+    ...(call === undefined ? {} : { call }),
+  });
+
+const enableCall = (instanceId: string): FixCall => ({
+  tool: "goat_provider_update",
+  arguments: { instanceId, enabled: true },
+});
 
 const retry = (subject: string) =>
   agent(
@@ -150,10 +164,15 @@ const enabledCheck = (target: Target, enabled: boolean) =>
         "fail",
         `${nameOf(target)} is disabled.`,
         "disabled",
-        settingsChange(`Enable ${nameOf(target)} in ${SETTINGS}.`),
+        settingsChange(`Enable ${nameOf(target)} in ${SETTINGS}.`, enableCall(target.instanceId)),
       );
 
-const implicitCloudEnabledCheck = (target: Target, enabled: boolean, sibling: string) =>
+const implicitCloudEnabledCheck = (
+  target: Target,
+  enabled: boolean,
+  sibling: string,
+  call: FixCall,
+) =>
   enabled
     ? check("enabled", "pass", `${nameOf(target)} follows the enabled ${sibling} provider.`)
     : check(
@@ -161,7 +180,7 @@ const implicitCloudEnabledCheck = (target: Target, enabled: boolean, sibling: st
         "fail",
         `${nameOf(target)} is off because its ${sibling} provider is disabled or missing.`,
         "disabled",
-        settingsChange(`Enable the ${sibling} provider in ${SETTINGS}.`),
+        settingsChange(`Enable the ${sibling} provider in ${SETTINGS}.`, call),
       );
 
 // ── Generic drivers: judged from the registry's readiness snapshot ─────────
@@ -195,7 +214,7 @@ export const snapshotChecks = (
           "fail",
           `${name} is disabled.`,
           "disabled",
-          settingsChange(`Enable ${name} in ${SETTINGS}.`),
+          settingsChange(`Enable ${name} in ${SETTINGS}.`, enableCall(snapshot.instanceId)),
         ),
   );
   if (!snapshot.enabled) return checks;
@@ -220,7 +239,15 @@ export const snapshotChecks = (
         snapshot.message ?? `${name} is not installed on this machine.`,
         "executable_missing",
         snapshot.setup?.canInstall
-          ? settingsChange(`Install ${name} from ${SETTINGS}.`)
+          ? settingsChange(
+              `Install ${name} from ${SETTINGS}.`,
+              snapshot.driver === "acpRegistry"
+                ? {
+                    tool: "goat_provider_update",
+                    arguments: { instanceId: snapshot.instanceId, install: true },
+                  }
+                : undefined,
+            )
           : human(
               `Install ${name} on this machine, or set its binary path in ${SETTINGS}.${docs ? ` See ${docs}.` : ""}`,
               { handoff: "terminal" },
@@ -451,7 +478,16 @@ const forbiddenEnvironmentFix = (
         : `GOAT started with ${fromProcess.join(", ")} set, ${origin}. Add ${them} with an empty value to the environment of Claude instance ${sourceId} in ${SETTINGS}, or restart GOAT without ${them}.`,
     );
   }
-  return settingsChange(steps.join(" "));
+  return settingsChange(steps.join(" "), {
+    tool: "goat_provider_update",
+    arguments: {
+      instanceId: sourceId,
+      environment: [
+        ...fromInstance.map((name) => ({ name, value: null })),
+        ...fromProcess.map((name) => ({ name, value: "" })),
+      ],
+    },
+  });
 };
 
 /** `environment` without the routing variables Claude Cloud refuses, to probe what else blocks. */
@@ -484,6 +520,7 @@ const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function*
         target,
         implicitDefaultInstance(settings, CLAUDE_CLOUD).enabled,
         `Claude instance ${sourceId}`,
+        enableCall(sourceId),
       ),
     );
   } else if (!configured) {
@@ -734,9 +771,17 @@ const devinSiblingFailure = (
     candidates.length > 0
       ? settingsChange(
           `Select ACP instance ${candidates[0]} as the Devin ACP instance of ${nameOf(target)} in ${SETTINGS}.`,
+          {
+            tool: "goat_provider_link",
+            arguments: { instanceId: target.instanceId, siblingInstanceId: candidates[0] },
+          },
         )
       : settingsChange(
-          `Reset ${nameOf(target)} in ${SETTINGS} so GOAT sets it up again from the Devin CLI, or choose a Devin provider under Advanced.`,
+          `Reset ${nameOf(target)} in ${SETTINGS} so GOAT sets it up again from the Devin CLI, or add an ACP Registry provider for Devin and select it as the Devin ACP instance of ${nameOf(target)}.`,
+          {
+            tool: "goat_provider_add",
+            arguments: { acpAgentId: "devin", linkTo: target.instanceId },
+          },
         );
   switch (error.reason) {
     case "ambiguous":
@@ -781,7 +826,10 @@ const devinSiblingFailure = (
         "fail",
         `ACP instance ${siblingId} is disabled.`,
         "sibling_invalid",
-        settingsChange(`Enable ACP instance ${siblingId} in ${SETTINGS}.`),
+        settingsChange(
+          `Enable ACP instance ${siblingId} in ${SETTINGS}.`,
+          siblingId ? enableCall(siblingId) : undefined,
+        ),
       );
     case "unprepared":
       return check(
@@ -789,7 +837,12 @@ const devinSiblingFailure = (
         "fail",
         `Devin from the ACP Registry is not installed for ${siblingId} yet.`,
         "sibling_not_ready",
-        settingsChange(`Install Devin from ${SETTINGS} → ${siblingId}.`),
+        settingsChange(
+          `Install Devin from ${SETTINGS} → ${siblingId}.`,
+          siblingId
+            ? { tool: "goat_provider_update", arguments: { instanceId: siblingId, install: true } }
+            : undefined,
+        ),
       );
     case "missing_runner":
       return check(
@@ -886,6 +939,7 @@ const diagnoseDevinCloud = Effect.fn("ProviderDiagnosis.devinCloud")(function* (
         target,
         implicitDefaultInstance(settings, DEVIN_CLOUD).enabled,
         "Devin ACP",
+        { tool: "goat_provider_add", arguments: { acpAgentId: "devin" } },
       ),
     );
   } else if (!configured) {
