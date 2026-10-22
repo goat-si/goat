@@ -87,6 +87,7 @@ import {
   WSL_RUNTIME_EXTRA_RESOURCES,
   parseServerVersionOutput,
   resolveDesktopBuildVersion,
+  sandboxedPreloadSyntaxError,
   stampReleaseVersionForBuild,
 } from "./build-desktop-artifact.ts";
 import {
@@ -2572,6 +2573,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(resolved.target, "nsis");
       assert.equal(resolved.arch, "arm64");
     }),
+  );
+});
+
+it("refuses a preload that Electron's sandbox wrapper cannot parse", () => {
+  // Effect's scheduler declared this at the top level of the 0.1.1 nightly preload.
+  const effectScheduler = "const setImmediate = (f) => f();\nsetImmediate(() => {});";
+  assert.include(sandboxedPreloadSyntaxError(effectScheduler) ?? "", "setImmediate");
+  assert.strictEqual(
+    sandboxedPreloadSyntaxError("(() => {\n" + effectScheduler + "\n})();"),
+    undefined,
   );
 });
 
