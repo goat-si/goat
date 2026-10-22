@@ -45,6 +45,7 @@ import {
 } from "@goat/contracts";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
 import { appendGeneratedImageMarkdown } from "./CodexGeneratedImageMarkdown.ts";
+import { failEventsOnAppServerExit, makeCodexSessionEventQueue } from "./CodexAppServerExit.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
@@ -2355,7 +2356,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           model: input.modelSelection.model,
           now,
         });
-        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        const events = yield* makeCodexSessionEventQueue;
+        yield* failEventsOnAppServerExit(client, events, input.providerSessionId);
         const rateLimitSnapshot = yield* Ref.make<CodexRateLimitSnapshot | undefined>(undefined);
         const limitedTurnItems = yield* Ref.make(
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
