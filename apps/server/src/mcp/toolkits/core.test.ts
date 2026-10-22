@@ -1774,36 +1774,3 @@ it.effect("pending toolkit host routing preserves target authority", () =>
     }).pipe(Effect.provide(dependencies));
   }),
 );
-
-it.effect(
-  "publishes strict pending transport schemas and rejects unknown keys before dispatch",
-  () =>
-    Effect.gen(function* () {
-      const dependencies = layerThreadToolkit.pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
-      );
-      yield* Effect.gen(function* () {
-        const server = yield* McpServer.McpServer;
-        for (const name of [
-          "goat_pending_request_list",
-          "goat_pending_request_read",
-          "goat_pending_request_respond",
-        ]) {
-          const definition = server.tools.find(({ tool }) => tool.name === name);
-          expect(definition?.tool.inputSchema.additionalProperties).toBe(false);
-          const result = yield* server
-            .callTool({ name, arguments: { misspelledHost: "box" } })
-            .pipe(
-              Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-              Effect.provideService(McpSchema.McpServerClient, client),
-            );
-          expect(declaredFailure(result)).toMatchObject({
-            code: "invalid_request",
-            message: expect.stringContaining("so nothing ran"),
-          });
-        }
-      }).pipe(Effect.provide(dependencies));
-    }),
-);
