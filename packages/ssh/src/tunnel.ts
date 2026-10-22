@@ -82,6 +82,7 @@ import { runtimePreparationError } from "./runtimePreparationErrors.ts";
 import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
 import { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
 import { makeManagedTrust } from "./managedTrust.ts";
+import { makeTargetAdmission, type RequestTicket } from "./targetAdmission.ts";
 import { makeFailureEnrichment, runtimeFailureResult } from "./sshFailureDiagnostics.ts";
 import {
   makeRemoteSessions,
@@ -2768,67 +2769,15 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   });
   const targetLocks = yield* KeyedLock.make<string>();
   const authSecrets = new Map<string, string>();
-  // Ensure and disconnect requests for one target are ordered by arrival. Both
-  // resolve the alias before taking the target lock, so a reconnect sent after a
-  // disconnect can reach the lock first. Tickets let each request see whether a
-  // newer one has replaced its intent: a disconnect yields to any newer request,
-  // and an ensure yields to a newer disconnect.
-  let requestSequence = 0;
-  const latestRequest = new Map<string, number>();
-  const latestDisconnect = new Map<string, number>();
-  interface RequestTicket {
-    readonly key: string;
-    readonly sequence: number;
-  }
-  const takeRequestTicket = (target: DesktopSshEnvironmentTarget, kind: "ensure" | "disconnect") =>
-    Effect.sync((): RequestTicket => {
-      const key = targetConnectionKey(target);
-      const sequence = ++requestSequence;
-      latestRequest.set(key, sequence);
-      if (kind === "disconnect") latestDisconnect.set(key, sequence);
-      return { key, sequence };
-    });
-  const disconnectSuperseded = (ticket: RequestTicket) =>
-    latestRequest.get(ticket.key) !== ticket.sequence;
-  const ensureSuperseded = (ticket: RequestTicket) =>
-    (latestDisconnect.get(ticket.key) ?? 0) > ticket.sequence;
-
-  const lockUsers = new Map<string, number>();
-  const releaseLockUser = (key: string) =>
-    Effect.sync(() => {
-      const count = lockUsers.get(key) ?? 0;
-      if (count <= 1) lockUsers.delete(key);
-      else lockUsers.set(key, count - 1);
-    });
-  // Count admission before any yield, so ready-only requests never queue behind installation.
-  const withTargetLock = <A, E, R>(key: string, effect: Effect.Effect<A, E, R>) =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
-        lockUsers.set(key, (lockUsers.get(key) ?? 0) + 1);
-      }),
-      () => targetLocks.withLock(key, effect),
-      () => releaseLockUser(key),
-    );
-  const notReady = (target: DesktopSshEnvironmentTarget) =>
-    new SshLaunchError({
-      message: `Call goat_ssh_host_prepare for ${target.alias}, then call goat_ssh_host_status until setup completes; retry goat_provider_diagnose.`,
-      stdout: "",
-    });
-  const withIdleTargetLock = <A, E, R>(
-    key: string,
-    target: DesktopSshEnvironmentTarget,
-    effect: Effect.Effect<A, E, R>,
-  ) =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
-        if (lockUsers.has(key)) return false;
-        lockUsers.set(key, 1);
-        return true;
-      }),
-      (acquired): Effect.Effect<A, E | SshLaunchError, R> =>
-        acquired ? targetLocks.withLock(key, effect) : Effect.fail(notReady(target)),
-      (acquired) => (acquired ? releaseLockUser(key) : Effect.void),
-    );
+  const {
+    latestRequest,
+    takeRequestTicket,
+    disconnectSuperseded,
+    ensureSuperseded,
+    withTargetLock,
+    notReady,
+    withIdleTargetLock,
+  } = makeTargetAdmission(targetLocks);
 
   const closeTunnelEntry = Effect.fn("ssh/tunnel.closeTunnelEntry")(function* (
     entry: SshTunnelEntry,
