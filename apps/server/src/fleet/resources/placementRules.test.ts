@@ -2,12 +2,20 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  QuotaPool,
   type FleetSettings,
   type HostStatusEntry,
   type ModelSelection,
 } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+import payload from "../../usage/fixtures/opencodex-quota-pool.json" with { type: "json" };
 
-import { place, schedulerHostStatus, type PlacementInput } from "./placementRules.ts";
+import {
+  hubTakesNoGoals,
+  place,
+  schedulerHostStatus,
+  type PlacementInput,
+} from "./placementRules.ts";
 
 const NOW = Date.parse("2026-10-20T00:00:00.000Z");
 const LATER = "2026-10-20T05:00:00.000Z";
@@ -36,6 +44,11 @@ const host = (
       readonly instanceId: ProviderInstanceId;
       readonly windows: ReadonlyArray<Window>;
     }>;
+    /** Omit for an older host, which lists only the instances that report quota. */
+    readonly providers?: ReadonlyArray<{
+      readonly instanceId: ProviderInstanceId;
+      readonly enabled: boolean;
+    }>;
     readonly reachability?: HostStatusEntry["reachability"];
     readonly lastKnown?: true;
   } = {},
@@ -59,6 +72,15 @@ const host = (
       fromCache: true,
       limits: { checkedAt: EARLIER, windows: [...quota.windows] },
     })),
+    ...(options.providers === undefined
+      ? {}
+      : {
+          providers: options.providers.map((provider) => ({
+            instanceId: provider.instanceId,
+            driver: ProviderDriverKind.make("codex"),
+            enabled: provider.enabled,
+          })),
+        }),
   },
 });
 
@@ -71,8 +93,36 @@ const goal = (overrides: Partial<PlacementInput> = {}): PlacementInput => ({
   ...overrides,
 });
 const none: FleetSettings = {};
+const pool = Schema.decodeUnknownSync(QuotaPool)(payload);
 
 describe("place", () => {
+  it("scores routed hosts from their raw pool while preserving direct account quota", () => {
+    const routed = host("routed", { quotas: [{ instanceId: codex, windows: [window(1)] }] });
+    const metrics = routed.metrics!;
+    const pooled: HostStatusEntry = {
+      ...routed,
+      metrics: {
+        ...metrics,
+        quotaPool: pool,
+        quotas: metrics.quotas.map((quota) => ({
+          ...quota,
+          limits: { ...quota.limits, quotaPool: { homeId: "fixture-home", provider: "openai" } },
+        })),
+      },
+    };
+    const result = place(
+      goal(),
+      [pooled, host("direct", { quotas: [{ instanceId: codex, windows: [window(50)] }] })],
+      none,
+      NOW,
+    );
+    assert.strictEqual(result._tag, "Placed");
+    if (result._tag === "Placed") assert.strictEqual(result.host, "direct");
+    assert.strictEqual(
+      schedulerHostStatus(pooled, none, new Set(), 0, NOW).quotas[0]?.busiestPercent,
+      61,
+    );
+  });
   it("skips a window at its limit until it resets and says when", () => {
     const result = place(
       goal(),
@@ -147,6 +197,21 @@ describe("place", () => {
         ["mini", "not_ready"],
       ],
     );
+  });
+
+  it("keeps goal work off the hub but still places a person's own launch there", () => {
+    const settings = hubTakesNoGoals({ hosts: { local: { maxThreads: 4 } } });
+    const hosts = [host(null), host("mac-studio")];
+    const goalWork = place(goal(), hosts, settings, NOW);
+    assert.strictEqual(goalWork._tag === "Placed" && goalWork.host, "mac-studio");
+    const own = place(
+      goal({ owner: "thread:t1", hostSelector: { hosts: [null] } }),
+      hosts,
+      settings,
+      NOW,
+    );
+    assert.strictEqual(own._tag === "Placed" && own.host, null);
+    assert.deepStrictEqual(settings.hosts?.local, { maxThreads: 4, allowGoals: false });
   });
 
   it("refuses every host once the fleet holds its global limit of running plus queued threads", () => {
@@ -228,11 +293,53 @@ describe("place", () => {
     });
   });
 
-  it("refuses a host that does not report the requested instance", () => {
+  it("refuses an older host that does not report the requested instance", () => {
     const result = place(goal({ selections: [claudeOpus] }), [host(null)], none, NOW);
     assert.deepStrictEqual(result._tag === "Refused" && result.reasons[0]?.reason, {
       code: "no_instance",
-      message: "claudeAgent is not reported there",
+      message: "claudeAgent is not configured there",
+    });
+  });
+
+  it("places an instance listed in providers that reports no quota", () => {
+    const result = place(
+      goal({ selections: [claudeOpus] }),
+      [host(null, { providers: [{ instanceId: claude, enabled: true }] })],
+      none,
+      NOW,
+    );
+    assert.strictEqual(result._tag, "Placed");
+    assert.deepStrictEqual(result._tag === "Placed" && result.modelSelection, claudeOpus);
+  });
+
+  it("refuses an instance the host does not configure", () => {
+    const result = place(
+      goal({ selections: [claudeOpus] }),
+      [host(null, { providers: [{ instanceId: codex, enabled: true }] })],
+      none,
+      NOW,
+    );
+    assert.deepStrictEqual(result._tag === "Refused" && result.reasons[0]?.reason, {
+      code: "no_instance",
+      message: "claudeAgent is not configured there",
+    });
+  });
+
+  it("refuses an instance the host configures as disabled", () => {
+    const result = place(
+      goal({ selections: [claudeOpus] }),
+      [
+        host(null, {
+          quotas: [{ instanceId: claude, windows: [window(10)] }],
+          providers: [{ instanceId: claude, enabled: false }],
+        }),
+      ],
+      none,
+      NOW,
+    );
+    assert.deepStrictEqual(result._tag === "Refused" && result.reasons[0]?.reason, {
+      code: "no_instance",
+      message: "claudeAgent is disabled there",
     });
   });
 

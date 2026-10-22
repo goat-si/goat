@@ -10,7 +10,7 @@ import {
 
 import { MAC_PERMISSION_TITLES, type MacPermission } from "./MacPermission.ts";
 
-const permissionGranted = (permission: MacPermission) => {
+export const macPermissionGranted = (permission: MacPermission) => {
   if (permission === "screen-recording")
     return Electron.systemPreferences.getMediaAccessStatus("screen") === "granted";
   if (permission === "accessibility")
@@ -18,7 +18,7 @@ const permissionGranted = (permission: MacPermission) => {
   return false;
 };
 
-export function macAppBundlePath(executable: string): string | undefined {
+function macAppBundlePath(executable: string): string | undefined {
   return /^(.+\.app)\/Contents\/MacOS\/[^/]+$/.exec(executable)?.[1];
 }
 
@@ -79,7 +79,7 @@ export class MacPermissionHelper {
     preload: string,
     owner: Electron.BrowserWindow | null,
     iconPaths: readonly string[],
-    isGranted: () => boolean | Promise<boolean> = () => permissionGranted(permission),
+    isGranted: () => boolean | Promise<boolean> = () => macPermissionGranted(permission),
   ) {
     this.close();
     const generation = this.generation;

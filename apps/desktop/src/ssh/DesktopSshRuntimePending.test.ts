@@ -67,6 +67,7 @@ describe("desktop SSH pending result", () => {
               disconnectEnvironment: () => Effect.void,
               revalidateTunnels: () => Effect.void,
               issueMcpClientSession: () => Effect.die("Unexpected session"),
+              issueClientSession: () => Effect.die("unexpected client session"),
               runRemoteScript: () => Effect.die("Unexpected script"),
             }),
           ),

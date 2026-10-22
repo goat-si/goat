@@ -7,16 +7,17 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Schema from "effect/Schema";
 // eslint-disable-next-line goat/no-raw-mcp-registration -- Test harness calls only toolkits registered through McpHttpServer.toolkitRegistration.
 import { McpSchema, McpServer } from "effect/ai";
-import migration from "../../../persistence/Migrations/073_Memory.ts";
-import searchMigration from "../../../persistence/Migrations/075_MemorySearchCounters.ts";
-import hubMigration from "../../../persistence/Migrations/074_MemoryHubSync.ts";
-import lineageMigration from "../../../persistence/Migrations/077_MemoryImportLineage.ts";
-import checkpointMigration from "../../../persistence/Migrations/078_MemoryCheckpointAccounting.ts";
-import reportMigration from "../../../persistence/Migrations/079_MemoryReportLifecycle.ts";
-import usageMigration from "../../../persistence/Migrations/080_MemoryUsageCounters.ts";
-import revertMigration from "../../../persistence/Migrations/081_MemoryRevertResults.ts";
-import readyMigration from "../../../persistence/Migrations/083_MemoryLastReadySpace.ts";
-import administeredMigration from "../../../persistence/Migrations/084_MemoryHubAdministered.ts";
+import migration from "../../../persistence/Migrations/076_Memory.ts";
+import searchMigration from "../../../persistence/Migrations/078_MemorySearchCounters.ts";
+import hubMigration from "../../../persistence/Migrations/077_MemoryHubSync.ts";
+import lineageMigration from "../../../persistence/Migrations/080_MemoryImportLineage.ts";
+import checkpointMigration from "../../../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../../../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../../../persistence/Migrations/082_MemoryReportLifecycle.ts";
+import usageMigration from "../../../persistence/Migrations/083_MemoryUsageCounters.ts";
+import revertMigration from "../../../persistence/Migrations/084_MemoryRevertResults.ts";
+import readyMigration from "../../../persistence/Migrations/086_MemoryLastReadySpace.ts";
+import administeredMigration from "../../../persistence/Migrations/087_MemoryHubAdministered.ts";
 import * as RepositoryResolver from "../../../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as Store from "../../../memory/MemoryStore.ts";
@@ -43,6 +44,7 @@ const database = Layer.effectDiscard(
     Effect.andThen(searchMigration),
     Effect.andThen(lineageMigration),
     Effect.andThen(checkpointMigration),
+    Effect.andThen(revisionSizeMigration),
     Effect.andThen(reportMigration),
     Effect.andThen(usageMigration),
     Effect.andThen(revertMigration),

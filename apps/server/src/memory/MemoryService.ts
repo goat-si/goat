@@ -969,7 +969,8 @@ const make = Effect.fnUntraced(function* (
                     environmentId,
                     importSource: {
                       sourceId: registration.sourceId,
-                      format: registration.source.format,
+                      // Hub protocol v1 peers decode only these formats.
+                      format: registration.source.format satisfies M.MemoryImportFormat,
                       parserVersion: registration.source.parserVersion,
                       sourceLocator: registration.sourceLocator,
                       sourceItemKey: candidate.sourceItemKey,

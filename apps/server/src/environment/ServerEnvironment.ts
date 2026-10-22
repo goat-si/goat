@@ -1,4 +1,3 @@
-import { ProviderMemoryImportRuntime } from "../memory/imports/MemoryImportTypes.ts";
 import {
   EnvironmentId,
   ORCHESTRATION_PROTOCOL_VERSION,
@@ -18,6 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { ProviderMemoryImportRuntime } from "../memory/imports/MemoryImportTypes.ts";
 
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
 
@@ -28,9 +28,9 @@ import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
-import * as Settings from "../serverSettings.ts";
 import * as MemoryHubHttp from "../memory/MemoryHubHttp.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as Settings from "../serverSettings.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
 
@@ -239,8 +239,11 @@ export const make = Effect.gen(function* () {
         refusedReverts: true,
         resolutionInputs: true,
         retainedLocalSpace: true,
+        generationHold: true,
         hubDiagnostics: true,
-        ...(importRuntime._tag === "Some" ? { importProvider: true } : {}),
+        ...(importRuntime._tag === "Some"
+          ? { importProvider: true, importTurnStartFit: true }
+          : {}),
       },
       repositoryIdentity: true,
       connectionProbe: true,
@@ -283,8 +286,11 @@ export const make = Effect.gen(function* () {
       pullRequestStackActions: true,
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
+      threadStop: true,
       environmentIcon: true,
       projectCloneTracking: true,
+      automaticServerUpdates: true,
+      ignoredFileListing: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
@@ -293,6 +299,7 @@ export const make = Effect.gen(function* () {
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
       serverBrowser: true,
       sshActivity: true,
+      hubProxy: true,
       drainRestart: true,
       channelLedger: true,
       goatBotHome: true,

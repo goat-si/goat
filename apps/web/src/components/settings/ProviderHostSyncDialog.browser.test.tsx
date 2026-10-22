@@ -10,6 +10,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 import "~/index.css";
+import { fakeTimers } from "../../../test/render";
 
 const commands = vi.hoisted(() => ({
   matrix: vi.fn(),
@@ -131,7 +132,7 @@ it.each(["light", "dark"] as const)(
     await expect.element(dialog.getByText("Update runtime", { exact: true })).toBeVisible();
     expect(commands.matrix).toHaveBeenCalledWith({ environmentId, input: {} });
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    using _timers = fakeTimers();
     await act(async () => {
       const start = [
         ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),

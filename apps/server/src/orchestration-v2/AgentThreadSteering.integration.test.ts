@@ -12,9 +12,12 @@ import {
   type OrchestrationV2DomainEvent,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -22,6 +25,7 @@ import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectWorker from "./EffectWorker.ts";
@@ -47,7 +51,12 @@ type Events = Queue.Queue<ProviderAdapter.ProviderAdapterV2Event>;
 
 const harness = Effect.fn("agentThreadSteeringHarness")(function* (
   name: string,
-  turns: { readonly supportsActiveSteering: boolean; readonly restartSteering?: boolean },
+  turns: {
+    readonly supportsActiveSteering: boolean;
+    readonly restartSteering?: boolean;
+    /** Computer use is on, so unattended messages may not join a person's turn. */
+    readonly computerUse?: boolean;
+  },
 ) {
   const cwd = yield* checkpointWorkspace("agent-thread-steering-" + name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -124,6 +133,14 @@ const harness = Effect.fn("agentThreadSteeringHarness")(function* (
       Layer.mergeAll(
         CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase)),
         ServerSettings.layerTest(),
+        ...(turns.computerUse === true
+          ? [
+              Layer.mock(CuaDriver.CuaDriver)({
+                enabled: Effect.succeed(true),
+                acquire: Effect.succeed(Option.none()),
+              }),
+            ]
+          : []),
         ProviderReplayHarness.layerWithRegistry(
           { name: "agent-thread-steering-" + name },
           ProviderAdapterRegistry.layerSingle(adapter),
@@ -240,6 +257,7 @@ const startTarget = (cwd: string, started: ReadonlyArray<Turn>, idle = false) =>
 const send = (
   mode: ThreadManagementService.ThreadManagementSendMode = "steer_when_ready",
   text = "update from the sender thread",
+  sender: ThreadId = senderThreadId,
 ) =>
   Effect.gen(function* () {
     const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -247,7 +265,7 @@ const send = (
       projectId,
       commandId: CommandId.make("agent-send"),
       threadId,
-      senderThreadId,
+      senderThreadId: sender,
       messageId: agentMessageId,
       text,
       attachments: [],
@@ -692,6 +710,91 @@ it.effect("internal senders that queue still queue", () =>
         yield* worker.drain();
         assert.equal(sent.delivery, "queued");
         assert.deepEqual(steered, []);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("an unattended message queued behind a slow start keeps its own turn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { cwd, events, started, steered, layer } = yield* harness("slow-start-unattended", {
+        supportsActiveSteering: true,
+        computerUse: true,
+      });
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        // The promotion watcher runs on its own fiber; its gate decision is the point to wait for.
+        const gated = yield* Deferred.make<void>();
+        const gateLogger = Logger.make(({ message }) => {
+          if (JSON.stringify(message).includes("waits as the next turn"))
+            Deferred.doneUnsafe(gated, Effect.void);
+        });
+        yield* startTarget(cwd, started);
+
+        // A channel worker (unattended by its id) messages a person's turn that starts slowly.
+        const sending = yield* send(
+          "steer_when_ready",
+          "use the screen",
+          ThreadId.make("channel-worker:slow-start"),
+        ).pipe(
+          Effect.provide(Logger.layer([gateLogger], { mergeWithExisting: true })),
+          Effect.forkScoped,
+        );
+        yield* TestClock.adjust(ThreadManagementService.STEER_READY_WAIT_MS + 1);
+        const sent = yield* Fiber.join(sending);
+        assert.equal(sent.delivery, "queued");
+
+        // The turn becomes steerable; the promotion watcher must leave the message queued
+        // instead of steering it into the person's turn.
+        const promoted = yield* awaitDomainEvent(
+          (event) =>
+            event.type === "message.updated" &&
+            event.payload.id === agentMessageId &&
+            event.payload.runId === started[0]!.runId,
+        );
+        const ended = yield* awaitDomainEvent(
+          (event) =>
+            event.type === "run.updated" &&
+            event.payload.id === started[0]!.runId &&
+            event.payload.status === "waiting",
+        );
+        yield* reportRunning(events, started[0]!);
+        yield* Effect.raceFirst(Deferred.await(gated), Fiber.join(promoted));
+        yield* worker.drain();
+        assert.deepEqual(steered, []);
+
+        const now = yield* DateTime.now;
+        const providerTurn = {
+          ...providerTurnFor(started[0]!, now),
+          status: "completed" as const,
+          completedAt: now,
+        };
+        yield* Queue.offer(events, { type: "provider_turn.updated", driver, providerTurn });
+        yield* Queue.offer(events, {
+          type: "turn.terminal",
+          driver,
+          providerThreadId: providerTurn.providerThreadId,
+          providerTurnId: providerTurn.id,
+          runOrdinal: started[0]!.runOrdinal,
+          status: "completed",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* Fiber.join(ended);
+        yield* worker.drain();
+        yield* orchestrator.resumeQueuedRuns;
+        yield* worker.drain();
+
+        assert.deepEqual(steered, []);
+        assert.equal(started.length, 2);
+        assert.equal(started[1]?.message.messageId, agentMessageId);
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.notEqual(
+          projection.messages.find((message) => message.id === agentMessageId)?.runId,
+          started[0]!.runId,
+        );
       }).pipe(Effect.provide(layer));
     }),
   ),

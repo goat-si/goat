@@ -6,7 +6,14 @@
  * prefix only Vite knows gets answered with index.html; a prefix only the
  * server knows redirect-loops through the proxy.
  */
-export const DEV_PROXIED_PATH_PREFIXES = ["/api", "/oauth", "/.well-known", "/ws", "/mcp"] as const;
+export const DEV_PROXIED_PATH_PREFIXES = [
+  "/api",
+  "/oauth",
+  "/.well-known",
+  "/ws",
+  "/mcp",
+  "/hub",
+] as const;
 
 /**
  * MCP OAuth derives its issuer and resource URLs from the request, and a client
@@ -19,6 +26,7 @@ export const DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES: ReadonlySet<string> = new S
   "/.well-known",
   "/mcp",
   "/ws",
+  "/hub",
 ]);
 
 export function isDevProxiedPath(pathname: string): boolean {

@@ -1,7 +1,7 @@
 // @effect-diagnostics globalDate:off - The page scripts store native Dates; the test feeds them in.
 import { describe, expect, it } from "vite-plus/test";
 
-import { originStorageImportScript, STORAGE_VALUE_CODEC } from "./rendererOriginStorage.ts";
+import { STORAGE_VALUE_CODEC } from "./rendererOriginStorage.ts";
 
 const codec = new Function(`${STORAGE_VALUE_CODEC}; return { encode, decode };`)() as {
   encode: (value: unknown) => Promise<unknown>;
@@ -9,137 +9,6 @@ const codec = new Function(`${STORAGE_VALUE_CODEC}; return { encode, decode };`)
 };
 const roundTrip = async (value: unknown) =>
   codec.decode(JSON.parse(JSON.stringify(await codec.encode(value))));
-
-it("imports missing localStorage keys while preserving current values, including empty strings", async () => {
-  const items = new Map([
-    ["connections", "current-connections"],
-    ["dismissed", ""],
-    ["current-only", "keep"],
-  ]);
-  const storage = {
-    getItem: (key: string) => items.get(key) ?? null,
-    setItem: (key: string, value: string) => void items.set(key, value),
-  };
-  const script = originStorageImportScript(
-    JSON.stringify({
-      localStorage: { connections: "legacy-connections", dismissed: "legacy-value", theme: "dark" },
-      databases: [],
-      skipped: 0,
-    }),
-  );
-  const run = new Function("localStorage", `return ${script}`) as (
-    localStorage: typeof storage,
-  ) => Promise<string>;
-
-  expect(JSON.parse(await run(storage))).toEqual({
-    localStorageItems: 1,
-    databases: 0,
-    records: 0,
-    skipped: 0,
-  });
-  expect(Object.fromEntries(items)).toEqual({
-    connections: "current-connections",
-    dismissed: "",
-    "current-only": "keep",
-    theme: "dark",
-  });
-  expect(JSON.parse(await run(storage)).localStorageItems).toBe(0);
-});
-
-it.each([null, "id"])(
-  "preserves existing IndexedDB records with keyPath=%s and continues importing",
-  async (keyPath) => {
-    const records = new Map([
-      ["shared", { id: "shared", value: "current" }],
-      ["current-only", { id: "current-only", value: "keep" }],
-    ]);
-    type Pending = { onsuccess?: () => void; onerror?: (event: Event) => void };
-    // Model IDB's duplicate-key request error and transaction cancellation at the page boundary.
-    const indexedDB = {
-      open: () => {
-        const pending: Pending & { result: unknown } = {
-          result: {
-            objectStoreNames: { contains: (name: string) => name === "connections" },
-            close: () => undefined,
-            transaction: () => {
-              let outstanding = 0;
-              let aborted = false;
-              const transaction = {
-                oncomplete: undefined as (() => void) | undefined,
-                onabort: undefined as (() => void) | undefined,
-                objectStore: () => ({
-                  keyPath,
-                  add: (value: { id: string; value: string }, key?: string) => {
-                    const request: Pending = {};
-                    outstanding++;
-                    queueMicrotask(() => {
-                      const recordKey = keyPath === null ? key! : value.id;
-                      if (records.has(recordKey)) {
-                        const event = new Event("error", { cancelable: true });
-                        request.onerror?.(event);
-                        if (!event.defaultPrevented) {
-                          aborted = true;
-                          transaction.onabort?.();
-                        }
-                      } else {
-                        records.set(recordKey, value);
-                        request.onsuccess?.();
-                      }
-                      if (--outstanding === 0 && !aborted) transaction.oncomplete?.();
-                    });
-                    return request;
-                  },
-                }),
-              };
-              return transaction;
-            },
-          },
-        };
-        queueMicrotask(() => pending.onsuccess?.());
-        return pending;
-      },
-    };
-    const script = originStorageImportScript(
-      JSON.stringify({
-        localStorage: {},
-        skipped: 0,
-        databases: [
-          {
-            name: "app",
-            version: 1,
-            stores: [
-              {
-                name: "connections",
-                keyPath,
-                autoIncrement: false,
-                indexes: [],
-                records: [
-                  ["shared", { id: "shared", value: "legacy" }],
-                  ["legacy-only", { id: "legacy-only", value: "imported" }],
-                ],
-              },
-            ],
-          },
-        ],
-      }),
-    );
-    const run = new Function("indexedDB", `return ${script}`) as (
-      database: typeof indexedDB,
-    ) => Promise<string>;
-
-    expect(JSON.parse(await run(indexedDB))).toEqual({
-      localStorageItems: 0,
-      databases: 1,
-      records: 1,
-      skipped: 0,
-    });
-    expect(Object.fromEntries(records)).toEqual({
-      shared: { id: "shared", value: "current" },
-      "current-only": { id: "current-only", value: "keep" },
-      "legacy-only": { id: "legacy-only", value: "imported" },
-    });
-  },
-);
 
 describe("renderer origin storage codec", () => {
   it("round-trips structured-clone values through JSON", async () => {

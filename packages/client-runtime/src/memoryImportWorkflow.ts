@@ -1,15 +1,59 @@
-import type {
-  MemoryCapacityDimension,
-  MemoryImportIssue,
-  MemoryImportOutcome,
-  MemoryImportFormat,
-  MemoryImportProviderInput,
-  MemoryImportProviderResult,
-  MemoryImportReceipt,
-  MemoryImportSourceId,
-  MemoryOperationId,
+import {
+  MEMORY_IMPORT_PREVIEW_MAX_ITEMS,
+  MemoryImportRpcError,
+  type MemoryCapacityDimension,
+  type MemoryImportIssue,
+  type MemoryImportOutcome,
+  type MemoryImportFormat,
+  type MemoryImportProviderInput,
+  type MemoryImportProviderResult,
+  type MemoryImportReceipt,
+  type MemoryImportSourceId,
+  type MemoryOperationId,
 } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import type { MemoryImportDestination, MemoryImportRecoveryStore } from "./memoryImportRecovery.ts";
+
+const isMemoryImportRpcError = Schema.is(MemoryImportRpcError);
+
+/** A short reason for a whole-request import refusal, for the settings UI. */
+export function memoryImportIssueReason(issue: MemoryImportIssue): string {
+  switch (issue) {
+    case "unsupported_format":
+      return "This provider's memory format is not supported.";
+    case "source_missing":
+      return "That memory store or profile is not on this device.";
+    case "source_unreadable":
+      return "The memory store could not be read.";
+    case "invalid_utf8":
+      return "A memory file is not valid text.";
+    case "path_rejected":
+      return "A memory file is outside the allowed location.";
+    case "limit_exceeded":
+      return `This folder has more than ${MEMORY_IMPORT_PREVIEW_MAX_ITEMS} items.`;
+    case "source_changed":
+      return "The source changed. Preview again before importing.";
+    case "scope_unmapped":
+      return "Items in projects/ need a project scope.";
+    case "mapping_changed":
+      return "The destination changed. Preview again before importing.";
+    case "bootstrap_required":
+      return "Set up memory on this device before importing.";
+    case "secret_detected":
+      return "Import stopped because sensitive content was found.";
+    case "storage_failed":
+      return "The import could not be saved.";
+    case "operation_id_reused":
+      return "This import request was already used. Preview again.";
+    case "capacity_exceeded":
+      return "Memory storage is full.";
+  }
+}
+
+/** The typed refusal's reason, or null when the failure is not a memory-import error. */
+export function memoryImportRequestFailureMessage(error: unknown): string | null {
+  return isMemoryImportRpcError(error) ? memoryImportIssueReason(error.issue) : null;
+}
 
 type Apply = Extract<MemoryImportProviderInput, { action: "apply" }>;
 type Preview = Extract<MemoryImportProviderResult, { action: "preview" }>;

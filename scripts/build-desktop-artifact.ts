@@ -23,11 +23,17 @@ import { fromYaml } from "@goat/shared/schemaYaml";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@goat/shared/relayAuth";
 import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
+import { cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
+import {
+  ReleasePackageManifestError,
+  releasePackageFiles,
+  updateReleasePackageVersions,
+} from "./update-release-package-versions.ts";
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
 import { resolveBuildCommitTime } from "./lib/build-commit-time.ts";
 import {
@@ -36,16 +42,13 @@ import {
   resolveDevBuildVersion,
 } from "./lib/release-version.ts";
 import {
-  releasePackageFiles,
-  updateReleasePackageVersions,
-} from "./update-release-package-versions.ts";
-import {
   BRAND_ASSET_PATHS,
   resolveWebAssetBrandForChannel,
   type WebAssetBrand,
 } from "./lib/brand-assets.ts";
 import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
+import { windowsSystemTar } from "./lib/windows-tar.ts";
 import {
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
@@ -59,6 +62,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -124,6 +128,9 @@ const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
 );
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeReleasePackageManifest = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
 const decodeWorkspaceConfig = Schema.decodeEffect(fromYaml(WorkspaceConfig));
 const encodeStageWorkspaceConfig = Schema.encodeEffect(fromYaml(StageWorkspaceConfig));
 
@@ -321,6 +328,15 @@ export class InvalidMockUpdateServerPortError extends Schema.TaggedError<Invalid
   }
 }
 
+export class DesktopBuildManifestRestoreError extends Schema.TaggedError<DesktopBuildManifestRestoreError>()(
+  "DesktopBuildManifestRestoreError",
+  { failures: Schema.Array(ReleasePackageManifestError) },
+) {
+  override get message(): string {
+    return `Failed to restore release manifests: ${this.failures.map((failure) => failure.filePath).join(", ")}`;
+  }
+}
+
 export class BuildCommandFailedError extends Schema.TaggedError<BuildCommandFailedError>()(
   "BuildCommandFailedError",
   {
@@ -464,7 +480,10 @@ const WINDOWS_DESKTOP_BUILD_PREREQUISITES = [
     id: "msvc",
     description: "Visual Studio Build Tools with C++, Windows SDK, and Spectre libraries",
   },
-  { id: "tar", description: "tar to inspect the bundled WSL runtime archive" },
+  {
+    id: "tar",
+    description: "tar.exe to extract Cua Driver and inspect the bundled WSL runtime archive",
+  },
 ] as const;
 
 export class WindowsDesktopBuildPrerequisitesMissingError extends Schema.TaggedError<WindowsDesktopBuildPrerequisitesMissingError>()(
@@ -1047,6 +1066,10 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/LICENSE-T3CODE.txt",
   "!apps/desktop/gnome-extension",
   "!apps/desktop/gnome-extension/**/*",
+  "!apps/desktop/prod-resources/cua-driver",
+  "!apps/desktop/prod-resources/cua-driver/**/*",
+  "!apps/desktop/resources/cua-driver",
+  "!apps/desktop/resources/cua-driver/**/*",
 ] as const;
 // Windows terminal helpers cannot run on macOS and slow signing and notarization.
 export const MAC_FILE_EXCLUSIONS = [
@@ -1145,6 +1168,7 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
+  { from: "apps/desktop/prod-resources/cua-driver", to: "cua-driver" },
   {
     from: "apps/desktop/prod-resources/cursor-sdk",
     to: "node_modules/@cursor",
@@ -1466,6 +1490,14 @@ ${associatedDomains}
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!-- The hardened runtime denies camera and microphone to the app and every
+         child process, with no prompt, unless the app claims these. Terminals
+         and coding agents inherit the app's TCC identity, so without these a
+         command like ffmpeg or imagesnap gets silent access-denied. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
   </dict>
 </plist>
 `;
@@ -1695,9 +1727,14 @@ export function createStagePatchedDependencies(
   dependencies: Record<string, unknown>,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(patchedDependencies).filter(([patchKey]) =>
-      Object.hasOwn(dependencies, getPatchedDependencyPackageName(patchKey)),
-    ),
+    Object.entries(patchedDependencies).filter(([patchKey]) => {
+      const name = getPatchedDependencyPackageName(patchKey);
+      // The Cua SDK's transitive loader needs the ASAR path fix too.
+      return (
+        Object.hasOwn(dependencies, name) ||
+        (name === "@ubjs/node" && Object.hasOwn(dependencies, "@trycua/cua-driver"))
+      );
+    }),
   );
 }
 
@@ -2022,6 +2059,114 @@ const runCommand = Effect.fn("runCommand")(function* (
   }
 });
 
+export class DesktopBuildAlreadyRunningError extends Schema.TaggedError<DesktopBuildAlreadyRunningError>()(
+  "DesktopBuildAlreadyRunningError",
+  { lockPath: Schema.String },
+) {
+  override get message(): string {
+    return `Another desktop build owns '${this.lockPath}'. Wait for it to finish. If a build was killed, confirm no desktop build is running, inspect and restore any changed release manifests, then remove this lock.`;
+  }
+}
+
+const withDesktopBuildLock = Effect.fn("withDesktopBuildLock")(function* <A, E, R>(
+  repoRoot: string,
+  build: Effect.Effect<A, E, R>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const lockPath = path.join(repoRoot, ".desktop-build.lock");
+  return yield* Effect.acquireUseRelease(
+    fs
+      .makeDirectory(lockPath)
+      .pipe(
+        Effect.mapError((error) =>
+          error.reason._tag === "AlreadyExists"
+            ? new DesktopBuildAlreadyRunningError({ lockPath })
+            : error,
+        ),
+      ),
+    // Stop packaging children and finish stage cleanup before another build can enter.
+    () => build.pipe(Effect.scoped),
+    (_, exit) =>
+      fs
+        .remove(lockPath, { recursive: true })
+        .pipe(
+          Effect.catch((error) =>
+            Exit.isFailure(exit) ? Effect.logError(error) : Effect.fail(error),
+          ),
+        ),
+  );
+});
+
+// The artifact entry point holds the checkout lock through staging/packaging,
+// so it calls this implementation without reacquiring its own lock.
+const buildDesktopBundlesUnlocked = Effect.fn("buildDesktopBundlesUnlocked")(function* (
+  repoRoot: string,
+  appVersion: string,
+  verbose: boolean,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const vp = yield* resolveVp(repoRoot);
+  const spawnCommand = yield* resolveSpawnCommand(vp, ["run", "build:desktop"]);
+  yield* Effect.acquireUseRelease(
+    Effect.forEach(releasePackageFiles, (relativePath) =>
+      Effect.gen(function* () {
+        const filePath = path.join(repoRoot, relativePath);
+        const contents = yield* fs.readFileString(filePath);
+        const needsRestore = yield* decodeReleasePackageManifest(contents).pipe(
+          Effect.map((manifest) => manifest.version !== appVersion),
+          // Let alignment report invalid manifests after any preceding writes.
+          Effect.orElseSucceed(() => false),
+        );
+        return { filePath, contents, needsRestore };
+      }),
+    ),
+    () =>
+      Effect.gen(function* () {
+        yield* updateReleasePackageVersions(appVersion, { rootDir: repoRoot });
+        // The compiler must stop reading the aligned manifests before restoration.
+        yield* runCommand(
+          ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+            cwd: repoRoot,
+            shell: spawnCommand.shell,
+            env: { APP_VERSION: appVersion },
+            extendEnv: true,
+          }),
+          { label: "vp run build:desktop", verbose },
+        ).pipe(Effect.scoped);
+      }),
+    (originals, exit) =>
+      Effect.gen(function* () {
+        const [, failures] = yield* Effect.partition(
+          originals.filter(({ needsRestore }) => needsRestore),
+          ({ filePath, contents }) =>
+            fs
+              .writeFileString(filePath, contents)
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ReleasePackageManifestError({ operation: "write", filePath, cause }),
+                ),
+              ),
+        );
+        if (failures.length === 0) return;
+        const error = new DesktopBuildManifestRestoreError({ failures });
+        if (Exit.isFailure(exit)) {
+          // Cleanup must not hide the original build or alignment failure.
+          yield* Effect.logError(error);
+        } else {
+          return yield* error;
+        }
+      }),
+  );
+});
+
+export const buildDesktopBundles = Effect.fn("buildDesktopBundles")(
+  (repoRoot: string, appVersion: string, verbose: boolean) =>
+    withDesktopBuildLock(repoRoot, buildDesktopBundlesUnlocked(repoRoot, appVersion, verbose)),
+);
+
 const desktopBuildProbeSucceeds = Effect.fn("desktopBuildProbeSucceeds")(function* (
   command: ChildProcess.Command,
   label: string,
@@ -2144,7 +2289,7 @@ function windowsVswherePrerequisiteScript(arch: typeof BuildArch.Type): string {
 }
 
 export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBuild")(
-  function* (input: { readonly arch: typeof BuildArch.Type; readonly bundlesWslRuntime: boolean }) {
+  function* (input: { readonly arch: typeof BuildArch.Type }) {
     const rustTarget = resolveResourceMonitorRustTargets("win", input.arch)[0]!;
     const reuseResourceMonitor = yield* Config.Boolean("GOAT_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
       Config.withDefault(false),
@@ -2171,9 +2316,7 @@ export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBu
               ]),
               "Visual Studio Build Tools",
             ),
-        tar: input.bundlesWslRuntime
-          ? desktopBuildProbeSucceeds(ChildProcess.make("tar.exe", ["--version"]), "tar")
-          : Effect.succeed(true),
+        tar: desktopBuildProbeSucceeds(ChildProcess.make("tar.exe", ["--version"]), "tar"),
       },
       { concurrency: "unbounded" },
     );
@@ -2295,11 +2438,11 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
     // probe cannot resolve through staging and Windows needs no symlink privilege.
     yield* fs.copy(source, destination);
 
-    const restoreRelativeSymlinks = (
-      sourceDirectory: string,
-      destinationDirectory: string,
-    ): Effect.Effect<void, PlatformError | BundleNotSelfContainedError> =>
-      Effect.gen(function* () {
+    const restoreRelativeSymlinks = Effect.fn("build-desktop-artifact.restoreRelativeSymlinks")(
+      function* (
+        sourceDirectory: string,
+        destinationDirectory: string,
+      ): Effect.fn.Return<void, PlatformError | BundleNotSelfContainedError> {
         for (const entry of yield* fs.readDirectory(sourceDirectory)) {
           const sourceEntry = path.join(sourceDirectory, entry);
           const destinationEntry = path.join(destinationDirectory, entry);
@@ -2336,13 +2479,14 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
             }
           }
         }
-      });
+      },
+    );
 
     yield* restoreRelativeSymlinks(source, destination);
   },
 );
 
-const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
+export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -2609,69 +2753,197 @@ export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (inp
   );
 });
 
-function generateMacIconSet(
+class CuaDriverArtifactError extends Schema.TaggedError<CuaDriverArtifactError>()(
+  "CuaDriverArtifactError",
+  { message: Schema.String },
+) {}
+
+export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageRoot: string;
+  readonly stageResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const release = cuaDriverRelease(
+    input.platform === "mac" ? "darwin" : input.platform === "win" ? "win32" : "linux",
+    input.arch === "universal" ? "arm64" : input.arch,
+  );
+  if (!release) {
+    return yield* new CuaDriverArtifactError({ message: "Unsupported Cua Driver build target." });
+  }
+  const cacheDir = path.join(input.repoRoot, "node_modules/.cache/goat/cua-driver");
+  const archivePath = path.join(cacheDir, release.archiveName);
+  const verified = Effect.fn("verifyCuaDriverArchive")(function* (file: string) {
+    if (!(yield* fs.exists(file))) return false;
+    if (Number((yield* fs.stat(file)).size) !== release.bytes) return false;
+    const hash = NodeCrypto.createHash("sha256");
+    yield* fs
+      .stream(file)
+      .pipe(Stream.runForEach((chunk) => Effect.sync(() => hash.update(chunk))));
+    return hash.digest("hex") === release.sha256;
+  });
+  yield* fs.makeDirectory(cacheDir, { recursive: true });
+  if (!(yield* verified(archivePath))) {
+    yield* fs.remove(archivePath, { force: true });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const temporary = yield* fs.makeTempDirectoryScoped({ directory: cacheDir });
+        const downloadPath = path.join(temporary, release.archiveName);
+        yield* runCommand(
+          ChildProcess.make("curl", [
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--connect-timeout",
+            "30",
+            "--max-time",
+            "600",
+            "--retry",
+            "3",
+            "--output",
+            downloadPath,
+            release.url,
+          ]),
+          { label: "download Cua Driver", verbose: input.verbose },
+        );
+        if (!(yield* verified(downloadPath))) {
+          return yield* new CuaDriverArtifactError({
+            message: `Cua Driver archive failed size/SHA-256 verification: ${release.archiveName}`,
+          });
+        }
+        yield* fs.rename(downloadPath, archivePath);
+      }),
+    );
+  }
+  yield* fs.makeDirectory(input.stageRoot, { recursive: true });
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const extracted = yield* fs.makeTempDirectoryScoped({ directory: input.stageRoot });
+      const hostPlatform = yield* HostProcess.Platform;
+      const command =
+        release.format === "zip" && hostPlatform !== "win32"
+          ? ChildProcess.make("unzip", ["-q", archivePath, "-d", extracted])
+          : ChildProcess.make(hostPlatform === "win32" ? windowsSystemTar() : "tar", [
+              "-xf",
+              archivePath,
+              "-C",
+              extracted,
+            ]);
+      yield* runCommand(command, { label: "extract Cua Driver", verbose: input.verbose });
+      const requiredFiles = [
+        release.executable,
+        ...(input.platform === "win"
+          ? ["cua-driver-uia.exe", "cua-cursor-theme.exe"]
+          : input.platform === "linux"
+            ? [
+                "cua-cursor-theme",
+                "wayland-helper/install.sh",
+                "wayland-helper/winrects@cua/metadata.json",
+                "wayland-helper/winrects@cua/extension.js",
+              ]
+            : []),
+      ];
+      for (const file of requiredFiles) {
+        if ((yield* fs.stat(path.join(extracted, file))).type !== "File") {
+          return yield* new CuaDriverArtifactError({
+            message: `Cua Driver release is missing ${file}.`,
+          });
+        }
+      }
+      yield* fs.makeDirectory(input.stageResourcesDir, { recursive: true });
+      const destination = path.join(input.stageResourcesDir, "cua-driver");
+      yield* fs.remove(destination, { recursive: true, force: true });
+      if (input.platform === "mac") {
+        yield* fs.copyFile(path.join(extracted, release.executable), destination);
+        yield* fs.chmod(destination, 0o755);
+      } else {
+        yield* fs.makeDirectory(destination, { recursive: true });
+        // SDK libraries come from the app's npm dependencies, not this release.
+        const entries =
+          input.platform === "linux"
+            ? [release.executable, "cua-cursor-theme", "wayland-helper"]
+            : requiredFiles;
+        for (const entry of entries) {
+          yield* fs.copy(path.join(extracted, entry), path.join(destination, entry));
+        }
+        if (input.platform === "linux") {
+          for (const executable of [release.executable, "cua-cursor-theme"]) {
+            yield* fs.chmod(path.join(destination, executable), 0o755);
+          }
+        }
+      }
+    }),
+  );
+});
+
+const generateMacIconSet = Effect.fn("build-desktop-artifact.generateMacIconSet")(function* (
   sourcePng: string,
   targetIcns: string,
   tmpRoot: string,
   path: Path.Path,
   verbose: boolean,
 ) {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const iconsetDir = path.join(tmpRoot, "icon.iconset");
-    yield* fs.makeDirectory(iconsetDir, { recursive: true });
+  const fs = yield* FileSystem.FileSystem;
+  const iconsetDir = path.join(tmpRoot, "icon.iconset");
+  yield* fs.makeDirectory(iconsetDir, { recursive: true });
 
-    const iconSizes = [16, 32, 128, 256, 512] as const;
-    for (const size of iconSizes) {
-      yield* runCommand(
-        ChildProcess.make(
-          {},
-        )`sips -z ${size} ${size} ${sourcePng} --out ${path.join(iconsetDir, `icon_${size}x${size}.png`)}`,
-        { label: `sips icon ${size}x${size}`, verbose },
-      );
+  const iconSizes = [16, 32, 128, 256, 512] as const;
+  for (const size of iconSizes) {
+    yield* runCommand(
+      ChildProcess.make(
+        {},
+      )`sips -z ${size} ${size} ${sourcePng} --out ${path.join(iconsetDir, `icon_${size}x${size}.png`)}`,
+      { label: `sips icon ${size}x${size}`, verbose },
+    );
 
-      const retinaSize = size * 2;
-      yield* runCommand(
-        ChildProcess.make(
-          {},
-        )`sips -z ${retinaSize} ${retinaSize} ${sourcePng} --out ${path.join(iconsetDir, `icon_${size}x${size}@2x.png`)}`,
-        { label: `sips icon ${size}x${size}@2x`, verbose },
-      );
-    }
+    const retinaSize = size * 2;
+    yield* runCommand(
+      ChildProcess.make(
+        {},
+      )`sips -z ${retinaSize} ${retinaSize} ${sourcePng} --out ${path.join(iconsetDir, `icon_${size}x${size}@2x.png`)}`,
+      { label: `sips icon ${size}x${size}@2x`, verbose },
+    );
+  }
 
-    yield* runCommand(ChildProcess.make({})`iconutil -c icns ${iconsetDir} -o ${targetIcns}`, {
-      label: "iconutil icns",
-      verbose,
-    });
+  yield* runCommand(ChildProcess.make({})`iconutil -c icns ${iconsetDir} -o ${targetIcns}`, {
+    label: "iconutil icns",
+    verbose,
   });
-}
+});
 
-function stageMacIcons(stageResourcesDir: string, sourcePng: string, verbose: boolean) {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    if (!(yield* fs.exists(sourcePng))) {
-      return yield* new DesktopIconSourceMissingError({
-        platform: "mac",
-        sourcePath: sourcePng,
-      });
-    }
-
-    const tmpRoot = yield* fs.makeTempDirectoryScoped({
-      prefix: "goat-icon-build-",
+const stageMacIcons = Effect.fn("build-desktop-artifact.stageMacIcons")(function* (
+  stageResourcesDir: string,
+  sourcePng: string,
+  verbose: boolean,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  if (!(yield* fs.exists(sourcePng))) {
+    return yield* new DesktopIconSourceMissingError({
+      platform: "mac",
+      sourcePath: sourcePng,
     });
+  }
 
-    const iconPngPath = path.join(stageResourcesDir, "icon.png");
-    const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
-
-    yield* runCommand(ChildProcess.make({})`sips -z 512 512 ${sourcePng} --out ${iconPngPath}`, {
-      label: "sips mac icon",
-      verbose,
-    });
-
-    yield* generateMacIconSet(sourcePng, iconIcnsPath, tmpRoot, path, verbose);
+  const tmpRoot = yield* fs.makeTempDirectoryScoped({
+    prefix: "t3code-icon-build-",
   });
-}
+
+  const iconPngPath = path.join(stageResourcesDir, "icon.png");
+  const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
+
+  yield* runCommand(ChildProcess.make({})`sips -z 512 512 ${sourcePng} --out ${iconPngPath}`, {
+    label: "sips mac icon",
+    verbose,
+  });
+
+  yield* generateMacIconSet(sourcePng, iconIcnsPath, tmpRoot, path, verbose);
+});
 
 export const stageDesktopDmgBackground = Effect.fn("stageDesktopDmgBackground")(function* (
   stageResourcesDir: string,
@@ -2706,32 +2978,34 @@ export const stageDesktopDmgBackground = Effect.fn("stageDesktopDmgBackground")(
   }
 });
 
-function stageLinuxIcons(stageResourcesDir: string, sourcePng: string, verbose: boolean) {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    if (!(yield* fs.exists(sourcePng))) {
-      return yield* new DesktopIconSourceMissingError({
-        platform: "linux",
-        sourcePath: sourcePng,
-      });
-    }
+const stageLinuxIcons = Effect.fn("build-desktop-artifact.stageLinuxIcons")(function* (
+  stageResourcesDir: string,
+  sourcePng: string,
+  verbose: boolean,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  if (!(yield* fs.exists(sourcePng))) {
+    return yield* new DesktopIconSourceMissingError({
+      platform: "linux",
+      sourcePath: sourcePng,
+    });
+  }
 
-    const iconPath = path.join(stageResourcesDir, "icon.png");
-    yield* fs.copyFile(sourcePng, iconPath);
+  const iconPath = path.join(stageResourcesDir, "icon.png");
+  yield* fs.copyFile(sourcePng, iconPath);
 
-    const iconsDir = path.join(stageResourcesDir, "icons");
-    yield* fs.makeDirectory(iconsDir, { recursive: true });
-    for (const iconSize of LINUX_ICON_SIZES) {
-      yield* stageLinuxIconSize(
-        sourcePng,
-        path.join(iconsDir, `${iconSize}x${iconSize}.png`),
-        iconSize,
-        verbose,
-      );
-    }
-  });
-}
+  const iconsDir = path.join(stageResourcesDir, "icons");
+  yield* fs.makeDirectory(iconsDir, { recursive: true });
+  for (const iconSize of LINUX_ICON_SIZES) {
+    yield* stageLinuxIconSize(
+      sourcePng,
+      path.join(iconsDir, `${iconSize}x${iconSize}.png`),
+      iconSize,
+      verbose,
+    );
+  }
+});
 
 export function stageLinuxIconSize(
   sourcePng: string,
@@ -2767,24 +3041,25 @@ export function stageLinuxIconSize(
   );
 }
 
-function stageWindowsIcons(stageResourcesDir: string, sourceIco: string) {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    if (!(yield* fs.exists(sourceIco))) {
-      return yield* new DesktopIconSourceMissingError({
-        platform: "win",
-        sourcePath: sourceIco,
-      });
-    }
+const stageWindowsIcons = Effect.fn("build-desktop-artifact.stageWindowsIcons")(function* (
+  stageResourcesDir: string,
+  sourceIco: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  if (!(yield* fs.exists(sourceIco))) {
+    return yield* new DesktopIconSourceMissingError({
+      platform: "win",
+      sourcePath: sourceIco,
+    });
+  }
 
-    const iconPath = path.join(stageResourcesDir, "icon.ico");
-    yield* fs.copyFile(sourceIco, iconPath);
-  });
-}
+  const iconPath = path.join(stageResourcesDir, "icon.ico");
+  yield* fs.copyFile(sourceIco, iconPath);
+});
 
-function validateBundledClientAssets(clientDir: string) {
-  return Effect.gen(function* () {
+const validateBundledClientAssets = Effect.fn("build-desktop-artifact.validateBundledClientAssets")(
+  function* (clientDir: string) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const indexPath = path.join(clientDir, "index.html");
@@ -2816,8 +3091,8 @@ function validateBundledClientAssets(clientDir: string) {
         missingFiles: missing,
       });
     }
-  });
-}
+  },
+);
 
 export function resolveDesktopRuntimeDependencies(
   dependencies: Record<string, string> | undefined,
@@ -2952,7 +3227,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // not inflate the loose-file count and slow NSIS installation.
     ...(platform === "win"
       ? { asar: { smartUnpack: false }, asarUnpack: [WINDOWS_NATIVE_ASAR_UNPACK_GLOB] }
-      : {}),
+      : {
+          asarUnpack: [
+            "**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}",
+            "**/node_modules/@ubjs/node-*/**/*.node",
+          ],
+        }),
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
       ...(sshRuntimeBundled ? SSH_RUNTIME_EXTRA_RESOURCES : []),
@@ -2995,6 +3275,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           "GOAT connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
         NSScreenCaptureUsageDescription:
           "GOAT captures the active window when you use the window capture shortcut.",
+        NSCameraUsageDescription:
+          "GOAT lets commands run by terminals and coding agents use the camera.",
+        NSMicrophoneUsageDescription:
+          "GOAT lets commands run by terminals and coding agents use the microphone.",
         // macOS lists an app under Default web browser only when it opens web
         // pages as documents as well as http and https links (see protocols).
         CFBundleDocumentTypes: [
@@ -3117,8 +3401,16 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // packaged executable with Electron's stock icon.
       signAndEditExecutable: true,
     };
-    if (signed) {
+    if (signed && (yield* HostProcess.Platform) === "win32") {
       winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
+    } else if (signed) {
+      const path = yield* Path.Path;
+      const { publisherName } = yield* AzureTrustedSigningOptionsConfig;
+      winConfig.signtoolOptions = {
+        sign: yield* path.fromFileUrl(new URL("./lib/windows-jsign.ts", import.meta.url)),
+        signingHashAlgorithms: ["sha256"],
+        publisherName: [publisherName],
+      };
     }
     buildConfig.win = winConfig;
   }
@@ -3428,7 +3720,12 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   yield* fs.copy(input.serverDistDir, path.join(serverStageDir, "apps/server/dist"));
 
   const sidecarDependencies = {
-    ...input.runtimeExternalDependencies,
+    // The desktop host owns Cua; this server reaches it through telemetry IPC.
+    ...Object.fromEntries(
+      Object.entries(input.runtimeExternalDependencies).filter(
+        ([name]) => name !== "@trycua/cua-driver",
+      ),
+    ),
     ...resolveFffNativeDependencies("win", input.arch, input.fffNodeVersion),
   };
   const sidecarPatchedDependencies = createStagePatchedDependencies(
@@ -3654,6 +3951,32 @@ export const validatePackagedSshRuntimeArchives = Effect.fn("validatePackagedSsh
   },
 );
 
+/**
+ * The fff probe needs a host of the target's platform and architecture; the
+ * bundle self-check needs a Windows host. A cross build defers both to
+ * scripts/verify-windows-desktop-artifact.ts.
+ */
+export const verifyWindowsPackagedRuntime = Effect.fn(
+  "desktopArtifact.verifyWindowsPackagedRuntime",
+)(function* (input: {
+  readonly packagedAppDir: string;
+  readonly appExecutableName: string;
+  readonly targetArch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const path = yield* Path.Path;
+  const asarPath = path.join(input.packagedAppDir, "resources", WINDOWS_SERVER_ASAR_RESOURCE);
+  yield* verifyWindowsPrimaryFffNativeLoad({ ...input, asarPath });
+  const hostPlatform = yield* HostProcess.Platform;
+  if (hostPlatform !== "win32") {
+    yield* Effect.log(
+      `[desktop-artifact] Skipped the bundle self-check on a ${hostPlatform} host.`,
+    );
+    return;
+  }
+  yield* verifyPackagedBundleIsSelfContained({ asarPath, verbose: input.verbose });
+});
+
 export const validateWindowsPackagedPayload = Effect.fn(
   "desktopArtifact.validateWindowsPackagedPayload",
 )(function* (input: {
@@ -3807,13 +4130,18 @@ export const validateWindowsPackagedPayload = Effect.fn(
       );
     }
 
+    const hostPlatform = yield* HostProcess.Platform;
     const listing = yield* spawnAndCollectOutput(
-      ChildProcess.make("tar", ["-tzf", WSL_RUNTIME_ARCHIVE_NAME], {
-        cwd: resourcesDir,
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      }),
+      ChildProcess.make(
+        hostPlatform === "win32" ? windowsSystemTar() : "tar",
+        ["-tzf", WSL_RUNTIME_ARCHIVE_NAME],
+        {
+          cwd: resourcesDir,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      ),
     ).pipe(Effect.mapError(invalidWslRuntime));
     if (listing.exitCode !== 0) {
       return yield* invalidWslRuntime(
@@ -3867,16 +4195,10 @@ export const validateWindowsPackagedPayload = Effect.fn(
     });
   }
 
-  yield* verifyWindowsPrimaryFffNativeLoad({
+  yield* verifyWindowsPackagedRuntime({
     packagedAppDir,
-    asarPath,
     appExecutableName: input.appExecutableName,
     targetArch: input.targetArch,
-    verbose: input.verbose ?? false,
-  });
-
-  yield* verifyPackagedBundleIsSelfContained({
-    asarPath,
     verbose: input.verbose ?? false,
   });
 
@@ -3886,7 +4208,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   return { packagedAppDir, fileCount, unpackedFiles } as const;
 });
 
-const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
+const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(function* (
   options: ResolvedBuildOptions,
 ) {
   const repoRoot = yield* RepoRoot;
@@ -3903,10 +4225,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (hostPlatform === "win32" && options.platform === "win") {
     yield* preflightWindowsDesktopBuild({
       arch: options.arch,
-      bundlesWslRuntime: bundlesWslRuntime({
-        platform: options.platform,
-        runtimeArchivePath: options.wslRuntime,
-      }),
     });
   }
   const workspaceConfig = yield* readWorkspaceConfig();
@@ -3982,21 +4300,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   if (!options.skipBuild) {
     yield* Effect.log("[desktop-artifact] Building desktop/server/web artifacts...");
-    const spawnCommand = yield* resolveSpawnCommand(vp, ["run", "build:desktop"]);
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        if (appVersion !== serverPackageJson.version) {
-          yield* stampReleaseVersionForBuild(repoRoot, appVersion);
-        }
-        yield* runCommand(
-          ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-            cwd: repoRoot,
-            shell: spawnCommand.shell,
-          }),
-          { label: "vp run build:desktop", verbose: options.verbose },
-        );
-      }),
-    );
+    yield* buildDesktopBundlesUnlocked(repoRoot, appVersion, options.verbose);
   }
 
   const requiredBuildInputs = [
@@ -4124,6 +4428,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
   yield* stageBrowserSecret({
     repoRoot,
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+    verbose: options.verbose,
+  });
+  yield* stageCuaDriverExecutable({
+    repoRoot,
+    stageRoot,
     stageResourcesDir,
     platform: options.platform,
     arch: options.arch,
@@ -4338,6 +4650,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     // takes seconds on a many-core runner instead of about two minutes.
     buildEnv.XZ_DEFAULTS = "-T0";
   }
+  if (options.platform === "win") {
+    // Windows signs only through Azure Trusted Signing. Off Windows,
+    // electron-builder's signtool manager would read CSC_LINK (the macOS
+    // certificate) as a Windows certificate.
+    delete buildEnv.CSC_LINK;
+    delete buildEnv.CSC_KEY_PASSWORD;
+  }
   if (!options.signed) {
     buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
     delete buildEnv.CSC_LINK;
@@ -4476,6 +4795,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   );
 });
 
+const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
+  options: ResolvedBuildOptions,
+) {
+  const repoRoot = yield* RepoRoot;
+  return yield* withDesktopBuildLock(repoRoot, buildDesktopArtifactUnlocked(options));
+});
+
 const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   platform: Flag.Literals("platform", BuildPlatform.literals).pipe(
     Flag.withDescription("Build platform (env: GOAT_DESKTOP_PLATFORM)."),
@@ -4492,7 +4818,9 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     Flag.optional,
   ),
   buildVersion: Flag.String("build-version").pipe(
-    Flag.withDescription("Artifact version metadata (env: GOAT_DESKTOP_VERSION)."),
+    Flag.withDescription(
+      "Compiled bundle and desktop package version (env: GOAT_DESKTOP_VERSION).",
+    ),
     Flag.optional,
   ),
   outputDir: Flag.String("output-dir").pipe(

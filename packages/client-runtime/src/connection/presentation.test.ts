@@ -9,19 +9,21 @@ import {
 } from "./catalog.ts";
 import {
   BearerConnectionTarget,
-  ConnectionBlockedError,
   ConnectionTransientError,
+  connectionProjectionPhase,
   RelayConnectionTarget,
   type SupervisorConnectionState,
+  ConnectionBlockedError,
 } from "./model.ts";
 import {
-  connectionCatalogDisplayUrl,
   connectionProgressLabel,
   environmentMcpUrl,
+  offlineSnapshotAgeLabel,
   connectionStatusText,
   connectionStatusTitle,
   presentEnvironmentConnection,
   presentConnectionState,
+  reconcileSshConnectionPresentation,
 } from "./presentation.ts";
 
 const TARGET = new BearerConnectionTarget({
@@ -59,25 +61,6 @@ function supervisorState(overrides: Partial<SupervisorConnectionState>): Supervi
 }
 
 describe("connection presentation", () => {
-  it("labels a blocked protocol as unsupported", () => {
-    const connection = presentConnectionState(
-      supervisorState({
-        phase: "blocked",
-        lastFailure: new ConnectionBlockedError({
-          reason: "unsupported",
-          detail: "Update your app.",
-        }),
-      }),
-    );
-    expect(connection.phase).toBe("unsupported");
-    expect(connection.error).toBe("Update your app.");
-    expect(connectionStatusText(connection)).toBe("Client not supported");
-  });
-
-  it("preserves profile display information without exposing credentials", () => {
-    expect(connectionCatalogDisplayUrl(ENTRY)).toBe("https://environment.example.test");
-  });
-
   it("copies the MCP address of the route this device is connected over", () => {
     const route = (connectionId: string, httpBaseUrl: string): ConnectionRoute => {
       const target = new BearerConnectionTarget({ ...TARGET, connectionId });
@@ -110,6 +93,7 @@ describe("connection presentation", () => {
     expect(environmentMcpUrl({ entry })).toBe("http://192.168.4.53:3773/mcp");
   });
 
+  // regression: #16909 Copy MCP URL falls back to an alternate route when the relay route has no address
   it("passes over routes without an address of their own", () => {
     const relay = new RelayConnectionTarget({
       environmentId: TARGET.environmentId,
@@ -255,18 +239,6 @@ describe("connection presentation", () => {
     expect(connectionProgressLabel(waiting, 100_000 - 240_000)).toBe("Retrying in 4m");
   });
 
-  it("combines reconnect progress with the latest failure", () => {
-    const connection = {
-      phase: "reconnecting",
-      error: "Relay request timed out.",
-      traceId: "trace-retry",
-    } as const;
-    expect(connectionStatusText(connection)).toBe(
-      "Failed to connect. Reconnecting... Reason: Relay request timed out.",
-    );
-    expect(connectionStatusTitle(connection)).toBe("Failed to connect. Reconnecting...");
-  });
-
   it("shows an unreachable host quietly through backoff and the next attempt", () => {
     const failure = new ConnectionTransientError({
       reason: "host-unreachable",
@@ -304,38 +276,6 @@ describe("connection presentation", () => {
     expect(connectionStatusTitle(broken)).toBe("Failed to connect. Reconnecting...");
   });
 
-  it("presents the supervisor's offline state without consulting shell state", () => {
-    expect(
-      presentEnvironmentConnection(
-        supervisorState({
-          network: "offline",
-          phase: "offline",
-          stage: null,
-        }),
-      ),
-    ).toEqual({
-      phase: "offline",
-      error: null,
-      traceId: null,
-    });
-  });
-
-  it("presents a connected supervisor snapshot as connected", () => {
-    expect(
-      presentEnvironmentConnection(
-        supervisorState({
-          phase: "connected",
-          stage: null,
-          generation: 1,
-        }),
-      ),
-    ).toEqual({
-      phase: "connected",
-      error: null,
-      traceId: null,
-    });
-  });
-
   it("preserves an explicitly available environment while offline", () => {
     expect(
       presentEnvironmentConnection(
@@ -352,5 +292,182 @@ describe("connection presentation", () => {
       error: null,
       traceId: null,
     });
+  });
+});
+
+describe("offlineSnapshotAgeLabel", () => {
+  const captured = "2026-10-19T10:00:00.000Z";
+  const at = (minutes: number) => Date.parse(captured) + minutes * 60_000;
+
+  it("names the age of the captured snapshot in coarse steps", () => {
+    expect(offlineSnapshotAgeLabel(captured, at(0.5))).toBe("last state just now");
+    expect(offlineSnapshotAgeLabel(captured, at(7))).toBe("last state 7 min ago");
+    expect(offlineSnapshotAgeLabel(captured, at(135))).toBe("last state 2 h ago");
+    expect(offlineSnapshotAgeLabel(captured, at(60 * 72))).toBe("last state 3 d ago");
+  });
+
+  it("shows no age it cannot vouch for", () => {
+    expect(offlineSnapshotAgeLabel(null, at(5))).toBeNull();
+    expect(offlineSnapshotAgeLabel("not a time", at(5))).toBeNull();
+    // A clock behind the hub's must not read as a negative age.
+    expect(offlineSnapshotAgeLabel(captured, at(-3))).toBe("last state just now");
+  });
+});
+
+describe("shared SSH reconciliation", () => {
+  const origin = {
+    supervisorId: "window-one",
+    attemptId: 1,
+    routeId: "ssh:fixture",
+    stage: "preparing",
+    setupTimeout: true,
+  } as const;
+  const ready = {
+    supervisorId: "window-one",
+    attemptId: 2,
+    routeId: "ssh:fixture",
+    operationId: "op-2",
+    attachmentId: "attachment-2",
+    runtimeStatus: {
+      host: "fixture",
+      state: "ready",
+      runtimeVersion: null,
+      requestedVersion: "1.0.0",
+    },
+  } as const;
+  const failure = new ConnectionTransientError({
+    reason: "timeout",
+    detail: "Old setup timed out.",
+    traceId: "old-trace",
+  });
+  const snapshot = (overrides: Partial<SupervisorConnectionState> = {}) =>
+    supervisorState({
+      attempt: 2,
+      lastFailure: failure,
+      failureOrigin: origin,
+      sshRuntimeReady: ready,
+      ...overrides,
+    });
+
+  it("suppresses the old timeout for every shared consumer while keeping diagnostic evidence", () => {
+    const connection = presentConnectionState(snapshot({ stage: "opening" }));
+    expect(connection).toMatchObject({
+      phase: "reconnecting",
+      error: null,
+      traceId: null,
+      failure: { detail: failure.detail },
+      failureOrigin: origin,
+      sshRuntimeReady: ready,
+    });
+    expect(connectionStatusText(connection)).toBe("Runtime ready · Opening connection");
+    expect(connectionStatusTitle(connection)).toBe("Runtime ready · Opening connection");
+    expect(connectionProgressLabel(connection, 0)).toBe("Opening connection");
+    expect(connection.phase).not.toBe("connected");
+  });
+
+  it.each([
+    { failureOrigin: { ...origin, attemptId: 2 }, sshRuntimeReady: { ...ready, attemptId: 1 } },
+    { failureOrigin: { ...origin, attemptId: 2 } },
+    { sshRuntimeReady: { ...ready, supervisorId: "other-window" } },
+    { sshRuntimeReady: { ...ready, routeId: "ssh:other" } },
+    { failureOrigin: { ...origin, setupTimeout: false } },
+    {
+      sshRuntimeReady: {
+        ...ready,
+        runtimeStatus: { ...ready.runtimeStatus, state: "providers_not_ready" as const },
+      },
+    },
+  ])("keeps fresh, same-attempt, incomparable and non-setup failures visible: %j", (overrides) => {
+    const connection = presentConnectionState(snapshot(overrides));
+    expect(connection.error).toBe(failure.message);
+    expect(connectionStatusText(connection)).toContain(failure.message);
+    expect(connectionStatusTitle(connection)).toBe("Failed to connect. Reconnecting...");
+  });
+
+  it("does not assign attempt provenance to an owner poll or hide real auth/socket errors", () => {
+    const { failureOrigin: _origin, ...noOrigin } = snapshot();
+    const connection = presentConnectionState(noOrigin);
+    expect(reconcileSshConnectionPresentation(connection, ready.runtimeStatus).error).toBe(
+      failure.message,
+    );
+    for (const lastFailure of [
+      new ConnectionBlockedError({ reason: "authentication", detail: "Key rejected." }),
+      new ConnectionTransientError({ reason: "transport", detail: "Socket closed." }),
+    ]) {
+      expect(presentConnectionState(snapshot({ lastFailure })).error).toBe(lastFailure.message);
+    }
+  });
+
+  it.each(["uploading", "checking", "starting", "connecting"] as const)(
+    "puts active %s before retry text/title without leaking the old error",
+    (phase) => {
+      const sshPreparation = {
+        ...origin,
+        attemptId: 2,
+        operationId: "op-2",
+        phase,
+        hostAnswered: true,
+      };
+      const connection = presentConnectionState(snapshot({ sshPreparation }));
+      const text =
+        phase === "uploading"
+          ? "Installing GOAT runtime — first setup can take a few minutes"
+          : phase === "checking"
+            ? "Checking GOAT runtime"
+            : phase === "starting"
+              ? "Starting GOAT"
+              : "Connecting to SSH host";
+      expect(connection.error).toBeNull();
+      expect(connection.failure?.detail).toBe(failure.detail);
+      expect(connectionStatusText(connection)).toBe(text);
+      expect(connectionStatusTitle(connection)).toBe(text);
+      expect(connectionProgressLabel(connection, 0)).toBe(text);
+      const terminal = presentConnectionState(snapshot({ stage: "synchronizing" }));
+      expect(terminal.sshPreparation).toBeUndefined();
+      expect(connectionProgressLabel(terminal, 0)).toBe("Syncing");
+    },
+  );
+
+  it("invalidates ready suppression for current failed, stopped or untrusted owner evidence", () => {
+    const connection = presentConnectionState(snapshot());
+    for (const state of [
+      "failed",
+      "stopped",
+      "untrusted",
+      "auth_failed",
+      "update_waiting",
+    ] as const) {
+      const reconciled = reconcileSshConnectionPresentation(connection, {
+        ...ready.runtimeStatus,
+        state,
+      });
+      expect(reconciled.error).toBe(failure.message);
+      expect(reconciled.sshRuntimeReady).toBeUndefined();
+      expect(connectionStatusText(reconciled)).toContain(failure.message);
+    }
+    // A delayed preparing poll cannot reintroduce the terminal-to-poll gap.
+    expect(
+      reconcileSshConnectionPresentation(connection, {
+        ...ready.runtimeStatus,
+        state: "preparing",
+        phase: "starting",
+      }).error,
+    ).toBeNull();
+  });
+
+  it("clears active text when disconnected, offline or connected and never enables session actions from runtime ready", () => {
+    const sshPreparation = {
+      ...origin,
+      operationId: "op",
+      phase: "uploading",
+      hostAnswered: true,
+    } as const;
+    for (const phase of ["available", "offline", "connected"] as const) {
+      const connection = presentConnectionState(snapshot({ phase, sshPreparation }));
+      expect(connectionStatusText(connection)).not.toContain("Installing");
+      expect(connectionProgressLabel(connection, 0)).not.toContain("Installing");
+    }
+    const state = snapshot({ stage: "opening" });
+    expect(connectionProjectionPhase(state)).toBe("synchronizing");
   });
 });

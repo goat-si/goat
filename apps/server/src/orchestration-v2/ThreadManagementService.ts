@@ -60,6 +60,9 @@ import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimi
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
+import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import { currentMemoryAccess } from "../memory/MemoryAccess.ts";
 
 /**
@@ -614,51 +617,51 @@ export function makeStopDelegatedTasks(deps: {
   readonly dispatch: ThreadManagementServiceShape["dispatch"];
   readonly getThreadRecords: Orchestrator.OrchestratorV2Shape["getThreadRecords"];
 }): ThreadManagementServiceShape["stopDelegatedTasks"] {
-  const stopDelegatedTasks: ThreadManagementServiceShape["stopDelegatedTasks"] = (input) =>
-    Effect.gen(function* () {
-      const { subagents } = yield* deps.getThreadRecords(input.threadId, ["subagents"]);
-      const failures: Array<
-        Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
-      > = [];
-      const stopCascadeFrom = input.stopCascadeFrom ?? input.threadId;
-      for (const task of subagents) {
-        if (
-          task.origin !== "app_owned" ||
-          task.childThreadId === null ||
-          task.promotedAt !== undefined
-        )
-          continue;
-        const threadId = task.childThreadId;
-        if (input.childThreadIds !== undefined && !input.childThreadIds.includes(threadId))
-          continue;
-        yield* deps
-          .dispatch({
-            type: "thread.stop",
-            commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
-            threadId,
-            ...(input.reason === undefined ? {} : { reason: input.reason }),
-            stopCascadeFrom,
-          })
-          .pipe(
-            Effect.andThen(
-              stopDelegatedTasks({
-                ...input,
-                threadId,
-                childThreadIds: undefined,
-                stopCascadeFrom,
-              }),
-            ),
-            Effect.catch((error) =>
-              Effect.logWarning("Unable to stop a delegated task", {
-                parentThreadId: input.threadId,
-                threadId,
-                error,
-              }).pipe(Effect.andThen(Effect.sync(() => failures.push(error)))),
-            ),
-          );
-      }
-      if (failures[0] !== undefined) return yield* Effect.fail(failures[0]);
-    });
+  const stopDelegatedTasks: ThreadManagementServiceShape["stopDelegatedTasks"] = Effect.fn(
+    "ThreadManagementService.stopDelegatedTasks",
+  )(function* (input) {
+    const { subagents } = yield* deps.getThreadRecords(input.threadId, ["subagents"]);
+    const failures: Array<
+      Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+    > = [];
+    const stopCascadeFrom = input.stopCascadeFrom ?? input.threadId;
+    for (const task of subagents) {
+      if (
+        task.origin !== "app_owned" ||
+        task.childThreadId === null ||
+        task.promotedAt !== undefined
+      )
+        continue;
+      const threadId = task.childThreadId;
+      if (input.childThreadIds !== undefined && !input.childThreadIds.includes(threadId)) continue;
+      yield* deps
+        .dispatch({
+          type: "thread.stop",
+          commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
+          threadId,
+          ...(input.reason === undefined ? {} : { reason: input.reason }),
+          stopCascadeFrom,
+        })
+        .pipe(
+          Effect.andThen(
+            stopDelegatedTasks({
+              ...input,
+              threadId,
+              childThreadIds: undefined,
+              stopCascadeFrom,
+            }),
+          ),
+          Effect.catch((error) =>
+            Effect.logWarning("Unable to stop a delegated task", {
+              parentThreadId: input.threadId,
+              threadId,
+              error,
+            }).pipe(Effect.andThen(Effect.sync(() => failures.push(error)))),
+          ),
+        );
+    }
+    if (failures[0] !== undefined) return yield* Effect.fail(failures[0]);
+  });
   return stopDelegatedTasks;
 }
 
@@ -1119,15 +1122,51 @@ const make = Effect.gen(function* () {
     });
 
   /** Dispatches one message and reads back the run it started, joined, or queued behind. */
+  const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+  const cuaDriver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
+  /** See `gateUnattendedSteering`: such a message waits as the next turn instead. */
+  const unattendedSteeringMode = (
+    input: ThreadManagementSendInput,
+    mode: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>["dispatchMode"],
+  ) =>
+    Effect.gen(function* () {
+      if (
+        (mode.type !== "steer_active" && mode.type !== "restart_active") ||
+        (input.scheduledTaskId === undefined && input.senderThreadId === undefined)
+      )
+        return mode;
+      // With computer use off no turn holds a driver, so steering stays as it always was,
+      // including for senders on other machines this host cannot classify.
+      if (Option.isNone(cuaDriver) || !(yield* cuaDriver.value.enabled)) return mode;
+      const gated = yield* ComputerUseOrigin.gateUnattendedSteering(
+        ComputerUseOrigin.projectionOriginReads({
+          getThreadRecords: (id, fields, filter) =>
+            orchestrator.getThreadRecords(id, fields, filter),
+          channelOrigin: (id) =>
+            Option.isSome(computerUseLeases)
+              ? computerUseLeases.value.channelOrigin(id)
+              : Effect.succeed(undefined),
+        }),
+        input,
+        mode,
+      );
+      if (gated.queued)
+        yield* Effect.logInfo(
+          "An unattended message waits as the next turn instead of steering a person's turn.",
+          { threadId: input.threadId, messageId: input.messageId },
+        );
+      return gated.mode;
+    });
   const dispatchAndRead = (
     input: ThreadManagementSendInput,
     commandId: CommandId,
-    dispatchMode: Extract<
+    requestedMode: Extract<
       OrchestrationV2Command,
       { readonly type: "message.dispatch" }
     >["dispatchMode"],
   ) =>
     Effect.gen(function* () {
+      const dispatchMode = yield* unattendedSteeringMode(input, requestedMode);
       const dispatched = yield* dispatch({
         type: "message.dispatch",
         memoryGrantCeiling: input.memoryGrantCeiling ?? "none",
@@ -1263,6 +1302,13 @@ const make = Effect.gen(function* () {
             return true;
           if (decision.type === "wait") return false;
           if (decision.type !== "steer") return true;
+          // The same admission gate as an immediate steer: an unattended message promoted into
+          // a person's turn would reach it without computer use admission. It keeps its own turn.
+          const gated = yield* unattendedSteeringMode(input, {
+            type: "steer_active",
+            targetRunId: decision.run.id,
+          });
+          if (gated.type !== "steer_active") return true;
           attempt += 1;
           return yield* orchestrator
             .dispatch({
@@ -1461,52 +1507,53 @@ const make = Effect.gen(function* () {
         return yield* new ThreadManagementReviewTaskFinishedError({ threadId: input.threadId });
     });
 
-  const sendToThread: ThreadManagementServiceShape["sendToThread"] = (input) =>
-    Effect.gen(function* () {
-      if (input.mode === "steer_when_ready") return yield* sendAgentMessage(input);
-      const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns", "messages"], {
-        messageIds: [input.messageId],
+  const sendToThread: ThreadManagementServiceShape["sendToThread"] = Effect.fn(
+    "ThreadManagementService.sendToThread",
+  )(function* (input) {
+    if (input.mode === "steer_when_ready") return yield* sendAgentMessage(input);
+    const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns", "messages"], {
+      messageIds: [input.messageId],
+    });
+    if (target.thread.archivedAt !== null) {
+      return yield* new ThreadManagementThreadArchivedError({
+        threadId: input.threadId,
       });
-      if (target.thread.archivedAt !== null) {
-        return yield* new ThreadManagementThreadArchivedError({
+    }
+
+    if (target.messages.some((message) => message.id === input.messageId)) {
+      const sequence = yield* orchestrator.getThreadEventSequence(input.threadId);
+      return yield* readDelivery(
+        input,
+        { sequence, storedEvents: [] },
+        input.mode === "restart" ? "restart_active" : "steer_active",
+      );
+    }
+    yield* assertReviewTaskSendAllowed(input);
+    const steerableRun = latestSteerableRun(target);
+    let dispatchMode: Extract<
+      OrchestrationV2Command,
+      { readonly type: "message.dispatch" }
+    >["dispatchMode"];
+    if (input.mode === "steer" || input.mode === "restart") {
+      if (steerableRun === undefined) {
+        return yield* new ThreadManagementNoSteerableRunError({
           threadId: input.threadId,
+          mode: input.mode,
         });
       }
-
-      if (target.messages.some((message) => message.id === input.messageId)) {
-        const sequence = yield* orchestrator.getThreadEventSequence(input.threadId);
-        return yield* readDelivery(
-          input,
-          { sequence, storedEvents: [] },
-          input.mode === "restart" ? "restart_active" : "steer_active",
-        );
-      }
-      yield* assertReviewTaskSendAllowed(input);
-      const steerableRun = latestSteerableRun(target);
-      let dispatchMode: Extract<
-        OrchestrationV2Command,
-        { readonly type: "message.dispatch" }
-      >["dispatchMode"];
-      if (input.mode === "steer" || input.mode === "restart") {
-        if (steerableRun === undefined) {
-          return yield* new ThreadManagementNoSteerableRunError({
-            threadId: input.threadId,
-            mode: input.mode,
-          });
-        }
-        dispatchMode = {
-          type: input.mode === "steer" ? "steer_active" : "restart_active",
-          targetRunId: steerableRun.id,
-        };
-      } else if (input.mode === "auto" && steerableRun !== undefined) {
-        dispatchMode = { type: "steer_active", targetRunId: steerableRun.id };
-      } else {
-        dispatchMode = {
-          type: input.mode === "queue" ? "queue_after_active" : "start_immediately",
-        };
-      }
-      return yield* dispatchAndRead(input, input.commandId, dispatchMode);
-    });
+      dispatchMode = {
+        type: input.mode === "steer" ? "steer_active" : "restart_active",
+        targetRunId: steerableRun.id,
+      };
+    } else if (input.mode === "auto" && steerableRun !== undefined) {
+      dispatchMode = { type: "steer_active", targetRunId: steerableRun.id };
+    } else {
+      dispatchMode = {
+        type: input.mode === "queue" ? "queue_after_active" : "start_immediately",
+      };
+    }
+    return yield* dispatchAndRead(input, input.commandId, dispatchMode);
+  });
 
   const waitForRun: ThreadManagementServiceShape["waitForThread"] = (input) =>
     Effect.gen(function* () {
@@ -1640,24 +1687,25 @@ const make = Effect.gen(function* () {
    * A message queued behind a starting turn may later join that turn as steering. Its queued run
    * then ends cancelled while the message lives on in the run it joined, so a wait follows it there.
    */
-  const waitForThread: ThreadManagementServiceShape["waitForThread"] = (input) =>
-    Effect.gen(function* () {
-      const startedAt = yield* Clock.currentTimeMillis;
-      const result = yield* waitForRun(input);
-      const run = result.run;
-      if (run?.status !== "cancelled" || run.userMessageId == null) return result;
-      const { messages } = yield* getProjectThreadRecords(input, ["messages"], {
-        messageIds: [run.userMessageId],
-      });
-      const joinedRunId = messages.find((message) => message.id === run.userMessageId)?.runId;
-      if (joinedRunId == null || joinedRunId === run.id) return result;
-      const elapsed = (yield* Clock.currentTimeMillis) - startedAt;
-      return yield* waitForRun({
-        ...input,
-        runId: joinedRunId,
-        timeoutMs: Math.max(1, input.timeoutMs - elapsed),
-      });
+  const waitForThread: ThreadManagementServiceShape["waitForThread"] = Effect.fn(
+    "ThreadManagementService.waitForThread",
+  )(function* (input) {
+    const startedAt = yield* Clock.currentTimeMillis;
+    const result = yield* waitForRun(input);
+    const run = result.run;
+    if (run?.status !== "cancelled" || run.userMessageId == null) return result;
+    const { messages } = yield* getProjectThreadRecords(input, ["messages"], {
+      messageIds: [run.userMessageId],
     });
+    const joinedRunId = messages.find((message) => message.id === run.userMessageId)?.runId;
+    if (joinedRunId == null || joinedRunId === run.id) return result;
+    const elapsed = (yield* Clock.currentTimeMillis) - startedAt;
+    return yield* waitForRun({
+      ...input,
+      runId: joinedRunId,
+      timeoutMs: Math.max(1, input.timeoutMs - elapsed),
+    });
+  });
 
   const settleAfterRun: ThreadManagementServiceShape["settleAfterRun"] = Effect.fn(
     "orchestrationV2.threadManagement.settleAfterRun",
@@ -1695,55 +1743,58 @@ const make = Effect.gen(function* () {
     return { sequence: result.sequence };
   });
 
-  const interruptThread: ThreadManagementServiceShape["interruptThread"] = (input) =>
-    Effect.gen(function* () {
-      const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns"]);
-      const explicitRun =
-        input.runId === undefined
-          ? undefined
-          : target.runs.find((candidate) => candidate.id === input.runId);
-      if (input.runId !== undefined && explicitRun === undefined) {
-        return yield* new ThreadManagementRunNotFoundError({
-          threadId: input.threadId,
-          runId: input.runId,
-        });
-      }
-      if (explicitRun !== undefined && isTerminalRunStatus(explicitRun.status)) {
-        return {
-          type: "already_terminal",
-          run: explicitRun as OrchestrationV2Run & {
-            readonly status: ThreadManagementTerminalRunStatus;
-          },
-        } as const;
-      }
-      const interruptibleRun = latestActiveRun(target);
-      if (interruptibleRun === undefined) {
-        if (input.runId === undefined) {
-          return { type: "no_active_run" } as const;
-        }
-        return yield* new ThreadManagementThreadNotInterruptibleError({
-          threadId: input.threadId,
-          runId: input.runId,
-        });
-      }
-      if (input.runId !== undefined && interruptibleRun.id !== input.runId) {
-        return yield* new ThreadManagementThreadNotInterruptibleError({
-          threadId: input.threadId,
-          runId: input.runId,
-        });
-      }
-      const dispatch = yield* orchestrator.dispatch({
-        type: "run.interrupt",
-        commandId: input.commandId,
+  const interruptThread: ThreadManagementServiceShape["interruptThread"] = Effect.fn(
+    "ThreadManagementService.interruptThread",
+  )(function* (input) {
+    const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns"]);
+    const explicitRun =
+      input.runId === undefined
+        ? undefined
+        : target.runs.find((candidate) => candidate.id === input.runId);
+    if (input.runId !== undefined && explicitRun === undefined) {
+      return yield* new ThreadManagementRunNotFoundError({
         threadId: input.threadId,
-        runId: interruptibleRun.id,
-        ...(input.reason === undefined ? {} : { reason: input.reason }),
+        runId: input.runId,
       });
-      return { type: "interrupt_requested", run: interruptibleRun, dispatch } as const;
+    }
+    if (explicitRun !== undefined && isTerminalRunStatus(explicitRun.status)) {
+      return {
+        type: "already_terminal",
+        run: explicitRun as OrchestrationV2Run & {
+          readonly status: ThreadManagementTerminalRunStatus;
+        },
+      } as const;
+    }
+    const interruptibleRun = latestActiveRun(target);
+    if (interruptibleRun === undefined) {
+      if (input.runId === undefined) {
+        return { type: "no_active_run" } as const;
+      }
+      return yield* new ThreadManagementThreadNotInterruptibleError({
+        threadId: input.threadId,
+        runId: input.runId,
+      });
+    }
+    if (input.runId !== undefined && interruptibleRun.id !== input.runId) {
+      return yield* new ThreadManagementThreadNotInterruptibleError({
+        threadId: input.threadId,
+        runId: input.runId,
+      });
+    }
+    const dispatch = yield* orchestrator.dispatch({
+      type: "run.interrupt",
+      commandId: input.commandId,
+      threadId: input.threadId,
+      runId: interruptibleRun.id,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
     });
+    return { type: "interrupt_requested", run: interruptibleRun, dispatch } as const;
+  });
 
-  const stopWorkflow: ThreadManagementServiceShape["stopWorkflow"] = (input) =>
-    Effect.gen(function* () {
+  const stopWorkflow: ThreadManagementServiceShape["stopWorkflow"] = Effect.fn(
+    "ThreadManagementService.stopWorkflow",
+  )(
+    function* (input) {
       const records = yield* orchestrator
         .getThreadRecords(input.threadId, ["subagents", "runs", "providerThreads"])
         .pipe(
@@ -1824,7 +1875,9 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-    }).pipe((effect) => threadDispatch.withLock(input.threadId, effect));
+    },
+    (effect, input) => effect.pipe((effect) => threadDispatch.withLock(input.threadId, effect)),
+  );
 
   const stopDelegatedTasks = makeStopDelegatedTasks({
     dispatch,

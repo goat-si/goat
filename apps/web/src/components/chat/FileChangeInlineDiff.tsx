@@ -171,7 +171,7 @@ function FileDiffCards(props: {
     <div className="flex flex-col gap-2" onKeyDown={(event) => event.stopPropagation()}>
       {files.map((file) => {
         const filePath = resolveFileDiffPath(file);
-        // An edit's own patch names files by their absolute host path.
+        // An edit's patch is repo-relative inside the workspace, and absolute outside it.
         const displayPath = workspaceRelativeFilePath(filePath, workspaceRoot) ?? filePath;
         const stat = getDiffLineStat([file]);
         const filePatch = extractFilePatch(patch, file);

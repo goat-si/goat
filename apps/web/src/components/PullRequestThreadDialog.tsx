@@ -17,6 +17,7 @@ import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { useEnvironmentQuery } from "~/state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { vcsEnvironment } from "~/state/vcs";
+import { OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST } from "./pullRequest/pullRequestCheckoutToast";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -29,6 +30,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Spinner } from "./ui/spinner";
+import { toastManager } from "./ui/toast";
 
 interface PullRequestThreadDialogProps {
   open: boolean;
@@ -167,6 +169,9 @@ export function PullRequestThreadDialog({
       branch: result.value.branch,
       worktreePath: result.value.worktreePath,
     });
+    if (!result.value.isOnPullRequestHead) {
+      toastManager.add(OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST);
+    }
     onOpenChange(false);
   };
 

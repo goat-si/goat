@@ -17,6 +17,7 @@ export type SettingsSheetTarget =
   | "SettingsKeyboard"
   | "SettingsMicrophone"
   | "SettingsFollowUp"
+  | "SettingsHubNodes"
   | "SettingsScheduledTasks"
   | "SettingsProjectGrouping"
   | "SettingsClientStorage"

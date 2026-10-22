@@ -11,15 +11,16 @@ import type {
   ChannelTask,
   ChannelTaskPullRequest,
 } from "@goat/contracts";
+import { channelEvidenceLabels } from "@goat/shared/channelEvidence";
 
 /** Each read result is cut to this many characters before a pass sees it. */
 export const RECALL_RESULT_CHARS = 4_000;
 /** At most this many tasks answer one work read. */
-export const RECALL_TASK_LIMIT = 5;
+const RECALL_TASK_LIMIT = 5;
 /** How many of the owner's newest tasks a work read searches. */
 export const RECALL_TASK_SCAN = 200;
 /** How many of a thread's newest messages a thread read returns. */
-export const RECALL_THREAD_MESSAGES = 6;
+const RECALL_THREAD_MESSAGES = 6;
 /** How many of a thread's newest runs a thread read loads messages from. */
 export const RECALL_THREAD_RUNS = 3;
 const RECALL_MESSAGE_CHARS = 700;
@@ -27,7 +28,7 @@ const RECALL_FIELD_CHARS = 600;
 /** At most this many memory lines or items answer one memory read. */
 export const RECALL_MEMORY_LINES = 12;
 /** How many of the newest visible tasks the journal shows, and its size in characters. */
-export const JOURNAL_ENTRIES = 15;
+const JOURNAL_ENTRIES = 15;
 export const JOURNAL_CHARS = 3_000;
 const JOURNAL_RESULT_CHARS = 160;
 
@@ -152,6 +153,7 @@ export const taskDigest = (task: ChannelTask): string => {
       ? ["  the worker ended without filing a final report"]
       : []),
     ...(prs.length === 0 ? [] : ["  pull requests: " + prs.join(", ")]),
+    ...channelEvidenceLabels(task.observed?.result).map((label) => "  " + label),
     ...task.openQuestions.map((question) => "  open question: " + question.text),
     ...(task.completedAt === undefined ? [] : ["  ended " + task.completedAt.slice(0, 16)]),
   ];
@@ -185,7 +187,10 @@ export const journalFor = (
       (task.resultSummary === undefined || task.resultSummary.trim() === ""
         ? ""
         : " — " + cut(task.resultSummary.replace(/\s+/gu, " ").trim(), JOURNAL_RESULT_CHARS)) +
-      (prs.length === 0 ? "" : " — " + prs.join(", "));
+      (prs.length === 0 ? "" : " — " + prs.join(", ")) +
+      (task.observed?.result === undefined
+        ? ""
+        : " — " + channelEvidenceLabels(task.observed.result).join("; "));
     if (used + line.length + 1 > chars) break;
     lines.push(line);
     used += line.length + 1;

@@ -5,7 +5,7 @@ import {
   EnvironmentId,
   type UserInputAttachmentAnswerPayload,
 } from "@goat/contracts";
-import { getQuestionTextPreview, getQuestionAnswerAttribution } from "./userInput.ts";
+import { getQuestionAnswerAttribution } from "./userInput.ts";
 
 function answer(
   overrides: Partial<UserInputAttachmentAnswerPayload> = {},
@@ -18,28 +18,6 @@ function answer(
     ...overrides,
   };
 }
-
-describe("getQuestionTextPreview", () => {
-  it("joins the question texts", () => {
-    expect(
-      getQuestionTextPreview(
-        answer({ questionTextById: { scope: "Which repository?", name: "What name?" } }),
-      ),
-    ).toBe("Which repository? · What name?");
-  });
-
-  it("normalizes whitespace and skips blank texts", () => {
-    expect(
-      getQuestionTextPreview(
-        answer({ questionTextById: { scope: "Which\nrepository?", x: "  " } }),
-      ),
-    ).toBe("Which repository?");
-  });
-
-  it("returns an empty string without question texts", () => {
-    expect(getQuestionTextPreview(answer({ questionTextById: undefined }))).toBe("");
-  });
-});
 
 describe("getQuestionAnswerAttribution", () => {
   it("shows local and foreign agent identity and unchanged reason", () => {

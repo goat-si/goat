@@ -239,6 +239,10 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
     (target) =>
       target.environment.serverConfig.environment.capabilities.threadRestartContinuation === true,
   );
+  const supportsAutomaticServerUpdates = targets.every(
+    (target) =>
+      target.environment.serverConfig.environment.capabilities.automaticServerUpdates === true,
+  );
   const disabledFor = (key: string) =>
     disabled ||
     (projectSelected &&
@@ -388,8 +392,8 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                   <SettingsSection title="Worktrees">
                     <SettingsSwitchRow
                       icon="arrow.triangle.branch"
-                      label="Start from origin"
-                      subtitle="Base new worktrees on the remote branch."
+                      label="Start from remote"
+                      subtitle="Uses the latest commit of the base branch’s tracked remote branch, even if its name differs. Otherwise uses the same-named branch on origin. Uses your local branch if that remote branch is missing."
                       value={uniform("newWorktreesStartFromOrigin")}
                       disabled={disabledFor("newWorktreesStartFromOrigin")}
                       onValueChange={(value) => write({ newWorktreesStartFromOrigin: value })}
@@ -430,6 +434,16 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       onValueChange={(value) => write({ enableAgentBrowserAccess: value })}
                     />
                   </SettingsSection>
+                  <SettingsSection title="Computer use">
+                    <SettingsSwitchRow
+                      icon="desktopcomputer"
+                      label="Computer use"
+                      subtitle="Allow agents to see and use apps on the selected environments' computers. A Mac also needs Accessibility and Screen Recording, granted at that Mac. A computer without a usable screen says why it cannot turn on."
+                      value={uniform("enableCua")}
+                      disabled={disabledFor("enableCua")}
+                      onValueChange={(value) => write({ enableCua: value })}
+                    />
+                  </SettingsSection>
                   <StandingInstructionsSettings
                     key={targets
                       .map((target) => `${target.environment.environmentId}:${target.projectId}`)
@@ -443,15 +457,14 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
 
               {props.page === "maintenance" ? (
                 <>
-                  {!projectSelected &&
-                    selectedTargets
-                      .filter(
+                  {!projectSelected ? (
+                    <DatabaseStorageNotice
+                      targets={selectedTargets.filter(
                         (target) =>
                           target.serverConfig.environment.capabilities.databaseStorage === true,
-                      )
-                      .map((target) => (
-                        <DatabaseStorageNotice key={target.environmentId} target={target} />
-                      ))}
+                      )}
+                    />
+                  ) : null}
                   {!projectSelected ? (
                     <SettingsSection title="Manage environments">
                       {selectedTargets.map((target) => (
@@ -493,10 +506,14 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                         subtitle={
                           projectSelected
                             ? "Environment-wide setting. Select All projects to change it."
-                            : "When this server runs as a background service, install new releases from its channel while no threads are running. A failed update rolls back."
+                            : supportsAutomaticServerUpdates
+                              ? "When this server runs as a background service, install new releases from its channel while no threads are running. A failed update rolls back."
+                              : "Update this server to change this setting."
                         }
                         value={uniform("automaticServerUpdates")}
-                        disabled={disabledFor("automaticServerUpdates")}
+                        disabled={
+                          disabledFor("automaticServerUpdates") || !supportsAutomaticServerUpdates
+                        }
                         onValueChange={(value) => write({ automaticServerUpdates: value })}
                       />
                     </View>

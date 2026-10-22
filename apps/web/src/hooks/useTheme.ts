@@ -10,10 +10,12 @@ import {
   canonicalThemePreference,
   isKnownThemePreference,
   getThemePreferenceMode,
+  getThemePreviewAppearance,
   parseThemeHalves,
   resolveDesktopTheme,
   resolveThemeAppearance,
   resolveThemeHalf,
+  subscribeToThemePreview,
   THEME_PREVIEW_ID,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
@@ -115,7 +117,7 @@ export class ThemeStorageError extends Schema.TaggedError<ThemeStorageError>()(
   }
 }
 
-export const isThemeStorageError = Schema.is(ThemeStorageError);
+const isThemeStorageError = Schema.is(ThemeStorageError);
 
 export class DesktopThemeSyncError extends Schema.TaggedError<DesktopThemeSyncError>()(
   "DesktopThemeSyncError",
@@ -129,7 +131,7 @@ export class DesktopThemeSyncError extends Schema.TaggedError<DesktopThemeSyncEr
   }
 }
 
-export const isDesktopThemeSyncError = Schema.is(DesktopThemeSyncError);
+const isDesktopThemeSyncError = Schema.is(DesktopThemeSyncError);
 
 let listeners: Array<() => void> = [];
 let lastSnapshot: ThemeSnapshot | null = null;
@@ -213,7 +215,7 @@ export function readThemePreference(): Theme {
   return DEFAULT_THEME_SNAPSHOT.theme;
 }
 
-export function writeThemePreference(theme: Theme): void {
+function writeThemePreference(theme: Theme): void {
   if (typeof window === "undefined") return;
   try {
     migratingStorage(window.localStorage).setItem(STORAGE_KEY, theme);
@@ -358,7 +360,7 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
   }
 }
 
-export async function syncDesktopThemePreference(
+async function syncDesktopThemePreference(
   bridge: DesktopThemeBridge,
   theme: Theme,
   followSystem?: boolean,
@@ -372,7 +374,7 @@ export async function syncDesktopThemePreference(
   }
 }
 
-export function syncDesktopTheme(
+function syncDesktopTheme(
   theme: Theme,
   followSystem?: boolean,
   appearanceMode?: ThemePreferenceMode,
@@ -496,6 +498,16 @@ function subscribe(listener: () => void): () => void {
       removeWindowListeners = null;
     }
   };
+}
+
+export function useRenderedAppearance() {
+  const { resolvedTheme } = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const previewAppearance = useSyncExternalStore(
+    subscribeToThemePreview,
+    getThemePreviewAppearance,
+    () => null,
+  );
+  return previewAppearance ?? resolvedTheme;
 }
 
 function setTheme(next: Theme): boolean {

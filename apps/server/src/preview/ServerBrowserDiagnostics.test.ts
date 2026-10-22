@@ -6,12 +6,21 @@ import { scanDiagnosticUrlTokens, ServerBrowserDiagnostics } from "./ServerBrows
 const fixture = () => {
   const page = new NodeEvents.EventEmitter();
   const diagnostics = new ServerBrowserDiagnostics(page as unknown as Page);
-  const consoleMessage = (text: string, level = "log") =>
-    page.emit("console", { type: () => level, text: () => text });
+  const consoleMessage = (text: string, level = "log", args: unknown[] = [text]) =>
+    page.emit("console", { type: () => level, text: () => text, args: () => args });
   return { page, diagnostics, consoleMessage };
 };
 
 describe("ServerBrowserDiagnostics", () => {
+  it("removes Chromium data URL payloads before recording while preserving page-authored text", () => {
+    const { diagnostics, consoleMessage } = fixture();
+    const url = "data:text/plain;name=private.txt,private payload\nwith more text";
+    consoleMessage(`Blocked navigation to ${url}`, "error", []);
+    expect(diagnostics.consoleEntries[0]?.text).toBe("Blocked navigation to data:text/plain,…");
+    expect(diagnostics.read({ text: "private" }).console.entries).toEqual([]);
+    consoleMessage(url);
+    expect(diagnostics.read({}).console.entries[0]?.text).toBe(url);
+  });
   it("keeps newest entries with separate eviction and filtered omission counts", () => {
     const { diagnostics, consoleMessage } = fixture();
     for (let i = 0; i < 205; i++) consoleMessage(`entry ${i}`, i % 2 === 0 ? "warning" : "log");

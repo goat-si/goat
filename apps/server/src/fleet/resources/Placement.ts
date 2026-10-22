@@ -26,13 +26,14 @@ import * as Fallback from "./Fallback.ts";
 import { stepKey, toSelection } from "./fallbackPolicy.ts";
 import {
   fleetThreads,
+  hubTakesNoGoals,
   place,
   schedulerHostStatus,
   type HostSelector,
   type PlacementResult,
 } from "./placementRules.ts";
 
-export const MAX_DECISIONS = 50;
+const MAX_DECISIONS = 50;
 
 export interface PlacementRequest {
   /** "goal:<id>" or "thread:<id>". */
@@ -66,7 +67,7 @@ export const PlacementHostConditions = Context.Reference<{
   defaultValue: () => ({ cordoned: Effect.succeed(new Set<string | null>()) }),
 });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
@@ -74,7 +75,9 @@ export const make = Effect.gen(function* () {
   const log = yield* Ref.make<ReadonlyArray<PlacementDecision>>([]);
 
   const fleetSettings = settingsService.getSettings.pipe(
-    Effect.map((settings) => settings.fleet),
+    Effect.map((settings) =>
+      settings.hub.enabled ? hubTakesNoGoals(settings.fleet) : settings.fleet,
+    ),
     Effect.orElseSucceed((): FleetSettings => ({})),
   );
   // The controller places with this machine's SSH keys, as goal launches do.

@@ -1,6 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
 import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -10,7 +13,60 @@ import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { ARCHIVE, remoteShell } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
-import { REMOTE_LAUNCH_LISTENER_SCRIPT } from "./tunnel.ts";
+import { buildRemoteNodeEnvScript, REMOTE_LAUNCH_LISTENER_SCRIPT } from "./tunnel.ts";
+
+const listenerPrelude = () => {
+  const env = buildRemoteNodeEnvScript();
+  const at = env.indexOf("remote_node_satisfies_engine");
+  assert.isAbove(at, 0);
+  return `${env.slice(0, at)}${REMOTE_LAUNCH_LISTENER_SCRIPT}`;
+};
+
+// A macOS login PATH can omit /usr/sbin. Hide /proc and the real lsof so the
+// launch helpers have to find a fake /usr/sbin/lsof, or fail closed.
+const runWithoutProc = (lsofBody: string | undefined, script: string) => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-lsof-"));
+  const sbin = NodePath.join(root, "sbin");
+  const empty = NodePath.join(root, "empty");
+  const minimal = NodePath.join(root, "minimal");
+  NodeFS.mkdirSync(sbin);
+  NodeFS.mkdirSync(empty);
+  NodeFS.mkdirSync(minimal);
+  // The listener pipeline still needs grep. The login PATH under test has that,
+  // and nothing else that would satisfy `command -v lsof`.
+  NodeFS.symlinkSync("/usr/bin/grep", NodePath.join(minimal, "grep"));
+  if (lsofBody !== undefined) {
+    NodeFS.writeFileSync(NodePath.join(sbin, "lsof"), lsofBody, { mode: 0o755 });
+  }
+  const driver = `set -eu
+# /sbin is a symlink to usr/sbin on usr-merged hosts. Mounting it afterwards
+# would cover the lsof stand-in.
+if [ ! -L /sbin ]; then mount --bind ${JSON.stringify(empty)} /sbin; fi
+mount --bind ${JSON.stringify(lsofBody === undefined ? empty : sbin)} /usr/sbin
+mount -t tmpfs tmpfs /proc
+export PATH=${JSON.stringify(minimal)}
+GOAT_HOST_WINDOWS=0
+${listenerPrelude()}
+${script}
+`;
+  try {
+    return NodeChildProcess.spawnSync(
+      "unshare",
+      ["--user", "--mount", "--map-root-user", "sh", "-c", driver],
+      { encoding: "utf8" },
+    );
+  } finally {
+    NodeFS.rmSync(root, { recursive: true, force: true });
+  }
+};
+
+// macOS CI has no unshare, and some Linux hosts disable unprivileged user namespaces.
+const canIsolateListenerPath =
+  HostProcess.Platform.defaultValue() === "linux" &&
+  NodeChildProcess.spawnSync("unshare", ["--user", "--map-root-user", "true"], {
+    encoding: "utf8",
+    timeout: 5_000,
+  }).status === 0;
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH launch identity", () => {
   it.live("checks the socket PID with noglob enabled and preserves the caller's options", () =>
@@ -175,5 +231,63 @@ case "$-" in *f*) ;; *) exit 3 ;; esac
         assert.equal(events.filter((event) => event.type === "failed-start").length, 1);
         assert.isFalse(yield* f.fs.exists(`${f.state}/pid`));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.skipIf(!canIsolateListenerPath)("finds lsof from a minimal PATH that omits /usr/sbin", () => {
+    const fake = `#!/bin/sh
+pid=
+prev=
+for arg in "$@"; do
+  if [ "$prev" = -p ]; then pid=$arg; fi
+  prev=$arg
+done
+if [ "$pid" = "$EXPECTED" ]; then printf '%s\\n' "$pid"; fi
+`;
+    const result = runWithoutProc(
+      fake,
+      `found="$(listener_lsof)"
+[ "$found" = /usr/sbin/lsof ]
+ensure_listener_path
+resolved="$(command -v lsof)"
+case "$resolved" in
+  /usr/sbin/lsof|/sbin/lsof) ;;
+  *) printf 'lsof resolved to %s\\n' "$resolved" >&2; exit 1 ;;
+esac
+EXPECTED=$$
+export EXPECTED
+server_owns_listener "$$" 9
+if server_owns_listener 1 9; then exit 2; fi
+`,
+    );
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  });
+
+  it.skipIf(!canIsolateListenerPath)(
+    "leaves a server running when a minimal PATH has no listener probe",
+    () => {
+      const result = runWithoutProc(
+        undefined,
+        `/bin/sleep 30 &
+old=$!
+trap 'if kill -0 "$old" 2>/dev/null; then printf left-running; kill "$old" 2>/dev/null || true; else printf already-dead; fi' EXIT
+NEEDS_OWNED_UPGRADE=1
+LIVE_STATUS=live
+ensure_listener_path
+if ! listener_probe_available; then
+  printf 'Cannot verify the launched GOAT listener: this host needs /proc or lsof. The existing server was left running.\\n' >&2
+  exit 1
+fi
+kill "$old"
+printf reached-replacement
+`,
+      );
+      assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+      assert.equal(result.stdout.trim(), "left-running");
+      assert.include(
+        result.stderr,
+        "Cannot verify the launched GOAT listener: this host needs /proc or lsof. The existing server was left running.",
+      );
+      assert.notInclude(result.stdout, "reached-replacement");
+    },
   );
 });

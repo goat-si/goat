@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { RegistryContext } from "@effect/atom-react";
 import {
   EnvironmentId,
@@ -19,6 +18,7 @@ const harness = vi.hoisted(() => ({
   respond: vi.fn(),
   refresh: vi.fn(),
   refreshProviders: vi.fn(),
+  navigate: vi.fn(),
   scopeAllowed: true,
   manage: (_registry: AtomRegistry.AtomRegistry, _allowed: boolean) => {},
   publish: (_registry: AtomRegistry.AtomRegistry, _value: SshHandoffProgressResult) => {},
@@ -66,7 +66,10 @@ vi.mock("./CopyTextButton", () => ({
     <button>{accessibilityLabel}</button>
   ),
 }));
-vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
+vi.mock("@react-navigation/native", () => ({
+  useIsFocused: () => true,
+  useNavigation: () => ({ navigate: harness.navigate }),
+}));
 vi.mock("react-native", () => ({
   AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
   View: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -149,6 +152,7 @@ beforeEach(() => {
   harness.respond.mockReset().mockResolvedValue({ _tag: "Success", value: handoff });
   harness.scopeAllowed = true;
   harness.refresh.mockReset();
+  harness.navigate.mockReset();
   harness.refreshProviders.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
 });
 afterEach(async () => {
@@ -470,6 +474,66 @@ it.each([
   },
 );
 
+describe("provider setup request", () => {
+  const request: Handoff = {
+    ...handoff,
+    kind: "approval",
+    title: "Set up Claude",
+    reason: "Sign in so the agent can continue.",
+    state: "pending",
+    target: { environmentId: EnvironmentId.make("vps"), path: "provider.setup" },
+  };
+  it("opens provider accounts on the requested driver and instance", async () => {
+    harness.open.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        human: {
+          location: "Sign in to Claude on vps",
+          providerSetup: {
+            driver: "claudeAgent",
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+          },
+        },
+      },
+    });
+    await render(request);
+    expect(container.textContent).not.toContain("Open setup");
+    await click("Review request");
+    expect(container.textContent).toContain("Sign in to Claude on vps");
+    await click("Open setup");
+    expect(harness.navigate).toHaveBeenCalledWith("SettingsSheet", {
+      screen: "SettingsContent",
+      params: {
+        screen: "SettingsProviderAccounts",
+        params: {
+          environmentId: EnvironmentId.make("vps"),
+          driver: "claudeAgent",
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+        },
+      },
+    });
+    expect(harness.respond).not.toHaveBeenCalled();
+  });
+  it("does not offer setup for other provider requests", async () => {
+    await render({
+      ...request,
+      target: { ...request.target, path: "provider.home_request" },
+    });
+    await click("Review request");
+    expect(container.textContent).not.toContain("Open setup");
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+  it("needs permission to manage providers on the target", async () => {
+    await act(async () => harness.manage(registry, false));
+    await render(request);
+    const review = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent === "Review request",
+    );
+    expect(review?.disabled).toBe(true);
+    expect(container.textContent).not.toContain("Open setup");
+  });
+});
+
 describe("OpenCodex Home approval", () => {
   const request = {
     ...handoff,
@@ -544,4 +608,39 @@ describe("OpenCodex Home approval", () => {
       expect(harness.refresh).not.toHaveBeenCalled();
     },
   );
+});
+
+it("shows successful pin-only approval as the agent's next step", async () => {
+  const trust = { ...handoff, target: { ...handoff.target, path: "ssh.host_add" } };
+  await render({ ...trust, state: "pending" });
+  await click("Review request");
+  await click("Approve");
+  expect(harness.respond.mock.lastCall?.[0].input.action).toBe("completed");
+  await render({ ...trust, resolvedAt: DateTime.makeUnsafe(0) });
+  await publish({ ...diagnosis, result: { kind: "ok", status: { ...runtime, state: "stopped" } } });
+  expect(container.textContent).toContain("Host key pinned. The agent can continue.");
+  expect(container.textContent).not.toContain("expired or was replaced");
+  expect(container.textContent).not.toContain("GOAT is setting up");
+  expect(container.textContent).not.toContain("ready for agents");
+});
+it.each(["expired", "superseded"] as const)("preserves real %s trust requests", async (reason) => {
+  await render({ ...handoff, target: { ...handoff.target, path: "ssh.host_add" } });
+  await publish({ kind: "unavailable", reason });
+  expect(container.textContent).toContain(
+    "This request expired or was replaced. Ask the agent again.",
+  );
+  expect(container.textContent).not.toContain("Host key pinned");
+});
+it("preserves a failed pin after approval", async () => {
+  await render({ ...handoff, target: { ...handoff.target, path: "ssh.host_add" } });
+  await publish({
+    ...diagnosis,
+    result: {
+      kind: "error",
+      code: "operation_failed",
+      message: "The SSH host key or destination changed. Add this host again to review it.",
+    },
+  });
+  expect(container.textContent).toContain("The SSH host key or destination changed.");
+  expect(container.textContent).not.toContain("Host key pinned");
 });

@@ -1,7 +1,11 @@
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { EnvironmentId } from "@goat/contracts";
+import {
+  DesktopSshEnvironmentBootstrapSchema,
+  DesktopSshPreparationProgressEventSchema,
+  EnvironmentId,
+} from "@goat/contracts";
 import {
   Connectivity,
   ConnectionDriver,
@@ -15,7 +19,13 @@ import type { WsRpcProtocolClient } from "@goat/client-runtime/rpc";
 import { SshHostAnswered } from "@goat/ssh/command";
 import * as NetService from "@goat/shared/Net";
 import * as SshTunnel from "@goat/ssh/tunnel";
-import { SshLaunchError, SshPasswordPromptError } from "@goat/ssh/errors";
+import {
+  SshEnsureSupersededError,
+  SshLaunchError,
+  SshPasswordPromptError,
+  SshPreparationTimeoutError,
+} from "@goat/ssh/errors";
+import { vi } from "vite-plus/test";
 import * as SshAuth from "@goat/ssh/auth";
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
@@ -33,18 +43,23 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as DesktopSshEnvironment from "./DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./DesktopSshPasswordPrompts.ts";
+import { makeEnsureFlightFixture } from "../../../../packages/ssh/src/tunnel.ensure-flight.fixture.ts";
+import { uploadTarget } from "../../../../packages/ssh/src/tunnel.fixture.ts";
+import { bootstrapSshBearerSession, ensureSshEnvironment } from "../ipc/methods/sshEnvironment.ts";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as IpcChannels from "../ipc/channels.ts";
 
-function makeTempHomeDir() {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    return yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-env-test-" });
-  });
-}
+vi.mock("electron", () => ({}));
+
+const decodeBootstrap = Schema.decodeUnknownEffect(DesktopSshEnvironmentBootstrapSchema);
+const decodePreparationEvent = Schema.decodeUnknownOption(DesktopSshPreparationProgressEventSchema);
 
 const runtimeTarget = {
   alias: "devbox",
@@ -83,6 +98,7 @@ const unusedManager = {
   disconnectEnvironment: () => Effect.void,
   revalidateTunnels: () => Effect.void,
   issueMcpClientSession: () => Effect.die("unexpected session"),
+  issueClientSession: () => Effect.die("unexpected client session"),
   runRemoteScript: () => Effect.die("unexpected remote script"),
 } satisfies SshTunnel.SshEnvironmentManagerShape;
 
@@ -380,6 +396,368 @@ describe("desktop SSH runtime status", () => {
 });
 
 describe("sshEnvironment", () => {
+  it.effect(
+    "shares one real manager preparation across two window gateways and independent supervisors",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeEnsureFlightFixture;
+        yield* Effect.gen(function* () {
+          const scope = yield* Scope.Scope;
+          const service = yield* DesktopSshEnvironment.make;
+          const ipcContext = yield* Effect.context<FileSystem.FileSystem>();
+          const desktop = DesktopEnvironment.DesktopEnvironment.of({
+            path: yield* Path.Path,
+            homeDirectory: fixture.root,
+          } as DesktopEnvironment.DesktopEnvironment["Service"]);
+          const observed = yield* Queue.unbounded<string>();
+          const exchangeEntered = yield* Queue.unbounded<string>();
+          const requestIds: string[] = [];
+          const completions: string[] = [];
+          const exchanged = new Map<string, string>();
+          const sent: Array<{
+            senderId: number;
+            requestId: string;
+            operationId: string;
+            terminal: boolean;
+          }> = [];
+          const target = new SshConnectionTarget({
+            environmentId: EnvironmentId.make("ssh-two-window-fixture"),
+            label: "SSH fixture",
+            connectionId: "ssh:devbox",
+          });
+          const routeId = connectionRouteId(target);
+          const makeWindow = (senderId: number) =>
+            Effect.gen(function* () {
+              let sequence = 0;
+              return yield* EnvironmentSupervisor.make(
+                { target, profile: Option.none(), enabled: true },
+                { initiallyDesired: false },
+              ).pipe(
+                Effect.provideService(Connectivity.Connectivity, {
+                  status: Effect.succeed("online" as const),
+                  changes: Stream.never,
+                }),
+                Effect.provideService(Wakeups.ConnectionWakeups, { changes: Stream.never }),
+                Effect.provideService(ConnectionDriver, {
+                  checkRoute: () => Effect.succeed("unchecked"),
+                  preflight: () => Effect.succeed(false),
+                  connect: (_entry, report, context) =>
+                    Effect.gen(function* () {
+                      const requestId = `window-${senderId}-request-${++sequence}`;
+                      requestIds.push(requestId);
+                      const events = yield* Queue.unbounded<Effect.Effect<void>>();
+                      const drained = yield* Deferred.make<void>();
+                      let active = true;
+                      let sawPreparation = false;
+                      yield* report({ stage: "preparing", routeId });
+                      yield* Queue.take(events).pipe(
+                        Effect.flatten,
+                        Effect.forever,
+                        Effect.forkChild,
+                      );
+                      yield* Effect.sleep("235 millis");
+                      const native = yield* ensureSshEnvironment
+                        .handler(
+                          {
+                            target: uploadTarget,
+                            requestId,
+                            caller: "provision",
+                            options: { issuePairingToken: true },
+                            ...(context === undefined
+                              ? {}
+                              : { attemptContext: { ...context, routeId } }),
+                          },
+                          {
+                            sender: {
+                              id: senderId,
+                              send: (channel, payload) => {
+                                if (
+                                  channel === IpcChannels.SSH_ENVIRONMENT_ANSWERED_CHANNEL &&
+                                  payload === requestId &&
+                                  active
+                                )
+                                  Queue.offerUnsafe(
+                                    events,
+                                    report({ stage: "preparing", routeId, hostAnswered: true }),
+                                  );
+                                if (channel !== IpcChannels.SSH_ENVIRONMENT_PROGRESS_CHANNEL)
+                                  return;
+                                const decoded = decodePreparationEvent(payload);
+                                assert(Option.isSome(decoded));
+                                assert.equal(decoded.value.requestId, requestId);
+                                const { requestId: _requestId, ...progress } = decoded.value;
+                                sent.push({
+                                  senderId,
+                                  requestId,
+                                  operationId: progress.operationId,
+                                  terminal: progress.phase === null,
+                                });
+                                if (
+                                  !sawPreparation &&
+                                  progress.phase === "uploading" &&
+                                  progress.hostAnswered
+                                ) {
+                                  sawPreparation = true;
+                                  Queue.offerUnsafe(observed, requestId);
+                                }
+                                if (active)
+                                  Queue.offerUnsafe(
+                                    events,
+                                    report({
+                                      stage: "preparing",
+                                      routeId,
+                                      sshPreparation: progress,
+                                    }),
+                                  );
+                              },
+                            },
+                          },
+                        )
+                        .pipe(
+                          Effect.provideService(
+                            DesktopSshEnvironment.DesktopSshEnvironment,
+                            service,
+                          ),
+                          Effect.provideService(DesktopEnvironment.DesktopEnvironment, desktop),
+                          Effect.provide(ipcContext),
+                          Effect.flatMap(decodeBootstrap),
+                          Effect.tap(() =>
+                            Effect.sync(() => {
+                              completions.push(requestId);
+                            }),
+                          ),
+                          Effect.orDie,
+                          Effect.forkIn(scope),
+                        );
+                      return yield* Effect.gen(function* () {
+                        const bootstrap = yield* Fiber.join(native);
+                        Queue.offerUnsafe(
+                          events,
+                          Deferred.succeed(drained, undefined).pipe(Effect.asVoid),
+                        );
+                        yield* Deferred.await(drained);
+                        yield* Queue.offer(exchangeEntered, requestId);
+                        yield* Effect.sleep("235 millis");
+                        assert.isString(bootstrap.pairingToken);
+                        const exchange = yield* bootstrapSshBearerSession
+                          .handler({
+                            httpBaseUrl: bootstrap.httpBaseUrl,
+                            credential: bootstrap.pairingToken!,
+                          })
+                          .pipe(
+                            Effect.provideService(
+                              HttpClient.HttpClient,
+                              HttpClient.make((request) =>
+                                Effect.sync(() => {
+                                  assert.equal(request.url, "http://127.0.0.1:41773/oauth/token");
+                                  assert.equal(request.method, "POST");
+                                  assert(request.body._tag === "Uint8Array");
+                                  const credential = new URLSearchParams(
+                                    new TextDecoder().decode(request.body.body),
+                                  ).get("subject_token");
+                                  assert.equal(credential, bootstrap.pairingToken);
+                                  assert.isFalse(exchanged.has(credential!));
+                                  exchanged.set(credential!, requestId);
+                                  return HttpClientResponse.fromWeb(
+                                    request,
+                                    Response.json({
+                                      access_token: `fixture-bearer-${senderId}`,
+                                      issued_token_type:
+                                        "urn:ietf:params:oauth:token-type:access_token",
+                                      token_type: "Bearer",
+                                      expires_in: 3600,
+                                      scope: "orchestration:read",
+                                    }),
+                                  );
+                                }),
+                              ),
+                            ),
+                            Effect.orDie,
+                          );
+                        assert.equal(
+                          (exchange as { access_token: string }).access_token,
+                          `fixture-bearer-${senderId}`,
+                        );
+                        const prepared = {
+                          environmentId: target.environmentId,
+                          label: target.label,
+                          httpBaseUrl: bootstrap.httpBaseUrl,
+                          socketUrl: `${bootstrap.wsBaseUrl}ws`,
+                          httpAuthorization: null,
+                          target,
+                        };
+                        yield* report({ stage: "synchronizing", prepared });
+                        return {
+                          prepared,
+                          session: {
+                            client: {} as WsRpcProtocolClient,
+                            initialConfig: Effect.die("unused config"),
+                            subscribeServerConfig: () => Stream.never,
+                            ready: Effect.void,
+                            probe: Effect.void,
+                            closed: Effect.never,
+                          },
+                        };
+                      }).pipe(
+                        Effect.ensuring(
+                          Effect.sync(() => {
+                            active = false;
+                          }),
+                        ),
+                      );
+                    }),
+                }),
+              );
+            });
+          const awaitPhase = (
+            supervisor: EnvironmentSupervisor.EnvironmentSupervisor["Service"],
+            phase: SupervisorConnectionState["phase"],
+          ) =>
+            SubscriptionRef.changes(supervisor.state).pipe(
+              Stream.filter((state) => state.phase === phase),
+              Stream.runHead,
+            );
+          const first = yield* makeWindow(1);
+          const second = yield* makeWindow(2);
+          yield* first.connect;
+          yield* TestClock.adjust("235 millis");
+          yield* Deferred.await(fixture.uploadEntered);
+          assert.equal(yield* Queue.take(observed), "window-1-request-1");
+          yield* second.connect;
+          yield* TestClock.adjust("235 millis");
+          assert.equal(yield* Queue.take(observed), "window-2-request-1");
+          yield* first.disconnect;
+          yield* awaitPhase(first, "available");
+          assert.equal((yield* SubscriptionRef.get(second.state)).phase, "connecting");
+          yield* first.connect;
+          yield* TestClock.adjust("235 millis");
+          assert.equal(yield* Queue.take(observed), "window-1-request-2");
+          yield* TestClock.adjust("258 seconds");
+          assert.equal((yield* SubscriptionRef.get(first.state)).phase, "connecting");
+          assert.equal((yield* SubscriptionRef.get(second.state)).phase, "connecting");
+          assert.equal(fixture.count.acquisitions, 1);
+          assert.equal(fixture.count.uploads, 1);
+          assert.equal(fixture.count.launches, 0);
+          assert.equal(requestIds.length, 3);
+          yield* Deferred.succeed(fixture.releaseUpload, undefined);
+          yield* Queue.take(exchangeEntered);
+          yield* Queue.take(exchangeEntered);
+          yield* TestClock.adjust("235 millis");
+          yield* awaitPhase(first, "connected");
+          yield* awaitPhase(second, "connected");
+          assert.equal(fixture.count.launches, 1);
+          assert.equal(fixture.count.forwards, 1);
+          assert.equal(fixture.count.pairings, 3);
+          assert.equal(completions.length, 3);
+          assert.deepEqual([...exchanged.values()].sort(), [
+            "window-1-request-2",
+            "window-2-request-1",
+          ]);
+          assert.equal(new Set(sent.map((event) => event.operationId)).size, 1);
+          assert.equal(
+            new Set(sent.filter((event) => event.terminal).map((event) => event.requestId)).size,
+            3,
+          );
+          yield* TestClock.adjust("200 seconds");
+          assert.equal(requestIds.length, 3);
+          assert.equal(fixture.count.acquisitions, 1);
+          assert.equal(fixture.count.uploads, 1);
+          assert.equal(fixture.count.launches, 1);
+          assert.equal((yield* SubscriptionRef.get(first.state)).phase, "connected");
+          assert.equal((yield* SubscriptionRef.get(second.state)).phase, "connected");
+        }).pipe(
+          Effect.provide(fixture.layer),
+          Effect.provideService(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, {
+            request: () => Effect.die("unexpected password"),
+            resolve: () => Effect.die("unexpected resolution"),
+          }),
+          Effect.scoped,
+        );
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer())), Effect.scoped),
+  );
+
+  it.effect("forwards attachment completion hints and isolates phase and admission observers", () =>
+    Effect.gen(function* () {
+      const active = {
+        operationId: "flight-1",
+        phase: "uploading",
+        hostAnswered: true,
+        remainingMs: 800_000,
+      } as const;
+      const terminal = { ...active, phase: null, outcome: "pending" } as const;
+      const progress: unknown[] = [];
+      const admissions: unknown[] = [];
+      const service = yield* DesktopSshEnvironment.make.pipe(
+        Effect.provideService(SshTunnel.SshEnvironmentManager, {
+          ...unusedManager,
+          ensureEnvironment: (receivedTarget, options) =>
+            Effect.sync(() => {
+              assert.deepEqual(receivedTarget, runtimeTarget);
+              assert.equal(options?.preparedAttachmentId, "attachment-1");
+              assert.equal(options?.issuePairingToken, true);
+              assert.equal(options?.keyOnly, true);
+              assert.doesNotThrow(() =>
+                options?.onPreparationAdmission?.({
+                  operationId: "flight-1",
+                  disposition: "attachment-completion",
+                  generation: 3,
+                }),
+              );
+              assert.doesNotThrow(() => options?.onPreparationProgress?.(active));
+              assert.doesNotThrow(() => options?.onPreparationProgress?.(terminal));
+              return pendingRuntime;
+            }),
+        }),
+      );
+      const result = yield* service.ensureEnvironment(runtimeTarget, {
+        preparedAttachmentId: "attachment-1",
+        issuePairingToken: true,
+        keyOnly: true,
+        onPreparationProgress: (value) => {
+          progress.push(value);
+          throw new Error("renderer gone");
+        },
+        onPreparationAdmission: (value) => {
+          admissions.push(value);
+          throw new Error("renderer gone");
+        },
+      });
+      assert.deepEqual(result, pendingRuntime);
+      assert.deepEqual(progress, [active, terminal]);
+      assert.deepEqual(admissions, [
+        { operationId: "flight-1", disposition: "attachment-completion", generation: 3 },
+      ]);
+    }).pipe(Effect.provide(desktopRuntimeLayer)),
+  );
+
+  it.effect(
+    "preserves neutral ownership and preparation timeout errors without prompt cancellation",
+    () =>
+      Effect.gen(function* () {
+        for (const error of [
+          new SshEnsureSupersededError({
+            message: "SSH preparation superseded by a newer connection intent.",
+          }),
+          new SshPreparationTimeoutError({
+            message: "SSH runtime preparation exceeded its 15-minute limit.",
+          }),
+        ]) {
+          const service = yield* DesktopSshEnvironment.make.pipe(
+            Effect.provideService(SshTunnel.SshEnvironmentManager, {
+              ...unusedManager,
+              ensureEnvironment: () => Effect.fail(error),
+            }),
+          );
+          const result = yield* service.ensureEnvironment(runtimeTarget).pipe(Effect.exit);
+          assert(Exit.isFailure(result));
+          const cause = Cause.findErrorOption(result.cause);
+          assert(Option.isSome(cause));
+          assert.strictEqual(cause.value, error);
+          assert.isFalse(DesktopSshEnvironment.isDesktopSshPasswordPromptCancellation(cause.value));
+        }
+      }).pipe(Effect.provide(desktopRuntimeLayer)),
+  );
+
   it.effect("isolates a throwing authentication listener from other pending requests", () =>
     Effect.gen(function* () {
       const entered = yield* Queue.unbounded<() => void>();
@@ -691,120 +1069,11 @@ describe("sshEnvironment", () => {
             disconnectEnvironment: () => Effect.die("unused"),
             revalidateTunnels: () => Effect.die("unused"),
             issueMcpClientSession: () => Effect.die("unused"),
+            issueClientSession: () => Effect.die("unexpected client session"),
             runRemoteScript: () => Effect.die("unused"),
           }),
         ),
       ),
     );
   });
-  it("keeps prompt presentation diagnostics distinct from the legacy wrapper message", () => {
-    const cause = new DesktopSshPasswordPrompts.DesktopSshPromptPresentationError({
-      requestId: "prompt-1",
-      destination: "devbox",
-      operation: "send-prompt-request",
-      cause: new Error("renderer send failed"),
-    });
-
-    assert.equal(cause.message, "Failed to present SSH password prompt for devbox.");
-    assert.equal(
-      DesktopSshEnvironment.toSshPasswordPromptError(cause).message,
-      "GOAT window is not available for SSH authentication.",
-    );
-  });
-
-  it("treats password prompt timeouts as cancellable authentication prompts", () => {
-    assert.equal(
-      DesktopSshEnvironment.isDesktopSshPasswordPromptCancellation(
-        new SshPasswordPromptError({
-          message: "SSH authentication timed out for devbox.",
-          cause: new DesktopSshPasswordPrompts.DesktopSshPromptTimedOutError({
-            requestId: "prompt-1",
-            destination: "devbox",
-          }),
-        }),
-      ),
-      true,
-    );
-  });
-
-  it.effect("wires desktop host discovery through the ssh package runtime", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const homeDir = yield* makeTempHomeDir();
-      const sshDir = path.join(homeDir, ".ssh");
-      yield* fs.makeDirectory(path.join(sshDir, "config.d"), { recursive: true });
-      yield* fs.writeFileString(
-        path.join(sshDir, "config"),
-        ["Host devbox", "  HostName devbox.example.com", "Include config.d/*.conf", ""].join("\n"),
-      );
-      yield* fs.writeFileString(
-        path.join(sshDir, "config.d", "team.conf"),
-        [
-          "Host staging",
-          "  HostName staging.example.com",
-          "Host *",
-          "  ServerAliveInterval 30",
-          "",
-        ].join("\n"),
-      );
-      yield* fs.writeFileString(
-        path.join(sshDir, "known_hosts"),
-        [
-          "known.example.com ssh-ed25519 AAAA",
-          "|1|hashed|entry ssh-ed25519 AAAA",
-          "[bastion.example.com]:2222 ssh-ed25519 AAAA",
-          "",
-        ].join("\n"),
-      );
-
-      const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
-      const hosts = yield* sshEnvironment.discoverHosts({ homeDir });
-      assert.deepEqual(hosts, [
-        {
-          alias: "bastion.example.com",
-          hostname: "bastion.example.com",
-          username: null,
-          port: null,
-          source: "known-hosts",
-        },
-        {
-          alias: "devbox",
-          hostname: "devbox",
-          username: null,
-          port: null,
-          source: "ssh-config",
-        },
-        {
-          alias: "known.example.com",
-          hostname: "known.example.com",
-          username: null,
-          port: null,
-          source: "known-hosts",
-        },
-        {
-          alias: "staging",
-          hostname: "staging",
-          username: null,
-          port: null,
-          source: "ssh-config",
-        },
-      ]);
-    }).pipe(
-      Effect.provide(
-        DesktopSshEnvironment.layer().pipe(
-          Layer.provideMerge(
-            Layer.succeed(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, {
-              request: () => Effect.die("unexpected password prompt request"),
-              resolve: () => Effect.die("unexpected password prompt resolution"),
-            }),
-          ),
-          Layer.provideMerge(NodeServices.layer),
-          Layer.provideMerge(NodeHttpClient.layerUndici),
-          Layer.provideMerge(NetService.layer),
-        ),
-      ),
-      Effect.scoped,
-    ),
-  );
 });

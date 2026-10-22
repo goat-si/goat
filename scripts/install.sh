@@ -9,7 +9,7 @@
 #                            (default: nightly, the only train GOAT publishes so
 #                            far; preview is a maintainers' test train)
 #   GOAT_VERSION           exact version to install (overrides GOAT_CHANNEL)
-#   GOAT_HOME              T3 home directory (default: ~/.t3)
+#   GOAT_HOME              GOAT home directory (default: ~/.goat)
 #   GOAT_INSTALL_BIN_DIR   where the `goat` symlink goes (default: ~/.local/bin)
 #   GOAT_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
 #
@@ -246,6 +246,10 @@ fi
 step "Setting up the goat command..."
 mkdir -p "$bin_dir"
 ln -sfn "${target_dir}/goat" "${bin_dir}/goat"
+# Pruning keeps what this launcher points at; a background service cannot see bin_dir otherwise.
+launcher="$(CDPATH='' cd -P -- "$bin_dir" && pwd)/goat"
+launchers="${goat_home}/runtime/launchers"
+grep -qxF "$launcher" "$launchers" 2>/dev/null || printf '%s\n' "$launcher" >> "$launchers"
 if "$interactive"; then printf '\r\033[2K' >&2; fi
 printf '  %sInstalled GOAT %s%s\n\n' "$green" "$version" "$reset" >&2
 case ":${PATH}:" in

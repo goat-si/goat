@@ -110,12 +110,14 @@ const prepare = (mode: string | null) =>
     yield* f.fs.chmod(`${bin}/curl`, 0o755);
     yield* f.fs.writeFileString(log, "");
     f.setRemotePath(`${bin}:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`);
+    const progress: SshTunnel.SshRuntimeProgress[] = [];
     const selected = yield* SshTunnel.prepareRemoteRuntime(
       uploadTarget,
       {},
       { ...f.runner, ...(mode === null ? {} : { hostDownload: true }) },
       REMOTE_RUNTIME_STATE_KEY,
       true,
+      (step) => progress.push(step),
     ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport));
     const record = yield* f.fs.readFileString(
       `${f.home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}/.install-record`,
@@ -123,6 +125,7 @@ const prepare = (mode: string | null) =>
     const fetched = (yield* f.fs.readFileString(log)).split("\n").filter(Boolean);
     return {
       selected,
+      progress,
       source: record.trim().split(" ")[3],
       fetched,
       uploads: f.counters().uploads,
@@ -137,6 +140,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host downl
       assert.isTrue(result.selected.uploaded);
       assert.equal(result.source, "https");
       assert.equal(result.uploads, 0);
+      assert.isNotEmpty(result.progress);
+      assert.isTrue(result.progress.every((step) => step.upload === undefined));
       assert.deepEqual(result.fetched, ["SHA256SUMS", `${stem}.tar.gz`]);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
@@ -149,6 +154,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host downl
         assert.equal(result.selected.version, ARCHIVE.archiveVersion);
         assert.equal(result.source, "cache");
         assert.equal(result.uploads, 1);
+        const uploads = result.progress.flatMap((step) => step.upload ?? []);
+        assert.isAtLeast(uploads.length, 2);
+        assert.equal(uploads[0]?.sentBytes, 0);
+        assert.equal(uploads.at(-1)?.sentBytes, uploads.at(-1)?.totalBytes);
+        assert.isUndefined(result.progress[0]?.upload);
         assert.isAtLeast(result.fetched.length, 1);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );

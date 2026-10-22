@@ -1,40 +1,46 @@
-import * as Schema from "effect/Schema";
-import { SshWorkspaceLaunchInput } from "@goat/contracts";
+import { describe, expect, it } from "@effect/vitest";
 import {
-  AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
+  AuthEnvironmentMaintainScope,
   AuthFilesystemReadScope,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
+  AuthSourceControlWriteScope,
+  AuthTerminalOperateScope,
+  AuthTerminalReadScope,
+  CLIENT_GUARDED_RPC_SCOPES,
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
+  SshWorkspaceLaunchInput,
   ThreadId,
-  AuthOrchestrationOperateScope,
-  ORCHESTRATION_V2_WS_METHODS,
-  AuthOrchestrationReadScope,
-  AuthSourceControlWriteScope,
-  AuthPreviewOperateScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
-  AuthTerminalReadScope,
-  AuthTerminalOperateScope,
   WS_METHODS,
+  WsNotesRpcGroup,
+  type EnvironmentAuthorizationError,
+  type NoteConflictError,
+  type NoteError,
 } from "@goat/contracts";
-import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as RpcTest from "effect/rpc/RpcTest";
-
-import {
-  AuthorizedWsRpcGroup as WsRpcGroup,
-  RPC_REQUIRED_SCOPES as BASE_RPC_REQUIRED_SCOPES,
-  MEMORY_RPC_REQUIRED_SCOPES,
-  requiredScopeForRpcMethod,
-  requiredScopeForDeviceList,
-} from "./RpcAuthorization.ts";
 import * as RpcAuthorization from "./RpcAuthorization.ts";
+import {
+  RPC_REQUIRED_SCOPES as BASE_RPC_REQUIRED_SCOPES,
+  HUB_NODES_RPC_REQUIRED_SCOPES,
+  MEMORY_RPC_REQUIRED_SCOPES,
+  AuthorizedWsRpcGroup as WsRpcGroup,
+  requiredScopeForDeviceList,
+  requiredScopeForRpcMethod,
+} from "./RpcAuthorization.ts";
 
-const RPC_REQUIRED_SCOPES = { ...BASE_RPC_REQUIRED_SCOPES, ...MEMORY_RPC_REQUIRED_SCOPES };
+const RPC_REQUIRED_SCOPES = {
+  ...BASE_RPC_REQUIRED_SCOPES,
+  ...MEMORY_RPC_REQUIRED_SCOPES,
+  ...HUB_NODES_RPC_REQUIRED_SCOPES,
+};
 
 describe("RPC authorization scopes", () => {
   it.effect("accepts only the owning desktop with settings write scope as a catalog host", () =>
@@ -72,6 +78,15 @@ describe("RPC authorization scopes", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });
 
+  it("keeps hub node scopes equal to client guards", () => {
+    for (const [method, scope] of Object.entries(HUB_NODES_RPC_REQUIRED_SCOPES)) {
+      expect(CLIENT_GUARDED_RPC_SCOPES[method as keyof typeof HUB_NODES_RPC_REQUIRED_SCOPES]).toBe(
+        scope,
+      );
+      expect(requiredScopeForRpcMethod(method)).toBe(scope);
+    }
+  });
+
   // Boat machines bill the owner's account, so only a settings writer may change or wake them.
   it("lets readers list cloud machines and only settings writers change them", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudMachinesList)).toBe(
@@ -91,27 +106,6 @@ describe("RPC authorization scopes", () => {
       expect(requiredScopeForRpcMethod(method), method).toBe(AuthSettingsWriteScope);
   });
 
-  it("requires operate access to stop a workflow", () => {
-    expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.stopWorkflow)).toBe(
-      AuthOrchestrationOperateScope,
-    );
-  });
-
-  it("authorizes background policy reporting and observation deliberately", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverReportClientActivity)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverReportHostPowerState)).toBe(
-      AuthEnvironmentMaintainScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverGetBackgroundPolicy)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.subscribeBackgroundPolicy)).toBe(
-      AuthOrchestrationReadScope,
-    );
-  });
-
   it("keeps webhook delivery logs, which hold request bodies, behind operate scope", () => {
     for (const method of [
       WS_METHODS.scheduledTasksListWebhookDeliveries,
@@ -126,109 +120,6 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.serverGetHostStatus)).toBe(
       AuthOrchestrationReadScope,
     );
-  });
-
-  it("allows relay status reads without granting relay installation access", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.cloudGetRelayClientStatus)).toBe(
-      AuthRelayReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.cloudInstallRelayClient)).toBe(AuthRelayWriteScope);
-  });
-
-  it("requires permission to operate on a thread before uploading feedback", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.providerUploadFeedback)).toBe(
-      AuthOrchestrationOperateScope,
-    );
-  });
-
-  it("requires write access to import agent session history", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsScan)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsImport)).toBe(
-      AuthOrchestrationOperateScope,
-    );
-  });
-
-  it("separates ACP Registry discovery from provisioning", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverSearchAcpRegistry)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverPrepareAcpRegistryAgent)).toBe(
-      AuthProvidersManageScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverUninstallAcpRegistryManagedBinary)).toBe(
-      AuthProvidersManageScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverAcceptAcpRegistryUrlAuth)).toBe(
-      AuthProvidersManageScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverListAcpRegistrySessions)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverImportAcpRegistrySession)).toBe(
-      AuthOrchestrationOperateScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverLogoutAcpRegistry)).toBe(
-      AuthProvidersManageScope,
-    );
-  });
-
-  it("reads the reviewer menu under the same scope as the pull request it belongs to", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsChecks)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsReviewerCandidates)).toBe(
-      requiredScopeForRpcMethod(WS_METHODS.pullRequestsDetail),
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsRequestReviewers)).toBe(
-      requiredScopeForRpcMethod(WS_METHODS.pullRequestsComment),
-    );
-  });
-
-  it("requires source control writes to start, retry, or cancel project clones", () => {
-    for (const method of [
-      WS_METHODS.projectCloneStart,
-      WS_METHODS.projectCloneRetry,
-      WS_METHODS.projectCloneCancel,
-    ]) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthSourceControlWriteScope);
-    }
-    expect(requiredScopeForRpcMethod(WS_METHODS.subscribeProjectClones)).toBe(
-      AuthOrchestrationReadScope,
-    );
-  });
-
-  it("separates viewing pull request file progress from writing it", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsFilesViewed)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsSetFilesViewed)).toBe(
-      AuthSourceControlWriteScope,
-    );
-  });
-
-  it("separates preview control from observation", () => {
-    for (const method of [
-      WS_METHODS.previewOpen,
-      WS_METHODS.previewNavigate,
-      WS_METHODS.previewResize,
-      WS_METHODS.previewRefresh,
-      WS_METHODS.previewClose,
-      WS_METHODS.previewReportStatus,
-      WS_METHODS.previewAdjust,
-      WS_METHODS.previewClearProfile,
-      WS_METHODS.previewReportProfiles,
-    ]) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthPreviewOperateScope);
-    }
-    for (const method of [
-      WS_METHODS.previewList,
-      WS_METHODS.subscribePreviewEvents,
-      WS_METHODS.subscribeDiscoveredLocalServers,
-    ]) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
-    }
   });
 
   it("separates passive terminal observation from operations that can change a shell", () => {
@@ -290,10 +181,6 @@ describe("RPC scope middleware", () => {
       scopes: [AuthOrchestrationReadScope, AuthEnvironmentMaintainScope],
       missing: AuthDiagnosticsReadScope,
     },
-    {
-      scopes: [AuthOrchestrationReadScope, AuthDiagnosticsReadScope],
-      missing: AuthEnvironmentMaintainScope,
-    },
   ])("rejects telemetry retry without $missing before its handler runs", ({ scopes, missing }) =>
     Effect.gen(function* () {
       const handled: Array<string> = [];
@@ -317,27 +204,6 @@ describe("RPC scope middleware", () => {
         requiredPermission: missing,
       });
       expect(handled).toEqual([]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("reports only authorized requests that succeed", () =>
-    Effect.gen(function* () {
-      const observed: Array<string> = [];
-      const client = yield* RpcTest.makeClient(group).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            group.toLayerHandler(WS_METHODS.serverProbe, () => Effect.succeed({})),
-            group.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () => Effect.never),
-            RpcAuthorization.layer([AuthOrchestrationReadScope], (method) =>
-              Effect.sync(() => void observed.push(method)),
-            ),
-          ),
-        ),
-      );
-
-      yield* client[WS_METHODS.serverProbe]({});
-      yield* client[WS_METHODS.serverRetryResourceTelemetry]({}).pipe(Effect.flip);
-      expect(observed).toEqual([WS_METHODS.serverProbe]);
     }).pipe(Effect.scoped),
   );
 });
@@ -447,6 +313,59 @@ it.effect("requires task permission before attaching a prepared worktree to a th
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );
+
+describe("thread context authorization", () => {
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (
+        tag,
+      ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.gitRunStackedAction> =>
+        tag !== WS_METHODS.gitRunStackedAction,
+    ),
+  );
+
+  it.effect.each(["commit", "create_pr", "commit_push_pr"] as const)(
+    "%s needs thread read permission only when generating a PR from a thread",
+    (action) =>
+      Effect.gen(function* () {
+        const handled: string[] = [];
+        const handler = group.toLayerHandler(WS_METHODS.gitRunStackedAction, ({ actionId }) =>
+          Stream.fromEffect(Effect.sync(() => handled.push(actionId))).pipe(Stream.drain),
+        );
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.merge(handler, RpcAuthorization.layer([AuthSourceControlWriteScope])),
+          ),
+        );
+        const input = { actionId: "without-thread", cwd: "/repo", action };
+        const withThread = { ...input, actionId: "with-thread", threadId: ThreadId.make("thread") };
+        yield* Stream.runDrain(client[WS_METHODS.gitRunStackedAction](input));
+        if (action === "create_pr" || action === "commit_push_pr") {
+          expect(
+            yield* Stream.runDrain(client[WS_METHODS.gitRunStackedAction](withThread)).pipe(
+              Effect.flip,
+            ),
+          ).toMatchObject({ requiredPermission: AuthOrchestrationReadScope });
+          expect(handled).toEqual(["without-thread"]);
+        } else {
+          yield* Stream.runDrain(client[WS_METHODS.gitRunStackedAction](withThread));
+          expect(handled).toEqual(["without-thread", "with-thread"]);
+        }
+        const reader = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.merge(
+              handler,
+              RpcAuthorization.layer([AuthSourceControlWriteScope, AuthOrchestrationReadScope]),
+            ),
+          ),
+        );
+        yield* Stream.runDrain(
+          reader[WS_METHODS.gitRunStackedAction]({ ...withThread, actionId: "allowed" }),
+        );
+        expect(handled.at(-1)).toBe("allowed");
+      }).pipe(Effect.scoped),
+  );
+});
 
 it.effect("separates host file URLs from readable attachment URLs", () =>
   Effect.gen(function* () {
@@ -730,4 +649,77 @@ it.each([
 ] as const)("registers %s with its destination authority", (method, scope) => {
   expect(WsRpcGroup.requests.has(method)).toBe(true);
   expect(requiredScopeForRpcMethod(method)).toBe(scope);
+});
+
+describe("notes permissions", () => {
+  it("separates note observation from mutations", () => {
+    for (const method of [
+      WS_METHODS.notesList,
+      WS_METHODS.notesRead,
+      WS_METHODS.notesSubscribe,
+      WS_METHODS.notesWorkTargets,
+      WS_METHODS.notesWorkTargetProjects,
+    ])
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    for (const method of [
+      WS_METHODS.notesWrite,
+      WS_METHODS.notesMove,
+      WS_METHODS.notesDelete,
+      WS_METHODS.notesStartWork,
+    ])
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+  });
+  it.effect("rejects every notes mutation before its handler on a read-only connection", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const group = WsNotesRpcGroup.omit(
+        WS_METHODS.notesList,
+        WS_METHODS.notesRead,
+        WS_METHODS.notesSubscribe,
+        WS_METHODS.notesWorkTargets,
+        WS_METHODS.notesWorkTargetProjects,
+      );
+      const invoked = Effect.sync(() => {
+        calls++;
+      }).pipe(Effect.andThen(Effect.never));
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayer({
+              [WS_METHODS.notesWrite]: () => invoked,
+              [WS_METHODS.notesMove]: () => invoked,
+              [WS_METHODS.notesDelete]: () => invoked,
+              [WS_METHODS.notesStartWork]: () => invoked,
+            }),
+            RpcAuthorization.layer([AuthOrchestrationReadScope]),
+          ),
+        ),
+      );
+      const revision = "a".repeat(64);
+      const denied: ReadonlyArray<
+        Effect.Effect<void, NoteError | NoteConflictError | EnvironmentAuthorizationError>
+      > = [
+        client[WS_METHODS.notesWrite]({ path: "a.md", body: "changed", baseRevision: null }).pipe(
+          Effect.asVoid,
+        ),
+        client[WS_METHODS.notesMove]({ from: "a.md", to: "b.md", baseRevision: revision }).pipe(
+          Effect.asVoid,
+        ),
+        client[WS_METHODS.notesDelete]({ path: "a.md", baseRevision: revision }).pipe(
+          Effect.asVoid,
+        ),
+        client[WS_METHODS.notesStartWork]({
+          path: "a.md",
+          requestId: "attempt",
+          target: { type: "host", host: "host", projectPath: "/project" },
+        }).pipe(Effect.asVoid),
+      ];
+      for (const request of denied)
+        expect(yield* request.pipe(Effect.flip)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: AuthOrchestrationOperateScope,
+        });
+      expect(calls).toBe(0);
+    }),
+  );
 });

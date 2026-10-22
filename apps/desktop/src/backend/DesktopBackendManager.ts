@@ -18,6 +18,7 @@ import { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import {
+  SERVER_EXIT_CODE_DATABASE_AHEAD,
   SERVER_EXIT_CODE_STATE_DIR_OWNED,
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
@@ -244,6 +245,7 @@ export interface BackendInstanceSpec {
   readonly onShutdown?: () => Effect.Effect<void>;
   readonly onPreflightFailed?: (failure: PreflightFailure) => Effect.Effect<boolean>;
   readonly onStateDirOwned?: () => Effect.Effect<void>;
+  readonly onDatabaseAhead?: () => Effect.Effect<void>;
 }
 
 interface ActiveBackendRun {
@@ -313,7 +315,7 @@ const closeRun = (
   );
 };
 
-export const waitForHttpReady = (
+const waitForHttpReady = (
   options: BackendProcessContext & { readonly timeout: Duration.Duration },
 ): Effect.Effect<void, BackendReadinessTimeoutError, HttpClient.HttpClient> => {
   const readinessUrl = new URL(BACKEND_READINESS_PATH, options.httpBaseUrl);
@@ -800,6 +802,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           exitCode?: number,
         ) {
           const stateDirOwned = exitCode === SERVER_EXIT_CODE_STATE_DIR_OWNED;
+          const databaseAhead = exitCode === SERVER_EXIT_CODE_DATABASE_AHEAD;
           yield* mutex.withPermits(1)(
             Effect.gen(function* () {
               const { isCurrentRun, nextState, pid, exitObserved, stopRequested, wasReady } =
@@ -874,6 +877,11 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                   yield* (spec.onStateDirOwned?.() ?? Effect.void).pipe(Effect.ignore);
                   return;
                 }
+                if (databaseAhead && !stopRequested) {
+                  yield* Ref.update(state, (latest) => ({ ...latest, desiredRunning: false }));
+                  yield* (spec.onDatabaseAhead?.() ?? Effect.void).pipe(Effect.ignore);
+                  return;
+                }
                 yield* scheduleRestart(reason);
               }
             }),
@@ -882,11 +890,25 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
         const program = runBackendProcess({
           ...config.value,
-          desktopTelemetryStream: desktopTelemetryPublisher.encoded,
+          desktopTelemetryStream: Stream.unwrap(
+            Ref.get(state).pipe(
+              Effect.map((current) =>
+                Option.getOrUndefined(current.active)?.id === runId
+                  ? desktopTelemetryPublisher.encodedForSource(spec.id)
+                  : Stream.empty,
+              ),
+            ),
+          ),
           desktopBrowserStream: desktopBrowserHost.events,
           onDesktopBrowserCommand: desktopBrowserHost.handleCommandLine,
-          onDesktopTelemetryControl: (message) =>
-            desktopTelemetryPublisher.handleControlForSource(spec.id, message),
+          onDesktopTelemetryControl: Effect.fn("desktop.backendInstance.onDesktopTelemetryControl")(
+            function* (message) {
+              const current = yield* Ref.get(state);
+              const active = Option.getOrUndefined(current.active);
+              if (active?.id !== runId || active.stopRequested || !current.desiredRunning) return;
+              yield* desktopTelemetryPublisher.handleControlForSource(spec.id, message);
+            },
+          ),
           onStarted: Effect.fn("desktop.backendInstance.onStarted")(function* (pid) {
             yield* updateActiveRun(runId, (run) => ({
               ...run,
@@ -1115,20 +1137,25 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     });
   });
 
-  const waitForReady = (timeout: Duration.Duration): Effect.Effect<boolean> =>
-    Effect.gen(function* () {
+  const waitForReady: (timeout: Duration.Duration) => Effect.Effect<boolean> = Effect.fn(
+    "DesktopBackendManager.waitForReady",
+  )(
+    function* (_timeout: Duration.Duration) {
       const current = yield* Ref.get(state);
       if (!current.desiredRunning) return { done: true, ready: false };
       return current.ready ? { done: true, ready: true } : { done: false, ready: false };
-    }).pipe(
-      Effect.repeat({
-        until: (status) => status.done,
-        schedule: Schedule.spaced(Duration.millis(100)),
-      }),
-      Effect.map((status) => status.ready),
-      Effect.timeoutOption(timeout),
-      Effect.map(Option.getOrElse(() => false)),
-    );
+    },
+    (effect, timeout) =>
+      effect.pipe(
+        Effect.repeat({
+          until: (status) => status.done,
+          schedule: Schedule.spaced(Duration.millis(100)),
+        }),
+        Effect.map((status) => status.ready),
+        Effect.timeoutOption(timeout),
+        Effect.map(Option.getOrElse(() => false)),
+      ),
+  );
 
   yield* Effect.addFinalizer(() => stop());
 

@@ -18,6 +18,8 @@ export {
 } from "@goat/client-runtime/state/user-input-draft";
 export type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
 
+import { collectInlineContextIds } from "./lib/composerContextReferences";
+
 /** Question responses carry text, so send thread chips as links with the actual thread IDs. */
 export function projectPendingUserInputAnswer(
   answer: unknown,
@@ -33,6 +35,15 @@ export function projectPendingUserInputAnswer(
       ? formatThreadLink(record.threadId, reference.label)
       : projectComposerContextForProvider({ text: reference.source, records: [record] });
   });
+}
+
+// Question drafts retain deleted chip records for undo; only transfer referenced records.
+export function threadContextsReferencedByAnswer(
+  answer: string,
+  threadContexts: ReadonlyArray<ThreadContextRecord>,
+) {
+  const referencedIds = new Set(collectInlineContextIds(answer));
+  return threadContexts.filter((record) => referencedIds.has(record.contextId));
 }
 
 export interface PendingUserInputProgress {
@@ -103,7 +114,7 @@ export function carryDisplacedCustomAnswerIntoPrompt(
   return `${prompt.trimEnd()}${DISPLACED_ANSWER_SEPARATOR}${displaced}`;
 }
 
-export function countAnsweredPendingUserInputQuestions(
+function countAnsweredPendingUserInputQuestions(
   questions: ReadonlyArray<UserInputQuestion>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {

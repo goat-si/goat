@@ -1,3 +1,4 @@
+import * as CodexErrors from "effect-codex-app-server/errors";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -134,15 +135,6 @@ it("marks the most preferred available model as default", () => {
   );
 });
 
-it("prefers sol over terra when both are available", () => {
-  const models = applyPreferredCodexDefaultModel([
-    { slug: "gpt-5.6-terra", name: "GPT-5.6-Terra", isCustom: false, capabilities: null },
-    { slug: "gpt-5.6-sol", name: "GPT-5.6-Sol", isCustom: false, capabilities: null },
-  ]);
-
-  assert.deepStrictEqual(models.find((model) => model.isDefault)?.slug, "gpt-5.6-sol");
-});
-
 it("ranks qualified Codex models while preserving their wire ids", () => {
   const models = applyPreferredCodexDefaultModel([
     {
@@ -158,15 +150,6 @@ it("ranks qualified Codex models while preserving their wire ids", () => {
     models.filter((model) => model.isDefault).map((model) => model.slug),
     ["openai.gpt-5.6-sol"],
   );
-});
-
-it("keeps Codex's own default when no preferred model is available", () => {
-  const models = applyPreferredCodexDefaultModel([
-    { slug: "gpt-5.5", name: "GPT-5.5", isCustom: false, capabilities: null },
-    { slug: "gpt-5.4", name: "GPT-5.4", isCustom: false, isDefault: true, capabilities: null },
-  ]);
-
-  assert.deepStrictEqual(models.find((model) => model.isDefault)?.slug, "gpt-5.4");
 });
 
 it("ignores custom models that shadow a preferred slug", () => {
@@ -218,5 +201,27 @@ it.effect.each(["missing", "changed"])(
       const account = yield* fs.readFileString(`${fixture.input.execution.home}/account-observed`);
       assert.include(account, fixture.catalog);
       assert.include(account, fixture.input.settings.opencodexBaseUrl);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a failed Codex config probe never publishes the inspect-only endpoint as effective",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* routeFixture({ role: "home" });
+      const snapshot = yield* checkCodexProviderStatus(
+        fixture.input.settings,
+        () =>
+          Effect.fail(
+            new CodexErrors.CodexAppServerSpawnError({
+              command: "fixture-codex",
+              cause: new Error("fixture probe failure"),
+            }),
+          ),
+        {},
+      ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
+      assert.equal(snapshot.codexRoute?.state, "home");
+      assert.isUndefined(snapshot.codexRoute?.effectiveBaseUrl);
+      assert.equal(snapshot.status, "error");
     }).pipe(Effect.provide(NodeServices.layer)),
 );

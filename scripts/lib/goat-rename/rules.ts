@@ -5,7 +5,7 @@
  *
  * Plan and reasons: devlog/_plan/261013_remove-t3-internals/000_plan.md.
  */
-import type { KeepRule, PathRule, TextRule } from "./engine.ts";
+import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
 
 /**
  * Files no rule touches and the residue check skips. Upstream-owned files
@@ -18,7 +18,6 @@ export const isExempt = (path: string): boolean =>
   path.startsWith("apps/marketing/") ||
   path.startsWith("infra/") ||
   path.startsWith(".devcontainer/") ||
-  path.startsWith(".cursor/") ||
   path.startsWith(".github/ISSUE_TEMPLATE/") ||
   path === ".github/TRIAGE_EXEMPTIONS.td" ||
   path.startsWith(".github/scripts/thread-transfer") ||
@@ -119,7 +118,7 @@ const outsideSshRunner = (path: string) =>
 
 /** Lint rule ids are listed so that unrelated `t3code/...` paths and branch names stay. */
 const LINT_RULE_IDS =
-  "namespace-node-imports|no-dom-test-environment|no-global-process-runtime|no-hermes-unsupported-apis|no-hookless-use-function|no-inline-schema-compile|no-low-value-comments|no-manual-effect-runtime-in-tests|no-manual-memo|no-mobile-pull-request-glyph-literals|no-mobile-uniwind-theme-escape-hatches|no-native-title-tooltip|no-outset-state-indicators|no-raw-mcp-registration|no-raw-resize-observer|no-rpc-permission-bypass|no-test-in-loop|no-unscoped-has|prefer-catch-tags|require-centered-scroll-gutter|require-suppression-reason";
+  "namespace-node-imports|no-dom-test-environment|no-frame-waits-in-browser-tests|no-global-process-runtime|no-hermes-unsupported-apis|no-hookless-use-function|no-inline-schema-compile|no-low-value-comments|no-manual-effect-runtime-in-tests|no-manual-memo|no-mobile-pull-request-glyph-literals|no-mobile-uniwind-theme-escape-hatches|no-native-title-tooltip|no-outset-state-indicators|no-polling-loop-in-tests|no-raw-mcp-registration|no-raw-resize-observer|no-real-time-wait-in-tests|no-rpc-permission-bypass|no-test-in-loop|no-test-timeout-or-unreasoned-skip|no-unscoped-has|no-wall-clock-in-tests|prefer-catch-tags|prefer-effect-fn|require-centered-scroll-gutter|require-disposable-render|require-suppression-reason";
 
 export const TEXT_RULES: readonly TextRule[] = [
   {
@@ -464,6 +463,15 @@ export const TEXT_RULES: readonly TextRule[] = [
     replace: "goat",
     scope: (path) => path === "apps/server/src/process/agentScope.ts",
   },
+  // Repository hygiene (devlog/_plan/261021_repo_hygiene.md).
+  {
+    id: "repo-skill-names",
+    category: "hygiene",
+    find: /\btest-t3-(app|mobile)\b/g,
+    replace: "test-goat-$1",
+    // Upstream tests use the old skill name as sample data; renaming them only adds merge churn.
+    scope: (path) => !isTest(path),
+  },
 ];
 
 export const PATH_RULES: readonly PathRule[] = [
@@ -481,6 +489,30 @@ export const PATH_RULES: readonly PathRule[] = [
     replace: to,
     scope: outsideMarketingSchema,
   })),
+  {
+    id: "repo-skill-names",
+    category: "hygiene",
+    find: /^\.agents\/skills\/test-t3-(app|mobile)\//g,
+    replace: ".agents/skills/test-goat-$1/",
+  },
+  {
+    // Builds since v0.1.1 read goat.json first and fall back to t3.json (plan 261013 D9).
+    id: "repo-project-file",
+    category: "hygiene",
+    find: /^t3\.json$/g,
+    replace: "goat.json",
+  },
+];
+
+/** Upstream paths GOAT drops. Reasons: devlog/_plan/261021_repo_hygiene.md. */
+export const DROP_RULES: readonly DropRule[] = [
+  {
+    id: "cursor-rules",
+    category: "hygiene",
+    find: /^\.cursor\//,
+    reason:
+      "Cursor reads AGENTS.md; the Cursor Cloud notes describe upstream's VM and contradict AGENTS.md.",
+  },
 ];
 
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
@@ -684,13 +716,11 @@ export const KEEP_RULES: readonly KeepRule[] = [
       "Historical release and replay/sample repository inputs are fixtures, not product names.",
   },
   {
-    id: "t1-skills",
+    id: "skill-name-fixtures",
     pattern: /test-t3-(?:app|mobile)/g,
-    scope: (path) => path.startsWith(".agents/"),
-    reason:
-      "Repository skill names and references are contributor prose/tooling owned by T1 (D15).",
+    scope: isTest,
+    reason: "Upstream tests use the old repository skill name as sample data.",
   },
-
   {
     id: "peer-wire-and-history",
     pattern:
@@ -869,13 +899,6 @@ export const KEEP_RULES: readonly KeepRule[] = [
     id: "legacy-module",
     pattern: /legacyT3Names/g,
     reason: "Name of the compatibility module that holds every legacy spelling (plan D3).",
-  },
-  {
-    id: "repo-project-file",
-    pattern: /t3\.json/g,
-    reason:
-      "This repository's own project file stays t3.json until maintainers run builds that read goat.json (plan D9).",
-    scope: (path) => path === "t3.json",
   },
   {
     // Frozen (ADR-0014): `run-t3.sh`. Every client version finds the remote runner by this name.

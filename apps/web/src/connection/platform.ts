@@ -35,6 +35,8 @@ import {
   type DesktopBridge,
   type DesktopEnvironmentBootstrap,
   type DesktopSshEnvironmentTarget,
+  type DesktopSshPreparationProgress,
+  type DesktopSshAttemptContext,
   type EnvironmentId,
   type ExecutionEnvironmentDescriptor,
   isCloudMachineAlias,
@@ -65,6 +67,7 @@ import {
 import { clearComposerDraftsEnvironment } from "../composerDraftStore";
 import { isHostedStaticApp } from "../hostedPairing";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
+import { randomUUID } from "../lib/utils";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { acknowledgeRpcRequest, trackRpcRequestSent } from "../rpc/requestLatencyState";
 import { desktopWakeups } from "./desktopWakeups";
@@ -248,7 +251,7 @@ export type CloudMachinePreflight = (alias: string) => Effect.Effect<void, Conne
  * wakes a stopped machine, because reconnects and route checks run this too; Resume in Settings
  * does. Loaded lazily: the server state module depends on this connection layer.
  */
-export const readyCloudMachineThroughPrimary: CloudMachinePreflight = Effect.fn(
+const readyCloudMachineThroughPrimary: CloudMachinePreflight = Effect.fn(
   "web.connectionPlatform.ssh.readyCloudMachine",
 )(function* (alias) {
   const [{ serverEnvironment }, { primaryEnvironmentIdAtom }] = yield* Effect.promise(() =>
@@ -313,7 +316,7 @@ const pairingGrantKey = (server: PairingGrantServer, target: DesktopSshEnvironme
       ]);
 
 /** The standard scopes a saved SSH token must still hold to be reused instead of re-paired. */
-export function requiredSshTokenScopes(
+function requiredSshTokenScopes(
   grants: SshPairingGrants,
   server: PairingGrantServer,
   target: DesktopSshEnvironmentTarget,
@@ -328,26 +331,104 @@ export function requiredSshTokenScopes(
   return required.length === 0 ? AuthStandardClientScopes : required;
 }
 
+function isExplicitSshCredentialRejection(error: ConnectionAttemptError): boolean {
+  return (
+    error._tag === "ConnectionBlockedError" &&
+    (/\[ssh_http:(?:401|403)\]/u.test(error.detail) ||
+      error.detail === "The environment credential is invalid." ||
+      error.detail === "The environment credential does not grant the required access.")
+  );
+}
+
+interface DesktopSshPreparationOptions {
+  readonly keyOnly?: boolean;
+  readonly onHostAnswered?: Effect.Effect<void>;
+  readonly onPreparationProgress?: (progress: DesktopSshPreparationProgress) => Effect.Effect<void>;
+  readonly attemptContext?: DesktopSshAttemptContext;
+  readonly preparedAttachmentId?: string;
+}
+
+// One consumer preserves terminal ordering without detached callback effects. Old preloads
+// receive only serializable options; their IPC dispatcher does not strip functions.
+const ensureDesktopSshRuntime = Effect.fn("web.connectionPlatform.ssh.ensure")(function* (
+  bridge: DesktopBridge,
+  target: DesktopSshEnvironmentTarget,
+  issuePairingToken: boolean,
+  options?: DesktopSshPreparationOptions,
+) {
+  type Report =
+    | { readonly type: "answered" }
+    | { readonly type: "phase"; readonly progress: DesktopSshPreparationProgress }
+    | { readonly type: "done" };
+  const reports = yield* Queue.bounded<Report>(64);
+  let active = true;
+  let answered = false;
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      active = false;
+    }),
+  );
+  const consumer = yield* Effect.gen(function* () {
+    while (true) {
+      const report = yield* Queue.take(reports);
+      if (report.type === "done") return;
+      yield* Effect.suspend(() =>
+        report.type === "answered"
+          ? (options?.onHostAnswered ?? Effect.void)
+          : (options?.onPreparationProgress?.(report.progress) ?? Effect.void),
+      ).pipe(Effect.ignoreCause);
+    }
+  }).pipe(Effect.forkScoped);
+  const result = yield* Effect.tryPromise({
+    try: () =>
+      bridge.ensureSshEnvironment(target, {
+        issuePairingToken,
+        ...(options?.keyOnly === undefined ? {} : { keyOnly: options.keyOnly }),
+        ...(target.alias.startsWith("goat-") ? { keyOnly: true } : {}),
+        ...(bridge.supportsSshEnvironmentProgress === true
+          ? {
+              onHostAnswered: () => {
+                if (!active || answered) return;
+                answered = true;
+                Queue.offerUnsafe(reports, { type: "answered" });
+              },
+            }
+          : {}),
+        ...(bridge.supportsSshPreparationPhases === true
+          ? {
+              caller: issuePairingToken ? ("provision" as const) : ("saved-connection" as const),
+              ...(options?.attemptContext === undefined
+                ? {}
+                : { attemptContext: options.attemptContext }),
+              ...(options?.preparedAttachmentId === undefined
+                ? {}
+                : { preparedAttachmentId: options.preparedAttachmentId }),
+              onPreparationProgress: (progress: DesktopSshPreparationProgress) => {
+                if (active) Queue.offerUnsafe(reports, { type: "phase", progress });
+              },
+            }
+          : {}),
+      }),
+    catch: sshPreparationFailure,
+  }).pipe(withSshConnectionTiming("ensure"), Effect.exit);
+  active = false;
+  yield* Queue.offer(reports, { type: "done" });
+  yield* Fiber.join(consumer);
+  return yield* result;
+}, Effect.scoped);
+
 export const provisionDesktopSshEnvironment = Effect.fn(
   "web.connectionPlatform.ssh.provisionDesktop",
 )(function* (
   bridge: DesktopBridge,
   target: DesktopSshEnvironmentTarget,
   expectedEnvironmentId?: EnvironmentId,
-  options?: { readonly keyOnly?: boolean; readonly onHostAnswered?: () => void },
+  options?: DesktopSshPreparationOptions,
   readyCloudMachine: CloudMachinePreflight = readyCloudMachineThroughPrimary,
   grants: SshPairingGrants = sshPairingGrants,
 ) {
   yield* preflightCloudMachine(target.alias, readyCloudMachine);
-  const bootstrap = yield* Effect.tryPromise({
-    try: () =>
-      bridge.ensureSshEnvironment(target, {
-        ...options,
-        ...(target.alias.startsWith("goat-") ? { keyOnly: true } : {}),
-        issuePairingToken: true,
-      }),
-    catch: sshPreparationFailure,
-  }).pipe(withSshConnectionTiming("ensure"));
+  const bootstrap = yield* ensureDesktopSshRuntime(bridge, target, true, options);
   if ("type" in bootstrap) return yield* sshRuntimePendingError(bootstrap.pending);
   const pairingToken = bootstrap.pairingToken;
   if (pairingToken === null) {
@@ -408,28 +489,25 @@ export const prepareDesktopSshEnvironment = Effect.fn("web.connectionPlatform.ss
     grants: SshPairingGrants = sshPairingGrants,
   ) {
     yield* preflightCloudMachine(input.target.alias, readyCloudMachine);
-    const answered = yield* Deferred.make<void>();
-    yield* Deferred.await(answered).pipe(
-      Effect.andThen(input.onHostAnswered ?? Effect.void),
-      Effect.forkScoped,
-    );
-    // Older preloads forward all options over IPC, where a function cannot be cloned.
-    const progressOptions =
-      bridge.supportsSshEnvironmentProgress === true
-        ? { onHostAnswered: () => Deferred.doneUnsafe(answered, Effect.void) }
-        : undefined;
+    const progressOptions: DesktopSshPreparationOptions = {
+      ...(input.onHostAnswered === undefined ? {} : { onHostAnswered: input.onHostAnswered }),
+      ...(input.onPreparationProgress === undefined
+        ? {}
+        : { onPreparationProgress: input.onPreparationProgress }),
+      ...(input.attemptContext === undefined ? {} : { attemptContext: input.attemptContext }),
+    };
+    let preparedAttachmentId: string | undefined;
     const bearerToken = input.bearerToken;
     if (bearerToken !== undefined) {
-      const bootstrap = yield* Effect.tryPromise({
-        try: () =>
-          bridge.ensureSshEnvironment(input.target, {
-            ...(input.target.alias.startsWith("goat-") ? { keyOnly: true } : {}),
-            issuePairingToken: false,
-            ...progressOptions,
-          }),
-        catch: sshPreparationFailure,
-      }).pipe(withSshConnectionTiming("ensure"));
+      const bootstrap = yield* ensureDesktopSshRuntime(
+        bridge,
+        input.target,
+        false,
+        progressOptions,
+      );
       if ("type" in bootstrap) return yield* sshRuntimePendingError(bootstrap.pending);
+      if (bridge.supportsSshPreparationPhases === true)
+        preparedAttachmentId = bootstrap.attachmentId;
       // Stop without sending the saved token, or pairing, when the forward
       // reaches a different environment.
       const descriptor = yield* Effect.tryPromise({
@@ -463,8 +541,14 @@ export const prepareDesktopSshEnvironment = Effect.fn("web.connectionPlatform.ss
                 Effect.result,
                 Effect.forkScoped,
               );
-      const verifiedDescriptor =
-        authorization === undefined ? descriptor : yield* Deferred.await(endpointVerified);
+      const verified =
+        authorization === undefined
+          ? undefined
+          : yield* Deferred.await(endpointVerified).pipe(Effect.result);
+      const savedCredentialRejected =
+        verified?._tag === "Failure" && isExplicitSshCredentialRejection(verified.failure);
+      if (verified?._tag === "Failure" && !savedCredentialRejected) return yield* verified.failure;
+      const verifiedDescriptor = verified?._tag === "Success" ? verified.success : descriptor;
       const grantKey = pairingGrantKey(verifiedDescriptor, bootstrap.target);
       const secureStore = desktopSshPairingGrantStore(bridge);
       const persisted =
@@ -495,43 +579,63 @@ export const prepareDesktopSshEnvironment = Effect.fn("web.connectionPlatform.ss
         if (grantKey !== undefined) grants.delete(grantKey);
         if (persisted !== undefined) yield* persisted.invalidate;
       });
-      const session = yield* Effect.tryPromise({
-        try: () => bridge.fetchSshSessionState(bootstrap.httpBaseUrl, bearerToken),
-        catch: (cause) => ({
-          cause,
-          revoked: /\[ssh_http:(?:401|403)\]/u.test(
-            cause instanceof Error ? cause.message : String(cause),
-          ),
-        }),
-      }).pipe(
-        Effect.tapError((error) => (error.revoked ? invalidate : Effect.void)),
-        Effect.mapError((error) => ("cause" in error ? sshPreparationFailure(error.cause) : error)),
-        withSshConnectionTiming("session"),
-      );
+      const session = savedCredentialRejected
+        ? { authenticated: false, permissions: [] as readonly string[] }
+        : yield* Effect.tryPromise({
+            try: () => bridge.fetchSshSessionState(bootstrap.httpBaseUrl, bearerToken),
+            catch: (cause) => ({
+              cause,
+              revoked: /\[ssh_http:(?:401|403)\]/u.test(
+                cause instanceof Error ? cause.message : String(cause),
+              ),
+            }),
+          }).pipe(
+            Effect.catch((error) =>
+              error.revoked
+                ? invalidate.pipe(
+                    Effect.as({
+                      authenticated: false as const,
+                      permissions: [] as readonly string[],
+                    }),
+                  )
+                : Effect.fail(sshPreparationFailure(error.cause)),
+            ),
+            withSshConnectionTiming("session"),
+          );
       if (!session.authenticated) yield* invalidate;
       // Servers never widen a stored grant, so a token from before the standard
       // scopes grew is replaced by pairing again, unless this runtime grants no more.
-      const granted = session.permissions ?? session.scopes ?? [];
+      const granted = session.permissions ?? ("scopes" in session ? session.scopes : []) ?? [];
       if (
         session.authenticated &&
         requiredSshTokenScopes(effectiveGrants, verifiedDescriptor, bootstrap.target).every(
           (scope) => granted.includes(scope),
         )
       ) {
-        const authorized: ClientCapabilities.PreparedSshEnvironment = {
-          ...prepared,
-          ...(persisted?.grant === undefined ? {} : { sshPairingGrant: persisted.grant }),
-          verifiedEndpoint: { httpBaseUrl: bootstrap.httpBaseUrl, descriptor: verifiedDescriptor },
-          ...(authorization === undefined
-            ? {}
-            : {
-                authorization: yield* Fiber.join(authorization).pipe(
-                  Effect.flatMap(Effect.fromResult),
-                ),
-              }),
-        };
-        return authorized;
+        const authorizationResult =
+          authorization === undefined ? undefined : yield* Fiber.join(authorization);
+        if (
+          authorizationResult?._tag === "Failure" &&
+          !isExplicitSshCredentialRejection(authorizationResult.failure)
+        ) {
+          return yield* authorizationResult.failure;
+        }
+        if (authorizationResult?._tag !== "Failure") {
+          const authorized: ClientCapabilities.PreparedSshEnvironment = {
+            ...prepared,
+            ...(persisted?.grant === undefined ? {} : { sshPairingGrant: persisted.grant }),
+            verifiedEndpoint: {
+              httpBaseUrl: bootstrap.httpBaseUrl,
+              descriptor: verifiedDescriptor,
+            },
+            ...(authorizationResult?._tag === "Success"
+              ? { authorization: authorizationResult.success }
+              : {}),
+          };
+          return authorized;
+        }
       }
+      yield* invalidate;
       if (authorization !== undefined) yield* Fiber.interrupt(authorization);
     }
     // The cloud machine was readied above; pairing again must not ready it twice.
@@ -539,7 +643,10 @@ export const prepareDesktopSshEnvironment = Effect.fn("web.connectionPlatform.ss
       bridge,
       input.target,
       input.expectedEnvironmentId,
-      progressOptions,
+      {
+        ...progressOptions,
+        ...(preparedAttachmentId === undefined ? {} : { preparedAttachmentId }),
+      },
       () => Effect.void,
       grants,
     );
@@ -624,6 +731,19 @@ export const desktopSshRuntimeGateway: SshRuntimeOwnerGateway = {
       target,
       mode,
     ),
+};
+
+const ANALYTICS_DEVICE_ID_KEY = "goat:analytics-device-id";
+
+// Lives as long as this browser profile's site data. Storage can be blocked, which only drops the id.
+const analyticsDevice = {
+  id: Effect.try(() => {
+    const existing = window.localStorage.getItem(ANALYTICS_DEVICE_ID_KEY);
+    if (existing) return existing;
+    const created = randomUUID();
+    window.localStorage.setItem(ANALYTICS_DEVICE_ID_KEY, created);
+    return created;
+  }).pipe(Effect.option),
 };
 
 const layerCapabilities = Layer.effectContext(
@@ -719,7 +839,29 @@ const layerCapabilities = Layer.effectContext(
     });
 
     return Context.make(ClientCapabilities.CloudSession, cloudSession).pipe(
+      Context.add(ClientCapabilities.AnalyticsDevice, analyticsDevice),
       Context.add(ClientCapabilities.PrimaryEnvironmentAuth, primaryAuth),
+      Context.add(ClientCapabilities.PrimaryConnectionEndpoint, {
+        endpoint: Effect.gen(function* () {
+          const target = yield* Effect.try({
+            try: readPrimaryEnvironmentTarget,
+            catch: () =>
+              new ConnectionBlockedError({
+                reason: "configuration",
+                detail: "Could not resolve the primary hub endpoint.",
+              }),
+          });
+          if (target === null)
+            return yield* new ConnectionBlockedError({
+              reason: "configuration",
+              detail: "The primary hub endpoint is unavailable.",
+            });
+          return {
+            httpBaseUrl: target.target.httpBaseUrl,
+            bearerToken: yield* primaryAuth.bearerToken,
+          };
+        }),
+      }),
       Context.add(ClientCapabilities.RelayDeviceIdentity, identity),
       Context.add(ClientCapabilities.ClientPresentation, presentation),
       Context.add(ClientCapabilities.SshEnvironmentGateway, ssh),
@@ -821,7 +963,7 @@ export function secondsUntil(expiresAt: string | undefined, nowEpochMs: number):
     : 0;
 }
 
-export function secondaryBearerExpiresAtEpochMs(
+function secondaryBearerExpiresAtEpochMs(
   issuedAtEpochMs: number,
   expiresInSeconds: number,
 ): number {
@@ -858,7 +1000,7 @@ export type PrimaryEnvironmentTargetRead =
       readonly cause: unknown;
     };
 
-export function readPrimaryEnvironmentTargetResult(
+function readPrimaryEnvironmentTargetResult(
   readTarget: () => PrimaryEnvironmentTarget | null = readPrimaryEnvironmentTarget,
 ): PrimaryEnvironmentTargetRead {
   try {
@@ -1142,11 +1284,11 @@ const layerEnvironmentOwnedDataCleanup = Layer.succeed(
 const layerRpcRequestObserver = Layer.succeed(
   EnvironmentRpcRequestObserver,
   EnvironmentRpcRequestObserver.of({
-    observe: ({ environmentId, method }) =>
+    observe: ({ environmentId, environmentLabel, method }) =>
       Effect.sync(() => {
         nextObservedRpcRequestId += 1;
         const requestId = `${environmentId}:${nextObservedRpcRequestId}`;
-        trackRpcRequestSent(requestId, method, `${method} · ${environmentId}`);
+        trackRpcRequestSent(requestId, method, `${method} · ${environmentLabel}`);
         return Effect.sync(() => {
           acknowledgeRpcRequest(requestId);
         });

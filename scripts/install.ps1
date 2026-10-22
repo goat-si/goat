@@ -8,7 +8,7 @@
 #                            (default: nightly, the only train GOAT publishes so
 #                            far; preview is a maintainers' test train)
 #   GOAT_VERSION           exact version to install (overrides GOAT_CHANNEL)
-#   GOAT_HOME              T3 home directory (default: ~\.t3)
+#   GOAT_HOME              GOAT home directory (default: ~\.goat)
 #   GOAT_INSTALL_BIN_DIR   where goat.exe is linked (default: ~\.local\bin)
 #   GOAT_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
 #
@@ -248,6 +248,12 @@ $shim = Join-Path $binDir "goat.cmd"
 # UTF-8 without a BOM: cmd.exe reads the shim as-is, and ASCII would corrupt
 # non-ASCII characters in the user's home path.
 [System.IO.File]::WriteAllText($shim, "@echo off`r`n`"$(Join-Path $targetDir 'goat.exe')`" %*", (New-Object System.Text.UTF8Encoding $false))
+# Pruning keeps what this shim points at; a background service cannot see $binDir otherwise.
+$launchers = Join-Path $goatHome "runtime\launchers"
+$shimPath = (Resolve-Path $shim).Path
+if (-not ((Test-Path $launchers) -and ((Get-Content $launchers) -contains $shimPath))) {
+  [System.IO.File]::AppendAllText($launchers, "$shimPath`r`n", (New-Object System.Text.UTF8Encoding $false))
+}
 if ($interactive) { [Console]::Error.Write("`r$esc[2K") }
 [Console]::Error.WriteLine("  ${green}Installed GOAT $version$reset`n")
 if (($env:PATH -split ";") -notcontains $binDir) {

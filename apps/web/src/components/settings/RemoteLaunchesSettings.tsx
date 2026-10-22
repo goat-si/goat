@@ -2,6 +2,7 @@ import {
   resolveEnvironmentMachineKind,
   type EnvironmentId,
   type RemoteLaunch,
+  type DesktopSshPreparationProgress,
 } from "@goat/contracts";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
@@ -12,7 +13,10 @@ import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import * as Effect from "effect/Effect";
+import { sshRuntimePhaseText } from "@goat/client-runtime/state/sshRuntime";
+import { isSshConnectionSuperseded } from "./ConnectionsSettings.logic";
 
 import { connectSshEnvironment as connectSshEnvironmentAtom } from "~/connection/onboarding";
 import { useThreadShells } from "~/state/entities";
@@ -152,29 +156,64 @@ function RemoteHostLaunches({
     reportFailure: false,
   });
   const [connecting, setConnecting] = useState(false);
+  const [preparation, setPreparation] = useState<DesktopSshPreparationProgress | null>(null);
+  const submission = useRef(0);
+  useEffect(
+    () => () => {
+      submission.current += 1;
+    },
+    [],
+  );
   const canConnectOverSsh = window.desktopBridge !== undefined;
   const connectHost = async () => {
+    if (connecting) return;
+    const submissionId = ++submission.current;
     setConnecting(true);
-    const result = await connectSshEnvironment({
-      target: { alias: group.host, hostname: group.host, username: null, port: null },
-      label: "",
-    });
-    setConnecting(false);
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
+    const connect = async () => {
+      const result = await connectSshEnvironment({
+        target: { alias: group.host, hostname: group.host, username: null, port: null },
+        label: "",
+        onPreparationProgress: (progress) =>
+          Effect.sync(() => {
+            if (submission.current === submissionId)
+              setPreparation(progress.phase === null ? null : progress);
+          }),
+      });
+      if (submission.current !== submissionId) return;
+      if (result._tag === "Failure") {
+        if (
+          !isAtomCommandInterrupted(result) &&
+          !isSshConnectionSuperseded(squashAtomCommandFailure(result))
+        ) {
+          toastManager.add({
+            type: "error",
+            title: `Could not connect ${group.host}`,
+            description: errorMessage(squashAtomCommandFailure(result)),
+          });
+        }
+        return;
+      }
+      toastManager.add({
+        type: "success",
+        title: `${group.host} connected`,
+        description: "Its threads open from here once they load.",
+      });
+    };
+    await connect()
+      .catch((error: unknown) => {
+        if (submission.current !== submissionId || isSshConnectionSuperseded(error)) return;
         toastManager.add({
           type: "error",
           title: `Could not connect ${group.host}`,
-          description: errorMessage(squashAtomCommandFailure(result)),
+          description: errorMessage(error),
         });
-      }
-      return;
-    }
-    toastManager.add({
-      type: "success",
-      title: `${group.host} connected`,
-      description: "Its threads open from here once they load.",
-    });
+      })
+      .finally(() => {
+        if (submission.current !== submissionId) return;
+        submission.current += 1;
+        setPreparation(null);
+        setConnecting(false);
+      });
   };
   return (
     <>
@@ -182,11 +221,13 @@ function RemoteHostLaunches({
         kind={resolveEnvironmentMachineKind(hostEnvironment?.serverConfig ?? null)}
         label={group.host}
         subtitle={
-          hostEnvironment !== null
-            ? `Connected as ${hostEnvironment.label}`
-            : canConnectOverSsh
-              ? `Not connected to this app. Connect over SSH as ${group.host}.`
-              : `Not connected to this app. Pair ${group.host} under Environments to open these threads.`
+          preparation?.phase
+            ? sshRuntimePhaseText(preparation.phase)
+            : hostEnvironment !== null
+              ? `Connected as ${hostEnvironment.label}`
+              : canConnectOverSsh
+                ? `Not connected to this app. Connect over SSH as ${group.host}.`
+                : `Not connected to this app. Pair ${group.host} under Environments to open these threads.`
         }
       >
         {hostEnvironment === null && canConnectOverSsh ? (

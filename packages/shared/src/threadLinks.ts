@@ -1,5 +1,5 @@
 import { GOAT_THREAD_LINK_PROTOCOL, THREAD_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
-import { ThreadId } from "@goat/contracts";
+import { ThreadId, type ScopedThreadRef } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
  * the reference and resolves in the environment of the message that holds it. Titles change, so
  * clients show the thread's current title; the label only stands in for a thread they cannot see.
  */
-export const THREAD_LINK_PROTOCOL = GOAT_THREAD_LINK_PROTOCOL;
+const THREAD_LINK_PROTOCOL = GOAT_THREAD_LINK_PROTOCOL;
 const THREAD_LINK_HREF_PREFIX = `${THREAD_LINK_PROTOCOL}://v1/`;
 const THREAD_LINK_HREF_PREFIXES = THREAD_LINK_PROTOCOLS.map((protocol) => `${protocol}://v1/`);
 // Code comes first in the alternation so a link written inside a code span or fence is skipped.
@@ -33,6 +33,30 @@ export function percentDecodedThreadLinkId(threadId: ThreadId): ThreadId | null 
   } catch {
     return null;
   }
+}
+
+export function resolveThreadLinkRef(
+  source: ScopedThreadRef,
+  refs: ReadonlyArray<ScopedThreadRef>,
+): ScopedThreadRef | null {
+  const decodedId = percentDecodedThreadLinkId(source.threadId);
+  const ids = decodedId === null ? [source.threadId] : [source.threadId, decodedId];
+  for (const threadId of ids) {
+    const local = refs.find(
+      (ref) => ref.environmentId === source.environmentId && ref.threadId === threadId,
+    );
+    if (local) return local;
+  }
+  for (const threadId of ids) {
+    let match: ScopedThreadRef | null = null;
+    for (const ref of refs) {
+      if (ref.threadId !== threadId) continue;
+      if (match !== null) return null;
+      match = ref;
+    }
+    if (match !== null) return match;
+  }
+  return null;
 }
 
 export function formatThreadLink(threadId: string, label: string): string {

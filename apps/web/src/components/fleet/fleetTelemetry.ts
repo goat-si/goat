@@ -9,11 +9,24 @@ import {
   type FleetMachineHeat,
 } from "@goat/client-runtime/state/fleet-heat";
 import { cpuPercent, loadPerCore } from "@goat/client-runtime/state/host-metrics";
-import type { EnvironmentId, HostStatusEntry, HostStatusQuota } from "@goat/contracts";
+import {
+  formatHealthDuration,
+  plainHostFailure,
+  presentConnectionWait,
+  presentHostResponsiveness,
+  presentHostStorage,
+  presentHostStrays,
+} from "@goat/client-runtime/state/fleet-host-health";
+import type {
+  EnvironmentId,
+  HostStatusEntry,
+  HostStatusQuota,
+  ServerEventLoopStall,
+} from "@goat/contracts";
 
 import { formatElapsedDurationLabel } from "~/timestampFormat";
 
-import type { FleetConnection } from "./fleetConnection";
+import { isFleetConnectionWait, type FleetConnection } from "./fleetConnection";
 
 /** What one environment answered about itself and the SSH hosts it reaches. */
 export interface FleetHostRead {
@@ -22,9 +35,9 @@ export interface FleetHostRead {
 }
 
 /** Ten minutes of 15 s samples. */
-export const HOST_HISTORY_CAPACITY = 40;
+const HOST_HISTORY_CAPACITY = 40;
 /** Samples older than this are dropped, so a host that went quiet stops drawing an old line. */
-export const HOST_HISTORY_MAX_AGE_MS = 10 * 60_000;
+const HOST_HISTORY_MAX_AGE_MS = 10 * 60_000;
 
 export function pushBounded<T>(
   list: ReadonlyArray<T>,
@@ -275,30 +288,76 @@ export function hottestHost(
 
 export type FleetAlertTone = "destructive" | "warning" | "muted";
 
+/** The one next step an alert offers, run against the machine's own environment. */
+export type FleetAlertActionKind = "retry" | "compact" | "clean_up" | "memory_settings";
+
 export interface FleetAlert {
   readonly key: string;
   readonly tone: FleetAlertTone;
   readonly label: string;
   readonly detail: string;
+  readonly action?: { readonly kind: FleetAlertActionKind; readonly environmentId: EnvironmentId };
+  /** Extra lines for the tooltip, such as each stray process. */
+  readonly lines?: ReadonlyArray<string>;
 }
 
 const ALERT_ORDER: Record<FleetAlertTone, number> = { destructive: 0, warning: 1, muted: 2 };
 
-function connectionAlert(connection: FleetConnection): Pick<FleetAlert, "tone" | "detail"> | null {
+function connectionAlert(
+  connection: FleetConnection,
+  now: number,
+): (Pick<FleetAlert, "tone" | "detail"> & { readonly retry: boolean }) | null {
   const detail = connection.reason === null ? connection.label : connection.reason;
+  const elapsed = connection.since === undefined ? 0 : now - connection.since;
   switch (connection.state) {
     case "attention":
-      return { tone: "destructive", detail };
+      return { tone: "destructive", detail, retry: false };
     case "connecting":
-    case "reconnecting":
+    case "reconnecting": {
+      if (connection.since === undefined) return { tone: "warning", detail, retry: false };
+      const wait = presentConnectionWait({
+        step: connection.step ?? null,
+        sinceMs: connection.since,
+        nowMs: now,
+      });
+      return {
+        tone: "warning",
+        detail: connection.reason === null ? wait.text : wait.text + " · " + connection.reason,
+        retry: wait.slow,
+      };
+    }
     case "degraded":
-      return { tone: "warning", detail };
+      return { tone: "warning", detail, retry: true };
     case "unreachable":
+      return {
+        tone: "muted",
+        detail:
+          (elapsed < 60_000
+            ? connection.label
+            : connection.label + " for " + formatHealthDuration(elapsed)) +
+          (connection.reason === null ? "" : " · " + connection.reason),
+        retry: true,
+      };
     case "offline":
-      return { tone: "muted", detail: connection.label };
+    case "stopped":
+      return { tone: "muted", detail: connection.label, retry: false };
     default:
       return null;
   }
+}
+
+/** Slow connection waits, by machine id: the graph stops their marching edges. */
+export function slowConnectionWaits(
+  connections: ReadonlyMap<string, FleetConnection>,
+  now: number,
+): ReadonlySet<string> {
+  const slow = new Set<string>();
+  for (const [machineId, connection] of connections) {
+    if (!isFleetConnectionWait(connection.state) || connection.since === undefined) continue;
+    if (presentConnectionWait({ step: null, sinceMs: connection.since, nowMs: now }).slow)
+      slow.add(machineId);
+  }
+  return slow;
 }
 
 /**
@@ -314,6 +373,12 @@ export function fleetAlerts(
     /** Environments whose last host-status read failed. */
     readonly unreadable?: ReadonlyArray<{ readonly key: string; readonly label: string }>;
     readonly lastSeen?: HostLastSeen;
+    /** Each Fleet machine's own environment, for alerts that offer an action. */
+    readonly environmentOf?: ReadonlyMap<string, EnvironmentId>;
+    /** Environments whose host-status read is still waiting, by when it started. */
+    readonly pendingSince?: ReadonlyMap<EnvironmentId, number>;
+    /** The last event-loop stall each environment reported when it connected. */
+    readonly stalls?: ReadonlyMap<EnvironmentId, ServerEventLoopStall>;
   } = {},
 ): ReadonlyArray<FleetAlert> {
   const unreadable = options.unreadable ?? [];
@@ -322,23 +387,100 @@ export function fleetAlerts(
     key: key + ":unreadable",
     tone: "warning",
     label,
-    detail: "Could not read host status",
+    detail: "Could not read its host status; showing what it last reported",
   }));
   for (const row of rows) {
     const connection = row.machineId === null ? undefined : connections.get(row.machineId);
-    const fromConnection = connection === undefined ? null : connectionAlert(connection);
+    const environmentId =
+      row.machineId === null ? undefined : options.environmentOf?.get(row.machineId);
+    const act = (kind: FleetAlertActionKind) =>
+      environmentId === undefined ? {} : { action: { kind, environmentId } };
+    const fromConnection = connection === undefined ? null : connectionAlert(connection, now);
     if (fromConnection !== null) {
-      alerts.push({ key: row.key + ":connection", label: row.label, ...fromConnection });
+      const { retry, ...alert } = fromConnection;
+      alerts.push({
+        key: row.key + ":connection",
+        label: row.label,
+        ...alert,
+        ...(retry ? act("retry") : {}),
+      });
     }
     const entry = row.entry;
     if (entry === null) continue;
     if (fromConnection === null && (row.tone === "stale" || row.tone === "unreachable")) {
       const lastKnown = lastKnownLabel(row, lastSeen, now);
+      const why = entry.message === undefined ? null : plainHostFailure(row.label, entry.message);
       alerts.push({
         key: row.key + ":reach",
         tone: "warning",
         label: row.label,
-        detail: lastKnown === null ? "Unreachable" : "Unreachable, " + lastKnown,
+        detail:
+          why === null
+            ? lastKnown === null
+              ? "Unreachable"
+              : "Unreachable, " + lastKnown
+            : lastKnown === null
+              ? why
+              : why + " · " + lastKnown,
+      });
+    }
+    const metrics = row.tone === "ok" ? entry.metrics : undefined;
+    const storage =
+      metrics?.storage === undefined ? null : presentHostStorage(metrics.storage, now);
+    // Set when not answering is blamed on storage: that one alert carries the storage fix.
+    let storageExplained = false;
+    if (fromConnection === null && row.tone === "ok") {
+      const responsiveness = presentHostResponsiveness({
+        pendingSinceMs:
+          environmentId === undefined ? null : (options.pendingSince?.get(environmentId) ?? null),
+        stall: environmentId === undefined ? undefined : options.stalls?.get(environmentId),
+        storage,
+        nowMs: now,
+      });
+      if (responsiveness !== null) {
+        storageExplained = responsiveness.compact;
+        alerts.push({
+          key: row.key + ":responsive",
+          tone: responsiveness.tone === "destructive" ? "destructive" : "warning",
+          label: row.label,
+          detail: responsiveness.label + " · " + responsiveness.cause,
+          ...(responsiveness.compact ? act("compact") : {}),
+        });
+      }
+    }
+    if (
+      storage !== null &&
+      (storage.compactingMs !== null || (storage.alert !== null && !storageExplained))
+    ) {
+      const progress =
+        storage.compactingMs === null
+          ? null
+          : "Compacting history · " + formatHealthDuration(storage.compactingMs);
+      alerts.push({
+        key: row.key + ":storage",
+        tone:
+          storage.tone === "destructive"
+            ? "destructive"
+            : storage.alert === null
+              ? "muted"
+              : "warning",
+        label: row.label,
+        detail: [storage.alert, progress].filter((part) => part !== null).join(" · "),
+        lines: [storage.summary, storage.archive, storage.lastResult].filter(
+          (line) => line !== null,
+        ),
+        ...(storage.action === null || progress !== null ? {} : act(storage.action)),
+      });
+    }
+    const strays = presentHostStrays(metrics?.strays, now);
+    if (strays !== null) {
+      alerts.push({
+        key: row.key + ":strays",
+        tone: "muted",
+        label: row.label,
+        detail: strays.detail,
+        lines: strays.lines,
+        ...act("clean_up"),
       });
     }
     if (row.tone === "unsupported") {
@@ -347,6 +489,19 @@ export function fleetAlerts(
         tone: "muted",
         label: row.label,
         detail: "Update GOAT to report status",
+      });
+    }
+    // The host's own verdict, held with hysteresis there; agents running work on it are told too.
+    const pressure = entry.pressure;
+    if (row.tone === "ok" && pressure !== undefined && pressure.level !== "ok") {
+      const reason = pressure.reasons[0]?.message;
+      alerts.push({
+        key: row.key + ":pressure",
+        tone: pressure.level === "critical" ? "destructive" : "warning",
+        label: row.label,
+        detail:
+          (pressure.level === "critical" ? "Overloaded" : "Under heavy load") +
+          (reason === undefined ? "" : ", " + reason),
       });
     }
     // As in Settings > Hosts, only the protocol verdict warns; builds of different versions
@@ -394,7 +549,7 @@ export interface FleetThroughput {
   readonly finishedBuckets: ReadonlyArray<number>;
 }
 
-export const THROUGHPUT_WINDOW_MS = 60 * 60_000;
+const THROUGHPUT_WINDOW_MS = 60 * 60_000;
 export const THROUGHPUT_BUCKETS = 12;
 
 interface RunTimes {

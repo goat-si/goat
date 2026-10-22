@@ -146,7 +146,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(f.remoteCommands.length - before, 1);
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"drain"');
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
 
     it.live.each(["busy", "unknown", "cancelled"])(
@@ -196,7 +195,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(yield* f.fs.readLink(lock), owner);
           assert.deepEqual(yield* f.snapshot, snapshot);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
 
     it.live.each([ARCHIVE.archiveVersion, "1.2.2"])(
@@ -251,7 +249,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(f.remoteCommands.length - beforeThird, 1);
           assert.equal(yield* reconnectEvents, readinessEvent + readinessEvent);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
 
     it.live.each([0, 1, 60])(
@@ -305,7 +302,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             }) + "\n",
           );
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
 
     it.live.each(["readiness", "launch"] as const)(
@@ -369,7 +365,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               : "fixture launch failed\n",
           );
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
 
     it.live.each(["executable", "runner", "runtime record", "identity"] as const)(
@@ -423,7 +418,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             }
           }
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
 
     it.live.each([
@@ -506,11 +500,18 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               authentications: 0,
               steps: {} as Record<string, number>,
             };
+            const workerCosts: Readonly<Record<string, unknown>>[] = [];
+            const logger = Logger.make(({ fiber, message }) => {
+              if (String(message) === "ssh.reconnect.cost")
+                workerCosts.push(fiber.getRef(References.CurrentLogAnnotations));
+            });
             const result = yield* Effect.gen(function* () {
               const startedAt = yield* Clock.currentTimeMillis;
               measureReconnect = true;
               const result = yield* manager.ensureEnvironment(uploadTarget).pipe(
                 Effect.provideService(SshReconnectCost, cost),
+                Effect.provideService(References.MinimumLogLevel, "Info"),
+                Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
                 Effect.ensuring(
                   Effect.sync(() => {
                     measureReconnect = false;
@@ -544,7 +545,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.isUndefined(result.pendingReplacement);
             assert.equal(forwards, 2);
             assert.equal(f.remoteCommands.length - commands, 1);
-            assert.property(cost.steps, "runtime-probe-folded");
+            assert.lengthOf(workerCosts, 1);
+            assert.isString(workerCosts[0]?.operationId);
+            assert.property(workerCosts[0]?.steps, "runtime-probe-folded");
+            assert.notProperty(cost.steps, "runtime-probe-folded");
             assert.deepEqual(yield* f.snapshot, snapshot);
             if (contended !== "none") {
               assert.equal(yield* f.fs.readLink(lock), owner);
@@ -558,7 +562,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             }
           }).pipe(Effect.provide(layer), Effect.scoped);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
 
     it.effect(
@@ -645,7 +648,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             Effect.scoped,
           );
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
 
     it.effect.each(["verified", "rejected", "uncertain drain"] as const)(
@@ -763,61 +765,59 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       "uncertain drain",
       "rejected attachment",
       "failed launch",
-    ] as const)(
-      "does not retain wake selection after %s",
-      (action) =>
-        Effect.gen(function* () {
-          const f = yield* fixture;
-          yield* f.shiftHostClock(60);
-          let forwardAlive = true;
-          let configuration = "hostname devbox.example.com\nuser julius\nport 2222\n";
-          let runner: RemoteGoatRunnerOptions = {
-            ...f.runner,
-            refreshOwnedRuntimeOnFirstConnection: true,
-          };
-          const transport = ChildProcessSpawner.make((command) => {
-            if (command._tag === "StandardCommand" && command.args.includes("-G"))
-              return Effect.succeed(makeSuccessfulProcess(configuration));
-            if (command._tag === "StandardCommand" && command.args.includes("-N")) {
-              forwardAlive = true;
-              return Effect.succeed({
-                ...makeRunningProcess(() => undefined),
-                isRunning: Effect.sync(() => forwardAlive),
-              });
-            }
-            return f.transport.spawn(command);
-          });
-          const layer = Layer.mergeAll(
-            NodeServices.layer,
-            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
-            Layer.succeed(FileSystem.FileSystem, f.observedFs),
-            Layer.succeed(HttpClient.HttpClient, testHttpClient),
-            Layer.succeed(NetService.NetService, testNetService),
-            SshAuth.SshPasswordPrompt.disabledLayer,
-            SshEnvironmentManager.layer({
-              resolveCliRunner: Effect.sync(() => runner),
-              leaveRemoteServerRunning: true,
-            }),
-          );
-          yield* Effect.gen(function* () {
-            const manager = yield* SshEnvironmentManager;
-            yield* manager.ensureEnvironment(uploadTarget);
-            const snapshot = yield* f.snapshot;
-            const failLaunch = `sh() {
+    ] as const)("does not retain wake selection after %s", (action) =>
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        yield* f.shiftHostClock(60);
+        let forwardAlive = true;
+        let configuration = "hostname devbox.example.com\nuser julius\nport 2222\n";
+        let runner: RemoteGoatRunnerOptions = {
+          ...f.runner,
+          refreshOwnedRuntimeOnFirstConnection: true,
+        };
+        const transport = ChildProcessSpawner.make((command) => {
+          if (command._tag === "StandardCommand" && command.args.includes("-G"))
+            return Effect.succeed(makeSuccessfulProcess(configuration));
+          if (command._tag === "StandardCommand" && command.args.includes("-N")) {
+            forwardAlive = true;
+            return Effect.succeed({
+              ...makeRunningProcess(() => undefined),
+              isRunning: Effect.sync(() => forwardAlive),
+            });
+          }
+          return f.transport.spawn(command);
+        });
+        const layer = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
+          Layer.succeed(FileSystem.FileSystem, f.observedFs),
+          Layer.succeed(HttpClient.HttpClient, testHttpClient),
+          Layer.succeed(NetService.NetService, testNetService),
+          SshAuth.SshPasswordPrompt.disabledLayer,
+          SshEnvironmentManager.layer({
+            resolveCliRunner: Effect.sync(() => runner),
+            leaveRemoteServerRunning: true,
+          }),
+        );
+        yield* Effect.gen(function* () {
+          const manager = yield* SshEnvironmentManager;
+          yield* manager.ensureEnvironment(uploadTarget);
+          const snapshot = yield* f.snapshot;
+          const failLaunch = `sh() {
   if [ "\${3:-}" = runtime ]; then return 23; fi
   command sh "$@"
 }
 `;
-            if (action === "failed refresh" || action === "uncertain drain") {
-              f.setScriptPrefix(failLaunch);
-              const failed = yield* Effect.result(
-                manager.ensureEnvironment(uploadTarget, { refreshRuntime: true }),
-              );
-              assert.equal(failed._tag, "Failure");
-              f.setScriptPrefix("");
-            }
-            if (action === "rejected attachment") {
-              f.setScriptPrefix(`sh() {
+          if (action === "failed refresh" || action === "uncertain drain") {
+            f.setScriptPrefix(failLaunch);
+            const failed = yield* Effect.result(
+              manager.ensureEnvironment(uploadTarget, { refreshRuntime: true }),
+            );
+            assert.equal(failed._tag, "Failure");
+            f.setScriptPrefix("");
+          }
+          if (action === "rejected attachment") {
+            f.setScriptPrefix(`sh() {
   if [ "\${3:-}" = runtime ]; then
     printf '%s\\n' '{"status":"pending","pending":{"reason":"busy","replacement":"incompatible","requestedVersion":"1.2.3","liveVersion":"1.2.3"}}'
     return 0
@@ -825,65 +825,64 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   command sh "$@"
 }
 `);
-              const rejected = yield* manager.ensureEnvironment(uploadTarget, {
-                refreshRuntime: true,
-              });
-              assert.isTrue("type" in rejected);
-              f.setScriptPrefix("");
-            }
-            if (action === "uncertain drain" || action === "rejected attachment") {
-              const status = yield* manager.status(uploadTarget);
-              assert.equal(
-                status.status?.state,
-                action === "uncertain drain" ? "update_blocked" : "update_waiting",
-              );
-              assert.equal(
-                (yield* Effect.result(manager.readyEnvironment(uploadTarget)))._tag,
-                "Failure",
-              );
-            }
-            forwardAlive = false;
-            yield* manager.revalidateTunnels();
-            if (action === "disconnect") yield* manager.disconnectEnvironment(uploadTarget);
-            if (action === "forget")
-              yield* manager.forgetEnvironment(uploadTarget, { stopRuntime: "no" });
-            if (action === "generation")
-              yield* manager.beginSetupOperation(uploadTarget, "wake-test");
-            if (action === "version") runner = { ...f.runner, archiveVersion: "1.2.4" };
-            if (action === "build") runner = { ...f.runner, archiveCommitTime: 1_700_000_001 };
-            if (action === "config") configuration += "identityfile /changed-identity\n";
-            if (action === "host") configuration = configuration.replace("devbox", "otherbox");
-            if (action === "invalidated") {
-              f.setScriptPrefix("printf 'fixture rejected probe\\n' >&2\nexit 23\n");
-              const status = yield* manager.status(uploadTarget);
-              assert.equal(status.kind, "error");
-              f.setScriptPrefix("");
-            }
-            if (action === "failed launch") {
-              f.setScriptPrefix(failLaunch);
-              const before = f.remoteCommands.length;
-              const failed = yield* Effect.result(manager.ensureEnvironment(uploadTarget));
-              assert.equal(failed._tag, "Failure");
-              assert.equal(f.remoteCommands.length - before, 1);
-              f.setScriptPrefix("");
-            }
-            const before = f.remoteCommands.length;
-            const result = yield* manager.ensureEnvironment(
-              uploadTarget,
-              action === "refresh"
-                ? { refreshRuntime: true }
-                : action === "confirmation"
-                  ? { confirmReplacement: true }
-                  : undefined,
+            const rejected = yield* manager.ensureEnvironment(uploadTarget, {
+              refreshRuntime: true,
+            });
+            assert.isTrue("type" in rejected);
+            f.setScriptPrefix("");
+          }
+          if (action === "uncertain drain" || action === "rejected attachment") {
+            const status = yield* manager.status(uploadTarget);
+            assert.equal(
+              status.status?.state,
+              action === "uncertain drain" ? "update_blocked" : "update_waiting",
             );
-            assert.isFalse("type" in result);
-            assert.equal(f.remoteCommands.length - before, 2);
-            assert.deepEqual(yield* f.snapshot, snapshot);
-            if (action === "uncertain drain" || action === "rejected attachment")
-              yield* manager.readyEnvironment(uploadTarget);
-          }).pipe(Effect.provide(layer), Effect.scoped);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
+            assert.equal(
+              (yield* Effect.result(manager.readyEnvironment(uploadTarget)))._tag,
+              "Failure",
+            );
+          }
+          forwardAlive = false;
+          yield* manager.revalidateTunnels();
+          if (action === "disconnect") yield* manager.disconnectEnvironment(uploadTarget);
+          if (action === "forget")
+            yield* manager.forgetEnvironment(uploadTarget, { stopRuntime: "no" });
+          if (action === "generation")
+            yield* manager.beginSetupOperation(uploadTarget, "wake-test");
+          if (action === "version") runner = { ...f.runner, archiveVersion: "1.2.4" };
+          if (action === "build") runner = { ...f.runner, archiveCommitTime: 1_700_000_001 };
+          if (action === "config") configuration += "identityfile /changed-identity\n";
+          if (action === "host") configuration = configuration.replace("devbox", "otherbox");
+          if (action === "invalidated") {
+            f.setScriptPrefix("printf 'fixture rejected probe\\n' >&2\nexit 23\n");
+            const status = yield* manager.status(uploadTarget);
+            assert.equal(status.kind, "error");
+            f.setScriptPrefix("");
+          }
+          if (action === "failed launch") {
+            f.setScriptPrefix(failLaunch);
+            const before = f.remoteCommands.length;
+            const failed = yield* Effect.result(manager.ensureEnvironment(uploadTarget));
+            assert.equal(failed._tag, "Failure");
+            assert.equal(f.remoteCommands.length - before, 1);
+            f.setScriptPrefix("");
+          }
+          const before = f.remoteCommands.length;
+          const result = yield* manager.ensureEnvironment(
+            uploadTarget,
+            action === "refresh"
+              ? { refreshRuntime: true }
+              : action === "confirmation"
+                ? { confirmReplacement: true }
+                : undefined,
+          );
+          assert.isFalse("type" in result);
+          assert.equal(f.remoteCommands.length - before, 2);
+          assert.deepEqual(yield* f.snapshot, snapshot);
+          if (action === "uncertain drain" || action === "rejected attachment")
+            yield* manager.readyEnvironment(uploadTarget);
+        }).pipe(Effect.provide(layer), Effect.scoped);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
     it.live("rechecks a managed pin after master setup before using captured wake proof", () =>
@@ -1100,42 +1099,38 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             Effect.scoped,
           );
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
 
-    it.live.each([true, false])(
-      "reprobes a newer live runtime (compatible=%s)",
-      (compatible) =>
-        Effect.gen(function* () {
-          const f = yield* fixture;
-          yield* f.shiftHostClock(60);
-          const first = yield* launch(f);
-          assert.equal(first.status, "ready");
-          if (first.status !== "ready") return;
-          yield* replaceLive(f, compatible);
-          const before = f.remoteCommands.length;
-          const result = yield* Effect.result(launch(f, first.selectedRuntime));
-          assert.equal(f.remoteCommands.length - before, compatible ? 2 : 1);
-          const ordinary = yield* Effect.result(launch(f));
-          assert.equal(result._tag, ordinary._tag);
-          if (result._tag === "Failure" && ordinary._tag === "Failure") {
-            assert.equal(result.failure._tag, "SshLaunchError");
-            assert.equal("reason" in result.failure && result.failure.reason, "runtime-newer");
-            assert.equal(result.failure.message, ordinary.failure.message);
-          } else if (result._tag === "Success" && ordinary._tag === "Success") {
-            assert.equal(result.success.status, "ready");
-            if (result.success.status !== "ready" || ordinary.success.status !== "ready") return;
-            assert.equal(result.success.selectedRuntime.version, "9.0.0");
-            assert.equal(
-              result.success.selectedRuntime.updateBlocked,
-              ordinary.success.selectedRuntime.updateBlocked,
-            );
+    it.live.each([true, false])("reprobes a newer live runtime (compatible=%s)", (compatible) =>
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        yield* f.shiftHostClock(60);
+        const first = yield* launch(f);
+        assert.equal(first.status, "ready");
+        if (first.status !== "ready") return;
+        yield* replaceLive(f, compatible);
+        const before = f.remoteCommands.length;
+        const result = yield* Effect.result(launch(f, first.selectedRuntime));
+        assert.equal(f.remoteCommands.length - before, compatible ? 2 : 1);
+        const ordinary = yield* Effect.result(launch(f));
+        assert.equal(result._tag, ordinary._tag);
+        if (result._tag === "Failure" && ordinary._tag === "Failure") {
+          assert.equal(result.failure._tag, "SshLaunchError");
+          assert.equal("reason" in result.failure && result.failure.reason, "runtime-newer");
+          assert.equal(result.failure.message, ordinary.failure.message);
+        } else if (result._tag === "Success" && ordinary._tag === "Success") {
+          assert.equal(result.success.status, "ready");
+          if (result.success.status !== "ready" || ordinary.success.status !== "ready") return;
+          assert.equal(result.success.selectedRuntime.version, "9.0.0");
+          assert.equal(
+            result.success.selectedRuntime.updateBlocked,
+            ordinary.success.selectedRuntime.updateBlocked,
+          );
 
-            assert.isString(result.success.selectedRuntime.updateBlocked);
-            assert.isUndefined(result.success.selectedRuntime.reconnectProbe);
-          }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
+          assert.isString(result.success.selectedRuntime.updateBlocked);
+          assert.isUndefined(result.success.selectedRuntime.reconnectProbe);
+        }
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
     it.live(
@@ -1165,7 +1160,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.notInclude(events, '"type":"stop"');
           assert.equal(events.split('"type":"start"').length - 1, 1);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
 
     it.live(
@@ -1207,7 +1201,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* launch(f, result.selectedRuntime);
           assert.equal(f.remoteCommands.length - reconnected, 1);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      180_000,
     );
   },
 );

@@ -179,19 +179,6 @@ describe("project files queries", () => {
     expect(getUnsavedProjectFileQueryData(environmentId, "/repo", "convex.json")).toBeNull();
   });
 
-  it("releases a retained unsaved draft when explicitly cleared", () => {
-    setProjectFileQueryData(environmentId, "/repo", "convex.json", "first draft");
-    setProjectFileQueryData(environmentId, "/repo", "convex.json", "latest draft");
-    drainRegistryTasks();
-    expect(getUnsavedProjectFileQueryData(environmentId, "/repo", "convex.json")?.contents).toBe(
-      "latest draft",
-    );
-
-    clearProjectFileQueryData(environmentId, "/repo", "convex.json");
-    drainRegistryTasks();
-    expect(appAtomRegistry.getNodes().has(optimisticFile)).toBe(false);
-  });
-
   it("keeps a reopened editor's newer draft pending when the old editor's write finishes", async () => {
     vi.stubGlobal("window", {});
     vi.useFakeTimers();

@@ -1,3 +1,4 @@
+import { ThreadHistoryArchiveHint } from "./ThreadHistoryArchiveHint";
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
 import type { EnvironmentServerConfig } from "@goat/client-runtime/connection";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
@@ -262,7 +263,7 @@ import {
   type SidebarSection,
   resolveSidebarRowThreadId,
 } from "./Sidebar.logic";
-import { resolveCheckoutBranchMismatch } from "./BranchToolbar.logic";
+import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   createSidebarCollisionDetection,
   createSidebarSortingStrategy,
@@ -312,6 +313,7 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { GoatBotSidebarRow } from "./goatBot/GoatBotSidebarRow";
+import { NotesSidebarRow } from "../notes/NotesSidebarRow";
 import { DecisionInboxSidebarRow } from "./decisions/DecisionInboxSidebarRow";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { subscribeSidebarSearchFocus } from "./sidebar/sidebarSearchFocus";
@@ -1075,7 +1077,7 @@ function SidebarThreadTooltip({
         {branchMismatch ? (
           <div className="flex min-w-0 items-start gap-2 text-warning">
             <CircleAlertIcon aria-hidden className="mt-0.5 size-3 shrink-0 stroke-current" />
-            <div className="min-w-0 flex-1 wrap-break-word leading-5">
+            <div className="min-w-0 flex-1 wrap-break-word">
               You're currently checked out on another branch.
             </div>
           </div>
@@ -1840,7 +1842,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
-  const branchMismatch = resolveCheckoutBranchMismatch({
+  const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
     activeThreadBranch: thread.branch,
@@ -2135,6 +2137,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       via {thread.source.externalLauncher}
     </span>
   ) : null;
+  const historyArchiveHint = (
+    <ThreadHistoryArchiveHint
+      state={thread.source.historyArchive}
+      variant="icon"
+      className="inline-flex shrink-0 items-center text-muted-foreground/65"
+    />
+  );
 
   const prBadgeShape = supportsMultiplePullRequests
     ? resolveThreadPullRequestBadge(thread.pullRequests)
@@ -2258,6 +2267,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             {draftIndicator}
             {title}
             {externalLauncherBadge}
+            {historyArchiveHint}
             {pinIndicator}
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
@@ -2323,7 +2333,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       onPointerDown={handleActionPointerDown}
                       className={cn(
                         "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                        isWoke && "static",
+                        isWoke && "group-any-hover/sidebar-row:static",
                       )}
                     >
                       <AlarmClockOffIcon className="mb-px size-3" />
@@ -2340,7 +2350,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           onPointerDown={handleActionPointerDown}
                           className={cn(
                             "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                            isWoke && "static",
+                            isWoke && "group-any-hover/sidebar-row:static",
                           )}
                         />
                       }
@@ -2357,7 +2367,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     onPointerDown={handleActionPointerDown}
                     className={cn(
                       "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                      isWoke && "static",
+                      isWoke && "group-any-hover/sidebar-row:static",
                     )}
                   >
                     <CheckIcon className="size-3" />
@@ -2425,6 +2435,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {draftIndicator}
               {title}
               {externalLauncherBadge}
+              {historyArchiveHint}
               {pinIndicator}
               {thread.worktreePath ? <ThreadWorktreeIndicator thread={thread} /> : null}
               {isRegeneratingTitle ? (
@@ -2621,6 +2632,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   via {thread.source.externalLauncher}
                 </span>
               ) : null}
+              <ThreadHistoryArchiveHint
+                state={thread.source.historyArchive}
+                variant="text"
+                className="max-w-[40%] shrink-0 truncate"
+              />
               <span className="ml-auto inline-flex min-w-0 max-w-[48%] shrink-0 items-center gap-1.5">
                 {prBadge}
                 <span className="inline-flex min-w-0 items-center gap-1">
@@ -2694,7 +2710,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
     JSON.stringify([thread.environmentId, gitCwd]),
     gitStatus.data,
   );
-  const branchMismatch = resolveCheckoutBranchMismatch({
+  const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
     activeThreadBranch: thread.branch,
@@ -5015,6 +5031,7 @@ export default function Sidebar() {
                 timeout={400}
               >
                 <ul role="presentation">
+                  <NotesSidebarRow />
                   <DecisionInboxSidebarRow />
                 </ul>
                 <ul
@@ -5087,6 +5104,7 @@ export default function Sidebar() {
             ) : (
               <>
                 <ul role="presentation">
+                  <NotesSidebarRow />
                   <DecisionInboxSidebarRow />
                 </ul>
                 <p
@@ -5272,7 +5290,10 @@ export default function Sidebar() {
                           onDraftContextMenu={handleDraftContextMenu}
                         />
                       );
-                      const items: ReactNode[] = [<DecisionInboxSidebarRow key="decision-inbox" />];
+                      const items: ReactNode[] = [
+                        <NotesSidebarRow key="notes" />,
+                        <DecisionInboxSidebarRow key="decision-inbox" />,
+                      ];
                       if (sidebarListItems.length === 0) items.push(draftBlock);
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {

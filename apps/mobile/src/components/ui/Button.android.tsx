@@ -54,6 +54,7 @@ export function Button(props: ButtonProps) {
       accessibilityState={{
         disabled: Boolean(props.disabled || props.loading),
         busy: Boolean(props.loading),
+        selected: props.selected,
       }}
       accessibilityActions={[{ name: "activate" }]}
       onAccessibilityAction={() => {

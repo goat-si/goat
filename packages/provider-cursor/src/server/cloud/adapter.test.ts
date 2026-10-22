@@ -462,6 +462,47 @@ describe("Cursor Cloud adapter", () => {
       expect(h.cancelRun).not.toHaveBeenCalled();
     }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
+  effectIt.effect("stops following a registered run on Stop without cancelling it", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      h.setRunningLookup(true);
+      const { message: _message, cloudLaunchSource: _launchSource, ...attach } = h.input;
+      const registered: Task = {
+        ...task(),
+        taskId: agentId,
+        tracking: "polled",
+        attach: "registered",
+      };
+      const nativeThreadRef = { driver: DRIVER, nativeId: agentId, strength: "strong" as const };
+      yield* h.runtime.resumeTurn!({
+        ...attach,
+        cloudTask: registered,
+        providerThread: { ...h.thread, nativeThreadRef, cloudTask: registered },
+      });
+      yield* Deferred.await(h.secondLookup);
+      yield* h.runtime.interruptTurn({
+        providerThread: {
+          ...h.thread,
+          nativeThreadRef,
+          cloudTask: { ...registered, taskId: runId },
+        },
+        providerTurnId: (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+          driver: DRIVER,
+          nativeTurnId: `${instanceId}:${runId}`,
+        }),
+      });
+      const events = yield* collectTerminal(h.runtime);
+      expect(h.cancelRun).not.toHaveBeenCalled();
+      expect(h.commits.at(-1)).toMatchObject({
+        status: "running",
+        tracking: "link-only",
+        attach: "registered",
+      });
+      expect(events.filter((event) => event.type === "turn.terminal")).toEqual([
+        expect.objectContaining({ status: "interrupted", failure: null }),
+      ]);
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
   effectIt.effect("refuses to follow a registered agent with no visible runs", () =>
     Effect.gen(function* () {
       const h = yield* harness;

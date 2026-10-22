@@ -10,7 +10,8 @@ import { migrationEntries, migrationManifest, runMigrations } from "./Migrations
 // GOAT builds record GOAT's own migrations right after the last upstream one they knew:
 // at 61 before the sync that added PullRequestReviewGuides, at 62 before the one that
 // added ThreadFailureLookupIndex, at 63 before the one that added DropUnusedV1Projections, at 64
-// before the one that added CanonicalizeThreadPullRequestLinks.
+// before the one that added CanonicalizeThreadPullRequestLinks, and at 65 before the one that
+// added CodexUsageNativeTurnIndex, RepairClientSettlementTimestamps and WebhookDedupe.
 const seedGoatLedger = (names: ReadonlyArray<string>, firstGoatId = 61) =>
   Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: firstGoatId - 1 });
@@ -47,10 +48,28 @@ const hasReviewGuides = Effect.gen(function* () {
 });
 
 describe("GOAT migration ids", () => {
-  it.effect("moves today's released ledger past CanonicalizeThreadPullRequestLinks", () =>
+  it.effect("moves today's released ledger past WebhookDedupe", () =>
+    Effect.gen(function* () {
+      yield* seedGoatLedger(goatNames, 65);
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [65, "CodexUsageNativeTurnIndex"],
+        [66, "RepairClientSettlementTimestamps"],
+        [67, "WebhookDedupe"],
+      ]);
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("moves a released ledger past CanonicalizeThreadPullRequestLinks", () =>
     Effect.gen(function* () {
       yield* seedGoatLedger(goatNames, 64);
-      assert.deepStrictEqual(yield* runMigrations(), [[64, "CanonicalizeThreadPullRequestLinks"]]);
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [64, "CanonicalizeThreadPullRequestLinks"],
+        [65, "CodexUsageNativeTurnIndex"],
+        [66, "RepairClientSettlementTimestamps"],
+        [67, "WebhookDedupe"],
+      ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -62,6 +81,9 @@ describe("GOAT migration ids", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         [63, "DropUnusedV1Projections"],
         [64, "CanonicalizeThreadPullRequestLinks"],
+        [65, "CodexUsageNativeTurnIndex"],
+        [66, "RepairClientSettlementTimestamps"],
+        [67, "WebhookDedupe"],
       ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
@@ -86,22 +108,32 @@ describe("GOAT migration ids", () => {
         [62, "ThreadFailureLookupIndex"],
         [63, "DropUnusedV1Projections"],
         [64, "CanonicalizeThreadPullRequestLinks"],
-        [73, "Memory"],
-        [74, "MemoryHubSync"],
-        [75, "MemorySearchCounters"],
-        [76, "MemoryTaskGrantCeiling"],
-        [77, "MemoryImportLineage"],
-        [78, "MemoryCheckpointAccounting"],
-        [79, "MemoryReportLifecycle"],
-        [80, "MemoryUsageCounters"],
-        [81, "MemoryRevertResults"],
-        [82, "HandoffLookupIndex"],
-        [83, "MemoryLastReadySpace"],
-        [84, "MemoryHubAdministered"],
-        [85, "MemoryCheckpointLifecycle"],
-        [86, "FleetGoals"],
-        [87, "FleetHealth"],
-        [88, "ThreadRunObservedChecks"],
+        [65, "CodexUsageNativeTurnIndex"],
+        [66, "RepairClientSettlementTimestamps"],
+        [67, "WebhookDedupe"],
+        [76, "Memory"],
+        [77, "MemoryHubSync"],
+        [78, "MemorySearchCounters"],
+        [79, "MemoryTaskGrantCeiling"],
+        [80, "MemoryImportLineage"],
+        [81, "MemoryCheckpointAccounting"],
+        [82, "MemoryReportLifecycle"],
+        [83, "MemoryUsageCounters"],
+        [84, "MemoryRevertResults"],
+        [85, "HandoffLookupIndex"],
+        [86, "MemoryLastReadySpace"],
+        [87, "MemoryHubAdministered"],
+        [88, "MemoryCheckpointLifecycle"],
+        [89, "FleetGoals"],
+        [90, "FleetHealth"],
+        [91, "ThreadRunObservedChecks"],
+        [92, "RemoteDispatchObservation"],
+        [93, "MemoryRevisionCheckpointSize"],
+        [94, "HubNodes"],
+        [95, "MemorySummaryWorkThreadIndex"],
+        [96, "ThreadHistoryArchives"],
+        [97, "PermissionProfiles"],
+        [98, "DecisionInbox"],
       ]);
       assert.isTrue(yield* hasReviewGuides);
       assert.deepStrictEqual(yield* history, migrationManifest);
@@ -117,27 +149,37 @@ describe("GOAT migration ids", () => {
         [62, "ThreadFailureLookupIndex"],
         [63, "DropUnusedV1Projections"],
         [64, "CanonicalizeThreadPullRequestLinks"],
-        [68, "ChannelLedger"],
-        [69, "RemoteDispatchQuestions"],
-        [70, "ThreadRunResults"],
-        [71, "RemoteReportRelay"],
-        [72, "ProjectionTurnItemRequestIndex"],
-        [73, "Memory"],
-        [74, "MemoryHubSync"],
-        [75, "MemorySearchCounters"],
-        [76, "MemoryTaskGrantCeiling"],
-        [77, "MemoryImportLineage"],
-        [78, "MemoryCheckpointAccounting"],
-        [79, "MemoryReportLifecycle"],
-        [80, "MemoryUsageCounters"],
-        [81, "MemoryRevertResults"],
-        [82, "HandoffLookupIndex"],
-        [83, "MemoryLastReadySpace"],
-        [84, "MemoryHubAdministered"],
-        [85, "MemoryCheckpointLifecycle"],
-        [86, "FleetGoals"],
-        [87, "FleetHealth"],
-        [88, "ThreadRunObservedChecks"],
+        [65, "CodexUsageNativeTurnIndex"],
+        [66, "RepairClientSettlementTimestamps"],
+        [67, "WebhookDedupe"],
+        [71, "ChannelLedger"],
+        [72, "RemoteDispatchQuestions"],
+        [73, "ThreadRunResults"],
+        [74, "RemoteReportRelay"],
+        [75, "ProjectionTurnItemRequestIndex"],
+        [76, "Memory"],
+        [77, "MemoryHubSync"],
+        [78, "MemorySearchCounters"],
+        [79, "MemoryTaskGrantCeiling"],
+        [80, "MemoryImportLineage"],
+        [81, "MemoryCheckpointAccounting"],
+        [82, "MemoryReportLifecycle"],
+        [83, "MemoryUsageCounters"],
+        [84, "MemoryRevertResults"],
+        [85, "HandoffLookupIndex"],
+        [86, "MemoryLastReadySpace"],
+        [87, "MemoryHubAdministered"],
+        [88, "MemoryCheckpointLifecycle"],
+        [89, "FleetGoals"],
+        [90, "FleetHealth"],
+        [91, "ThreadRunObservedChecks"],
+        [92, "RemoteDispatchObservation"],
+        [93, "MemoryRevisionCheckpointSize"],
+        [94, "HubNodes"],
+        [95, "MemorySummaryWorkThreadIndex"],
+        [96, "ThreadHistoryArchives"],
+        [97, "PermissionProfiles"],
+        [98, "DecisionInbox"],
       ]);
       assert.isTrue(yield* hasReviewGuides);
       assert.deepStrictEqual(yield* history, migrationManifest);
@@ -165,22 +207,32 @@ describe("GOAT migration ids", () => {
           [62, "ThreadFailureLookupIndex"],
           [63, "DropUnusedV1Projections"],
           [64, "CanonicalizeThreadPullRequestLinks"],
-          [73, "Memory"],
-          [74, "MemoryHubSync"],
-          [75, "MemorySearchCounters"],
-          [76, "MemoryTaskGrantCeiling"],
-          [77, "MemoryImportLineage"],
-          [78, "MemoryCheckpointAccounting"],
-          [79, "MemoryReportLifecycle"],
-          [80, "MemoryUsageCounters"],
-          [81, "MemoryRevertResults"],
-          [82, "HandoffLookupIndex"],
-          [83, "MemoryLastReadySpace"],
-          [84, "MemoryHubAdministered"],
-          [85, "MemoryCheckpointLifecycle"],
-          [86, "FleetGoals"],
-          [87, "FleetHealth"],
-          [88, "ThreadRunObservedChecks"],
+          [65, "CodexUsageNativeTurnIndex"],
+          [66, "RepairClientSettlementTimestamps"],
+          [67, "WebhookDedupe"],
+          [76, "Memory"],
+          [77, "MemoryHubSync"],
+          [78, "MemorySearchCounters"],
+          [79, "MemoryTaskGrantCeiling"],
+          [80, "MemoryImportLineage"],
+          [81, "MemoryCheckpointAccounting"],
+          [82, "MemoryReportLifecycle"],
+          [83, "MemoryUsageCounters"],
+          [84, "MemoryRevertResults"],
+          [85, "HandoffLookupIndex"],
+          [86, "MemoryLastReadySpace"],
+          [87, "MemoryHubAdministered"],
+          [88, "MemoryCheckpointLifecycle"],
+          [89, "FleetGoals"],
+          [90, "FleetHealth"],
+          [91, "ThreadRunObservedChecks"],
+          [92, "RemoteDispatchObservation"],
+          [93, "MemoryRevisionCheckpointSize"],
+          [94, "HubNodes"],
+          [95, "MemorySummaryWorkThreadIndex"],
+          [96, "ThreadHistoryArchives"],
+          [97, "PermissionProfiles"],
+          [98, "DecisionInbox"],
         ]);
         assert.deepStrictEqual(yield* history, migrationManifest);
         assert.deepStrictEqual(yield* runMigrations(), []);
@@ -192,13 +244,13 @@ describe("GOAT migration ids", () => {
 describe("unreleased memory DB", () => {
   it.effect("rejects an old memory ledger before moving any GOAT ids", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 72 });
+      yield* runMigrations({ toMigrationInclusive: 75 });
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`UPDATE effect_sql_migrations SET migration_id = 171 WHERE name = 'RemoteReportRelay'`;
-      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (72 + 100, 'Memory')`;
+      yield* sql`UPDATE effect_sql_migrations SET migration_id = 174 WHERE name = 'RemoteReportRelay'`;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (75 + 100, 'Memory')`;
       // The old Memory id may collide with dev's index, so model the actual pre-sync ledger.
       yield* sql`DELETE FROM effect_sql_migrations WHERE name = 'ProjectionTurnItemRequestIndex'`;
-      yield* sql`UPDATE effect_sql_migrations SET migration_id = 72 WHERE name = 'Memory'`;
+      yield* sql`UPDATE effect_sql_migrations SET migration_id = 75 WHERE name = 'Memory'`;
       const before = yield* history;
       const result = yield* Effect.flip(runMigrations());
       assert.strictEqual(result._tag, "MigrationError");
@@ -211,10 +263,10 @@ describe("unreleased memory DB", () => {
 
   it.effect("rejects old memory when other GOAT ids already match", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 72 });
+      yield* runMigrations({ toMigrationInclusive: 75 });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`DELETE FROM effect_sql_migrations WHERE name = 'ProjectionTurnItemRequestIndex'`;
-      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (72, 'Memory')`;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (75, 'Memory')`;
       const before = yield* history;
       const result = yield* Effect.flip(reconcileGoatMigrationIds(migrationEntries));
       if (result._tag !== "MigrationError") return yield* result;
@@ -243,7 +295,7 @@ describe("unreleased memory DB", () => {
 
   it.effect("rejects unrecorded memory tables in an ordinary dev ledger", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 72 });
+      yield* runMigrations({ toMigrationInclusive: 75 });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`CREATE TABLE memory_payloads (body TEXT)`;
       const before = yield* history;
@@ -256,13 +308,13 @@ describe("unreleased memory DB", () => {
 
   it.effect("upgrades an ordinary dev DB without memory and restarts normally", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 72 });
+      yield* runMigrations({ toMigrationInclusive: 75 });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`CREATE TABLE unrelated_state (value TEXT)`;
       yield* sql`INSERT INTO unrelated_state VALUES ('keep')`;
       assert.deepStrictEqual(
         yield* runMigrations(),
-        migrationManifest.filter(([id]) => id > 72),
+        migrationManifest.filter(([id]) => id > 75),
       );
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT value FROM unrelated_state`, [{ value: "keep" }]);
@@ -291,8 +343,8 @@ it.effect("validates later Memory migrations against the registry without a fixe
 
 // WP5 names are stable registration keys; old ordinals must never migrate data.
 it.effect.each([
-  { name: "MemoryImportLineage", oldId: 76 },
-  { name: "MemoryCheckpointAccounting", oldId: 77 },
+  { name: "MemoryImportLineage", oldId: 79 },
+  { name: "MemoryCheckpointAccounting", oldId: 80 },
 ] as const)(
   "rejects the old $name ordinal $oldId without changing schema or ledger",
   ({ name, oldId }) =>
@@ -322,20 +374,18 @@ it.effect("restarts the current WP5 registry without rewriting lineage or accoun
       yield* sql`SELECT * FROM memory_quota_counters ORDER BY space,dimension,scope_key`;
     const schema = yield* sql`SELECT name,sql FROM sqlite_master ORDER BY name`;
     assert.deepStrictEqual(
-      migrationManifest.filter(([id]) => id >= 77),
+      migrationManifest.filter(([id]) => id >= 80),
       [
-        [77, "MemoryImportLineage"],
-        [78, "MemoryCheckpointAccounting"],
-        [79, "MemoryReportLifecycle"],
-        [80, "MemoryUsageCounters"],
-        [81, "MemoryRevertResults"],
-        [82, "HandoffLookupIndex"],
-        [83, "MemoryLastReadySpace"],
-        [84, "MemoryHubAdministered"],
-        [85, "MemoryCheckpointLifecycle"],
-        [86, "FleetGoals"],
-        [87, "FleetHealth"],
-        [88, "ThreadRunObservedChecks"],
+        [80, "MemoryImportLineage"],
+        [81, "MemoryCheckpointAccounting"],
+        [82, "MemoryReportLifecycle"],
+        [83, "MemoryUsageCounters"],
+        [84, "MemoryRevertResults"],
+        [85, "HandoffLookupIndex"],
+        [86, "MemoryLastReadySpace"],
+        [87, "MemoryHubAdministered"],
+        [88, "MemoryCheckpointLifecycle"],
+        ...migrationManifest.filter(([id]) => id > 88),
       ],
     );
     assert.deepStrictEqual(yield* runMigrations(), []);

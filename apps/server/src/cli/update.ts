@@ -1,10 +1,10 @@
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   CLI_RELEASE_BASE_URL_ENV,
-  CLI_RELEASE_REPOSITORY,
   CLI_RELEASE_CHANNELS,
-  cliReleaseIndexPageUrl,
+  CLI_RELEASE_REPOSITORY,
   cliReleaseChannelOf,
+  cliReleaseIndexPageUrl,
   newestCliReleaseVersion,
   type CliReleaseChannel,
 } from "@goat/shared/cliRelease";
@@ -25,16 +25,19 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as BootService from "../cloud/bootService.ts";
 import {
   ensurePinnedRuntimeInstalled,
+  launcherOwnsVersionsDir,
   pinnedRuntimeCommand,
   PinnedRuntimeInstallError,
   pinnedRuntimePaths,
+  prunePinnedRuntimes,
+  windowsShimTarget,
 } from "../cloud/pinnedRuntime.ts";
 import { compareExactServiceVersions, isExactServiceVersion } from "../cloud/serviceProtocol.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
-import { createUpdateProgress } from "./updateProgress.ts";
 import * as CliService from "./service.ts";
+import { createUpdateProgress } from "./updateProgress.ts";
 
 export class CliUpdateError extends Schema.TaggedError<CliUpdateError>()("CliUpdateError", {
   reason: Schema.String,
@@ -100,6 +103,9 @@ export const resolveNewestRelease = Effect.fn("cli.update.resolve_newest_release
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const httpClient = yield* HttpClient.HttpClient;
+    const environment = yield* HostProcess.Environment;
+    const githubToken =
+      environment.GH_TOKEN?.trim() || environment.GITHUB_TOKEN?.trim() || undefined;
     const cacheDirectory = path.join(input.baseDir, "cache");
     const cachePath = path.join(cacheDirectory, "release-index.json");
     const now = yield* Clock.currentTimeMillis;
@@ -128,12 +134,15 @@ export const resolveNewestRelease = Effect.fn("cli.update.resolve_newest_release
     const listed: Array<(typeof ReleaseIndex.Type)[number]> = [];
     for (let page = 1; page <= RELEASE_INDEX_MAX_PAGES; page += 1) {
       const body = yield* Effect.gen(function* () {
+        const request = HttpClientRequest.get(cliReleaseIndexPageUrl(page)).pipe(
+          HttpClientRequest.setHeader("Accept", "application/vnd.github+json"),
+        );
+        const authenticatedRequest =
+          githubToken === undefined
+            ? request
+            : HttpClientRequest.setHeader(request, "Authorization", `Bearer ${githubToken}`);
         const response = yield* httpClient
-          .execute(
-            HttpClientRequest.get(cliReleaseIndexPageUrl(page)).pipe(
-              HttpClientRequest.setHeader("Accept", "application/vnd.github+json"),
-            ),
-          )
+          .execute(authenticatedRequest)
           .pipe(
             Effect.mapError(
               (cause) => new CliReleaseIndexError({ failure: "network", channel, cause }),
@@ -221,15 +230,6 @@ export const resolveNewestRelease = Effect.fn("cli.update.resolve_newest_release
 export const resolveNewestVersion = (input: Parameters<typeof resolveNewestRelease>[0]) =>
   resolveNewestRelease(input).pipe(Effect.map((release) => release.version));
 
-export function launcherOwnsVersionsDir(
-  path: Path.Path,
-  versionsDir: string,
-  candidate: string,
-): boolean {
-  const relative = path.relative(versionsDir, path.resolve(candidate));
-  return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
-}
-
 /**
  * Only a launcher that already points into this home's `runtime/goat/versions` tree is touched;
  * a plain copy of the executable, or a launcher for some other install, is left alone.
@@ -250,7 +250,7 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
     const shimPath = yield* findWindowsShim(input.launchedAs);
     if (shimPath === undefined) return Option.none<string>();
     const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    const quoted = Option.isSome(current) ? /^"([^"]+)"/m.exec(current.value)?.[1] : undefined;
+    const quoted = Option.isSome(current) ? windowsShimTarget(current.value) : undefined;
     if (quoted === undefined || !ownsTarget(quoted)) return Option.none<string>();
     yield* fs
       .writeFileString(shimPath, `@echo off\r\n"${input.targetEntryPath}" %*`)
@@ -325,7 +325,7 @@ export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(functio
     const shimPath = path.join(directory, "goat.cmd");
     const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
     if (Option.isNone(contents)) continue;
-    const target = /^"([^"]+)"/m.exec(contents.value)?.[1];
+    const target = windowsShimTarget(contents.value);
     if (
       target !== undefined &&
       path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
@@ -635,18 +635,16 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     targetEntryPath: runtime.entryPath,
   });
 
-  // The service switch runs in this process against the target version: the downloaded runtime
-  // has already proven it runs (the `--version` check above), and doing it here rather than
-  // through the target's own CLI means a downgrade to a version without today's commands still
-  // works.
-  let serviceUpdated = false;
+  // Use today's service manager for the target version. Inside the service it hands off to
+  // the target CLI, so stopping this process cannot interrupt the switch.
+  let servicePlan: BootService.BootServicePlan | undefined;
   if (serviceInstalled && !serviceCurrent) {
     yield* Console.log(
       restartService
         ? "Restarting the background service..."
         : "Updating the background service...",
     );
-    yield* BootService.BootService.pipe(
+    servicePlan = yield* BootService.BootService.pipe(
       Effect.flatMap((target) =>
         target.install({ allowDowngrade: input.allowDowngrade, start: restartService }),
       ),
@@ -664,7 +662,17 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
           }),
       ),
     );
-    serviceUpdated = restartService;
+  }
+
+  // A handed-off service install rewrites the unit later, while the old launcher may be stopped.
+  if (servicePlan?.handedOff !== true) {
+    // A stopped service's unit still names the launcher runtime it will start.
+    const unit = yield* fs.readFileString(status.unitPath).pipe(Effect.option);
+    yield* prunePinnedRuntimes({
+      baseDir: input.baseDir,
+      keep: [currentVersion, targetVersion],
+      references: Option.toArray(Option.flatMapNullishOr(unit, BootService.bootServiceProgramOf)),
+    });
   }
 
   progress.success(`Installed GOAT ${targetVersion}`);
@@ -673,7 +681,11 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   } else {
     yield* Console.log(`  Run ${runtime.entryPath}\n`);
   }
-  if (serviceUpdated) {
+  if (servicePlan?.handedOff === true) {
+    yield* Console.log(
+      `  Background service switching to ${targetVersion} from a separate systemd unit, since this session runs inside it and disconnects when it restarts. Result: ${servicePlan.logPath}`,
+    );
+  } else if (servicePlan !== undefined && restartService) {
     yield* Console.log(`  Background service restarted on ${targetVersion}`);
   } else if (serviceInstalled && serviceCurrent) {
     yield* Console.log(`  Background service already on ${targetVersion}`);
@@ -681,7 +693,7 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     yield* Console.log(
       `  Background service still running ${serviceVersion ?? "an unknown version"}. Run \`goat service restart\` when you are ready to switch it to ${targetVersion}.`,
     );
-  } else if (status.installed && !servesThisHome) {
+  } else if (!servesThisHome && (status.installed || status.installedBaseDir !== undefined)) {
     yield* Console.log(
       `  The background service serves ${status.installedBaseDir ?? "another GOAT home"} and was left unchanged.`,
     );

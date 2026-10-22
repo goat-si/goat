@@ -156,7 +156,7 @@ export const effectiveRuntimeMode = (
     ? goal.spec.workers.runtimeMode
     : access.runtimeMode;
 
-export const pullRequestNumber = (
+const pullRequestNumber = (
   pullRequest: { readonly url: string; readonly number?: number | undefined },
   repository: string | null,
 ) => {
@@ -178,7 +178,7 @@ const remoteDisabled = () =>
 const notSendable = (message: string) =>
   new OrchestratorMcpFailure({ code: "thread_not_sendable", message });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const hostThreads = yield* HostThreadsMcpService.HostThreadsMcpService;
   const launches = yield* ThreadLaunchMcpService.ThreadLaunchMcpService;

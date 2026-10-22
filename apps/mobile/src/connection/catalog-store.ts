@@ -1,5 +1,7 @@
 import {
-  ConnectionCatalogDocument,
+  decodeConnectionCatalogStorage,
+  encodeConnectionCatalogStorage,
+  isFutureConnectionCatalog,
   type ConnectionCatalogDocument as ConnectionCatalogDocumentType,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
 } from "@goat/client-runtime/platform";
@@ -7,7 +9,6 @@ import { ConnectionTransientError } from "@goat/client-runtime/connection";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import * as MobileSecureStorage from "../persistence/mobile-secure-storage";
@@ -23,9 +24,8 @@ function catalogError(operation: string, cause: unknown) {
   });
 }
 
-const ConnectionCatalogDocumentJson = Schema.fromJsonString(ConnectionCatalogDocument);
-const decodeConnectionCatalogDocument = Schema.decodeEffect(ConnectionCatalogDocumentJson);
-const encodeConnectionCatalogDocument = Schema.encodeEffect(ConnectionCatalogDocumentJson);
+const decodeConnectionCatalogDocument = decodeConnectionCatalogStorage;
+const encodeConnectionCatalogDocument = encodeConnectionCatalogStorage;
 
 const decodeCatalog = Effect.fn("mobile.connectionStorage.decodeCatalog")(function* (raw: string) {
   return yield* decodeConnectionCatalogDocument(raw).pipe(
@@ -87,6 +87,8 @@ export const make = Effect.fn("mobile.connectionStorage.makeCatalogStore")(funct
     const raw = yield* getItem(CONNECTION_CATALOG_KEY);
     let catalog: ConnectionCatalogDocumentType;
     if (raw !== null && raw.trim() !== "") {
+      if (isFutureConnectionCatalog(raw))
+        return yield* catalogError("decode", "This catalog requires a newer client.");
       catalog = yield* decodeCatalog(raw).pipe(
         Effect.catch((error) =>
           Effect.logWarning("Discarding corrupt mobile connection catalog", error).pipe(

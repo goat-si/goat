@@ -43,6 +43,12 @@ function savedConnection(entry: ConnectionCatalogEntry): SavedConnection {
       routes.push({ kind: "t3-connect" });
     } else if (profile?._tag === "BearerConnectionProfile") {
       routes.push({ kind: "direct", httpBaseUrl: profile.httpBaseUrl });
+    } else if (profile?._tag === "HubProxyConnectionProfile") {
+      routes.push({
+        kind: "hub-proxy",
+        hubEnvironmentId: profile.hubEnvironmentId,
+        nodeId: profile.nodeId,
+      });
     }
   }
   return {

@@ -168,7 +168,7 @@ sees what you enter.
 | Codex       | [Connect with ChatGPT](./providers-codex.md#connect-with-chatgpt), or install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`. |
 | Claude      | Install [Claude Code](https://claude.com/product/claude-code), then sign in from GOAT, which runs `claude auth login` in the app.                         |
 | Cursor      | Install [Cursor CLI](https://cursor.com/cli), then run `agent login`.                                                                                     |
-| Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                                                                                        |
+| Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then sign in from GOAT with an xAI API key, or run `grok login`.                                              |
 | OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                                                                                  |
 | Antigravity | Install and sign in with Google from GOAT's provider settings.                                                                                            |
 | Pi          | Install [Pi](./providers-pi.md#set-up-pi) with Node.js 22.19 or newer, then run `pi` and `/login`.                                                        |

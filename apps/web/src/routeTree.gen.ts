@@ -27,14 +27,17 @@ import { Route as SettingsOpenSourceLicensesRouteImport } from './routes/setting
 import { Route as SettingsMemoryRouteImport } from './routes/settings.memory'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIntegrationsRouteImport } from './routes/settings.integrations'
+import { Route as SettingsHubRouteImport } from './routes/settings.hub'
 import { Route as SettingsGoatBotRouteImport } from './routes/settings.goat-bot'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
+import { Route as SettingsDecisionInboxRouteImport } from './routes/settings.decision-inbox'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
+import { Route as ChatNotesRouteImport } from './routes/_chat.notes'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatFleetRouteImport } from './routes/_chat.fleet'
 import { Route as ChatDecisionsRouteImport } from './routes/_chat.decisions'
@@ -132,6 +135,11 @@ const SettingsIntegrationsRoute = SettingsIntegrationsRouteImport.update({
   path: '/integrations',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsHubRoute = SettingsHubRouteImport.update({
+  id: '/hub',
+  path: '/hub',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsGoatBotRoute = SettingsGoatBotRouteImport.update({
   id: '/goat-bot',
   path: '/goat-bot',
@@ -145,6 +153,11 @@ const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
 const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
   id: '/diagnostics',
   path: '/diagnostics',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsDecisionInboxRoute = SettingsDecisionInboxRouteImport.update({
+  id: '/decision-inbox',
+  path: '/decision-inbox',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsConnectionsRoute = SettingsConnectionsRouteImport.update({
@@ -170,6 +183,11 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatNotesRoute = ChatNotesRouteImport.update({
+  id: '/notes',
+  path: '/notes',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatNewRoute = ChatNewRouteImport.update({
@@ -216,14 +234,17 @@ export interface FileRoutesByFullPath {
   '/decisions': typeof ChatDecisionsRoute
   '/fleet': typeof ChatFleetRoute
   '/new': typeof ChatNewRoute
+  '/notes': typeof ChatNotesRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
+  '/settings/decision-inbox': typeof SettingsDecisionInboxRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/goat-bot': typeof SettingsGoatBotRoute
+  '/settings/hub': typeof SettingsHubRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/memory': typeof SettingsMemoryRoute
@@ -248,14 +269,17 @@ export interface FileRoutesByTo {
   '/decisions': typeof ChatDecisionsRoute
   '/fleet': typeof ChatFleetRoute
   '/new': typeof ChatNewRoute
+  '/notes': typeof ChatNotesRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
+  '/settings/decision-inbox': typeof SettingsDecisionInboxRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/goat-bot': typeof SettingsGoatBotRoute
+  '/settings/hub': typeof SettingsHubRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/memory': typeof SettingsMemoryRoute
@@ -283,14 +307,17 @@ export interface FileRoutesById {
   '/_chat/decisions': typeof ChatDecisionsRoute
   '/_chat/fleet': typeof ChatFleetRoute
   '/_chat/new': typeof ChatNewRoute
+  '/_chat/notes': typeof ChatNotesRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
+  '/settings/decision-inbox': typeof SettingsDecisionInboxRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/goat-bot': typeof SettingsGoatBotRoute
+  '/settings/hub': typeof SettingsHubRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/memory': typeof SettingsMemoryRoute
@@ -319,14 +346,17 @@ export interface FileRouteTypes {
     | '/decisions'
     | '/fleet'
     | '/new'
+    | '/notes'
     | '/pull-requests'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/connections'
+    | '/settings/decision-inbox'
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/goat-bot'
+    | '/settings/hub'
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/memory'
@@ -351,14 +381,17 @@ export interface FileRouteTypes {
     | '/decisions'
     | '/fleet'
     | '/new'
+    | '/notes'
     | '/pull-requests'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/connections'
+    | '/settings/decision-inbox'
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/goat-bot'
+    | '/settings/hub'
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/memory'
@@ -385,14 +418,17 @@ export interface FileRouteTypes {
     | '/_chat/decisions'
     | '/_chat/fleet'
     | '/_chat/new'
+    | '/_chat/notes'
     | '/_chat/pull-requests'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/connections'
+    | '/settings/decision-inbox'
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/goat-bot'
+    | '/settings/hub'
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/memory'
@@ -547,6 +583,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsIntegrationsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/hub': {
+      id: '/settings/hub'
+      path: '/hub'
+      fullPath: '/settings/hub'
+      preLoaderRoute: typeof SettingsHubRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/goat-bot': {
       id: '/settings/goat-bot'
       path: '/goat-bot'
@@ -566,6 +609,13 @@ declare module '@tanstack/react-router' {
       path: '/diagnostics'
       fullPath: '/settings/diagnostics'
       preLoaderRoute: typeof SettingsDiagnosticsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/decision-inbox': {
+      id: '/settings/decision-inbox'
+      path: '/decision-inbox'
+      fullPath: '/settings/decision-inbox'
+      preLoaderRoute: typeof SettingsDecisionInboxRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/connections': {
@@ -601,6 +651,13 @@ declare module '@tanstack/react-router' {
       path: '/pull-requests'
       fullPath: '/pull-requests'
       preLoaderRoute: typeof ChatPullRequestsRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/notes': {
+      id: '/_chat/notes'
+      path: '/notes'
+      fullPath: '/notes'
+      preLoaderRoute: typeof ChatNotesRouteImport
       parentRoute: typeof ChatRoute
     }
     '/_chat/new': {
@@ -653,6 +710,7 @@ interface ChatRouteChildren {
   ChatDecisionsRoute: typeof ChatDecisionsRoute
   ChatFleetRoute: typeof ChatFleetRoute
   ChatNewRoute: typeof ChatNewRoute
+  ChatNotesRoute: typeof ChatNotesRoute
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
   ChatIndexRoute: typeof ChatIndexRoute
   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
@@ -664,6 +722,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatDecisionsRoute: ChatDecisionsRoute,
   ChatFleetRoute: ChatFleetRoute,
   ChatNewRoute: ChatNewRoute,
+  ChatNotesRoute: ChatNotesRoute,
   ChatPullRequestsRoute: ChatPullRequestsRoute,
   ChatIndexRoute: ChatIndexRoute,
   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
@@ -676,9 +735,11 @@ interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
+  SettingsDecisionInboxRoute: typeof SettingsDecisionInboxRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsGoatBotRoute: typeof SettingsGoatBotRoute
+  SettingsHubRoute: typeof SettingsHubRoute
   SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsMemoryRoute: typeof SettingsMemoryRoute
@@ -695,9 +756,11 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
   SettingsConnectionsRoute: SettingsConnectionsRoute,
+  SettingsDecisionInboxRoute: SettingsDecisionInboxRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsGoatBotRoute: SettingsGoatBotRoute,
+  SettingsHubRoute: SettingsHubRoute,
   SettingsIntegrationsRoute: SettingsIntegrationsRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsMemoryRoute: SettingsMemoryRoute,

@@ -6,13 +6,15 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as SshAuth from "./auth.ts";
@@ -50,13 +52,39 @@ const successfulStatus = (result: SshHostResult) => {
   return result.status;
 };
 
-const fixture = (initial: unknown, runnerOptions: SshTunnel.RemoteGoatRunnerOptions = {}) => {
+const fixture = (
+  initial: unknown,
+  runnerOptions: SshTunnel.RemoteGoatRunnerOptions = {},
+  afterUpload: Effect.Effect<void> = Effect.void,
+) => {
   let probe = initial;
   let probeFailure: string | undefined;
   let toolFixProbe = "1000\nLinux\nID=debian\n";
   let launchVersion = ARCHIVE.archiveVersion as string;
   let drainPending = false;
   let drainReplacement: "older" | "capability" = "older";
+  // The version the server behind a forward reports; unset answers no descriptor.
+  let descriptorVersion: string | undefined;
+  let readinessGate:
+    | { readonly entered: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
+    | undefined;
+  const httpClient = HttpClient.make((request) =>
+    Effect.gen(function* () {
+      const path = new URL(request.url).pathname;
+      if (path === "/.well-known/goat/environment" && descriptorVersion !== undefined)
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(JSON.stringify({ serverVersion: descriptorVersion }), { status: 200 }),
+        );
+      const gate = readinessGate;
+      if (gate !== undefined && path === "/") {
+        readinessGate = undefined;
+        yield* Deferred.succeed(gate.entered, undefined);
+        yield* Deferred.await(gate.release);
+      }
+      return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+    }),
+  );
   const calls = { probes: 0, uploads: 0, launches: 0, forwards: 0, prompts: 0, strict: false };
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
@@ -67,11 +95,19 @@ const fixture = (initial: unknown, runnerOptions: SshTunnel.RemoteGoatRunnerOpti
         calls.forwards++;
         return makeRunningProcess(() => undefined);
       }
+      const input = command.options.stdin;
       if (command.args.includes("-c")) {
         calls.uploads++;
+        if (
+          input !== undefined &&
+          typeof input === "object" &&
+          "stream" in input &&
+          Stream.isStream(input.stream)
+        )
+          yield* Stream.runDrain(input.stream);
+        yield* afterUpload;
         return makeSuccessfulProcess("goat uploaded");
       }
-      const input = command.options.stdin;
       const script =
         input !== undefined &&
         typeof input === "object" &&
@@ -134,11 +170,17 @@ const fixture = (initial: unknown, runnerOptions: SshTunnel.RemoteGoatRunnerOpti
     setLaunchVersion: (value: string) => {
       launchVersion = value;
     },
+    setDescriptorVersion: (value: string) => {
+      descriptorVersion = value;
+    },
+    gateReadiness: (gate: NonNullable<typeof readinessGate>) => {
+      readinessGate = gate;
+    },
     layer: Layer.mergeAll(
       NodeServices.layer,
       Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Layer.succeed(NetService.NetService, testNetService),
-      Layer.succeed(HttpClient.HttpClient, testHttpClient),
+      Layer.succeed(HttpClient.HttpClient, httpClient),
       Layer.succeed(SshAuth.SshPasswordPrompt, {
         isAvailable: true,
         request: () =>
@@ -160,6 +202,73 @@ const fixture = (initial: unknown, runnerOptions: SshTunnel.RemoteGoatRunnerOpti
 };
 
 describe("SSH runtime status", () => {
+  const live = (version: string) => ({
+    ...stopped,
+    ready: true,
+    liveStatus: "live",
+    liveVersion: version,
+    livePort: 3773,
+    liveOwned: true,
+    liveDrain: true,
+    liveSignals: signals(version),
+    liveBinarySignals: signals(version),
+  });
+
+  it.effect("an agent call reusing a healthy forward never reports the host as preparing", () => {
+    const f = fixture(live(ARCHIVE.archiveVersion));
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+      const gate = {
+        entered: yield* Deferred.make<void>(),
+        release: yield* Deferred.make<void>(),
+      };
+      f.gateReadiness(gate);
+      const reuse = yield* manager
+        .ensureEnvironment(uploadTarget, { keyOnly: true, reuseWhileRefreshPending: true })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(gate.entered);
+      const during = successfulStatus(yield* manager.status(uploadTarget));
+      assert.equal(during.state, "ready");
+      assert.equal(during.runtimeVersion, ARCHIVE.archiveVersion);
+      yield* Deferred.succeed(gate.release, undefined);
+      yield* Fiber.join(reuse);
+      assert.equal(f.calls.launches, 1);
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  });
+
+  it.effect(
+    "a forward whose server was replaced on the same port reconnects to the live build without updating again",
+    () => {
+      const f = fixture(live("1.2.2"), { refreshOwnedRuntimeOnFirstConnection: false });
+      f.setLaunchVersion("1.2.2");
+      return Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+        assert.equal(f.calls.launches, 1);
+        // Another client (or a person) replaced 1.2.2 with this app's build on the same port.
+        f.setProbe(live(ARCHIVE.archiveVersion));
+        f.setLaunchVersion(ARCHIVE.archiveVersion);
+        f.setDescriptorVersion(ARCHIVE.archiveVersion);
+        yield* manager.ensureEnvironment(uploadTarget, {
+          keyOnly: true,
+          reuseWhileRefreshPending: true,
+        });
+        assert.equal(f.calls.launches, 2);
+        assert.equal(f.calls.uploads, 0);
+        const after = successfulStatus(yield* manager.status(uploadTarget));
+        assert.equal(after.state, "ready");
+        assert.equal(after.runtimeVersion, ARCHIVE.archiveVersion);
+        // Matching the live build again, the next call reuses the forward.
+        yield* manager.ensureEnvironment(uploadTarget, {
+          keyOnly: true,
+          reuseWhileRefreshPending: true,
+        });
+        assert.equal(f.calls.launches, 2);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    },
+  );
+
   it.effect("publishes current-operation diagnosis and preserves it on status reads", () => {
     const f = fixture({
       ...stopped,
@@ -331,7 +440,9 @@ describe("SSH runtime status", () => {
           });
         }).pipe(Effect.provide(f.layer), Effect.scoped);
         assert.deepEqual(
-          milestones.map((step) => step.phase),
+          milestones
+            .map((step) => step.phase)
+            .filter((phase, index, phases) => phase !== phases[index - 1]),
           mode === "upload"
             ? ["connecting", "checking", "uploading", "starting"]
             : ["connecting", "checking", "starting"],
@@ -350,6 +461,65 @@ describe("SSH runtime status", () => {
           uploads: mode === "upload" ? 1 : 0,
           launches: 1,
         });
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect.each(["linux", "win32"] as const)(
+    "publishes throttled archive counters for a %s upload and clears them on launch",
+    (platform) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-upload-progress-" });
+        const totalBytes = 3 * 1024 * 1024 + 13;
+        yield* fs.writeFile(
+          `${directory}/${cliArchiveFileName(ARCHIVE.archiveVersion, `${platform}-x64`)}`,
+          new Uint8Array(totalBytes),
+        );
+        const uploaded = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        const f = fixture(
+          { ...stopped, platform },
+          { archiveDirectory: directory },
+          Deferred.succeed(uploaded, undefined).pipe(Effect.andThen(Deferred.await(resume))),
+        );
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const progress: SshTunnel.SshRuntimeProgress[] = [];
+          const fiber = yield* manager
+            .ensureEnvironment(uploadTarget, {
+              onPhase: (step) => progress.push(step),
+            })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(uploaded);
+          const status = yield* manager.status(uploadTarget);
+          yield* decodeSshHostResult(status);
+          assert.equal(status.status?.phase, "uploading");
+          assert.deepEqual(status.status?.upload, { sentBytes: totalBytes, totalBytes });
+          const updates = progress.flatMap((step) => step.upload ?? []);
+          assert.deepEqual(updates[0], { sentBytes: 0, totalBytes });
+          assert.deepEqual(updates.at(-1), { sentBytes: totalBytes, totalBytes });
+          assert.isAtLeast(updates.length, 3);
+          for (let index = 1; index < updates.length; index++) {
+            const previous = updates[index - 1]!;
+            const current = updates[index]!;
+            assert.equal(current.totalBytes, totalBytes);
+            assert.isAtMost(current.sentBytes, totalBytes);
+            if (current.sentBytes !== totalBytes)
+              assert.isAtLeast(current.sentBytes - previous.sentBytes, 1024 * 1024);
+          }
+          if (platform === "win32") {
+            assert.isAbove(updates[1]!.sentBytes, 1024 * 1024);
+            assert.isBelow(updates[1]!.sentBytes, 2 * 1024 * 1024);
+          } else assert.equal(updates[1]!.sentBytes, 1024 * 1024);
+          yield* Deferred.succeed(resume, undefined);
+          yield* Fiber.join(fiber);
+          assert.isUndefined((yield* manager.status(uploadTarget)).status?.upload);
+          assert.isTrue(
+            progress
+              .filter((step) => step.phase !== "uploading")
+              .every((step) => step.upload === undefined),
+          );
+        }).pipe(Effect.provide(f.layer), Effect.scoped);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
@@ -447,15 +617,32 @@ describe("SSH runtime status", () => {
       state: "failed",
       reason: "missing_tools",
     },
-  ])("classifies an observed failure: $state/$reason", ({ stderr, state, reason }) => {
+    {
+      stderr:
+        "GOAT 1.2.3 on this host cannot open its data because a newer GOAT build already upgraded it. Update this app or the GOAT runtime on this host, then reconnect.",
+      state: "failed",
+      reason: "operation_failed",
+      detail:
+        "GOAT 1.2.3 on this host cannot open its data because a newer GOAT build already upgraded it. Update this app or the GOAT runtime on this host, then reconnect.",
+      instruction: "Update this app or the GOAT runtime on devbox, then reconnect.",
+    },
+  ])("classifies an observed failure: $state/$reason", (input) => {
+    const { stderr, state, reason } = input;
     const f = fixture(stopped);
     f.failProbe(stderr);
     return Effect.gen(function* () {
       const manager = yield* SshTunnel.SshEnvironmentManager;
       const result = yield* manager.status(uploadTarget);
       yield* decodeSshHostResult(result);
-      assert.equal(successfulStatus(result).state, state);
-      assert.equal(successfulStatus(result).failure?.reason, reason);
+      const status = successfulStatus(result);
+      assert.equal(status.state, state);
+      assert.equal(status.failure?.reason, reason);
+      if ("detail" in input && typeof input.detail === "string")
+        assert.include(status.detail ?? "", input.detail);
+      if ("instruction" in input && typeof input.instruction === "string") {
+        assert.equal(status.failure?.fix?.actor, "human");
+        assert.equal(status.failure?.fix?.instruction, input.instruction);
+      }
       assert.equal(f.calls.prompts, 0);
       assert.equal(f.calls.launches, 0);
     }).pipe(Effect.provide(f.layer), Effect.scoped);

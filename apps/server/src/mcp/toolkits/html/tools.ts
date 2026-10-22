@@ -1,6 +1,5 @@
-import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import { OrchestratorMcpFailure } from "@goat/contracts";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import {
   HTML_RENDER_COLUMN_WIDTH,
   HTML_RENDER_MAX_HEIGHT,
@@ -9,6 +8,7 @@ import {
 } from "@goat/shared/htmlRender";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
+import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 
 import * as HtmlRender from "../../../htmlRender/HtmlRender.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -70,7 +70,7 @@ const HtmlRenderTool = Tool.make(agentSurfaceRegistry["html.render"].name, {
       Schema.isMaxLength(HTML_RENDER_MAX_TITLE_LENGTH),
     ).annotate({ description: "Short name for the page." }),
     height: Schema.Int.annotate({
-      description: `The frame height in CSS pixels, ${HTML_RENDER_MIN_HEIGHT}-${HTML_RENDER_MAX_HEIGHT}. Use html_preview's contentHeight, or less to make long content scroll inside the frame.`,
+      description: `The frame height in CSS pixels, ${HTML_RENDER_MIN_HEIGHT}-${HTML_RENDER_MAX_HEIGHT}. Use html_preview's contentHeight. A lower height makes long content scroll inside the frame on mobile only.`,
     }),
   }),
   success: Schema.Struct({

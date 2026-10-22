@@ -18,9 +18,10 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { observeResize } from "../../lib/observeResize";
 import { cn } from "../../lib/utils";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { BoatIcon } from "../Icons";
 import { GoatWordmark } from "../GoatWordmark";
 import { renderProviderGlyph } from "../chat/ProviderInstanceIcon";
-import { describeMachine } from "./describeMachine";
+import { fleetMachineSubtitle } from "./describeMachine";
 import {
   fleetConnectionVisual,
   UNKNOWN_FLEET_CONNECTION,
@@ -102,6 +103,26 @@ interface HeatPaint {
 function useHeatPaint(): HeatPaint {
   const base = "fleet-heat-" + useId().replace(/[^a-zA-Z0-9_-]/g, "");
   return { flame: base + "-flame", core: base + "-core" };
+}
+
+/**
+ * Flat oklch and oklab fills (including Tailwind's `fill-info/10`) drop a channel while a
+ * shape is CSS-animated in Chromium, so a busy halo leaves yellow specks. A gradient fill
+ * does not.
+ */
+function HaloDefs(props: { readonly info: string; readonly primary: string }) {
+  return (
+    <defs>
+      <radialGradient id={props.info}>
+        <stop offset="0" style={{ stopColor: "var(--info)", stopOpacity: 0.1 }} />
+        <stop offset="1" style={{ stopColor: "var(--info)", stopOpacity: 0.1 }} />
+      </radialGradient>
+      <radialGradient id={props.primary}>
+        <stop offset="0" style={{ stopColor: "var(--primary)", stopOpacity: 0.1 }} />
+        <stop offset="1" style={{ stopColor: "var(--primary)", stopOpacity: 0.1 }} />
+      </radialGradient>
+    </defs>
+  );
 }
 
 function HeatDefs({ paint }: { readonly paint: HeatPaint }) {
@@ -387,13 +408,19 @@ export const FleetGraph = memo(function FleetGraph(props: {
   readonly onSelectMachine: (machineId: string) => void;
   /** How hard each machine is working, by machine id; absent draws every node normal. */
   readonly heat?: ReadonlyMap<string, FleetMachineHeat>;
+  /** Connection attempts that have run long: their edges stop moving and say so. */
+  readonly slowMachineIds?: ReadonlySet<string>;
 }) {
   const { snapshot, connections, currentMachineId, selectedMachineId, onSelectMachine, heat } =
     props;
+  const slow = props.slowMachineIds;
   const [wrapperRef, width] = useElementWidth();
   const svgRef = useRef<SVGSVGElement>(null);
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
   const paint = useHeatPaint();
+  const haloBase = "fleet-halo-" + useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const infoHalo = haloBase + "-info";
+  const primaryHalo = haloBase + "-primary";
   usePauseWhileHidden(svgRef);
   const { offsets, press, move, release } = usePullableNodes(svgRef, width, reduced);
   // Below 340 the orbits cannot keep labels apart; see ORBIT_GAP in fleetLayout.
@@ -470,6 +497,7 @@ export const FleetGraph = memo(function FleetGraph(props: {
             }
           >
             <HeatDefs paint={paint} />
+            <HaloDefs info={infoHalo} primary={primaryHalo} />
             <ellipse
               cx={layout.center.x}
               cy={layout.center.y}
@@ -513,7 +541,10 @@ export const FleetGraph = memo(function FleetGraph(props: {
                     <path
                       d={entry.edge}
                       fill="none"
-                      className={cn(link.className, link.animated && !reduced && "fleet-flow")}
+                      className={cn(
+                        link.className,
+                        link.animated && !reduced && !slow?.has(machine!.id) && "fleet-flow",
+                      )}
                       strokeWidth={1.4}
                       strokeDasharray={link.dash}
                     />
@@ -635,8 +666,10 @@ export const FleetGraph = memo(function FleetGraph(props: {
                 <MachineNode
                   key={"machine:" + entry.layout.id}
                   at={entry.at}
+                  halo={infoHalo}
                   machine={machinesById.get(entry.layout.id)!}
                   connection={connections.get(entry.layout.id) ?? UNKNOWN_FLEET_CONNECTION}
+                  slow={slow?.has(entry.layout.id) === true}
                   heat={heat?.get(entry.layout.id) ?? NO_FLEET_HEAT}
                   current={currentMachineId === entry.layout.id}
                   selected={selectedMachineId === entry.layout.id}
@@ -651,7 +684,7 @@ export const FleetGraph = memo(function FleetGraph(props: {
 
             <g transform={"translate(" + layout.center.x + " " + layout.center.y + ")"}>
               {live > 0 && !reduced ? (
-                <circle r={36} className="fleet-breathe fill-primary/10" />
+                <circle r={36} className="fleet-breathe" fill={"url(#" + primaryHalo + ")"} />
               ) : null}
               <circle
                 r={29}
@@ -720,8 +753,12 @@ type NodeHandlers = {
 
 function MachineNode(props: {
   readonly at: FleetPoint;
+  /** Gradient id for the busy halo. A flat oklab fill speckles while the halo breathes. */
+  readonly halo: string;
   readonly machine: FleetMachine;
   readonly connection: FleetConnection;
+  /** The connection attempt has run long. */
+  readonly slow: boolean;
   readonly heat: FleetMachineHeat;
   /** The machine this app runs on. */
   readonly current: boolean;
@@ -741,23 +778,24 @@ function MachineNode(props: {
     event.preventDefault();
     onSelect(machine.id);
   };
-  const device = describeMachine(machine.os, machine.machineKind);
   // The user knows their own hardware; naming the machine is what matters here.
   const sub = current
     ? THIS_MACHINE
-    : [device, machine.subtitle].filter((part) => part !== null).join(" · ") ||
-      (machine.kind === "environment" ? null : machine.kind === "cloud" ? "cloud" : "ssh");
+    : (fleetMachineSubtitle(machine) ??
+      (machine.kind === "environment" ? null : machine.kind === "cloud" ? "cloud" : "ssh"));
   const status =
     connection.state === "unknown"
       ? []
       : [
-          connection.reason === null
-            ? connection.label
-            : connection.label + ": " + connection.reason,
+          (props.slow ? "Still connecting" : connection.label) +
+            (connection.reason === null ? "" : ": " + connection.reason),
         ];
-  const description = [current ? THIS_MACHINE : null, ...status, workSummary(machine)].filter(
-    (part) => part !== null,
-  );
+  const description = [
+    current ? THIS_MACHINE : null,
+    machine.boat === null ? null : "Boat machine",
+    ...status,
+    workSummary(machine),
+  ].filter((part) => part !== null);
   // Only heat is worth announcing; a normal reading stays in the tooltip.
   const spoken =
     heated === null ? description : [...description, heat.summary.replaceAll(" · ", ", ")];
@@ -775,7 +813,11 @@ function MachineNode(props: {
     >
       <title>{[machine.label, ...description, heat.summary].join("\n")}</title>
       {busy > 0 && !reduced && !glowing ? (
-        <circle r={MACHINE_RADIUS + 8} className="fleet-breathe fill-info/10" />
+        <circle
+          r={MACHINE_RADIUS + 8}
+          className="fleet-breathe"
+          fill={"url(#" + props.halo + ")"}
+        />
       ) : null}
       {current ? (
         <circle r={MACHINE_RADIUS + 4} fill="none" className="stroke-foreground/25" />
@@ -801,17 +843,25 @@ function MachineNode(props: {
       {heated === null ? null : (
         <circle r={MACHINE_RADIUS - 0.8} className={cn("pointer-events-none", HEAT_TINT[heated])} />
       )}
-      <EnvironmentMachineIcon
-        kind={
-          machine.machineKind ??
-          (machine.kind === "cloud" || machine.cloudState !== null ? "cloud" : "server")
-        }
-        x={-8}
-        y={-8}
-        width={16}
-        height={16}
-        className={quiet ? "text-muted-foreground/70" : "text-foreground"}
-      />
+      {machine.boat !== null ? (
+        <BoatIcon
+          data-fleet-boat-logo=""
+          x={-8}
+          y={-8}
+          width={16}
+          height={16}
+          className={quiet ? "opacity-55" : undefined}
+        />
+      ) : (
+        <EnvironmentMachineIcon
+          kind={machine.machineKind ?? (machine.kind === "cloud" ? "cloud" : "server")}
+          x={-8}
+          y={-8}
+          width={16}
+          height={16}
+          className={quiet ? "text-muted-foreground/70" : "text-foreground"}
+        />
+      )}
       <g transform={"translate(" + STATUS_OFFSET + " " + STATUS_OFFSET + ")"}>
         <FleetConnectionGlyph state={connection.state} halo />
       </g>

@@ -1,3 +1,4 @@
+import { ThreadHistoryArchiveHint } from "./ThreadHistoryArchiveHint";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@goat/shared/threadPullRequests";
 import { Spinner } from "~/components/ui/spinner";
@@ -244,6 +245,7 @@ import {
 } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { GoatBotSidebarRow } from "./goatBot/GoatBotSidebarRow";
+import { NotesSidebarRow } from "../notes/NotesSidebarRow";
 import { DecisionInboxSidebarRow } from "./decisions/DecisionInboxSidebarRow";
 import { useGoatBotPreferred } from "./goatBot/GoatBotModeButton";
 const projectsViewEnvironments = createProjectsViewEnvironmentAtoms({
@@ -793,6 +795,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               via {thread.source.externalLauncher}
             </span>
           ) : null}
+          <ThreadHistoryArchiveHint
+            state={thread.source.historyArchive}
+            variant="icon"
+            className="inline-flex shrink-0 items-center text-muted-foreground/65"
+          />
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {canOperatePreview && discoveredPorts.length > 0 && (
@@ -2430,7 +2437,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover/project-header:opacity-0">
                     <span
                       className={`size-[9px] rounded-full ${projectStatus.dotClass} ${
-                        projectStatus.pulse ? "animate-status-pulse" : ""
+                        projectStatus.pulse ? "motion-safe:animate-status-pulse" : ""
                       }`}
                     />
                   </span>
@@ -3073,6 +3080,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       ) : null}
       <LocalSecondaryStatus />
       <ul role="presentation">
+        <NotesSidebarRow />
         <DecisionInboxSidebarRow />
       </ul>
       {pinnedProject && pinnedThreads.length > 0 ? (

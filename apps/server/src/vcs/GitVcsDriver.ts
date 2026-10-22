@@ -12,30 +12,32 @@ import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
 
 import {
-  type VcsError,
   GitCommandError,
   VcsProcessExitError,
-  type VcsSwitchRefInput,
-  type VcsSwitchRefResult,
+  VcsUnsupportedOperationError,
+  type ReviewDiffFileContentsInput,
+  type ReviewDiffFileContentsResult,
+  type ReviewDiffPreviewInput,
+  type ReviewDiffPreviewResult,
   type VcsCreateRefInput,
   type VcsCreateRefResult,
   type VcsCreateWorktreeInput,
   type VcsCreateWorktreeResult,
-  type ReviewDiffPreviewInput,
-  type ReviewDiffPreviewResult,
-  type ReviewDiffFileContentsInput,
-  type ReviewDiffFileContentsResult,
+  type VcsError,
   type VcsInitInput,
   type VcsListRefsInput,
   type VcsListRefsResult,
-  type WorktreesDirectoryStatus,
   type VcsPullResult,
   type VcsRemoveWorktreeInput,
   type VcsStatusInput,
   type VcsStatusResult,
+  type VcsSwitchRefInput,
+  type VcsSwitchRefResult,
+  type WorktreesDirectoryStatus,
   type WorktreeSubmodules,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { isMissingExecutable } from "@goat/source-control-core/server/discovery";
 import {
   makeGitVcsDriverCore,
   PATCH_RENDER_PREFIX_ARGS,
@@ -52,6 +54,12 @@ export interface ExecuteGitInput {
   readonly env?: NodeJS.ProcessEnv;
   readonly allowNonZeroExit?: boolean;
   readonly timeoutMs?: number | null;
+  /**
+   * Fail only after Git prints nothing for this long, instead of after `timeoutMs`.
+   * For commands whose healthy duration is unbounded but which report progress.
+   */
+  readonly stallTimeoutMs?: number;
+  readonly forceKillAfterMs?: number;
   readonly maxOutputBytes?: number;
   readonly appendTruncationMarker?: boolean;
   /**
@@ -140,6 +148,18 @@ export interface CreateWorktreeProgress {
     completed: number;
     total: number;
   }) => Effect.Effect<void, never>;
+  /** A Git hook, usually post-checkout, started after the files were written. */
+  readonly onHookStarted?: (hookName: string) => Effect.Effect<void, never>;
+  /**
+   * The hook stopped printing long enough to count as stuck. Git runs post-checkout only
+   * after the worktree is complete, so the worktree is kept and `createWorktree` succeeds.
+   */
+  readonly onHookStalled?: (input: {
+    readonly hookName: string;
+    readonly detail: string;
+  }) => Effect.Effect<void, never>;
+  /** Directories the project file keeps out of this worktree through sparse checkout. */
+  readonly onSparseCheckout?: (excluded: ReadonlyArray<string>) => Effect.Effect<void, never>;
   readonly onSubmodulesStarted?: () => Effect.Effect<void, never>;
   readonly onSubmodulesDisabled?: (input: {
     source: "settings" | "t3.json";
@@ -148,6 +168,15 @@ export interface CreateWorktreeProgress {
   readonly onSubmodulesFinished?: (input: {
     ok: boolean;
     detail: string | null;
+  }) => Effect.Effect<void, never>;
+  /**
+   * Fires when `reuseExistingBranch` picked up a branch that already existed. `reused` means
+   * its clean GOAT worktree was bound as is, so the caller must not remove it on failure;
+   * `added` means a new worktree was checked out for the existing branch.
+   */
+  readonly onExistingBranch?: (input: {
+    readonly worktree: "reused" | "added";
+    readonly fastForwarded: boolean;
   }) => Effect.Effect<void, never>;
 }
 
@@ -159,6 +188,18 @@ export interface CreateWorktreeOptions {
    */
   readonly submodules?: WorktreeSubmodules | null;
   readonly worktreesDirectory?: string;
+  /**
+   * When `newRefName` already exists without commits beyond `refName`, fast-forward and use it
+   * (and its clean worktree at the target path) instead of failing. A branch with its own
+   * commits or a dirty or foreign checkout still fails, naming the existing_worktree launch.
+   */
+  readonly reuseExistingBranch?: boolean;
+  /**
+   * The caller runs the project's worktree setup script itself, so a repository hook that
+   * honors `GOAT_WORKTREE_SETUP=0` (this repository's post-checkout does) skips installing
+   * dependencies inside `git worktree add` a second time.
+   */
+  readonly skipSetupHook?: boolean;
 }
 
 export interface GitCommitProgress {
@@ -178,6 +219,16 @@ export interface GitCommitOptions {
   readonly timeoutMs?: number;
   readonly progress?: GitCommitProgress;
   readonly stage?: { readonly filePaths?: readonly string[] };
+}
+
+export interface ExistingBranchState {
+  readonly tip: string;
+  readonly baseSha: string;
+  /** Commits on the branch that its base lacks; any is work a reuse could lose. */
+  readonly uniqueCommits: number;
+  readonly worktreePath: string | null;
+  /** Uncommitted or untracked changes in that worktree. */
+  readonly dirty: boolean;
 }
 
 export interface GitDeleteLocalBranchInput {
@@ -291,6 +342,11 @@ export interface GitResolveRemoteTrackingCommitResult {
   remoteRefName: string;
 }
 
+export interface GitFetchWorktreeBaseCommitInput {
+  cwd: string;
+  refName: string;
+}
+
 export interface GitSetBranchUpstreamInput {
   cwd: string;
   branch: string;
@@ -398,6 +454,13 @@ export class GitVcsDriver extends Context.Service<
     readonly resolveRemoteTrackingCommit: (
       input: GitResolveRemoteTrackingCommitInput,
     ) => Effect.Effect<GitResolveRemoteTrackingCommitResult, GitCommandError>;
+    readonly resolveWorktreeBaseRemote: (
+      input: GitFetchWorktreeBaseCommitInput,
+    ) => Effect.Effect<{ remoteName: string; branchName: string } | null, GitCommandError>;
+    /** Fetches the configured upstream, explicit remote ref, or origin; null uses the local base. */
+    readonly fetchWorktreeBaseCommit: (
+      input: GitFetchWorktreeBaseCommitInput,
+    ) => Effect.Effect<GitResolveRemoteTrackingCommitResult | null, GitCommandError>;
     readonly fetchRemoteBranch: (
       input: GitFetchRemoteBranchInput,
     ) => Effect.Effect<void, GitCommandError>;
@@ -418,6 +481,12 @@ export class GitVcsDriver extends Context.Service<
      * Absolute path of the worktree that has `branch` checked out, or null when
      * no worktree of the repository at `cwd` has it.
      */
+    /** Null when `branch` does not exist; prunes worktree records whose folders are gone. */
+    readonly inspectExistingBranch: (input: {
+      readonly cwd: string;
+      readonly branch: string;
+      readonly baseRef: string;
+    }) => Effect.Effect<ExistingBranchState | null, GitCommandError>;
     readonly branchWorktreePath: (input: {
       readonly cwd: string;
       readonly branch: string;
@@ -443,7 +512,6 @@ const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const CHECKPOINT_RECOVERY_MAX_CANDIDATES = 64;
 const CHECKPOINT_RECOVERY_TIMEOUT = "5 seconds";
 const GIT_CHECK_IGNORE_MAX_STDIN_BYTES = 256 * 1024;
-const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
 const WORKSPACE_GIT_HARDENED_CONFIG_ARGS = [
   "-c",
   "core.fsmonitor=false",
@@ -562,6 +630,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   const path = yield* Path.Path;
   const vcsProcess = yield* VcsProcess.VcsProcess;
   const crypto = yield* Crypto.Crypto;
+  const hostPlatform = yield* HostProcess.Platform;
   const capabilities = {
     kind: "git" as const,
     supportsWorktrees: true,
@@ -582,7 +651,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         timeoutMs: 5_000,
         maxOutputBytes: 4_096,
       },
-    ).pipe(Effect.map((result) => result.exitCode === 0 && result.stdout.trim() === "true"));
+    ).pipe(
+      Effect.map((result) => result.exitCode === 0 && result.stdout.trim() === "true"),
+      Effect.catchIf(isMissingExecutable, () => Effect.succeed(false)),
+    );
 
   const execute: VcsDriver.VcsDriver["Service"]["execute"] = (input) =>
     gitCommand(vcsProcess, input.operation, input.cwd, input.args, {
@@ -805,37 +877,51 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       }),
     );
 
-  const resolveGitCommonDir = (cwd: string) =>
-    Effect.gen(function* () {
-      const result = yield* execute({
-        operation: "GitVcsDriver.checkpoints.resolveGitCommonDir",
-        cwd,
-        args: ["rev-parse", "--git-common-dir"],
-      });
-      const gitCommonDir = result.stdout.trim();
-      return path.isAbsolute(gitCommonDir) ? gitCommonDir : path.resolve(cwd, gitCommonDir);
+  // Git reports relative paths from the physical cwd, which can differ from a symlink.
+  const resolveGitCommonDir = Effect.fn("GitVcsDriver.resolveGitCommonDir")(function* (
+    cwd: string,
+  ) {
+    const result = yield* execute({
+      operation: "GitVcsDriver.checkpoints.resolveGitCommonDir",
+      cwd,
+      args: ["rev-parse", "--git-common-dir"],
     });
+    const gitCommonDir = result.stdout.trim();
+    if (path.isAbsolute(gitCommonDir)) return gitCommonDir;
+    const physicalCwd = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
+    return path.resolve(physicalCwd, gitCommonDir);
+  });
 
   // Git renames loose objects and refs into place without fsync by default, so
   // an unclean restart can leave 0-byte files under refs/t3/** that break every
   // later fetch and push. Checkpoint writes flush before they are published;
   // macOS defaults to writeout-only, which does not reach the disk either.
+  // Set fsync first: Git 2.36 ignores unknown batch without resetting the method.
+  // Git documents batch/fsync equivalence on macOS HFS+/APFS and Windows NTFS/ReFS;
+  // keep per-object fsync on other platforms. Batch still fully flushes refs.
   // On macOS, VcsProcess retries unsupported full flushes with plain fsync.
   const durableWrite = [
     "-c",
     "core.fsync=objects,reference",
     "-c",
     "core.fsyncMethod=fsync",
+    ...(hostPlatform === "darwin" || hostPlatform === "win32"
+      ? ["-c", "core.fsyncMethod=batch"]
+      : []),
   ] as const;
 
-  // Existing workspaces can exceed MAX_PATH even when the user's Git config disables long paths.
-  const longPaths = (yield* HostProcess.Platform) === "win32" ? ["-c", "core.longpaths=true"] : [];
+  // Checkpoints must handle existing paths beyond Windows MAX_PATH, even when
+  // core.longpaths is disabled in the user's Git configuration.
+  const longPaths = hostPlatform === "win32" ? ["-c", "core.longpaths=true"] : [];
 
   const captureTree = Effect.fn("GitVcsDriver.captureTree")(function* (input: {
     readonly cwd: string;
     readonly ref: string;
     readonly strict: boolean;
-  }): Effect.fn.Return<GitWorkspaceSnapshotResult, VcsError | GitWorkspaceSnapshotError> {
+  }): Effect.fn.Return<
+    GitWorkspaceSnapshotResult & { readonly complete: boolean },
+    VcsError | GitWorkspaceSnapshotError
+  > {
     const operation = VcsProcess.CHECKPOINT_CAPTURE_OPERATION;
     const readUntracked = Effect.fn("GitVcsDriver.snapshot.readUntracked")(function* () {
       const paths = yield* execute({
@@ -1040,54 +1126,126 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         }
       }
 
-      if (input.strict) {
-        // Newly staged paths belong to the snapshot even when ignore rules match them.
-        // Read the real index, then stage disk content only into the private index.
+      const workspaceIgnored = (yield* filterIgnoredPaths(input.cwd, ["."])).length === 0;
+      if (workspaceIgnored && !input.strict) {
+        // HEAD omits staged-only paths. Seed just this workspace's additions, keeping
+        // unrelated staged changes and the scratch index's sparse flags untouched.
         const additions = yield* execute({
           operation,
           cwd: input.cwd,
           args: [
+            "-c",
+            "core.quotePath=true",
             "diff",
             "--cached",
+            "--raw",
+            "--no-abbrev",
             "--no-renames",
-            "--name-only",
+            "--no-relative",
+            "--ignore-submodules=none",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ita-visible-in-index",
             "--diff-filter=A",
-            "-z",
-            capturedHead!,
             "--",
+            ".",
           ],
           maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+          outputMode: "error",
         });
-        const deletions = yield* execute({
-          operation,
-          cwd: input.cwd,
-          args: ["ls-files", "--deleted", "-z"],
-          maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
-        });
-        if (additions.stdoutTruncated || deletions.stdoutTruncated)
-          return yield* new GitWorkspaceSnapshotError({ code: "unsupported_snapshot" });
-        // Git's deletion scan retains dangling symlinks, unlike a filesystem stat.
-        const deletedPaths = new Set(splitNullSeparatedGitStdoutPaths(deletions));
-        const presentPaths = splitNullSeparatedGitStdoutPaths(additions).filter(
-          (name) => !deletedPaths.has(name),
-        );
-        if (presentPaths.length > 0) {
+        if (additions.stdout.length > 0) {
+          // Git's quoted paths round-trip through index-info, including non-UTF-8 names.
           yield* execute({
             operation,
             cwd: input.cwd,
-            args: [
-              "--literal-pathspecs",
-              ...indexConfig,
-              ...durableWrite,
-              "add",
-              ...(sparseCheckout ? ["--sparse"] : []),
-              "-f",
-              "--pathspec-from-file=-",
-              "--pathspec-file-nul",
-            ],
-            stdin: presentPaths.join("\0") + "\0",
+            args: [...indexConfig, "-c", "index.sparse=false", "update-index", "--index-info"],
+            stdin: additions.stdout.replace(/^:000000 ([0-7]{6}) 0+ ([0-9a-f]+) A\t/gm, "$1 $2\t"),
             env: commitEnv,
           });
+        }
+        const tracked = yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: [...indexConfig, "ls-files", "--cached", "-z", "--", "."],
+          env: commitEnv,
+          maxOutputBytes: 1,
+          outputMode: "truncate",
+        });
+        if (tracked.stdout.length === 0) {
+          return yield* new VcsUnsupportedOperationError({
+            operation,
+            kind: "git",
+            detail: "The workspace directory is ignored by its Git repository.",
+          });
+        }
+      }
+
+      let omittedContents = capturedHead === null;
+      if (input.strict || capturedHead !== null) {
+        // Newly staged paths belong to the snapshot even when ignore rules match them.
+        // Read the real index, then stage disk content only into the private index.
+        const staged = yield* Effect.gen(function* () {
+          const additions = yield* execute({
+            operation,
+            cwd: input.cwd,
+            args: [
+              "diff",
+              "--cached",
+              "--no-renames",
+              "--name-only",
+              ...(input.strict ? [] : ["--relative"]),
+              "--diff-filter=A",
+              "-z",
+              capturedHead!,
+              "--",
+              ...(input.strict ? [] : ["."]),
+            ],
+            maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+          });
+          const deletions = yield* execute({
+            operation,
+            cwd: input.cwd,
+            args: ["ls-files", "--deleted", "-z"],
+            maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+          });
+          return { additions, deletions };
+        }).pipe(Effect.result);
+        if (
+          staged._tag === "Failure" ||
+          staged.success.additions.stdoutTruncated ||
+          staged.success.deletions.stdoutTruncated
+        ) {
+          if (input.strict) {
+            if (staged._tag === "Failure") return yield* staged.failure;
+            return yield* new GitWorkspaceSnapshotError({ code: "unsupported_snapshot" });
+          }
+          omittedContents = true;
+        } else {
+          const { additions, deletions } = staged.success;
+          // Git's deletion scan retains dangling symlinks, unlike a filesystem stat.
+          const deletedPaths = new Set(splitNullSeparatedGitStdoutPaths(deletions));
+          const presentPaths = splitNullSeparatedGitStdoutPaths(additions).filter(
+            (name) => !deletedPaths.has(name),
+          );
+          if (presentPaths.length > 0) {
+            yield* execute({
+              operation,
+              cwd: input.cwd,
+              args: [
+                "--literal-pathspecs",
+                ...indexConfig,
+                ...durableWrite,
+                "add",
+                ...(sparseCheckout ? ["--sparse"] : []),
+                "-f",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+              ],
+              stdin: presentPaths.join("\0") + "\0",
+              env: commitEnv,
+            });
+          }
         }
       }
 
@@ -1101,7 +1259,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             ...durableWrite,
             "add",
             ...(sparseCheckout ? ["--sparse"] : []),
-            "-A",
+            workspaceIgnored ? "-u" : "-A",
             "--",
             ".",
             ...exclusions,
@@ -1160,6 +1318,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
                     }
                   }
                   if (exclusions.length === 0) return yield* error;
+                  omittedContents = true;
                   return yield* stageFiles(exclusions);
                 }).pipe(
                   // One budget covers discovery, queued Git admission, probes, and the staging retry.
@@ -1188,6 +1347,19 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         });
       }
 
+      // A gitlink preserves only the nested HEAD, never its dirty contents or objects.
+      // Seal completeness at production time; an exporter cannot reconstruct omitted paths
+      // by inspecting the immutable tree, nor safely substitute the later live workspace.
+      const treeEntries = yield* execute({
+        operation,
+        cwd: input.cwd,
+        args: ["ls-tree", "-r", "-z", treeOid],
+        maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+      });
+      const complete =
+        !omittedContents &&
+        !treeEntries.stdoutTruncated &&
+        !/(?:^|\0)160000 /u.test(treeEntries.stdout);
       const message = input.strict
         ? `t3 snapshot ref=${input.ref}`
         : `t3 checkpoint ref=${input.ref}`;
@@ -1266,7 +1438,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           args: [...durableWrite, "update-ref", input.ref, commitOid],
         });
       }
-      return { snapshotRef: input.ref, commitOid, addedUntrackedPaths };
+      return { snapshotRef: input.ref, commitOid, addedUntrackedPaths, complete };
     }).pipe(Effect.ensuring(cleanupTempIndex));
   });
 
@@ -1277,7 +1449,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         ref: input.checkpointRef,
         strict: false,
       }).pipe(
-        Effect.asVoid,
+        Effect.map(({ commitOid, complete }) => ({ commitOid, complete })),
         Effect.mapError((error) =>
           error._tag === "GitWorkspaceSnapshotError"
             ? new VcsProcessExitError({
@@ -1438,7 +1610,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             : []),
         ],
         allowNonZeroExit: true,
-        maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+        maxOutputBytes: input.maxOutputBytes ?? VcsDriver.CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
         outputMode: input.format === "numstat" ? "error" : "truncate",
       });
 
@@ -1480,7 +1652,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           operation,
           cwd: input.cwd,
           args: [...args, "--name-only", "-z", "--no-renames", "--no-ext-diff"],
-          maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+          maxOutputBytes: VcsDriver.CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
           outputMode: "error",
         }).pipe(Effect.map((result) => result.stdout.split("\0")));
       // Remerge diff lists a merge's paths only where the result differs from Git's
@@ -1528,7 +1700,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         cwd: input.cwd,
         ref: input.snapshotRef,
         strict: true,
-      }),
+      }).pipe(Effect.map(({ complete: _complete, ...snapshot }) => snapshot)),
     checkpoints,
     detectRepository,
     isInsideWorkTree,

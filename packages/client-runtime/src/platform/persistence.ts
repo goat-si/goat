@@ -1,4 +1,5 @@
 import {
+  IsoDateTime,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadDetailSnapshot,
@@ -77,9 +78,22 @@ export class ConnectionRegistrationStore extends Context.Service<
   }
 >()("@goat/client-runtime/platform/persistence/ConnectionRegistrationStore") {}
 
+export const ShellSnapshotMeta = Schema.Struct({
+  snapshotSequence: Schema.Number,
+  capturedAt: IsoDateTime,
+});
+export type ShellSnapshotMeta = typeof ShellSnapshotMeta.Type;
+
 export class EnvironmentCacheStore extends Context.Service<
   EnvironmentCacheStore,
   {
+    readonly loadShellMeta: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<Option.Option<ShellSnapshotMeta>, ConnectionPersistenceError>;
+    readonly saveShellMeta: (
+      environmentId: EnvironmentId,
+      meta: ShellSnapshotMeta,
+    ) => Effect.Effect<void, ConnectionPersistenceError>;
     readonly loadShell: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<Option.Option<DeferredShellSnapshot>, ConnectionPersistenceError>;

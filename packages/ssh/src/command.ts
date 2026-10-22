@@ -17,6 +17,7 @@ import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
 const SSH_COMMAND_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MAX_SSH_ERROR_OUTPUT_LENGTH = 4_000;
+const SSH_STDIN_CHUNK_BYTES = 1024 * 1024;
 const MAX_SSH_DIAGNOSTIC_PREFIX_LENGTH = 512;
 
 /**
@@ -110,8 +111,11 @@ export interface RunSshCommandOptions extends SshAuthOptions {
   readonly preHostArgs?: ReadonlyArray<string>;
   readonly remoteCommandArgs?: ReadonlyArray<string>;
   readonly stdin?: string | Uint8Array;
+  readonly onStdinProgress?: (sentBytes: number) => void;
   readonly timeoutMs?: number;
   readonly timeoutStage?: "runtime-install" | "runtime-launch" | "pairing";
+  /** Keep the end of long failed-command stdout, where the final cause usually is. */
+  readonly keepErrorOutputTail?: boolean;
 }
 
 export function parseSshResolveOutput(alias: string, stdout: string): DesktopSshEnvironmentTarget {
@@ -208,9 +212,7 @@ export function getLastNonEmptyOutputLine(stdout: string): string | null {
   );
 }
 
-export const collectProcessOutput = <E>(
-  stream: Stream.Stream<Uint8Array, E>,
-): Effect.Effect<string, E> =>
+const collectProcessOutput = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
   stream.pipe(
     Stream.decodeText(),
     Stream.runFold(
@@ -288,14 +290,15 @@ export const sshDiagnosticChunks = <E>(
     }),
   );
 
-function redactSshErrorOutput(output: string): string {
+function redactSshErrorOutput(output: string, keepTail = false): string {
   const redacted = output.replace(
     /("(?:access_token|bearerToken|credential|pairingToken|token)"\s*:\s*")[^"]+(")/giu,
     "$1[redacted]$2",
   );
-  return redacted.length > MAX_SSH_ERROR_OUTPUT_LENGTH
-    ? `${redacted.slice(0, MAX_SSH_ERROR_OUTPUT_LENGTH)}\n[truncated]`
-    : redacted;
+  if (redacted.length <= MAX_SSH_ERROR_OUTPUT_LENGTH) return redacted;
+  return keepTail
+    ? `[truncated]\n${redacted.slice(-MAX_SSH_ERROR_OUTPUT_LENGTH)}`
+    : `${redacted.slice(0, MAX_SSH_ERROR_OUTPUT_LENGTH)}\n[truncated]`;
 }
 
 function normalizeSshErrorMessage(input: {
@@ -365,10 +368,27 @@ function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
   };
 }
 
-function stdinStream(input: string | Uint8Array | undefined) {
-  return input === undefined
-    ? Stream.empty
-    : Stream.make(typeof input === "string" ? encoder.encode(input) : input);
+function stdinStream(
+  input: string | Uint8Array | undefined,
+  onProgress?: (sentBytes: number) => void,
+) {
+  if (input === undefined) return Stream.empty;
+  const bytes = typeof input === "string" ? encoder.encode(input) : input;
+  return Stream.unfold(0, (offset) =>
+    Effect.sync(() => {
+      // The stdin sink pulls again only after writing the preceding chunk and draining it.
+      if (offset > 0) {
+        try {
+          onProgress?.(offset);
+        } catch {
+          // A disposed progress observer must not interrupt an upload.
+        }
+      }
+      if (offset === bytes.byteLength) return undefined;
+      const end = Math.min(offset + SSH_STDIN_CHUNK_BYTES, bytes.byteLength);
+      return [bytes.subarray(offset, end), end] as const;
+    }),
+  );
 }
 
 const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(function* (
@@ -434,7 +454,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
         env: environment,
         extendEnv: true,
         stdin: {
-          stream: stdinStream(input.stdin),
+          stream: stdinStream(input.stdin, input.onStdinProgress),
           endOnDone: true,
         },
       }),
@@ -531,7 +551,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
   );
 
   if (exitCode !== 0) {
-    const diagnosticStdout = redactSshErrorOutput(stdout);
+    const diagnosticStdout = redactSshErrorOutput(stdout, input.keepErrorOutputTail);
     yield* Effect.logWarning("ssh.command.failed", {
       ...sshTargetLogFields(target),
       command: ["ssh", ...args],

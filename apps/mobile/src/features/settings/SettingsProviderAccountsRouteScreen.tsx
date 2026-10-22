@@ -1,3 +1,4 @@
+import { resolveProviderInstanceDisplayName } from "@goat/client-runtime/state/provider-instance-display";
 import { CodexHomeRouteStatus, includesProviderAccount } from "./CodexHomeRouteStatus";
 import * as Dialog from "../../components/ui/Dialog";
 import {
@@ -5,10 +6,22 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@goat/client-runtime/state/runtime";
-import type { ProviderAuthResponse, ServerProvider } from "@goat/contracts";
+import {
+  AuthProvidersManageScope,
+  type ProviderAuthResponse,
+  type ServerProvider,
+} from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useRef, useState } from "react";
-import { Linking, Pressable, ScrollView, TextInput, View } from "react-native";
+import { type StaticScreenProps } from "@react-navigation/native";
+import { useRef, useState, type ReactNode } from "react";
+import {
+  Linking,
+  Pressable,
+  ScrollView,
+  TextInput,
+  View,
+  type ScrollViewInstance,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -16,6 +29,7 @@ import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import { useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import {
@@ -24,58 +38,155 @@ import {
 } from "./components/SettingsEnvironmentFilterHeader";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
+import {
+  orderEnvironmentsForProviderSetup,
+  providerSetupLabel,
+  providerSetupPrompt,
+  selectProviderAccounts,
+  type ProviderAccountsRouteParams,
+} from "./provider-accounts-selection";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
 
-export function SettingsProviderAccountsRouteScreen() {
-  const { selectedTargets } = useSettingsEnvironmentFilter();
+export function SettingsProviderAccountsRouteScreen({
+  route,
+}: StaticScreenProps<ProviderAccountsRouteParams | undefined>) {
+  const selection = route.params;
+  const { availableTargets, selectedTargets } = useSettingsEnvironmentFilter();
   const providersByEnvironment = useAtomValue(environmentPresentations.providersByEnvironmentAtom);
   const insets = useSafeAreaInsets();
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  const scrolled = useRef<string | null>(null);
+  // The handoff's environment shows even when the filter hides it, without changing the filter.
+  const requestedTarget = availableTargets.find(
+    (target) => target.environmentId === selection?.environmentId,
+  );
+  const orderedTargets = orderEnvironmentsForProviderSetup(
+    requestedTarget === undefined || selectedTargets.includes(requestedTarget)
+      ? selectedTargets
+      : [requestedTarget, ...selectedTargets],
+    selection?.environmentId,
+  );
+  const permittedEnvironments = useEnvironmentsWithScope(orderedTargets, AuthProvidersManageScope);
+  const environmentMissing =
+    selection?.environmentId !== undefined &&
+    !availableTargets.some((target) => target.environmentId === selection.environmentId);
   return (
     <>
       <SettingsEnvironmentFilterHeader />
       <SettingsScreen title="Provider accounts" trailing={<AndroidSettingsEnvironmentFilter />}>
         <ScreenScrollView
+          ref={scrollRef}
           className="flex-1"
           contentInsetAdjustmentBehavior="automatic"
           contentContainerClassName="gap-6 px-5 pt-4"
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         >
-          {selectedTargets.length === 0 ? (
+          {environmentMissing ? (
+            <Text className="text-foreground-muted">
+              Connect this environment to finish provider setup.
+            </Text>
+          ) : null}
+          {orderedTargets.length === 0 ? (
             <Text className="text-foreground-muted">Select a connected environment.</Text>
           ) : (
-            selectedTargets.map((environment) => (
-              <SettingsSection key={environment.environmentId} title={environment.label}>
-                {(providersByEnvironment.get(environment.environmentId) ?? [])
-                  .filter(includesProviderAccount)
-                  .map((provider) =>
-                    provider.driver === "codex" &&
-                    provider.codexRoute?.modelRoute === "opencodex" ? (
-                      <CodexHomeRouteStatus
-                        key={provider.instanceId}
-                        environment={environment}
-                        provider={provider}
-                      />
+            orderedTargets.map((environment) => {
+              const applies = selection?.environmentId === environment.environmentId;
+              const providers = providersByEnvironment.get(environment.environmentId) ?? [];
+              const { accounts, highlighted } = selectProviderAccounts(
+                providers,
+                applies ? selection : undefined,
+                includesProviderAccount,
+              );
+              const prompt = applies
+                ? providerSetupPrompt({
+                    foundLabel: highlighted
+                      ? resolveProviderInstanceDisplayName(highlighted)
+                      : null,
+                    requestedLabel: providerSetupLabel(selection),
+                  })
+                : null;
+              return (
+                <View
+                  key={environment.environmentId}
+                  onLayout={(event) => {
+                    if (!applies || !selection) return;
+                    const token = [
+                      selection.environmentId,
+                      selection.instanceId,
+                      selection.driver,
+                    ].join(":");
+                    if (scrolled.current === token) return;
+                    scrolled.current = token;
+                    scrollRef.current?.scrollTo({
+                      y: event.nativeEvent.layout.y,
+                      animated: false,
+                    });
+                  }}
+                >
+                  <SettingsSection title={environment.label}>
+                    {!permittedEnvironments.has(environment.environmentId) ? (
+                      <View className="gap-1 p-4">
+                        <Text className="text-base text-foreground">Limited permissions</Text>
+                        <Text className="text-sm text-foreground-muted">
+                          {`This session can view ${environment.label}'s providers but can't change their settings.`}
+                        </Text>
+                      </View>
                     ) : (
-                      <ProviderAccount
-                        key={provider.instanceId}
-                        environment={environment}
-                        provider={provider}
-                      />
-                    ),
-                  )}
-                {!(providersByEnvironment.get(environment.environmentId) ?? []).some(
-                  includesProviderAccount,
-                ) ? (
-                  <Text className="p-4 text-foreground-muted">
-                    Configure a provider with in-app sign-in in web or desktop Settings.
-                  </Text>
-                ) : null}
-              </SettingsSection>
-            ))
+                      <>
+                        {prompt ? (
+                          <Text
+                            className={
+                              accounts.length === 0
+                                ? "p-4 text-sm text-foreground-muted"
+                                : "px-4 pt-4 text-sm text-foreground-muted"
+                            }
+                          >
+                            {prompt}
+                          </Text>
+                        ) : null}
+                        {accounts.map((provider) => (
+                          <ProviderAccountFrame
+                            key={provider.instanceId}
+                            highlighted={highlighted?.instanceId === provider.instanceId}
+                          >
+                            {provider.driver === "codex" &&
+                            provider.codexRoute?.modelRoute === "opencodex" ? (
+                              <CodexHomeRouteStatus environment={environment} provider={provider} />
+                            ) : (
+                              <ProviderAccount environment={environment} provider={provider} />
+                            )}
+                          </ProviderAccountFrame>
+                        ))}
+                        {accounts.length === 0 && !prompt ? (
+                          <Text className="p-4 text-foreground-muted">
+                            Configure a provider with in-app sign-in in web or desktop Settings.
+                          </Text>
+                        ) : null}
+                      </>
+                    )}
+                  </SettingsSection>
+                </View>
+              );
+            })
           )}
         </ScreenScrollView>
       </SettingsScreen>
     </>
+  );
+}
+
+function ProviderAccountFrame(props: {
+  readonly highlighted: boolean;
+  readonly children: ReactNode;
+}) {
+  return (
+    <View
+      accessibilityLabel={props.highlighted ? "Requested provider setup" : undefined}
+      accessibilityState={props.highlighted ? { selected: true } : undefined}
+      className={props.highlighted ? "bg-primary/10" : undefined}
+    >
+      {props.children}
+    </View>
   );
 }
 

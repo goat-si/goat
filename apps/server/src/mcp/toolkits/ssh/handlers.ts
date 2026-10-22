@@ -1,3 +1,7 @@
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
+import { goatclawRoleBrief, goatclawRoleTemplate } from "../../../goatclaw/RoleTemplates.ts";
+import { newCommandId } from "../../threadAccess.ts";
+import { addDevice } from "./addDevice.ts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
 import {
   type CloudMachineError,
@@ -18,21 +22,25 @@ import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
+import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
+import { admitLaunch } from "../../pressureAdmission.ts";
 import { SshToolkit, SshThreadHandoffFailure } from "./tools.ts";
 
-const isRemoteDispatchError = Schema.is(RemoteDispatchCoordinator.RemoteDispatchError);
+// Resolved per call: the coordinator sits on an import cycle through LaunchWatchService and
+// the MCP services, so its exports can still be undefined while this module evaluates.
+const isRemoteDispatchError = (u: unknown): u is RemoteDispatchCoordinator.RemoteDispatchError =>
+  Schema.is(RemoteDispatchCoordinator.RemoteDispatchError)(u);
 
 /**
  * The remote's local branches are usually behind origin, so a dispatched
  * worktree starts from origin unless the caller says otherwise. The remote
  * falls back to its local base when origin or the remote branch is missing.
  */
-export const sshLaunchWorkspace = (
-  workspace: SshLaunchWorkspace | undefined,
-): SshLaunchWorkspace =>
+const sshLaunchWorkspace = (workspace: SshLaunchWorkspace | undefined): SshLaunchWorkspace =>
   workspace === undefined
     ? { type: "cwd" }
     : workspace.type === "worktree"
@@ -89,7 +97,7 @@ const requireOrchestration = McpInvocationContext.McpInvocationContext.pipe(
  * Cloud machines bill the user's Boat account, so changing them needs what changing settings
  * needs: a live settings:write grant that is reconfirmed for this call (as memory's settings tools).
  */
-export const requireSettingsWrite = McpInvocationContext.McpInvocationContext.pipe(
+const requireSettingsWrite = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((scope) => {
     const deny = () =>
       new OrchestratorMcpFailure({
@@ -133,24 +141,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
       return yield* setup.status(input);
     }),
   ),
-  goat_ssh_host_add: McpToolAccess.writes((input) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      const setup = yield* SshHostSetup.SshHostSetup;
-      return yield* setup.add(input, { kind: "mcp", scope }).pipe(
-        Effect.mapError(
-          (error) =>
-            new OrchestratorMcpFailure({
-              code:
-                error._tag === "EnvironmentAuthorizationError"
-                  ? "capability_denied"
-                  : "orchestration_error",
-              message: error.message,
-            }),
-        ),
-      );
-    }),
-  ),
+  goat_ssh_host_add: addDevice,
   goat_ssh_host_prepare: McpToolAccess.writes((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -285,7 +276,26 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     McpToolAccess.writesEnvironment((input, check) =>
       Effect.gen(function* () {
         const caller = yield* check;
-        const runtimeMode = yield* resolveRuntimeMode(caller.limits.runtimeMode, input.runtimeMode);
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const permissions = yield* Profiles.PermissionProfiles;
+        const laneId = yield* newCommandId();
+        const effective = yield* permissions.require(scope, "threads.remote", {
+          host: input.host,
+          runtimeMode: caller.limits.runtimeMode,
+        });
+        const runtimeMode = yield* resolveRuntimeMode(effective.runtimeMode, input.runtimeMode);
+        const role = input.goatclawRole;
+        if (role !== undefined && !effective.enabled)
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "goatclaw is off, so role launches are unavailable.",
+          });
+        if (role !== undefined && input.message === undefined)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "A goatclaw role launch needs message: the task the role works on.",
+          });
+        const pressure = yield* admitLaunch(input.host);
         const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
         // The thread on this machine that launches; an outside client has none to record.
         const launcher = caller.caller;
@@ -307,18 +317,34 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
           .validateLaunchAttachments(input.attachments ?? [])
           .pipe(Effect.mapError(toMcpFailure));
         const coordinator = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
+        const referenceMessage =
+          input.references === undefined || input.references.length === 0
+            ? input.message
+            : yield* RepositoryReferenceMcpService.RepositoryReferenceMcpService.pipe(
+                Effect.flatMap((references) =>
+                  references.prepareBrief(caller.scope, {
+                    message: input.message,
+                    references: input.references!,
+                    defaultHost: input.host,
+                  }),
+                ),
+              );
         const launch: SshRemoteDispatch.SshLaunchInput = {
           host: input.host,
           cwd: input.cwd,
           workspace: sshLaunchWorkspace(input.workspace),
           title: input.title,
-          message: input.message,
+          message:
+            role === undefined || referenceMessage === undefined
+              ? referenceMessage
+              : goatclawRoleBrief(role, referenceMessage),
           projectTitle: input.projectTitle,
           // The remote project usually has no default model, so a thread caller's own
           // model is the sensible default; an outside client must pass one.
           modelSelection: input.modelSelection ?? caller.caller?.modelSelection,
           runtimeMode,
           callerRuntimeMode: caller.limits.runtimeMode,
+          ...(effective.enabled ? { permissionProfileCeiling: effective.profile } : {}),
           interactionMode: input.interactionMode,
           attachments,
           allowBroadWorkspaceRoot: input.allowBroadWorkspaceRoot,
@@ -327,7 +353,22 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
         };
         // A webhook choice is checked, and an inline secret kept, before anything runs remotely.
         const launchWatches = yield* LaunchWatchService.LaunchWatchService;
-        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const repository = input.repository;
+        const repositoryNotes =
+          repository === undefined
+            ? []
+            : yield* RepositoryLaunchMcpService.RepositoryLaunchMcpService.pipe(
+                Effect.flatMap((service) =>
+                  service.check(scope, {
+                    host: input.host,
+                    path:
+                      input.workspace?.type === "existing_worktree"
+                        ? input.workspace.worktreePath
+                        : input.cwd,
+                    repository,
+                  }),
+                ),
+              );
         // Set in the same uninterruptible step that saves the watch, which then holds the route.
         // Until then any exit, interruption included, frees the secret the route kept.
         let routeKept = false;
@@ -352,9 +393,27 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                 ),
           (route) =>
             Effect.gen(function* () {
+              const admitted = yield* permissions.claim(scope, {
+                id: laneId,
+                host: input.host,
+                runtimeMode,
+                worktree: input.workspace?.type === "worktree",
+                ...(role === undefined ? {} : { profileId: goatclawRoleTemplate(role).profileId }),
+              });
+              const guardedLaunch = {
+                ...launch,
+                runtimeMode: admitted.runtimeMode,
+                ...(admitted.enabled ? { permissionProfileCeiling: admitted.profile } : {}),
+              };
+              const authorize = check.pipe(
+                Effect.andThen(permissions.recheck(scope, admitted, { host: input.host })),
+              );
               const result = yield* Effect.gen(function* () {
                 if (scope.thread === undefined) {
-                  const value = yield* dispatch.launchThread(launch, check.pipe(Effect.asVoid));
+                  const value = yield* dispatch.launchThread(
+                    guardedLaunch,
+                    authorize.pipe(Effect.asVoid),
+                  );
                   return { ...value, correlationId: null };
                 }
                 const value = yield* coordinator.launch(
@@ -362,12 +421,23 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     kind: "thread",
                     originThreadId: scope.thread.threadId,
                     delivery: input.reportDelivery ?? "wake",
-                    launch,
+                    launch: guardedLaunch,
                   },
-                  check.pipe(Effect.asVoid),
+                  authorize.pipe(Effect.asVoid),
                 );
                 return { ...value.launch, correlationId: value.correlationId };
               }).pipe(
+                Effect.tapError((error) => {
+                  const underlying = isRemoteDispatchError(error) ? error.cause : error;
+                  return admitted.enabled &&
+                    underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+                    (underlying.reason === "remote_refused" ||
+                      underlying.reason === "invalid_request" ||
+                      underlying.reason === "host_unknown") &&
+                    underlying.launchMayHaveStarted !== true
+                    ? permissions.release(laneId)
+                    : Effect.void;
+                }),
                 Effect.mapError((error) =>
                   error instanceof SshRemoteDispatch.SshRemoteDispatchError
                     ? toMcpFailure(error)
@@ -379,6 +449,12 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                       : error,
                 ),
               );
+              if (admitted.enabled)
+                yield* permissions.complete(
+                  laneId,
+                  result.threadId,
+                  result.correlationId ?? undefined,
+                );
               const runId = result.runId === null ? null : RunId.make(result.runId);
               const watching =
                 input.notifyOnCompletion !== false && (launcher !== undefined || runId !== null)
@@ -439,8 +515,10 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
               return {
                 ...result,
                 watching,
+                ...(pressure === undefined ? {} : { pressure }),
                 notes: [
                   ...result.notes,
+                  ...repositoryNotes,
                   ...(watching && launcher === undefined
                     ? [
                         `This machine follows the thread on ${result.host} and posts to its completion webhook when the run ends, waits on a question, or if ${result.host} stays unreachable.`,
@@ -567,6 +645,10 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     Effect.gen(function* () {
       yield* requireSettingsWrite;
       const cloud = yield* CloudMachineService.CloudMachineService;
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      yield* Profiles.PermissionProfiles.pipe(
+        Effect.flatMap((permissions) => permissions.require(scope, "boat.start")),
+      );
       return yield* cloud.create(input).pipe(Effect.mapError(toCloudFailure));
     }),
   ),
@@ -581,6 +663,10 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     Effect.gen(function* () {
       yield* requireSettingsWrite;
       const cloud = yield* CloudMachineService.CloudMachineService;
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      yield* Profiles.PermissionProfiles.pipe(
+        Effect.flatMap((permissions) => permissions.require(scope, "boat.start")),
+      );
       return yield* cloud.resume(input.alias).pipe(Effect.mapError(toCloudFailure));
     }),
   ),

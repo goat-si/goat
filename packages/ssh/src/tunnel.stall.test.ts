@@ -105,8 +105,9 @@ it.effect(
         const manager = yield* SshTunnel.SshEnvironmentManager;
         const first = yield* manager.ensureEnvironment(uploadTarget);
         assert.lengthOf(costs, 1);
-        assert.equal(costs[0]?.spawns, spawns);
+        assert.equal(costs[0]?.spawns, spawns - 1);
         assert.equal(spawns, 4);
+        const firstRequestSpawns = spawns;
         assert.equal(costs[0]?.authentications, 1);
         assert.isAtLeast(Number(costs[0]?.wallMs), 0);
         assert.containsAllKeys(costs[0]?.steps, [
@@ -133,7 +134,7 @@ it.effect(
         assert.equal(relay.port, firstRelay.port);
         assert.equal(forwards, 2);
         assert.lengthOf(costs, 2);
-        assert.equal(costs[1]?.spawns, spawns - Number(costs[0]?.spawns));
+        assert.equal(costs[1]?.spawns, spawns - firstRequestSpawns - 1);
       }).pipe(
         Effect.provide(layer),
         Effect.provideService(References.MinimumLogLevel, "Info"),
@@ -142,14 +143,17 @@ it.effect(
     }).pipe(Effect.scoped),
 );
 
-it.effect("emits one timed cost summary when target resolution fails", () =>
+it.effect("records failed target resolution separately from manager preparation cost", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
     const finish = yield* Deferred.make<void>();
     const costs: Readonly<Record<string, unknown>>[] = [];
+    const requestCosts: Readonly<Record<string, unknown>>[] = [];
     const logger = Logger.make(({ fiber, message }) => {
       if (String(message) === "ssh.reconnect.cost")
         costs.push(fiber.getRef(References.CurrentLogAnnotations));
+      if (String(message) === "ssh.ensure.request.cost")
+        requestCosts.push(fiber.getRef(References.CurrentLogAnnotations));
     });
     const spawner = ChildProcessSpawner.make(() =>
       Deferred.succeed(started, undefined).pipe(
@@ -182,7 +186,10 @@ it.effect("emits one timed cost summary when target resolution fails", () =>
       yield* TestClock.adjust("7 seconds");
       yield* Deferred.succeed(finish, undefined);
       assert.equal((yield* Fiber.join(preparation))._tag, "Failure");
-      assert.deepEqual(costs, [
+      assert.lengthOf(costs, 1);
+      assert.isString(costs[0]?.operationId);
+      assert.equal(costs[0]?.spawns, 0);
+      assert.deepEqual(requestCosts, [
         {
           spawns: 1,
           authentications: 1,

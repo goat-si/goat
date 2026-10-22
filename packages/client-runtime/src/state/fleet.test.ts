@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  NodeId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -13,6 +14,7 @@ import {
   buildFleet,
   classifyFleetThread,
   createFleetSummaryAtom,
+  summarizeFleet,
   type FleetEnvironment,
   type FleetShell,
 } from "./fleet.ts";
@@ -33,6 +35,9 @@ type ShellOptions = {
   readonly launchedBy?: FleetShell["source"]["launchedBy"];
   readonly subagentOf?: string;
   readonly subagentRequest?: FleetShell["pendingSubagentRequest"];
+  readonly natives?: ReadonlyArray<
+    readonly [id: string, child: string | null, status?: "running" | "waiting"]
+  >;
   readonly createdAt?: string;
   readonly updatedAt?: string;
 };
@@ -72,6 +77,12 @@ function shell(environmentId: EnvironmentId, id: string, options: ShellOptions =
             rootThreadId: ThreadId.make(options.subagentOf),
           },
     pendingSubagentRequest: options.subagentRequest ?? null,
+    nativeSubagents: (options.natives ?? []).map(([nativeId, child, status]) => ({
+      id: NodeId.make(nativeId),
+      childThreadId: child === null ? null : ThreadId.make(child),
+      title: "task " + nativeId,
+      status: status ?? "running",
+    })),
     createdAt: options.createdAt ?? "2026-10-17T00:00:00.000Z",
     updatedAt: options.updatedAt ?? "2026-10-17T00:00:00.000Z",
     source: options.launchedBy === undefined ? {} : { launchedBy: options.launchedBy },
@@ -224,6 +235,41 @@ describe("buildFleet", () => {
     expect(fleet.threads.map((thread) => thread.title)).toEqual(["a"]);
   });
 
+  it("counts the GOAT servers that answer, as the rail does, whatever else it draws", () => {
+    const unreachable = EnvironmentId.make("unreachable");
+    const environments: FleetEnvironment[] = [
+      env(local, "Mac", ["mac", "mac.tailnet"]),
+      env(remote, "Box", ["box"]),
+      { ...env(unreachable, "Away", ["away"]), connected: false },
+    ];
+    const fleet = buildFleet({
+      environments,
+      primaryEnvironmentId: local,
+      shells: [shell(local, "a"), shell(remote, "b")],
+      remote: [
+        {
+          dispatcherEnvironmentId: local,
+          // Two routes to one server, a plain SSH host, and a stopped Boat machine.
+          launches: [launch({ host: "mac.tailnet" }), launch({ host: "devbox" })],
+          cloudMachines: [cloud({ state: "archived", label: "Nightly" })],
+        },
+      ],
+    });
+    expect(fleet.machines.map((machine) => [machine.label, machine.answering])).toEqual([
+      ["Mac", true],
+      ["Box", true],
+      ["Away", false],
+      ["Nightly", false],
+      ["devbox", false],
+    ]);
+    expect(fleet.totals.machines).toBe(2);
+    const summary = summarizeFleet(
+      [shell(local, "a"), shell(remote, "b")],
+      environments.filter((environment) => environment.connected !== false),
+    );
+    expect(summary.machines).toHaveLength(fleet.totals.machines);
+  });
+
   it("lists only top-level threads, with a subagent's request on its parent", () => {
     const fleet = buildFleet({
       environments: [env(local, "Mac")],
@@ -239,6 +285,47 @@ describe("buildFleet", () => {
     expect(fleet.threads.map((thread) => [thread.title, thread.state])).toEqual([
       ["parent", "attention"],
     ]);
+  });
+
+  it("groups native subagents, nested and under delegated children, on their top-level row", () => {
+    const fleet = buildFleet({
+      environments: [env(local, "Mac")],
+      primaryEnvironmentId: local,
+      shells: [
+        shell(local, "parent", {
+          natives: [
+            ["n1", "native-a"],
+            ["n2", null, "waiting"],
+          ],
+        }),
+        // Native child threads have no runs; a nested record lives on the spawning child.
+        shell(local, "native-a", {
+          subagentOf: "parent",
+          status: null,
+          title: "/root/reader",
+          natives: [["n3", "native-b"]],
+        }),
+        shell(local, "delegated", { subagentOf: "parent", natives: [["n4", null]] }),
+        shell(local, "other"),
+      ],
+      remote: [],
+    });
+    expect(fleet.threads.map((thread) => thread.title)).toEqual(["other", "parent"]);
+    expect(fleet.totals).toMatchObject({ running: 2, attention: 0 });
+    const [other, parent] = fleet.threads;
+    expect(
+      parent!.subagents.map((subagent) => [
+        subagent.title,
+        subagent.status,
+        subagent.ref?.threadId ?? null,
+      ]),
+    ).toEqual([
+      ["/root/reader", "running", "native-a"],
+      ["task n2", "waiting", null],
+      ["task n3", "running", "native-b"],
+      ["task n4", "running", null],
+    ]);
+    expect(other!.subagents).toEqual([]);
   });
 
   it("counts a launch whose thread is loaded here once, as that live thread", () => {
@@ -279,8 +366,14 @@ describe("buildFleet", () => {
         },
       ],
     });
-    expect(fleet.totals).toEqual({ running: 0, attention: 0, reported: 1, machines: 2 });
-    expect(fleet.machines[1]).toMatchObject({ kind: "ssh", label: "devbox", subtitle: "via Mac" });
+    // The SSH host is drawn with its reported work, but only the GOAT server counts as a machine.
+    expect(fleet.totals).toEqual({ running: 0, attention: 0, reported: 1, machines: 1 });
+    expect(fleet.machines[1]).toMatchObject({
+      kind: "ssh",
+      label: "devbox",
+      subtitle: "via Mac",
+      answering: false,
+    });
     expect(fleet.threads).toMatchObject([{ title: "Fix tests", ref: null, reportedBy: "Mac" }]);
   });
 
@@ -317,7 +410,7 @@ describe("buildFleet", () => {
     expect(fleet.machines[1]).toMatchObject({
       kind: "environment",
       subtitle: "Cloud box",
-      cloudState: "running",
+      boat: { status: "running", source: "record" },
       running: 1,
     });
   });
@@ -330,7 +423,10 @@ describe("buildFleet", () => {
       remote: [{ dispatcherEnvironmentId: local, launches: [], cloudMachines: [cloud()] }],
     });
     expect(fleet.machines).toHaveLength(2);
-    expect(fleet.machines[1]).toMatchObject({ environmentId: remote, cloudState: "running" });
+    expect(fleet.machines[1]).toMatchObject({
+      environmentId: remote,
+      boat: { status: "running", source: "record" },
+    });
     expect(fleet.totals).toMatchObject({ running: 0, attention: 0, reported: 0 });
   });
 
@@ -356,6 +452,73 @@ describe("buildFleet", () => {
       "cloud",
     ]);
     expect(fleet.machines[2]).toMatchObject({ label: "Cloud box", subtitle: "via Mac" });
+  });
+
+  it("names a reported cloud machine's Boat state, so a stopped one is not mistaken for away", () => {
+    const fleet = buildFleet({
+      environments: [env(local, "Mac")],
+      primaryEnvironmentId: local,
+      shells: [],
+      remote: [
+        {
+          dispatcherEnvironmentId: local,
+          launches: [],
+          cloudMachines: [
+            cloud({ state: "archived" }),
+            cloud({ alias: "boat-bx_zzzzzzzz" as CloudMachine["alias"], state: "provisioning" }),
+          ],
+        },
+      ],
+    });
+    expect(fleet.machines.slice(1).map((machine) => [machine.kind, machine.boat])).toEqual([
+      ["cloud", { status: "stopped", source: "record" }],
+      ["cloud", { status: "starting", source: "record" }],
+    ]);
+    expect(fleet.machines[0]!.boat).toBeNull();
+  });
+
+  it("falls back to the reserved alias only when no record describes the host", () => {
+    const fleet = buildFleet({
+      environments: [env(local, "Mac"), env(remote, "Box", ["BOAT-bx_23456789"])],
+      primaryEnvironmentId: local,
+      shells: [],
+      remote: [
+        {
+          dispatcherEnvironmentId: local,
+          launches: [launch({ host: CLOUD_ALIAS }), launch({ host: "devbox" })],
+          // The dispatcher's cloud machine list has not loaded.
+          cloudMachines: [],
+        },
+      ],
+    });
+    const byLabel = new Map(fleet.machines.map((machine) => [machine.label, machine]));
+    expect(byLabel.get(CLOUD_ALIAS)).toMatchObject({
+      kind: "cloud",
+      boat: { status: "unknown", source: "alias" },
+      reported: 1,
+    });
+    expect(byLabel.get("Box")).toMatchObject({
+      kind: "environment",
+      boat: { status: "unknown", source: "alias" },
+    });
+    expect(byLabel.get("devbox")).toMatchObject({ kind: "ssh", boat: null });
+  });
+
+  it("keeps a connected machine's Boat identity while Boat deletes it", () => {
+    const fleet = buildFleet({
+      environments: [env(local, "Mac"), env(remote, "Box", [CLOUD_ALIAS])],
+      primaryEnvironmentId: local,
+      shells: [],
+      remote: [
+        {
+          dispatcherEnvironmentId: local,
+          launches: [],
+          cloudMachines: [cloud({ deletePending: true })],
+        },
+      ],
+    });
+    expect(fleet.machines).toHaveLength(2);
+    expect(fleet.machines[1]!.boat).toEqual({ status: "deleting", source: "record" });
   });
 
   it("groups agents per machine", () => {

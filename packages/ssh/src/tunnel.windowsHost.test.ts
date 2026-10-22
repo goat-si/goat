@@ -88,6 +88,9 @@ describe("Windows SSH host", () => {
     const archive = new Uint8Array(256 * 1024).map((_, index) => index % 251);
     const script = `set -eu\ncat > "$GOAT_UPLOAD_OUT"\nprintf 'ran %s\\n' "$#"\n`;
     const command = remoteUploadCommand(script, archive, "win32");
+    assert.equal(command.archiveOffset, new TextEncoder().encode(script).byteLength);
+    assert.equal(command.archiveLength, archive.byteLength);
+    assert.deepEqual(command.stdin.subarray(command.archiveOffset), archive);
     // The remote command stays far below Windows OpenSSH's ~8 KiB limit.
     assert.isBelow(command.remoteCommandArgs.join(" ").length, 512);
     const out = NodeChildProcess.execFileSync("mktemp", [], { encoding: "utf8" }).trim();
@@ -106,6 +109,8 @@ describe("Windows SSH host", () => {
 
     const posix = remoteUploadCommand(script, archive, "linux");
     assert.strictEqual(posix.stdin, archive);
+    assert.equal(posix.archiveOffset, 0);
+    assert.equal(posix.archiveLength, archive.byteLength);
   });
 
   it.effect(

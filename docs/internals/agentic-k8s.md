@@ -569,8 +569,10 @@ goal resumes them through its own claims instead.
    `Cordoned`, is outside the goal's `hostSelector`, lacks the provider instance or the project, is at
    `maxThreads`, or when the global cap is reached. Each refusal keeps a reason.
 2. **Score** the survivors with the existing `choosePlacement`. It moves from
-   `apps/server/src/channels/channelPlacement.ts` to `apps/server/src/fleet/resources/placement.ts`; the
-   channel module re-exports it unchanged. There is one scorer.
+   `apps/server/src/channels/channelPlacement.ts` to
+   `apps/server/src/fleet/resources/placementScore.ts`; the channel module re-exports it unchanged.
+   There is one scorer. The scorer file is `placementScore.ts` rather than `placement.ts`: on a
+   case-insensitive filesystem that name is the same file as `Placement.ts`.
 3. Return `Placed` or `Refused` with the per-candidate reasons, which become the goal's `Blocked`
    condition message.
 
@@ -578,13 +580,18 @@ There is no preemption. A goal never stops someone's thread to make room; it wai
 `preemptionPolicy: Never` ([priority and preemption](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/)).
 
 **Now (T3).** `fleet` settings and `Placement` (`apps/server/src/fleet/resources/Placement.ts`)
-ship as above. The filter is `placementRules.ts`, not `placement.ts`: on a case-insensitive
-filesystem that name is the same file as `Placement.ts`. `choosePlacement` stays in
+ship as above. The filter is `placementRules.ts`. `choosePlacement` stays in
 `channelPlacement.ts` and is imported rather than moved while channel work is in flight; it is
 still the only scorer. The filter cannot see projects on a host or cordons yet: missing projects
 surface at launch, and the cordon set is an input that T2's `Health` fills. Goal reservations
 belong to T1's action claims and are not counted here. Service keys follow the repository's
 deterministic-key rule (`goat/fleet/resources/Placement`), not the shorter names above.
+
+**Now (pressure, ADR-0020).** Host status entries carry `pressure` (`ok`, `elevated`,
+`critical`), which each server derives for itself with hysteresis. `hostRefusal` refuses goal
+work on a critical host with `host_pressure`. `goat_host_status` with `placement` ranks hosts for
+one lane with `choosePlacement`'s weights plus load per core and an elevated penalty; goal
+placement still scores with `choosePlacement` alone.
 
 ## Fallback chains
 
@@ -663,13 +670,12 @@ no goal threads until the goal controller provides it.
 
 ## Interfaces between T1, T2 and T3
 
-T1 depends on T2 and T3 only through these `Context.Service` tags. Each tag has a default layer
-in `apps/server/src/fleet/defaults.ts` so T1 merges before the others, and the defaults keep T1 a
-small, honest vertical slice instead of a controller that looks complete: the default placement
-allows **this machine only** and refuses every SSH host with reason `placement_unavailable`, the
-default health classifies local threads from local projections and reports `unknown` for anything
-else, the default rescheduler refuses, and the default fallback returns `Exhausted` (so usage limits
-wait for the reset, as today). Remote goals arrive when T2 and T3 replace these layers.
+T1 depends on T2 and T3 through these `Context.Service` tags so tests can supply bounded
+implementations without replacing the controller. `apps/server/src/fleet/defaults.ts` retains
+only a refusing rescheduler for local goal tests; it is not the server's health implementation.
+The server composes health and rescheduling in `fleet/health/layer.ts`, with placement supplied
+by `fleet/resources`. Wiring these layers does not by itself authorize remote goal execution:
+the worker still enforces its remote authority and durable-dispatch prerequisites (#575).
 
 ```ts
 // apps/server/src/fleet/resources/Placement.ts (T3)
@@ -799,7 +805,7 @@ types above are the agreement.
 ## Persistence
 
 **Now.** SQLite migrations live in `apps/server/src/persistence/Migrations/` and are registered in
-`apps/server/src/persistence/Migrations.ts`; the latest is `084_MemoryCheckpointLifecycle`. Launch
+`apps/server/src/persistence/Migrations.ts`. Launch
 watches persist in `thread-launch-watches.json`.
 
 **Proposed.** Goals are control-plane rows outside the orchestration event stream. A goal is not

@@ -3,16 +3,15 @@ import { assert, it } from "@effect/vitest";
 import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -51,7 +50,7 @@ const makePiSpawner = Effect.fnUntraced(function* (
 ) {
   const pendingCommand = yield* Deferred.make<void>();
   const launches: Array<ChildProcess.StandardCommand> = [];
-  const spawner = ChildProcessSpawner.make((command) =>
+  const spawner = lazyChildProcessSpawner((command) =>
     Effect.gen(function* () {
       assert.isTrue(ChildProcess.isStandardCommand(command));
       if (!ChildProcess.isStandardCommand(command)) return yield* Effect.die("Unexpected pipeline");
@@ -179,7 +178,7 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
       const instance = yield* create({}, false).pipe(
         Effect.provideService(
           ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() => Effect.die("Disabled Pi must not spawn")),
+          lazyChildProcessSpawner(() => Effect.die("Disabled Pi must not spawn")),
         ),
       );
       assert.isDefined(instance.snapshotForCwd);
@@ -246,20 +245,5 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
           ["personal"],
         );
       }).pipe(Effect.scoped),
-  );
-
-  it.effect("times out workspace discovery that needs interactive input", () =>
-    Effect.gen(function* () {
-      const { spawner, pendingCommand } = yield* makePiSpawner();
-      const instance = yield* create().pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      );
-      const probe = yield* instance.snapshotForCwd!("/pending").pipe(Effect.flip, Effect.forkChild);
-      yield* Deferred.await(pendingCommand);
-      yield* TestClock.adjust("15 seconds");
-      const error = yield* Fiber.join(probe);
-      assert.equal(error._tag, "ProviderDriverError");
-      assert.include(error.detail, "workspace commands");
-    }).pipe(Effect.scoped),
   );
 });

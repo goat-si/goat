@@ -26,7 +26,7 @@ import "../lib/uuid";
 import * as MobileSecureStorage from "./mobile-secure-storage";
 import * as MobileStorage from "./mobile-storage";
 
-const deviceIdKey = "t3code.agent-awareness.device-id";
+const deviceIdKey = "goat.agent-awareness.device-id";
 const makeStorage = MobileStorage.make().pipe(Effect.provide(MobileSecureStorage.layer));
 
 beforeEach(() => {
@@ -55,6 +55,7 @@ describe("mobile device identity", () => {
     }),
   );
 
+  // regression: #18837 serialize initial device identity creation
   it.effect("reuses an existing device identity without generating or writing", () =>
     Effect.gen(function* () {
       values.set(deviceIdKey, "existing-device");

@@ -3,6 +3,7 @@ import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ProviderDriverKind, ProviderReplayTranscript } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -12,6 +13,8 @@ import type * as Scope from "effect/Scope";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { MigrationError } from "effect/sql/Migrator";
 import type { SqlError } from "effect/sql/SqlError";
+
+import type { DatabaseNewerThanBuildError } from "../../persistence/Errors.ts";
 
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../../config.ts";
@@ -68,6 +71,12 @@ import {
   type OrchestratorV2ScenarioResult,
 } from "./OrchestratorScenario.ts";
 import { makeProviderReplayGate, type ProviderReplayGate } from "@goat/provider-testing/replayGate";
+
+type ReplayDatabaseError =
+  | DatabaseNewerThanBuildError
+  | MigrationError
+  | PlatformError.PlatformError
+  | SqlError;
 
 export function makeReplayServerConfig(
   scenario: string,
@@ -142,6 +151,7 @@ export function makeReplayServerConfig(
       worktreesDir,
       attachmentsDir,
       browserArtifactsDir: path.join(stateDir, "browser-artifacts"),
+      notesDir: path.join(baseDir, "notes"),
       environmentThemesDir,
       logsDir,
       serverLogPath: path.join(logsDir, "server.log"),
@@ -174,7 +184,10 @@ export interface OrchestratorV2ProviderReplayHarness<
   ) => Effect.Effect<Transcript, Error>;
   readonly makeProviderAdapterRegistryLayer: (
     transcript: Transcript,
-    options?: { readonly replayGate?: ProviderReplayGate },
+    options?: {
+      readonly replayGate?: ProviderReplayGate;
+      readonly onReplayTurnComplete?: (nativeTurnId: string) => Effect.Effect<void>;
+    },
   ) => Layer.Layer<
     ProviderAdapterRegistry.ProviderAdapterRegistryV2,
     Error,
@@ -189,10 +202,7 @@ export function runOrchestratorV2ProviderReplayScenario<
   scenario: OrchestratorV2ProviderReplayScenario<Transcript>,
   harness: OrchestratorV2ProviderReplayHarness<Transcript, Error>,
   options: {
-    readonly databaseLayer?: Layer.Layer<
-      SqlClient.SqlClient,
-      MigrationError | PlatformError.PlatformError | SqlError
-    >;
+    readonly databaseLayer?: Layer.Layer<SqlClient.SqlClient, ReplayDatabaseError>;
     readonly runEffectWorker?: boolean;
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
@@ -200,12 +210,7 @@ export function runOrchestratorV2ProviderReplayScenario<
   } = {},
 ): Effect.Effect<
   OrchestratorV2ScenarioResult,
-  | Orchestrator.OrchestratorV2Error
-  | OrchestratorV2ScenarioStepError
-  | Error
-  | MigrationError
-  | PlatformError.PlatformError
-  | SqlError,
+  Orchestrator.OrchestratorV2Error | OrchestratorV2ScenarioStepError | Error | ReplayDatabaseError,
   never
 > {
   const replayGate = makeProviderReplayGate(
@@ -215,31 +220,45 @@ export function runOrchestratorV2ProviderReplayScenario<
         : [],
     ) ?? [],
   );
-  const layer = layerProviderReplay(scenario, harness, {
-    ...options,
-    replayGate,
-  });
-
   return Effect.gen(function* () {
-    const result = yield* runOrchestratorV2Scenario(scenario, { replayGate });
-    const recorder = yield* CommandOutputRecorder.CommandOutputRecorder;
-    return { ...result, commandOutput: yield* recorder.snapshot };
-  }).pipe(Effect.provide(layer));
+    const completions = new Map<string, Deferred.Deferred<void>>();
+    for (const step of scenario.steps ?? []) {
+      if (step.type === "await_replay_turn_complete") {
+        completions.set(step.nativeTurnId, yield* Deferred.make<void>());
+      }
+    }
+    const layer = layerProviderReplay(scenario, harness, {
+      ...options,
+      replayGate,
+      onReplayTurnComplete: (nativeTurnId) => {
+        const completion = completions.get(nativeTurnId);
+        return completion === undefined
+          ? Effect.void
+          : Deferred.succeed(completion, undefined).pipe(Effect.asVoid);
+      },
+    });
+    return yield* Effect.gen(function* () {
+      const result = yield* runOrchestratorV2Scenario(scenario, {
+        replayGate,
+        awaitReplayTurnComplete: (nativeTurnId) => Deferred.await(completions.get(nativeTurnId)!),
+      });
+      const recorder = yield* CommandOutputRecorder.CommandOutputRecorder;
+      return { ...result, commandOutput: yield* recorder.snapshot };
+    }).pipe(Effect.provide(layer));
+  });
 }
 
 export function layerProviderReplay<Transcript extends ProviderReplayTranscript, Error>(
   scenario: OrchestratorV2ProviderReplayScenario<Transcript>,
   harness: OrchestratorV2ProviderReplayHarness<Transcript, Error>,
   options: {
-    readonly databaseLayer?: Layer.Layer<
-      SqlClient.SqlClient,
-      MigrationError | PlatformError.PlatformError | SqlError
-    >;
+    readonly databaseLayer?: Layer.Layer<SqlClient.SqlClient, ReplayDatabaseError>;
     readonly runEffectWorker?: boolean;
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
     readonly replayGate?: ProviderReplayGate;
+    readonly onReplayTurnComplete?: (nativeTurnId: string) => Effect.Effect<void>;
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
@@ -247,12 +266,14 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
   | EventSink.EventSinkV2
   | CommandOutputRecorder.CommandOutputRecorder
   | ProviderSessionManager.ProviderSessionManagerV2,
-  Error | MigrationError | PlatformError.PlatformError | SqlError
+  Error | ReplayDatabaseError
 > {
-  const layerRegistry = harness.makeProviderAdapterRegistryLayer(
-    scenario.transcript,
-    options.replayGate === undefined ? {} : { replayGate: options.replayGate },
-  );
+  const layerRegistry = harness.makeProviderAdapterRegistryLayer(scenario.transcript, {
+    ...(options.replayGate === undefined ? {} : { replayGate: options.replayGate }),
+    ...(options.onReplayTurnComplete === undefined
+      ? {}
+      : { onReplayTurnComplete: options.onReplayTurnComplete }),
+  });
   return layerWithRegistry(scenario, layerRegistry, options);
 }
 
@@ -267,10 +288,7 @@ export function layerWithRegistry<Error>(
     readonly cloudSources?: Layer.Layer<CloudTaskSource.CloudTaskSourceService>;
     readonly projects?: Layer.Layer<ProjectService.ProjectService>;
     readonly continuationRequests?: Layer.Layer<never>;
-    readonly databaseLayer?: Layer.Layer<
-      SqlClient.SqlClient,
-      MigrationError | PlatformError.PlatformError | SqlError
-    >;
+    readonly databaseLayer?: Layer.Layer<SqlClient.SqlClient, ReplayDatabaseError>;
     readonly runEffectWorker?: boolean;
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
@@ -287,7 +305,7 @@ export function layerWithRegistry<Error>(
   | ThreadManagementService.ThreadManagementService
   | ProviderSessionManager.ProviderSessionManagerV2
   | CommandOutputRecorder.CommandOutputRecorder,
-  Error | MigrationError | PlatformError.PlatformError | SqlError
+  Error | ReplayDatabaseError
 > {
   const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
@@ -573,10 +591,7 @@ export function layerWithRegistry<Error>(
   }
   // Built before the runtime it shares stores with, so recovery commits before
   // the effect worker claims anything, as in serverRuntimeStartup.
-  const layerStartupRecovery: Layer.Layer<
-    never,
-    MigrationError | PlatformError.PlatformError | SqlError
-  > =
+  const layerStartupRecovery: Layer.Layer<never, ReplayDatabaseError> =
     options.recoverOnStartup === true
       ? Layer.effectDiscard(
           ProviderRuntimeRecoveryService.ProviderRuntimeRecoveryService.use(

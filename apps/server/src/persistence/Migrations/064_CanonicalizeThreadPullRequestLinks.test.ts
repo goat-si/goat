@@ -127,7 +127,6 @@ layer("064_CanonicalizeThreadPullRequestLinks", (it) => {
         [64, "CanonicalizeThreadPullRequestLinks"],
       ]);
       assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 64 }), []);
-      yield* runMigrations();
       const rows = yield* sql<{ readonly thread_id: string; readonly payload_json: string }>`
         SELECT thread_id, payload_json FROM orchestration_v2_projection_threads
       `;

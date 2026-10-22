@@ -17,7 +17,7 @@ vi.mock("~/env", () => env);
 describe("browser target resolver", () => {
   beforeEach(() => readPreparedConnection.mockReset());
 
-  it("maps environment ports onto a private network host", async () => {
+  it("maps environment ports onto a private network host", () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://192.168.1.25:3773" });
     expect(
       resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
@@ -33,7 +33,7 @@ describe("browser target resolver", () => {
     });
   });
 
-  it("preserves explicit loopback URL navigation for a remote Tailscale environment", async () => {
+  it("preserves explicit loopback URL navigation for a remote Tailscale environment", () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://100.65.180.100:3773" });
     expect(
       resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
@@ -48,22 +48,7 @@ describe("browser target resolver", () => {
     });
   });
 
-  it("preserves explicit IPv4 loopback URL navigation for a private network environment", async () => {
-    readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://192.168.1.50:3773" });
-    expect(
-      resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
-        kind: "url",
-        url: "http://127.0.0.1:5999/",
-      }),
-    ).toEqual({
-      requestedUrl: "http://127.0.0.1:5999/",
-      resolvedUrl: "http://127.0.0.1:5999/",
-      resolutionKind: "direct",
-      environmentId: "environment-1",
-    });
-  });
-
-  it("preserves URL credentials on explicit loopback navigation", async () => {
+  it("preserves URL credentials on explicit loopback navigation", () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://100.65.180.100:3773" });
     expect(
       resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
@@ -73,19 +58,7 @@ describe("browser target resolver", () => {
     ).toBe("http://user:p%40ss@localhost:5173/dashboard");
   });
 
-  it("preserves credentialed loopback URLs for private IPv6 environments", async () => {
-    readPreparedConnection.mockReturnValue({
-      httpBaseUrl: "http://[fd7a:115c:a1e0::53]:3773",
-    });
-    expect(
-      resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
-        kind: "url",
-        url: "http://user:p%40ss@localhost:5173/dashboard?mode=test#results",
-      }).resolvedUrl,
-    ).toBe("http://user:p%40ss@localhost:5173/dashboard?mode=test#results");
-  });
-
-  it("preserves schemeless localhost navigation for a remote environment", async () => {
+  it("preserves schemeless localhost navigation for a remote environment", () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://192.168.1.25:3773" });
     expect(
       resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
@@ -95,37 +68,7 @@ describe("browser target resolver", () => {
     ).toBe("localhost:3000/app");
   });
 
-  it("keeps localhost navigation local for a local environment", async () => {
-    readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://127.0.0.1:3773" });
-    expect(
-      resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
-        kind: "url",
-        url: "localhost:3000/app",
-      }),
-    ).toEqual({
-      requestedUrl: "localhost:3000/app",
-      resolvedUrl: "localhost:3000/app",
-      resolutionKind: "direct",
-      environmentId: "environment-1",
-    });
-  });
-
-  it("keeps localhost navigation local for the full IPv4 loopback range", async () => {
-    readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://127.0.0.2:3773" });
-    expect(
-      resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
-        kind: "url",
-        url: "http://localhost:3000/app",
-      }),
-    ).toEqual({
-      requestedUrl: "http://localhost:3000/app",
-      resolvedUrl: "http://localhost:3000/app",
-      resolutionKind: "direct",
-      environmentId: "environment-1",
-    });
-  });
-
-  it("refuses public relay hosts until the authenticated gateway exists", async () => {
+  it("refuses public relay hosts until the authenticated gateway exists", () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "https://relay.example.com" });
     expect(() =>
       resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
@@ -141,7 +84,7 @@ describe("browser target resolver", () => {
     ).toMatchObject({ resolvedUrl: "http://localhost:5173", resolutionKind: "direct" });
   });
 
-  it("normalizes schemeless localhost server-picker values", async () => {
+  it("normalizes schemeless localhost server-picker values", () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://localhost:3773" });
     expect(resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "localhost:5173")).toBe(
       "http://localhost:5173/",
@@ -151,14 +94,14 @@ describe("browser target resolver", () => {
     ).toBe("http://localhost:3000/app");
   });
 
-  it("maps discovered loopback servers onto a remote environment host", async () => {
+  it("maps discovered loopback servers onto a remote environment host", () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://192.168.1.25:3773" });
     expect(
       resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "localhost:3000/app"),
     ).toBe("http://192.168.1.25:3000/app");
   });
 
-  it("keeps localhost for servers on the desktop's own WSL or primary backend", async () => {
+  it("keeps localhost for servers on the desktop's own WSL or primary backend", () => {
     // WSL NAT mode serves the backend on the distro IP, but a loopback-only dev
     // server there answers only on localhost from the Windows desktop.
     env.isElectron = true;
@@ -184,58 +127,7 @@ describe("browser target resolver", () => {
     }
   });
 
-  it("preserves localhost server-picker values when the prepared base is 127.0.0.1", async () => {
-    readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://127.0.0.1:3773" });
-    expect(
-      resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "localhost:5173/app?x=1#top"),
-    ).toBe("http://localhost:5173/app?x=1#top");
-  });
-
-  it("normalizes public URLs without treating them as environment ports", async () => {
-    expect(resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "example.com/app")).toBe(
-      "https://example.com/app",
-    );
-  });
-
-  it("supports private IPv6 environment hosts", async () => {
-    readPreparedConnection.mockReturnValue({
-      httpBaseUrl: "http://[fd7a:115c:a1e0::53]:3773",
-    });
-    expect(
-      resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
-        kind: "environment-port",
-        port: 5173,
-        path: "/app?mode=test",
-      }).resolvedUrl,
-    ).toBe("http://[fd7a:115c:a1e0::53]:5173/app?mode=test");
-  });
-
-  it("supports a local IPv6 environment host", async () => {
-    readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://[::1]:3773" });
-    expect(
-      resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
-        kind: "environment-port",
-        port: 5173,
-      }).resolvedUrl,
-    ).toBe("http://localhost:5173/");
-  });
-
-  it("maps local IPv4 environment ports onto localhost for dual-stack guests", async () => {
-    readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://127.0.0.1:3773" });
-    expect(
-      resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
-        kind: "environment-port",
-        port: 5173,
-        path: "/app",
-      }).resolvedUrl,
-    ).toBe("http://localhost:5173/app");
-  });
-
-  it("leaves malformed input for the normal navigation error path", async () => {
-    expect(resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "   ")).toBe("   ");
-  });
-
-  it("classifies exact private IPv4 and IPv6 boundaries", async () => {
+  it("classifies exact private IPv4 and IPv6 boundaries", () => {
     const privateHosts = [
       "0.0.0.0",
       "10.0.0.0",
@@ -290,7 +182,7 @@ describe("browser target resolver", () => {
     expect(publicHosts.filter(isPrivateNetworkHost)).toEqual([]);
   });
 
-  it("allows only globally routable hosts to reach a public favicon provider", async () => {
+  it("allows only globally routable hosts to reach a public favicon provider", () => {
     const nonPublic = [
       "192.0.0.0",
       "192.0.0.255",

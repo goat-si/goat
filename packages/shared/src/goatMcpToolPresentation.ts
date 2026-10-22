@@ -51,6 +51,7 @@ export type GoatMcpToolSummaryAction =
   | "worktree-cleanup"
   | "project-list"
   | "project-read"
+  | "repository-snapshot"
   | "project-create"
   | "project-update"
   | "project-delete"
@@ -129,12 +130,12 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "pull-request",
   ),
   unwatch_pull_request: tool(
-    ["Stop watching", "Stopping watching", "Stopped watching", "a pull request"],
+    ["Stop watching", "Unwatching", "Stopped watching", "a pull request"],
     "unwatch-pr",
     "pull-request",
   ),
   write_pull_request_guides: tool(
-    ["Write", "Writing", "Started", "review guides"],
+    ["Write", "Writing", "Started writing", "review guides"],
     "write-pr-guides",
     "pull-request",
   ),
@@ -158,7 +159,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "thread-read",
   ),
   task_cancel: tool(
-    ["Cancel", "Canceling", "Requested cancellation of", "delegated task"],
+    ["Cancel", "Canceling", "Requested cancellation of", "a delegated task"],
     "task-cancel",
   ),
   schedule_task: tool(
@@ -184,6 +185,26 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_thread_status: tool(
     ["Check", "Checking", "Checked", "a GOAT thread's status"],
     "thread-read",
+  ),
+  goat_thread_replication_set: tool(
+    ["Set", "Setting", "Set", "checkpoint replication"],
+    "thread-watch",
+  ),
+  goat_thread_checkpoint_capture: tool(
+    ["Copy", "Copying", "Copied", "a thread checkpoint"],
+    "thread-watch",
+  ),
+  goat_thread_checkpoint_reconcile: tool(
+    ["Check", "Checking", "Checked", "a checkpoint recovery"],
+    "thread-watch",
+  ),
+  goat_thread_checkpoint_restore: tool(
+    ["Restore", "Restoring", "Restored", "a thread checkpoint"],
+    "thread-watch",
+  ),
+  goat_thread_handoff_host: tool(
+    ["Recover", "Recovering", "Recovered", "a watched thread"],
+    "thread-watch",
   ),
   goat_thread_watch: tool(["Watch", "Watching", "Watched", "a GOAT thread"], "thread-watch"),
   goat_thread_unwatch: tool(
@@ -398,6 +419,19 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "environment-update",
   ),
   goat_host_status: tool(["Read", "Reading", "Read", "host status"], "host-status"),
+  goat_hub_device_verify: tool(["Verify", "Verifying", "Verified", "device parity"], "host-status"),
+  goat_hub_device_join: tool(
+    ["Join", "Joining", "Joined", "a device to the hub"],
+    "environment-update",
+  ),
+  goat_hub_device_leave: tool(
+    ["Remove", "Removing", "Removed", "a device from the hub"],
+    "environment-update",
+  ),
+  goat_hub_device_repair: tool(
+    ["Repair", "Repairing", "Repaired", "a hub device"],
+    "environment-update",
+  ),
   goat_scheduler_status: tool(["Read", "Reading", "Read", "scheduler status"], "host-status"),
   goat_fallback_chain_get: tool(["Read", "Reading", "Read", "fallback chains"], "environment-read"),
   goat_fallback_chain_set: tool(
@@ -405,6 +439,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "environment-update",
   ),
   goat_goal_apply: tool(["Apply", "Applying", "Applied", "a fleet goal"], "environment-update"),
+  goat_permission_profile_get: tool(
+    ["Read", "Reading", "Read", "a permission profile"],
+    "environment-read",
+  ),
   goat_goal_get: tool(["Read", "Reading", "Read", "a fleet goal"], "host-status"),
   goat_goal_list: tool(["List", "Listing", "Listed", "fleet goals"], "host-status"),
   goat_goal_delete: tool(["Delete", "Deleting", "Deleted", "a fleet goal"], "environment-update"),
@@ -423,6 +461,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_provider_home_request: tool(
     ["Request", "Requesting", "Requested", "Codex Home approval"],
     "provider-diagnose",
+  ),
+  goat_computer_use_request: tool(
+    ["Request", "Requesting", "Requested", "computer use approval"],
+    "environment-update",
   ),
   goat_provider_diagnose: tool(
     ["Diagnose", "Diagnosing", "Diagnosed", "a provider"],
@@ -468,7 +510,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Launch", "Launching", "Launched", "a project thread"],
     "thread-create",
   ),
-  goat_ssh_host_add: tool(["Add", "Adding", "Added", "an SSH host"], "ssh-host-list"),
+  goat_ssh_host_add: tool(["Add", "Adding", "Added", "an SSH device"], "connection-add"),
   goat_ssh_host_prepare: tool(
     ["Prepare", "Preparing", "Prepared", "an SSH host"],
     "environment-update",
@@ -528,13 +570,17 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_cloud_run_list: tool(["List", "Listing", "Listed", "cloud runs"], "thread-list"),
   goat_cloud_run_forget: tool(["Forget", "Forgetting", "Forgot", "a cloud run"], "thread-update"),
   goat_connection_list: tool(["List", "Listing", "Listed", "saved connections"], "connection-list"),
-  goat_connection_add_ssh: tool(["Save", "Saving", "Saved", "an SSH connection"], "connection-add"),
+  goat_connection_add_ssh: tool(["Add", "Adding", "Added", "an SSH device"], "connection-add"),
   goat_connection_remove: tool(
     ["Remove", "Removing", "Removed", "a saved connection"],
     "connection-remove",
   ),
   goat_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
   goat_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),
+  goat_repository_snapshot: tool(
+    ["Read", "Reading", "Read", "a repository snapshot"],
+    "repository-snapshot",
+  ),
   goat_project_create: tool(
     ["Register", "Registering", "Registered", "a project"],
     "project-create",
@@ -707,10 +753,4 @@ export function resolveGoatMcpToolPresentation(
 ): GoatMcpToolPresentation | null {
   const definition = resolveGoatMcpToolDefinition(toolName);
   return definition === null ? null : { displayName: definition.displayName, logo: "t3-code" };
-}
-
-export function resolveGoatMcpToolSummaryAction(
-  toolName: string | null | undefined,
-): GoatMcpToolSummaryAction | null {
-  return resolveGoatMcpToolDefinition(toolName)?.summaryAction ?? null;
 }

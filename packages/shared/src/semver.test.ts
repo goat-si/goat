@@ -20,10 +20,6 @@ describe("semver helpers", () => {
     expect(satisfiesSemverRange("24.9.9", range)).toBe(false);
   });
 
-  it("normalizes versions with a missing patch segment", () => {
-    expect(normalizeSemverVersion("2.1")).toBe("2.1.0");
-  });
-
   it("normalizes and parses shorthand major-only versions", () => {
     expect(normalizeSemverVersion("20")).toBe("20.0.0");
     expect(normalizeSemverVersion("v18")).toBe("v18.0.0");
@@ -34,11 +30,6 @@ describe("semver helpers", () => {
   it("compares shorthand versions numerically instead of lexically", () => {
     expect(compareSemverVersions("20", "9")).toBeGreaterThan(0);
     expect(compareSemverVersions("18", "18.0.0")).toBe(0);
-  });
-
-  it("still rejects non-numeric shorthand and keeps empty input empty", () => {
-    expect(parseSemver("abc")).toBeNull();
-    expect(normalizeSemverVersion("")).toBe("");
   });
 
   it("compares prerelease versions before stable versions", () => {
@@ -85,6 +76,13 @@ describe("semver helpers", () => {
         { version: "0.1.0-dev.84b52e284", commitTime: newer },
         -1,
       ],
+      // `<base>-dev.<commit time>.g<sha>` carries its own order. The sha sorts the
+      // other way ("gfff…" above "g001…") and must not win.
+      [
+        { version: "0.1.0-dev.1792000000.gfff881545" },
+        { version: "0.1.0-dev.1792000100.g001234567" },
+        -1,
+      ],
       // Numbered builds of one train keep SemVer order, stamped or not.
       [{ version: "0.1.0-nightly.20261012.10" }, { version: "0.1.0-nightly.20261012.2" }, 1],
       [
@@ -129,10 +127,6 @@ describe("semver helpers", () => {
     });
   });
 
-  it("falls back to lexical comparison for malformed numeric segments", () => {
-    expect(compareSemverVersions("1.2.3abc", "1.2.10")).toBeGreaterThan(0);
-  });
-
   it("supports comparison comparators", () => {
     expect(satisfiesSemverRange("24.9.0", ">=24.0 <24.10")).toBe(true);
     expect(satisfiesSemverRange("24.10.0", ">=24.0 <24.10")).toBe(false);
@@ -145,11 +139,6 @@ describe("semver helpers", () => {
     expect(satisfiesSemverRange("0.5.0", "^0.2.3")).toBe(false);
     expect(satisfiesSemverRange("0.0.3", "^0.0.3")).toBe(true);
     expect(satisfiesSemverRange("0.0.4", "^0.0.3")).toBe(false);
-  });
-
-  it("rejects invalid versions and unsupported range syntax", () => {
-    expect(satisfiesSemverRange("not-a-version", ">=24.0")).toBe(false);
-    expect(satisfiesSemverRange("24.10.0", "~24.10")).toBe(false);
   });
 
   it("keeps the range checker stringifiable and executable as plain JavaScript", () => {

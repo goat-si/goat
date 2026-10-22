@@ -139,7 +139,7 @@ function InlineFileDiff(props: {
   const { nativeReviewDiffStyle, codeWordBreak } = useAppearanceCodeSurface();
   const { themeAppearance } = useAppearancePreferences();
   const filePath = resolveFileDiffPath(file);
-  // An edit's own patch names files by their absolute host path.
+  // An edit's patch is repo-relative inside the workspace, and absolute outside it.
   const displayPath = workspaceRelativeFilePath(filePath, props.workspaceRoot) ?? filePath;
   const sectionId = `inline:${filePath}`;
   const lineCount = inlineDiffLineCount(file);

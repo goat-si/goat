@@ -3,6 +3,7 @@ import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.test
 import { assert, it } from "@effect/vitest";
 import {
   CodexSettings,
+  EnvironmentAuthorizationError,
   MessageId,
   NodeId,
   RunId,
@@ -227,6 +228,7 @@ it.effect.each(["connect", "disconnect"] as const)(
     Effect.gen(function* () {
       const f = yield* approval(action);
       const before = yield* f.routes.capture(instanceId);
+      const seen: Array<ReadonlyArray<string>> = [];
       const result = yield* f.requests
         .request(
           { instanceId, action },
@@ -242,12 +244,13 @@ it.effect.each(["connect", "disconnect"] as const)(
               providerSessionId: "source-session",
             },
             client: undefined,
-            grantedScopes: ["orchestration:operate"],
-            reauthorize: () => Effect.void,
+            grantedScopes: ["orchestration:read"],
+            reauthorize: (required) => Effect.sync(() => void seen.push(required)),
           },
         )
         .pipe(Effect.provideService(HostProcess.Hostname, "vps-1"));
       assert.equal(result.kind, "needs_human");
+      assert.deepStrictEqual(seen, [["orchestration:read"]]);
       assert.equal(f.created.length, 1);
       assert.equal(
         f.created[0]?.reason,
@@ -263,4 +266,47 @@ it.effect.each(["connect", "disconnect"] as const)(
       );
       assert.deepStrictEqual(yield* f.routes.capture(instanceId), before);
     }).pipe(Effect.provide(layer)),
+);
+
+it.effect("refuses a read-only thread and a thread whose turn is no longer live", () =>
+  Effect.gen(function* () {
+    const f = yield* approval("connect");
+    const thread = {
+      environmentId,
+      readOnly: false,
+      capabilities: new Set(["orchestration" as const]),
+      issuedAt: 0,
+      requestNamespace: "approval-copy",
+      thread: {
+        threadId: ThreadId.make("owner-thread"),
+        providerInstanceId: instanceId,
+        providerSessionId: "source-session",
+      },
+      client: undefined,
+      grantedScopes: ["orchestration:read" as const],
+      reauthorize: () => Effect.void,
+    };
+    const readOnly = yield* f.requests.request(
+      { instanceId, action: "connect" },
+      { ...thread, readOnly: true },
+    );
+    assert.equal(readOnly.kind, "error");
+    if (readOnly.kind === "error") assert.equal(readOnly.code, "unsupported");
+    const dead = yield* f.requests.request(
+      { instanceId, action: "connect" },
+      {
+        ...thread,
+        reauthorize: () =>
+          Effect.fail(
+            new EnvironmentAuthorizationError({
+              requiredScope: "orchestration:read",
+              message: "The turn is no longer live.",
+            }),
+          ),
+      },
+    );
+    assert.equal(dead.kind, "error");
+    if (dead.kind === "error") assert.equal(dead.code, "capability_denied");
+    assert.equal(f.created.length, 0);
+  }).pipe(Effect.provide(layer)),
 );

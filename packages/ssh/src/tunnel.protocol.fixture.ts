@@ -1,6 +1,8 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert } from "@effect/vitest";
+import { build } from "vite-plus";
+import * as NodeURL from "node:url";
 import * as NetService from "@goat/shared/Net";
 import * as Crypto from "effect/Crypto";
 import * as Clock from "effect/Clock";
@@ -11,7 +13,12 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
-import { exitWithTestParent } from "./testParentLifetime.fixture.ts";
+import {
+  exitWithTestOwner,
+  exitWithTestParent,
+  killGroupWithTestOwner,
+  TEST_OWNER_FILE,
+} from "./testParentLifetime.fixture.ts";
 import * as SshTunnel from "./tunnel.ts";
 import {
   remoteShell,
@@ -38,6 +45,8 @@ export const protocolExecutable = (
     liveTokens?: string;
     descriptor404?: boolean;
     nodeReadiness?: boolean;
+    /** Hold SIGTERM until the stop controller releases it, then report actual exit via EOF. */
+    stopBarrier?: boolean;
     /** Advertise `drainRestart` with a per-start instance id and answer the drain endpoint. */
     drain?: boolean;
     /** Build commit time answered by `__ssh-helper commit-time`; unstamped when absent. */
@@ -50,8 +59,8 @@ export const protocolExecutable = (
     contestedAttempts?: number;
   },
   state: string,
+  helperUrl = new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href,
 ) => {
-  const helperUrl = new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href;
   // From packages/ssh/src, ../../../apps resolves the repository apps directory.
   return `#!${process.execPath}
 (async () => {
@@ -130,7 +139,8 @@ console.log((value.status ? value.status + " " : "") + [value.serverVersion ?? "
 } else if (args[0] === "__ssh-helper" && args[1] === "drain") {
   const value = await (await import(${JSON.stringify(helperUrl)})).requestSshRuntimeDrain({
     port: Number(flag("--port")), instanceId: flag("--instance-id"), targetVersion: flag("--target-version"),
-    graceSeconds: Number(flag("--grace-seconds")), force: args.includes("--force"), tokenFile: flag("--token-file") });
+    graceSeconds: Number(flag("--grace-seconds")), force: args.includes("--force"), tokenFile: flag("--token-file"),
+    automatic: process.env.GOAT_RUNTIME_DRAIN_AUTOMATIC === "1" });
   event("drain-request", { value, force: args.includes("--force"), grace: Number(flag("--grace-seconds")) }); console.log(value);
 } else if (args[0] === "__ssh-helper" && args[1] === "supervise") {
   // Supervised children prove readiness through their descriptor, not the readiness FIFO.
@@ -151,16 +161,32 @@ console.log((value.status ? value.status + " " : "") + [value.serverVersion ?? "
   if (contestedPort !== null && pickCount < ${JSON.stringify(signals.contestedAttempts ?? 1)}) {
     fs.writeFileSync(picked, String(pickCount + 1)); console.log(contestedPort); return;
   }
-  const socket = net.createServer(); socket.listen(0, "127.0.0.1", () => {
-const port = socket.address().port; socket.close(() => console.log(port));
-  });
+  const claim = (left) => {
+    if (left <= 0) process.exit(1);
+    const probe = net.createServer();
+    probe.listen(0, "127.0.0.1", () => {
+      const port = probe.address().port;
+      probe.close(() => {
+        const check = net.createServer();
+        check.once("error", () => claim(left - 1));
+        check.listen({ port, host: "127.0.0.1", exclusive: true }, () => {
+          check.close(() => console.log(port));
+        });
+      });
+    });
+  };
+  claim(32);
 } else if (args[0] === "__ssh-helper" && args[1] === "wait-ready") {
   const proof = path.join(test, "pending-proof");
   if (fs.existsSync(proof)) {
     const action = fs.readFileSync(proof, "utf8").trim();
     event("pending-proof", { action });
     if (action === "readiness") process.exit(2);
-    if (action === "ownership-loss") fs.writeFileSync(path.join(state, "managed"), "external\\n");
+    if (action === "ownership-loss") {
+      // A foreign server now holds the port, so the next launch can neither keep nor adopt it.
+      fs.writeFileSync(path.join(test, "foreign-command"), "node /srv/dev/goat/bin.ts serve\\n");
+      fs.writeFileSync(path.join(state, "managed"), "external\\n");
+    }
   }
   // Fixture readiness uses an event, not polling or a delay.
   let record = fs.existsSync(runtimeFile) ? JSON.parse(fs.readFileSync(runtimeFile, "utf8")) : null;
@@ -184,7 +210,18 @@ res.resume(); res.on("end", () => process.exit(res.statusCode === 200 ? 0 : 1));
   console.log(JSON.stringify(args[1] === "pairing" ? {credential: version} : {token: version, expiresAt: null}));
 } else if (args[0] === "serve") {
   ${exitWithTestParent('args.includes("--test-seed") || process.env.T3_TEST_SEED === "1"')}
+  ${exitWithTestOwner("test")}
   if (fs.existsSync(path.join(test, "fail-start-" + version))) { event("failed-start"); process.exit(3); }
+  const serveExitFile = path.join(test, "serve-exit-" + version);
+  if (fs.existsSync(serveExitFile)) {
+    const spec = fs.readFileSync(serveExitFile, "utf8");
+    const breakAt = spec.indexOf("\\n");
+    const code = Number((breakAt < 0 ? spec : spec.slice(0, breakAt)).trim());
+    const message = breakAt < 0 ? "" : spec.slice(breakAt + 1);
+    event("serve-exit", { code });
+    if (message !== "") console.error(message.replace(/\\n$/, ""));
+    process.exit(Number.isInteger(code) && code >= 0 && code < 256 ? code : 1);
+  }
   const at = args.indexOf("--port"); const requested = at < 0 ? 0 : Number(args[at+1]);
   const instanceId = drainCapable ? require("node:crypto").randomUUID() : undefined;
   const descriptor = {environmentId: "fixture", label: "Fixture", platform: {os: "linux", arch: "x64"},
@@ -201,6 +238,7 @@ if (req.method === "POST" && req.url === "/.well-known/goat/runtime/drain" && dr
     const token = fs.readFileSync(tokenFile, "utf8").trim();
     if (req.headers["x-goat-runtime-control"] !== token) { res.statusCode = 403; res.end("{}"); return; }
     if (request.expectedInstanceId !== instanceId) { res.end(JSON.stringify({status: "instance-changed", instanceId, forced: false})); return; }
+    event("drain-body", { automatic: request.automatic === true });
     const file = path.join(test, "drain");
     const mode = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "drained";
     if (mode === "response-lost") {
@@ -230,10 +268,47 @@ if (["/.well-known/goat/activity", "/.well-known/t3/activity"].includes(req.url)
 }
 res.end(["/.well-known/goat/environment", "/.well-known/t3/environment"].includes(req.url) ? JSON.stringify(descriptor) : "ok");
   });
-  process.on("SIGTERM", () => {
-event("stop");
+  const stop = () => {
 if (fs.existsSync(runtimeFile) && JSON.parse(fs.readFileSync(runtimeFile, "utf8")).pid === process.pid) fs.unlinkSync(runtimeFile);
 server.close(() => process.exit(0));
+  };
+  let stopRequested = false;
+  const stopObservers = new Set();
+  if (${JSON.stringify(signals.stopBarrier ?? false)}) {
+    const control = net.createServer(socket => {
+      stopObservers.add(socket);
+      let pending = "";
+      socket.on("error", error => { throw error; });
+      socket.on("close", () => stopObservers.delete(socket));
+      socket.on("data", data => {
+        pending += data;
+        if (!pending.endsWith("\\n")) return;
+        if (pending === "observe\\n") {
+          if (stopRequested) socket.write("stopping\\n");
+          pending = "";
+          return;
+        }
+        if (pending !== "exit\\n" || !stopRequested) throw new Error("Unexpected stop release");
+        pending = "";
+        stop();
+      });
+      socket.write("ready\\n");
+    });
+    await new Promise(resolve => control.listen(0, "127.0.0.1", resolve));
+    fs.writeFileSync(path.join(test, "stop-port-" + process.pid), String(control.address().port));
+  }
+  process.on("SIGTERM", () => {
+event("stop");
+if (${JSON.stringify(signals.stopBarrier ?? false)}) {
+  stopRequested = true;
+  for (const socket of stopObservers) socket.write("stopping\\n");
+} else stop();
+  });
+  if (process.env.T3_TEST_SEED === "1") server.once("error", error => {
+    if (error.code !== "EADDRINUSE") throw error;
+    const failure = { seedBindError: error.code, pid: process.pid, port: requested };
+    event("seed-bind-failure", failure);
+    process.stdout.write(JSON.stringify(failure) + "\\n", () => process.exit(1));
   });
   server.listen(requested, "127.0.0.1", () => {
 const record = {version: 1, pid: process.pid, port: server.address().port,
@@ -256,7 +331,11 @@ else if (!${JSON.stringify((signals.nodeReadiness ?? false) || signals.contested
 
 export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* (input: {
   live: boolean;
-  kind: "managed" | "external";
+  /**
+   * `external` runs a foreign command line (a developer's own server). `orphan` runs GOAT's
+   * managed invocation with no launch records or runner, as after a manual restart.
+   */
+  kind: "managed" | "external" | "orphan";
   oldVersion: string;
   ssh?: number;
   orchestration?: number;
@@ -266,6 +345,7 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   liveTokens?: string;
   descriptor404?: boolean;
   nodeMode?: boolean;
+  stopBarrier?: boolean;
   contestedPort?: number;
   contestedAttempts?: number;
   homePrefix?: string;
@@ -286,6 +366,45 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   const old = `${home}/.goat/runtime/goat/versions/${input.oldVersion}`;
   const cache = `${home}/cache`;
   for (const dir of [state, test, old, cache]) yield* fs.makeDirectory(dir, { recursive: true });
+  yield* fs.writeFileString(`${test}/${TEST_OWNER_FILE}`, String(process.pid));
+  const helperSource = new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url);
+  const helperEntry = `${test}/helpers.entry.mjs`;
+  yield* fs.writeFileString(
+    helperEntry,
+    `export { readLiveSshRuntimeProtocol, readSshRuntimeCompatibility, readSshServerActivity, requestSshRuntimeDrain, superviseSshRuntimeReplacement } from ${JSON.stringify(NodeURL.fileURLToPath(helperSource))};`,
+  );
+  const scriptsEntry = `${test}/scripts.entry.mjs`;
+  yield* fs.writeFileString(
+    scriptsEntry,
+    `export { buildRemoteGoatRunnerScript, buildRemoteLaunchScript, buildRemotePairingScript, buildRemoteMcpSessionScript, buildRemoteRuntimeProbeScript, buildRemoteGoatUploadInstallerScript } from ${JSON.stringify(NodeURL.fileURLToPath(new URL("./tunnel.ts", import.meta.url)))};`,
+  );
+  // Every subprocess still calls production code. Bundle once so repeated Node starts
+  // do not spend the ownership race's deadline loading unrelated schemas and CLI commands.
+  yield* Effect.promise(() =>
+    build({
+      configFile: false,
+      logLevel: "silent",
+      ssr: { noExternal: true },
+      build: {
+        ssr: true,
+        outDir: test,
+        emptyOutDir: false,
+        target: "node24",
+        rollupOptions: {
+          input: { sshHelper: helperEntry, scripts: scriptsEntry },
+          external: (id) => id.startsWith("node:"),
+          treeshake: { moduleSideEffects: false },
+          output: {
+            entryFileNames: "[name].mjs",
+            chunkFileNames: "chunks/[name]-[hash].mjs",
+            format: "es",
+          },
+        },
+      },
+    }),
+  );
+  const helperUrl = NodeURL.pathToFileURL(`${test}/sshHelper.mjs`).href;
+  const scriptsUrl = NodeURL.pathToFileURL(`${test}/scripts.mjs`).href;
   // Node-mode launches pick a port from the production default (3773). Parallel test files and
   // concurrent CI jobs on one host would race for it, so start this fixture's pick at its own
   // reserved port. The shim only rewrites that argument; argv0 stays "node" for ps checks.
@@ -316,18 +435,23 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
   yield* fs.writeFileString(`${test}/pids`, "");
   const fifo = yield* realSpawner.spawn(ChildProcess.make("mkfifo", [`${test}/ready.fifo`]));
   assert.equal(Number(yield* fifo.exitCode), 0);
-  yield* fs.writeFileString(`${old}/goat`, protocolExecutable(input.oldVersion, input, state));
+  yield* fs.writeFileString(
+    `${old}/goat`,
+    protocolExecutable(input.oldVersion, input, state, helperUrl),
+  );
   yield* fs.chmod(`${old}/goat`, 0o700);
   yield* fs.writeFileString(`${old}/.install-complete`, input.oldVersion + "\n");
   const nodeEntry = `${home}/old dev's entry.cjs`;
   if (input.nodeMode)
     yield* fs.writeFileString(
       nodeEntry,
-      protocolExecutable(input.oldVersion, { ...input, nodeReadiness: true }, state),
+      protocolExecutable(input.oldVersion, { ...input, nodeReadiness: true }, state, helperUrl),
     );
   const oldRunner =
     (yield* nativeScripts(
       input.nodeMode ? { nodeScriptPath: nodeEntry } : { archiveVersion: input.oldVersion },
+      undefined,
+      scriptsUrl,
     )).runner + "\n";
   yield* fs.writeFileString(`${state}/run-t3.sh`, oldRunner);
   yield* fs.chmod(`${state}/run-t3.sh`, 0o700);
@@ -350,47 +474,84 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
   let pid = 0;
   let port = 0;
   if (input.live) {
-    const nodePort = input.nodeMode ? yield* NetService.make().reserveLoopbackPort() : 0;
-    const child = yield* realSpawner.spawn(
-      ChildProcess.make(
-        input.nodeMode ? process.execPath : `${old}/goat`,
-        input.nodeMode
-          ? [
-              nodeEntry,
-              "serve",
-              "--host",
-              "127.0.0.1",
-              "--port",
-              String(nodePort),
-              "--base-dir",
-              `${home}/.goat`,
-            ]
-          : ["serve", "--test-seed"],
-        {
-          env: {
-            HOME: home,
-            PATH: process.env.PATH ?? "",
-            ...(input.nodeMode ? { T3_TEST_SEED: "1" } : {}),
+    // Node identity checks need the real positive --port argv. A seed can lose
+    // its reservation before bind; only its own confirmed bind failure may retry.
+    for (let attempt = 0; attempt < (input.nodeMode ? 3 : 1); attempt++) {
+      const nodePort = input.nodeMode ? yield* NetService.make().reserveLoopbackPort() : 0;
+      const child = yield* realSpawner.spawn(
+        ChildProcess.make(
+          input.nodeMode ? process.execPath : `${old}/goat`,
+          input.nodeMode
+            ? [
+                nodeEntry,
+                "serve",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                String(nodePort),
+                "--base-dir",
+                `${home}/.goat`,
+              ]
+            : ["serve", "--test-seed"],
+          {
+            env: {
+              HOME: home,
+              PATH: process.env.PATH ?? "",
+              ...(input.nodeMode ? { T3_TEST_SEED: "1" } : {}),
+            },
+            extendEnv: false,
           },
-          extendEnv: false,
-        },
-      ),
-    );
-    const ready = JSON.parse(
-      yield* child.stdout.pipe(
+        ),
+      );
+      if (input.stopBarrier)
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            if (yield* child.isRunning) yield* child.kill({ killSignal: "SIGKILL" });
+          }).pipe(Effect.orDie),
+        );
+      const line = yield* child.stdout.pipe(
         Stream.decodeText(),
         Stream.splitLines,
         Stream.take(1),
         Stream.mkString,
-      ),
-    ) as { pid: number; port: number };
-    assert.equal(ready.pid, Number(child.pid));
-    pid = ready.pid;
-    port = ready.port;
-    if (!input.nodeMode) yield* installArchivePsDouble(home, pid, port, input.oldVersion);
-    yield* fs.writeFileString(`${state}/pid`, `${pid}\n`);
-    yield* fs.writeFileString(`${state}/port`, `${port}\n`);
-    yield* fs.writeFileString(`${state}/managed`, input.kind + "\n");
+      );
+      if (line === "") {
+        return yield* Effect.die(new Error("Protocol seed stdout ended before readiness"));
+      }
+      const ready = JSON.parse(line) as { pid: number; port: number; seedBindError?: unknown };
+      assert.equal(ready.pid, Number(child.pid));
+      if (input.nodeMode && ready.seedBindError === "EADDRINUSE") {
+        assert.equal(ready.port, nodePort);
+        assert.notEqual(Number(yield* child.exitCode), 0);
+        if (attempt < 2) continue;
+        return yield* Effect.die(
+          new Error("Protocol Node seed exhausted 3 bind attempts (EADDRINUSE)"),
+        );
+      }
+      assert.isUndefined(ready.seedBindError);
+      assert.isTrue(Number.isInteger(ready.port) && ready.port > 0);
+      if (input.nodeMode) assert.equal(ready.port, nodePort);
+      pid = ready.pid;
+      port = ready.port;
+      break;
+    }
+    if (!input.nodeMode)
+      yield* installArchivePsDouble(
+        home,
+        pid,
+        port,
+        input.oldVersion,
+        input.kind === "external"
+          ? `node ${home}/dev/goat/apps/server/src/bin.ts serve --port ${port}`
+          : undefined,
+      );
+    if (input.kind === "orphan") {
+      yield* fs.remove(`${state}/run-t3.sh`);
+    } else {
+      yield* fs.writeFileString(`${state}/pid`, `${pid}\n`);
+      yield* fs.writeFileString(`${state}/port`, `${port}\n`);
+      yield* fs.writeFileString(`${state}/managed`, input.kind + "\n");
+    }
     if (input.kind === "managed")
       yield* fs.writeFileString(
         `${state}/identity`,
@@ -410,6 +571,7 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
         drain: true,
       },
       state,
+      helperUrl,
     ),
   );
   yield* fs.chmod(`${stage}/goat`, 0o700);
@@ -471,7 +633,9 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
   };
   const fixtureScope = yield* Scope.Scope;
   const remoteSpawn = (command: ChildProcess.Command) =>
-    realSpawner.spawn(command).pipe(Effect.provideService(Scope.Scope, fixtureScope));
+    realSpawner
+      .spawn(killGroupWithTestOwner(command))
+      .pipe(Effect.provideService(Scope.Scope, fixtureScope));
   const transport = ChildProcessSpawner.make((command) => {
     if (command._tag !== "StandardCommand") return remoteSpawn(command);
     if (command.command === "gh") {

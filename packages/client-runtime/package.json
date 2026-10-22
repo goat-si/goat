@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./hub-nodes": {
+      "types": "./src/hubNodes.ts",
+      "default": "./src/hubNodes.ts"
+    },
+    "./cloud-machines": {
+      "types": "./src/cloudMachines.ts",
+      "default": "./src/cloudMachines.ts"
+    },
     "./memory-browsing": {
       "types": "./src/memoryBrowsing.ts",
       "default": "./src/memoryBrowsing.ts"
@@ -43,6 +51,10 @@
       "types": "./src/goatBot/index.ts",
       "default": "./src/goatBot/index.ts"
     },
+    "./workspace-basename-lookup": {
+      "types": "./src/workspaceBasenameLookup.ts",
+      "default": "./src/workspaceBasenameLookup.ts"
+    },
     "./composerThreadItems": {
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
@@ -54,6 +66,10 @@
     "./handoff": {
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
+    },
+    "./computerUseGrant": {
+      "types": "./src/computerUseGrant.ts",
+      "default": "./src/computerUseGrant.ts"
     },
     "./device/stream": {
       "types": "./src/device/stream.ts",
@@ -227,6 +243,10 @@
       "types": "./src/state/presentation.ts",
       "default": "./src/state/presentation.ts"
     },
+    "./state/hubProxy": {
+      "types": "./src/state/hubProxy.ts",
+      "default": "./src/state/hubProxy.ts"
+    },
     "./state/device": {
       "types": "./src/state/device.ts",
       "default": "./src/state/device.ts"
@@ -355,6 +375,14 @@
       "types": "./src/state/fleetHeat.ts",
       "default": "./src/state/fleetHeat.ts"
     },
+    "./state/fleet-host-health": {
+      "types": "./src/state/fleetHostHealth.ts",
+      "default": "./src/state/fleetHostHealth.ts"
+    },
+    "./state/hub-fleet": {
+      "types": "./src/state/hubFleet.ts",
+      "default": "./src/state/hubFleet.ts"
+    },
     "./state/host-metrics": {
       "types": "./src/state/host-metrics.ts",
       "default": "./src/state/host-metrics.ts"
@@ -394,6 +422,10 @@
     "./state/thread-subagents": {
       "types": "./src/state/threadSubagents.ts",
       "default": "./src/state/threadSubagents.ts"
+    },
+    "./state/thread-undo": {
+      "types": "./src/state/threadUndo.ts",
+      "default": "./src/state/threadUndo.ts"
     },
     "./state/thread-settled": {
       "types": "./src/state/threadSettled.ts",
@@ -538,6 +570,18 @@
     "./rpc/session": {
       "types": "./src/rpc/session.ts",
       "default": "./src/rpc/session.ts"
+    },
+    "./notes": {
+      "types": "./src/notes/index.ts",
+      "default": "./src/notes/index.ts"
+    },
+    "./notes/rpc": {
+      "types": "./src/notes/rpc/index.ts",
+      "default": "./src/notes/rpc/index.ts"
+    },
+    "./model-traits": {
+      "types": "./src/modelTraits.ts",
+      "default": "./src/modelTraits.ts"
     }
   },
   "scripts": {

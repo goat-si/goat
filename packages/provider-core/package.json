@@ -187,6 +187,10 @@
       "types": "./src/server/textGenerationUtils.ts",
       "import": "./src/server/textGenerationUtils.ts"
     },
+    "./server/strictOutputSchema": {
+      "types": "./src/server/strictOutputSchema.ts",
+      "import": "./src/server/strictOutputSchema.ts"
+    },
     "./server/threadTitleContext": {
       "types": "./src/server/threadTitleContext.ts",
       "import": "./src/server/threadTitleContext.ts"

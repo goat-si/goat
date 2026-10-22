@@ -2,9 +2,10 @@ import {
   AntigravitySettings,
   ClaudeSettings,
   CodexSettings,
+  EasDeviceHostConfig,
+  secretSettingsFields,
   type ServerSettings,
   UsageLimitSourceConfig,
-  secretSettingsFields,
 } from "@goat/contracts";
 import { acpRegistryClient } from "@goat/provider-acp-registry/client";
 import { cursorClient } from "@goat/provider-cursor/client";
@@ -31,6 +32,7 @@ const providerSecretFields = new Map([
   ),
 ]);
 const usageLimitSecretFields = secretSettingsFields(UsageLimitSourceConfig);
+const easDeviceHostSecretFields = secretSettingsFields(EasDeviceHostConfig);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 
 export interface SettingsSecret {
@@ -142,6 +144,17 @@ export function mapSettingsSecrets(
     ]),
   ) as ServerSettings["usageLimitSources"];
 
+  const easDeviceHosts = settings.easDeviceHosts.map(
+    (host) =>
+      mapFields(
+        host,
+        easDeviceHostSecretFields,
+        (field, serverHost) =>
+          `device-host-${encode(host.id)}-${encode(field)}` +
+          (serverHost === null ? "" : `-${encode(serverHost)}`),
+      ) as EasDeviceHostConfig,
+  );
+
   // GOAT: the launch watch completion webhook, and each named target, sign their posts with these.
   const completionWebhook = {
     ...mapFields(settings.completionWebhook, ["secret"], () => "completion-webhook-secret"),
@@ -159,5 +172,6 @@ export function mapSettingsSecrets(
     sourceControlHosts,
     usageLimitSources,
     completionWebhook,
+    easDeviceHosts,
   };
 }

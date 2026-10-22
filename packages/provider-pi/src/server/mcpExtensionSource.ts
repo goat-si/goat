@@ -3,6 +3,7 @@
  * `@earendil-works/pi-coding-agent` and `typebox` from the user's pi install.
  */
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
+import { COMPUTER_USE_INSTRUCTIONS } from "@goat/provider-core/server/runtimeInstructions";
 
 export const PI_GOAT_MCP_EXTENSION_FILENAME = "pi-goat-mcp-extension.ts";
 
@@ -10,6 +11,13 @@ export const GOAT_MCP_URL_ENV = "GOAT_MCP_URL";
 export const GOAT_MCP_BEARER_ENV = "GOAT_MCP_BEARER_TOKEN";
 export const GOAT_PI_RUNTIME_MODE_ENV = "GOAT_PI_RUNTIME_MODE";
 export const GOAT_PI_MCP_EXTENSION_PATH_ENV = "GOAT_PI_MCP_EXTENSION_PATH";
+/** The managed Cua Driver's stdio MCP command, as JSON `{ command, args, env }`. */
+export const GOAT_CUA_MCP_ENV = "GOAT_CUA_MCP";
+/**
+ * A file the adapter rewrites before every turn: `on` while the turn may use the driver this
+ * process launched with, anything else (Plan, read-only, a changed driver) closes it for the turn.
+ */
+export const GOAT_CUA_GATE_ENV = "GOAT_CUA_GATE";
 
 /**
  * Pi tools whose confirmations the bridge raises as file-change approvals.
@@ -21,13 +29,17 @@ export const PI_GOAT_MCP_EXTENSION_SOURCE = `\
 import { stripFrontmatter, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { Type } from "typebox";
 
 const URL_ENV = ${JSON.stringify(GOAT_MCP_URL_ENV)};
 const TOKEN_ENV = ${JSON.stringify(GOAT_MCP_BEARER_ENV)};
 const RUNTIME_MODE_ENV = ${JSON.stringify(GOAT_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(GOAT_PI_MCP_EXTENSION_PATH_ENV)};
+const CUA_ENV = ${JSON.stringify(GOAT_CUA_MCP_ENV)};
+const CUA_GATE_ENV = ${JSON.stringify(GOAT_CUA_GATE_ENV)};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(GOAT_ORCHESTRATION_INSTRUCTIONS.trim())};
+const COMPUTER_USE_INSTRUCTIONS = ${JSON.stringify(COMPUTER_USE_INSTRUCTIONS)};
 const PROTOCOL = "2025-06-18";
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const FILE_CHANGE_TOOLS = new Set(${JSON.stringify(PI_FILE_CHANGE_TOOLS)});
@@ -240,6 +252,129 @@ function createMcpClient(endpoint: string, token: string) {
   };
 }
 
+type StdioMcpSpec = { command: string; args: string[]; env: Record<string, string> };
+
+/** A newline-delimited JSON-RPC client for a stdio MCP server, started on first use. */
+function createStdioMcpClient(spec: StdioMcpSpec) {
+  let nextId = 1;
+  let child: ChildProcess | undefined;
+  const waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+
+  const failAll = (error: Error) => {
+    for (const pending of waiting.values()) pending.reject(error);
+    waiting.clear();
+  };
+  const start = async () => {
+    // Loaded on first use, so sessions without computer use never touch it.
+    const { spawn } = await import("node:child_process");
+    const current = spawn(spec.command, spec.args, {
+      env: { ...process.env, ...spec.env },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    child = current;
+    let buffer = "";
+    current.stdout?.setEncoding("utf8");
+    current.stdout?.on("data", (chunk: string) => {
+      buffer += chunk;
+      const lines = buffer.split("\\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let message: JsonRpcResponse;
+        try {
+          message = JSON.parse(line) as JsonRpcResponse;
+        } catch {
+          continue;
+        }
+        const pending = typeof message.id === "number" ? waiting.get(message.id) : undefined;
+        if (pending === undefined) continue;
+        waiting.delete(message.id as number);
+        if (message.error) pending.reject(new Error(message.error.message ?? "MCP error"));
+        else pending.resolve(message.result);
+      }
+    });
+    // Only the current driver's exit fails calls: a replaced one's late exit
+    // must not fail the calls already waiting on its replacement.
+    const stopped = () => {
+      if (child !== current) return;
+      child = undefined;
+      failAll(new Error("Cua Driver stopped. Call the tool again to start a new session."));
+    };
+    current.on("exit", stopped);
+    current.on("error", stopped);
+  };
+  const request = async (method: string, params?: unknown, signal?: AbortSignal) => {
+    if (child === undefined) await start();
+    return new Promise<unknown>((resolve, reject) => {
+      const id = nextId++;
+      waiting.set(id, { resolve, reject });
+      signal?.addEventListener("abort", () => {
+        if (waiting.delete(id)) reject(new Error("Aborted"));
+      });
+      child?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\\n");
+    });
+  };
+  const notify = (method: string, params?: unknown) => {
+    child?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\\n");
+  };
+  const connect = async (signal?: AbortSignal) => {
+    await request(
+      "initialize",
+      { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "goat-pi-mcp", version: "1.0.0" } },
+      signal,
+    );
+    notify("notifications/initialized", {});
+  };
+
+  return {
+    connect,
+    async listTools(signal?: AbortSignal) {
+      const result = (await request("tools/list", {}, signal)) as { tools?: McpTool[] } | undefined;
+      return result?.tools ?? [];
+    },
+    async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+      // A driver that exited (the session ended) starts again and needs a handshake.
+      if (child === undefined) await connect(signal);
+      return request("tools/call", { name, arguments: args }, signal);
+    },
+    close() {
+      const current = child;
+      child = undefined;
+      current?.kill();
+      failAll(new Error("Cua Driver stopped. Call the tool again to start a new session."));
+    },
+  };
+}
+
+// A process launched by an adapter without the gate keeps its launch-time behavior. Once the
+// gate exists, anything but "on", including a missing or unreadable file, closes the driver.
+async function readCuaGate(): Promise<boolean> {
+  const path = env(CUA_GATE_ENV);
+  if (path === undefined) return true;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    return (await readFile(path, "utf8")).trim() === "on";
+  } catch {
+    return false;
+  }
+}
+
+function cuaSpec(): StdioMcpSpec | undefined {
+  const raw = env(CUA_ENV);
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as { command?: unknown; args?: unknown; env?: unknown };
+    if (typeof parsed.command !== "string" || !Array.isArray(parsed.args)) return undefined;
+    return {
+      command: parsed.command,
+      args: parsed.args.map(String),
+      env: (parsed.env ?? {}) as Record<string, string>,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export default async function goatMcpExtension(pi: ExtensionAPI) {
   // Keep skill chips in the request. Pi expands only one leading /skill:
   // command, so use its own frontmatter loader for every selected chip here.
@@ -445,12 +580,91 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     }
   });
 
-  // Deliver orchestration guidance through pi's real system-prompt channel.
-  // Wrapping the first user message instead would stop it from starting
-  // with "/" and silently break slash-command expansion.
-  pi.on("before_agent_start", (event, ctx) => {
+  // The managed Cua Driver, registered as mcp__cua-driver__<tool> like other
+  // harnesses name it. Its screenshots pass through as image content.
+  const cua = cuaSpec();
+  let computerUse = false;
+  // Turns this process may not use the driver on (Plan, read-only, a changed driver) close it.
+  let cuaOpen = true;
+  const cuaToolNames: string[] = [];
+  let closeCua: () => void = () => undefined;
+  if (cua !== undefined) {
+    const cuaClient = createStdioMcpClient(cua);
+    closeCua = () => cuaClient.close();
+    pi.on("session_shutdown", () => cuaClient.close());
+    try {
+      const signal = AbortSignal.timeout(20_000);
+      await cuaClient.connect(signal);
+      for (const tool of await cuaClient.listTools(signal)) {
+        const name = tool.name;
+        const description = tool.description ?? name;
+        cuaToolNames.push("mcp__cua-driver__" + name);
+        pi.registerTool({
+          name: \`mcp__cua-driver__\${name}\`,
+          label: name,
+          description,
+          promptSnippet: description.split("\\n")[0] ?? name,
+          parameters: jsonSchemaToTypebox(tool.inputSchema),
+          async execute(_toolCallId, params, signal) {
+            if (!cuaOpen)
+              return {
+                content: [{ type: "text", text: "Computer use is off for this turn." }],
+                details: { server: "cua-driver", tool: name },
+                isError: true,
+              };
+            const result = await cuaClient.callTool(
+              name,
+              (params ?? {}) as Record<string, unknown>,
+              signal,
+            );
+            return {
+              content: mcpModelContent(result),
+              details: { server: "cua-driver", tool: name },
+              ...(isMcpToolError(result) ? { isError: true } : {}),
+            };
+          },
+        });
+      }
+      computerUse = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      pi.on("session_start", async (_event, ctx) => {
+        ctx.ui.notify(\`Cua Driver unavailable: \${message}\`, "warning");
+      });
+    }
+  }
+
+  // Keep guidance in the system prompt so leading slash commands still expand.
+  pi.on("before_agent_start", async (event, ctx) => {
     reconcileDiscovery(ctx);
-    return { systemPrompt: event.systemPrompt + "\\n\\n" + ORCHESTRATION_INSTRUCTIONS };
+    if (computerUse) {
+      const open = await readCuaGate();
+      if (!open && cuaOpen) {
+        // End the driver connection before the turn starts, not just its tools.
+        closeCua();
+        pi.setActiveTools(pi.getActiveTools().filter((name) => !cuaToolNames.includes(name)));
+      } else if (open && !cuaOpen) {
+        const active = pi.getActiveTools();
+        pi.setActiveTools([...active, ...cuaToolNames.filter((name) => !active.includes(name))]);
+      }
+      cuaOpen = open;
+    }
+    const withComputerUse = computerUse && cuaOpen;
+    const sections = event.systemPromptOptions?.sections;
+    if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
+      // A full prompt override bypasses Pi's later section rendering.
+      sections.goat_code_orchestration = ORCHESTRATION_INSTRUCTIONS;
+      if (withComputerUse) sections.goat_computer_use = COMPUTER_USE_INSTRUCTIONS;
+      else delete sections.goat_computer_use;
+      return undefined;
+    }
+    return {
+      systemPrompt:
+        event.systemPrompt +
+        "\\n\\n" +
+        ORCHESTRATION_INSTRUCTIONS +
+        (withComputerUse ? "\\n\\n" + COMPUTER_USE_INSTRUCTIONS : ""),
+    };
   });
 }
 `;

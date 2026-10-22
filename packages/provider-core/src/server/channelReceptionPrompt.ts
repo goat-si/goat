@@ -168,6 +168,91 @@ function toActionResult(
   }
 }
 
+type LetterScript = "latin" | "korean" | "japanese" | "chinese" | "cyrillic" | "arabic";
+
+function countLetterScripts(text: string): Record<LetterScript, number> {
+  const counts: Record<LetterScript, number> = {
+    latin: 0,
+    korean: 0,
+    japanese: 0,
+    chinese: 0,
+    cyrillic: 0,
+    arabic: 0,
+  };
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0;
+    if (
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0xc0 && code <= 0x24f)
+    ) {
+      counts.latin += 1;
+    } else if (code >= 0xac00 && code <= 0xd7a3) {
+      counts.korean += 1;
+    } else if ((code >= 0x3040 && code <= 0x30ff) || (code >= 0x31f0 && code <= 0x31ff)) {
+      counts.japanese += 1;
+    } else if (code >= 0x4e00 && code <= 0x9fff) {
+      counts.chinese += 1;
+    } else if (code >= 0x0400 && code <= 0x04ff) {
+      counts.cyrillic += 1;
+    } else if (code >= 0x0600 && code <= 0x06ff) {
+      counts.arabic += 1;
+    }
+  }
+  return counts;
+}
+
+/** The script of the person's own words, so the reply is not left to the model's default. */
+function dominantLetterScript(text: string): LetterScript | null {
+  const counts = countLetterScripts(text);
+  // Kana marks Japanese even when most of the message is kanji.
+  if (counts.japanese > 0 && counts.japanese + counts.chinese >= counts.latin) return "japanese";
+  let best: LetterScript | null = null;
+  let bestCount = 0;
+  for (const script of Object.keys(counts) as LetterScript[]) {
+    const count = counts[script];
+    if (count > bestCount) {
+      best = script;
+      bestCount = count;
+    }
+  }
+  return bestCount === 0 ? null : best;
+}
+
+function personLanguageText(input: ChannelReceptionInput): string {
+  if (input.mode === "input") return input.inputText ?? "";
+  return input.tail
+    .filter((entry) => entry.role === "user")
+    .map((entry) => entry.text)
+    .join("\n");
+}
+
+/**
+ * Names the language of the person's words. A model whose own default is another language
+ * still has to follow this; "the same language" alone was not enough.
+ */
+function receptionLanguageDirective(text: string): string {
+  const fields = "replyText, title, question, and instruction";
+  const override =
+    "This overrides your default language and any standing note, fact, or update written in another language.";
+  switch (dominantLetterScript(text)) {
+    case "latin":
+      return `The person's words are in a Latin-script language. Write ${fields} in that same language. Do not write them in Chinese, Japanese, Korean, or any other script. ${override}`;
+    case "korean":
+      return `The person's words are in Korean. Write ${fields} in Korean. ${override}`;
+    case "japanese":
+      return `The person's words are in Japanese. Write ${fields} in Japanese. ${override}`;
+    case "chinese":
+      return `The person's words are in Chinese. Write ${fields} in Chinese. ${override}`;
+    case "cyrillic":
+      return `The person's words are in a Cyrillic-script language. Write ${fields} in that same language. Do not switch scripts. ${override}`;
+    case "arabic":
+      return `The person's words are in Arabic. Write ${fields} in Arabic. ${override}`;
+    default:
+      return `Write ${fields} in the same language as the person's own words. Do not switch to another language. ${override}`;
+  }
+}
+
 export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
   const tail = input.tail
     .map((entry) => (entry.role === "user" ? "Person: " : "GOAT: ") + entry.text)
@@ -266,7 +351,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "- When the person asks to continue a task on another machine because its remote machine stopped answering, choose move_task and pick host from allowedHosts (the other machines listed below).",
     "- Questions about which other machines you can see or reach are answered with report_only from the list of other machines below; say their reachability was not checked. Asking to connect to one, test it, or run work there starts a coding agent with host set.",
     "",
-    "Style: one to three short sentences, warm and plain, outcome first. No internal ids unless the person needs them.",
+    "Style: one to three short sentences, warm and plain, outcome first. No internal ids unless the person needs them. replyText, title, question, and instruction use the person's language, even when a note or fact is in another language.",
     "",
     "Choose exactly one action:",
     "- create_task: work that needs a coding agent. Fill title (short, in the person's language) and instruction (complete and self-contained: the goal, the context from this conversation, relevant standing notes, and what to report back). Set projectId to one listed below whenever one fits. Set host only when the person asks for the work to run on one of the other machines listed below.",
@@ -322,10 +407,9 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
         ]),
     subject,
     "",
-    // Last, so the language follows the person rather than the environment the model runs in.
-    input.mode === "input"
-      ? "Write replyText in the same language as the new message above."
-      : "Write replyText in the language the person used in the recent conversation, not the language of the update. Say only what the update says happened.",
+    ...(input.mode === "task_event" ? ["Say only what the update says happened."] : []),
+    // Last, and it names the script, so a model whose default is another language still follows the person.
+    receptionLanguageDirective(personLanguageText(input)),
   ].join("\n");
 
   return { prompt, outputSchema: ChannelReceptionModelOutput };

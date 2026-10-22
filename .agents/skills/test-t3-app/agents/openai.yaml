@@ -1,4 +1,0 @@
-interface:
-  display_name: "GOAT App Testing"
-  short_description: "Test web and desktop in GOAT's Browser panel"
-  default_prompt: "Use $test-t3-app to verify the affected web or desktop flow through GOAT's Browser panel."

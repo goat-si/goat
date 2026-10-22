@@ -1,4 +1,5 @@
 export * from "./catalog.ts";
+export * from "./diagnosis.ts";
 export * as Connectivity from "./connectivity.ts";
 export * as CredentialStore from "./credentialStore.ts";
 export {
@@ -8,6 +9,7 @@ export {
 } from "./driver.ts";
 export * from "./errors.ts";
 export * from "./githubRoutingPermissions.ts";
+export * from "./hostFreeze.ts";
 export * as Connection from "./layer.ts";
 export * from "./model.ts";
 export * as ConnectionOnboarding from "./onboarding.ts";
@@ -31,3 +33,7 @@ export { OutdatedHostUpdateError } from "./outdatedHostUpdate.ts";
 
 export * from "./desktopLocal.ts";
 export { handleConnectionCatalogOperation } from "./catalogHost.ts";
+
+export * as HubProxyAuth from "./hubProxyAuthSource.ts";
+export type { HubProxyAuthorization } from "./hubProxyAuthSource.ts";
+export * from "./hubProxyDiscovery.ts";

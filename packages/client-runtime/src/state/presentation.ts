@@ -4,6 +4,7 @@ import {
   type EnvironmentId,
   type ServerConfig,
   type ServerProvider,
+  type SshHostStatus,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -73,7 +74,22 @@ function sameConnection(
   left: EnvironmentConnectionPresentation,
   right: EnvironmentConnectionPresentation,
 ): boolean {
-  return left.phase === right.phase && left.error === right.error && left.traceId === right.traceId;
+  return (
+    left.phase === right.phase &&
+    left.error === right.error &&
+    left.traceId === right.traceId &&
+    left.stage === right.stage &&
+    left.retryAt === right.retryAt &&
+    left.unreachable === right.unreachable &&
+    left.failureSuppressed === right.failureSuppressed &&
+    left.failureOrigin === right.failureOrigin &&
+    left.sshPreparation === right.sshPreparation &&
+    left.sshRuntimeReady === right.sshRuntimeReady &&
+    left.failure?.kind === right.failure?.kind &&
+    left.failure?.reason === right.failure?.reason &&
+    left.failure?.detail === right.failure?.detail &&
+    left.failure?.traceId === right.failure?.traceId
+  );
 }
 
 function withoutProviders(
@@ -107,6 +123,9 @@ export function createEnvironmentPresentationAtoms<E>(input: {
     environmentId: EnvironmentId,
   ) => Atom.Atom<AsyncResult.AsyncResult<SupervisorConnectionState, E>>;
   readonly serverConfigValueAtom: (environmentId: EnvironmentId) => Atom.Atom<ServerConfig | null>;
+  readonly sshRuntimeStatusAtom?: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<SshHostStatus | undefined>;
 }) {
   const presentationAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
@@ -121,7 +140,12 @@ export function createEnvironmentPresentationAtoms<E>(input: {
       const previous = Option.getOrNull(get.self<EnvironmentPresentation | null>());
       const connection: EnvironmentConnectionPresentation =
         entry.unsupportedReason === undefined
-          ? presentEnvironmentConnection(state)
+          ? presentEnvironmentConnection(
+              state,
+              input.sshRuntimeStatusAtom === undefined
+                ? undefined
+                : get(input.sshRuntimeStatusAtom(environmentId)),
+            )
           : { phase: "unsupported", error: entry.unsupportedReason, traceId: null };
       const next = {
         entry,

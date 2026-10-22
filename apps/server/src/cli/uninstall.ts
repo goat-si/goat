@@ -14,10 +14,19 @@ import * as Schema from "effect/Schema";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 
 import * as BootService from "../cloud/bootService.ts";
-import { pinnedRuntimeVersionsDir } from "../cloud/pinnedRuntime.ts";
+import {
+  launcherOwnsVersionsDir,
+  pinnedRuntimeVersionsDir,
+  windowsShimTarget,
+} from "../cloud/pinnedRuntime.ts";
+import {
+  SERVICE_RESTART_PENDING_FILE,
+  SERVICE_STATE_FILE,
+  SERVICE_STOP_MARKER_FILE,
+} from "../cloud/serviceProtocol.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import * as CliService from "./service.ts";
-import { findWindowsShim, launcherOwnsVersionsDir, resolveLauncherPath } from "./update.ts";
+import { findWindowsShim, resolveLauncherPath } from "./update.ts";
 
 export class CliUninstallError extends Schema.TaggedError<CliUninstallError>()(
   "CliUninstallError",
@@ -32,8 +41,16 @@ export interface UninstallPlan {
   readonly service: boolean;
   readonly launcher: string | undefined;
   readonly runtimeDir: string | undefined;
+  /** Launcher files that sit beside `runtime/goat`, not inside it. */
+  readonly runtimeResidue: ReadonlyArray<string>;
   readonly userdataDir: string;
 }
+
+const SERVICE_RUNTIME_RESIDUE = [
+  SERVICE_STATE_FILE,
+  SERVICE_STOP_MARKER_FILE,
+  SERVICE_RESTART_PENDING_FILE,
+] as const;
 
 /**
  * Only a launcher that points into this home's `runtime/goat/versions` is claimed: a plain copy of the
@@ -51,7 +68,7 @@ export const findOwnedLauncher = Effect.fn("cli.uninstall.find_launcher")(functi
     const shimPath = yield* findWindowsShim(input.launchedAs);
     if (shimPath === undefined) return undefined;
     const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    const target = Option.isSome(contents) ? /^"([^"]+)"/m.exec(contents.value)?.[1] : undefined;
+    const target = Option.isSome(contents) ? windowsShimTarget(contents.value) : undefined;
     return target !== undefined && launcherOwnsVersionsDir(path, input.versionsDir, target)
       ? shimPath
       : undefined;
@@ -74,13 +91,20 @@ const planUninstall = Effect.fn("cli.uninstall.plan")(function* (input: {
     path.resolve(status.installedBaseDir) === path.resolve(input.baseDir);
   const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
   const runtimeDir = path.dirname(versionsDir);
+  const runtimeRoot = path.dirname(runtimeDir);
   const launchedAs = (yield* HostProcess.IsExecutable) ? yield* resolveLauncherPath : undefined;
+  const runtimeResidue: string[] = [];
+  for (const name of SERVICE_RUNTIME_RESIDUE) {
+    const file = path.join(runtimeRoot, name);
+    if (yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))) runtimeResidue.push(file);
+  }
   const plan: UninstallPlan = {
     service: status.supported && status.installed && servesThisHome,
     launcher: yield* findOwnedLauncher({ launchedAs, versionsDir }),
     runtimeDir: (yield* fs.exists(runtimeDir).pipe(Effect.orElseSucceed(() => false)))
       ? runtimeDir
       : undefined,
+    runtimeResidue,
     userdataDir: path.join(input.baseDir, "userdata"),
   };
   return plan;
@@ -120,11 +144,16 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
   const service = yield* BootService.BootService;
   const plan = yield* planUninstall({ baseDir: input.baseDir });
 
-  if (!plan.service && plan.launcher === undefined && plan.runtimeDir === undefined) {
+  if (
+    !plan.service &&
+    plan.launcher === undefined &&
+    plan.runtimeDir === undefined &&
+    plan.runtimeResidue.length === 0
+  ) {
     yield* Console.log(`Nothing to remove: goat is not installed for ${input.baseDir}.`);
     if (!(yield* HostProcess.IsExecutable)) {
       yield* Console.log(
-        "  This goat runs from a Node script, so it was installed by npm or built from source. Remove it the same way (`npm uninstall -g t3`, or delete the checkout).",
+        "  This goat runs from a Node script, so it was installed by npm or built from source. Remove it the same way (`npm uninstall -g goat`, or delete the checkout).",
       );
     }
     return;
@@ -135,6 +164,9 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
   if (plan.launcher !== undefined) yield* Console.log(`  the launcher at ${plan.launcher}`);
   if (plan.runtimeDir !== undefined) {
     yield* Console.log(`  every downloaded version under ${plan.runtimeDir}`);
+  }
+  if (plan.runtimeResidue.length > 0) {
+    yield* Console.log("  service state left beside the downloaded runtime");
   }
   yield* Console.log(
     `Your projects, threads, and settings under ${plan.userdataDir} are kept. Delete that directory yourself if you want them gone too.`,
@@ -203,6 +235,14 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
         );
       yield* Console.log(`Removed ${plan.runtimeDir}.`);
     }
+  }
+  for (const file of plan.runtimeResidue) {
+    yield* fs
+      .remove(file, { force: true })
+      .pipe(Effect.mapError(() => new CliUninstallError({ reason: `Could not remove ${file}.` })));
+  }
+  if (plan.runtimeResidue.length > 0) {
+    yield* Console.log("Removed leftover service state.");
   }
   yield* Console.log("");
   yield* Console.log("goat is uninstalled. Thanks for trying GOAT.");

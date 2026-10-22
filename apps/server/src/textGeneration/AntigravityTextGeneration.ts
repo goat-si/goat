@@ -4,6 +4,7 @@ import {
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
 import { type ProviderSetupError, TextGenerationError } from "@goat/contracts";
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -115,6 +116,8 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
             operation,
             detail:
               "Antigravity text generation is unavailable for profiles with global hooks or MCP configuration. Select another system model.",
+            // Typed so memory pauses this model: the profile refuses every request.
+            cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
           });
         }
 
@@ -223,7 +226,10 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
                 new TextGenerationError({
                   operation,
                   detail: "Could not select the Antigravity model for text generation.",
-                  cause,
+                  // Memory treats a model it cannot select as unavailable until settings change.
+                  cause: TextGenerationOperations.isMemoryOperation(operation)
+                    ? new MemoryGenerationRunnerError({ code: "unavailable" })
+                    : cause,
                 }),
             });
 
@@ -231,6 +237,8 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
               return yield* new TextGenerationError({
                 operation,
                 detail: "Antigravity did not disclose its selected memory model.",
+                // Typed so memory pauses this model: it is undisclosed on every try.
+                cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
               });
             const result = yield* runtime.prompt({
               prompt: [

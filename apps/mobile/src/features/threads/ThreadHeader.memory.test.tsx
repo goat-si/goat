@@ -1,5 +1,4 @@
 import { act } from "react";
-// @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import {
   createNativeMemoryHarness,
@@ -16,7 +15,7 @@ vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({
   }),
 }));
 vi.mock("../workspace/useAndroidWorkspaceNavigation", () => ({
-  useWorkspaceListNavigation: () => () => {},
+  useWorkspaceBackNavigation: () => () => {},
 }));
 vi.mock("../../native/NativeWorkspaceColumns", () => ({
   useNativeWorkspaceColumnsSupported: () => false,

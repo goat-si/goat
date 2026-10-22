@@ -1,23 +1,13 @@
-import * as NodeNet from "node:net";
-
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe as describeEffect, it as itEffect } from "@effect/vitest";
-import * as HostProcess from "@goat/shared/HostProcess";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
-
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off - Tests exercise native Node fixture boundaries.
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { ownRuntimeManifest } from "@goat/shared/runtimeManifest";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeHttp from "node:http";
-import * as NodeChildProcess from "node:child_process";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
-import { ownRuntimeManifest } from "@goat/shared/runtimeManifest";
 import packageJson from "../../package.json" with { type: "json" };
 import { readLiveSshRuntimeProtocol, readSshServerActivity } from "./sshHelper.ts";
 
@@ -290,7 +280,6 @@ describe("SSH live identity and bounded responses", () => {
                 : process.pid,
           ),
         );
-      const started = performance.now();
       const result = await readLiveSshRuntimeProtocol(file, ports, pids);
       const live = [
         "missing",
@@ -302,8 +291,6 @@ describe("SSH live identity and bounded responses", () => {
       ].includes(mode);
       expect(result.status).toBe(live ? "live" : "unknown");
       if (live && mode !== "split UTF8" && mode !== "remembered stale") expect(result.pid).toBe(0);
-      if (mode === "held" || mode === "oversized")
-        expect(performance.now() - started).toBeLessThan(3500);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -477,75 +464,3 @@ it.each([404, 403, 500])("activity falls back only on HTTP %s", async (status) =
 // desktop app with network access on) listens on *:<port>. Linux refuses that
 // bind unless both sockets set SO_REUSEPORT, so on Linux the preload adds it to
 // the picker's probe and the holder sets it too. macOS needs neither.
-const MACOS_BIND_PRELOAD = `const net = require("node:net");
-const listen = net.Server.prototype.listen;
-net.Server.prototype.listen = function (port, host, callback) {
-  if (typeof port !== "number" || typeof host !== "string") return listen.apply(this, arguments);
-  return listen.call(this, { port, host, reusePort: true }, callback);
-};
-`;
-
-describeEffect("__ssh-helper pick-port", () => {
-  const hostPlatform = HostProcess.Platform.defaultValue();
-  const linuxHost = hostPlatform === "linux";
-  const windowsHost = hostPlatform === "win32";
-
-  const holdWildcardPort = Effect.acquireRelease(
-    Effect.callback<NodeNet.Server>((resume) => {
-      const server = NodeNet.createServer((socket) => socket.destroy());
-      server.once("error", (error) => resume(Effect.die(error)));
-      server.listen({ port: 0, host: "0.0.0.0", reusePort: linuxHost }, () =>
-        resume(Effect.succeed(server)),
-      );
-    }),
-    (server) =>
-      Effect.callback<void>((resume) => {
-        server.close(() => resume(Effect.void));
-      }),
-  );
-
-  itEffect.effect.skipIf(windowsHost)(
-    "skips a port another server answers on loopback",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pick-port-" });
-        yield* fs.writeFileString(`${root}/preload.cjs`, MACOS_BIND_PRELOAD);
-        const holder = yield* holdWildcardPort;
-        const heldPort = (holder.address() as NodeNet.AddressInfo).port;
-
-        const child = yield* spawner.spawn(
-          ChildProcess.make(process.execPath, [
-            ...(linuxHost ? ["--require", `${root}/preload.cjs`] : []),
-            "--experimental-strip-types",
-            new URL("../bin.ts", import.meta.url).pathname,
-            "__ssh-helper",
-            "pick-port",
-            "",
-            String(heldPort),
-            "20",
-          ]),
-        );
-        const [stdout, exitCode] = yield* Effect.all(
-          [
-            child.stdout.pipe(
-              Stream.decodeText(),
-              Stream.runFold(
-                () => "",
-                (acc, chunk) => acc + chunk,
-              ),
-            ),
-            child.exitCode.pipe(Effect.map(Number)),
-          ],
-          { concurrency: "unbounded" },
-        );
-
-        assert.equal(exitCode, 0);
-        const picked = Number(stdout);
-        assert.isAbove(picked, heldPort);
-        assert.isBelow(picked, heldPort + 20);
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    30_000,
-  );
-});

@@ -1,15 +1,10 @@
-import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
-  ScheduledTaskId,
-  ScheduledTask,
-  OrchestrationV2ThreadForkSourcePoint,
-  OrchestrationV2ContextTransfer,
-  TrimmedNonEmptyString,
-  ModelSelection,
-  RuntimeMode,
-  ProviderInteractionMode,
   IsoDateTime,
+  ModelSelection,
+  NonNegativeInt,
+  OrchestrationV2ContextTransfer,
+  OrchestrationV2DispatchCommandResult,
+  OrchestrationV2ThreadForkSourcePoint,
   OrchestratorMcpFailure,
   OrchestratorMcpPendingRequestListInput,
   OrchestratorMcpPendingRequestListResult,
@@ -19,22 +14,27 @@ import {
   OrchestratorMcpPendingRequestRespondResult,
   OrchestratorMcpThreadSearchInput,
   OrchestratorMcpThreadSearchResult,
-  OrchestrationV2DispatchCommandResult,
-  ThreadId,
+  ProviderInteractionMode,
   RunId,
-  NonNegativeInt,
+  RuntimeMode,
+  ScheduledTask,
+  ScheduledTaskId,
+  ThreadId,
   ThreadResult,
   ThreadResultReport,
+  TrimmedNonEmptyString,
 } from "@goat/contracts";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
+import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 
-import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
-import * as PendingQuestionsMcpService from "../../PendingQuestionsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as PendingQuestionsMcpService from "../../PendingQuestionsMcpService.ts";
 import * as ThreadSearchMcpService from "../../ThreadSearchMcpService.ts";
 
 const ThreadOrganizeTool = Tool.make(agentSurfaceRegistry["thread.organize"].name, {

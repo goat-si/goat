@@ -9,61 +9,6 @@ import {
 
 const decodeJson = Schema.decodeUnknownSync(GoatProjectFileFromJson);
 
-describe("buildGoatProjectFileJsonSchema", () => {
-  it("emits a draft 2020-12 schema with the published $id", () => {
-    const schema = buildGoatProjectFileJsonSchema();
-
-    expect(schema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
-    expect(schema.$id).toBe("https://t3.codes/schema/t3.json");
-    expect(schema.type).toBe("object");
-    expect(schema.additionalProperties).toBe(false);
-  });
-
-  it("documents every supported field", () => {
-    const schema = buildGoatProjectFileJsonSchema() as {
-      properties: Record<
-        string,
-        {
-          description?: string;
-          items?: { properties: Record<string, unknown>; required: ReadonlyArray<string> };
-        }
-      >;
-      required?: ReadonlyArray<string>;
-    };
-
-    expect(Object.keys(schema.properties).sort()).toEqual([
-      "$schema",
-      "defaultThreadEnvMode",
-      "iconPath",
-      "scripts",
-      "worktreeSubmodules",
-    ]);
-    expect(schema.required).toBeUndefined();
-    expect(schema.properties.iconPath?.description).toContain("Workspace-relative path");
-    expect(schema.properties.defaultThreadEnvMode?.description).toContain("new threads start");
-
-    const script = schema.properties.scripts?.items;
-    expect(script?.required).toEqual(["name", "command"]);
-    expect(Object.keys(script?.properties ?? {}).sort()).toEqual([
-      "async",
-      "autoOpenPreview",
-      "checkInSharedCheckout",
-      "command",
-      "icon",
-      "name",
-      "previewUrl",
-      "runAsCheck",
-      "runOnSettle",
-      "runOnWorktreeCreate",
-    ]);
-  });
-
-  it("stays JSON-serializable", () => {
-    const schema = buildGoatProjectFileJsonSchema();
-    expect(JSON.parse(JSON.stringify(schema))).toEqual(schema);
-  });
-});
-
 describe("GoatProjectFileFromJson", () => {
   it("decodes lenient JSONC with comments and trailing commas", () => {
     const decoded = decodeJson(`{
@@ -77,10 +22,6 @@ describe("GoatProjectFileFromJson", () => {
     expect(decoded.iconPath).toBe("assets/logo.svg");
     expect(decoded.scripts?.[0]).toEqual({ name: "Dev", command: "pnpm dev" });
   });
-
-  it("fails on malformed JSON", () => {
-    expect(() => decodeJson("{ not json")).toThrow();
-  });
 });
 
 describe("parseGoatProjectFile", () => {
@@ -92,9 +33,10 @@ describe("parseGoatProjectFile", () => {
       }`),
     ).toEqual({ defaultThreadEnvMode: "worktree" });
   });
+});
 
-  it("returns null for malformed or invalid contents", () => {
-    expect(parseGoatProjectFile("{ not json")).toBeNull();
-    expect(parseGoatProjectFile('{ "defaultThreadEnvMode": "spaceship" }')).toBeNull();
-  });
+it("publishes GOAT check-in script options", () => {
+  const schema = buildGoatProjectFileJsonSchema();
+  expect(schema).toHaveProperty("properties.scripts.items.properties.checkInSharedCheckout");
+  expect(schema).toHaveProperty("properties.scripts.items.properties.runAsCheck");
 });

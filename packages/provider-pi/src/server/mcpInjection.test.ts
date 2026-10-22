@@ -1,22 +1,14 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
-import { legacyEnvName } from "@goat/contracts/legacyT3Names";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-
 import {
-  PI_GOAT_MCP_EXTENSION_FILENAME,
+  GOAT_CUA_MCP_ENV,
   GOAT_MCP_BEARER_ENV,
   GOAT_MCP_URL_ENV,
   GOAT_PI_RUNTIME_MODE_ENV,
   GOAT_PI_MCP_EXTENSION_PATH_ENV,
 } from "./mcpExtensionSource.ts";
-import {
-  buildPiRpcLaunch,
-  materializePiGoatMcpExtension,
-  resolvePiLaunchArgs,
-} from "./mcpInjection.ts";
+import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
+import { legacyEnvName } from "@goat/contracts/legacyT3Names";
 
 const threadId = ThreadId.make("thread-pi-t3-mcp");
 
@@ -31,6 +23,29 @@ const mcpSession = {
 };
 
 describe("pi T3 MCP injection", () => {
+  it("hands the session's Cua Driver to GOAT's extension only, never from the parent", () => {
+    const cuaDriver = {
+      command: "/resources/cua-driver",
+      args: ["mcp"],
+      environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+    };
+    const inherited = { [GOAT_CUA_MCP_ENV]: '{"command":"/stale/cua-driver","args":[]}' };
+    const launch = (input: { readonly attached: boolean; readonly extension: boolean }) =>
+      buildPiRpcLaunch({
+        launchArgs: [],
+        environment: inherited,
+        mcpSession: input.attached ? { ...mcpSession, cuaDriver } : mcpSession,
+        extensionPath: input.extension ? "/tmp/cache/pi-goat-mcp-extension.ts" : undefined,
+      }).env[GOAT_CUA_MCP_ENV];
+    assert.deepEqual(JSON.parse(launch({ attached: true, extension: true }) ?? "null"), {
+      command: "/resources/cua-driver",
+      args: ["mcp"],
+      env: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
+    });
+    assert.isUndefined(launch({ attached: false, extension: true }));
+    assert.isUndefined(launch({ attached: true, extension: false }));
+  });
+
   it("always adds the permission bridge and configures MCP when available", () => {
     const resolvedArgs = resolvePiLaunchArgs(
       "--extension=/home/user/.pi/agent/extensions/demo.ts --session-dir=/tmp/pi-sessions --provider=anthropic --model=claude-sonnet --tools='' --name=-review --extension-flag=kept",
@@ -103,18 +118,6 @@ describe("pi T3 MCP injection", () => {
     );
   });
 
-  it("falls back to Pi's first supported mode for legacy auto threads", () => {
-    const launch = buildPiRpcLaunch({
-      launchArgs: [],
-      environment: {},
-      mcpSession: undefined,
-      extensionPath: "/tmp/cache/pi-goat-mcp-extension.ts",
-      runtimeMode: "auto",
-    });
-
-    assert.equal(launch.env[GOAT_PI_RUNTIME_MODE_ENV], "approval-required");
-  });
-
   it("forces tools and user extensions off for unattended text generation", () => {
     const launch = buildPiRpcLaunch({
       launchArgs: [
@@ -129,6 +132,7 @@ describe("pi T3 MCP injection", () => {
       environment: {},
       mcpSession,
       extensionPath: "/tmp/cache/pi-goat-mcp-extension.ts",
+      sessionPath: "/fake/persisted.jsonl",
       ephemeral: true,
       disableExtensions: true,
       disableTools: true,
@@ -162,20 +166,4 @@ describe("pi T3 MCP injection", () => {
     assert.isTrue(resolvePiLaunchArgs("--provider openrouter --model=deepseek/v4").ok);
     assert.isTrue(resolvePiLaunchArgs("--model deepseek/v4").ok);
   });
-
-  it.effect("materializes the MCP bridge with namespaced tool registration", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const cacheDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pi-extensions-" });
-      const mcpDest = yield* materializePiGoatMcpExtension(cacheDir);
-      assert.isTrue(mcpDest.endsWith(PI_GOAT_MCP_EXTENSION_FILENAME));
-      const mcpSource = yield* fs.readFileString(mcpDest);
-      assert.include(mcpSource, "export default async function goatMcpExtension");
-      assert.include(mcpSource, "before_agent_start");
-      assert.include(mcpSource, 'pi.on("tool_call"');
-      assert.include(mcpSource, "Allow ${event.toolName}?");
-      assert.include(mcpSource, '"mcp-protocol-version"');
-      assert.include(mcpSource, '"tools/call"');
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
 });

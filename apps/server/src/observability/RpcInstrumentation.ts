@@ -4,6 +4,7 @@ import {
   SLACK_CHANNEL_WS_METHODS,
   WS_METHODS,
   type WsRpcGroup,
+  type WsHubNodesRpcGroup,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -13,13 +14,30 @@ import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 
 import { rpcRequestDuration, rpcRequestsTotal, withMetrics } from "./Metrics.ts";
 
-type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
+type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup | typeof WsHubNodesRpcGroup>["_tag"];
 
 /**
  * Trace queries and dashboards group by these labels, so they keep their historical values
  * even where they differ from the method prefix.
  */
 const RPC_AGGREGATES = {
+  [WS_METHODS.hubNodesList]: "hubNodes",
+  [WS_METHODS.hubNodesSubscribe]: "hubNodes",
+  [WS_METHODS.hubNodesAdd]: "hubNodes",
+  [WS_METHODS.hubNodesRemove]: "hubNodes",
+  [WS_METHODS.hubNodesCheck]: "hubNodes",
+  [WS_METHODS.hubNodesImport]: "hubNodes",
+  [WS_METHODS.hubNodesDismissNotice]: "hubNodes",
+  [WS_METHODS.notesList]: "notes",
+  [WS_METHODS.notesRead]: "notes",
+  [WS_METHODS.notesWrite]: "notes",
+  [WS_METHODS.notesMove]: "notes",
+  [WS_METHODS.notesDelete]: "notes",
+  [WS_METHODS.notesSubscribe]: "notes",
+  [WS_METHODS.notesStartWork]: "notes",
+  [WS_METHODS.notesWorkTargets]: "notes",
+  [WS_METHODS.notesWorkTargetProjects]: "notes",
+
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: "orchestration",
@@ -38,6 +56,7 @@ const RPC_AGGREGATES = {
   [ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput]: "orchestrationV2",
   [WS_METHODS.projectsMutate]: "orchestration",
   [WS_METHODS.serverProbe]: "server",
+  [WS_METHODS.serverCheckComputerUse]: "server",
   [WS_METHODS.serverGetConfig]: "server",
   [WS_METHODS.serverRefreshProviders]: "server",
   [WS_METHODS.serverUpdateProvider]: "server",
@@ -69,6 +88,13 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetStorageCleanupReport]: "server",
   [WS_METHODS.serverGetWorktreesDirectoryStatus]: "server",
   [WS_METHODS.serverGetDatabaseStorage]: "server",
+  [WS_METHODS.serverCompactStorage]: "server",
+  [WS_METHODS.serverCleanUpStrayProcesses]: "server",
+  [WS_METHODS.decisionList]: "decision",
+  [WS_METHODS.decisionGet]: "decision",
+  [WS_METHODS.decisionRequest]: "decision",
+  [WS_METHODS.decisionAnswer]: "decision",
+  [WS_METHODS.decisionWithdraw]: "decision",
   [WS_METHODS.serverGetSettings]: "server",
   [WS_METHODS.serverUpdateSettings]: "server",
   [WS_METHODS.serverSearchAcpRegistry]: "server",
@@ -87,6 +113,10 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetProcessDiagnostics]: "server",
   [WS_METHODS.serverGetHostResources]: "server",
   [WS_METHODS.serverGetHostStatus]: "server",
+  [WS_METHODS.hubDeviceVerify]: "server",
+  [WS_METHODS.hubDeviceJoin]: "server",
+  [WS_METHODS.hubDeviceLeave]: "server",
+  [WS_METHODS.hubDeviceRepair]: "server",
   [WS_METHODS.serverGetProcessResourceHistory]: "server",
   [WS_METHODS.serverGetResourceTelemetryHistory]: "server",
   [WS_METHODS.serverRetryResourceTelemetry]: "server",
@@ -118,6 +148,9 @@ const RPC_AGGREGATES = {
   [WS_METHODS.cloudMachinesForget]: "cloudMachines",
   [WS_METHODS.cloudMachinesDismissUnconfirmed]: "cloudMachines",
   [WS_METHODS.cloudMachinesEnsureReady]: "cloudMachines",
+  [WS_METHODS.hubProxyPrepareNode]: "hubProxy",
+  [WS_METHODS.hubProxyEnrollNode]: "hubProxy",
+  [WS_METHODS.hubProxyUnenrollNode]: "hubProxy",
   [WS_METHODS.secretsAnswerRequest]: "secrets",
   [WS_METHODS.handoffsOpen]: "handoffs",
   [WS_METHODS.handoffsRespond]: "handoffs",
@@ -151,6 +184,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.pullRequestsThreadComments]: "pull-requests",
   [WS_METHODS.pullRequestsDiffFileContents]: "pull-requests",
   [WS_METHODS.pullRequestsFilesViewed]: "pull-requests",
+  [WS_METHODS.pullRequestsChangeBreakdown]: "pull-requests",
   [WS_METHODS.pullRequestsRunAction]: "pull-requests",
   [WS_METHODS.pullRequestsUpdate]: "pull-requests",
   [WS_METHODS.pullRequestsComment]: "pull-requests",
@@ -175,6 +209,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.projectCloneRetry]: "source-control",
   [WS_METHODS.subscribeProjectClones]: "source-control",
   [WS_METHODS.projectsListEntries]: "workspace",
+  [WS_METHODS.projectsListIgnoredFiles]: "workspace",
   [WS_METHODS.projectsReadFile]: "workspace",
   [WS_METHODS.projectsSearchContents]: "workspace",
   [WS_METHODS.projectsSearchEntries]: "workspace",
@@ -212,6 +247,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.vcsInit]: "vcs",
   [WS_METHODS.sshHostStatus]: "ssh",
   [WS_METHODS.sshHostHandoffProgress]: "ssh",
+  [WS_METHODS.sshHostPreflight]: "ssh",
   [WS_METHODS.sshHostProbe]: "ssh",
   [WS_METHODS.sshHostTrust]: "ssh",
   [WS_METHODS.sshHostPrepare]: "ssh",
@@ -246,6 +282,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeDiscoveredLocalServers]: "preview",
   [WS_METHODS.deviceConfigure]: "device",
   [WS_METHODS.deviceTestHost]: "device",
+  [WS_METHODS.deviceEasAccount]: "device",
   [WS_METHODS.deviceList]: "device",
   [WS_METHODS.deviceOpen]: "device",
   [WS_METHODS.deviceClose]: "device",

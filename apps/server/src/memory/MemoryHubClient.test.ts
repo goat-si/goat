@@ -624,3 +624,29 @@ it.effect("v1 pull requires the lineage field and rejects the old checkpoint cod
     }
   }).pipe(Effect.provide(live)),
 );
+
+it("treats a rebound Hub as a different connection even when the epoch is unchanged", () => {
+  const binding = {
+    mode: "member" as const,
+    memorySpaceId: space,
+    hubEnvironmentId: environment,
+    endpoint: M.MemoryHubEndpoint.make("https://hub.invalid"),
+    secretName: "memory-hub-a",
+  };
+  const connection = { ...binding, epoch: 3 };
+  assert.isTrue(
+    Client.isCurrentConnection({ memoryHub: binding, memoryHubVersion: 3 }, connection),
+  );
+  // External settings may change the binding without bumping the epoch; a fence raised
+  // locally for that change must not pass as the Hub ending the lease.
+  for (const memoryHub of [
+    { ...binding, secretName: "memory-hub-b" },
+    { ...binding, endpoint: M.MemoryHubEndpoint.make("https://other.invalid") },
+    { ...binding, memorySpaceId: null },
+    { mode: "disabled" as const },
+  ])
+    assert.isFalse(Client.isCurrentConnection({ memoryHub, memoryHubVersion: 3 }, connection));
+  assert.isFalse(
+    Client.isCurrentConnection({ memoryHub: binding, memoryHubVersion: 4 }, connection),
+  );
+});

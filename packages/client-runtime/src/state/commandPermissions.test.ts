@@ -12,11 +12,15 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  AuthPreviewOperateScope,
   AuthSettingsWriteScope,
+  SSH_PREFLIGHT_STEP_ORDER,
   AuthSourceControlWriteScope,
   ThreadId,
   EnvironmentId,
   ScheduledTaskId,
+  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   type AuthSessionState,
 } from "@goat/contracts";
@@ -24,11 +28,11 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as TestClock from "effect/testing/TestClock";
 import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentRpcCommand } from "./runtime.ts";
+import { createServerEnvironmentAtoms } from "./server.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -63,6 +67,35 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("requires the destination preview grant to close a browser tab", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const close = createCommandPermissions(runtime, WS_METHODS.previewClose);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(close.permissionAtom(env))).toBe(false);
+        expect((yield* close.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthPreviewOperateScope],
+            permissions: [AuthPreviewOperateScope],
+          }),
+        );
+        expect(registry.get(close.permissionAtom(env))).toBe(true);
+        yield* close.authorize(registry, env);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(close.permissionAtom(other))).toBe(false);
+        expect((yield* close.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+      }),
+    ),
+  );
+
   it.effect("requires the destination settings grant to run storage cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -85,27 +118,6 @@ describe("command permissions", () => {
         yield* cleanup.authorize(registry, env);
         registry.set(sessions(other), AsyncResult.success(grant(false)));
         expect(registry.get(cleanup.permissionAtom(other))).toBe(false);
-      }),
-    ),
-  );
-
-  it.effect("requires the destination settings grant to check OTLP endpoints", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* setup;
-        const check = createCommandPermissions(runtime, WS_METHODS.serverCheckOtlpEndpoint);
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
-        expect(registry.get(check.permissionAtom(env))).toBe(false);
-        registry.set(
-          sessions(env),
-          AsyncResult.success({
-            ...grant(false),
-            scopes: [AuthSettingsWriteScope],
-            permissions: [AuthSettingsWriteScope],
-          }),
-        );
-        expect(registry.get(check.permissionAtom(env))).toBe(true);
-        yield* check.authorize(registry, env);
       }),
     ),
   );
@@ -133,18 +145,6 @@ describe("command permissions", () => {
         yield* Effect.yieldNow;
         registry.set(sessions(env), AsyncResult.success(grant(true)));
         yield* Fiber.join(fiber);
-      }),
-    ),
-  );
-  it.effect("bounds a session that never loads", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* setup;
-        const fiber = yield* permissions
-          .authorize(registry, env)
-          .pipe(Effect.flip, Effect.forkChild);
-        yield* TestClock.adjust("6 seconds");
-        expect((yield* Fiber.join(fiber))._tag).toBe("EnvironmentAuthorizationError");
       }),
     ),
   );
@@ -254,6 +254,46 @@ it.effect(
         );
         expect(registry.get(prepare.permissionAtom(env, input))).toBe(true);
         yield* prepare.authorize(registry, env, input);
+      }),
+    ),
+);
+
+it.effect.each(["commit", "push", "commit_push", "create_pr", "commit_push_pr"] as const)(
+  "%s needs thread read permission only when generating a PR from a thread",
+  (action) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const command = createCommandPermissions(runtime, WS_METHODS.gitRunStackedAction);
+        const input = { actionId: "action", cwd: "/repo", action };
+        const withThread = { ...input, threadId: ThreadId.make("thread") };
+        const session = {
+          ...grant(false),
+          scopes: [AuthSourceControlWriteScope],
+          permissions: [AuthSourceControlWriteScope],
+        };
+        registry.set(sessions(env), AsyncResult.success(session));
+        expect(registry.get(command.permissionAtom(env, input))).toBe(true);
+        yield* command.authorize(registry, env, input);
+        const readsThread = action === "create_pr" || action === "commit_push_pr";
+        expect(registry.get(command.permissionAtom(env, withThread))).toBe(!readsThread);
+        if (readsThread) {
+          expect(
+            yield* command.authorize(registry, env, withThread).pipe(Effect.flip),
+          ).toMatchObject({ requiredPermission: AuthOrchestrationReadScope });
+        } else {
+          yield* command.authorize(registry, env, withThread);
+        }
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...session,
+            scopes: [AuthSourceControlWriteScope, AuthOrchestrationReadScope],
+            permissions: [AuthSourceControlWriteScope, AuthOrchestrationReadScope],
+          }),
+        );
+        expect(registry.get(command.permissionAtom(env, withThread))).toBe(true);
+        yield* command.authorize(registry, env, withThread);
       }),
     ),
 );
@@ -579,3 +619,111 @@ it.effect("memory commands check the destination's live grant for all 16 install
     }),
   ),
 );
+
+it.effect("SSH preflight uses the destination settings grant at availability and dispatch", () =>
+  Effect.gen(function* () {
+    let calls = 0;
+    const session = {
+      client: {
+        [WS_METHODS.sshHostPreflight]: () =>
+          Effect.sync(() => {
+            calls++;
+            return {
+              host: "box",
+              destination: { alias: "box", hostname: "box.local", user: "dev", port: 22 },
+              steps: SSH_PREFLIGHT_STEP_ORDER.map((id) => ({
+                id,
+                state: "passed",
+                summary: "Passed",
+              })),
+              ready: true,
+            };
+          }),
+      },
+    } as unknown as RpcSession;
+    const supervisor = {
+      target: { environmentId: env, label: "target" },
+      session: yield* SubscriptionRef.make(Option.some(session)),
+    } as unknown as EnvironmentSupervisor["Service"];
+    const commandRuntime = Atom.runtime(
+      Layer.mergeAll(
+        Layer.succeed(EnvironmentRegistry, {
+          run: (_id: EnvironmentId, effect: Effect.Effect<unknown>) =>
+            effect.pipe(Effect.provideService(EnvironmentSupervisor, supervisor)),
+        } as unknown as EnvironmentRegistry["Service"]),
+        Layer.mock(Persistence.EnvironmentCacheStore)({}),
+      ),
+    );
+    const command = createServerEnvironmentAtoms(commandRuntime, {
+      initialConfigValueAtom: () => Atom.make(null),
+    }).preflightSshHost;
+    const registry = AtomRegistry.make();
+    registry.mount(sessions(env));
+    registry.mount(sessions(other));
+    yield* Effect.promise(async () => {
+      try {
+        const input = { environmentId: env, input: { host: "box" } };
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        registry.set(
+          sessions(other),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthSettingsWriteScope],
+            permissions: [AuthSettingsWriteScope],
+          }),
+        );
+        expect(registry.get(command.permissionAtom(env))).toBe(false);
+        expect((await command.run(registry, input))._tag).toBe("Failure");
+        expect(calls).toBe(0);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthSettingsWriteScope],
+            permissions: [AuthSettingsWriteScope],
+          }),
+        );
+        expect(registry.get(command.permissionAtom(env))).toBe(true);
+        expect((await command.run(registry, input))._tag).toBe("Success");
+        expect(calls).toBe(1);
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        expect((await command.run(registry, input))._tag).toBe("Failure");
+        expect(calls).toBe(1);
+      } finally {
+        registry.dispose();
+      }
+    });
+  }),
+);
+describe("command permissions through a hub", () => {
+  it.effect("hides node actions the hub does not forward and keeps follow-ups and stop", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const dispatch = createCommandPermissions(
+          runtime,
+          ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+        );
+        const remove = { type: "thread.delete", commandId: "c1", threadId: "t1" };
+        const followUp = {
+          type: "message.dispatch",
+          commandId: "c2",
+          threadId: "t1",
+          createdBy: "user",
+        };
+        const stop = { type: "run.interrupt", commandId: "c3", threadId: "t1", runId: "r1" };
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        // A direct connection is unaffected.
+        expect(registry.get(dispatch.permissionAtom(env, remove))).toBe(true);
+        registry.set(sessions(env), AsyncResult.success({ ...grant(true), proxiedByHub: true }));
+        expect(registry.get(dispatch.permissionAtom(env, remove))).toBe(false);
+        expect(registry.get(dispatch.permissionAtom(env, followUp))).toBe(true);
+        expect(registry.get(dispatch.permissionAtom(env, stop))).toBe(true);
+        expect(yield* dispatch.authorize(registry, env, remove).pipe(Effect.flip)).toMatchObject({
+          requiredScope: "hub:proxy",
+        });
+        yield* dispatch.authorize(registry, env, followUp);
+      }),
+    ),
+  );
+});

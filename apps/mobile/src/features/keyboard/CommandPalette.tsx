@@ -187,6 +187,13 @@ export function CommandPalette(props: {
   const items = useMemo(() => {
     const actions: CommandPaletteItem[] = [
       {
+        key: "notes",
+        kind: "action",
+        title: "Open notes",
+        searchTerms: ["note", "markdown", "hub", "노트", "메모"],
+        run: () => navigation.navigate("Notes"),
+      },
+      {
         key: "newTask",
         kind: "action",
         title: "New thread in…",

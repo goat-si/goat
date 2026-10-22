@@ -1,3 +1,4 @@
+import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 /**
  * The goal tools' service (docs/internals/agentic-k8s.md, "Agent and client surface" and
  * "Authority and safety"). A goal acts as the thread that declares it, so applying is where
@@ -76,7 +77,7 @@ const encodeSpec = Schema.encodeSync(FleetGoalSpec);
 const sameSpec = (left: FleetGoal["spec"], right: FleetGoal["spec"]) =>
   JSON.stringify(encodeSpec(left)) === JSON.stringify(encodeSpec(right));
 
-export const ownerKeyOf = (threadId: string) => "thread:" + threadId;
+const ownerKeyOf = (threadId: string) => "thread:" + threadId;
 
 const threadCallerIn = Effect.gen(function* () {
   const caller = yield* loadCaller();
@@ -98,7 +99,8 @@ const hasFullAccess = (caller: Caller) =>
 const assertMayManage = (caller: Caller, goal: FleetGoal) =>
   isOwner(caller, goal) ? Effect.void : assertFullAccess(caller, managesGoals);
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
+  const permissions = yield* Profiles.PermissionProfiles;
   const store = yield* GoalStore;
   const crypto = yield* Crypto.Crypto;
   const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -171,7 +173,14 @@ export const make = Effect.gen(function* () {
   return GoalService.of({
     apply: (scope, input) =>
       Effect.gen(function* () {
-        const caller = yield* callerOf(scope);
+        const original = yield* callerOf(scope);
+        const effective = yield* permissions.require(scope, "goals.apply", {
+          runtimeMode: original.limits.runtimeMode,
+        });
+        const caller = {
+          ...original,
+          limits: { ...original.limits, runtimeMode: effective.runtimeMode },
+        };
         const now = DateTime.formatIso(yield* DateTime.now);
         if (input.id === undefined) {
           const ceiling = caller.limits.runtimeMode;
@@ -351,4 +360,4 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(GoalService, make);
+export const layer = Layer.effect(GoalService, make).pipe(Layer.provide(Profiles.layer));

@@ -216,6 +216,21 @@ export const OrchestrationV2ContextTransferResolution = Schema.Union([
 export type OrchestrationV2ContextTransferResolution =
   typeof OrchestrationV2ContextTransferResolution.Type;
 
+export const OrchestrationV2ProviderTurnTokenUsage = Schema.Struct({
+  usedTokens: NonNegativeInt,
+  maxTokens: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  inputTokens: Schema.optional(NonNegativeInt),
+  cachedInputTokens: Schema.optional(NonNegativeInt),
+  outputTokens: Schema.optional(NonNegativeInt),
+  reasoningOutputTokens: Schema.optional(NonNegativeInt),
+  promptCacheTtlMs: Schema.optional(PositiveInt),
+  autoCompactThreshold: Schema.optional(PositiveInt),
+  promptCacheExpiresAt: Schema.optional(Schema.String),
+  updatedAt: Schema.String,
+});
+export type OrchestrationV2ProviderTurnTokenUsage =
+  typeof OrchestrationV2ProviderTurnTokenUsage.Type;
+
 export const OrchestrationV2ContextTransfer = Schema.Struct({
   id: ContextTransferId,
   type: OrchestrationV2ContextTransferType,
@@ -224,6 +239,7 @@ export const OrchestrationV2ContextTransfer = Schema.Struct({
   sourcePoint: OrchestrationV2ContextSourcePoint,
   basePoint: Schema.NullOr(OrchestrationV2ContextSourcePoint),
   sourceProviderInstanceId: Schema.NullOr(ProviderInstanceId),
+  sourceTokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   targetProviderInstanceId: Schema.NullOr(ProviderInstanceId),
   targetRunId: Schema.NullOr(RunId),
   status: Schema.Literals([
@@ -434,6 +450,9 @@ export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitReco
  */
 const SideChatOf = Schema.optional(Schema.NullOr(ThreadId));
 
+export const OrchestrationV2ThreadHistoryArchive = Schema.Literals(["archived", "deleted"]);
+export type OrchestrationV2ThreadHistoryArchive = typeof OrchestrationV2ThreadHistoryArchive.Type;
+
 export function isSideChatThread(thread: {
   readonly sideChatOf?: ThreadId | null | undefined;
 }): boolean {
@@ -461,6 +480,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   /** Who started this thread's cloud run outside GOAT, such as "Grok Bot"; descriptive only. */
   externalLauncher: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+  /**
+   * Where the thread's tool history lives when not in the database: `archived` restores when the
+   * thread is opened, `deleted` is gone. Absent while the history is in the database.
+   */
+  historyArchive: Schema.optional(OrchestrationV2ThreadHistoryArchive),
   sideChatOf: SideChatOf,
   forkedFrom: Schema.NullOr(
     Schema.Union([
@@ -757,6 +781,7 @@ export const OrchestrationV2WorkflowAgent = Schema.Struct({
   durationMs: Schema.optional(NonNegativeInt),
   queuedAt: Schema.optional(NonNegativeInt),
   startedAt: Schema.optional(NonNegativeInt),
+  completedAt: Schema.optional(NonNegativeInt),
   prompt: Schema.optional(Schema.NonEmptyString),
   result: Schema.optional(Schema.NonEmptyString),
 });
@@ -1003,6 +1028,7 @@ export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
   title: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   updatedAt: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   itemIdentityVersion: Schema.optional(Schema.Literal(2)),
+  forkHeadMessageId: Schema.optional(TrimmedNonEmptyString),
 });
 export type OrchestrationV2ProviderThreadNativeMetadata =
   typeof OrchestrationV2ProviderThreadNativeMetadata.Type;
@@ -1151,19 +1177,6 @@ export const OrchestrationV2ContextHandoff = Schema.Struct({
   updatedAt: Schema.DateTimeUtc,
 });
 export type OrchestrationV2ContextHandoff = typeof OrchestrationV2ContextHandoff.Type;
-
-export const OrchestrationV2ProviderTurnTokenUsage = Schema.Struct({
-  usedTokens: NonNegativeInt,
-  maxTokens: Schema.optional(Schema.NullOr(NonNegativeInt)),
-  inputTokens: Schema.optional(NonNegativeInt),
-  cachedInputTokens: Schema.optional(NonNegativeInt),
-  outputTokens: Schema.optional(NonNegativeInt),
-  reasoningOutputTokens: Schema.optional(NonNegativeInt),
-  promptCacheTtlMs: Schema.optional(PositiveInt),
-  updatedAt: Schema.String,
-});
-export type OrchestrationV2ProviderTurnTokenUsage =
-  typeof OrchestrationV2ProviderTurnTokenUsage.Type;
 
 export const OrchestrationV2ProviderTurn = Schema.Struct({
   id: ProviderTurnId,
@@ -1348,6 +1361,7 @@ export const OrchestrationV2UserInputQuestion = Schema.Struct({
       label: TrimmedNonEmptyString,
       description: TrimmedNonEmptyString,
       value: Schema.optional(Schema.String),
+      preview: Schema.optional(Schema.String),
     }),
   ),
   multiSelect: Schema.optional(Schema.Boolean),
@@ -1399,6 +1413,13 @@ export const OrchestrationV2Checkpoint = Schema.Struct({
   ordinalWithinScope: NonNegativeInt,
   appRunOrdinal: Schema.NullOr(PositiveInt),
   ref: CheckpointRef,
+  /** Producer-returned evidence; absence keeps legacy local checkpoints usable, but not replicable. */
+  replicationEvidence: Schema.optional(
+    Schema.Struct({
+      commitOid: Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u)),
+      complete: Schema.Boolean,
+    }),
+  ),
   status: Schema.Literals(["ready", "missing", "error", "stale"]),
   files: Schema.Array(OrchestrationV2CheckpointFileSummary),
   capturedAt: Schema.DateTimeUtc,
@@ -2058,6 +2079,15 @@ export const OrchestrationV2LatestVisibleMessageSummary = Schema.Struct({
 export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
+/** A provider-native subagent (Codex spawn_agent, Claude Task) still working for this thread. */
+export const OrchestrationV2NativeSubagentSummary = Schema.Struct({
+  id: NodeId,
+  childThreadId: Schema.NullOr(ThreadId),
+  title: Schema.NullOr(Schema.String),
+  status: Schema.Literals(["pending", "running", "waiting"]),
+});
+export type OrchestrationV2NativeSubagentSummary = typeof OrchestrationV2NativeSubagentSummary.Type;
+
 export const OrchestrationV2ThreadShell = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -2077,6 +2107,11 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   /** Who started this thread's cloud run outside GOAT, such as "Grok Bot"; descriptive only. */
   externalLauncher: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+  /**
+   * Where the thread's tool history lives when not in the database: `archived` restores when the
+   * thread is opened, `deleted` is gone. Absent while the history is in the database.
+   */
+  historyArchive: Schema.optional(OrchestrationV2ThreadHistoryArchive),
   sideChatOf: SideChatOf,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
@@ -2085,11 +2120,13 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestRunRequestedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunCompletedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  latestRunStopRequested: Schema.optional(Schema.Boolean),
   activeRunId: Schema.NullOr(RunId),
   activityRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   activityRunStatus: Schema.optional(
     Schema.NullOr(Schema.Literals(["preparing", "starting", "running", "waiting"])),
   ),
+  blockedOnThreadWait: Schema.optional(Schema.Boolean),
   status: OrchestrationV2ShellThreadStatus,
   lastError: Schema.optional(Schema.NullOr(Schema.String)),
   lastErrorClass: Schema.optional(Schema.NullOr(OrchestrationV2ProviderFailureClass)),
@@ -2104,6 +2141,10 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestUserAuthoredMessageAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   hasActionableProposedPlan: Schema.Boolean,
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  /** Fleet groups these under the thread and goatclaw counts them as lanes. */
+  nativeSubagents: Schema.optional(Schema.Array(OrchestrationV2NativeSubagentSummary)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   providerInstanceHistory: Schema.optional(Schema.Array(ProviderInstanceId)).pipe(
@@ -2834,6 +2875,14 @@ export type OrchestrationV2StoredEventJson = typeof OrchestrationV2StoredEventJs
 
 export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
+    type: Schema.Literal("thread.stop"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    reason: Schema.optional(Schema.String),
+    /** A cascade is a no-op once this task is no longer a delegated descendant. */
+    stopCascadeFrom: Schema.optional(ThreadId),
+  }),
+  Schema.Struct({
     type: Schema.Literal("thread.create"),
     memoryGrantCeiling: MemoryTaskGrantCeilingField,
     ...OrchestrationV2CreationFields,
@@ -2980,6 +3029,8 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request (#8160); absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Records where the tool history lives; null means back in the database. Server-issued. */
+    historyArchive: Schema.optional(Schema.NullOr(OrchestrationV2ThreadHistoryArchive)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
@@ -2988,6 +3039,7 @@ export const OrchestrationV2Command = Schema.Union([
     ...ThreadPullRequestKey.fields,
     url: TrimmedNonEmptyString,
     source: ThreadPullRequestLinkSource,
+    repositoryWebUrl: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.unlink"),
@@ -3010,7 +3062,11 @@ export const OrchestrationV2Command = Schema.Union([
     ...ThreadPullRequestKey.fields,
     watching: Schema.Boolean,
     link: Schema.optional(
-      Schema.Struct({ url: TrimmedNonEmptyString, source: ThreadPullRequestLinkSource }),
+      Schema.Struct({
+        url: TrimmedNonEmptyString,
+        source: ThreadPullRequestLinkSource,
+        repositoryWebUrl: Schema.optional(TrimmedNonEmptyString),
+      }),
     ),
   }),
   Schema.Struct({
@@ -3080,6 +3136,11 @@ export const OrchestrationV2Command = Schema.Union([
     restartContinuationOfRunId: Schema.optional(RunId),
     usageLimitContinuationOfRunId: Schema.optional(RunId),
     manualContinuationOfRunId: Schema.optional(RunId),
+    /**
+     * A server-initiated resume of this failed run. Accepted as a no-op instead of starting a
+     * turn once the user has settled, snoozed, archived, or otherwise moved the thread on.
+     */
+    automatedContinuationOfRunId: Schema.optional(RunId),
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
     deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
     delegatedCompletion: Schema.optional(
@@ -3421,18 +3482,6 @@ const OrchestrationV2InternalCommand = Schema.Union([
         }),
       }),
     ),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("thread.stop"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    reason: Schema.optional(Schema.String),
-    /**
-     * The thread whose Stop or task_cancel cascaded here. The stop is an accepted no-op
-     * unless this thread is still a delegated descendant of it, so a task promoted
-     * after the cascade began keeps running.
-     */
-    stopCascadeFrom: Schema.optional(ThreadId),
   }),
   /** Records a server notice on an existing thread without starting provider work. */
   Schema.Struct({

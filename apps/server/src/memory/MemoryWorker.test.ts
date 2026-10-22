@@ -9,25 +9,30 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
-import migration from "../persistence/Migrations/073_Memory.ts";
-import hubMigration from "../persistence/Migrations/074_MemoryHubSync.ts";
-import lineageMigration from "../persistence/Migrations/077_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/078_MemoryCheckpointAccounting.ts";
-import reportMigration from "../persistence/Migrations/079_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/080_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/081_MemoryRevertResults.ts";
+import migration from "../persistence/Migrations/076_Memory.ts";
+import hubMigration from "../persistence/Migrations/077_MemoryHubSync.ts";
+import lineageMigration from "../persistence/Migrations/080_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
+import threadIndexMigration from "../persistence/Migrations/095_MemorySummaryWorkThreadIndex.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { decideMemoryOperation } from "./MemoryDecider.ts";
 import * as Service from "./MemoryService.ts";
 import * as Maintenance from "./MemoryFtsMaintenance.ts";
 import * as Worker from "./MemoryWorker.ts";
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
+import * as Hold from "./MemoryGenerationHold.ts";
 import * as Snapshot from "./MemorySnapshot.ts";
 import { threadProvenanceCases } from "./threadProvenance.testkit.ts";
 import * as Sync from "./MemorySyncService.ts";
@@ -46,9 +51,11 @@ const setup = Layer.effectDiscard(
     yield* hubMigration;
     yield* lineageMigration;
     yield* checkpointMigration;
+    yield* revisionSizeMigration;
     yield* reportMigration;
     yield* usageMigration;
     yield* revertMigration;
+    yield* threadIndexMigration;
     const sql = yield* SqlClient.SqlClient;
     yield* sql`CREATE TABLE orchestration_events (sequence INTEGER PRIMARY KEY,event_id TEXT,stream_id TEXT,event_type TEXT,payload_json TEXT,occurred_at TEXT,application_event_version INTEGER,aggregate_kind TEXT)`;
     yield* sql`CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY,deleted_at TEXT)`;
@@ -71,7 +78,8 @@ const service = Service.layer.pipe(
 );
 const maintenance = Maintenance.layer.pipe(Layer.provideMerge(quota));
 const live = (
-  failure = false,
+  // A function decides per call: a detail string fails with it, undefined succeeds.
+  failure: boolean | (() => string | M.TextGenerationError | undefined) = false,
   onInput?: (input: M.GenerateMemorySummaryInput) => void,
   local = false,
   elapsedPerCallMs = 0,
@@ -102,40 +110,42 @@ const live = (
       Layer.mock(Generation.TextGeneration)({
         generateMemorySummary: (input) => {
           onInput?.(input);
-          const result = failure
-            ? Effect.fail(
-                new M.TextGenerationError({
-                  operation: "generateMemorySummary",
-                  detail: "synthetic failure",
-                }),
-              )
-            : Effect.succeed({
-                result: {
-                  text: [
-                    input.previousSummary?.text,
-                    ...input.messages.map((message) => message.messageId),
-                  ]
-                    .filter(Boolean)
-                    .join(" "),
-                  assertionKind: "inference" as const,
-                  evidence: [
-                    ...(input.previousSummary?.evidence ?? []),
-                    {
-                      origin: "thread" as const,
-                      sourceThread: input.sourceThread,
-                      watermark: input.sourceWatermark,
-                      messageIds: input.messages.map((m) => m.messageId),
-                    },
-                  ],
-                },
-                execution: {
-                  requestedModelSelection: input.modelSelection,
-                  effectiveModel: "fixture",
-                  effectiveProvider: M.ProviderDriverKind.make("codex"),
-                  providerInstanceId: selection.instanceId,
-                  environmentId,
-                },
-              });
+          const detail =
+            typeof failure === "function" ? failure() : failure ? "synthetic failure" : undefined;
+          const result =
+            detail !== undefined
+              ? Effect.fail(
+                  typeof detail === "string"
+                    ? new M.TextGenerationError({ operation: "generateMemorySummary", detail })
+                    : detail,
+                )
+              : Effect.succeed({
+                  result: {
+                    text: [
+                      input.previousSummary?.text,
+                      ...input.messages.map((message) => message.messageId),
+                    ]
+                      .filter(Boolean)
+                      .join(" "),
+                    assertionKind: "inference" as const,
+                    evidence: [
+                      ...(input.previousSummary?.evidence ?? []),
+                      {
+                        origin: "thread" as const,
+                        sourceThread: input.sourceThread,
+                        watermark: input.sourceWatermark,
+                        messageIds: input.messages.map((m) => m.messageId),
+                      },
+                    ],
+                  },
+                  execution: {
+                    requestedModelSelection: input.modelSelection,
+                    effectiveModel: "fixture",
+                    effectiveProvider: M.ProviderDriverKind.make("codex"),
+                    providerInstanceId: selection.instanceId,
+                    environmentId,
+                  },
+                });
           return elapsedPerCallMs
             ? TestClock.adjust(elapsedPerCallMs).pipe(Effect.andThen(result))
             : result;
@@ -152,6 +162,14 @@ const decodeMessage = Schema.decodeUnknownEffect(
 const decodeOperation = Schema.decodeUnknownEffect(M.MemoryOperation);
 const decodeRun = Schema.decodeUnknownEffect(Schema.fromJsonString(M.OrchestrationV2RunJson));
 const encodeRun = Schema.encodeSync(Schema.fromJsonString(M.OrchestrationV2RunJson));
+// Counts finished spans by name, so a test can tell repeated work from settled work.
+const countingTracer = (counts: Map<string, number>) =>
+  Tracer.make({
+    span: (options) => {
+      counts.set(options.name, (counts.get(options.name) ?? 0) + 1);
+      return new Tracer.NativeSpan(options);
+    },
+  });
 const seed = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES (${threadId},NULL)`;
@@ -972,7 +990,7 @@ describe("MemoryWorker", () => {
       }).pipe(Effect.provide(live(false, (input) => inputs.push(input), local, 400000)));
     },
   );
-  it.effect("revisits consolidation at exactly 24 hours after extracting turns", () =>
+  it.effect("revisits consolidation on the first recovery scan from 24 hours on", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(now));
       yield* seed;
@@ -989,6 +1007,15 @@ describe("MemoryWorker", () => {
         0,
       );
       yield* TestClock.adjust(1);
+      yield* worker.sweepDue();
+      // The scan just before the boundary found nothing; the next scheduled one consolidates.
+      assert.strictEqual(
+        (yield* sql<{
+          count: number;
+        }>`SELECT count(*) AS count FROM memory_outbox WHERE kind='consolidate'`)[0]!.count,
+        0,
+      );
+      yield* TestClock.adjust(Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
       yield* worker.sweepDue();
       assert.strictEqual(
         (yield* sql<{
@@ -1022,6 +1049,134 @@ describe("MemoryWorker", () => {
       assert.deepStrictEqual(rows, [{ kind: "consolidate", status: "completed" }]);
     }).pipe(Effect.provide(live())),
   );
+  it.effect.each([
+    [
+      "schema_rejected",
+      'Codex CLI command failed: {"error":{"message":"Invalid schema for response_format","code":"invalid_json_schema"},"status":400}',
+      5,
+    ],
+    [
+      "unavailable",
+      // Grok's shape: free-text detail, typed runner cause.
+      new M.TextGenerationError({
+        operation: "generateMemorySummary",
+        detail: "Grok did not disclose or support the selected memory model.",
+        cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+      }),
+      6,
+    ],
+  ] as const)(
+    "pauses a model the provider keeps refusing (%s) instead of failing every summary",
+    ([reason, schemaRejection, probes]) => {
+      let reject = true;
+      let calls = 0;
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(now));
+        yield* seed;
+        const sql = yield* SqlClient.SqlClient;
+        const store = yield* Store.MemoryStore;
+        const worker = yield* Worker.MemoryWorker;
+        const template = work();
+        for (let index = 0; index < 19; index++)
+          yield* store.enqueueWork({
+            ...template,
+            id: "queued-" + index,
+            memoryId: M.MemoryId.make(id(9000 + index)),
+            status: "pending",
+            claimedBy: null,
+            claimedUntil: null,
+            metadata: {
+              ...(template.metadata as Extract<Store.MemoryWork["metadata"], { kind: "summary" }>),
+              memoryId: M.MemoryId.make(id(9000 + index)),
+              operationId: M.MemoryOperationId.make(id(9100 + index)),
+              revisionId: M.MemoryRevisionId.make(id(9200 + index)),
+            },
+          });
+        const summaries = sql<{
+          status: string;
+          attempt: number;
+        }>`SELECT status,attempt FROM memory_outbox WHERE kind='summary'`;
+        yield* worker.sweepDue();
+        yield* worker.sweepDue();
+        // The first rejection holds the model: no other summary was claimed or reported.
+        assert.strictEqual(calls, 1);
+        assert.strictEqual((yield* store.pendingReports(100)).length, 1);
+        const statuses = (yield* summaries).map((row) => row.status);
+        assert.deepStrictEqual(
+          [
+            statuses.filter((status) => status === "retry").length,
+            statuses.filter((status) => status === "pending").length,
+          ],
+          [1, 19],
+        );
+        const hold = yield* Hold.MemoryGenerationHold;
+        const key = yield* hold.keyFor(selection);
+        assert.strictEqual((yield* hold.status(key))?.reason, reason);
+        // Probes at 1 minute, 10 minutes and 1 hour, then once a day (hourly for an outage).
+        for (const step of [60_000, 600_000, 3_600_000, 82_800_000, 3_600_000]) {
+          yield* TestClock.adjust(step);
+          yield* worker.sweepDue();
+          yield* worker.sweepDue();
+        }
+        assert.strictEqual(calls, probes);
+        assert.isAtMost((yield* store.pendingReports(100)).length, probes);
+        // The provider is fixed: the next daily probe succeeds and the queue drains.
+        reject = false;
+        yield* TestClock.adjust(24 * 3_600_000);
+        yield* worker.sweepDue();
+        // The success lifts the hold and rearms rows that failed earlier probes, so every row is
+        // generated again at once. The clones share one source chunk, so only one of them commits.
+        assert.strictEqual(calls, probes + 20);
+        assert.isTrue((yield* summaries).some((row) => row.status === "completed"));
+        assert.isUndefined(yield* hold.status(key));
+      }).pipe(
+        Effect.provide(
+          live(
+            () => (reject ? schemaRejection : undefined),
+            () => void (calls += 1),
+          ).pipe(Layer.provideMerge(Hold.layer)),
+        ),
+      );
+    },
+  );
+  it.effect("resumes held summaries right away when the memory model changes", () => {
+    let calls = 0;
+    const models: Array<string> = [];
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(now));
+      yield* seed;
+      const store = yield* Store.MemoryStore;
+      const worker = yield* Worker.MemoryWorker;
+      yield* worker.sweepDue();
+      assert.strictEqual(calls, 1);
+      const settings = yield* Settings.ServerSettingsService;
+      yield* settings.updateSettings({
+        memoryModelSelection: { instanceId: selection.instanceId, model: "fixture-next" },
+      });
+      // No clock advance: the change alone makes the held summary due again.
+      yield* worker.sweepDue();
+      assert.strictEqual(calls, 2);
+      assert.deepStrictEqual(models, ["fixture", "fixture-next"]);
+      const rows = yield* (yield* SqlClient.SqlClient)<{
+        status: string;
+      }>`SELECT status FROM memory_outbox WHERE kind='summary'`;
+      assert.isTrue(rows.every((row) => row.status === "completed"));
+      assert.strictEqual(yield* store.rearmGenerationWork(Date.parse(now)), 0);
+    }).pipe(
+      Effect.provide(
+        live(
+          () =>
+            models.at(-1) === "fixture"
+              ? 'Codex CLI command failed: {"error":{"code":"invalid_json_schema"},"status":400}'
+              : undefined,
+          (input) => {
+            calls += 1;
+            models.push(input.modelSelection.model);
+          },
+        ),
+      ),
+    );
+  });
   it.effect("records one safe report and durable future retry on provider failure", () =>
     Effect.gen(function* () {
       yield* seed;
@@ -1054,6 +1209,71 @@ describe("MemoryWorker", () => {
       );
     }).pipe(Effect.provide(live())),
   );
+  it.effect("drains a summary work history far above the store budget to its live threads", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.MemoryStore;
+      const worker = yield* Worker.MemoryWorker;
+      const threads = 2000;
+      const runs = 45;
+      // Half the threads are live; the rest were deleted or dropped by history compaction.
+      yield* sql`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<${threads - 1})
+        INSERT INTO orchestration_v2_projection_threads SELECT 'synthetic-'||i,CASE WHEN i%4=1 THEN ${now} END FROM n WHERE i%4!=3`;
+      // Every run left a row the size of a real one; only the newest per thread completed.
+      yield* sql`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<${threads * runs - 1})
+        INSERT INTO memory_outbox (id,space,memory_id,kind,status,metadata_json,attempt,next_attempt_at)
+        SELECT 'synthetic:'||i,${space},${memoryId},'summary',CASE WHEN i%${runs}=${runs - 1} THEN 'completed' ELSE 'cancelled' END,
+        json_object('kind','summary','sourceThread',json_object('environmentId',${environmentId},'threadId','synthetic-'||CAST(i/${runs} AS INTEGER)),
+          'observedThroughSequence',i%${runs},'sourceWatermark',json_object('fromEventId',${id(10)},'toEventId',${id(11)},'throughSequence',i%${runs}),
+          'memoryId',${memoryId},'operationId',${id(4)},'revisionId',${id(5)},'modelSelection',json_object('instanceId','codex','model','fixture'),
+          'evidence',printf('%.1100c','x')),1,0
+        FROM n`;
+      assert.isAbove((yield* store.measureAllocation()).memoryBytes!, M.MEMORY_STORE_BUDGET_BYTES);
+      const rows = () =>
+        sql<{
+          count: number;
+        }>`SELECT count(*) AS count FROM memory_outbox WHERE id LIKE 'synthetic:%'`.pipe(
+          Effect.map((result) => result[0]!.count),
+        );
+      // One sweep runs the whole paged pass: the one-time compaction of an old store.
+      yield* worker.sweepDue();
+      assert.strictEqual(yield* rows(), threads / 2);
+      assert.isBelow((yield* store.measureAllocation()).memoryBytes!, M.MEMORY_STORE_TARGET_BYTES);
+    }).pipe(Effect.provide(live())),
+  );
+  it.effect("settles a run that later messages invalidated instead of rereading it", () => {
+    const spans = new Map<string, number>();
+    const reads = () => spans.get("MemoryWorker.readSource") ?? 0;
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(now));
+      yield* seed;
+      const sql = yield* SqlClient.SqlClient;
+      const worker = yield* Worker.MemoryWorker;
+      const original = (yield* sql<{
+        payload_json: string;
+      }>`SELECT payload_json FROM orchestration_events WHERE sequence=1`)[0]!;
+      const message = yield* decodeMessage(original.payload_json);
+      // A follow-up message whose run never reports, so the completed run's source stays stale.
+      yield* sql`INSERT INTO orchestration_events VALUES (3,${id(30)},${threadId},'message.updated',${encodeMessage({ ...message, id: M.MessageId.make("follow-up"), runId: M.RunId.make("run-queued") })},${now},2,'thread')`;
+      const sweep = worker.sweepDue().pipe(Effect.withTracer(countingTracer(spans)));
+      yield* sweep;
+      yield* TestClock.adjust(Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
+      yield* sweep;
+      assert.deepStrictEqual(
+        yield* sql`SELECT kind,status FROM memory_outbox WHERE kind IN ('summary','consolidate')`,
+        [{ kind: "summary", status: "cancelled" }],
+      );
+      const settled = reads();
+      for (let pass = 0; pass < 3; pass++) {
+        yield* sweep;
+        yield* TestClock.adjust(Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
+        yield* sweep;
+      }
+      assert.strictEqual(reads(), settled);
+      // Eight sweeps over one hour sample storage at its start and at its end.
+      assert.strictEqual(spans.get("MemoryStore.measureAllocation"), 2);
+    }).pipe(Effect.provide(live()));
+  });
 });
 
 it.effect.each(

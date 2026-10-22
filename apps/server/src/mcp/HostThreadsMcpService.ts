@@ -2,6 +2,13 @@ import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoord
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import {
   OrchestratorMcpFailure,
+  type ThreadReplicaCaptureInput,
+  type ThreadReplicaCaptureResult,
+  type ThreadReplicaRestoreInput,
+  type ThreadReplicaRestoreResult,
+  type ThreadReplicaRecoveryInput,
+  type ThreadReplicaSettingInput,
+  type ThreadReplicaReconcileInput,
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListResult,
   OrchestratorMcpThreadReadResult,
@@ -34,12 +41,18 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { hostFailure } from "./hostFailure.ts";
 import { withHostFanOutDeadline } from "./hostFanOutDeadline.ts";
-import type { LaunchWatch } from "./launchWatch.ts";
+import { type LaunchWatch, replicaStatus } from "./launchWatch.ts";
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
-import { assertLiveCaller, readCaller, unavailable } from "./threadAccess.ts";
+import {
+  assertLiveCaller,
+  readCaller,
+  unavailable,
+  reauthorizationFailure,
+} from "./threadAccess.ts";
 import { boundedStatus, statusFromRead } from "./threadStatus.ts";
 
 /**
@@ -114,12 +127,13 @@ const decodeStatus = Schema.decodeUnknownEffect(OrchestratorMcpThreadStatusResul
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
 /** A stored watch as the watch tools show it. */
-export function watchView(watch: LaunchWatch): OrchestratorMcpThreadWatch {
+function watchView(watch: LaunchWatch): OrchestratorMcpThreadWatch {
   return {
     ...(watch.host === null ? {} : { host: watch.host }),
     threadId: watch.threadId,
     title: watch.title,
-    pendingRunIds: [...watch.pendingRuns],
+    pendingRunIds: watch.recovery === undefined ? [...watch.pendingRuns] : [],
+    replicaStatus: replicaStatus(watch),
     lastReportedRunId: watch.reportedRuns.at(-1) ?? null,
     hostUnavailableSince: watch.outage === null ? null : iso(watch.outage.since),
     createdAt: iso(watch.createdAt),
@@ -131,6 +145,27 @@ const storeFailure = (error: LaunchWatchService.LaunchWatchStoreError) =>
   failure("orchestration_error", error.message);
 
 export interface HostThreadsMcpServiceShape {
+  readonly reconcileCheckpoint: (
+    scope: McpInvocationScope,
+    input: ThreadReplicaReconcileInput,
+  ) => Effect.Effect<ThreadReplicaRestoreResult, OrchestratorMcpFailure>;
+  readonly configureReplication: (
+    scope: McpInvocationScope,
+    input: ThreadReplicaSettingInput,
+  ) => Effect.Effect<ThreadReplicaSettingInput, OrchestratorMcpFailure>;
+  readonly captureCheckpoint: (
+    scope: McpInvocationScope,
+    input: ThreadReplicaCaptureInput,
+  ) => Effect.Effect<ThreadReplicaCaptureResult, OrchestratorMcpFailure>;
+  readonly restoreCheckpoint: (
+    scope: McpInvocationScope,
+    input: ThreadReplicaRestoreInput,
+  ) => Effect.Effect<ThreadReplicaRestoreResult, OrchestratorMcpFailure>;
+  readonly recoverCheckpoint: (
+    scope: McpInvocationScope,
+    input: ThreadReplicaRecoveryInput,
+  ) => Effect.Effect<ThreadReplicaRestoreResult, OrchestratorMcpFailure>;
+
   readonly listThreads: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadListInput,
@@ -236,9 +271,29 @@ const make = Effect.gen(function* () {
   const reports = yield* Effect.serviceOption(RemoteReportService.RemoteReportService);
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const launchWatches = yield* LaunchWatchService.LaunchWatchService;
+  const replicas = yield* ThreadReplicaService.ThreadReplicaService;
+  const replicaAuthorization = (scope: McpInvocationScope) =>
+    readCaller().pipe(
+      Effect.tap(assertLiveCaller),
+      Effect.tap(() =>
+        scope.reauthorize === undefined
+          ? Effect.void
+          : scope
+              .reauthorize(["orchestration:operate"])
+              .pipe(Effect.mapError(reauthorizationFailure)),
+      ),
+      Effect.tap(() =>
+        scope.readOnly || scope.client?.access === "read-only"
+          ? Effect.fail(failure("capability_denied", "Checkpoint operations require write access."))
+          : Effect.void,
+      ),
+      Effect.map((caller) => caller.limits),
+      Effect.provideService(McpInvocationContext, scope),
+      Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+    );
 
   /** Only an agent inside a GOAT thread owns watches; it is woken in that thread. */
-  const watcherOf = (scope: McpInvocationScope) =>
+  const watcherOf = (scope: McpInvocationScope): Effect.Effect<ThreadId, OrchestratorMcpFailure> =>
     scope.thread === undefined
       ? Effect.fail(
           failure(
@@ -519,25 +574,33 @@ const make = Effect.gen(function* () {
   });
 
   const readThread: HostThreadsMcpServiceShape["readThread"] = (scope, input) =>
-    input.host === undefined
-      ? local.readThread(scope, input).pipe(
-          Effect.flatMap((read) =>
-            results.forRun(input.threadId, read.thread.latestRunId).pipe(
-              Effect.mapError(unavailable),
-              Effect.map((result) => ({ ...read, result })),
-            ),
-          ),
-        )
-      : onHost(
-          scope,
-          {
-            host: input.host,
-            tool: "goat_thread_read",
-            arguments: withoutHost(input),
-            writes: false,
-          },
-          decodeRead,
-        );
+    Effect.gen(function* () {
+      const read =
+        input.host === undefined
+          ? local.readThread(scope, input).pipe(
+              Effect.flatMap((read) =>
+                results.forRun(input.threadId, read.thread.latestRunId).pipe(
+                  Effect.mapError(unavailable),
+                  Effect.map((result) => ({ ...read, result })),
+                ),
+              ),
+            )
+          : onHost(
+              scope,
+              {
+                host: input.host,
+                tool: "goat_thread_read",
+                arguments: withoutHost(input),
+                writes: false,
+              },
+              decodeRead,
+            );
+      const watch = yield* launchWatches
+        .find(watchKeyOf(scope, { host: input.host, threadId: input.threadId }))
+        .pipe(Effect.mapError(storeFailure));
+      const result: OrchestratorMcpThreadReadResult = yield* read;
+      return watch === null ? result : { ...result, replicaStatus: replicaStatus(watch) };
+    });
 
   const watchThread: HostThreadsMcpServiceShape["watchThread"] = Effect.fn(
     "HostThreadsMcpService.watchThread",
@@ -568,8 +631,23 @@ const make = Effect.gen(function* () {
       limit: 1,
       runLimit: 1,
     });
+    const replicaGrant = yield* replicaAuthorization(scope);
+    if (
+      input.checkpointReplication === "on" &&
+      (input.host === undefined ||
+        replicaGrant.runtimeMode !== "full-access" ||
+        replicaGrant.interactionMode !== "default")
+    )
+      return yield* failure(
+        "capability_denied",
+        "Checkpoint replication needs a remote watch and full access in default interaction mode.",
+      );
     const watch = yield* launchWatches
       .register({
+        ...(input.checkpointReplication === undefined
+          ? {}
+          : { checkpointReplication: input.checkpointReplication }),
+        replicaCeiling: replicaGrant.runtimeMode,
         launcherThreadId,
         host: input.host,
         threadId: input.threadId,
@@ -585,6 +663,9 @@ const make = Effect.gen(function* () {
   const threadStatus: HostThreadsMcpServiceShape["threadStatus"] = Effect.fn(
     "HostThreadsMcpService.threadStatus",
   )(function* (scope, input) {
+    const watch = yield* launchWatches
+      .find(watchKeyOf(scope, { host: input.host, threadId: input.threadId }))
+      .pipe(Effect.mapError(storeFailure));
     const status =
       input.host === undefined
         ? yield* local.threadStatus(scope, { threadId: input.threadId })
@@ -608,13 +689,28 @@ const make = Effect.gen(function* () {
                   runLimit: 2,
                 }).pipe(Effect.map(statusFromRead)),
             ),
+            Effect.catchIf(
+              (error) => error.code === "host_unavailable" && watch !== null,
+              () =>
+                Effect.succeed({
+                  host: input.host,
+                  threadId: input.threadId,
+                  title: watch?.title ?? "Remote thread",
+                  phase: "waiting" as const,
+                  terminal: false,
+                  run: null,
+                  queuedRunId: null,
+                  pendingRequest: null,
+                  lastActivityAt: iso(watch!.updatedAt),
+                  lastMessage: null,
+                  lastError: "Source host is unavailable; run state is unknown.",
+                  remoteUnavailable: true,
+                }),
+            ),
           );
-    // The watch lives on this machine, whichever machine runs the thread.
-    const watch = yield* launchWatches
-      .find(watchKeyOf(scope, { host: input.host, threadId: input.threadId }))
-      .pipe(Effect.mapError(storeFailure));
     return boundedStatus({
       ...status,
+      ...(watch === null ? {} : { replicaStatus: replicaStatus(watch) }),
       watch:
         watch === null
           ? null
@@ -675,6 +771,11 @@ const make = Effect.gen(function* () {
     sendToThread: (scope, input) =>
       Effect.gen(function* () {
         const host = input.host;
+        if (host !== undefined && (yield* local.permissionProfile(scope)).enabled)
+          return yield* failure(
+            "capability_denied",
+            "Remote follow-up sends cannot yet preserve goatclaw permission ceilings and lane accounting. Use goat_ssh_thread_launch for a new profiled lane.",
+          );
         const requestKey =
           host === undefined || input.clientRequestId === undefined
             ? undefined
@@ -793,6 +894,27 @@ const make = Effect.gen(function* () {
             decodeInterrupt,
           ),
     readOnHost: (scope, input, decode) => onHost(scope, { ...input, writes: false }, decode),
+    reconcileCheckpoint: (scope, input) => replicas.reconcile(input, replicaAuthorization(scope)),
+    configureReplication: (scope, input) =>
+      replicas.configureHost(
+        input,
+        replicaAuthorization(scope).pipe(
+          Effect.tap(
+            () =>
+              scope
+                .reauthorize?.(["settings:write"])
+                .pipe(Effect.mapError(reauthorizationFailure)) ?? Effect.void,
+          ),
+        ),
+      ),
+    captureCheckpoint: (scope, input) => replicas.capture(input, replicaAuthorization(scope)),
+    restoreCheckpoint: (scope, input) => replicas.restore(input, replicaAuthorization(scope)),
+    recoverCheckpoint: (scope, input) =>
+      watcherOf(scope).pipe(
+        Effect.flatMap((launcherThreadId) =>
+          launchWatches.recover({ ...input, launcherThreadId }, replicaAuthorization(scope)),
+        ),
+      ),
     watchThread,
     unwatchThread: (scope, input) =>
       Effect.gen(function* () {

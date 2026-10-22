@@ -13,6 +13,7 @@ import type {
   ChannelTaskNeedsYouKind,
   ChannelTaskPullRequest,
   ChannelWorkerObservation,
+  ThreadResult,
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
   OrchestrationV2RuntimeRequest,
@@ -25,7 +26,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 /** Which person-facing request a native runtime request is; tool calls the client answers are none. */
-export const needsYouKindOf = (
+const needsYouKindOf = (
   kind: OrchestrationV2RuntimeRequest["kind"],
 ): ChannelTaskNeedsYouKind | undefined => {
   switch (kind) {
@@ -46,7 +47,7 @@ export const needsYouKindOf = (
 
 /**
  * Pending person-facing requests, oldest first. With `threadOf`, an approval names its request
- * and thread so GOAT Bot can answer it; callers on another machine leave it out.
+ * and thread so GOAT Bot can answer it.
  */
 export const needsYouFromRuntimeRequests = <
   T extends Pick<OrchestrationV2RuntimeRequest, "id" | "kind" | "status" | "createdAt">,
@@ -72,6 +73,17 @@ export const needsYouFromRuntimeRequests = <
           ? -1
           : 1,
     );
+
+/** Names the machine that holds these approvals. An empty host leaves the refs as they are. */
+export const withApprovalHost = (
+  needsYou: ReadonlyArray<ChannelTaskNeedsYou>,
+  host: string,
+): ReadonlyArray<ChannelTaskNeedsYou> =>
+  host === ""
+    ? needsYou
+    : needsYou.map((need) =>
+        need.approval === undefined ? need : { ...need, approval: { ...need.approval, host } },
+      );
 
 /** Approvals in `next` that `previous` did not list: each gets one card. */
 export const newApprovals = (
@@ -179,10 +191,28 @@ export const observeWorker = (input: {
   readonly pullRequests: ReadonlyArray<ChannelTaskPullRequest>;
   readonly needsYou: ReadonlyArray<ChannelTaskNeedsYou>;
   readonly usageLimitResetAt?: string | undefined;
+  readonly result?: ThreadResult | null | undefined;
 }): ChannelWorkerObservation => ({
   pullRequests: [...input.pullRequests],
   needsYou: [...input.needsYou],
   ...(input.usageLimitResetAt === undefined ? {} : { usageLimitResetAt: input.usageLimitResetAt }),
+  ...(input.result == null ||
+  (input.result.tests === undefined &&
+    input.result.observedCheck === undefined &&
+    input.result.runStatus !== "completed")
+    ? {}
+    : {
+        result: {
+          runId: input.result.runId,
+          ...(input.result.observedCheckPending === undefined
+            ? {}
+            : { observedCheckPending: input.result.observedCheckPending }),
+          ...(input.result.tests === undefined ? {} : { tests: input.result.tests }),
+          ...(input.result.observedCheck === undefined
+            ? {}
+            : { observedCheck: input.result.observedCheck }),
+        },
+      }),
 });
 
 /** Whether a failed thread read means the thread does not exist, rather than a read that failed. */
@@ -205,11 +235,84 @@ const LIVE_SUBAGENT_STATUSES: ReadonlySet<OrchestrationV2Subagent["status"]> = n
   "waiting",
 ]);
 
+/** What one bounded walk of a worker's live subagents found. */
+export interface SubagentScan {
+  /** Pending requests on subagent threads that live on this machine. */
+  readonly requests: ReadonlyArray<OrchestrationV2RuntimeRequest & { readonly threadId: ThreadId }>;
+  /** Live subagents whose GOAT is on another machine, in walk order. */
+  readonly remote: ReadonlyArray<{ readonly host: string; readonly correlationId: string }>;
+  /** Local subagent threads the walk visited, for a waiter to subscribe to. */
+  readonly localThreadIds: ReadonlyArray<ThreadId>;
+}
+
 /**
- * The pending requests of the live subagents a worker started, and of theirs, a few levels down
- * and a bounded number of threads at most, each thread once. A subagent on another machine has no
- * thread here and is not read. A thread that cannot be read is skipped this pass.
+ * The live subagents a worker started, and theirs, a few levels down and a bounded number of
+ * threads at most, each thread once. A subagent on another machine has no thread here: it is
+ * returned in `remote` so the caller can use the report already stored for that dispatch. A
+ * cloud subagent, with no thread and no remote dispatch, is not read and does not take a slot.
+ * A thread that cannot be read is skipped this pass.
  */
+export const scanSubagents = <E, R>(
+  subagents: ReadonlyArray<OrchestrationV2Subagent>,
+  read: (threadId: NonNullable<OrchestrationV2Subagent["childThreadId"]>) => Effect.Effect<
+    {
+      readonly runtimeRequests: ReadonlyArray<OrchestrationV2RuntimeRequest>;
+      readonly subagents: ReadonlyArray<OrchestrationV2Subagent>;
+    },
+    E,
+    R
+  >,
+): Effect.Effect<SubagentScan, never, R> =>
+  Effect.gen(function* () {
+    const requests: Array<OrchestrationV2RuntimeRequest & { readonly threadId: ThreadId }> = [];
+    const remote: Array<{ readonly host: string; readonly correlationId: string }> = [];
+    const localThreadIds: Array<ThreadId> = [];
+    const visited = new Set<string>();
+    let level = subagents;
+    for (let depth = 0; depth < SUBAGENT_DEPTH && level.length > 0; depth += 1) {
+      const next: Array<OrchestrationV2Subagent> = [];
+      for (const subagent of level) {
+        if (
+          subagent.promotedAt !== undefined ||
+          !LIVE_SUBAGENT_STATUSES.has(subagent.status) ||
+          visited.size >= SUBAGENT_THREADS
+        ) {
+          continue;
+        }
+        const childThreadId = subagent.childThreadId;
+        if (childThreadId === null) {
+          const elsewhere = subagent.remote;
+          const correlationId = elsewhere?.correlationId;
+          if (
+            elsewhere !== undefined &&
+            typeof correlationId === "string" &&
+            correlationId !== "" &&
+            !visited.has(correlationId)
+          ) {
+            visited.add(correlationId);
+            remote.push({ host: elsewhere.host, correlationId });
+          }
+          continue;
+        }
+        if (visited.has(childThreadId)) continue;
+        visited.add(childThreadId);
+        localThreadIds.push(childThreadId);
+        const child = yield* read(childThreadId).pipe(Effect.option);
+        if (child._tag === "None") continue;
+        requests.push(
+          ...child.value.runtimeRequests.map((request) => ({
+            ...request,
+            threadId: childThreadId,
+          })),
+        );
+        next.push(...child.value.subagents);
+      }
+      level = next;
+    }
+    return { requests, remote, localThreadIds };
+  });
+
+/** Pending requests of the live local subagents a worker started. Remote children are not read. */
 export const subagentRequests = <E, R>(
   subagents: ReadonlyArray<OrchestrationV2Subagent>,
   read: (threadId: NonNullable<OrchestrationV2Subagent["childThreadId"]>) => Effect.Effect<
@@ -224,36 +327,4 @@ export const subagentRequests = <E, R>(
   ReadonlyArray<OrchestrationV2RuntimeRequest & { readonly threadId: ThreadId }>,
   never,
   R
-> =>
-  Effect.gen(function* () {
-    const found: Array<OrchestrationV2RuntimeRequest & { readonly threadId: ThreadId }> = [];
-    const visited = new Set<string>();
-    let level = subagents;
-    for (let depth = 0; depth < SUBAGENT_DEPTH && level.length > 0; depth += 1) {
-      const next: Array<OrchestrationV2Subagent> = [];
-      for (const subagent of level) {
-        const childThreadId = subagent.childThreadId;
-        if (
-          childThreadId === null ||
-          subagent.promotedAt !== undefined ||
-          !LIVE_SUBAGENT_STATUSES.has(subagent.status) ||
-          visited.has(childThreadId) ||
-          visited.size >= SUBAGENT_THREADS
-        ) {
-          continue;
-        }
-        visited.add(childThreadId);
-        const child = yield* read(childThreadId).pipe(Effect.option);
-        if (child._tag === "None") continue;
-        found.push(
-          ...child.value.runtimeRequests.map((request) => ({
-            ...request,
-            threadId: childThreadId,
-          })),
-        );
-        next.push(...child.value.subagents);
-      }
-      level = next;
-    }
-    return found;
-  });
+> => scanSubagents(subagents, read).pipe(Effect.map((scan) => scan.requests));

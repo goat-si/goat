@@ -8,11 +8,15 @@ import {
   AuthSettingsWriteScope,
   type CloudMachine,
   type CloudMachineType,
+  type DesktopSshPreparationProgress,
   type EnvironmentId,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import * as Effect from "effect/Effect";
+import { sshRuntimePhaseText } from "@goat/client-runtime/state/sshRuntime";
+import { isSshConnectionSuperseded } from "./ConnectionsSettings.logic";
 
 import { requestConfirmDialog } from "~/confirmDialog";
 import { connectSshEnvironment as connectSshEnvironmentAtom } from "~/connection/onboarding";
@@ -94,7 +98,7 @@ export function CloudMachinesSettings({
       ) : null}
       {value?.machines.map((machine) => (
         <CloudMachineRow
-          key={machine.alias}
+          key={`${environmentId}:${machine.alias}`}
           environmentId={environmentId}
           machine={machine}
           configured={value.configured}
@@ -291,6 +295,14 @@ function CloudMachineRow({
     reportFailure: false,
   });
   const [busy, setBusy] = useState<string | null>(null);
+  const [preparation, setPreparation] = useState<DesktopSshPreparationProgress | null>(null);
+  const submission = useRef(0);
+  useEffect(
+    () => () => {
+      submission.current += 1;
+    },
+    [],
+  );
   const actions = configured
     ? cloudMachineActions(machine)
     : cloudMachineActions({ ...machine, presence: "unknown" });
@@ -302,8 +314,10 @@ function CloudMachineRow({
     action: () => Promise<CommandResult>,
     fallback: string,
   ): Promise<boolean> => {
+    const generation = submission.current;
     setBusy(label);
     const result = await action();
+    if (generation !== submission.current) return false;
     setBusy(null);
     if (result._tag !== "Failure") return true;
     if (!isAtomCommandInterrupted(result))
@@ -316,14 +330,30 @@ function CloudMachineRow({
   };
 
   const connect = async () => {
-    if (bridge === undefined) return;
+    if (bridge === undefined || busy !== null) return;
+    const submissionId = ++submission.current;
     // Resume waits until the machine accepts SSH and refreshes its address and host key.
     if (!(await run("Starting…", () => resume(input), "Could not start the machine"))) return;
+    if (submission.current !== submissionId) return;
     setBusy("Connecting…");
     const connectMachine = async () => {
       const target = await bridge.resolveSshHost(machine.alias);
-      const result = await connectSshEnvironment({ target, label: machine.label });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
+      if (submission.current !== submissionId) return;
+      const result = await connectSshEnvironment({
+        target,
+        label: machine.label,
+        onPreparationProgress: (progress) =>
+          Effect.sync(() => {
+            if (submission.current === submissionId)
+              setPreparation(progress.phase === null ? null : progress);
+          }),
+      });
+      if (submission.current !== submissionId) return;
+      if (
+        result._tag === "Failure" &&
+        !isAtomCommandInterrupted(result) &&
+        !isSshConnectionSuperseded(squashAtomCommandFailure(result))
+      )
         toastManager.add({
           type: "error",
           title: `Could not connect ${machine.label}`,
@@ -332,6 +362,7 @@ function CloudMachineRow({
     };
     await connectMachine()
       .catch((error: unknown) => {
+        if (submission.current !== submissionId || isSshConnectionSuperseded(error)) return;
         toastManager.add({
           type: "error",
           title: `Could not connect ${machine.label}`,
@@ -339,6 +370,9 @@ function CloudMachineRow({
         });
       })
       .finally(() => {
+        if (submission.current !== submissionId) return;
+        submission.current += 1;
+        setPreparation(null);
         setBusy(null);
       });
   };
@@ -367,7 +401,9 @@ function CloudMachineRow({
         <p className="truncate text-sm">{machine.label}</p>
         <p className="truncate text-xs text-muted-foreground">
           {[
-            busy ?? cloudMachineStatus(machine),
+            preparation?.phase
+              ? sshRuntimePhaseText(preparation.phase)
+              : (busy ?? cloudMachineStatus(machine)),
             machine.alias,
             `stops after ${formatAutoStop(machine.ttlSeconds)}`,
             machine.lastError,

@@ -1,5 +1,3 @@
-"use client";
-
 import { FILL_PREVIEW_VIEWPORT, type ScopedThreadRef } from "@goat/contracts";
 import { previewPdfAssetUrl } from "@goat/shared/preview";
 import { useEnvironmentHttpBaseUrl } from "~/state/environments";

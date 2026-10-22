@@ -78,6 +78,12 @@ export const workerLaunchIdsFor = (taskId: ChannelTaskId, generation: number) =>
   messageId: MessageId.make(stableId("channel-worker-message", [taskId, String(generation)])),
 });
 
+/**
+ * Whether a thread is a channel task's worker, from its id alone. The id is fixed when the
+ * thread is created, before its first turn and before the ledger records the binding.
+ */
+export const isChannelWorkerThreadId = (threadId: string) => threadId.startsWith("channel-worker:");
+
 export const answerForwardIdsFor = (eventId: ChannelTaskEventId) => ({
   commandId: CommandId.make(stableId("channel-answer", [eventId])),
   messageId: MessageId.make(stableId("channel-answer-message", [eventId])),
@@ -143,6 +149,10 @@ export const botLaunchIdsFor = (ownerId: string, replacing?: ThreadId) => {
     threadId: ThreadId.make(stableId("channel-bot", parts)),
   };
 };
+
+/** Switching a stored bot thread to full access, once per thread and moment it was needed. */
+export const botFullAccessCommandIdFor = (threadId: ThreadId, at: string) =>
+  CommandId.make(stableId("channel-bot-full-access", [threadId, at]));
 
 /** What makes two inputs under one idempotency key the same input. */
 export const contentHashFor = (message: ChannelInboundMessage) =>

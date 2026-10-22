@@ -350,7 +350,6 @@ it.effect.each(["codex-handbook-v1", "claude-topic-v1", "omo-memory-core-beta63"
           JSON.stringify(evidence, null, 2),
         );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  { timeout: 120000 },
 );
 
 it.effect(
@@ -433,7 +432,6 @@ it.effect(
       assert.equal(item.revision.provenance.importSource?.sourceId, sourceId);
       assert.deepEqual(stamp(source), before);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  { timeout: 120000 },
 );
 
 it.effect.skipIf(!posixPermissions)(
@@ -506,7 +504,6 @@ it.effect.skipIf(!posixPermissions)(
       ),
     );
   },
-  { timeout: 120000 },
 );
 
 it.effect(
@@ -530,99 +527,36 @@ it.effect(
         "None",
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  { timeout: 120000 },
 );
 
-it.effect(
-  "both grants are rechecked after real reader waits for discover, preview and apply",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* buildMemoryImportFixture("omo-memory-core-beta63");
-      let active: readonly M.AuthEnvironmentScope[] = grants;
-      let barrier:
-        | { entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> }
-        | undefined;
-      const g = yield* graph(
-        {
-          stateDir: fixture.stateDir,
-          gitExecutable: "/usr/bin/git",
-          roots: [{ format: "omo", rootSlot: "synthetic", path: fixture.trustedRoot }],
-          onSnapshotSealed: () =>
-            barrier
-              ? Deferred.succeed(barrier.entered, undefined).pipe(
-                  Effect.andThen(Deferred.await(barrier.release)),
-                )
-              : Effect.void,
-        },
-        Effect.sync(() => active),
-      );
-      const d = yield* g.call({ action: "discover", memorySpaceId: g.space, format: "omo" });
-      if (d.action !== "discover") return assert.fail("discover");
-      const sourceId = d.sources[0]!.sourceId;
-      const p = yield* g.call({ action: "preview", memorySpaceId: g.space, sourceId });
-      if (p.action !== "preview") return assert.fail("preview");
-      const actions: readonly M.MemoryImportProviderInput[] = [
-        { action: "discover", memorySpaceId: g.space, format: "omo" },
-        { action: "preview", memorySpaceId: g.space, sourceId },
-        {
-          action: "apply",
-          memorySpaceId: g.space,
-          sourceId,
-          sessionId: p.sessionId,
-          operationId: id(),
-          items: p.items.map((i) => ({
-            sourceItemKey: i.sourceItemKey,
-            sourceFingerprint: i.sourceFingerprint!,
-            scope: { kind: "user" },
-          })),
-        },
-      ];
-      for (const missing of grants)
-        for (const input of actions) {
-          active = grants;
-          barrier = {
-            entered: yield* Deferred.make<void>(),
-            release: yield* Deferred.make<void>(),
-          };
-          const request = yield* g.call(input).pipe(Effect.result, Effect.forkChild);
-          yield* Deferred.await(barrier.entered);
-          active = grants.filter((scope) => scope !== missing);
-          yield* Deferred.succeed(barrier.release, undefined);
-          const result = yield* Fiber.join(request);
-          assert.equal(result._tag, "Failure");
-          if (result._tag === "Failure") assert.equal(result.failure._tag, "MemoryRpcError");
-          barrier = undefined;
-        }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  { timeout: 120000 },
-);
-
-it.effect(
-  "both grants are rechecked after SQL contention for all four actions",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* buildMemoryImportFixture("codex-ad-hoc-v1");
-      let active: readonly M.AuthEnvironmentScope[] = grants;
-      let permitEntered: Deferred.Deferred<void> | undefined;
-      const scopes = Effect.suspend(() =>
-        permitEntered
-          ? Deferred.succeed(permitEntered, undefined).pipe(Effect.as(active))
-          : Effect.succeed(active),
-      );
-      const g = yield* graph(
-        {
-          stateDir: fixture.stateDir,
-          gitExecutable: "/usr/bin/git",
-          roots: [{ format: "codex", rootSlot: "synthetic", path: fixture.trustedRoot }],
-        },
-        scopes,
-      );
-      const d = yield* g.call({ action: "discover", memorySpaceId: g.space, format: "codex" });
-      if (d.action !== "discover") return assert.fail("discover");
-      const sourceId = d.sources[0]!.sourceId;
-      const p = yield* g.call({ action: "preview", memorySpaceId: g.space, sourceId });
-      if (p.action !== "preview") return assert.fail("preview");
-      const apply: M.MemoryImportProviderInput = {
+it.effect("both grants are rechecked after real reader waits for discover, preview and apply", () =>
+  Effect.gen(function* () {
+    const fixture = yield* buildMemoryImportFixture("omo-memory-core-beta63");
+    let active: readonly M.AuthEnvironmentScope[] = grants;
+    let barrier: { entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> } | undefined;
+    const g = yield* graph(
+      {
+        stateDir: fixture.stateDir,
+        gitExecutable: "/usr/bin/git",
+        roots: [{ format: "omo", rootSlot: "synthetic", path: fixture.trustedRoot }],
+        onSnapshotSealed: () =>
+          barrier
+            ? Deferred.succeed(barrier.entered, undefined).pipe(
+                Effect.andThen(Deferred.await(barrier.release)),
+              )
+            : Effect.void,
+      },
+      Effect.sync(() => active),
+    );
+    const d = yield* g.call({ action: "discover", memorySpaceId: g.space, format: "omo" });
+    if (d.action !== "discover") return assert.fail("discover");
+    const sourceId = d.sources[0]!.sourceId;
+    const p = yield* g.call({ action: "preview", memorySpaceId: g.space, sourceId });
+    if (p.action !== "preview") return assert.fail("preview");
+    const actions: readonly M.MemoryImportProviderInput[] = [
+      { action: "discover", memorySpaceId: g.space, format: "omo" },
+      { action: "preview", memorySpaceId: g.space, sourceId },
+      {
         action: "apply",
         memorySpaceId: g.space,
         sourceId,
@@ -633,38 +567,92 @@ it.effect(
           sourceFingerprint: i.sourceFingerprint!,
           scope: { kind: "user" },
         })),
-      };
-      yield* g.call(apply);
-      const store = Context.get(g.context, Store.MemoryStore);
-      for (const missing of grants)
-        for (const input of [
-          { action: "discover", memorySpaceId: g.space, format: "codex" },
-          { action: "preview", memorySpaceId: g.space, sourceId },
-          { ...apply, operationId: id() },
-          { action: "status", memorySpaceId: g.space, operationId: apply.operationId },
-        ] as const) {
-          active = grants;
-          const locked = yield* Deferred.make<void>();
-          const release = yield* Deferred.make<void>();
-          const holding = yield* store
-            .transact(
-              Deferred.succeed(locked, undefined).pipe(Effect.andThen(Deferred.await(release))),
-            )
-            .pipe(Effect.forkChild);
-          yield* Deferred.await(locked);
-          permitEntered = yield* Deferred.make<void>();
-          const request = yield* g.call(input).pipe(Effect.result, Effect.forkChild);
-          yield* Deferred.await(permitEntered);
-          active = grants.filter((scope) => scope !== missing);
-          yield* Deferred.succeed(release, undefined);
-          yield* Fiber.join(holding);
-          const result = yield* Fiber.join(request);
-          assert.equal(result._tag, "Failure");
-          if (result._tag === "Failure") assert.equal(result.failure._tag, "MemoryRpcError");
-          permitEntered = undefined;
-        }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  { timeout: 120000 },
+      },
+    ];
+    for (const missing of grants)
+      for (const input of actions) {
+        active = grants;
+        barrier = {
+          entered: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        };
+        const request = yield* g.call(input).pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(barrier.entered);
+        active = grants.filter((scope) => scope !== missing);
+        yield* Deferred.succeed(barrier.release, undefined);
+        const result = yield* Fiber.join(request);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") assert.equal(result.failure._tag, "MemoryRpcError");
+        barrier = undefined;
+      }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("both grants are rechecked after SQL contention for all four actions", () =>
+  Effect.gen(function* () {
+    const fixture = yield* buildMemoryImportFixture("codex-ad-hoc-v1");
+    let active: readonly M.AuthEnvironmentScope[] = grants;
+    let permitEntered: Deferred.Deferred<void> | undefined;
+    const scopes = Effect.suspend(() =>
+      permitEntered
+        ? Deferred.succeed(permitEntered, undefined).pipe(Effect.as(active))
+        : Effect.succeed(active),
+    );
+    const g = yield* graph(
+      {
+        stateDir: fixture.stateDir,
+        gitExecutable: "/usr/bin/git",
+        roots: [{ format: "codex", rootSlot: "synthetic", path: fixture.trustedRoot }],
+      },
+      scopes,
+    );
+    const d = yield* g.call({ action: "discover", memorySpaceId: g.space, format: "codex" });
+    if (d.action !== "discover") return assert.fail("discover");
+    const sourceId = d.sources[0]!.sourceId;
+    const p = yield* g.call({ action: "preview", memorySpaceId: g.space, sourceId });
+    if (p.action !== "preview") return assert.fail("preview");
+    const apply: M.MemoryImportProviderInput = {
+      action: "apply",
+      memorySpaceId: g.space,
+      sourceId,
+      sessionId: p.sessionId,
+      operationId: id(),
+      items: p.items.map((i) => ({
+        sourceItemKey: i.sourceItemKey,
+        sourceFingerprint: i.sourceFingerprint!,
+        scope: { kind: "user" },
+      })),
+    };
+    yield* g.call(apply);
+    const store = Context.get(g.context, Store.MemoryStore);
+    for (const missing of grants)
+      for (const input of [
+        { action: "discover", memorySpaceId: g.space, format: "codex" },
+        { action: "preview", memorySpaceId: g.space, sourceId },
+        { ...apply, operationId: id() },
+        { action: "status", memorySpaceId: g.space, operationId: apply.operationId },
+      ] as const) {
+        active = grants;
+        const locked = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const holding = yield* store
+          .transact(
+            Deferred.succeed(locked, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(locked);
+        permitEntered = yield* Deferred.make<void>();
+        const request = yield* g.call(input).pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(permitEntered);
+        active = grants.filter((scope) => scope !== missing);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(holding);
+        const result = yield* Fiber.join(request);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") assert.equal(result.failure._tag, "MemoryRpcError");
+        permitEntered = undefined;
+      }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect.each([1, 2] as const)(
@@ -728,5 +716,4 @@ it.effect.each([1, 2] as const)(
       assert.equal(reads, readCount);
       assert.equal(commits, stopAfter);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  { timeout: 120000 },
 );

@@ -1,269 +1,296 @@
+import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
+import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
+import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
+import * as PendingQuestionsMcpService from "./mcp/PendingQuestionsMcpService.ts";
+// @effect-diagnostics nodeBuiltinImport:off - the closed import factory requires a synchronous UUID callback.
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
-import { desiredLinkReconcileStartup } from "./cloud/DesiredLinkReconcile.ts";
-import * as HomeRoute from "./provider/OpenCodexRoute.ts";
-import * as CodexRoutes from "./provider/CodexRouteService.ts";
-import * as HomeRequests from "./provider/CodexHomeRequests.ts";
-import * as ProviderOnboarding from "./provider/ProviderOnboarding.ts";
-import { resolveCommandPath } from "@goat/shared/shell";
 import * as HostProcess from "@goat/shared/HostProcess";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- the closed import factory requires a synchronous UUID callback.
+import { resolveCommandPath } from "@goat/shared/shell";
+import { desiredLinkReconcileStartup } from "./cloud/DesiredLinkReconcile.ts";
+import * as NotesLayers from "./notes/NotesLayers.ts";
+import * as HomeRequests from "./provider/CodexHomeRequests.ts";
+import * as CodexRoutes from "./provider/CodexRouteService.ts";
+import * as HomeRoute from "./provider/OpenCodexRoute.ts";
+import * as ProviderOnboarding from "./provider/ProviderOnboarding.ts";
+import * as SshDeviceAdd from "./sshRemote/SshDeviceAdd.ts";
+import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import type * as Crypto from "effect/Crypto";
+import type * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as NodeCrypto from "node:crypto";
-import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
+import * as ChannelLayers from "./channels/ChannelLayers.ts";
+import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
+import * as BoatClient from "./cloudMachines/BoatClient.ts";
+import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
+import * as CloudMachineSsh from "./cloudMachines/sshConfig.ts";
+import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
+import * as GoalLayers from "./fleet/goals/GoalLayers.ts";
+import * as FleetHealth from "./fleet/health/layer.ts";
+import * as HandoffExpiry from "./handoffs/HandoffExpiry.ts";
+import * as HubDown from "./hub/HubDown.ts";
+import * as HubNodeRepository from "./hubNodes/HubNodeRepository.ts";
+import * as HubNodes from "./hubNodes/HubNodes.ts";
+import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
+import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
+import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
+import * as ThreadReplicaService from "./mcp/ThreadReplicaService.ts";
+import * as McpToolAccess from "./mcp/McpToolAccess.ts";
+import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
+import * as ThreadLaunchMcpService from "./mcp/ThreadLaunchMcpService.ts";
+import { invocationPermit, memoryError } from "./mcp/toolkits/memory/handlers.ts";
+import { MemoryAdministrationToolkit } from "./mcp/toolkits/memoryAdministration/tools.ts";
+import { parseClaudeMemory } from "./memory/imports/ClaudeMemoryImporter.ts";
+import { parseCodexMemory } from "./memory/imports/CodexMemoryImporter.ts";
 import {
   acquireMemoryImportReader,
   preflightMemoryImportStateDirectory,
   type MemoryImportReaderConfig,
 } from "./memory/imports/MemoryImportReader.ts";
-import { makeProviderMemoryImport } from "./memory/imports/ProviderMemoryImport.ts";
-import { parseCodexMemory } from "./memory/imports/CodexMemoryImporter.ts";
-import { parseClaudeMemory } from "./memory/imports/ClaudeMemoryImporter.ts";
+import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
 import { parseOmoMemory } from "./memory/imports/OmoMemoryImporter.ts";
-import type * as Crypto from "effect/Crypto";
-import type * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as Schema from "effect/Schema";
-import * as McpToolAccess from "./mcp/McpToolAccess.ts";
-import { invocationPermit, memoryError } from "./mcp/toolkits/memory/handlers.ts";
-import { MemoryAdministrationToolkit } from "./mcp/toolkits/memoryAdministration/tools.ts";
-import * as Context from "effect/Context";
-import * as Ref from "effect/Ref";
+import { makeProviderMemoryImport } from "./memory/imports/ProviderMemoryImport.ts";
+import * as MemoryCompactor from "./memory/MemoryCompactor.ts";
+import * as MemoryMaintenance from "./memory/MemoryFtsMaintenance.ts";
+import * as MemoryGenerationHold from "./memory/MemoryGenerationHold.ts";
+import * as MemoryHubAuth from "./memory/MemoryHubAuth.ts";
+import * as MemoryHubHttp from "./memory/MemoryHubHttp.ts";
+import * as MemoryHub from "./memory/MemoryHubService.ts";
+import * as MemoryOwnerSourceReadPolicyBinding from "./memory/MemoryOwnerSourceReadPolicyBinding.ts";
+import * as MemoryQuota from "./memory/MemoryQuotaService.ts";
+import * as MemoryReportAdapter from "./memory/MemoryReportAdapter.ts";
+import * as MemoryReportWorker from "./memory/MemoryReportWorker.ts";
+import * as MemoryService from "./memory/MemoryService.ts";
+import * as MemorySettings from "./memory/MemorySettingsService.ts";
 import * as MemorySnapshot from "./memory/MemorySnapshot.ts";
 import * as MemorySnapshotBinding from "./memory/MemorySnapshotBinding.ts";
 import * as MemoryStore from "./memory/MemoryStore.ts";
-import * as MemoryQuota from "./memory/MemoryQuotaService.ts";
-import * as MemoryService from "./memory/MemoryService.ts";
-import * as MemoryMaintenance from "./memory/MemoryFtsMaintenance.ts";
-import * as MemorySync from "./memory/MemorySyncService.ts";
-import * as MemorySettings from "./memory/MemorySettingsService.ts";
-import * as MemoryOwnerSourceReadPolicyBinding from "./memory/MemoryOwnerSourceReadPolicyBinding.ts";
 import * as MemorySyncRuntimeLive from "./memory/MemorySyncRuntimeLive.ts";
-import * as MemoryReportWorker from "./memory/MemoryReportWorker.ts";
-import * as MemoryReportAdapter from "./memory/MemoryReportAdapter.ts";
+import * as MemorySync from "./memory/MemorySyncService.ts";
 import * as MemoryWorker from "./memory/MemoryWorker.ts";
-import * as MemoryHub from "./memory/MemoryHubService.ts";
-import * as MemoryCompactor from "./memory/MemoryCompactor.ts";
-import * as MemoryHubAuth from "./memory/MemoryHubAuth.ts";
-import * as MemoryHubHttp from "./memory/MemoryHubHttp.ts";
-import * as RuntimeAdmission from "./runtimeAdmission.ts";
-import * as RuntimeDrain from "./runtimeDrain.ts";
-import * as RuntimeControl from "./runtimeControl.ts";
-import * as RuntimeIdentity from "./runtimeIdentity.ts";
-import * as SshRemoteDispatch from "./sshRemote/SshRemoteDispatch.ts";
-import * as HandoffExpiry from "./handoffs/HandoffExpiry.ts";
-import * as FleetHealth from "./fleet/health/layer.ts";
-import * as GoalLayers from "./fleet/goals/GoalLayers.ts";
-import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
-import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
-import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
-import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
-import * as ProviderDiagnosisRouting from "./provider/ProviderDiagnosisRouting.ts";
-import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
-import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
-import * as ThreadLaunchMcpService from "./mcp/ThreadLaunchMcpService.ts";
-import * as RemoteReportService from "./remoteReports/RemoteReportService.ts";
-import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
-import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
-import * as BoatClient from "./cloudMachines/BoatClient.ts";
-import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
-import * as CloudMachineSsh from "./cloudMachines/sshConfig.ts";
-import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
-import * as RemoteDispatchCoordinator from "./remoteReports/RemoteDispatchCoordinator.ts";
-import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
-import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
-import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
-import * as ChannelLayers from "./channels/ChannelLayers.ts";
-import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
-import * as Clock from "effect/Clock";
-import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
-import * as StorageCleanup from "./storageCleanup.ts";
+import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
-import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
+import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as ThreadArchiveGate from "./orchestration-v2/ThreadArchiveGate.ts";
+import * as ThreadHistoryArchive from "./orchestration-v2/ThreadHistoryArchive.ts";
+import * as ThreadHistoryArchiveLabels from "./orchestration-v2/ThreadHistoryArchiveLabels.ts";
+import * as ProviderDiagnosisRouting from "./provider/ProviderDiagnosisRouting.ts";
+import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
+import * as RemoteDispatchCoordinator from "./remoteReports/RemoteDispatchCoordinator.ts";
+import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
+import * as RemoteReportService from "./remoteReports/RemoteReportService.ts";
+import * as RuntimeAdmission from "./runtimeAdmission.ts";
+import * as RuntimeControl from "./runtimeControl.ts";
+import * as RuntimeDrain from "./runtimeDrain.ts";
+import * as RuntimeIdentity from "./runtimeIdentity.ts";
+import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
+import * as SshRemoteDispatch from "./sshRemote/SshRemoteDispatch.ts";
+import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
+import * as StorageCleanup from "./storageCleanup.ts";
+import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
+import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
+import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
-// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentHttpApi,
-  MemoryHubError,
   MemoryHubDisableInput,
-  MemorySettingsUpdateInput,
   MemoryHubDisableResult,
+  MemoryHubError,
+  MemorySettingsUpdateInput,
   type RepositoryIdentity,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Option from "effect/Option";
-import * as Layer from "effect/Layer";
-import * as Stream from "effect/Stream";
-import * as Scope from "effect/Scope";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
-import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
-import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
-import * as ServerConfig from "./config.ts";
-import { withUntracedRequests } from "./http.ts";
-import * as ServerHttp from "./http.ts";
-import {
-  guardHttpResponseWriteErrors,
-  rejectRequestsUntilServing,
-} from "./httpResponseErrorGuard.ts";
-import { fixPath } from "./os-jank.ts";
-import * as Ws from "./ws.ts";
-import * as AgentScopeLive from "./process/agentScope.ts";
-import * as ExternalLauncher from "./process/externalLauncher.ts";
-import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
-import * as PullRequestHttp from "./pullRequest/http.ts";
-import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
-import * as PullRequestService from "./pullRequest/PullRequestService.ts";
-import * as SqlitePersistence from "./persistence/Sqlite.ts";
-import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
-import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
-import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
-import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
-import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-import * as DelegatedTaskAnalytics from "./telemetry/DelegatedTaskAnalytics.ts";
-import * as ProviderEventIngestor from "./orchestration-v2/ProviderEventIngestor.ts";
-import * as ModelManifest from "./provider/ModelManifest.ts";
-import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
-import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
-import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
+import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
+import * as CursorAccountReader from "@goat/provider-cursor/server/CursorAccountReader";
+import * as CursorKeychain from "@goat/provider-cursor/server/CursorKeychain";
+import * as CursorUsageAccounts from "@goat/provider-cursor/server/CursorUsageAccounts";
 import * as OpenCodeRuntime from "@goat/provider-opencode/server/OpenCodeRuntime";
 import * as OpenCodeServerLedger from "@goat/provider-opencode/server/OpenCodeServerLedger";
-import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
-import * as ProviderDiagnosisService from "./provider/ProviderDiagnosisService.ts";
-import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
-import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
-import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
-import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
-import * as TextGeneration from "./textGeneration/TextGeneration.ts";
-import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
-import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
-import * as TerminalManager from "./terminal/Manager.ts";
-import * as McpHttpServer from "./mcp/McpHttpServer.ts";
-import * as FleetFallback from "./fleet/resources/Fallback.ts";
-import * as FleetPlacement from "./fleet/resources/Placement.ts";
-import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
-import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
-import * as DeviceService from "./device/DeviceService.ts";
-import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
-import * as PreviewManager from "./preview/Manager.ts";
-import * as PortScanner from "./preview/PortScanner.ts";
-import * as ServerBrowser from "./preview/ServerBrowser.ts";
-import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
-import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
-import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
-import * as ProcessRunner from "./processRunner.ts";
-import * as GitManager from "./git/GitManager.ts";
-import * as EnvironmentTheme from "./environmentTheme.ts";
-import * as Keybindings from "./keybindings.ts";
-import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
-import { layerCommandReadiness } from "./commandReadiness.ts";
-import * as ServerOwnership from "./serverOwnership.ts";
-import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
-import * as ServerSettings from "./serverSettings.ts";
-import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
-import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
-import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
-import * as CodexInstallation from "./provider/CodexInstallation.ts";
-import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
-import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
-import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
-import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
-import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
-import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
-import * as GoatProjectFileLoader from "./project/GoatProjectFileLoader.ts";
-import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
-import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
-import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
-import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
-import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
-import * as CloudTaskSource from "./orchestration-v2/CloudTaskSourceService.ts";
-import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
-import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
-import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
-import * as VcsProcess from "./vcs/VcsProcess.ts";
-import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
-import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
-import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
-import * as GitWorkflowService from "./git/GitWorkflowService.ts";
-import * as ReviewService from "./review/ReviewService.ts";
-import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
-import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
+import * as NetService from "@goat/shared/Net";
+import * as RelayClient from "@goat/shared/relayClient";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
-import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
-import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
-import * as Observability from "./observability/Observability.ts";
-import * as HeapSnapshot from "./observability/HeapSnapshot.ts";
-import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
-import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
-import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
-import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
+import { disableTailscaleServe, ensureTailscaleServe } from "@goat/tailscale";
+import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as AuthHttp from "./auth/http.ts";
-import * as ReplayMarkers from "./auth/replayMarkers.ts";
-import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
-import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
-import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
-import * as HeldHooksWaker from "./relay/HeldHooksWaker.ts";
 import * as McpOAuth from "./auth/McpOAuth.ts";
 import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
-import {
-  relayHookBaseUrl,
-  ScheduledTaskWebhookOrigin,
-} from "./scheduledTasks/ScheduledTaskService.ts";
+import * as ReplayMarkers from "./auth/replayMarkers.ts";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
+import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
+import * as ServerAutoUpdate from "./cloud/autoUpdate.ts";
+import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
+import * as CloudLink from "./cloud/CloudLink.ts";
 import {
   CLOUD_ENDPOINT_RUNTIME_CONFIG,
   decodeRuntimeConfig,
   RELAY_URL_SECRET,
 } from "./cloud/config.ts";
-import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ConnectReachability from "./cloud/ConnectReachability.ts";
 import * as CloudHttp from "./cloud/http.ts";
-import * as CloudLink from "./cloud/CloudLink.ts";
-import * as RelayTracing from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
-import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
-import * as MaintenanceAudit from "./maintenance/MaintenanceAudit.ts";
+import * as RelayTracing from "./cloud/relayTracing.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
-import * as ServerAutoUpdate from "./cloud/autoUpdate.ts";
-import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
+import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
+import { layerCommandReadiness } from "./commandReadiness.ts";
+import * as ServerConfig from "./config.ts";
+import * as CuaDriver from "./cua/CuaDriver.ts";
+import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
+import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
+import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
+import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
+import * as DeviceService from "./device/DeviceService.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
-import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
+import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
+import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as EnvironmentTheme from "./environmentTheme.ts";
+import * as FleetFallback from "./fleet/resources/Fallback.ts";
+import * as FleetPressure from "./fleet/pressure/PressureNudger.ts";
+import * as FleetPlacement from "./fleet/resources/Placement.ts";
+import * as GitManager from "./git/GitManager.ts";
+import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import * as ServerHttp from "./http.ts";
+import { withUntracedRequests } from "./http.ts";
+import {
+  guardHttpResponseWriteErrors,
+  rejectRequestsUntilServing,
+} from "./httpResponseErrorGuard.ts";
+import * as HubProxyHttp from "./hubProxy/http.ts";
+import * as HubProxyNodes from "./hubProxy/HubProxyNodes.ts";
+import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
+import * as Keybindings from "./keybindings.ts";
+import * as MaintenanceAudit from "./maintenance/MaintenanceAudit.ts";
+import * as McpHttpServer from "./mcp/McpHttpServer.ts";
+import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
+import * as HeapSnapshot from "./observability/HeapSnapshot.ts";
+import * as Observability from "./observability/Observability.ts";
+import * as CloudTaskSource from "./orchestration-v2/CloudTaskSourceService.ts";
+import * as EventStoreV2 from "./orchestration-v2/EventStore.ts";
+import * as OrchestrationHttp from "./orchestration-v2/http.ts";
+import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService.ts";
+import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
+import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
+import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ProviderEventIngestor from "./orchestration-v2/ProviderEventIngestor.ts";
+import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
+import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
+import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
+import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
+import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
+import { fixPath } from "./os-jank.ts";
+import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
+import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
+import * as SqlitePersistence from "./persistence/Sqlite.ts";
+import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
+import * as PreviewManager from "./preview/Manager.ts";
+import * as PortScanner from "./preview/PortScanner.ts";
+import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
+import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
+import * as AgentScopeLive from "./process/agentScope.ts";
+import * as ExternalLauncher from "./process/externalLauncher.ts";
+import * as ProcessRunner from "./processRunner.ts";
+import * as GoatProjectFileLoader from "./project/GoatProjectFileLoader.ts";
+import * as ProjectHttp from "./project/http.ts";
+import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
+import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
+import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
+import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
+import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
+import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
+import * as CodexInstallation from "./provider/CodexInstallation.ts";
+import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
+import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
+import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
+import * as ProviderDiagnosisService from "./provider/ProviderDiagnosisService.ts";
+import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
+import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
+import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
+import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
+import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
+import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
+import * as PullRequestHttp from "./pullRequest/http.ts";
+import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
+import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
+import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
+import * as PullRequestService from "./pullRequest/PullRequestService.ts";
+import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as HeldHooksWaker from "./relay/HeldHooksWaker.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
+import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
-import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
-import * as CursorAccountReader from "@goat/provider-cursor/server/CursorAccountReader";
-import * as CursorKeychain from "@goat/provider-cursor/server/CursorKeychain";
-import * as CursorUsageAccounts from "@goat/provider-cursor/server/CursorUsageAccounts";
-import * as UsageService from "./usage/UsageService.ts";
-import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
-import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
-import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
-import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
-import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
-import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
-import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
-import * as EventStoreV2 from "./orchestration-v2/EventStore.ts";
-import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
-import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
-import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
-import * as OrchestrationHttp from "./orchestration-v2/http.ts";
-import * as ProjectHttp from "./project/http.ts";
-import * as NetService from "@goat/shared/Net";
-import * as RelayClient from "@goat/shared/relayClient";
-import { disableTailscaleServe, ensureTailscaleServe } from "@goat/tailscale";
+import * as ReviewService from "./review/ReviewService.ts";
+import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
+import {
+  relayHookBaseUrl,
+  ScheduledTaskWebhookOrigin,
+} from "./scheduledTasks/ScheduledTaskService.ts";
+import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as ServerActivation from "./serverActivation.ts";
+import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as ServerOwnership from "./serverOwnership.ts";
+import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
+import * as ServerSettings from "./serverSettings.ts";
+import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
+import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
+import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import { loopbackUrlHostForAddress } from "./startupAccess.ts";
+import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
+import * as DelegatedTaskAnalytics from "./telemetry/DelegatedTaskAnalytics.ts";
+import * as TerminalManager from "./terminal/Manager.ts";
+import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
+import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as UsageService from "./usage/UsageService.ts";
+import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
+import * as VcsProcess from "./vcs/VcsProcess.ts";
+import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
+import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
+import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
+import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import * as Ws from "./ws.ts";
 
 // MCP handoff thread IDs include escaped provenance and can exceed find-my-way's
 // 100-character default for one path segment.
@@ -332,10 +359,29 @@ const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
 // move lock. It gets the power monitor background policy uses, so suspend and resume reach it.
 const layerFleetHealth = FleetHealth.layer.pipe(Layer.provide(layerHostPowerMonitor));
 
+// Notices to orchestrating threads and launch advice; reads the monitor host status exposes.
+const layerPressureAdmission = FleetPressure.layerAdmission.pipe(
+  Layer.provide(HostPressureMonitor.layer),
+);
+const layerFleetPressure = FleetPressure.layer.pipe(
+  Layer.provide(layerFleetHealth),
+  Layer.provideMerge(layerPressureAdmission),
+);
+const layerThreadReplicas = ThreadReplicaService.layer.pipe(Layer.provide(layerPressureAdmission));
+const layerLaunchWatches = LaunchWatchService.layer.pipe(
+  Layer.provideMerge(layerThreadReplicas),
+  Layer.provide(layerPressureAdmission),
+);
+
 // Reuses DesktopTelemetryReceiverLayerLive: a fresh receiver layer here
 // would open a second reader on the desktop telemetry fd.
 const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
+);
+
+const layerCuaDriver = CuaDriver.layer.pipe(
+  Layer.provide(layerDesktopTelemetryReceiver),
+  Layer.provide(layerServerSettings),
 );
 
 const layerBackground = BackgroundPolicy.layer.pipe(
@@ -347,6 +393,7 @@ const layerUsage = UsageService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       AntigravityUsage.layer,
+      CodexUsageHistory.layer,
       CursorUsageAccounts.layer.pipe(
         Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
       ),
@@ -367,6 +414,7 @@ const layerResourceDiagnostics = Layer.mergeAll(
   layerResourceTelemetry,
   ProcessDiagnostics.layer.pipe(Layer.provide(layerResourceTelemetry)),
   ProcessResourceMonitor.layer.pipe(Layer.provide(layerResourceTelemetry)),
+  ProcessGroupMetrics.layer.pipe(Layer.provide(layerResourceTelemetry)),
 );
 
 const layerRelayClient = Layer.unwrap(
@@ -493,6 +541,7 @@ const layerVcs = Layer.empty.pipe(
   Layer.provideMerge(
     VcsStatusBroadcaster.layer.pipe(
       Layer.provide(layerGitWorkflow),
+      Layer.provide(VcsStatusBroadcaster.layerAutomaticFetchInterval),
       // The orchestration runtime also consumes the broadcaster (run
       // finalization), so the policy cannot read the store from the runtime's
       // output.
@@ -522,6 +571,14 @@ const layerDevice = DeviceService.layer.pipe(
   Layer.provide(layerServerSettings),
   Layer.provide(ProcessRunner.layer),
   Layer.provide(NetService.layer),
+);
+
+// One proxy session service for the /hub/nodes routes and the hubProxy RPCs, so unenrolling or
+// removing a node ends every socket open to it. It reads the runtime's one HubNodes, and the same
+// SshRemoteDispatch layer reference as the MCP tools, so the proxy shares their tunnel manager.
+const layerHubProxy = HubProxySessions.layer.pipe(
+  Layer.provideMerge(HubProxyNodes.layerFromHubNodes),
+  Layer.provide(SshRemoteDispatch.layer),
 );
 
 const layerWorkspaceEntries = WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer));
@@ -599,6 +656,11 @@ export const layerMemorySourceReadBinding = Layer.effect(
     });
   }),
 );
+// One layer reference for the worker and layerMemorySync, so the worker, conflict resolution and
+// the status read share one set of holds. The registry supplies the provider version in each key.
+const layerMemoryGenerationHold = MemoryGenerationHold.layer.pipe(
+  Layer.provide(ProviderRegistry.layer),
+);
 const layerMemoryQuota = MemoryQuota.layer.pipe(Layer.provideMerge(MemoryStore.layer));
 export const layerMemorySourceReadService = Layer.unwrap(
   Effect.gen(function* () {
@@ -623,6 +685,7 @@ const layerMemoryWorker = Layer.mergeAll(
   Layer.provide(RuntimeLayer.layerEventSink),
   Layer.provide(layerTextGeneration),
   Layer.provide(RuntimeIdentity.layer),
+  Layer.provide(layerMemoryGenerationHold),
 );
 const layerMemoryStarted = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -786,6 +849,7 @@ const layerMemorySync = layerMemorySyncStarted.pipe(
   Layer.provide(layerMemoryHub),
   Layer.provide(layerTextGeneration),
   Layer.provide(ServerEnvironment.layerIdentity),
+  Layer.provide(layerMemoryGenerationHold),
 );
 
 /** Acquisition is isolated from the core graph; only a fully acquired reader publishes the tag. */
@@ -996,7 +1060,6 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerGitWorkflow),
-  Layer.provide(ResourceCleanupService.layer),
   Layer.provide(
     RunFinalizationService.layerObserver.pipe(
       Layer.provide(ProjectionStoreV2.layer),
@@ -1018,6 +1081,9 @@ const layerThreadSettlementWorker = Layer.effectDiscard(
 const layerObservedCheckWorker = Layer.effectDiscard(
   ObservedCheckService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(ProjectionStoreV2.layer), Layer.provide(RuntimeLayer.layerProjectService));
+const layerIdleCompactionWorker = Layer.effectDiscard(
+  IdleCompactionService.make.pipe(Effect.flatMap((service) => service.start())),
+).pipe(Layer.provide(ProjectionStoreV2.layer));
 
 const layerThreadPullRequestWorker = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
@@ -1068,13 +1134,18 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
   layerObservedCheckWorker,
+  layerIdleCompactionWorker,
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  WorktreeCheckoutHealth.layer.pipe(Layer.provide(ProcessRunner.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
+    Layer.provide(ThreadHistoryArchive.layer),
     Layer.provide(
       Layer.merge(EventStoreV2.layerFromOrchestrationEventStore, ProjectionStoreV2.layer),
     ),
   ),
+  ThreadHistoryArchiveLabels.layer.pipe(Layer.provide(ThreadHistoryArchive.layer)),
+  StrayProcesses.layer.pipe(Layer.provide(ProcessRunner.layer)),
   layerThreadPullRequestWorker,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
@@ -1122,14 +1193,44 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       Layer.provide(Layer.merge(layerMemoryService, layerMemorySync)),
     ),
   ),
+  Layer.provideMerge(layerHubProxy),
+  Layer.provideMerge(
+    HubNodes.layer.pipe(
+      Layer.provide(HubNodeRepository.layer),
+      Layer.provide(SshRemoteDispatch.layer),
+    ),
+  ),
   // One cloud machine service for WS, MCP and both SshRemoteDispatch builds, so the
   // per-alias readiness lock and SSH cache invalidation span every caller.
   Layer.provideMerge(layerCloudMachines),
   // Hosts linked over HTTPS, for the same SshRemoteDispatch builds and the MCP link tools.
   Layer.provideMerge(LinkedHosts.layer),
-  Layer.provideMerge(layerOrchestrationApplication),
+  Layer.provideMerge(
+    DecisionInbox.layerRunning.pipe(
+      Layer.provideMerge(DecisionInbox.layer),
+      Layer.provide(PermissionProfiles.layer),
+      Layer.provide(
+        PendingQuestionsMcpService.layer.pipe(
+          Layer.provide(HostThreadsMcpService.layer),
+          Layer.provide(
+            OrchestratorMcpService.layer.pipe(
+              Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+            ),
+          ),
+          Layer.provide(ThreadResultService.layer),
+        ),
+      ),
+      Layer.provide(RemoteDispatchCoordinator.layer),
+      Layer.provide(layerLaunchWatches),
+      Layer.provide(SshRemoteDispatch.layer),
+      Layer.provideMerge(layerOrchestrationApplication),
+    ),
+  ),
   Layer.provideMerge(
     RuntimeDrain.layer.pipe(
+      // One instance, shared with the auto-update scheduler, so arbitration sees its target.
+      Layer.provide(SshRuntimeAutoUpdate.layerArbiter),
+      Layer.provideMerge(SshRuntimeAutoUpdate.layer),
       Layer.provide(ProjectionStoreV2.layer),
       Layer.provide(RuntimeDrain.layerShutdown),
       Layer.provideMerge(RuntimeAdmission.layer),
@@ -1137,17 +1238,18 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ),
   ),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
-  Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  // pipe takes at most 20 steps, so the Cua Driver joins this merge.
+  Layer.provideMerge(
+    Layer.mergeAll(ProjectStore.layer, ThreadSearch.layer, layerCuaDriver, ComputerUseLeases.layer),
+  ),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),
   Layer.provideMerge(layerVcs),
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
   Layer.provideMerge(layerPersistence),
-  Layer.provideMerge(
-    Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
-  ),
-  Layer.provideMerge(ProviderRegistry.layer),
+  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer)),
+  Layer.provideMerge(Layer.merge(ProviderRegistry.layer, UsageLimitSources.layer)),
   (application) =>
     provideMemorySnapshot(
       application,
@@ -1229,6 +1331,21 @@ const layerSshWorkspace = SshWorkspaceSync.layer.pipe(
   Layer.provide(RuntimeLayer.layerProjectService),
 );
 
+const layerNotes = NotesLayers.layer.pipe(
+  Layer.provide(RuntimeLayer.layerEventSink),
+  Layer.provide(
+    HostThreadsMcpService.layer.pipe(
+      Layer.provide(
+        OrchestratorMcpService.layer.pipe(
+          Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+        ),
+      ),
+      Layer.provide(ThreadResultService.layer),
+    ),
+  ),
+  Layer.provide(ThreadResultService.layer),
+);
+
 const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -1253,18 +1370,22 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
     DeviceHubProxy.layer,
+    HubProxyHttp.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
   ),
   Layer.mergeAll(
-    McpHttpServer.layer.pipe(Layer.provide(layerFleetHealth)),
+    McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
+    ComputerUseLeaseRoute.layer,
     layerMemoryToolkits,
     McpHttpServer.layerProviderToolkit,
     HandoffExpiry.layer,
     // Fleet goals act through the same launch, watch and dispatch services as these tools.
     McpHttpServer.layerFleetToolkit.pipe(
-      Layer.provide(GoalLayers.layer.pipe(Layer.provideMerge(layerFleetHealth))),
+      Layer.provide(
+        GoalLayers.layer.pipe(Layer.provide(HubDown.layer), Layer.provideMerge(layerFleetHealth)),
+      ),
     ),
   ).pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
@@ -1274,7 +1395,7 @@ const layerMakeRoutes = Layer.mergeAll(
   // One instance for the goat_host_status tool and the server.getHostStatus RPC; fleet
   // placement reads the same one.
   Layer.provide(
-    Layer.mergeAll(FleetPlacement.layer, FleetFallback.layerChains).pipe(
+    Layer.mergeAll(layerNotes, FleetPlacement.layer, FleetFallback.layerChains).pipe(
       Layer.provideMerge(
         McpHttpServer.layerHostStatusService.pipe(
           Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
@@ -1290,9 +1411,19 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerSshWorkspace),
   // SshHostSetup routes approvals of agent-requested provider syncs to ProviderHostSync.
   Layer.provide(
-    SshHostSetup.layer.pipe(
-      Layer.provide(MaintenanceAudit.layer),
-      Layer.provideMerge(ProviderHostSync.layer),
+    SshDeviceAdd.layer.pipe(
+      Layer.provideMerge(
+        SshHostSetup.layer.pipe(
+          Layer.provide(MaintenanceAudit.layer),
+          Layer.provideMerge(
+            ProviderHostSync.layer.pipe(
+              Layer.provide(
+                ProviderDiagnosisService.layer.pipe(Layer.provide(ProviderHostLive.layer)),
+              ),
+            ),
+          ),
+        ),
+      ),
     ),
   ),
   Layer.provide(
@@ -1304,8 +1435,9 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(
     Layer.mergeAll(
       ProviderDiagnosisRouting.layer,
-      // Cloud launches route to a credential holder with the same diagnosis and host reads.
+      // Cloud launches read readiness from the provider × host matrix.
       CloudAgentService.layer.pipe(
+        Layer.provide(ProviderHostSync.layer),
         Layer.provide(
           ThreadLaunchMcpService.layer.pipe(
             Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
@@ -1329,7 +1461,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
-  Layer.provide(LaunchWatchService.layer),
+  Layer.provide(layerLaunchWatches),
   Layer.provide(SshRemoteDispatch.layer),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
@@ -1361,6 +1493,12 @@ const layerMakeServer = Layer.unwrap(
     const activation = yield* Deferred.make<void>();
     const awaitActivation = Deferred.await(activation);
     const layerActivation = Layer.succeed(ServerActivation.ServerActivation, awaitActivation);
+    // One slot for the whole server: every projection store reads through it, and the archive
+    // service fills it once it has loaded which threads are archived.
+    const layerArchiveGate = Layer.succeed(
+      ThreadArchiveGate.ThreadArchiveGate,
+      ThreadArchiveGate.makeThreadArchiveGateSlot(),
+    );
     const runtimeStateParked = yield* Deferred.make<void>();
     const tailscaleParked = yield* Deferred.make<void>();
     const cloudLinkParked = yield* Deferred.make<void>();
@@ -1441,7 +1579,7 @@ const layerMakeServer = Layer.unwrap(
               return yield* ensureTailscaleServe({
                 localPort,
                 servePort: config.tailscaleServePort,
-                localHost: "127.0.0.1",
+                localHost: loopbackUrlHostForAddress(address),
               }).pipe(
                 Effect.as({ localPort, servePort: config.tailscaleServePort }),
                 Effect.tap(() =>
@@ -1511,10 +1649,11 @@ const layerMakeServer = Layer.unwrap(
     );
 
     return layerServerApplication.pipe(
-      Layer.provide(CloudLink.layer),
+      Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
       Layer.provideMerge(layerRuntimeServices),
       Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(layerServerEnvironment))),
       Layer.provide(layerActivation),
+      Layer.provide(layerArchiveGate),
       Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),
       Layer.provide(

@@ -19,6 +19,16 @@ export const Hostname = Context.Reference<string>("@goat/shared/HostProcess/Host
   defaultValue: () => NodeOS.hostname(),
 });
 
+export const Username = Context.Reference<string | null>("@goat/shared/HostProcess/Username", {
+  defaultValue: () => {
+    try {
+      return NodeOS.userInfo().username.trim() || null;
+    } catch {
+      return null;
+    }
+  },
+});
+
 export const HomeDirectory = Context.Reference<string>("@goat/shared/HostProcess/HomeDirectory", {
   defaultValue: () => NodeOS.homedir(),
 });

@@ -81,8 +81,12 @@ const layerFor = (seen: Seen) =>
           launch: (_scope, input, modes, stable) =>
             Effect.sync(() => {
               seen.launches.push({ modes, threadId: stable?.threadId });
+              // Goal workers always launch into their stable thread id.
+              const threadId = stable?.threadId;
+              if (threadId === undefined)
+                throw new Error("goal worker launched without a thread id");
               return {
-                threadId: stable!.threadId,
+                threadId,
                 projectId: input.projectId!,
                 modelSelection: input.modelSelection!,
                 runId: null,

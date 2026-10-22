@@ -115,6 +115,24 @@ Remembered launch files whose PID has exited are stale and do not block attachin
 (`readLiveSshRuntimeProtocol` in `apps/server/src/cli/sshHelper.ts`). They never grant kill
 authority either, because the launch script requires its PID file to name the live PID.
 
+Ownership follows the server, not the client that started it. A live server this host user runs
+as `~/.goat/runtime/goat/versions/<v>/goat serve --host 127.0.0.1 --port <p> --base-dir ~/.goat`
+is GOAT's managed runtime even when its launch records are gone, for example after a manual
+restart or a moved `ssh-launch` directory. The probe reports it as `liveAdoptable`, and an
+owning launch holding the replacement lock writes identity, port, PID and `managed` for it
+(`managed_orphan` and `adopt_managed_orphan` in `packages/ssh/src/tunnel.ts`). From then on it
+updates through its own drain like any owned runtime; a rollback without a retained runner
+restarts it through this client's runner pinned to its version. Records that name another live
+process, a drain in progress, Windows hosts, and any other command line (a developer's own
+server, another base directory, another user) stay foreign: attach-only, never replaced.
+
+A reused forward is checked against the live descriptor's `serverVersion`. A server replaced on
+the same port by another client, a self-update or a person no longer matches the attachment, so
+the client reconnects and reads the live server again instead of reporting, or acting on, the
+version it first attached to. A host that already runs the requested build drops any refresh
+intent kept from its older server. Callers that only reuse a forward that still answers, as
+agents do before every remote tool, never publish `preparing`.
+
 Desktop and agent dispatch both leave the server running when they disconnect
 (`leaveRemoteServerRunning`). Removing a saved connection also leaves the remote runtime running.
 The explicit stop script signals a server only after its
@@ -215,12 +233,16 @@ desktop and the server's SSH dispatch (`resolveSshCliRunner` in
 After a launch that installed a runtime, cleanup runs under the host replacement lock, never
 on a drain/replacement or rollback connection, and excludes concurrent installs. It uses the
 live binary's `__ssh-helper compare-version` to remove only proven older, unused directories,
-keeping the live, retained and requested versions and the newest older rollback build (all
-unordered rollback candidates are preserved). It checks process commands, executable paths and
-cwd, renames victims into sibling `.trash-*` directories before deleting, and never follows
-symlinks. Errors only log `ssh.runtime.cleanup.*`. Windows is skipped because its process and
-shell utilities differ; hosts without readable `/proc` executable/cwd links or `flock`, including
-macOS, conservatively keep everything.
+keeping the live, retained and requested versions and one rollback build: the proven-older
+build installed most recently, which is the one the host ran before. Versions whose order
+against the live build is unknown, or that are newer, stay. It checks process commands,
+executable paths and cwd (`/proc` on Linux, `lsof` on macOS), renames victims into sibling
+`.trash-*` directories before deleting, and never follows symlinks. Each ordering check starts
+`goat`, so a long backlog shrinks over several connections, oldest installs first, within the
+cleanup deadline. Staging and trash directories over an hour old are removed too, since no
+install holds a lock then. The mutex is `flock`, or an atomic directory where `flock` is
+missing. Errors only log `ssh.runtime.cleanup.*`; a failed inspection keeps everything.
+Windows is skipped because its process and shell utilities differ.
 
 Runtime supply targets the owning process's exact release and platform, not the
 latest published build. The acquisition order in
@@ -237,9 +259,19 @@ A manually published nightly is evidence only for that exact version and platfor
 Older cached archives are not selected automatically when no compatible installation exists:
 archive integrity does not prove protocol support or authorize a userdata downgrade.
 
+A runtime on a stable or nightly build also updates itself when idle, following its own channel
+(see [Server: Updates](server.md#updates)). It runs the owning launch script locally, so it takes
+the same replacement lock, idle check, drain and supervisor as a client. A new client passes
+`GOAT_RUNTIME_DRAIN_AUTOMATIC=1` to `__ssh-helper drain` for an automatic refresh of an older
+runtime, never for a manual or confirmed update or an incompatible runtime. The runtime answers
+such a request `cancelled` without draining when its target is not the newest same-channel,
+strictly newer, never-failed candidate, or while its `automaticServerUpdates` is off; the
+client keeps its attachment. The supervisor
+records every outcome in `last-replacement.json` next to `run-t3.sh`.
+
 Manual updates target the owning manager's version too. An idle update waits for running work;
 a confirmed immediate update allows the drain to finish at its deadline. A newer runtime, a
-runtime whose version cannot be ordered, or an externally started server blocks replacement
+runtime whose version cannot be ordered, or a foreign server (see [Shared runtime](#shared-runtime)) blocks replacement
 without changing whether a compatible server can be used.
 
 "Older" and "newer" come from `compareRuntimeBuilds` in `packages/shared/src/semver.ts`, used by
@@ -274,7 +306,11 @@ still queued when ssh exits cannot crash the process with `EPIPE`.
 `SshEnvironmentManager` orders `ensureEnvironment` and `disconnectEnvironment` calls for one
 target by arrival. Both resolve the alias before they take the target lock, so a later call can
 reach the lock first. A disconnect does nothing once a newer call for that target exists, and an
-ensure fails as cancelled once a newer disconnect exists.
+ensure ends neutrally once a newer disconnect exists. Compatible calls share one credential-free
+manager preparation; pairing completes separately for each caller. Canceling a waiter detaches
+its observers, while preparation lives in the manager scope. Disconnect invalidates the owner
+before waiting for the target lock. Completion revalidates the generation, selected runtime and
+live attachment; an attachment hint never authorizes use of a replacement runtime.
 
 The client registry keeps one SSH teardown per route in flight (`forkSshDisconnect` in
 `packages/client-runtime/src/connection/registry.ts`). Switching off again while it is stalled
@@ -288,10 +324,29 @@ aliases. It uses thin bridges in `apps/server/src/sshRemote/SshRemoteDispatch.ts
 to reach the existing server manager; it does not create another manager.
 `apps/desktop/src/ssh/DesktopSshEnvironment.ts` owns saved desktop targets and runs
 status, idle updates, and confirmed immediate updates through its existing manager
-and typed IPC (`packages/contracts/src/ipc.ts`). Desktop catalog storage remains
+and typed IPC (`packages/contracts/src/ipc.ts`). Sparse request-scoped phase events replay the
+current phase and remaining preparation budget to joining renderers; terminal readiness carries
+native attachment evidence, not proof of an authenticated client session. Server and desktop
+managers remain separate owners. Desktop catalog storage remains
 client-owned: local native-primary setup reviews trust through the server but
 installs through the desktop manager. Remote or WSL clients cannot use that local
 ownership path.
+
+Adding a host starts with one read-only preflight shared by Settings and agents:
+`packages/ssh/src/preflight.ts` runs reachability, host key, key sign-in, platform,
+runtime and disk checks with fresh SSH processes (no shared master, strict host keys,
+no host-key updates), and `packages/ssh/src/runtimeAvailability.ts` checks the
+runner's archive sources without downloading archives. The runtime check follows the same
+published-fallback rule as provisioning: an opted-in runner with no mirror may use the newest
+compatible published release only when the host has no installed runtime or GOAT data.
+`SshHostSetup.preflight` serves it as `sshHost.preflight` with the server's own runner. `apps/server/src/sshRemote/SshDeviceAdd.ts`
+is the one agent path behind `goat_ssh_host_add` and its alias `goat_connection_add_ssh`:
+a failed check stops before any side effect, a new host key becomes a pin-only
+approval, and a passing host is saved through the desktop catalog when one is attached
+and registered in this server's [hub node list](#hub-nodes). Without a desktop the hub
+list alone saves it; a host GOAT has not run on is first prepared on a managed alias.
+`packages/shared/src/sshDestination.ts` parses typed
+destinations for both.
 
 SSH setup and immediate-update approvals resume through SshHostSetup's shared
 continuation worker. `apps/server/src/handoffs/Handoffs.ts` retains the private
@@ -357,6 +412,20 @@ SSH toolkit asks `RemoteDispatchCoordinator` to persist the dispatch first. That
 Workspace sync for a remote checkout is `apps/server/src/sshRemote/SshWorkspaceSync.ts`. Remote
 repo paths it prints sit under `$HOME/.goat/repos/`.
 
+[`RepositoryInventory`](../apps/server/src/project/RepositoryInventory.ts) reads only registered
+projects and their Git worktrees, with bounded snapshots exposed by host status on request.
+[`RepositoryLaunchMcpService`](../apps/server/src/mcp/RepositoryLaunchMcpService.ts) checks an
+explicit origin-key selection before SSH dispatch, preserving the caller's host-read ceiling.
+These are local-ref diagnostics, not proof that work is pushed or a placement policy.
+
+[`RepositoryReferences`](../apps/server/src/project/RepositoryReferences.ts) reads exact requested
+regular blobs from a pinned commit without a fetch or working-tree mount. The MCP reference
+service rechecks caller authority and remote content bounds, then copies snapshots into the
+worker brief; no source credential or write capability travels with them. Ambient provider
+filesystem permissions are unchanged. Runtime root grants must remain unsupported unless a
+provider can enforce them. Raw nested reference arguments are validated before MCP's lenient
+codec can discard unsupported authority fields.
+
 ## Linked hosts
 
 A linked host is another GOAT server this environment reaches over HTTPS instead of SSH, such as
@@ -404,3 +473,42 @@ GOAT never loses track of a machine that may still bill. `BoatClient.ts` is the 
 `settings:write` grant, as in Settings. Deleting a machine and managing the key stay in Settings.
 
 > Decision record: [ADR-0008](decisions/ADR-0008-ssh-hosts.md)
+
+## Hub nodes
+
+The hub is the GOAT server a phone pairs with. `HubNodes` in
+`apps/server/src/hubNodes/HubNodes.ts` owns the list of machines it reaches, so a headless
+`goat serve` serves the same list to every client over `hub.nodes.*` (`WsHubNodesRpcGroup` in
+`packages/contracts/src/rpc.ts`, wire shapes in `packages/contracts/src/hubNodes.ts`). Reading and
+checking need `orchestration:read`; adding, removing, importing and dismissing need
+`settings:write`. `goat_connection_*` MCP tools call the same service. Its tables live behind
+`apps/server/src/hubNodes/HubNodeRepository.ts`.
+
+A node is one GOAT environment with one or more routes. Routes come from three sources, merged by
+`apps/server/src/hubNodes/merge.ts`:
+
+- SSH hosts registered on the hub, in `hub_node_registrations`. An unregistered `~/.ssh/config`
+  alias is not a node. Registering a `boat-` alias is refused because the cloud source owns it.
+- Every `LinkedHosts` link. The route shows the link's access and expiry, never its token.
+- Every machine in the `CloudMachineService` local catalog. Listing never asks Boat.
+
+Routes with the same environment ID are one node. The ID comes from the link for linked hosts
+and, for SSH and running cloud machines, from `SshRemoteDispatch.identifyTarget`, which reads
+`$HOME/.goat/userdata/environment-id` over SSH without starting a runtime. A route whose ID is
+unknown is its own node with ID `route:<routeId>` until a check learns it; `get` still resolves
+that ID afterwards. The hub's own ID is refused at add and dropped at merge.
+
+Check never wakes or extends a cloud machine. It asks Boat for state once per check and probes a
+cloud route over SSH only when that state accepts SSH, through `ensureReady({ wake: false })`. A
+stopped machine reads offline. Route status, last-seen time and learned IDs persist in
+`hub_node_route_state`; a forgotten cloud alias loses its row. `changes` subscribes before it
+reads the first snapshot and coalesces signals, so a slow client gets the latest list, not a
+backlog, and a failed read waits for the next change instead of ending the stream.
+
+Removing a node deletes registrations and unlinks links. Cloud routes are refused, and a node
+with one is not partly removed. The desktop renderer imports its saved SSH connections once per
+hub (`hub_node_imports`); a catalog that cannot be unlocked records a notice that clients show
+until the user dismisses it or a later import succeeds. An agent's SSH add goes through
+`SshDeviceAdd`, which reports the hub registration separately from `desktopCatalog`, so a
+desktop save never hides a hub failure. An agent removal deletes the hub node and forwards it
+to an attached desktop catalog, reporting `desktopCatalog` as `saved`, `not_attached` or `failed`.

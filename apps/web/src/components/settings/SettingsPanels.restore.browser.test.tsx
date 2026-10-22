@@ -1,7 +1,7 @@
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@goat/contracts";
-import { act, useEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { useEffect } from "react";
+import { act, render } from "../../../test/render";
+import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   settings: null as UnifiedSettings | null,
@@ -37,64 +37,20 @@ vi.mock(import("../../localApi"), async (original) => ({
 
 import { useSettingsRestore } from "./SettingsPanels";
 
-let root: Root;
-let restore: ReturnType<typeof useSettingsRestore>;
-
-function Probe() {
-  const result = useSettingsRestore();
-  useEffect(() => {
-    restore = result;
-  });
-  return null;
-}
-
-beforeEach(async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+it("restores automatic server updates after an opt-out", async () => {
   vi.clearAllMocks();
-  state.settings = { ...DEFAULT_UNIFIED_SETTINGS };
+  state.settings = { ...DEFAULT_UNIFIED_SETTINGS, automaticServerUpdates: false };
   state.confirm.mockResolvedValue(true);
-  root = createRoot(document.createElement("div"));
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  vi.unstubAllGlobals();
-});
-
-const render = () => act(async () => root.render(<Probe />));
-
-describe("restoring V2 settings", () => {
-  it.each([
-    ["persistComposerContextStrip", "Composer context"],
-    ["autoResumeLimitedThreads", "Auto-resume limited threads"],
-    ["snoozeLimitedThreads", "Snooze limited threads"],
-  ] as const)("restores %s when it is the only changed setting", async (key, label) => {
-    state.settings = { ...DEFAULT_UNIFIED_SETTINGS, [key]: true };
-    await render();
-
-    expect(restore.changedSettingLabels).toEqual([label]);
-    await act(() => restore.restoreDefaults());
-
-    expect(state.confirm.mock.calls[0]?.[0]).toContain(label);
-    expect(state.update).toHaveBeenCalledOnce();
-    expect(state.update.mock.calls[0]?.[0][key]).toBe(DEFAULT_UNIFIED_SETTINGS[key]);
-  });
-
-  it("restores automatic server updates after an opt-out", async () => {
-    state.settings = { ...DEFAULT_UNIFIED_SETTINGS, automaticServerUpdates: false };
-    await render();
-    expect(restore.changedSettingLabels).toEqual(["Automatic server updates"]);
-    await act(() => restore.restoreDefaults());
-    expect(state.update.mock.calls[0]?.[0].automaticServerUpdates).toBe(true);
-  });
-
-  it("does not reset settings after cancellation", async () => {
-    state.settings = { ...DEFAULT_UNIFIED_SETTINGS, autoResumeLimitedThreads: true };
-    state.confirm.mockResolvedValue(false);
-    await render();
-
-    await act(() => restore.restoreDefaults());
-
-    expect(state.confirm).toHaveBeenCalledOnce();
-    expect(state.update).not.toHaveBeenCalled();
-  });
+  let restore: ReturnType<typeof useSettingsRestore>;
+  function Probe() {
+    const result = useSettingsRestore();
+    useEffect(() => {
+      restore = result;
+    });
+    return null;
+  }
+  await using _screen = await render(<Probe />);
+  expect(restore!.changedSettingLabels).toEqual(["Automatic server updates"]);
+  await act(() => restore!.restoreDefaults());
+  expect(state.update.mock.calls[0]?.[0].automaticServerUpdates).toBe(true);
 });

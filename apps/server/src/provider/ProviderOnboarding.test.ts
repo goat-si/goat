@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import {
+  EnvironmentAuthorizationError,
   EnvironmentId,
   MessageId,
   NodeId,
@@ -106,7 +107,7 @@ const agentThread: Invocation.McpInvocationScope = {
     providerInstanceId: ProviderInstanceId.make("codex"),
   },
   client: undefined,
-  grantedScopes: ["orchestration:operate"],
+  grantedScopes: ["orchestration:read"],
 };
 
 const harness = Effect.gen(function* () {
@@ -331,6 +332,50 @@ it.effect("setup_open validates the driver and lists addable providers with thei
       instances: [{ instanceId, auth: "unauthenticated" }],
     });
   }),
+);
+
+it.effect(
+  "a thread with only orchestration:read gets setup and login handoffs; a read-only or dead turn does not",
+  () =>
+    Effect.gen(function* () {
+      const { call, starts, created } = yield* harness;
+      const seen: Array<ReadonlyArray<string>> = [];
+      const thread: Invocation.McpInvocationScope = {
+        ...agentThread,
+        reauthorize: (required) => Effect.sync(() => void seen.push(required)),
+      };
+      const opened = yield* call(thread, "goat_provider_setup_open", { driver: "grok" });
+      expect(opened.structuredContent).toMatchObject({ kind: "needs_human" });
+      const login = yield* call(thread, "goat_provider_login_start", { instanceId });
+      expect(login.structuredContent).toMatchObject({
+        kind: "needs_human",
+        handoff: { targetPath: "provider.setup" },
+      });
+      expect(seen).toEqual([["orchestration:read"], ["orchestration:read"]]);
+      expect(starts).toEqual([]);
+
+      const readOnly = yield* call({ ...thread, readOnly: true }, "goat_provider_login_start", {
+        instanceId,
+      });
+      expect(readOnly.structuredContent).toMatchObject({ kind: "error", code: "unsupported" });
+      const dead = yield* call(
+        {
+          ...thread,
+          reauthorize: () =>
+            Effect.fail(
+              new EnvironmentAuthorizationError({
+                requiredScope: "orchestration:read",
+                message: "The turn is no longer live.",
+              }),
+            ),
+        },
+        "goat_provider_setup_open",
+        { driver: "grok" },
+      );
+      expect(dead.structuredContent).toMatchObject({ kind: "error", code: "capability_denied" });
+      expect(starts).toEqual([]);
+      expect(created).toHaveLength(2);
+    }),
 );
 
 it("derives the provider's own command when sign-in cannot run in the app", () => {

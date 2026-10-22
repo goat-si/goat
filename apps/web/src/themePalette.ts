@@ -26,8 +26,6 @@ import {
 export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, GOAT_CHAT_THEME, THEME_COLOR_ROLES };
 export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, ThemeVariants };
 
-export const GOAT_CHAT_THEME_ID = "goat-chat" as const;
-export const OCEAN_THEME_ID = "ocean" as const;
 export const THEME_FILE_VERSION = 1 as const;
 export const CUSTOM_THEMES_STORAGE_KEY = "goat:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "goat:theme-follow-system";
@@ -70,6 +68,24 @@ type CustomThemeLibrarySnapshot =
   | Readonly<{ status: "unavailable"; reason: "storage-unavailable"; cause: unknown }>;
 
 let customThemeLibrarySnapshot: CustomThemeLibrarySnapshot | null = null;
+const themePreviewListeners = new Set<() => void>();
+let themePreviewAppearance: ThemeAppearance | null = null;
+
+export function getThemePreviewAppearance(): ThemeAppearance | null {
+  return themePreviewAppearance;
+}
+
+export function subscribeToThemePreview(listener: () => void): () => void {
+  themePreviewListeners.add(listener);
+  return () => themePreviewListeners.delete(listener);
+}
+
+function setThemePreviewAppearance(appearance: ThemeAppearance | null): void {
+  if (themePreviewAppearance === appearance) return;
+  themePreviewAppearance = appearance;
+  for (const listener of themePreviewListeners) listener();
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1406,6 +1422,7 @@ export function applyThemeColorPreview(colors: ThemeColors, appearance: ThemeApp
   for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {
     if (isThemeColor(value)) root.style.setProperty(APP_THEME_VARIABLES[role], value);
   }
+  setThemePreviewAppearance(appearance);
 }
 
 export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppearance): void {
@@ -1414,6 +1431,7 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
   const root = document.documentElement;
   if (!root?.style) return;
 
+  setThemePreviewAppearance(null);
   const palette = getThemeDefinition(theme);
 
   if (palette) {

@@ -3,17 +3,20 @@ import type {
   EnvironmentConnectionPhase,
   EnvironmentPresentation,
 } from "@goat/client-runtime/connection";
+import { connectionRouteId, connectionRoutes } from "@goat/client-runtime/connection";
 import {
   createEnvironmentPresentationAtoms,
   createEnvironmentSummaryAtoms,
   createEnvironmentShellSyncAtom,
 } from "@goat/client-runtime/state/presentation";
 import type { EnvironmentId } from "@goat/contracts";
-import { Atom } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
+import * as Option from "effect/Option";
 
 import { environmentCatalog } from "../connection/catalog";
 import { serverEnvironment } from "./server";
 import { environmentShell } from "./shell";
+import { sshRuntime } from "./sshRuntime";
 
 const environmentShellSyncAtom = createEnvironmentShellSyncAtom(environmentShell.stateValueAtom);
 const emptyShellSyncAtom = Atom.make(null);
@@ -24,10 +27,41 @@ export function useEnvironmentShellSync(environmentId: EnvironmentId | null) {
   );
 }
 
+/** When the shell shown for this environment was captured, if that is known for it. */
+export function useEnvironmentSnapshotCapturedAt(environmentId: EnvironmentId | null) {
+  return useAtomValue(
+    environmentId === null
+      ? emptyShellSyncAtom
+      : environmentShell.offlineSnapshotAge(environmentId),
+  );
+}
+
+const sshRuntimeStatusAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => {
+    if (window.desktopBridge === undefined) return undefined;
+    const entry = get(environmentCatalog.catalogValueAtom).entries.get(environmentId);
+    const state = AsyncResult.value(get(environmentCatalog.stateAtom(environmentId)));
+    const ready = Option.isSome(state) ? state.value.sshRuntimeReady : undefined;
+    if (entry === undefined || ready === undefined) return undefined;
+    const route = connectionRoutes(entry).find(
+      (candidate) => connectionRouteId(candidate.target) === ready.routeId,
+    );
+    if (
+      route?.target._tag !== "SshConnectionTarget" ||
+      Option.isNone(route.profile) ||
+      route.profile.value._tag !== "SshConnectionProfile"
+    )
+      return undefined;
+    return get(sshRuntime.statusAtom({ environmentId, target: route.profile.value.target }))
+      ?.status;
+  }),
+);
+
 export const environmentPresentations = createEnvironmentPresentationAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   stateAtom: environmentCatalog.stateAtom,
   serverConfigValueAtom: serverEnvironment.configValueAtom,
+  sshRuntimeStatusAtom,
 });
 
 export const environmentSummaries = createEnvironmentSummaryAtoms({

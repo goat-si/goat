@@ -82,7 +82,10 @@ export function loadGoatProjectFile(
     if (settled.data !== null) {
       lookup = {
         known: true,
-        file: settled.data.truncated ? null : parseGoatProjectFile(settled.data.contents),
+        file:
+          settled.data.exists === false || settled.data.truncated
+            ? null
+            : parseGoatProjectFile(settled.data.contents),
       };
     } else if (
       relativePath === LEGACY_PROJECT_FILE_NAME &&

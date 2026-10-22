@@ -8,6 +8,8 @@ import {
   type ThreadId,
   type ThreadPullRequestLink,
 } from "@goat/contracts";
+import { watchHubProxySnapshot } from "./hubProxySnapshot.ts";
+import * as DateTime from "effect/DateTime";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -44,6 +46,7 @@ export type EnvironmentShellStatus = "empty" | "cached" | "synchronizing" | "liv
 export interface EnvironmentShellState {
   readonly snapshot: Option.Option<OrchestrationV2ShellSnapshot>;
   readonly status: EnvironmentShellStatus;
+  readonly meta?: Persistence.ShellSnapshotMeta;
   readonly error: Option.Option<string>;
 }
 
@@ -84,9 +87,13 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       ),
     ),
   );
+  const cachedMeta = yield* cache
+    .loadShellMeta(environmentId)
+    .pipe(Effect.catch(() => Effect.succeedNone));
   const cachedSnapshot = Option.map(cached, withoutDeferredPullRequests);
   const state = yield* SubscriptionRef.make<EnvironmentShellState>({
     snapshot: cachedSnapshot,
+    ...(Option.isSome(cachedMeta) ? { meta: cachedMeta.value } : {}),
     status: shellStatusForSnapshot(cachedSnapshot),
     error: Option.none(),
   });
@@ -121,6 +128,18 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         ),
       );
       if (!saved) return;
+      const meta = {
+        snapshotSequence: snapshot.snapshotSequence,
+        capturedAt: DateTime.formatIso(yield* DateTime.now),
+      };
+      yield* cache
+        .saveShellMeta(environmentId, meta)
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Could not persist shell cache metadata.", { error }),
+          ),
+        );
+      yield* SubscriptionRef.update(state, (current) => ({ ...current, meta }));
       lastPersisted = snapshot;
       if (!flush) return;
     }
@@ -240,6 +259,33 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     if (next.snapshot !== initial.snapshot && Option.isSome(next.snapshot)) {
       yield* Queue.offer(persistence, next.snapshot.value);
     }
+  }, snapshotWriteLock.withPermit);
+
+  const hydrateFromHub = Effect.fn("EnvironmentShellState.hydrateFromHub")(function* (
+    snapshot: OrchestrationV2ShellSnapshot,
+    capturedAt: string,
+  ) {
+    const session = yield* SubscriptionRef.get(supervisor.session);
+    if (Option.isSome(session) && (yield* Ref.get(lastAuthoritativeSession)) === session.value)
+      return false;
+    const current = yield* SubscriptionRef.get(state);
+    if (
+      Option.isSome(current.snapshot) &&
+      snapshot.snapshotSequence < current.snapshot.value.snapshotSequence
+    )
+      return false;
+    const meta = { snapshotSequence: snapshot.snapshotSequence, capturedAt };
+    yield* persistenceLock.withPermit(
+      Effect.gen(function* () {
+        yield* Ref.set(latestLiveSnapshot, Option.none());
+        yield* cache.saveShell(environmentId, snapshot);
+        yield* cache.saveShellMeta(environmentId, meta);
+      }).pipe(
+        Effect.catch((error) => Effect.logWarning("Could not persist a hub snapshot.", { error })),
+      ),
+    );
+    yield* SubscriptionRef.set(state, { ...current, snapshot: Option.some(snapshot), meta });
+    return true;
   }, snapshotWriteLock.withPermit);
 
   const stateScope = yield* Effect.scope;
@@ -407,7 +453,8 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     Effect.forkScoped,
   );
 
-  return state;
+  yield* watchHubProxySnapshot(hydrateFromHub).pipe(Effect.forkScoped);
+  return Object.assign(state, { hydrateFromHub });
 });
 
 function shellStateChanges(environmentId: EnvironmentId) {
@@ -526,7 +573,7 @@ export function createEnvironmentServerConfigsAtom(input: {
  * Every shell push replaces the state, so views that gate on load progress read these
  * primitives instead and stay put while threads stream.
  */
-export function createEnvironmentShellProgressAtoms(
+function createEnvironmentShellProgressAtoms(
   stateValueAtom: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellState>,
 ) {
   return {
@@ -571,7 +618,17 @@ export function createEnvironmentShellAtoms<R, E>(
     stateValueAtom,
     statusAtom,
     hasSnapshotAtom,
+    offlineSnapshotAge: Atom.family((environmentId: EnvironmentId) =>
+      Atom.make((get) => offlineSnapshotCapturedAt(get(stateValueAtom(environmentId)))),
+    ),
   };
+}
+
+export function offlineSnapshotCapturedAt(state: EnvironmentShellState): string | null {
+  return Option.isSome(state.snapshot) &&
+    state.meta?.snapshotSequence === state.snapshot.value.snapshotSequence
+    ? state.meta.capturedAt
+    : null;
 }
 
 export * from "./models.ts";

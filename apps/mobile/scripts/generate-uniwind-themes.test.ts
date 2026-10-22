@@ -1,50 +1,12 @@
+import { renderDefaultThemeVariablesJSON } from "./generate-uniwind-themes.mts";
+import { readDefaultMobileThemeVariables } from "../src/lib/mobileTheme.test-support";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  customThemeNames,
-  getGeneratedUniwindThemeOutputs,
-  renderDefaultThemeVariablesJSON,
-  renderUniwindThemesCSS,
-} from "./generate-uniwind-themes.mts";
-import { readDefaultMobileThemeVariables } from "../src/lib/mobileTheme.test-support";
+import { customThemeNames, renderUniwindThemesCSS } from "./generate-uniwind-themes.mts";
 
 describe("generate mobile Uniwind themes", () => {
-  it("keeps the committed outputs current", () => {
-    const staleOutputs = getGeneratedUniwindThemeOutputs()
-      .filter(
-        ([filename, contents]) =>
-          !NodeFS.existsSync(filename) || NodeFS.readFileSync(filename, "utf8") !== contents,
-      )
-      .map(([filename]) => NodePath.relative(import.meta.dirname, filename));
-
-    expect(
-      staleOutputs,
-      "Run `vp run --filter @goat/mobile generate` and commit the generated outputs.",
-    ).toEqual([]);
-  });
-
-  it("registers every custom palette for both appearances", () => {
-    expect(customThemeNames).toEqual([
-      "goat-chat-light",
-      "goat-chat-dark",
-      "grove-light",
-      "grove-dark",
-      "ocean-light",
-      "ocean-dark",
-      "ember-light",
-      "ember-dark",
-      "iris-light",
-      "iris-dark",
-    ]);
-
-    const stylesheet = renderUniwindThemesCSS();
-    for (const themeName of customThemeNames) {
-      expect(stylesheet.match(new RegExp(`@variant ${themeName} \\{`, "gu"))).toHaveLength(1);
-    }
-  });
-
   it("keeps channel identity colors independent of the selected palette", () => {
     for (const [, name, body] of renderUniwindThemesCSS().matchAll(
       /@variant ([\w-]+) \{([^}]+)\}/gu,

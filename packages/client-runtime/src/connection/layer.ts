@@ -6,6 +6,11 @@ import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
 
+import {
+  watchConnectedHubProxyDiscovery,
+  watchRemovedHubProxyRoutes,
+} from "./hubProxyDiscovery.ts";
+import * as HubProxyAuthSource from "./hubProxyAuthSource.ts";
 import * as ConnectionResolver from "./resolver.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as EnvironmentRegistry from "./registry.ts";
@@ -72,8 +77,9 @@ export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscovere
 );
 
 export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
+  const layerResolver = ConnectionResolver.layer.pipe(Layer.provideMerge(HubProxyAuthSource.layer));
   const layerDriver = ConnectionDriver.layer.pipe(
-    Layer.provide(Layer.mergeAll(ConnectionResolver.layer, RpcSession.layer(options))),
+    Layer.provide(Layer.mergeAll(layerResolver, RpcSession.layer(options))),
   );
   const layerRegistry = EnvironmentRegistry.layer.pipe(Layer.provide(layerDriver));
   const layerOnboarding = ConnectionOnboarding.layer.pipe(Layer.provide(layerRegistry));
@@ -81,7 +87,7 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
     layerRegistry,
     RelayEnvironmentDiscovery.layer,
     layerOnboarding,
-    ConnectionResolver.layer,
+    layerResolver,
   );
   const layerConnectionStartup = Layer.effectDiscard(
     Effect.gen(function* () {
@@ -89,6 +95,8 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
       const platformSource = yield* PlatformConnectionSource.PlatformConnectionSource;
       yield* watchDiscoveredCompatibility().pipe(Effect.forkScoped);
       yield* registry.start;
+      yield* watchRemovedHubProxyRoutes().pipe(Effect.forkScoped);
+      yield* watchConnectedHubProxyDiscovery.pipe(Effect.forkScoped);
       yield* platformSource.registrations.pipe(
         Stream.runForEach(registry.reconcilePlatform),
         Effect.forkScoped,

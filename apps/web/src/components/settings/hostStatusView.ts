@@ -3,6 +3,7 @@ import { cpuPercent, diskPercent, memoryPercent } from "@goat/client-runtime/sta
 
 import { formatBytes } from "~/lib/formatBytes";
 import { formatElapsedDurationLabel } from "~/timestampFormat";
+import { hostComputerUseText } from "./CuaSetupDialog.logic";
 
 export const NOT_AVAILABLE = "Not available";
 
@@ -33,6 +34,8 @@ export interface HostCardView {
   readonly loadAverage: string | null;
   readonly threads: HostStatusMetrics["threads"] | null;
   readonly quotas: ReadonlyArray<HostStatusQuota>;
+  /** Null when the host predates reporting computer use. */
+  readonly computerUse: string | null;
 }
 
 const PLATFORM_LABELS: Readonly<Record<string, string>> = {
@@ -133,6 +136,7 @@ export function hostCards(
       loadAverage: metrics === undefined ? null : formatLoadAverage(metrics.loadAvg),
       threads: metrics?.threads ?? null,
       quotas: metrics?.quotas ?? [],
+      computerUse: hostComputerUseText(metrics?.computerUse),
     };
   });
 }

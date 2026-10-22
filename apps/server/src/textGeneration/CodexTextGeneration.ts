@@ -33,6 +33,7 @@ import {
 import { codexModelFamily, getModelSelectionStringOptionValue } from "@goat/shared/model";
 import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 
 const CODEX_TIMEOUT_MS = 180_000;
 /**
@@ -154,6 +155,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         return yield* new TextGenerationError({
           operation,
           detail: "Codex memory generation could not isolate its authentication home.",
+          // Typed so memory pauses this model: this host cannot link the auth file.
+          cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
         });
       return userHome;
     }
@@ -261,6 +264,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           env: input.env,
           cwd: input.cwd,
           shell: spawnCommand.shell,
+          forceKillAfter: "1 second",
         }),
       );
       const [stdout, , exitCode] = yield* Effect.all(
@@ -328,7 +332,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const resolved = resolveRuntime
         ? yield* resolveRuntime.pipe(
             Effect.mapError(
-              (cause) => new TextGenerationError({ operation, detail: cause.detail }),
+              // The setup error stays as the cause so memory can pause a model it cannot run.
+              (cause) => new TextGenerationError({ operation, detail: cause.detail, cause }),
             ),
           )
         : undefined;
@@ -462,6 +467,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         stdin: {
           stream: Stream.encodeText(Stream.make(prompt)),
         },
+        forceKillAfter: "1 second",
       });
 
       const child = yield* commandSpawner

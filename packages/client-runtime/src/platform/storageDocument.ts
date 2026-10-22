@@ -6,8 +6,13 @@ import {
   type ConnectionRegistration,
   ConnectionCredential,
   ConnectionProfile,
+  HubProxyConnectionProfile,
 } from "../connection/catalog.ts";
-import { type ConnectionTarget, PersistedConnectionTarget } from "../connection/model.ts";
+import {
+  HubProxyConnectionTarget,
+  type ConnectionTarget,
+  PersistedConnectionTarget,
+} from "../connection/model.ts";
 import * as TokenStore from "../authorization/tokenStore.ts";
 import { StoredGitHubRoutingPermission } from "../connection/githubRoutingPermissions.ts";
 
@@ -105,6 +110,7 @@ function connectionIdOf(target: ConnectionTarget): string | null {
       return null;
     case "BearerConnectionTarget":
     case "SshConnectionTarget":
+    case "HubProxyConnectionTarget":
       return target.connectionId;
   }
 }
@@ -174,6 +180,15 @@ export function registerConnectionInCatalog(
   switch (registration._tag) {
     case "RelayConnectionRegistration":
       return next;
+    case "HubProxyConnectionRegistration":
+      return {
+        ...next,
+        profiles: replaceCatalogValue(
+          next.profiles,
+          (value) => value.connectionId,
+          registration.profile,
+        ),
+      };
     case "BearerConnectionRegistration":
     case "SshConnectionRegistration":
       return {
@@ -256,4 +271,69 @@ export function putRemoteDpopTokenInCatalog(
       token,
     ),
   };
+}
+
+// Keep legacy arrays readable by older clients: an unknown tagged route would make
+// them discard the entire catalog, including unrelated pairing credentials.
+const ConnectionCatalogStorageDocument = Schema.Struct({
+  ...ConnectionCatalogDocument.fields,
+  hubProxyTargets: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        index: Schema.Number,
+        value: HubProxyConnectionTarget,
+      }),
+    ),
+  ),
+  hubProxyProfiles: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        index: Schema.Number,
+        value: HubProxyConnectionProfile,
+      }),
+    ),
+  ),
+});
+const ConnectionCatalogStorageJson = Schema.fromJsonString(ConnectionCatalogStorageDocument);
+const decodeStorageDocument = Schema.decodeUnknownEffect(ConnectionCatalogStorageJson);
+const encodeStorageDocument = Schema.encodeEffect(ConnectionCatalogStorageJson);
+
+export const decodeConnectionCatalogStorage = (raw: string) =>
+  decodeStorageDocument(raw).pipe(
+    Effect.map((stored) => {
+      const { hubProxyTargets, hubProxyProfiles, ...document } = stored;
+      const targets = [...document.targets];
+      const profiles = [...document.profiles];
+      for (const entry of hubProxyTargets ?? []) targets.splice(entry.index, 0, entry.value);
+      for (const entry of hubProxyProfiles ?? []) profiles.splice(entry.index, 0, entry.value);
+      return { ...document, targets, profiles } satisfies ConnectionCatalogDocument;
+    }),
+  );
+
+export const encodeConnectionCatalogStorage = (document: ConnectionCatalogDocument) =>
+  encodeStorageDocument({
+    ...document,
+    targets: document.targets.filter((target) => target._tag !== "HubProxyConnectionTarget"),
+    profiles: document.profiles.filter((profile) => profile._tag !== "HubProxyConnectionProfile"),
+    hubProxyTargets: document.targets.flatMap((value, index) =>
+      value._tag === "HubProxyConnectionTarget" ? [{ index, value }] : [],
+    ),
+    hubProxyProfiles: document.profiles.flatMap((value, index) =>
+      value._tag === "HubProxyConnectionProfile" ? [{ index, value }] : [],
+    ),
+  });
+
+export function isFutureConnectionCatalog(raw: string): boolean {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "schemaVersion" in value &&
+      typeof value.schemaVersion === "number" &&
+      value.schemaVersion > 1
+    );
+  } catch {
+    return false;
+  }
 }

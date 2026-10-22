@@ -4,20 +4,30 @@ import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
 import { SshHostAnswered } from "@goat/ssh/command";
 import * as IpcChannels from "../channels.ts";
-import { SshHttpBridgeError } from "@goat/ssh/errors";
+import {
+  SshEnsureSupersededError,
+  SshHttpBridgeError,
+  SshPasswordPromptError,
+  SshPreparationTimeoutError,
+} from "@goat/ssh/errors";
 import { SshHostResult } from "@goat/contracts";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import * as NetService from "@goat/shared/Net";
 import * as DesktopSshPasswordPrompts from "../../ssh/DesktopSshPasswordPrompts.ts";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
+import { vi } from "vite-plus/test";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import {
@@ -31,6 +41,8 @@ import {
 } from "./sshEnvironment.ts";
 
 const decodeSshHostResult = Schema.decodeUnknownEffect(SshHostResult);
+
+vi.mock("electron", () => ({}));
 
 /** A desktop whose home is `home`, for the cloud machine guard. */
 const desktopAt = (home: string) =>
@@ -81,7 +93,15 @@ describe("SSH runtime IPC", () => {
   it.effect("decodes structured status and failures over IPC", () =>
     Effect.gen(function* () {
       const results = [
-        { kind: "ok", status: { ...baseStatus, state: "preparing", phase: "uploading" } },
+        {
+          kind: "ok",
+          status: {
+            ...baseStatus,
+            state: "preparing",
+            phase: "uploading",
+            upload: { sentBytes: 1024 * 1024, totalBytes: 70 * 1024 * 1024 },
+          },
+        },
         {
           kind: "ok",
           status: {
@@ -193,6 +213,7 @@ describe("SSH runtime IPC", () => {
         disconnectEnvironment: () => Effect.void,
         revalidateTunnels: () => Effect.void,
         issueMcpClientSession: () => Effect.die("unexpected MCP session"),
+        issueClientSession: () => Effect.die("unexpected client session"),
         runRemoteScript: () => Effect.die("unexpected remote script"),
       } satisfies SshTunnel.SshEnvironmentManagerShape;
       return Effect.gen(function* () {
@@ -259,6 +280,44 @@ describe("SSH runtime IPC", () => {
 });
 
 describe("SSH environment IPC", () => {
+  it.effect(
+    "preserves the prompt-cancel result and distinguishes native supersession and expiry",
+    () =>
+      Effect.gen(function* () {
+        const cancelled = new SshPasswordPromptError({
+          message: "SSH authentication cancelled for devbox.",
+          cause: new DesktopSshPasswordPrompts.DesktopSshPromptCancelledError({
+            requestId: "prompt-1",
+            destination: "devbox",
+          }),
+        });
+        const invoke = (error: DesktopSshEnvironment.DesktopSshEnvironmentOperationError) =>
+          ensureSshEnvironment.handler({ target, requestId: "request-1" }).pipe(
+            Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, {
+              ...unusedSshService,
+              ensureEnvironment: () => Effect.fail(error),
+            }),
+          );
+        assert.deepEqual(yield* invoke(cancelled), {
+          type: IpcChannels.SSH_PASSWORD_PROMPT_CANCELLED_RESULT,
+          message: cancelled.message,
+        });
+        for (const error of [
+          new SshEnsureSupersededError({
+            message: "SSH preparation superseded by a newer connection intent.",
+          }),
+          new SshPreparationTimeoutError({
+            message: "SSH runtime preparation exceeded its 15-minute limit.",
+          }),
+        ]) {
+          const result = yield* invoke(error).pipe(Effect.exit);
+          assert(Exit.isFailure(result));
+          const cause = Cause.findErrorOption(result.cause);
+          assert(Option.isSome(cause));
+          assert.strictEqual(cause.value, error);
+        }
+      }).pipe(Effect.provide(desktopAt("/nonexistent-home"))),
+  );
   it.effect("sends one preparation answer to the requesting renderer with its request ID", () =>
     Effect.gen(function* () {
       const sent: unknown[] = [];
@@ -319,7 +378,11 @@ describe("SSH environment IPC", () => {
             revalidateTunnels: Effect.die("unused"),
             ensureEnvironment: (receivedTarget, options) =>
               Effect.sync(() => {
-                received = { target: receivedTarget, options };
+                const { onPreparationProgress, onPreparationAdmission, ...nativeOptions } =
+                  options ?? {};
+                assert.isFunction(onPreparationProgress);
+                assert.isFunction(onPreparationAdmission);
+                received = { target: receivedTarget, options: nativeOptions };
                 return {
                   target,
                   httpBaseUrl: "http://127.0.0.1:41773/",
@@ -338,58 +401,207 @@ describe("SSH environment IPC", () => {
       });
     }),
   );
-  it.effect("fetches and decodes the remote environment descriptor", () => {
-    const requestUrls: string[] = [];
-    const layer = layerHttpClient((request) =>
-      Effect.sync(() => {
-        requestUrls.push(request.url);
-        return jsonResponse(request, {
-          environmentId: "remote-env",
-          label: "Remote Devbox",
-          platform: { os: "linux", arch: "x64" },
-          serverVersion: "1.2.3",
-          capabilities: { repositoryIdentity: true },
+
+  it.effect(
+    "keeps shared-operation events and trace provenance scoped to each sender and request",
+    () =>
+      Effect.gen(function* () {
+        const entered =
+          yield* Queue.unbounded<
+            NonNullable<
+              Parameters<
+                DesktopSshEnvironment.DesktopSshEnvironment["Service"]["ensureEnvironment"]
+              >[1]
+            >
+          >();
+        const release = yield* Deferred.make<void>();
+        const spans: Tracer.Span[] = [];
+        const tracer = Tracer.make({
+          span: (options) => {
+            const span = new Tracer.NativeSpan(options);
+            spans.push(span);
+            return span;
+          },
         });
-      }),
-    );
+        const sent = [[], []] as unknown[][];
+        const invoke = (index: number) =>
+          ensureSshEnvironment
+            .handler(
+              {
+                target,
+                requestId: `request-${index}`,
+                caller: index === 0 ? "saved-connection" : "provision",
+                attemptContext: {
+                  supervisorId: `window-${index}`,
+                  attemptId: index + 1,
+                  routeId: "ssh:devbox",
+                },
+                options: { preparedAttachmentId: "attachment-1", issuePairingToken: true },
+              },
+              {
+                sender: {
+                  id: 41 + index,
+                  send: (...args) => {
+                    sent[index]!.push(args);
+                  },
+                },
+              },
+            )
+            .pipe(Effect.provideService(Tracer.Tracer, tracer));
+        const service = {
+          ...unusedSshService,
+          ensureEnvironment: (_target, options) =>
+            Effect.gen(function* () {
+              assert.equal(options?.preparedAttachmentId, "attachment-1");
+              yield* Queue.offer(entered, options!);
+              yield* Deferred.await(release);
+              return {
+                target,
+                httpBaseUrl: "http://127.0.0.1:41773/",
+                wsBaseUrl: "ws://127.0.0.1:41773/",
+                pairingToken: "fixture-private-pairing",
+              };
+            }),
+        } satisfies DesktopSshEnvironment.DesktopSshEnvironment["Service"];
+        yield* Effect.gen(function* () {
+          const first = yield* invoke(0).pipe(Effect.forkChild);
+          const firstObservers = yield* Queue.take(entered);
+          const second = yield* invoke(1).pipe(Effect.forkChild);
+          const secondObservers = yield* Queue.take(entered);
+          firstObservers.onPreparationAdmission?.({
+            operationId: "shared-flight",
+            disposition: "leader",
+            generation: 7,
+          });
+          secondObservers.onPreparationAdmission?.({
+            operationId: "shared-flight",
+            disposition: "join",
+            generation: 7,
+          });
+          const active = {
+            operationId: "shared-flight",
+            phase: "uploading",
+            hostAnswered: true,
+            remainingMs: 880_000,
+          } as const;
+          firstObservers.onPreparationProgress?.(active);
+          secondObservers.onPreparationProgress?.(active);
+          firstObservers.onPreparationProgress?.({ ...active, phase: null, outcome: "pending" });
+          secondObservers.onPreparationProgress?.({ ...active, phase: null, outcome: "pending" });
+          assert.deepEqual(
+            sent,
+            [0, 1].map((index) => [
+              [
+                IpcChannels.SSH_ENVIRONMENT_PROGRESS_CHANNEL,
+                { requestId: `request-${index}`, ...active },
+              ],
+              [
+                IpcChannels.SSH_ENVIRONMENT_PROGRESS_CHANNEL,
+                { requestId: `request-${index}`, ...active, phase: null, outcome: "pending" },
+              ],
+            ]),
+          );
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(first);
+          yield* Fiber.join(second);
+          const ensureSpans = spans.filter(
+            (span) => span.name === "desktop.ipc.sshEnvironment.ensureEnvironment",
+          );
+          assert.equal(ensureSpans.length, 2);
+          for (const [index, span] of ensureSpans.entries()) {
+            assert.equal(span.attributes.get("senderId"), 41 + index);
+            assert.equal(
+              span.attributes.get("key"),
+              "devbox\u0000box.example.test\u0000owner\u00002207",
+            );
+            assert.equal(
+              span.attributes.get("caller"),
+              index === 0 ? "saved-connection" : "provision",
+            );
+            assert.equal(span.attributes.get("requestId"), `request-${index}`);
+            assert.equal(span.attributes.get("supervisorId"), `window-${index}`);
+            assert.equal(span.attributes.get("attemptId"), index + 1);
+            assert.equal(span.attributes.get("routeId"), "ssh:devbox");
+            assert.equal(span.attributes.get("operationId"), "shared-flight");
+            assert.equal(span.attributes.get("disposition"), index === 0 ? "leader" : "join");
+            assert.equal(span.attributes.get("generation"), 7);
+            assert.equal(span.attributes.get("outcome"), "ready");
+            assert.notInclude(JSON.stringify([...span.attributes]), "fixture-private-pairing");
+          }
+        }).pipe(Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, service));
+      }).pipe(Effect.provide(desktopAt("/nonexistent-home"))),
+  );
 
-    return Effect.gen(function* () {
-      const descriptor = yield* fetchSshEnvironmentDescriptor.handler({
-        httpBaseUrl: "http://127.0.0.1:41773/",
-      });
-
-      assert.deepEqual(descriptor, {
-        environmentId: "remote-env",
-        label: "Remote Devbox",
-        platform: { os: "linux", arch: "x64" },
-        serverVersion: "1.2.3",
-        capabilities: { repositoryIdentity: true },
-      });
-      assert.deepEqual(requestUrls, ["http://127.0.0.1:41773/.well-known/goat/environment"]);
-    }).pipe(Effect.provide(layer));
-  });
-
-  it.effect("wraps schema decode failures in a typed request error", () => {
-    const layer = layerHttpClient((request) =>
-      Effect.succeed(jsonResponse(request, { environmentId: "remote-env" })),
-    );
-
-    return Effect.gen(function* () {
-      const exit = yield* Effect.exit(
-        fetchSshEnvironmentDescriptor.handler({
-          httpBaseUrl: "http://127.0.0.1:41773/",
-        }),
-      );
-      assert(Exit.isFailure(exit));
-      const failure = Cause.findErrorOption(exit.cause);
-      assert(Option.isSome(failure));
-      const error = failure.value;
-
-      assert.instanceOf(error, DesktopSshEnvironmentRequestError);
-      assert.equal(error.operation, "fetch-environment-descriptor");
-      assert.equal(error.cause instanceof SshHttpBridgeError, false);
-    }).pipe(Effect.provide(layer));
-  });
+  it.effect(
+    "detaches destroyed and throwing senders without failing preparation or other requests",
+    () =>
+      Effect.gen(function* () {
+        const spans: Tracer.Span[] = [];
+        const tracer = Tracer.make({
+          span: (options) => {
+            const span = new Tracer.NativeSpan(options);
+            spans.push(span);
+            return span;
+          },
+        });
+        for (const mode of ["destroyed", "throws", "live"] as const) {
+          const sent: unknown[] = [];
+          const sender = {
+            id: 42,
+            isDestroyed: () => mode === "destroyed",
+            send: (...args: unknown[]) => {
+              if (mode === "throws") throw new Error("Object has been destroyed");
+              sent.push(args);
+            },
+          };
+          const result = yield* ensureSshEnvironment
+            .handler({ target, requestId: mode }, { sender })
+            .pipe(
+              Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, {
+                ...unusedSshService,
+                ensureEnvironment: (_target, options) =>
+                  Effect.gen(function* () {
+                    (yield* SshHostAnswered)?.();
+                    options?.onPreparationAdmission?.({
+                      operationId: "flight",
+                      disposition: "attachment-completion",
+                      generation: 1,
+                    });
+                    options?.onPreparationProgress?.({
+                      operationId: "flight",
+                      phase: "checking",
+                      hostAnswered: true,
+                      remainingMs: 1_000,
+                    });
+                    options?.onPreparationProgress?.({
+                      operationId: "flight",
+                      phase: null,
+                      outcome: "failed",
+                      hostAnswered: true,
+                      remainingMs: 0,
+                    });
+                    return {
+                      target,
+                      httpBaseUrl: "http://127.0.0.1:41773/",
+                      wsBaseUrl: "ws://127.0.0.1:41773/",
+                      pairingToken: null,
+                    };
+                  }),
+              }),
+              Effect.provideService(Tracer.Tracer, tracer),
+            );
+          assert.equal((result as { pairingToken: null }).pairingToken, null);
+          assert.equal(sent.length, mode === "live" ? 3 : 0);
+        }
+        const ensures = spans.filter(
+          (span) => span.name === "desktop.ipc.sshEnvironment.ensureEnvironment",
+        );
+        assert.deepEqual(
+          ensures.map((span) => span.attributes.get("observerDetached") ?? false),
+          [true, true, false],
+        );
+      }).pipe(Effect.provide(desktopAt("/nonexistent-home"))),
+  );
 
   it.effect("rejects non-loopback HTTP endpoints before issuing a request", () => {
     let requestCount = 0;

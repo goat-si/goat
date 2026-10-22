@@ -245,6 +245,15 @@ export class ChannelLedger extends Context.Service<
     readonly listTasksByStatus: (
       statuses: ReadonlyArray<ChannelTaskStatus>,
     ) => Effect.Effect<ReadonlyArray<ChannelStoredTask>, ChannelLedgerError>;
+    /** Finished local tasks whose bound run's check has advanced since its last observation. */
+    readonly listLocalCheckUpdates: () => Effect.Effect<
+      ReadonlyArray<ChannelStoredTask>,
+      ChannelLedgerError
+    >;
+    readonly listRemoteCheckUpdates: () => Effect.Effect<
+      ReadonlyArray<ChannelStoredTask>,
+      ChannelLedgerError
+    >;
     /**
      * Tasks from any channel that wait on a person: an open question, or a running worker whose
      * thread needs an answer, approval, sign-in or resume (`observed.needsYou`). Each counts once.
@@ -288,8 +297,14 @@ export class ChannelLedger extends Context.Service<
     readonly listPendingForwards: (
       limit: number,
     ) => Effect.Effect<ReadonlyArray<ChannelPendingEvent>, ChannelLedgerError>;
-    /** Records one worker run as it stands now; the newest write for a run wins. */
-    readonly upsertWorkerRun: (run: ChannelWorkerRun) => Effect.Effect<void, ChannelLedgerError>;
+    /**
+     * Records one worker run as it stands now; the newest write for a run wins. Deliveries commit
+     * in that same write, so a stall notice cannot land without the status it describes.
+     */
+    readonly upsertWorkerRun: (
+      run: ChannelWorkerRun,
+      deliveries?: ReadonlyArray<ChannelOutboxInsert>,
+    ) => Effect.Effect<void, ChannelLedgerError>;
     /** The recorded runs of these tasks, oldest first per task. */
     readonly listWorkerRuns: (
       taskIds: ReadonlyArray<ChannelTaskId>,
@@ -326,6 +341,16 @@ export class ChannelLedger extends Context.Service<
       readonly requestId: string;
       readonly now: string;
     }) => Effect.Effect<string, ChannelLedgerError>;
+    /**
+     * The code already issued for a request, and when. Does not issue a new one: a card that
+     * was never sent has no code, so a numbered reply cannot land on it.
+     */
+    readonly approvalCodeForRequest: (
+      requestId: string,
+    ) => Effect.Effect<
+      { readonly code: string; readonly issuedAt: string } | undefined,
+      ChannelLedgerError
+    >;
     /** The request a code was issued for in this conversation, if any. */
     readonly approvalRequestForCode: (input: {
       readonly conversationId: ChannelConversationId;
@@ -337,7 +362,7 @@ export class ChannelLedger extends Context.Service<
       readonly from: number;
       readonly now: string;
     }) => Effect.Effect<void, ChannelLedgerError>;
-    /** Recorded runs still running or waiting, across tasks, for reconciliation. */
+    /** Recorded runs still running, waiting, or stalled, across tasks, for reconciliation. */
     readonly listOpenWorkerRuns: () => Effect.Effect<
       ReadonlyArray<ChannelWorkerRun>,
       ChannelLedgerError
@@ -683,7 +708,7 @@ const storedTask = (row: TaskRow): ChannelStoredTask => ({
  * When a waiting task last asked for a person: its newest open question or worker need. Marking
  * the bot read covers everything asked before then; a later question counts again.
  */
-export const channelTaskWaitingSince = (task: ChannelTask): string => {
+const channelTaskWaitingSince = (task: ChannelTask): string => {
   const times = [
     ...task.openQuestions.map((question) => question.askedAt),
     ...(task.observed?.needsYou ?? []).map((need) => need.since),
@@ -1264,6 +1289,35 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("listTasksByStatus")),
       ),
 
+    listLocalCheckUpdates: () =>
+      sql<TaskRow>`
+        SELECT t.owner_id, t.task_json, t.pending_answer_message_id, t.completion_hold
+        FROM channel_tasks t JOIN thread_run_observed_checks c
+          ON c.thread_id = json_extract(t.task_json, '$.worker.threadId')
+          AND c.run_id = json_extract(t.task_json, '$.worker.runId')
+        WHERE t.status IN ('completed', 'failed', 'cancelled')
+          AND json_extract(t.task_json, '$.worker.host') IS NULL
+          AND ((c.status != 'not_run' AND c.status IS NOT json_extract(t.task_json, '$.observed.result.observedCheck.status'))
+            OR (c.status = 'not_run' AND json_extract(t.task_json, '$.observed.result.observedCheckPending') IS NOT 0))
+        ORDER BY t.updated_at LIMIT 20
+      `.pipe(
+        Effect.map((rows) => rows.map(storedTask)),
+        Effect.mapError(toLedgerError("listLocalCheckUpdates")),
+      ),
+
+    listRemoteCheckUpdates: () =>
+      sql<TaskRow>`
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        WHERE status IN ('completed', 'failed', 'cancelled')
+          AND json_extract(task_json, '$.worker.host') IS NOT NULL
+          AND (json_extract(task_json, '$.observed.result.observedCheckPending') = 1
+            OR json_extract(task_json, '$.observed.result.observedCheck.status') = 'running')
+        ORDER BY updated_at
+      `.pipe(
+        Effect.map((rows) => rows.map(storedTask)),
+        Effect.mapError(toLedgerError("listRemoteCheckUpdates")),
+      ),
+
     countWaitingTasks: (ownerId, readThrough) =>
       sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
@@ -1369,13 +1423,20 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("listPendingForwards")),
       ),
 
-    upsertWorkerRun: (run) =>
-      sql`
-        INSERT INTO channel_runtime_state (key, value_json, updated_at)
-        VALUES (${workerRunKey(run.taskId, run.runId)}, ${encodeWorkerRun(run)}, ${run.updatedAt})
-        ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json,
-          updated_at = excluded.updated_at
-      `.pipe(Effect.asVoid, Effect.mapError(toLedgerError("upsertWorkerRun"))),
+    upsertWorkerRun: (run, deliveries = []) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              INSERT INTO channel_runtime_state (key, value_json, updated_at)
+              VALUES (${workerRunKey(run.taskId, run.runId)}, ${encodeWorkerRun(run)}, ${run.updatedAt})
+              ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json,
+                updated_at = excluded.updated_at
+            `;
+            if (deliveries.length > 0) yield* insertDeliveries(deliveries, run.updatedAt);
+          }),
+        )
+        .pipe(Effect.asVoid, Effect.mapError(toLedgerError("upsertWorkerRun"))),
 
     listWorkerRuns: (taskIds) =>
       taskIds.length === 0
@@ -1489,6 +1550,19 @@ const make = Effect.gen(function* () {
         )
         .pipe(Effect.mapError(toLedgerError("issueApprovalCode"))),
 
+    approvalCodeForRequest: (requestId) =>
+      sql<{ readonly value_json: string; readonly updated_at: string }>`
+        SELECT value_json, updated_at FROM channel_runtime_state
+        WHERE key = ${"approval-code-of:" + requestId}
+      `.pipe(
+        Effect.map((rows) => {
+          const row = rows[0];
+          if (row === undefined) return undefined;
+          return { code: decodeApprovalOf(row.value_json).code, issuedAt: row.updated_at };
+        }),
+        Effect.mapError(toLedgerError("approvalCodeForRequest")),
+      ),
+
     approvalRequestForCode: (input) =>
       sql<{ readonly value_json: string }>`
         SELECT value_json FROM channel_runtime_state
@@ -1525,7 +1599,7 @@ const make = Effect.gen(function* () {
       sql<{ readonly value_json: string }>`
         SELECT value_json FROM channel_runtime_state
         WHERE key >= 'worker-run:' AND key < 'worker-run;'
-          AND json_extract(value_json, '$.status') IN ('running', 'waiting')
+          AND json_extract(value_json, '$.status') IN ('running', 'waiting', 'stalled')
       `.pipe(
         Effect.map((rows) => rows.map((row) => decodeWorkerRun(row.value_json))),
         Effect.mapError(toLedgerError("listOpenWorkerRuns")),

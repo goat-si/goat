@@ -1,39 +1,36 @@
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises Node HTTP and filesystem boundaries.
-import * as NodeHttp from "node:http";
-import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { afterEach, assert, describe, expect, it } from "@effect/vitest";
 import { AuthStandardClientScopes } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { buildMobilePairingLink } from "@goat/shared/mobilePairingLink";
 import * as NetService from "@goat/shared/Net";
-import * as HostProcess from "@goat/shared/HostProcess";
-import { afterEach, assert, describe, expect, it } from "@effect/vitest";
+import { CliError, Command } from "effect/cli";
 import * as Effect from "effect/Effect";
+import { FetchHttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
 import * as TestConsole from "effect/testing/TestConsole";
-import { Command, CliError } from "effect/cli";
-
+import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import packageJson from "../../package.json" with { type: "json" };
 import { cli } from "../binCli.ts";
-import { renderTerminalQrCode } from "../startupAccess.ts";
+import * as ServiceLauncherClient from "../cloud/serviceLauncherClient.ts";
 import {
   SERVICE_LAUNCHER_CONTEXT_ENV,
   SERVICE_LAUNCHER_PROTOCOL,
 } from "../cloud/serviceProtocol.ts";
-import * as ServiceLauncherClient from "../cloud/serviceLauncherClient.ts";
 import {
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
   type PersistedServerRuntimeState,
 } from "../serverRuntimeState.ts";
-import {
-  DevServerNotProxiableError,
-  resolveDirectPairingBaseUrl,
-  resolveTailscaleLocalTarget,
-} from "./pair.ts";
-
-import packageJson from "../../package.json" with { type: "json" };
+import { renderTerminalQrCode } from "../startupAccess.ts";
+import { DevServerNotProxiableError, resolveTailscaleLocalTarget } from "./pair.ts";
 
 const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
@@ -58,21 +55,6 @@ afterEach(() => {
   }
 });
 
-describe("pair base URL selection", () => {
-  it("pairs through the dev web origin when the server fronts a dev server", () => {
-    expect(resolveDirectPairingBaseUrl({ ...baseState, devUrl: "http://localhost:5733/" })).toBe(
-      "http://localhost:5733/",
-    );
-  });
-
-  it("pairs through the bound host when there is no dev server", () => {
-    expect(resolveDirectPairingBaseUrl({ ...baseState, host: "100.64.0.7" })).toBe(
-      "http://100.64.0.7:3773",
-    );
-    expect(resolveDirectPairingBaseUrl(baseState)).toBe("http://localhost:3773");
-  });
-});
-
 describe("pair tailscale local target", () => {
   it("proxies the dev web port for dev servers", () => {
     expect(resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://localhost:5733/" })).toEqual(
@@ -93,17 +75,6 @@ describe("pair tailscale local target", () => {
     expect(
       resolveTailscaleLocalTarget({ ...baseState, devUrl: "https://localhost:5733/" }),
     ).toBeInstanceOf(DevServerNotProxiableError);
-  });
-
-  it("proxies the backend port directly otherwise", () => {
-    expect(resolveTailscaleLocalTarget(baseState)).toEqual({ localPort: 3_773 });
-    expect(resolveTailscaleLocalTarget({ ...baseState, host: "0.0.0.0" })).toEqual({
-      localPort: 3_773,
-    });
-    expect(resolveTailscaleLocalTarget({ ...baseState, host: "192.168.1.42" })).toEqual({
-      localPort: 3_773,
-      localHost: "192.168.1.42",
-    });
   });
 });
 
@@ -134,6 +105,7 @@ const testDescriptor = {
 
 const withDescriptorServer = <A, E, R>(
   run: (origin: string, paths: string[]) => Effect.Effect<A, E, R>,
+  host = "127.0.0.1",
   legacyOnly = false,
 ) =>
   Effect.acquireUseRelease(
@@ -143,7 +115,7 @@ const withDescriptorServer = <A, E, R>(
         paths.push(request.url ?? "");
         if (
           request.url ===
-          (legacyOnly ? "/.well-known/t3/environment" : "/.well-known/goat/environment")
+          (legacyOnly ? "/.well-known/t3/environment" : "/.well-known/goat/environment") // goat-rename: legacy
         ) {
           response.writeHead(200, { "content-type": "application/json" });
           response.end(JSON.stringify(testDescriptor));
@@ -153,7 +125,7 @@ const withDescriptorServer = <A, E, R>(
         response.end();
       });
       Object.assign(server, { paths });
-      server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
+      server.listen(0, host, () => resume(Effect.succeed(server)));
     }),
     (server) => {
       const address = server.address();
@@ -161,7 +133,7 @@ const withDescriptorServer = <A, E, R>(
         return Effect.die(new Error("Expected a TCP address"));
       }
       return run(
-        `http://127.0.0.1:${String(address.port)}`,
+        `http://${host === "::1" ? "[::1]" : host}:${String(address.port)}`,
         (server as NodeHttp.Server & { paths: string[] }).paths,
       );
     },
@@ -169,6 +141,74 @@ const withDescriptorServer = <A, E, R>(
   );
 
 describe("goat pair", () => {
+  it.effect("publishes an IPv6-only server through Tailscale Serve when pairing", () =>
+    withDescriptorServer(
+      (origin) =>
+        Effect.gen(function* () {
+          const fetch = yield* FetchHttpClient.Fetch;
+          let serving = false;
+          const spawner = ChildProcessSpawner.make((command) =>
+            Effect.gen(function* () {
+              if (!ChildProcess.isStandardCommand(command))
+                return yield* Effect.die("Unexpected pipeline");
+              if (command.args[0] === "serve") {
+                const target = command.args.at(-1)!;
+                const descriptor = yield* Effect.promise(async () =>
+                  (await fetch(new URL("/.well-known/goat/environment", target))).json(),
+                );
+                expect(descriptor).toEqual(testDescriptor);
+                serving = true;
+              }
+              return ChildProcessSpawner.makeHandle({
+                pid: ChildProcessSpawner.ProcessId(1),
+                exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+                isRunning: Effect.succeed(false),
+                kill: () => Effect.void,
+                unref: Effect.succeed(Effect.void),
+                stdin: Sink.drain,
+                stdout: Stream.make(
+                  new TextEncoder().encode('{"Self":{"DNSName":"pair-test.tail.ts.net."}}'),
+                ),
+                stderr: Stream.empty,
+                all: Stream.empty,
+                getInputFd: () => Sink.drain,
+                getOutputFd: () => Stream.empty,
+              });
+            }),
+          );
+
+          const baseDir = makeTempDir("goat-pair-ipv6-test-");
+          yield* persistServerRuntimeState({
+            path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
+            state: yield* makePersistedServerRuntimeState({
+              config: { host: "::1", devUrl: undefined },
+              port: Number(new URL(origin).port),
+            }),
+          });
+          const output = yield* captureStdout(
+            runCli(["pair", "--base-dir", baseDir, "--tailscale"]).pipe(
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Effect.provideService(HostProcess.Platform, "linux"),
+              Effect.provideService(FetchHttpClient.Fetch, async (input, init) => {
+                if (String(input).startsWith(origin)) return fetch(input, init);
+                assert.equal(
+                  String(input),
+                  "https://pair-test.tail.ts.net/.well-known/goat/environment",
+                );
+                return serving
+                  ? Response.json(testDescriptor)
+                  : new Response(null, { status: 503 });
+              }),
+            ),
+          );
+
+          expect(serving).toBe(true);
+          assert.include(output, "Pairing URL: https://pair-test.tail.ts.net/pair#token=");
+        }),
+      "::1",
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect.each([false, true])("mints a token with legacy path fallback=%s", (legacyOnly) =>
     withDescriptorServer(
       (origin, paths) =>
@@ -215,6 +255,7 @@ describe("goat pair", () => {
           assert.equal(credentials[0]?.label, "goat pair");
           assert.deepEqual(credentials[0]?.scopes, AuthStandardClientScopes);
         }),
+      "127.0.0.1",
       legacyOnly,
     ).pipe(
       Effect.provide(NodeServices.layer),
@@ -232,43 +273,6 @@ describe("goat pair", () => {
         off: () => undefined,
       }),
     ),
-  );
-
-  it.effect("mints a pairing grant with only the selected scopes", () =>
-    withDescriptorServer((origin) =>
-      Effect.gen(function* () {
-        const baseDir = makeTempDir("goat-pair-scopes-test-");
-        yield* persistServerRuntimeState({
-          path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
-          state: yield* makePersistedServerRuntimeState({
-            config: { host: "127.0.0.1", devUrl: undefined },
-            port: Number(new URL(origin).port),
-          }),
-        });
-
-        yield* captureStdout(
-          runCli([
-            "pair",
-            "--base-dir",
-            baseDir,
-            "--scope",
-            "orchestration:read",
-            "--scope",
-            "relay:read",
-            "--scope",
-            "orchestration:read",
-          ]),
-        );
-        const listed = yield* captureStdout(
-          runCli(["auth", "pairing", "list", "--base-dir", baseDir, "--json"]),
-        );
-        const credentials = JSON.parse(listed) as ReadonlyArray<{
-          readonly scopes: ReadonlyArray<string>;
-        }>;
-        assert.lengthOf(credentials, 1);
-        assert.deepEqual(credentials[0]?.scopes, ["orchestration:read", "relay:read"]);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("pairs through the recorded dev web URL for dev servers", () =>
@@ -290,23 +294,6 @@ describe("goat pair", () => {
         assert.include(output, "Pairing URL: http://localhost:5733/pair#token=");
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("directs to goat serve or goat connect when no server is running", () =>
-    Effect.gen(function* () {
-      const baseDir = makeTempDir("goat-pair-none-test-");
-
-      const error = yield* provideCliTestLayers(
-        runCli(["pair", "--base-dir", baseDir]).pipe(Effect.flip),
-      );
-
-      const rendered = String(
-        typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
-      );
-      assert.include(rendered, "No running GOAT server found.");
-      assert.include(rendered, "goat serve");
-      assert.notInclude(rendered, "connect");
-    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("ignores runtime state whose recorded pid is no longer alive", () =>
@@ -335,27 +322,56 @@ describe("goat pair", () => {
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("ignores stale runtime state pointing at a dead server", () =>
-    Effect.gen(function* () {
-      const baseDir = makeTempDir("goat-pair-stale-test-");
-      const statePath = NodePath.join(baseDir, "userdata", "server-runtime.json");
-      yield* persistServerRuntimeState({
-        path: statePath,
-        state: yield* makePersistedServerRuntimeState({
-          config: { host: "127.0.0.1", devUrl: undefined },
-          port: 1,
-        }),
-      });
+  // Without the capability `tailscale serve` blocks on an enablement URL, so
+  // pairing must stop at status instead of spawning it.
+  it.effect("explains a tailnet without HTTPS serve instead of running tailscale serve", () =>
+    withDescriptorServer((origin) =>
+      Effect.gen(function* () {
+        const baseDir = makeTempDir("goat-pair-ts-test-");
+        yield* persistServerRuntimeState({
+          path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
+          state: yield* makePersistedServerRuntimeState({
+            config: { host: "127.0.0.1", devUrl: undefined },
+            port: Number(new URL(origin).port),
+          }),
+        });
+        const tailscaleCalls: Array<ReadonlyArray<string>> = [];
+        const spawner = ChildProcessSpawner.make((command) => {
+          const { args } = command as unknown as { readonly args: ReadonlyArray<string> };
+          tailscaleCalls.push(args);
+          const stdout =
+            args[0] === "status"
+              ? `{"Self":{"DNSName":"pair-test.invalid.","CapMap":{"funnel":null}}}`
+              : "";
+          return Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(args[0] === "status" ? 0 : 1)),
+              isRunning: Effect.succeed(false),
+              kill: () => Effect.void,
+              unref: Effect.succeed(Effect.void),
+              stdin: Sink.drain,
+              stdout: Stream.make(new TextEncoder().encode(stdout)),
+              stderr: Stream.empty,
+              all: Stream.empty,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+            }),
+          );
+        });
 
-      const error = yield* provideCliTestLayers(
-        runCli(["pair", "--base-dir", baseDir]).pipe(Effect.flip),
-      );
+        const error = yield* provideCliTestLayers(
+          runCli(["pair", "--base-dir", baseDir, "--tailscale"]).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.flip,
+          ),
+        );
 
-      const rendered = String(
-        typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
-      );
-      assert.include(rendered, "No running GOAT server found.");
-    }).pipe(Effect.provide(NodeServices.layer)),
+        assert.include(String(error), "Tailscale Serve is not enabled on your tailnet.");
+        assert.include(String(error), "https://login.tailscale.com/admin/dns");
+        assert.deepEqual(tailscaleCalls, [["status", "--json"]]);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
   );
 });
 

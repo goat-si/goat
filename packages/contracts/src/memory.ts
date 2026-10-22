@@ -143,6 +143,28 @@ export const MEMORY_FTS_INDEXED_TEXT_MAX_BYTES = 134217728;
 export const MEMORY_FTS_ALLOCATED_WARNING_BYTES = 100663296;
 export const MEMORY_FTS_ALLOCATED_BRAKE_BYTES = 134217728;
 export const MEMORY_FTS_ALLOCATED_RESUME_BYTES = 100663296;
+/**
+ * Steady-state ceiling for every memory_* btree on one server, measured with dbstat. Local
+ * writes that add content are refused at or above it; forgetting always proceeds.
+ */
+export const MEMORY_STORE_BUDGET_BYTES = 104857600;
+/** Where a healthy memory store sits. Storage samples above it log a warning. */
+export const MEMORY_STORE_TARGET_BYTES = 52428800;
+/**
+ * Default ceiling for orchestration history: the state database minus memory and free pages.
+ * While history is above it, compaction trims bulky tool output in idle threads. Configurable
+ * as `storageCleanup.historyBudgetBytes`.
+ */
+export const ORCHESTRATION_HISTORY_BUDGET_BYTES = 2147483648;
+/** Threads untouched this long are eligible for trimming while history is over its budget. */
+export const ORCHESTRATION_HISTORY_TRIM_IDLE_MS = 604800000;
+/** Bulky history fields above this are cut to a head and tail that fit it, marker included. */
+export const ORCHESTRATION_HISTORY_TRIM_FIELD_BYTES = 8192;
+/**
+ * Default idle days after which a thread's turn items move to a compressed archive file and
+ * come back when the thread is read. Configurable as `storageCleanup.historyArchiveAfterDays`.
+ */
+export const ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS = 30;
 export const MEMORY_STORAGE_SAMPLE_MAX_DAYS = 30;
 export const MEMORY_STORAGE_SAMPLE_MAX_UTF8_BYTES = 16384;
 export const MEMORY_STORAGE_SAMPLE_MAX_TABLES = 64;
@@ -251,6 +273,18 @@ export type MemoryProviderCapabilities = typeof MemoryProviderCapabilities.Type;
 
 export const MemoryImportFormat = Schema.Literals(["codex", "claude", "omo"]);
 export type MemoryImportFormat = typeof MemoryImportFormat.Type;
+
+/**
+ * The import format named in revision provenance. Decoders accept any format token
+ * so a revision from a newer import source never blocks sync or reads. Writers still
+ * record only `MemoryImportFormat` values until every peer of a space decodes this
+ * (the next hub protocol version); `parserVersion` and `sourceLocator` name the
+ * real source meanwhile. A known value encodes byte-for-byte as before.
+ */
+export const MemoryProvenanceImportFormat = Schema.String.check(
+  Schema.makeFilter((s) => /^[a-z][a-z0-9-]{0,31}$/.test(s)),
+);
+export type MemoryProvenanceImportFormat = typeof MemoryProvenanceImportFormat.Type;
 
 export const MemoryFailureCode = Schema.Literals([
   "unavailable",
@@ -363,7 +397,7 @@ export type MemorySourceExclusion = typeof MemorySourceExclusion.Type;
 
 export const MemoryImportSourceMetadata = struct({
   sourceId: MemoryImportSourceId,
-  format: MemoryImportFormat,
+  format: MemoryProvenanceImportFormat,
   parserVersion: canonical,
   sourceLocator: canonical.check(
     Schema.makeFilter((s) => !s.startsWith("/") && !/^[a-zA-Z]:[\\/]/.test(s)),
@@ -1140,6 +1174,14 @@ export const MemoryHubReconcileResult = struct({
 });
 export type MemoryHubReconcileResult = typeof MemoryHubReconcileResult.Type;
 
+/** Memory generation paused for the current model after the provider refused it the same way. */
+export const MemoryGenerationHold = struct({
+  reason: Schema.Literals(["schema_rejected", "auth", "unavailable", "rate_limited"]),
+  since: MemoryUtcTimestamp,
+  nextAttemptAt: MemoryUtcTimestamp,
+});
+export type MemoryGenerationHold = typeof MemoryGenerationHold.Type;
+
 export const MemorySyncStatus = struct({
   memorySpaceId: Schema.NullOr(MemorySpaceId),
   /** Last locally ready space remains readable while sharing is disabled. */
@@ -1153,6 +1195,8 @@ export const MemorySyncStatus = struct({
   failureCode: Schema.optionalKey(MemoryFailureCode),
   storage: MemoryStorageStatus,
   processing: MemoryProcessingStatus,
+  /** Present only when the request opted in with includeGenerationHold. */
+  generationHold: Schema.optionalKey(MemoryGenerationHold),
 }).check(Schema.makeFilter((v) => v.lastHubSequence === v.processing.lastReceivedHubSequence));
 export type MemorySyncStatus = typeof MemorySyncStatus.Type;
 
@@ -1604,10 +1648,19 @@ export const MemoryHistoryInput = struct({
 });
 export type MemoryHistoryInput = typeof MemoryHistoryInput.Type;
 
-/** Opt in only when memory.retainedLocalSpace is advertised; legacy requests remain empty. */
+/**
+ * Each opt-in is sent only when its capability (memory.retainedLocalSpace,
+ * memory.generationHold) is advertised: a strict legacy decoder rejects fields it does not know,
+ * so legacy requests remain empty.
+ */
 export const MemorySyncStatusInput = Schema.Union([
   struct({}),
   struct({ includeRetainedLocalSpaceId: Schema.Literal(true) }),
+  struct({ includeGenerationHold: Schema.Literal(true) }),
+  struct({
+    includeRetainedLocalSpaceId: Schema.Literal(true),
+    includeGenerationHold: Schema.Literal(true),
+  }),
 ]);
 export type MemorySyncStatusInput = typeof MemorySyncStatusInput.Type;
 
@@ -2027,6 +2080,8 @@ export const MemoryImportPreviewItem = struct({
   issue: Schema.optionalKey(MemoryImportIssue),
   memoryId: Schema.optionalKey(MemoryId),
   revisionId: Schema.optionalKey(MemoryRevisionId),
+  /** Imports normally but never fits the turn-start memory frame. Only sent when requested. */
+  tooLargeForTurnStart: Schema.optionalKey(Schema.Literal(true)),
 }).check(
   Schema.makeFilter(
     (v) =>
@@ -2078,7 +2133,13 @@ const importSelector = struct({
 export const MemoryImportProviderInput = bounded(
   Schema.Union([
     struct({ ...space, action: Schema.Literal("discover"), format: MemoryImportFormat }),
-    struct({ ...space, action: Schema.Literal("preview"), sourceId: MemoryImportSourceId }),
+    struct({
+      ...space,
+      action: Schema.Literal("preview"),
+      sourceId: MemoryImportSourceId,
+      /** Older clients decode preview items strictly, so the server adds the field only on request. */
+      includeTurnStartFit: Schema.optionalKey(Schema.Literal(true)),
+    }),
     struct({
       ...space,
       action: Schema.Literal("apply"),

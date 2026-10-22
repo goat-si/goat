@@ -10,6 +10,7 @@ import { build } from "vite-plus/pack";
 import { expect, it } from "vite-plus/test";
 
 // Opt in on a host with a display and the pinned Electron runtime installed.
+// oxlint-disable-next-line goat/no-test-timeout-or-unreasoned-skip -- Opt-in fixture bundles a preload and launches a real Electron process through its close event.
 it.skipIf(NodeProcess.env["GOAT_TEST_ELECTRON_POPUPS"] !== "1")(
   "retains a real webview opener, chained messages, POST, session, close and owner cleanup",
   async ({ onTestFinished }) => {

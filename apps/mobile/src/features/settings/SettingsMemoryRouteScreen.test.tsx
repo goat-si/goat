@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
@@ -670,6 +669,29 @@ describe("native sharing workflow", () => {
     await act(async () => h.focus());
     expect(view.container.textContent).toContain("Review latest settings");
     expect(h.calls.filter((c) => c.method === WS_METHODS.memoryHubSettingsGet)).toHaveLength(reads);
+  });
+  it("reads memory status again when memory is turned off or its model changes", async () => {
+    await start();
+    const reads = () => h.calls.filter((c) => c.method === WS_METHODS.memorySyncStatus).length;
+    const first = reads();
+    const config = h.registry.get(h.configs(nativeEnv))!;
+    const configure = (settings: Partial<typeof config.settings>) =>
+      act(async () => {
+        h.registry.set(h.configs(nativeEnv), {
+          ...config,
+          // A real config always carries provider instances; the harness one is partial.
+          settings: { ...config.settings, providerInstances: {}, ...settings },
+        });
+      });
+    // A pause belongs to the old model, so either change must replace the shown status.
+    await configure({ memoryEnabled: false });
+    await h.waitForCall(WS_METHODS.memorySyncStatus, first + 1);
+    await configure({
+      memoryEnabled: false,
+      memoryModelSelection: { instanceId: "codex", model: "other" } as never,
+    });
+    await h.waitForCall(WS_METHODS.memorySyncStatus, first + 2);
+    expect(reads()).toBe(first + 2);
   });
   it("ignores a late settings and sync read after a newer active refresh", async () => {
     await start();

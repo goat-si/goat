@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
-
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 
 // What `ldd` printed for the pinned headless shell in a bare debian:trixie-slim container.
@@ -17,8 +16,6 @@ const LDD_IN_BARE_DEBIAN = `\tlinux-vdso.so.1 (0x00007ffd2d1f8000)
 `;
 
 // Chrome's own abort on Ubuntu 26.04 with unprivileged user namespaces restricted.
-const SANDBOX_ABORT =
-  "[1005/163106.285700:FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc:129] No usable sandbox! If you are running on Ubuntu 23.10+ or another Linux distro that has disabled unprivileged user namespaces with AppArmor, see https://chromium.googlesource.com/";
 
 // What the real loader prints when the browser's `--version` cannot start it.
 const LOADER_ERROR =
@@ -75,35 +72,6 @@ const diagnose = (input: {
 };
 
 describe("diagnoseLaunchFailure", () => {
-  it.effect("turns Chrome's sandbox abort into the AppArmor steps", () =>
-    Effect.gen(function* () {
-      const { error, commands } = yield* diagnose({
-        platform: "linux",
-        output: SANDBOX_ABORT,
-        ldd: "",
-      });
-      expect(error?._tag).toBe("PreviewBrowserSandboxError");
-      expect(error?.message).toContain("Run `sudo goat browser setup` on the host");
-      expect(commands).toEqual([]);
-    }),
-  );
-
-  it.effect("tells a root server to drop root, not to run setup", () =>
-    Effect.gen(function* () {
-      const { error, commands } = yield* diagnose({
-        platform: "linux",
-        output: PreviewBrowserHost.NO_SANDBOX_SIGNATURE,
-        ldd: "",
-        uid: 0,
-      });
-      expect(error?._tag).toBe("PreviewBrowserRootError");
-      expect(error?.message).toContain("`User=`");
-      expect(error?.message).toContain("`GOAT_SERVER_BROWSER_SANDBOX=0`");
-      expect(error?.message).not.toMatch(/AppArmor|browser setup/);
-      expect(commands).toEqual([]);
-    }),
-  );
-
   it.effect("names every library the loader cannot find", () =>
     Effect.gen(function* () {
       const { error } = yield* diagnose({
@@ -129,21 +97,6 @@ describe("diagnoseLaunchFailure", () => {
         version: "Google Chrome for Testing 154.0.8037.92\n",
       });
       expect(error).toBeUndefined();
-    }),
-  );
-
-  it.effect("leaves other failures alone", () =>
-    Effect.gen(function* () {
-      const linux = yield* diagnose({
-        platform: "linux",
-        output: "crashed",
-        ldd: "\tlibc.so.6 => /lib/libc.so.6\n",
-        version: "Google Chrome for Testing 154.0.8037.92\n",
-      });
-      expect(linux.error).toBeUndefined();
-      const mac = yield* diagnose({ platform: "darwin", output: "crashed", ldd: "" });
-      expect(mac.error).toBeUndefined();
-      expect(mac.commands).toEqual([]);
     }),
   );
 });

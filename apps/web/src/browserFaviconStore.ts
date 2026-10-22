@@ -163,7 +163,7 @@ export const useBrowserFaviconStore = create<BrowserFaviconStoreState>()(
   ),
 );
 
-export function mergeBrowserFaviconState(
+function mergeBrowserFaviconState(
   persistedState: unknown,
   currentState: BrowserFaviconStoreState,
 ): BrowserFaviconStoreState {

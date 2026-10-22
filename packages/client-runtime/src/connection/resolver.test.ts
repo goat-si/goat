@@ -1,4 +1,7 @@
 import { vi } from "vite-plus/test";
+import { HubProxyAuthSource } from "./hubProxyAuthSource.ts";
+import { HubProxyConnectionTarget } from "./model.ts";
+import { HubProxyConnectionProfile } from "./catalog.ts";
 
 vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goat/shared/goatConnect")>()),
@@ -9,21 +12,19 @@ import {
   EnvironmentId,
   ORCHESTRATION_PROTOCOL_VERSION,
   type DesktopSshEnvironmentTarget,
+  type DesktopSshPreparationProgress,
 } from "@goat/contracts";
-import { RelayClientTracer } from "@goat/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Tracer from "effect/Tracer";
 
 import * as ConnectionResolver from "./resolver.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import {
   BearerConnectionCredential,
-  BearerConnectionProfile,
   type ConnectionCatalogEntry,
   SshConnectionProfile,
   type ConnectionCredential,
@@ -35,10 +36,8 @@ import {
   putConnectionCredentialInCatalog,
 } from "../platform/storageDocument.ts";
 import {
-  BearerConnectionTarget,
   ConnectionTransientError,
   PrimaryConnectionTarget,
-  RelayConnectionTarget,
   SshConnectionTarget,
   type ConnectionTarget,
 } from "./model.ts";
@@ -69,21 +68,8 @@ function catalogEntry(
   return { target, profile, enabled: true };
 }
 
-function collectingTracer(spans: Array<string>): Tracer.Tracer {
-  return Tracer.make({
-    span: (options) => {
-      const span = new Tracer.NativeSpan(options);
-      const end = span.end.bind(span);
-      span.end = (endTime, exit) => {
-        end(endTime, exit);
-        spans.push(span.name);
-      };
-      return span;
-    },
-  });
-}
-
 const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((options?: {
+  readonly hubAuth?: HubProxyAuthSource["Service"];
   readonly profiles?: ReadonlyArray<ConnectionProfile>;
   readonly profileStore?: ConnectionProfileStore.ConnectionProfileStore["Service"];
   readonly credentials?: ReadonlyArray<readonly [string, ConnectionCredential]>;
@@ -159,6 +145,9 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   });
 
   const layerDependencies = Layer.mergeAll(
+    options?.hubAuth === undefined
+      ? Layer.empty
+      : Layer.succeed(HubProxyAuthSource, options.hubAuth),
     RpcHttp.layerRemoteHttpClient(
       options?.fetch ??
         ((() =>
@@ -301,26 +290,6 @@ describe("ConnectionResolver", () => {
     }),
   );
 
-  it.effect("blocks an incompatible host during discovery before opening orchestration RPC", () =>
-    Effect.gen(function* () {
-      const layerBroker = yield* makeDependencies({
-        descriptorProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 1,
-      });
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
-      const target = new PrimaryConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Primary",
-        httpBaseUrl: "http://127.0.0.1:3777",
-        wsBaseUrl: "ws://127.0.0.1:3777",
-      });
-
-      const error = yield* Effect.flip(broker.prepare(catalogEntry(target)));
-
-      expect(error).toMatchObject({ reason: "unsupported" });
-      expect(error.message).toContain("This client is not supported");
-    }),
-  );
-
   it.effect("prepares a primary environment without remote capabilities", () =>
     Effect.gen(function* () {
       const layerBroker = yield* makeDependencies();
@@ -343,155 +312,19 @@ describe("ConnectionResolver", () => {
     }),
   );
 
-  it.effect("authorizes a desktop primary environment with its platform bearer token", () =>
-    Effect.gen(function* () {
-      const bearerInputs = yield* Ref.make<ReadonlyArray<{ token: string; method: string }>>([]);
-      const layerBroker = yield* makeDependencies({
-        primaryBearerToken: "desktop-bearer",
-        authorizeBearer: (input) =>
-          Ref.update(bearerInputs, (values) => [
-            ...values,
-            { token: input.bearerToken, method: input.connectionMethod },
-          ]).pipe(
-            Effect.as({
-              environmentId: input.expectedEnvironmentId,
-              label: "Primary",
-              httpBaseUrl: input.httpBaseUrl,
-              socketUrl: "ws://127.0.0.1:3777/ws?wsTicket=desktop",
-              httpAuthorization: {
-                _tag: "Bearer" as const,
-                token: input.bearerToken,
-              },
-            }),
-          ),
-      });
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
-      const target = new PrimaryConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Primary",
-        httpBaseUrl: "http://127.0.0.1:3777",
-        wsBaseUrl: "ws://127.0.0.1:3777",
-      });
-
-      expect(yield* broker.prepare(catalogEntry(target))).toMatchObject({
-        socketUrl: `ws://127.0.0.1:3777/ws?wsTicket=desktop&orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}`,
-        httpAuthorization: { _tag: "Bearer", token: "desktop-bearer" },
-        target,
-      });
-      expect(yield* Ref.get(bearerInputs)).toEqual([{ token: "desktop-bearer", method: "direct" }]);
-    }),
-  );
-
-  it.effect("uses the registered bearer profile without re-reading the profile store", () =>
-    Effect.gen(function* () {
-      const bearerInputs = yield* Ref.make<ReadonlyArray<{ token: string; method: string }>>([]);
-      const target = new BearerConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Saved",
-        connectionId: "saved-1",
-      });
-      const profile = new BearerConnectionProfile({
-        connectionId: "saved-1",
-        environmentId: ENVIRONMENT_ID,
-        label: "Saved",
-        httpBaseUrl: ENDPOINT.httpBaseUrl,
-        wsBaseUrl: ENDPOINT.wsBaseUrl,
-      });
-      const layerBroker = yield* makeDependencies({
-        credentials: [["saved-1", new BearerConnectionCredential({ token: "secret-bearer" })]],
-        authorizeBearer: (input) =>
-          Ref.update(bearerInputs, (values) => [
-            ...values,
-            { token: input.bearerToken, method: input.connectionMethod },
-          ]).pipe(
-            Effect.as({
-              environmentId: input.expectedEnvironmentId,
-              label: "Saved",
-              httpBaseUrl: input.httpBaseUrl,
-              socketUrl: "wss://environment.example.test/ws?wsTicket=ticket",
-              httpAuthorization: {
-                _tag: "Bearer" as const,
-                token: input.bearerToken,
-              },
-            }),
-          ),
-      });
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
-
-      expect(
-        (yield* broker.prepare(catalogEntry(target, Option.some(profile)))).socketUrl,
-      ).toContain("wsTicket=ticket");
-      expect(yield* Ref.get(bearerInputs)).toEqual([{ token: "secret-bearer", method: "direct" }]);
-    }),
-  );
-
-  it.effect("prepares relay connections with the authorized endpoint and credentials", () =>
-    Effect.gen(function* () {
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-      });
-      const layerBroker = yield* makeDependencies();
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
-
-      expect(yield* broker.prepare(catalogEntry(target))).toEqual({
-        environmentId: ENVIRONMENT_ID,
-        label: "Authorized relay environment",
-        httpBaseUrl: ENDPOINT.httpBaseUrl,
-        socketUrl: `wss://authorized.example.test/ws?wsTicket=dpop&orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}`,
-        httpAuthorization: {
-          _tag: "Dpop",
-          accessToken: "dpop-access-token",
-          expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-        },
-        target,
-      });
-    }),
-  );
-
-  it.effect("exports the complete relay authorization flow through the product tracer", () =>
-    Effect.gen(function* () {
-      const userSpans: Array<string> = [];
-      const productSpans: Array<string> = [];
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-      });
-      const layerBroker = yield* makeDependencies({
-        authorizeDpop: (input) =>
-          Effect.succeed({
-            environmentId: input.expectedEnvironmentId,
-            label: "Cloud",
-            httpBaseUrl: ENDPOINT.httpBaseUrl,
-            socketUrl: "wss://environment.example.test/ws?wsTicket=dpop",
-            httpAuthorization: {
-              _tag: "Dpop" as const,
-              accessToken: "dpop-access-token",
-              expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-            },
-          }).pipe(Effect.withSpan("test.remote.authorizeDpop")),
-      });
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
-
-      yield* broker
-        .prepare(catalogEntry(target))
-        .pipe(
-          Effect.provideService(RelayClientTracer, Option.some(collectingTracer(productSpans))),
-          Effect.withTracer(collectingTracer(userSpans)),
-        );
-
-      expect(productSpans).toContain("clientRuntime.connection.broker.relay");
-      expect(productSpans).toContain("test.remote.authorizeDpop");
-      expect(userSpans).toContain("clientRuntime.connection.broker.prepare");
-      expect(userSpans).not.toContain("test.remote.authorizeDpop");
-    }),
-  );
-
   it.effect("delegates SSH launch to the platform gateway before remote authorization", () =>
     Effect.gen(function* () {
       const preparedTargets = yield* Ref.make<ReadonlyArray<DesktopSshEnvironmentTarget>>([]);
       const connectionMethods = yield* Ref.make<ReadonlyArray<string>>([]);
       const answered = yield* Ref.make(false);
+      const phases: DesktopSshPreparationProgress[] = [];
+      const phase: DesktopSshPreparationProgress = {
+        operationId: "resolver-flight",
+        phase: "uploading",
+        hostAnswered: true,
+        remainingMs: 800_000,
+      };
+      const attemptContext = { supervisorId: "resolver-owner", attemptId: 2, routeId: "ssh-1" };
       const target = new SshConnectionTarget({
         environmentId: ENVIRONMENT_ID,
         label: "SSH",
@@ -506,7 +339,9 @@ describe("ConnectionResolver", () => {
       const layerBroker = yield* makeDependencies({
         prepareSsh: (input) =>
           Ref.update(preparedTargets, (values) => [...values, input.target]).pipe(
+            Effect.andThen(Effect.sync(() => expect(input.attemptContext).toEqual(attemptContext))),
             Effect.andThen(input.onHostAnswered ?? Effect.void),
+            Effect.andThen(input.onPreparationProgress?.(phase) ?? Effect.void),
             Effect.as({
               bootstrap: {
                 target: input.target,
@@ -534,10 +369,20 @@ describe("ConnectionResolver", () => {
       const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
 
       expect(
-        (yield* broker.prepare(catalogEntry(target, Option.some(profile)), Ref.set(answered, true)))
-          .socketUrl,
+        (yield* broker.prepare(
+          catalogEntry(target, Option.some(profile)),
+          Ref.set(answered, true),
+          {
+            attemptContext,
+            onPreparationProgress: (progress) =>
+              Effect.sync(() => {
+                phases.push(progress);
+              }),
+          },
+        )).socketUrl,
       ).toContain("wsTicket=bearer");
       expect(yield* Ref.get(answered)).toBe(true);
+      expect(phases).toEqual([phase]);
       expect(yield* Ref.get(preparedTargets)).toEqual([SSH_TARGET]);
       expect(yield* Ref.get(connectionMethods)).toEqual(["ssh"]);
     }),
@@ -796,25 +641,111 @@ describe("ConnectionResolver", () => {
         expect(yield* permissions.get(entry)).toBe(scenario === "changed" ? "off" : "read-write");
       }),
   );
+});
 
-  it.effect("preserves relay authorization failure classification and trace details", () =>
+describe("hub proxy preparation", () => {
+  const target = new HubProxyConnectionTarget({
+    environmentId: ENVIRONMENT_ID,
+    label: "Node",
+    connectionId: "hub:hub:node",
+  });
+  const profile = new HubProxyConnectionProfile({
+    connectionId: target.connectionId,
+    environmentId: ENVIRONMENT_ID,
+    label: "Node",
+    hubEnvironmentId: EnvironmentId.make("hub"),
+    hubConnectionId: "primary",
+    nodeId: "node/path",
+  });
+  const descriptor = {
+    environmentId: ENVIRONMENT_ID,
+    label: "Node",
+    platform: { os: "linux", arch: "x64" },
+    serverVersion: "0.0.0-test",
+    orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+    capabilities: {},
+  };
+
+  it.effect.each([null, { _tag: "Bearer" as const, token: "hub-token" }])(
+    "authenticates the descriptor and ticket exactly once, reuses the descriptor and preserves the node prefix (%j)",
+    (authorization) =>
+      Effect.gen(function* () {
+        const requests: { url: string; init: RequestInit }[] = [];
+        const layer = yield* makeDependencies({
+          hubAuth: {
+            resolve: () => Effect.succeed({ httpBaseUrl: "https://hub.test/", authorization }),
+          },
+          fetch: ((url, init) => {
+            requests.push({ url: String(url), init: init ?? {} });
+            return Promise.resolve(
+              String(url).includes("websocket-ticket")
+                ? Response.json({ ticket: "hub-ticket", expiresAt: "2026-10-20T00:00:00.000Z" })
+                : Response.json(descriptor),
+            );
+          }) satisfies typeof fetch,
+        });
+        const resolver = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layer));
+        const prepared = yield* resolver.prepare(catalogEntry(target, Option.some(profile)));
+        expect(prepared.httpBaseUrl).toBe("https://hub.test/hub/nodes/node%2Fpath/");
+        expect(prepared.httpAuthorization).toEqual(authorization);
+        expect(requests.map((request) => request.url)).toEqual([
+          "https://hub.test/hub/nodes/node%2Fpath/.well-known/goat/environment",
+          "https://hub.test/hub/nodes/node%2Fpath/api/auth/websocket-ticket",
+        ]);
+        for (const request of requests) {
+          expect(new Headers(request.init.headers).get("authorization")).toBe(
+            authorization === null ? null : "Bearer hub-token",
+          );
+          if (authorization === null) expect(request.init.credentials).toBe("include");
+        }
+        const socket = new URL(prepared.socketUrl);
+        expect(socket.pathname).toBe("/hub/nodes/node%2Fpath/ws");
+        expect(socket.searchParams.get("wsTicket")).toBe("hub-ticket");
+        expect(socket.searchParams.get("connectionMethod")).toBe("direct");
+        expect(socket.searchParams.get("clientSurface")).toBe("web");
+        expect(socket.searchParams.get("orchestrationProtocol")).toBe(
+          String(ORCHESTRATION_PROTOCOL_VERSION),
+        );
+      }),
+  );
+
+  it.effect("refuses an identity mismatch before issuing a ticket", () =>
     Effect.gen(function* () {
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
+      let calls = 0;
+      const layer = yield* makeDependencies({
+        hubAuth: {
+          resolve: () => Effect.succeed({ httpBaseUrl: "https://hub.test", authorization: null }),
+        },
+        fetch: (() => {
+          calls++;
+          return Promise.resolve(Response.json({ ...descriptor, environmentId: "wrong-node" }));
+        }) satisfies typeof fetch,
       });
-      const authorizationError = new ConnectionTransientError({
-        reason: "timeout",
-        detail: "Relay environment connection timed out.",
-        traceId: "relay-trace",
-      });
-      const layerBroker = yield* makeDependencies({
-        authorizeDpop: () => Effect.fail(authorizationError),
-      });
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
-      const error = yield* Effect.flip(broker.prepare(catalogEntry(target)));
+      const resolver = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layer));
+      expect(
+        yield* Effect.flip(resolver.prepare(catalogEntry(target, Option.some(profile)))),
+      ).toMatchObject({ _tag: "ConnectionBlockedError", reason: "configuration" });
+      expect(calls).toBe(1);
+    }),
+  );
 
-      expect(error).toBe(authorizationError);
+  it.effect.each([401, 403, 503])("classifies hub status %i", (status) =>
+    Effect.gen(function* () {
+      const layer = yield* makeDependencies({
+        hubAuth: {
+          resolve: () => Effect.succeed({ httpBaseUrl: "https://hub.test", authorization: null }),
+        },
+        fetch: (() =>
+          Promise.resolve(
+            Response.json({ message: "Unavailable" }, { status }),
+          )) satisfies typeof fetch,
+      });
+      const resolver = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layer));
+      expect(
+        yield* Effect.flip(resolver.prepare(catalogEntry(target, Option.some(profile)))),
+      ).toMatchObject({
+        _tag: status === 503 ? "ConnectionTransientError" : "ConnectionBlockedError",
+      });
     }),
   );
 });

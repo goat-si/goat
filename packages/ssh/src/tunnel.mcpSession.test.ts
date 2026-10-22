@@ -332,4 +332,39 @@ JSON
       ).toEqual([]);
     }),
   );
+
+  it.effect(
+    "adds providers:manage to the remote session script only when that grant is requested",
+    () =>
+      Effect.sync(() => {
+        const base = {
+          label: options.label,
+          ttl: options.ttl,
+          runtimeModeCeiling: "full-access",
+        };
+        const input = { archiveVersion };
+        const plain = buildRemoteMcpSessionScript("providers-manage", base, input);
+        const declined = buildRemoteMcpSessionScript(
+          "providers-manage",
+          { ...base, providersManage: false },
+          input,
+        );
+        const granted = buildRemoteMcpSessionScript(
+          "providers-manage",
+          { ...base, providersManage: true },
+          input,
+        );
+        const withApproval = buildRemoteMcpSessionScript(
+          "providers-manage",
+          { ...base, approvals: true, providersManage: true },
+          input,
+        );
+        expect(plain).not.toContain("--scope providers:manage");
+        expect(declined).not.toContain("--scope providers:manage");
+        expect(granted).toContain("--scope providers:manage ");
+        expect(granted.split("--scope providers:manage").length - 1).toBe(1);
+        expect(withApproval).toContain("--scope orchestration:approve ");
+        expect(withApproval).toContain("--scope providers:manage ");
+      }),
+  );
 });

@@ -14,6 +14,7 @@ import {
   getProjectFaviconResourceKey,
   isProjectFaviconFallbackUrl,
 } from "@goat/shared/projectFavicon";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -21,6 +22,7 @@ import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
+import { environmentRoutePrefix } from "../environment/endpoint.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { mediaFileReference } from "../mediaReference.ts";
 import { request } from "../rpc/client.ts";
@@ -47,7 +49,7 @@ const decodeAssetCollectionKey = Schema.decodeUnknownSync(
   Schema.Tuple([EnvironmentId, Schema.Array(AssetResource)]),
 );
 
-export function parseAssetCollectionKey(
+function parseAssetCollectionKey(
   key: string,
 ): readonly [EnvironmentId, ReadonlyArray<AssetResource>] {
   try {
@@ -59,7 +61,12 @@ export function parseAssetCollectionKey(
 
 export function resolveAssetUrl(httpBaseUrl: string, relativeUrl: string): string | null {
   try {
-    return new URL(relativeUrl, httpBaseUrl).toString();
+    const base = new URL(httpBaseUrl);
+    const prefix = environmentRoutePrefix(base);
+    return new URL(
+      prefix !== "" && relativeUrl.startsWith("/api/") ? `${prefix}${relativeUrl}` : relativeUrl,
+      base,
+    ).toString();
   } catch {
     return null;
   }
@@ -170,10 +177,10 @@ export function createAssetEnvironmentAtoms<R, E>(
     )
       return yield* error;
     const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-    const asset = yield* registry.run(
-      local.environmentId,
-      request(WS_METHODS.assetsCreateUrl, input),
-    );
+    // Map the full cause so retry defects and interruption survive.
+    const asset = yield* registry
+      .run(local.environmentId, request(WS_METHODS.assetsCreateUrl, input))
+      .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, () => error))));
     return { ...asset, relativeUrl: new URL(asset.relativeUrl, local.httpBaseUrl).href };
   });
   const createUrl = createEnvironmentQueryAtomFamily(runtime, {

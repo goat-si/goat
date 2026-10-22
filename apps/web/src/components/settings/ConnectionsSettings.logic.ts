@@ -3,14 +3,166 @@ import { readHostedPairingRequest } from "@goat/shared/remote";
 import { isLoopbackHostname } from "../../environments/primary/target";
 import { resolveDesktopPairingUrl } from "./pairingUrls";
 import {
+  connectionProgressLabel,
+  connectionRouteId,
+  connectionRoutes,
+  connectionStatusText,
+  reconcileSshConnectionPresentation,
+  sshPreparationFailure,
+  type EnvironmentPresentation,
+} from "@goat/client-runtime/connection";
+import { sshRuntimeStatusText } from "@goat/client-runtime/state/sshRuntime";
+import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
+import * as Option from "effect/Option";
+import { isGoatConnectUnavailable } from "./EnvironmentRow.logic";
+import {
   type AdvertisedEndpoint,
   type AuthGrantScope,
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
   type DesktopBridge,
   type DesktopServerExposureState,
+  type DesktopUpdateState,
   type DesktopWslState,
+  type DesktopSshPreparationProgress,
+  type SshHostStatus,
 } from "@goat/contracts";
+import {
+  getDesktopUpdateDownloadedVersion,
+  resolveDesktopUpdateButtonAction,
+} from "../desktopUpdate.logic";
+
+export function isSshConnectionSuperseded(error: unknown): boolean {
+  return sshPreparationFailure(error)._tag === "ConnectionAttemptSuperseded";
+}
+
+/** Runtime status and presentation must use the route that supplied the evidence. */
+export function savedConnectionSshRoute(environment: EnvironmentPresentation) {
+  const routeId =
+    environment.connection.sshPreparation?.routeId ??
+    environment.connection.sshRuntimeReady?.routeId ??
+    environment.connection.failureOrigin?.routeId;
+  for (const route of connectionRoutes(environment.entry)) {
+    if (
+      route.target._tag === "SshConnectionTarget" &&
+      Option.isSome(route.profile) &&
+      route.profile.value._tag === "SshConnectionProfile" &&
+      (routeId === undefined || connectionRouteId(route.target) === routeId)
+    ) {
+      return { routeId: connectionRouteId(route.target), target: route.profile.value.target };
+    }
+  }
+  return undefined;
+}
+
+/** Both the subtitle and an already-open tooltip must describe the same observation. */
+export function savedConnectionPresentation({
+  environment,
+  runtimeStatus,
+}: {
+  readonly environment: EnvironmentPresentation;
+  readonly runtimeStatus?: SshHostStatus | undefined;
+}) {
+  const original = environment.connection;
+  const routeId = savedConnectionSshRoute(environment)?.routeId;
+  const ownerStatus = routeId === undefined ? undefined : runtimeStatus;
+  const { sshPreparation, sshRuntimeReady, ...withoutSshEvidence } = original;
+  const connection = reconcileSshConnectionPresentation(
+    {
+      ...withoutSshEvidence,
+      ...(sshPreparation?.routeId === routeId && sshPreparation !== undefined
+        ? { sshPreparation }
+        : {}),
+      ...(sshRuntimeReady?.routeId === routeId && sshRuntimeReady !== undefined
+        ? { sshRuntimeReady }
+        : {}),
+    },
+    ownerStatus,
+  );
+  const result = (
+    text: string,
+    tone: "muted" | "error",
+    runtimeText: string | null,
+    tooltipText = text,
+    preparationPhase?: DesktopSshPreparationProgress["phase"],
+  ) => ({ text, tone, runtimeText, tooltipText, preparationPhase });
+  if (isGoatConnectUnavailable(environment.entry))
+    return result(
+      "Unavailable",
+      "muted",
+      null,
+      `${GOAT_CONNECT_COMING_SOON.status}. ${GOAT_CONNECT_COMING_SOON.description}`,
+    );
+  if (!environment.entry.enabled && connection.phase !== "unsupported")
+    return result("Off", "muted", null, "Switched off");
+  if (connection.phase === "unsupported")
+    return result(
+      "Client not supported",
+      "muted",
+      null,
+      connection.error ?? connectionStatusText(connection),
+    );
+  if (connection.phase === "offline") return result("Offline", "muted", null);
+  if (connection.phase === "available") return result("Not connected", "muted", null);
+
+  const preparing =
+    connection.sshPreparation?.routeId === routeId && connection.sshPreparation !== undefined;
+  if (preparing && (connection.phase === "connecting" || connection.phase === "reconnecting")) {
+    return result(
+      connectionProgressLabel(connection, 0),
+      "muted",
+      null,
+      connectionStatusText(connection),
+      connection.sshPreparation?.phase,
+    );
+  }
+  const ready =
+    connection.sshRuntimeReady?.routeId === routeId ? connection.sshRuntimeReady : undefined;
+  const runtime =
+    ownerStatus?.state === "preparing" && ready?.runtimeStatus.state === "ready"
+      ? ready.runtimeStatus
+      : (ownerStatus ?? ready?.runtimeStatus);
+  const runtimeText = runtime ? sshRuntimeStatusText(runtime) : null;
+  const runtimeTooltip =
+    runtimeText && runtime?.runtimeVersion && runtime.requestedVersion
+      ? `${runtimeText} · This app ${runtime.requestedVersion}`
+      : runtimeText;
+  const tooltip = [connectionStatusText(connection), runtimeTooltip].filter(Boolean).join("\n");
+  if (connection.phase === "connected")
+    return result("Connected", "muted", runtimeText, tooltip, null);
+  if (
+    connection.failureSuppressed &&
+    connection.error === null &&
+    ready?.runtimeStatus.state === "ready"
+  ) {
+    return result(
+      `Runtime ready · ${connectionProgressLabel(connection, 0)}`,
+      "muted",
+      null,
+      tooltip,
+      null,
+    );
+  }
+  if (connection.phase === "connecting") return result("Connecting", "muted", runtimeText, tooltip);
+  if (connection.phase === "reconnecting") {
+    return result(
+      connection.unreachable
+        ? "Unreachable"
+        : connection.error
+          ? `Reconnecting: ${connection.error}`
+          : "Reconnecting",
+      connection.unreachable || connection.error === null ? "muted" : "error",
+      runtimeText,
+      tooltip,
+    );
+  }
+  return result(
+    connection.error ? `Connection failed: ${connection.error}` : "Connection failed",
+    "error",
+    runtimeText,
+    tooltip,
+  );
+}
 
 /**
  * Operating terminals without being able to list them leaves a client
@@ -72,6 +224,38 @@ export function isWslSettingsRowVisible(input: {
 }): boolean {
   const { state, error } = input;
   return state ? state.available || state.enabled || state.wslOnly : error !== null;
+}
+
+/**
+ * Passive label for this machine's Version row once client and server versions
+ * match. The desktop bundles its server, so a pending app update is the only
+ * way it falls behind. Pending states follow the sidebar update control's
+ * action, including retryable failures, so the two never disagree; the sidebar
+ * is where to act. A recheck keeps a downloaded update while `checking`, so it
+ * keeps its label too. `state` is null outside the desktop app.
+ */
+export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null): string {
+  if (!state) return "Up to date";
+  if (state.status === "downloading") {
+    return state.availableVersion
+      ? `Downloading update ${state.availableVersion}`
+      : "Downloading update";
+  }
+  const action = resolveDesktopUpdateButtonAction(state);
+  if (
+    action === "install" ||
+    state.status === "downloaded" ||
+    (state.status === "checking" && state.downloadedVersion !== null)
+  ) {
+    const version = getDesktopUpdateDownloadedVersion(state);
+    return version ? `Update ${version} downloaded` : "Update downloaded";
+  }
+  if (action === "download") {
+    return state.availableVersion
+      ? `Update ${state.availableVersion} available`
+      : "Update available";
+  }
+  return "Up to date";
 }
 
 export type QrEndpointOption = {

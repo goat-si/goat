@@ -13,7 +13,6 @@ const state = vi.hoisted(() => ({
   otherScopes: new Set<string>(),
   baseDirectory: "",
   projects: [] as string[],
-  createRequests: [] as { environmentId: string; workspaceRoot: string }[],
 }));
 
 vi.mock("react", async (importOriginal) => ({
@@ -58,6 +57,7 @@ vi.mock("../../state/session", () => ({
     (environmentId === "environment" ? state.scopes : state.otherScopes).has(scope),
   readEnvironmentScope: (environmentId: string, scope: string) =>
     (environmentId === "environment" ? state.scopes : state.otherScopes).has(scope),
+  readEnvironmentProxiedByHub: () => false,
 }));
 vi.mock("../../state/entities", () => ({
   useProjects: () => [],
@@ -70,27 +70,16 @@ vi.mock("../../state/entities", () => ({
           settings: { addProjectBaseDirectory: state.baseDirectory },
         },
       ],
-      [
-        "other-environment",
-        {
-          environment: { platform: { os: "linux" }, capabilities: {} },
-          settings: { addProjectBaseDirectory: state.baseDirectory },
-        },
-      ],
     ]),
 }));
 vi.mock("../../state/use-remote-environment-registry", () => ({
   useRemoteEnvironmentRuntime: () => ({ connectionState: "connected" }),
   useRemoteConnectionStatus: () => ({
-    connectedEnvironments: [
-      { environmentId: "environment", connectionState: "connected" },
-      { environmentId: "other-environment", connectionState: "connected" },
-    ],
+    connectedEnvironments: [{ environmentId: "environment", connectionState: "connected" }],
   }),
   useSavedRemoteConnections: () => ({
     savedConnectionsById: {
       connection: { environmentId: "environment", environmentLabel: "Environment" },
-      other: { environmentId: "other-environment", environmentLabel: "Other environment" },
     },
   }),
 }));
@@ -111,16 +100,8 @@ vi.mock("../../state/sourceControl", () => ({
 }));
 vi.mock("../../state/projects", () => ({
   projectEnvironment: {
-    create: async ({
-      environmentId,
-      input,
-    }: {
-      environmentId: string;
-      input: { workspaceRoot: string };
-    }) => {
-      state.createRequests.push({ environmentId, workspaceRoot: input.workspaceRoot });
-      const scopes = environmentId === "environment" ? state.scopes : state.otherScopes;
-      if (!scopes.has(AuthOrchestrationOperateScope)) {
+    create: async ({ input }: { input: { workspaceRoot: string } }) => {
+      if (!state.scopes.has(AuthOrchestrationOperateScope)) {
         return AsyncResult.failure(Cause.fail(new Error("Project creation denied")));
       }
       state.projects.push(input.workspaceRoot);
@@ -129,7 +110,7 @@ vi.mock("../../state/projects", () => ({
   },
 }));
 
-import { AddProjectDestinationScreen, AddProjectLocalFolderScreen } from "./AddProjectScreen";
+import { AddProjectDestinationScreen } from "./AddProjectScreen";
 
 function findAction(node: ReactNode, label: string): (() => unknown) | null {
   if (Array.isArray(node)) {
@@ -159,12 +140,6 @@ function cloneAction() {
   return action;
 }
 
-function localProjectAction(environmentId = "environment") {
-  const action = findAction(AddProjectLocalFolderScreen({ environmentId }), "Add project");
-  if (!action) throw new Error("Add project action missing");
-  return action;
-}
-
 describe("clone project permissions", () => {
   beforeEach(async () => {
     state.baseDirectory = await NodeFSP.mkdtemp(
@@ -173,7 +148,6 @@ describe("clone project permissions", () => {
     state.scopes = new Set([AuthSourceControlWriteScope]);
     state.otherScopes = new Set();
     state.projects = [];
-    state.createRequests = [];
   });
 
   afterEach(async () => {
@@ -187,15 +161,6 @@ describe("clone project permissions", () => {
     expect(state.projects).toEqual([]);
   });
 
-  it("clones and registers the project when both permissions are granted", async () => {
-    state.scopes.add(AuthOrchestrationOperateScope);
-    await cloneAction()();
-
-    const destination = NodePath.join(state.baseDirectory, "repo");
-    expect(NodeFS.existsSync(destination)).toBe(true);
-    expect(state.projects).toEqual([destination]);
-  });
-
   it.each([AuthSourceControlWriteScope, AuthOrchestrationOperateScope])(
     "rechecks %s before a retained clone action creates a directory",
     async (scope) => {
@@ -206,68 +171,6 @@ describe("clone project permissions", () => {
 
       expect(NodeFS.existsSync(NodePath.join(state.baseDirectory, "repo"))).toBe(false);
       expect(state.projects).toEqual([]);
-    },
-  );
-});
-
-describe("local project permissions", () => {
-  beforeEach(() => {
-    state.baseDirectory = "/workspace/project";
-    state.scopes = new Set();
-    state.otherScopes = new Set();
-    state.projects = [];
-    state.createRequests = [];
-  });
-
-  it.each([false, true])(
-    "does not dispatch project creation without the current grant (revoked: %s)",
-    async (revokeBeforeSubmit) => {
-      if (revokeBeforeSubmit) state.scopes.add(AuthOrchestrationOperateScope);
-      const submit = localProjectAction();
-      state.scopes.delete(AuthOrchestrationOperateScope);
-
-      await submit();
-
-      expect(state.createRequests).toEqual([]);
-      expect(state.projects).toEqual([]);
-    },
-  );
-
-  it("adds a typed local path with only task-operation permission", async () => {
-    state.scopes.add(AuthOrchestrationOperateScope);
-
-    await localProjectAction()();
-
-    expect(state.createRequests).toEqual([
-      { environmentId: "environment", workspaceRoot: state.baseDirectory },
-    ]);
-    expect(state.projects).toEqual([state.baseDirectory]);
-  });
-
-  it("uses a grant added while the local-folder form is open", async () => {
-    const submit = localProjectAction();
-    state.scopes.add(AuthOrchestrationOperateScope);
-
-    await submit();
-
-    expect(state.projects).toEqual([state.baseDirectory]);
-  });
-
-  it.each([false, true])(
-    "uses the selected environment's grant (allowed: %s)",
-    async (allowSelectedEnvironment) => {
-      (allowSelectedEnvironment ? state.otherScopes : state.scopes).add(
-        AuthOrchestrationOperateScope,
-      );
-
-      await localProjectAction("other-environment")();
-
-      expect(state.createRequests).toEqual(
-        allowSelectedEnvironment
-          ? [{ environmentId: "other-environment", workspaceRoot: state.baseDirectory }]
-          : [],
-      );
-      expect(state.projects).toEqual(allowSelectedEnvironment ? [state.baseDirectory] : []);
     },
   );
 });

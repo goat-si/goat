@@ -31,7 +31,15 @@ export const OBSERVED_CHECK_OUTPUT_TAIL_LINES = 40;
 export const OBSERVED_CHECK_OUTPUT_TAIL_CHARS = 4_000;
 
 const ObservedCheckRow = Schema.Struct({
-  status: Schema.Literals(["running", "completed", "timed_out", "interrupted", "skipped"]),
+  // Internal disposition, not a check result: no script ran and no pass is implied.
+  status: Schema.Literals([
+    "running",
+    "completed",
+    "timed_out",
+    "interrupted",
+    "skipped",
+    "not_run",
+  ]),
   skipReason: Schema.NullOr(Schema.Literals(["shared-checkout", "worktree-missing"])),
   command: Schema.String,
   exitCode: Schema.NullOr(Schema.Number),
@@ -41,27 +49,34 @@ const ObservedCheckRow = Schema.Struct({
 });
 const decodeRows = Schema.decodeUnknownEffect(Schema.Array(ObservedCheckRow));
 
-/** The check GOAT ran after one run completed, or null when it never ran one. */
-export const readObservedCheck = (threadId: ThreadId, runId: RunId) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql`
+/** Absence is pending until the producer durably decides whether a check runs. */
+export const readObservedCheckState = Effect.fn("ObservedCheckService.readState")(function* (
+  threadId: ThreadId,
+  runId: RunId,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql`
       SELECT status, skip_reason AS "skipReason", command, exit_code AS "exitCode",
         duration_ms AS "durationMs", started_at AS "startedAt", output_tail AS "outputTail"
       FROM thread_run_observed_checks WHERE thread_id = ${threadId} AND run_id = ${runId}
     `.pipe(Effect.flatMap(decodeRows));
-    const row = rows[0];
-    if (row === undefined) return null;
-    return {
-      status: row.status,
-      ...(row.skipReason === null ? {} : { skipReason: row.skipReason }),
-      command: row.command,
-      exitCode: row.exitCode,
-      durationMs: row.durationMs,
-      at: row.startedAt,
-      ...(row.outputTail === null ? {} : { outputTail: row.outputTail }),
-    } satisfies ThreadResultObservedCheck;
-  });
+  const row = rows[0];
+  if (row === undefined) return { check: null, pending: true };
+  if (row.status === "not_run") return { check: null, pending: false };
+  const check = {
+    status: row.status,
+    ...(row.skipReason === null ? {} : { skipReason: row.skipReason }),
+    command: row.command,
+    exitCode: row.exitCode,
+    durationMs: row.durationMs,
+    at: row.startedAt,
+    ...(row.outputTail === null ? {} : { outputTail: row.outputTail }),
+  } satisfies ThreadResultObservedCheck;
+  return { check, pending: row.status === "running" };
+});
+
+export const readObservedCheck = (threadId: ThreadId, runId: RunId) =>
+  readObservedCheckState(threadId, runId).pipe(Effect.map((state) => state.check));
 
 /** Keeps the last lines a check printed, bounded in both lines and characters. */
 export function appendOutputTail(lines: Array<string>, line: string): void {
@@ -101,7 +116,7 @@ export const make = Effect.gen(function* () {
   const claim = (input: {
     readonly threadId: ThreadId;
     readonly runId: RunId;
-    readonly status: "running" | "skipped";
+    readonly status: "running" | "skipped" | "not_run";
     readonly skipReason: "shared-checkout" | "worktree-missing" | null;
     readonly command: string;
   }) =>
@@ -134,18 +149,28 @@ export const make = Effect.gen(function* () {
 
   const observeRun = Effect.fn("ObservedCheckService.observeRun")(
     function* (threadId: ThreadId, runId: RunId) {
+      const noCheck = claim({ threadId, runId, status: "not_run", skipReason: null, command: "" });
       const thread = yield* projections.getThreadShell(threadId);
       // A completed run's event repeats when its delegated work changes or the
       // thread is deleted; only the latest run, with nothing running after it,
       // owns the worktree as it was left.
-      if (thread === null || thread.latestRunId !== runId || thread.activeRunId !== null) return;
+      if (thread === null || thread.latestRunId !== runId || thread.activeRunId !== null) {
+        yield* noCheck;
+        return;
+      }
       const project = Option.getOrUndefined(
         yield* projects.getById(ProjectId.make(thread.projectId)),
       );
-      if (project === undefined) return;
+      if (project === undefined) {
+        yield* noCheck;
+        return;
+      }
       const settings = yield* settingsService.getSettings;
       const script = checkProjectScript(resolveProjectScripts(settings, project));
-      if (script === null) return;
+      if (script === null) {
+        yield* noCheck;
+        return;
+      }
 
       const worktreePath = thread.worktreePath;
       const skipReason =
@@ -199,7 +224,7 @@ export const make = Effect.gen(function* () {
         if (started.status !== "started" || started.completion === undefined) {
           // The script went away between reading settings and starting it.
           yield* sql`
-            DELETE FROM thread_run_observed_checks
+            UPDATE thread_run_observed_checks SET status = 'not_run'
             WHERE thread_id = ${threadId} AND run_id = ${runId} AND status = 'running'
           `;
           return;
@@ -244,6 +269,17 @@ export const make = Effect.gen(function* () {
   );
 
   const start = Effect.fn("ObservedCheckService.start")(function* () {
+    // Completion can commit just before a crash, before this worker claims its row. Do not
+    // execute scripts against old worktrees on restart: durably record that no check ran.
+    yield* sql`
+      INSERT INTO thread_run_observed_checks (thread_id, run_id, status, command, started_at)
+      SELECT thread_id, run_id, 'not_run', '', ${DateTime.formatIso(yield* DateTime.now)}
+      FROM orchestration_v2_projection_runs
+      WHERE status = 'completed'
+      ON CONFLICT (thread_id, run_id) DO NOTHING
+    `.pipe(
+      Effect.catchCause((cause) => Effect.logWarning("unclaimed check recovery failed", { cause })),
+    );
     // A check still marked running was cut off when the server last stopped.
     yield* sql`
       UPDATE thread_run_observed_checks SET status = 'interrupted' WHERE status = 'running'

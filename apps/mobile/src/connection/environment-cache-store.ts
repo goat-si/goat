@@ -18,6 +18,10 @@ import {
 } from "../lib/projectFaviconDatabaseCache";
 import { decodeStoredShellSnapshot } from "./shell-cache-decoding";
 
+const ShellMetaJson = Schema.fromJsonString(Persistence.ShellSnapshotMeta);
+const decodeShellMeta = Schema.decodeUnknownEffect(ShellMetaJson);
+const encodeShellMeta = Schema.encodeEffect(ShellMetaJson);
+
 const SERVER_CONFIG_CACHE_SCHEMA_VERSION = 1;
 const VCS_REFS_CACHE_SCHEMA_VERSION = 1;
 
@@ -102,6 +106,21 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
   attachProjectFaviconDatabase(database);
   const encodeStoredShellSnapshot = makeStoredShellSnapshotEncoder();
   return Persistence.EnvironmentCacheStore.of({
+    loadShellMeta: (environmentId) =>
+      loadDecodedCache({
+        database,
+        environmentId,
+        kind: "shell",
+        cacheKey: "meta",
+        operation: "load-shell",
+        decode: decodeShellMeta,
+        select: (meta) => Option.some(meta),
+      }),
+    saveShellMeta: (environmentId, meta) =>
+      encodeShellMeta(meta).pipe(
+        Effect.flatMap((raw) => database.saveCache(environmentId, "shell", "meta", 1, raw)),
+        Effect.mapError((cause) => persistenceError("save-shell", cause)),
+      ),
     loadShell: Effect.fn("MobileEnvironmentCache.loadShell")((environmentId) =>
       loadDecodedCache({
         database,

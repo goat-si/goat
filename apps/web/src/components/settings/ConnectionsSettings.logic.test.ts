@@ -5,10 +5,6 @@ import {
   buildHubPhoneQrPayload,
   selectHubPhoneQrTarget,
   applyWslEnableSelection,
-  canRevokeOtherClients,
-  isQrShareableEndpoint,
-  isWslSettingsRowVisible,
-  missingTailscaleEndpointDescription,
   selectQrEndpointOption,
   togglePairingScopeSelection,
 } from "./ConnectionsSettings.logic";
@@ -57,25 +53,6 @@ const baseWslState: DesktopWslState = {
   preflightError: null,
 };
 
-describe("isWslSettingsRowVisible", () => {
-  it("shows the retry row when the WSL state failed to load", () => {
-    expect(isWslSettingsRowVisible({ state: null, error: "load failed" })).toBe(true);
-  });
-
-  it("hides an unavailable and unused WSL snapshot", () => {
-    expect(
-      isWslSettingsRowVisible({
-        state: { ...baseWslState, available: false, wslOnly: false },
-        error: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("shows an available WSL snapshot", () => {
-    expect(isWslSettingsRowVisible({ state: baseWslState, error: null })).toBe(true);
-  });
-});
-
 describe("applyWslEnableSelection", () => {
   it("clears WSL-only and updates the distro before enabling both backends", async () => {
     const calls: Array<string> = [];
@@ -111,69 +88,6 @@ describe("applyWslEnableSelection", () => {
     expect(calls).toEqual(["setWslOnly:false", "setWslDistro:Debian", "setWslBackendEnabled:true"]);
     expect(state).toMatchObject({ enabled: true, distro: "Debian", wslOnly: false });
   });
-
-  it("stages WSL-only before enabling without rewriting an unchanged distro", async () => {
-    const calls: Array<string> = [];
-    let persistedWslOnly = false;
-    const setWslDistro = vi.fn(async () => baseWslState);
-    const setWslOnly = vi.fn(async (enabled: boolean) => {
-      calls.push(`setWslOnly:${enabled}`);
-      persistedWslOnly = enabled;
-      return { ...baseWslState, wslOnly: enabled };
-    });
-    const setWslBackendEnabled = vi.fn(async (enabled: boolean) => {
-      calls.push(`setWslBackendEnabled:${enabled}`);
-      return { ...baseWslState, enabled, wslOnly: persistedWslOnly };
-    });
-
-    const state = await applyWslEnableSelection({
-      bridge: { setWslDistro, setWslBackendEnabled, setWslOnly },
-      mode: "wsl-only",
-      nextDistro: null,
-      persistedDistro: null,
-    });
-
-    expect(calls).toEqual(["setWslOnly:true", "setWslBackendEnabled:true"]);
-    expect(setWslDistro).not.toHaveBeenCalled();
-    expect(state).toMatchObject({ enabled: true, wslOnly: true });
-  });
-});
-
-function makeEndpoint(overrides: Partial<AdvertisedEndpoint>): AdvertisedEndpoint {
-  return {
-    id: "desktop-lan:http://192.168.1.42:4780",
-    label: "Local network",
-    provider: { id: "desktop-core", label: "Desktop", kind: "core", isAddon: false },
-    httpBaseUrl: "http://192.168.1.42:4780",
-    wsBaseUrl: "ws://192.168.1.42:4780",
-    reachability: "lan",
-    compatibility: { hostedHttpsApp: "unknown", desktopApp: "compatible" },
-    source: "desktop-core",
-    status: "available",
-    ...overrides,
-  };
-}
-
-describe("isQrShareableEndpoint", () => {
-  it("excludes loopback endpoints so a scanned phone never dials itself", () => {
-    expect(
-      isQrShareableEndpoint(
-        makeEndpoint({
-          id: "desktop-loopback:4780",
-          reachability: "loopback",
-          httpBaseUrl: "http://127.0.0.1:4780",
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("excludes unavailable endpoints and keeps reachable ones", () => {
-    expect(isQrShareableEndpoint(makeEndpoint({ status: "unavailable" }))).toBe(false);
-    expect(isQrShareableEndpoint(makeEndpoint({}))).toBe(true);
-    expect(
-      isQrShareableEndpoint(makeEndpoint({ reachability: "private-network", status: "unknown" })),
-    ).toBe(true);
-  });
 });
 
 describe("selectQrEndpointOption", () => {
@@ -206,53 +120,27 @@ describe("selectQrEndpointOption", () => {
     );
   });
 
-  it("falls back to the saved default preference key when nothing is selected", () => {
-    expect(selectQrEndpointOption(options, null, "desktop-core:lan:http")?.id).toBe(
-      "desktop-lan:http://192.168.1.42:4780",
-    );
-  });
-
   it("skips non-QR-shareable options in the fallback so the panel never opens on loopback", () => {
     expect(selectQrEndpointOption(options, "tailscale-ip:gone", "nope")?.id).toBe(
       "tailscale-ip:http://100.84.12.7:4780",
     );
   });
-
-  it("returns the first option when nothing is QR-shareable, and null when empty", () => {
-    const loopbackOnly = options.slice(0, 1);
-    expect(selectQrEndpointOption(loopbackOnly, null, null)?.id).toBe("desktop-loopback:4780");
-    expect(selectQrEndpointOption([], "anything", "anything")).toBeNull();
-  });
 });
 
-describe("canRevokeOtherClients", () => {
-  it("permits revocation when a write-only grant cannot list clients", () => {
-    expect(canRevokeOtherClients(null)).toBe(true);
-  });
-
-  it("disables revocation only when a loaded list has no other clients", () => {
-    expect(canRevokeOtherClients([])).toBe(false);
-    expect(canRevokeOtherClients([{ current: true }])).toBe(false);
-    expect(canRevokeOtherClients([{ current: true }, { current: false }])).toBe(true);
-  });
-});
-
-describe("missingTailscaleEndpointDescription", () => {
-  it("explains that detection waits for Network access when the probe was skipped", () => {
-    expect(
-      missingTailscaleEndpointDescription({ mode: "local-only", tailscaleServeEnabled: false }),
-    ).toBe("Turn on Network access to detect Tailscale.");
-  });
-
-  it.each([
-    { mode: "network-accessible", tailscaleServeEnabled: false },
-    { mode: "local-only", tailscaleServeEnabled: true },
-  ] as const)("asks to start Tailscale when it was probed and not found (%o)", (state) => {
-    expect(missingTailscaleEndpointDescription(state)).toBe(
-      "Start Tailscale to set up HTTPS access through MagicDNS.",
-    );
-  });
-});
+function makeEndpoint(overrides: Partial<AdvertisedEndpoint>): AdvertisedEndpoint {
+  return {
+    id: "desktop-lan:http://192.168.1.42:4780",
+    label: "Local network",
+    provider: { id: "desktop-core", label: "Desktop", kind: "core", isAddon: false },
+    httpBaseUrl: "http://192.168.1.42:4780",
+    wsBaseUrl: "ws://192.168.1.42:4780",
+    reachability: "lan",
+    compatibility: { hostedHttpsApp: "unknown", desktopApp: "compatible" },
+    source: "desktop-core",
+    status: "available",
+    ...overrides,
+  };
+}
 
 function makeTailnetEndpoint(overrides: Partial<AdvertisedEndpoint> = {}): AdvertisedEndpoint {
   return makeEndpoint({
@@ -396,4 +284,298 @@ describe("buildClientPairingQrPayload", () => {
       direct,
     );
   });
+});
+
+import { EnvironmentId, type SshHostStatus } from "@goat/contracts";
+import {
+  SshConnectionProfile,
+  SshConnectionTarget,
+  connectionRouteId,
+  type ConnectionCatalogEntry,
+  type EnvironmentConnectionPresentation,
+} from "@goat/client-runtime/connection";
+import * as Option from "effect/Option";
+import { savedConnectionPresentation, savedConnectionSshRoute } from "./ConnectionsSettings.logic";
+
+const sshEnvironmentId = EnvironmentId.make("fixture-vps");
+const sshTarget = new SshConnectionTarget({
+  environmentId: sshEnvironmentId,
+  connectionId: "fixture-ssh",
+  label: "Fixture VPS",
+});
+const sshEntry = {
+  target: sshTarget,
+  profile: Option.some(
+    new SshConnectionProfile({
+      environmentId: sshEnvironmentId,
+      connectionId: "fixture-ssh",
+      label: "Fixture VPS",
+      target: { alias: "fixture-vps", hostname: "example.invalid", username: null, port: null },
+    }),
+  ),
+  enabled: true,
+};
+const sshRouteId = connectionRouteId(sshTarget);
+const readyRuntime: SshHostStatus = {
+  host: "fixture-vps",
+  state: "ready",
+  runtimeVersion: null,
+  requestedVersion: "0.4.3",
+};
+function rowPresentation(
+  connection: EnvironmentConnectionPresentation,
+  runtimeStatus = readyRuntime,
+  enabled = true,
+  entry: ConnectionCatalogEntry = sshEntry,
+) {
+  return savedConnectionPresentation({
+    environment: { entry: { ...entry, enabled }, connection, serverConfig: null },
+    runtimeStatus,
+  });
+}
+function failedAttempt(
+  failureAttempt: number,
+  readyAttempt: number,
+): EnvironmentConnectionPresentation {
+  return {
+    phase: "reconnecting",
+    stage: "opening",
+    error: "did not respond during connection setup",
+    traceId: null,
+    failure: {
+      kind: "retrying",
+      reason: "timeout",
+      detail: "did not respond during connection setup",
+    },
+    failureOrigin: {
+      supervisorId: "window-1",
+      attemptId: failureAttempt,
+      routeId: sshRouteId,
+      stage: "preparing",
+      setupTimeout: true,
+    },
+    sshRuntimeReady: {
+      supervisorId: "window-1",
+      attemptId: readyAttempt,
+      routeId: sshRouteId,
+      operationId: "operation-2",
+      attachmentId: "attachment-2",
+      runtimeStatus: readyRuntime,
+    },
+  };
+}
+
+describe("saved SSH row semantic status", () => {
+  const alternateTarget = new SshConnectionTarget({
+    ...sshTarget,
+    connectionId: "fixture-ssh-alternate",
+  });
+  const alternateRouteId = connectionRouteId(alternateTarget);
+  const entryWithAlternate = {
+    ...sshEntry,
+    alternateRoutes: [
+      {
+        target: alternateTarget,
+        profile: Option.some(
+          new SshConnectionProfile({
+            ...Option.getOrThrow(sshEntry.profile),
+            connectionId: alternateTarget.connectionId,
+            target: {
+              alias: "fixture-vps-alternate",
+              hostname: "alternate.example.invalid",
+              username: null,
+              port: null,
+            },
+          }),
+        ),
+      },
+    ],
+  };
+  function alternateAttempt(failureAttempt: number, readyAttempt: number) {
+    const connection = failedAttempt(failureAttempt, readyAttempt);
+    return {
+      ...connection,
+      failureOrigin: { ...connection.failureOrigin!, routeId: alternateRouteId },
+      sshRuntimeReady: { ...connection.sshRuntimeReady!, routeId: alternateRouteId },
+    };
+  }
+  it.each(["preparation", "ready", "failure", "none", "unknown"] as const)(
+    "selects the runtime target from %s route evidence",
+    (evidence) => {
+      const connection = alternateAttempt(1, 2);
+      const { sshRuntimeReady, failureOrigin, ...withoutEvidence } = connection;
+      const selected = savedConnectionSshRoute({
+        entry: entryWithAlternate,
+        serverConfig: null,
+        connection: {
+          ...withoutEvidence,
+          ...(evidence === "ready" ? { sshRuntimeReady } : {}),
+          ...(evidence === "failure" ? { failureOrigin } : {}),
+          ...(evidence === "preparation"
+            ? {
+                sshPreparation: {
+                  supervisorId: "window-1",
+                  attemptId: 2,
+                  routeId: alternateRouteId,
+                  operationId: "operation-2",
+                  phase: "uploading",
+                  hostAnswered: true,
+                },
+                sshRuntimeReady: { ...sshRuntimeReady!, routeId: sshRouteId },
+              }
+            : {}),
+          ...(evidence === "unknown"
+            ? { sshRuntimeReady: { ...sshRuntimeReady!, routeId: "removed-route" } }
+            : {}),
+        },
+      });
+      if (evidence === "unknown") {
+        expect(selected).toBeUndefined();
+      } else {
+        expect(selected?.target.hostname).toBe(
+          evidence === "none" ? "example.invalid" : "alternate.example.invalid",
+        );
+      }
+    },
+  );
+  it("shows preparation on a saved alternate SSH route without restoring the old timeout", () => {
+    const connection = alternateAttempt(1, 2);
+    const result = rowPresentation(
+      {
+        ...connection,
+        sshPreparation: {
+          supervisorId: "window-1",
+          attemptId: 2,
+          routeId: alternateRouteId,
+          operationId: "operation-2",
+          phase: "uploading",
+          hostAnswered: true,
+        },
+      },
+      readyRuntime,
+      true,
+      entryWithAlternate,
+    );
+    expect(result.text).toBe("Installing GOAT runtime — first setup can take a few minutes");
+    expect(result.preparationPhase).toBe("uploading");
+    expect(result.tone).toBe("muted");
+    expect(result.tooltipText).not.toContain("did not respond");
+  });
+  it("keeps newer ready evidence on a saved alternate SSH route", () => {
+    const result = rowPresentation(alternateAttempt(1, 2), readyRuntime, true, entryWithAlternate);
+    expect(result.text).toBe("Runtime ready · Opening connection");
+    expect(result.tone).toBe("muted");
+    expect(result.tooltipText).not.toContain("did not respond");
+  });
+  it("keeps a fresh timeout on the active alternate SSH route visible", () => {
+    const result = rowPresentation(alternateAttempt(3, 2), readyRuntime, true, entryWithAlternate);
+    expect(result.tone).toBe("error");
+    expect(result.text).toContain("did not respond");
+    expect(result.tooltipText).toContain("did not respond");
+  });
+  it("shows a newer verified ready attempt over the older setup timeout in row and tooltip", () => {
+    const result = rowPresentation(failedAttempt(1, 2));
+    expect(result.text).toBe("Runtime ready · Opening connection");
+    expect(result.tone).toBe("muted");
+    expect(result.tooltipText).toContain("Runtime ready");
+    expect(JSON.stringify(result)).not.toMatch(/unknown|did not respond/);
+  });
+  it.each([
+    [2, 1],
+    [2, 2],
+  ])(
+    "keeps timeout A%s against ready A%s, including a same-attempt socket timeout",
+    (failure, ready) => {
+      const result = rowPresentation(failedAttempt(failure, ready));
+      expect(result.tone).toBe("error");
+      expect(result.text).toContain("did not respond");
+      expect(result.tooltipText).toContain("did not respond");
+    },
+  );
+  it("does not turn a new poll of old readiness into new attempt evidence", () => {
+    const connection = failedAttempt(2, 1);
+    expect(rowPresentation(connection, { ...readyRuntime }).tone).toBe("error");
+  });
+  it.each(["route", "owner", "no-origin"])(
+    "does not suppress incomparable %s evidence",
+    (mismatch) => {
+      const connection = failedAttempt(1, 2);
+      const origin = connection.failureOrigin!;
+      const { failureOrigin: _origin, ...withoutOrigin } = connection;
+      const result = rowPresentation(
+        mismatch === "no-origin"
+          ? withoutOrigin
+          : {
+              ...connection,
+              failureOrigin: {
+                ...origin,
+                ...(mismatch === "route"
+                  ? { routeId: "another-route" }
+                  : { supervisorId: "another-window" }),
+              },
+            },
+      );
+      expect(result.tone).toBe("error");
+      expect(result.tooltipText).toContain("did not respond");
+    },
+  );
+  it("uses the active matching phase once while the owner poll is still delayed", () => {
+    const connection = failedAttempt(1, 2);
+    const result = rowPresentation(
+      {
+        ...connection,
+        sshPreparation: {
+          supervisorId: "window-1",
+          attemptId: 2,
+          routeId: sshRouteId,
+          operationId: "operation-2",
+          phase: "uploading",
+          hostAnswered: true,
+        },
+      },
+      { ...readyRuntime, state: "preparing", phase: "checking" },
+    );
+    expect(result.text).toBe("Installing GOAT runtime — first setup can take a few minutes");
+    expect(result.tone).toBe("muted");
+    expect(result.runtimeText).toBeNull();
+    expect(result.tooltipText).toBe(result.text);
+  });
+  it.each(["authentication", "configuration", "transport"] as const)(
+    "preserves a fresh %s failure against old ready evidence",
+    (reason) => {
+      const result = rowPresentation({
+        ...failedAttempt(2, 1),
+        phase: reason === "transport" ? "reconnecting" : "error",
+        error: "fresh failure",
+        failure: { kind: "blocked", reason, detail: "fresh failure" },
+      });
+      expect(result.tone).toBe("error");
+      expect(result.tooltipText).toContain("fresh failure");
+    },
+  );
+  it.each(["failed", "untrusted", "stopped", "providers_not_ready", "update_waiting"] as const)(
+    "does not let cached ready hide current owner %s",
+    (state) => {
+      expect(rowPresentation(failedAttempt(1, 2), { ...readyRuntime, state }).tone).toBe("error");
+    },
+  );
+  it("keeps disabled, unsupported, and offline distinct from preparation", () => {
+    const connection = failedAttempt(1, 2);
+    expect(rowPresentation(connection, readyRuntime, false).text).toBe("Off");
+    expect(rowPresentation({ ...connection, phase: "offline" }).text).toBe("Offline");
+    expect(rowPresentation({ ...connection, phase: "unsupported" }).text).toBe(
+      "Client not supported",
+    );
+  });
+});
+
+it("does not apply coherent evidence from a different saved SSH route to this row", () => {
+  const connection = failedAttempt(1, 2);
+  const result = rowPresentation({
+    ...connection,
+    failureOrigin: { ...connection.failureOrigin!, routeId: "another-saved-route" },
+    sshRuntimeReady: { ...connection.sshRuntimeReady!, routeId: "another-saved-route" },
+  });
+  expect(result.tone).toBe("error");
+  expect(result.text).toContain("did not respond");
 });

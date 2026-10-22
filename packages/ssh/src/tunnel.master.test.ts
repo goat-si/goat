@@ -9,6 +9,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as References from "effect/References";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -286,9 +288,18 @@ describe("scoped SSH master", () => {
             controlCommands: 0,
             steps: {},
           };
+          const workerCosts: Readonly<Record<string, unknown>>[] = [];
+          const logger = Logger.make(({ fiber, message }) => {
+            if (String(message) === "ssh.reconnect.cost")
+              workerCosts.push(fiber.getRef(References.CurrentLogAnnotations));
+          });
           yield* manager
             .ensureEnvironment(uploadTarget)
-            .pipe(Effect.provideService(SshReconnectCost, cost));
+            .pipe(
+              Effect.provideService(SshReconnectCost, cost),
+              Effect.provideService(References.MinimumLogLevel, "Info"),
+              Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+            );
           const resolve = f.commands.find((c) => commandArgs(c).includes("-G"))!;
           assert.includeMembers([...commandArgs(resolve)], ["-p", "2222", "julius@devbox"]);
           const master = f.commands.find((c) => commandArgs(c).includes("-M"))!;
@@ -319,9 +330,14 @@ describe("scoped SSH master", () => {
               ["ServerAliveInterval=15", "ServerAliveCountMax=3"],
             );
           }
-          assert.equal(cost.mastersStarted, 1);
-          assert.equal(cost.controlCommands, 2);
-          assert.equal(cost.authentications, 1);
+          assert.lengthOf(workerCosts, 1);
+          assert.isString(workerCosts[0]?.operationId);
+          assert.equal(workerCosts[0]?.mastersStarted, 1);
+          assert.equal(workerCosts[0]?.controlCommands, 2);
+          assert.equal(workerCosts[0]?.authentications, 1);
+          assert.equal(cost.mastersStarted, 0);
+          assert.equal(cost.controlCommands, 0);
+          assert.equal(cost.authentications, 0);
           yield* manager.runRemoteScript(uploadTarget, { script: "echo test" });
           assert.includeMembers([...commandArgs(f.commands.at(-1)!)], ["-S", socket]);
           yield* manager.disconnectEnvironment(uploadTarget);

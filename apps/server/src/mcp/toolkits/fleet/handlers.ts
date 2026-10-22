@@ -1,3 +1,5 @@
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
+import { readCaller } from "../../threadAccess.ts";
 import * as Effect from "effect/Effect";
 
 import * as GoalService from "../../../fleet/goals/GoalService.ts";
@@ -18,6 +20,13 @@ const withGoals = <A, E>(
   });
 
 export const layer = McpToolAccess.toLayer(FleetToolkit, {
+  goat_permission_profile_get: McpToolAccess.reads(() =>
+    Effect.gen(function* () {
+      const { scope, limits } = yield* readCaller();
+      const profiles = yield* Profiles.PermissionProfiles;
+      return yield* profiles.resolve(scope, limits.runtimeMode);
+    }),
+  ),
   goat_goal_apply: McpToolAccess.writes((input) =>
     withGoals((goals, scope) => goals.apply(scope, input)),
   ),

@@ -7,7 +7,14 @@ import { useUiStateStore } from "~/uiStateStore";
 import type { FleetConnection } from "./fleetConnection";
 import { fleetConsoleFrameClassName } from "./fleetConsoleFrame";
 
-const FleetConsole = lazy(() => import("./FleetConsole"));
+let fleetConsoleModule: Promise<typeof import("./FleetConsole")> | undefined;
+/** The console chunk's single import, shared by `lazy` and anything that needs to await the chunk. */
+export function loadFleetConsole() {
+  fleetConsoleModule ??= import("./FleetConsole");
+  return fleetConsoleModule;
+}
+
+const FleetConsole = lazy(loadFleetConsole);
 
 /** True once the page has painted and the browser is idle, so the graph draws first. */
 function useAfterFirstPaint() {

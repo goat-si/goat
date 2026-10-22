@@ -1,7 +1,4 @@
-import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
-  OrchestratorMcpFailure,
   DeviceToolCloseInput,
   DeviceToolError,
   DeviceToolListResult,
@@ -9,16 +6,20 @@ import {
   DeviceToolOpenResult,
   DeviceToolScreenshotResult,
   DeviceToolTargetInput,
+  OrchestratorMcpFailure,
 } from "@goat/contracts";
-import * as Schema from "effect/Schema";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { Tool, Toolkit } from "effect/ai";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as ServerConfig from "../../../config.ts";
-import { Tool, Toolkit } from "effect/ai";
+import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 
-import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -47,7 +48,14 @@ const DeviceOpenTool = Tool.make(agentSurfaceRegistry["device.open"].name, {
   parameters: DeviceToolOpenInput,
   success: DeviceToolOpenResult,
   failure: DeviceToolFailure,
-  dependencies: [...dependencies, FileSystem.FileSystem, Path.Path, ServerConfig.ServerConfig],
+  dependencies: [
+    ...dependencies,
+    FileSystem.FileSystem,
+    Path.Path,
+    ServerConfig.ServerConfig,
+    // The thread's project can name the EAS project a cloud device runs under.
+    ProjectService.ProjectService,
+  ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["device.open"]));
 
 export const DeviceScreenshotTool = Tool.make(agentSurfaceRegistry["device.screenshot"].name, {

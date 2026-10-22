@@ -11,11 +11,13 @@ import { resolveSshTarget, SshHostAnswered } from "@goat/ssh/command";
 import { discoverSshHosts } from "@goat/ssh/config";
 import {
   SshCommandError,
+  SshEnsureSupersededError,
   SshHostDiscoveryError,
   SshInvalidTargetError,
   SshLaunchError,
   SshPairingError,
   SshPasswordPromptError,
+  SshPreparationTimeoutError,
   SshReadinessError,
 } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
@@ -42,12 +44,23 @@ export type DesktopSshEnvironmentOperationError =
   | SshCommandError
   | SshInvalidTargetError
   | SshLaunchError
+  | SshEnsureSupersededError
+  | SshPreparationTimeoutError
   | SshPairingError
   | SshReadinessError
   | SshPasswordPromptError
   | NetService.NetError;
 
 export type DesktopSshEnvironmentDiscoverError = SshHostDiscoveryError;
+
+export type DesktopSshEnvironmentEnsureOptions = Pick<
+  SshTunnel.SshEnvironmentEnsureOptions,
+  | "issuePairingToken"
+  | "keyOnly"
+  | "preparedAttachmentId"
+  | "onPreparationProgress"
+  | "onPreparationAdmission"
+>;
 
 export class DesktopSshEnvironment extends Context.Service<
   DesktopSshEnvironment,
@@ -60,7 +73,7 @@ export class DesktopSshEnvironment extends Context.Service<
     ) => Effect.Effect<DesktopSshEnvironmentTarget, SshCommandError | SshInvalidTargetError>;
     readonly ensureEnvironment: (
       target: DesktopSshEnvironmentTarget,
-      options?: { readonly issuePairingToken?: boolean; readonly keyOnly?: boolean },
+      options?: DesktopSshEnvironmentEnsureOptions,
     ) => Effect.Effect<DesktopSshEnvironmentReadyOrPending, DesktopSshEnvironmentOperationError>;
     readonly status: (
       target: DesktopSshEnvironmentTarget,
@@ -98,7 +111,7 @@ function unexpectedPasswordPromptError(error: never): never {
   throw new Error(`Unhandled desktop SSH password prompt error: ${String(error)}`);
 }
 
-export function toSshPasswordPromptError(
+function toSshPasswordPromptError(
   cause: DesktopSshPasswordPrompts.DesktopSshPasswordPromptRequestError,
 ): SshPasswordPromptError {
   let message: string;
@@ -203,6 +216,31 @@ export const make = Effect.gen(function* () {
           }
         };
         const key = targetKey(target);
+        const safelyNotify =
+          <A>(notify: ((value: A) => void) | undefined) =>
+          (value: A) => {
+            try {
+              notify?.(value);
+            } catch {
+              // Observers can outlive their renderer; they do not own native preparation.
+            }
+          };
+        const managerOptions =
+          ensureOptions === undefined
+            ? undefined
+            : {
+                ...ensureOptions,
+                ...(ensureOptions.onPreparationProgress === undefined
+                  ? {}
+                  : {
+                      onPreparationProgress: safelyNotify(ensureOptions.onPreparationProgress),
+                    }),
+                ...(ensureOptions.onPreparationAdmission === undefined
+                  ? {}
+                  : {
+                      onPreparationAdmission: safelyNotify(ensureOptions.onPreparationAdmission),
+                    }),
+              };
         return yield* Effect.acquireUseRelease(
           Effect.sync(() => {
             const preparation = preparations.get(key) ?? { answered: false, listeners: new Set() };
@@ -214,7 +252,7 @@ export const make = Effect.gen(function* () {
             Effect.gen(function* () {
               // Replay only after acquisition so notification failures cannot bypass cleanup.
               if (preparation.answered) listener();
-              return yield* manager.ensureEnvironment(target, ensureOptions).pipe(
+              return yield* manager.ensureEnvironment(target, managerOptions).pipe(
                 Effect.provideService(SshHostAnswered, () => {
                   if (preparations.get(key) !== preparation || preparation.answered) return;
                   preparation.answered = true;

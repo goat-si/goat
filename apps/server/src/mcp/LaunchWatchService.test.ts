@@ -1,6 +1,12 @@
+import * as PressureNudger from "../fleet/pressure/PressureNudger.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   CommandId,
+  CheckpointId,
+  ProviderInstanceId,
+  type ThreadReplicaPayload,
   EnvironmentId,
   ProjectId,
   RunId,
@@ -12,11 +18,13 @@ import {
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
@@ -48,6 +56,10 @@ type WaitAnswer = Effect.Effect<
 /** Everything the service sees of the world, under the test's control. */
 interface World {
   readonly shells: Map<string, Partial<OrchestrationV2ThreadShell>>;
+  hostReplication?: "on" | "off";
+  pressureBlocked?: boolean;
+  settings?: ServerSettings.ServerSettingsService["Service"];
+  payloadStaged?: Effect.Effect<void>;
   /** Answers to local waits, taken one per wait. */
   readonly waits: Queue.Queue<WaitAnswer>;
   readonly waitCalls: Array<ThreadManagementService.ThreadManagementWaitInput>;
@@ -100,7 +112,16 @@ interface World {
 const makeWorld = Effect.gen(function* () {
   const world: World = {
     shells: new Map([
-      [launcher, { id: launcher, runtimeMode: "full-access", archivedAt: null, deletedAt: null }],
+      [
+        launcher,
+        {
+          id: launcher,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          archivedAt: null,
+          deletedAt: null,
+        },
+      ],
       [
         target,
         {
@@ -177,6 +198,32 @@ const layerFor = (world: World, baseDir: string) =>
   LaunchWatchService.layerWithoutDependencies.pipe(
     Layer.provide(
       Layer.mergeAll(
+        ServerSettings.layerTest({
+          fleet: {
+            hosts: {
+              box:
+                world.hostReplication === undefined
+                  ? {}
+                  : { checkpointReplication: world.hostReplication },
+            },
+          },
+        }).pipe(
+          Layer.tap((context) =>
+            Effect.sync(() => {
+              world.settings = Context.get(context, ServerSettings.ServerSettingsService);
+            }),
+          ),
+        ),
+        Layer.mock(PressureNudger.PressureAdmissionService)({
+          admit: (host) =>
+            Effect.succeed({
+              refuse: world.pressureBlocked === true,
+              advice: world.pressureBlocked
+                ? { host, level: "critical", message: "fixture pressure", alternatives: [] }
+                : undefined,
+            }),
+        }),
+        Layer.mock(ThreadReplicaService.ThreadReplicaService)({}),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadShell: (threadId) =>
             (threadId === launcher
@@ -222,6 +269,17 @@ const layerFor = (world: World, baseDir: string) =>
               Effect.flatMap((ceiling) =>
                 Clock.currentTimeMillis.pipe(
                   Effect.flatMap((at) => {
+                    if (
+                      [
+                        "goat_thread_checkpoint_capture",
+                        "goat_thread_checkpoint_restore",
+                        "goat_thread_checkpoint_reconcile",
+                        "goat_thread_interrupt",
+                      ].includes(call.tool)
+                    ) {
+                      expect(call.existingSessionOnly).toBe(true);
+                      expect(call.requireReady).toBe(true);
+                    }
                     world.hostCalls.push({ call, ceiling, at });
                     return world.hostCall(call);
                   }),
@@ -245,7 +303,25 @@ const layerFor = (world: World, baseDir: string) =>
         }),
         ServerConfig.layerTest(process.cwd(), baseDir).pipe(Layer.provide(NodeServices.layer)),
         NodeCrypto.layer,
-        NodeServices.layer,
+        Layer.effect(
+          FileSystem.FileSystem,
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            return {
+              ...fs,
+              rename: (from: string, to: string) =>
+                fs
+                  .rename(from, to)
+                  .pipe(
+                    Effect.andThen(
+                      to.includes("watch-replicas/")
+                        ? (world.payloadStaged ?? Effect.void)
+                        : Effect.void,
+                    ),
+                  ),
+            };
+          }),
+        ).pipe(Layer.provideMerge(NodeServices.layer)),
       ),
     ),
   );
@@ -1945,5 +2021,763 @@ describe("LaunchWatchService launcherless watches", () => {
         expect.objectContaining({ pendingRuns: [], reportedRuns: [run1] }),
       ]);
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+const watchReplica = (now: number): ThreadReplicaPayload => {
+  const context = "Checkpoint context";
+  const bytes = Buffer.from("fixture bundle");
+  return {
+    sourceEnvironmentId: EnvironmentId.make("box-env"),
+    sourceThreadId: target,
+    runId: run1,
+    checkpointId: CheckpointId.make("cp-1"),
+    repositoryKey: "github.com/example/recovery",
+    capturedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
+    headOid: "a".repeat(40),
+    commitOid: "b".repeat(40),
+    replicaRef: "refs/goat/replicas/watch/0",
+    bytes: bytes.length,
+    sha256: ThreadReplicaService.replicaDigest(bytes),
+    contextSha256: ThreadReplicaService.replicaDigest(context),
+    contextKind: "bounded_conversation",
+    context,
+    bundleBase64: bytes.toString("base64"),
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+  };
+};
+const replicaWatchInput = {
+  launcherThreadId: launcher,
+  host: "box",
+  threadId: target,
+  projectId: null,
+  title: "Recover me",
+  runId: run1,
+} as const;
+const recoveryInput = {
+  ...replicaWatchInput,
+  fromReplicatedCheckpoint: true,
+  expectedRunId: run1,
+  destinationHost: "destination",
+  destinationProjectId: projectId,
+} as const;
+const recoveryGrant = Effect.succeed({
+  runtimeMode: "full-access",
+  interactionMode: "default",
+} as const);
+
+describe("ordinary watch replicas", () => {
+  it.effect.each(["profiles", "pressure"] as const)(
+    "blocks fresh watch recovery before reservation for %s",
+    (reason) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        world.hostCall = (call) =>
+          Effect.succeed(
+            call.tool === "goat_thread_checkpoint_capture"
+              ? { status: "captured", replica }
+              : call.tool === "goat_thread_checkpoint_restore"
+                ? {
+                    operationId: call.arguments.operationId,
+                    status: "launched",
+                    threadId: "replacement",
+                    runId: "replacement-run",
+                  }
+                : call.tool === "goat_thread_wait"
+                  ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+                  : remoteRead({ itemCount: 0 }),
+          );
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Queue.take(world.delivered);
+            expect((yield* service.find(replicaWatchInput))?.replica).toBeDefined();
+            if (reason === "profiles")
+              yield* world.settings!.updateSettings({ goatclaw: { enabled: true } });
+            else world.pressureBlocked = true;
+            const result = yield* service.recover(recoveryInput, recoveryGrant).pipe(Effect.result);
+            expect(result._tag).toBe("Failure");
+            expect((yield* service.find(replicaWatchInput))?.recovery).toBeUndefined();
+            expect(
+              world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_restore"),
+            ).toHaveLength(0);
+          }),
+        );
+      }),
+  );
+
+  it.effect.each(["disabled", "authority_changed", "profiles_enabled"] as const)(
+    "does not publish an in-flight copy after %s",
+    (reason) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        world.hostCall = (call) =>
+          call.tool === "goat_thread_checkpoint_capture"
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as({ status: "captured", replica }),
+              )
+            : Effect.succeed(
+                call.tool === "goat_thread_wait"
+                  ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+                  : remoteRead({ itemCount: 0 }),
+              );
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Deferred.await(entered);
+            if (reason === "disabled")
+              yield* service.register({
+                ...replicaWatchInput,
+                runId: null,
+                checkpointReplication: "off",
+              });
+            else if (reason === "profiles_enabled")
+              yield* world.settings!.updateSettings({ goatclaw: { enabled: true } });
+            else world.shells.set(launcher, { ...world.shells.get(launcher), runtimeMode: "auto" });
+            yield* Deferred.succeed(release, undefined);
+            yield* Queue.take(world.delivered);
+            const saved = yield* service.find(replicaWatchInput);
+            expect(saved?.replica).toBeUndefined();
+            expect(saved?.replicaAttempt?.reason).toBe(
+              reason === "profiles_enabled" ? "disabled" : reason,
+            );
+            expect(
+              world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+            ).toHaveLength(1);
+          }),
+        );
+      }),
+  );
+
+  it.effect("resumes an interrupted active follower after a definite destination refusal", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const replica = watchReplica(yield* Clock.currentTimeMillis);
+      const activeWait = yield* Deferred.make<void>();
+      let activeWaitCount = 0;
+      world.hostCall = (call) => {
+        if (call.tool === "goat_thread_checkpoint_restore")
+          return Effect.succeed({
+            operationId: call.arguments.operationId,
+            status: "refused",
+            threadId: "unused",
+            runId: null,
+            reason: "project_missing",
+          });
+        if (call.tool === "goat_thread_checkpoint_capture")
+          return Effect.succeed({
+            status: "captured",
+            replica: { ...replica, runId: call.arguments.runId },
+          });
+        if (call.tool === "goat_thread_wait") {
+          const currentRun = call.arguments.runId;
+          if (currentRun === run2 && ++activeWaitCount === 1)
+            return Deferred.succeed(activeWait, undefined).pipe(Effect.andThen(Effect.never));
+          return Effect.succeed({
+            threadId: target,
+            runId: currentRun,
+            status: "completed",
+            timedOut: false,
+          });
+        }
+        return Effect.succeed(remoteRead({ itemCount: 0 }));
+      };
+      const dir = yield* tempDir;
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          yield* service.register({
+            ...replicaWatchInput,
+            checkpointReplication: "on",
+            replicaCeiling: "full-access",
+          });
+          yield* Queue.take(world.delivered);
+          yield* service.rearm({ ...replicaWatchInput, runId: run2 });
+          yield* Deferred.await(activeWait);
+          expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe("refused");
+          const resumed = yield* Queue.take(world.delivered);
+          expect(resumed.text).toContain("finished run run-2");
+          expect(activeWaitCount).toBe(2);
+          expect((yield* service.find(replicaWatchInput))?.recovery).toBeUndefined();
+        }),
+      );
+    }),
+  );
+
+  it.effect("does not repeat a capture claimed before a restart", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const entered = yield* Deferred.make<void>();
+      world.hostCall = (call) =>
+        call.tool === "goat_thread_checkpoint_capture"
+          ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.succeed(
+              call.tool === "goat_thread_wait"
+                ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+                : remoteRead({ itemCount: 0 }),
+            );
+      const dir = yield* tempDir;
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          yield* service.register({
+            ...replicaWatchInput,
+            checkpointReplication: "on",
+            replicaCeiling: "full-access",
+          });
+          yield* Deferred.await(entered);
+          expect((yield* service.find(replicaWatchInput))?.replicaAttempt?.reason).toBe(
+            "capturing",
+          );
+        }),
+      );
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          yield* service.find(replicaWatchInput);
+          yield* Queue.take(world.delivered);
+          expect((yield* service.find(replicaWatchInput))?.replicaAttempt?.reason).toBe(
+            "capture_interrupted",
+          );
+          expect(
+            world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+          ).toHaveLength(1);
+        }),
+      );
+    }),
+  );
+
+  it.effect(
+    "allows correcting a definitely refused destination without losing report routing",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        const operations: string[] = [];
+        world.hostCall = (call) => {
+          if (call.tool === "goat_thread_checkpoint_restore") {
+            operations.push(String(call.arguments.operationId));
+            return Effect.succeed({
+              operationId: call.arguments.operationId,
+              status: call.arguments.projectId === "missing" ? "refused" : "launched",
+              threadId: "replacement",
+              runId: call.arguments.projectId === "missing" ? null : "replacement-run",
+              reason: "project_missing",
+            });
+          }
+          if (call.host === "destination") return Effect.never;
+          if (call.tool === "goat_thread_interrupt")
+            return Effect.succeed({ threadId: target, runId: run1, status: "completed" });
+          if (call.tool === "goat_thread_checkpoint_capture")
+            return Effect.succeed({ status: "captured", replica });
+          return Effect.succeed(
+            call.tool === "goat_thread_wait"
+              ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+              : remoteRead({ itemCount: 0 }),
+          );
+        };
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+              notifyWebhook: true,
+            });
+            yield* Queue.take(world.delivered);
+            expect(
+              (yield* service.recover(
+                { ...recoveryInput, destinationProjectId: ProjectId.make("missing") },
+                recoveryGrant,
+              )).status,
+            ).toBe("refused");
+            expect((yield* service.find(replicaWatchInput))?.recovery).toBeUndefined();
+            expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe("launched");
+            expect(new Set(operations).size).toBe(2);
+            expect(
+              (yield* service.find({
+                launcherThreadId: launcher,
+                host: "destination",
+                threadId: ThreadId.make("replacement"),
+              }))?.notifyWebhook,
+            ).toBe(true);
+            expect((yield* service.find(replicaWatchInput))?.notifyWebhook).toBe(false);
+          }),
+        );
+      }),
+  );
+
+  it.effect(
+    "an older unknown reply cannot downgrade a known launch, including offline replay",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        const sent = yield* Deferred.make<string>();
+        const release = yield* Deferred.make<void>();
+        let destinationDown = false;
+        let mutationCalls = 0;
+        world.hostCall = (call) => {
+          if (
+            call.tool === "goat_thread_checkpoint_restore" ||
+            call.tool === "goat_thread_checkpoint_reconcile"
+          ) {
+            mutationCalls++;
+            if (destinationDown)
+              return Effect.fail(
+                new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "host_unavailable",
+                  message: "destination offline",
+                }),
+              );
+            const operationId = String(call.arguments.operationId);
+            if (call.tool === "goat_thread_checkpoint_reconcile")
+              return Effect.succeed({
+                operationId,
+                status: "launched",
+                threadId: "replacement",
+                runId: "replacement-run",
+              });
+            return Deferred.succeed(sent, operationId).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as({
+                operationId,
+                status: "launch_unknown",
+                threadId: "replacement",
+                runId: null,
+              }),
+            );
+          }
+          if (call.host === "destination") return Effect.never;
+          if (call.tool === "goat_thread_interrupt")
+            return Effect.succeed({ threadId: target, runId: run1, status: "completed" });
+          if (call.tool === "goat_thread_checkpoint_capture")
+            return Effect.succeed({ status: "captured", replica });
+          return Effect.succeed(
+            call.tool === "goat_thread_wait"
+              ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+              : remoteRead({ itemCount: 0 }),
+          );
+        };
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Queue.take(world.delivered);
+            const first = yield* service
+              .recover(recoveryInput, recoveryGrant)
+              .pipe(Effect.forkChild);
+            yield* Deferred.await(sent);
+            expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe("launched");
+            yield* Deferred.succeed(release, undefined);
+            expect((yield* Fiber.join(first)).status).toBe("launched");
+            destinationDown = true;
+            expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe("launched");
+            expect(mutationCalls).toBe(2);
+            expect((yield* service.find(replicaWatchInput))?.recovery?.status).toBe("launched");
+          }),
+        );
+      }),
+  );
+
+  it.effect("expires payload contents but still reconciles and retains the source fence", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const replica = watchReplica(yield* Clock.currentTimeMillis);
+      world.hostCall = (call) => {
+        if (call.tool === "goat_thread_checkpoint_restore")
+          return Effect.succeed({
+            operationId: call.arguments.operationId,
+            status: "launch_unknown",
+            threadId: "replacement",
+            runId: null,
+          });
+        if (call.tool === "goat_thread_checkpoint_reconcile") {
+          expect(call.arguments).not.toHaveProperty("replica");
+          return Effect.succeed({
+            operationId: call.arguments.operationId,
+            status: "launched",
+            threadId: "replacement",
+            runId: "replacement-run",
+          });
+        }
+        if (call.host === "destination") return Effect.never;
+        if (call.tool === "goat_thread_interrupt")
+          return Effect.succeed({ threadId: target, runId: run1, status: "completed" });
+        if (call.tool === "goat_thread_checkpoint_capture")
+          return Effect.succeed({ status: "captured", replica });
+        return Effect.succeed(
+          call.tool === "goat_thread_wait"
+            ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+            : remoteRead({ itemCount: 0 }),
+        );
+      };
+      const dir = yield* tempDir;
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          yield* service.register({
+            ...replicaWatchInput,
+            checkpointReplication: "on",
+            replicaCeiling: "full-access",
+          });
+          yield* Queue.take(world.delivered);
+          expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe(
+            "launch_unknown",
+          );
+          yield* service.unwatch(replicaWatchInput);
+          yield* TestClock.adjust("8 days");
+          const kept = yield* service.find(replicaWatchInput);
+          expect(kept?.replica).toBeUndefined();
+          expect(kept?.recovery?.status).toBe("launch_unknown");
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          expect(yield* fs.readDirectory(path.join(dir, "userdata", "watch-replicas"))).toEqual([]);
+          expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe("launched");
+        }).pipe(Effect.provide(NodeServices.layer)),
+      );
+    }),
+  );
+
+  it.effect.each([undefined, "off"] as const)(
+    "does no capture work when host setting is %s",
+    (setting) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        if (setting !== undefined) world.hostReplication = setting;
+        world.hostCall = (call) =>
+          Effect.succeed(
+            call.tool === "goat_thread_wait"
+              ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+              : remoteRead({ itemCount: 0 }),
+          );
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register(replicaWatchInput);
+            yield* Queue.take(world.delivered);
+            expect(
+              world.hostCalls.some(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+            ).toBe(false);
+          }),
+        );
+      }),
+  );
+
+  it.effect(
+    "captures once per completed turn across restart and rejects stale requests and lowered grants",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        world.hostCall = (call) =>
+          Effect.succeed(
+            call.tool === "goat_thread_checkpoint_capture"
+              ? { status: "captured", replica }
+              : call.tool === "goat_thread_wait"
+                ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+                : remoteRead({ itemCount: 0 }),
+          );
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Queue.take(world.delivered);
+            const stored = yield* service.find(replicaWatchInput);
+            expect(stored?.replica?.sha256).toBe(replica.sha256);
+          }),
+        );
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            const again = yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            expect(again.replicaAttempts).toEqual([run1]);
+            expect(
+              world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+            ).toHaveLength(1);
+            const denied = yield* service
+              .recover(
+                recoveryInput,
+                Effect.succeed({ runtimeMode: "auto", interactionMode: "default" }),
+              )
+              .pipe(Effect.result);
+            expect(denied._tag).toBe("Failure");
+            const stale = yield* service
+              .recover({ ...recoveryInput, expectedRunId: run2 }, recoveryGrant)
+              .pipe(Effect.result);
+            expect(stale._tag).toBe("Failure");
+          }),
+        );
+      }),
+  );
+
+  it.effect.each([false, true])(
+    "off wins staged ordinary payload publication (reenable=%s)",
+    (reenable) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        const staged = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        world.payloadStaged = Deferred.succeed(staged, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        );
+        let completedRun = run1;
+        world.hostCall = (call) =>
+          Effect.succeed(
+            call.tool === "goat_thread_checkpoint_capture"
+              ? { status: "captured", replica: { ...replica, runId: completedRun } }
+              : call.tool === "goat_thread_wait"
+                ? { threadId: target, runId: completedRun, status: "completed", timedOut: false }
+                : remoteRead({ itemCount: 0 }),
+          );
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Deferred.await(staged);
+            yield* world.settings!.updateSettings({ responseStreamingMode: "turn" });
+            yield* world.settings!.updateSettings({
+              fleet: {
+                hosts: {
+                  other: { checkpointReplication: "off" },
+                  box: { checkpointReplication: "off" },
+                },
+              },
+            });
+            if (reenable)
+              yield* world.settings!.updateSettings({
+                fleet: { hosts: { box: { checkpointReplication: "on" } } },
+              });
+            yield* Deferred.succeed(release, undefined);
+            yield* Queue.take(world.delivered);
+            expect((yield* service.find(replicaWatchInput))?.replica).toBeUndefined();
+            expect((yield* service.find(replicaWatchInput))?.replicaAttempt?.reason).toBe(
+              "disabled",
+            );
+          }),
+        );
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            expect((yield* service.find(replicaWatchInput))?.replica).toBeUndefined();
+            yield* world.settings!.updateSettings({
+              fleet: { hosts: { box: { checkpointReplication: "on" } } },
+            });
+            completedRun = run2;
+            yield* service.rearm({ ...replicaWatchInput, runId: run2 });
+            yield* Queue.take(world.delivered);
+            expect((yield* service.find(replicaWatchInput))?.replica?.runId).toBe(run2);
+          }),
+        );
+      }),
+  );
+
+  it.effect("cancelled ordinary publication removes staged payload and restart keeps dedup", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const replica = watchReplica(yield* Clock.currentTimeMillis);
+      const staged = yield* Deferred.make<void>();
+      world.payloadStaged = Deferred.succeed(staged, undefined).pipe(Effect.andThen(Effect.never));
+      world.hostCall = (call) =>
+        Effect.succeed(
+          call.tool === "goat_thread_checkpoint_capture"
+            ? { status: "captured", replica }
+            : call.tool === "goat_thread_wait"
+              ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+              : remoteRead({ itemCount: 0 }),
+        );
+      const dir = yield* tempDir;
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          yield* service.register({
+            ...replicaWatchInput,
+            checkpointReplication: "on",
+            replicaCeiling: "full-access",
+          });
+          yield* Deferred.await(staged);
+        }),
+      );
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      expect(yield* fs.readDirectory(path.join(dir, "userdata", "watch-replicas"))).toEqual([]);
+      delete world.payloadStaged;
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          const watch = yield* service.find(replicaWatchInput);
+          expect(watch?.replica).toBeUndefined();
+          expect(watch?.replicaAttempt?.reason).toBe("capture_interrupted");
+          expect(
+            world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+          ).toHaveLength(1);
+        }),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each(["completed", "question"] as const)(
+    "fences a late %s while recovering and retains it across unwatch and restart",
+    (late) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        const captured = yield* Deferred.make<void>();
+        const sourceWaiting = yield* Deferred.make<void>();
+        const sourceWaitEnded = yield* Deferred.make<void>();
+        const releaseSource = yield* Deferred.make<void>();
+        const interrupted = yield* Queue.unbounded<Record<string, unknown>>();
+        let sourceOffline = false;
+        let sourceReturned = false;
+        const operations: string[] = [];
+        world.hostCall = (call) => {
+          if (call.tool === "goat_thread_checkpoint_restore") {
+            const operationId = String(call.arguments.operationId);
+            operations.push(operationId);
+            return Effect.succeed({
+              operationId,
+              status: "launched",
+              threadId: "replacement",
+              runId: "replacement-run",
+            });
+          }
+          if (call.host === "destination") return Effect.never;
+          if (call.tool === "goat_thread_interrupt") {
+            if (!sourceReturned)
+              return Effect.fail(
+                new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "host_unavailable",
+                  message: "offline",
+                }),
+              );
+            return Queue.offer(interrupted, call.arguments).pipe(
+              Effect.as({ threadId: target, runId: run2, status: "interrupt_requested" }),
+            );
+          }
+          if (sourceOffline) {
+            if (call.tool === "goat_thread_wait")
+              return Deferred.succeed(sourceWaiting, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseSource)),
+                Effect.as({
+                  threadId: target,
+                  runId: run2,
+                  status: late === "completed" ? "completed" : "waiting",
+                  timedOut: false,
+                  pendingRequestIds: late === "question" ? ["old-question"] : [],
+                }),
+                Effect.ensuring(Deferred.succeed(sourceWaitEnded, undefined)),
+              );
+            return Effect.succeed(
+              call.tool === "goat_pending_request_list"
+                ? { requestIds: ["old-question"] }
+                : remoteRead({ itemCount: 0 }),
+            );
+          }
+          if (call.tool === "goat_thread_checkpoint_capture")
+            return Deferred.succeed(captured, undefined).pipe(
+              Effect.as({ status: "captured", replica }),
+            );
+          return Effect.succeed(
+            call.tool === "goat_thread_wait"
+              ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+              : remoteRead({ itemCount: 0 }),
+          );
+        };
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Deferred.await(captured);
+            yield* Queue.take(world.delivered);
+            sourceOffline = true;
+            yield* service.rearm({ ...replicaWatchInput, runId: run2 });
+            yield* Deferred.await(sourceWaiting);
+            const result = yield* service.recover(
+              recoveryInput,
+              recoveryGrant.pipe(
+                Effect.tap(() => Deferred.succeed(releaseSource, undefined)),
+                Effect.tap(() => Deferred.await(sourceWaitEnded)),
+              ),
+            );
+            expect(result.status).toBe("launched");
+            yield* Deferred.await(sourceWaitEnded);
+            const old = yield* service.find(replicaWatchInput);
+            expect(old?.recovery?.sourceRunId).toBe(run2);
+            yield* service.unwatch(replicaWatchInput);
+          }),
+        );
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            const recovered = yield* service.register({ ...replicaWatchInput, runId: run2 });
+            expect(recovered.recovery?.status).toBe("launched");
+            yield* service.rearm({ ...replicaWatchInput, runId: run2 });
+            const replay = yield* service.recover(recoveryInput, recoveryGrant);
+            expect(replay.status).toBe("launched");
+            expect(new Set(operations).size).toBe(1);
+            expect(operations).toHaveLength(1);
+            expect(world.deliveredLog).toHaveLength(1);
+            sourceReturned = true;
+            yield* world.settings!.updateSettings({ goatclaw: { enabled: true } });
+            yield* TestClock.adjust("2 minutes");
+            expect(yield* Queue.size(interrupted)).toBe(0);
+            expect((yield* service.find(replicaWatchInput))?.recovery?.sourceInterrupted).toBe(
+              false,
+            );
+            yield* world.settings!.updateSettings({ goatclaw: { enabled: false } });
+            world.shells.set(launcher, {
+              ...world.shells.get(launcher),
+              interactionMode: "plan",
+            });
+            yield* TestClock.adjust("2 minutes");
+            expect(yield* Queue.size(interrupted)).toBe(0);
+            expect((yield* service.find(replicaWatchInput))?.recovery?.sourceInterrupted).toBe(
+              false,
+            );
+            world.shells.set(launcher, {
+              ...world.shells.get(launcher),
+              interactionMode: "default",
+            });
+            yield* TestClock.adjust("2 minutes");
+            const stopped = yield* Queue.take(interrupted);
+            expect(stopped.threadId).toBe(target);
+            expect(stopped.runId).toBe(run2);
+            expect(stopped.stopCascade).toBeUndefined();
+            expect(
+              world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+            ).toHaveLength(1);
+          }),
+        );
+      }),
   );
 });

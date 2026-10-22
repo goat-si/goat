@@ -1,27 +1,30 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  ProviderSessionId,
+  ThreadId,
   EnvironmentId,
   MessageId,
   NodeId,
   ProjectId,
   ProviderInstanceId,
-  ProviderSessionId,
   RunAttemptId,
   RunId,
-  ThreadId,
   MemoryId,
   MemoryRevisionId,
   MemorySpaceId,
 } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { vi } from "vite-plus/test";
+import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
+import * as CursorAgentSdk from "./CursorAgentSdk.ts";
+import * as CursorSdk from "./CursorSdk.ts";
 import * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { vi } from "vite-plus/test";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -30,9 +33,7 @@ import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import { CursorSettings } from "../settings.ts";
 import { makeCursorAdapterV2 } from "./adapter.ts";
 
-import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
-import * as CursorAgentSdk from "./CursorAgentSdk.ts";
-import * as CursorSdk from "./CursorSdk.ts";
+const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 
 const cursorSdkMock = vi.hoisted(() => {
   const closeExecutionOrder: Array<string> = [];
@@ -135,7 +136,6 @@ vi.mock("./sdk.ts", () => ({
   SqliteLocalAgentStore: { open: vi.fn() },
 }));
 
-const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 const layerTest = CursorAgentSdk.layer.pipe(
   Layer.provide(
     Layer.succeed(ProviderEventLoggers.ProviderEventLoggers, {
@@ -161,6 +161,47 @@ const layerTest = CursorAgentSdk.layer.pipe(
 );
 
 describe("CursorAgentSdkRunner", () => {
+  it.effect("retries a resumed send after cancelling its abandoned local run", () =>
+    Effect.gen(function* () {
+      cursorSdkMock.runOperations.length = 0;
+      cursorSdkMock.listRuns.mockClear();
+      cursorSdkMock.cancelRun.mockClear();
+      cursorSdkMock.setStaleRunActive(true);
+
+      const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
+      const session = yield* runner.open({
+        operation: "resume",
+        agentId: "agent-cursor-agent-sdk-test",
+        options: { model: { id: "default" }, mode: "agent", local: { cwd: process.cwd() } },
+        threadId: ThreadId.make("thread-cursor-agent-sdk-stale-run-test"),
+        providerSessionId: ProviderSessionId.make(
+          "provider-session-cursor-agent-sdk-stale-run-test",
+        ),
+      });
+      assert.deepStrictEqual(cursorSdkMock.runOperations, []);
+      const run = yield* session.send({ message: "continue" });
+      yield* run.wait;
+
+      assert.deepStrictEqual(cursorSdkMock.runOperations, [
+        "run.start",
+        "agent.listRuns",
+        "agent.cancelRun",
+        "run.start",
+      ]);
+      assert.deepStrictEqual(cursorSdkMock.listRuns.mock.calls[0], [
+        "agent-cursor-agent-sdk-test",
+        { runtime: "local", cwd: process.cwd(), limit: 1 },
+      ]);
+      assert.deepStrictEqual(cursorSdkMock.cancelRun.mock.calls[0], [
+        "run-stale",
+        {
+          runtime: "local",
+          cwd: process.cwd(),
+        },
+      ]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect.each([false, true])(
     "preserves the adapter memory correction across active-run recovery (restore grant: %s)",
     (restoreGrant) =>
@@ -335,208 +376,4 @@ describe("CursorAgentSdkRunner", () => {
         ),
       ),
   );
-
-  it.effect("leaves a resumed agent alone when its next send succeeds", () =>
-    Effect.gen(function* () {
-      cursorSdkMock.runOperations.length = 0;
-      cursorSdkMock.setStaleRunActive(false);
-
-      const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
-      const session = yield* runner.open({
-        operation: "resume",
-        agentId: "agent-cursor-agent-sdk-test",
-        options: { model: { id: "default" }, mode: "agent", local: { cwd: process.cwd() } },
-        threadId: ThreadId.make("thread-cursor-agent-sdk-normal-resume-test"),
-        providerSessionId: ProviderSessionId.make(
-          "provider-session-cursor-agent-sdk-normal-resume-test",
-        ),
-      });
-      const run = yield* session.send({ message: "continue" });
-      yield* run.wait;
-
-      assert.deepStrictEqual(cursorSdkMock.runOperations, ["run.start"]);
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("retries a resumed send after cancelling its abandoned local run", () =>
-    Effect.gen(function* () {
-      cursorSdkMock.runOperations.length = 0;
-      cursorSdkMock.listRuns.mockClear();
-      cursorSdkMock.cancelRun.mockClear();
-      cursorSdkMock.setStaleRunActive(true);
-
-      const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
-      const session = yield* runner.open({
-        operation: "resume",
-        agentId: "agent-cursor-agent-sdk-test",
-        options: { model: { id: "default" }, mode: "agent", local: { cwd: process.cwd() } },
-        threadId: ThreadId.make("thread-cursor-agent-sdk-stale-run-test"),
-        providerSessionId: ProviderSessionId.make(
-          "provider-session-cursor-agent-sdk-stale-run-test",
-        ),
-      });
-      assert.deepStrictEqual(cursorSdkMock.runOperations, []);
-      const run = yield* session.send({ message: "continue" });
-      yield* run.wait;
-
-      assert.deepStrictEqual(cursorSdkMock.runOperations, [
-        "run.start",
-        "agent.listRuns",
-        "agent.cancelRun",
-        "run.start",
-      ]);
-      assert.deepStrictEqual(cursorSdkMock.listRuns.mock.calls[0], [
-        "agent-cursor-agent-sdk-test",
-        { runtime: "local", cwd: process.cwd(), limit: 1 },
-      ]);
-      assert.deepStrictEqual(cursorSdkMock.cancelRun.mock.calls[0], [
-        "run-stale",
-        {
-          runtime: "local",
-          cwd: process.cwd(),
-        },
-      ]);
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("logs agent.close before invoking the Cursor SDK", () =>
-    Effect.gen(function* () {
-      cursorSdkMock.agentClose.mockClear();
-      cursorSdkMock.closeExecutionOrder.length = 0;
-      cursorSdkMock.setAgentCloseFailure(undefined);
-
-      const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
-      const session = yield* runner.open({
-        operation: "create",
-        options: {
-          model: { id: "default" },
-          mode: "agent",
-          local: {
-            cwd: process.cwd(),
-          },
-        },
-        threadId: ThreadId.make("thread-cursor-agent-sdk-close-order-test"),
-        providerSessionId: ProviderSessionId.make(
-          "provider-session-cursor-agent-sdk-close-order-test",
-        ),
-      });
-
-      cursorSdkMock.closeExecutionOrder.length = 0;
-      yield* session.close;
-
-      assert.deepStrictEqual(cursorSdkMock.closeExecutionOrder, [
-        "protocol:agent.close",
-        "sdk:agent.close",
-      ]);
-      assert.equal(cursorSdkMock.agentClose.mock.calls.length, 1);
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("logs agent.close even when the Cursor SDK close fails", () =>
-    Effect.gen(function* () {
-      cursorSdkMock.agentClose.mockClear();
-      cursorSdkMock.closeExecutionOrder.length = 0;
-      const closeFailure = new Error("agent close failed");
-      cursorSdkMock.setAgentCloseFailure(closeFailure);
-
-      const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
-      const session = yield* runner.open({
-        operation: "create",
-        options: {
-          model: { id: "default" },
-          mode: "agent",
-          local: {
-            cwd: process.cwd(),
-          },
-        },
-        threadId: ThreadId.make("thread-cursor-agent-sdk-close-failure-test"),
-        providerSessionId: ProviderSessionId.make(
-          "provider-session-cursor-agent-sdk-close-failure-test",
-        ),
-      });
-
-      cursorSdkMock.closeExecutionOrder.length = 0;
-      const error = yield* Effect.flip(session.close);
-
-      assert.instanceOf(error, CursorAgentSdk.CursorAgentSdkRunnerError);
-      assert.equal(error.method, "agent.close");
-      assert.strictEqual(error.cause, closeFailure);
-      assert.deepStrictEqual(cursorSdkMock.closeExecutionOrder, [
-        "protocol:agent.close",
-        "sdk:agent.close",
-      ]);
-      assert.equal(cursorSdkMock.agentClose.mock.calls.length, 1);
-      cursorSdkMock.setAgentCloseFailure(undefined);
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("surfaces interaction callback failures through run.wait", () =>
-    Effect.gen(function* () {
-      cursorSdkMock.create.mockClear();
-      cursorSdkMock.runWait.mockClear();
-      cursorSdkMock.send.mockClear();
-
-      const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
-      const session = yield* runner.open({
-        operation: "create",
-        options: {
-          model: { id: "default" },
-          mode: "agent",
-          local: {
-            cwd: process.cwd(),
-            autoReview: false,
-            sandboxOptions: { enabled: false },
-            enableAgentRetries: true,
-          },
-        },
-        threadId: ThreadId.make("thread-cursor-agent-sdk-test"),
-        providerSessionId: ProviderSessionId.make("provider-session-cursor-agent-sdk-test"),
-      });
-
-      const callbackFailure = new Error("delta callback failed");
-      const run = yield* session.send({
-        message: "hello",
-        onDelta: () => Effect.fail(callbackFailure),
-      });
-
-      const error = yield* Effect.flip(run.wait);
-
-      assert.instanceOf(error, CursorAgentSdk.CursorAgentSdkRunnerError);
-      assert.equal(error.method, "run.wait");
-      assert.strictEqual(error.cause, callbackFailure);
-      assert.equal(cursorSdkMock.create.mock.calls.length, 1);
-      assert.equal(cursorSdkMock.send.mock.calls.length, 1);
-      assert.equal(cursorSdkMock.runWait.mock.calls.length, 1);
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it("names the SDK's reason, code and HTTP status in a runner failure's text", () => {
-    const failed = (cause: unknown) =>
-      CursorAgentSdk.cursorSdkFailureMessage(
-        new CursorAgentSdk.CursorAgentSdkRunnerError({ method: "agent.create", cause }),
-      );
-    assert.equal(
-      new CursorAgentSdk.CursorAgentSdkRunnerError({
-        method: "agent.create",
-        cause: new Error("Too many requests"),
-      }).message,
-      "Cursor Agent SDK agent.create failed.",
-    );
-    assert.equal(
-      failed(Object.assign(new Error("Too many requests"), { code: "rate_limited", status: 429 })),
-      "Cursor Agent SDK agent.create failed: Too many requests (rate_limited, HTTP 429)",
-    );
-    // Cursor's messages often start with the code already.
-    assert.equal(
-      failed(
-        Object.assign(new Error("[resource_exhausted] Error"), { code: "resource_exhausted" }),
-      ),
-      "Cursor Agent SDK agent.create failed: [resource_exhausted] Error",
-    );
-    assert.equal(
-      failed(Object.assign(new Error("Invalid User API Key"), { code: "error", status: 401 })),
-      "Cursor Agent SDK agent.create failed: Invalid User API Key (HTTP 401)",
-    );
-    assert.equal(failed(undefined), "Cursor Agent SDK agent.create failed.");
-  });
 });

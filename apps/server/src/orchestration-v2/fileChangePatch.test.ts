@@ -55,6 +55,54 @@ describe("codexFileChangePatch", () => {
       codexFileChangePatch([{ path: "/repo/a.ts", kind: { type: "update" }, diff: "binary" }]),
     ).toBeUndefined();
   });
+
+  it("writes paths inside the workspace relative to it, and leaves outsiders absolute", () => {
+    const root = "/tmp/goat-rv/localproj";
+    expect(
+      codexFileChangePatch(
+        [
+          {
+            path: `${root}/a.txt`,
+            kind: { type: "update" },
+            diff: "@@ -1 +1 @@\n-a\n+b\n",
+          },
+          {
+            path: `${root}/é quoted"name.txt`,
+            kind: { type: "add" },
+            diff: "x\n",
+          },
+          {
+            path: "/tmp/outside.txt",
+            kind: { type: "update" },
+            diff: "@@ -1 +1 @@\n-a\n+b\n",
+          },
+        ],
+        root,
+      ),
+    ).toBe(
+      [
+        "diff --git a/a.txt b/a.txt",
+        "--- a/a.txt",
+        "+++ b/a.txt",
+        "@@ -1 +1 @@",
+        "-a",
+        "+b",
+        'diff --git "a/é quoted\\"name.txt" "b/é quoted\\"name.txt"',
+        "new file mode 100644",
+        "--- /dev/null",
+        '+++ "b/é quoted\\"name.txt"',
+        "@@ -0,0 +1,1 @@",
+        "+x",
+        "diff --git a//tmp/outside.txt b//tmp/outside.txt",
+        "--- a//tmp/outside.txt",
+        "+++ b//tmp/outside.txt",
+        "@@ -1 +1 @@",
+        "-a",
+        "+b",
+        "",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("claudeFileChangePatch", () => {
@@ -68,6 +116,18 @@ describe("claudeFileChangePatch", () => {
       }),
     ).toBe(
       "diff --git a//repo/a.ts b//repo/a.ts\n--- a//repo/a.ts\n+++ b//repo/a.ts\n@@ -10,2 +10,2 @@\n x\n-a\n+b\n",
+    );
+  });
+
+  it("renders a created file inside the workspace by its repo-relative name", () => {
+    expect(
+      claudeFileChangePatch(
+        "/tmp/goat-rv/localproj/n.ts",
+        { type: "create", filePath: "/tmp/goat-rv/localproj/n.ts", content: "x\n" },
+        "/tmp/goat-rv/localproj",
+      ),
+    ).toBe(
+      "diff --git a/n.ts b/n.ts\nnew file mode 100644\n--- /dev/null\n+++ b/n.ts\n@@ -0,0 +1,1 @@\n+x\n",
     );
   });
 

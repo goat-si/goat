@@ -1,5 +1,5 @@
 import { EnvironmentId, ThreadId } from "@goat/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createGoatBotSendQueue } from "./sendQueue.ts";
 
@@ -15,9 +15,6 @@ function deferred<T>() {
 
 const bot = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
 
-// @effect-diagnostics-next-line globalTimers:off - lets the queue's promise callbacks settle.
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-
 function setup(canDispatch: () => boolean = () => true) {
   const calls: Array<{
     clientKey: string;
@@ -25,6 +22,7 @@ function setup(canDispatch: () => boolean = () => true) {
     reply: ReturnType<typeof deferred<{ requestKey: string }>>;
   }> = [];
   let key = 0;
+  const changed = vi.fn();
   const queue = createGoatBotSendQueue({
     send: (message) => {
       const reply = deferred<{ requestKey: string }>();
@@ -32,11 +30,11 @@ function setup(canDispatch: () => boolean = () => true) {
       return reply.promise;
     },
     canDispatch: () => canDispatch(),
-    onChange: () => {},
+    onChange: changed,
     makeKey: () => `key-${++key}`,
     now: () => "2026-10-12T12:00:00Z",
   });
-  return { queue, calls };
+  return { queue, calls, changed };
 }
 
 describe("createGoatBotSendQueue", () => {
@@ -47,22 +45,21 @@ describe("createGoatBotSendQueue", () => {
     expect(calls.map((call) => call.text)).toEqual(["first"]);
     expect(queue.pendingInputs().map((entry) => entry.state)).toEqual(["sending", "queued"]);
     calls[0]!.reply.resolve({ requestKey: "in-1" });
-    await flush();
-    expect(calls.map((call) => call.text)).toEqual(["first", "second"]);
+    await vi.waitFor(() => expect(calls.map((call) => call.text)).toEqual(["first", "second"]));
   });
 
   it("retries a failed message under the same key, once", async () => {
     const { queue, calls } = setup();
     const key = queue.submit("hello", bot);
     calls[0]!.reply.reject(new Error("socket closed"));
-    await flush();
-    expect(queue.pendingInputs()[0]?.state).toBe("failed");
+    await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("failed"));
     queue.retry(key);
     queue.retry(key);
     expect(calls.map((call) => call.clientKey)).toEqual([key, key]);
     calls[1]!.reply.resolve({ requestKey: "in-1" });
-    await flush();
-    expect(queue.pendingInputs()[0]).toMatchObject({ clientKey: key, requestKey: "in-1" });
+    await vi.waitFor(() =>
+      expect(queue.pendingInputs()[0]).toMatchObject({ clientKey: key, requestKey: "in-1" }),
+    );
   });
 
   it("stops and marks waiting messages unsent when sending is no longer allowed", async () => {
@@ -72,7 +69,7 @@ describe("createGoatBotSendQueue", () => {
     queue.submit("second", bot);
     allowed = false;
     calls[0]!.reply.resolve({ requestKey: "in-1" });
-    await flush();
+    await vi.waitFor(() => expect(queue.pendingInputs()[1]?.state).toBe("failed"));
     expect(calls).toHaveLength(1);
     expect(queue.pendingInputs().map((entry) => [entry.text, entry.state])).toEqual([
       ["first", "accepted"],
@@ -84,7 +81,7 @@ describe("createGoatBotSendQueue", () => {
     const { queue, calls } = setup();
     queue.submit("hello", bot);
     calls[0]!.reply.resolve({ requestKey: "in-1" });
-    await flush();
+    await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("accepted"));
     queue.acknowledge(new Set(["in-1"]));
     expect(queue.pendingInputs()).toEqual([]);
   });
@@ -109,9 +106,9 @@ it("keeps the submit-time bot and receivedAt through a failed attempt and retry"
   selected.threadId = ThreadId.make("different-bot");
   clock = "2026-10-12T13:00:00Z";
   attempt.reject(new Error("connection lost"));
-  await flush();
+  await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("failed"));
   queue.retry("fixed-key");
-  await flush();
+  await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("accepted"));
   expect(calls).toEqual([
     { clientKey: "fixed-key", text: "original", receivedAt: "2026-10-12T12:00:00Z", bot },
     { clientKey: "fixed-key", text: "original", receivedAt: "2026-10-12T12:00:00Z", bot },
@@ -124,16 +121,16 @@ it("remembers projected input IDs before the receipt and removes the accepted en
   queue.submit("hello", bot);
   queue.acknowledge(new Set(["input-id"]));
   calls[0]!.reply.resolve({ requestKey: "input-id" });
-  await flush();
-  expect(queue.pendingInputs()).toEqual([]);
+  await vi.waitFor(() => expect(queue.pendingInputs()).toEqual([]));
 });
 
 it("removes a projected client key even when the receipt is lost and never retries it", async () => {
-  const { queue, calls } = setup();
+  const { queue, calls, changed } = setup();
   const key = queue.submit("hello", bot);
   queue.acknowledge(new Set([key]));
+  const changes = changed.mock.calls.length;
   calls[0]!.reply.reject(new Error("lost receipt"));
-  await flush();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(changes + 1));
   queue.retry(key);
   expect(queue.pendingInputs()).toEqual([]);
   expect(calls).toHaveLength(1);
@@ -144,13 +141,13 @@ it("does not hold later messages after failure and sends a retry at retry time",
   const key = queue.submit("first", bot);
   queue.submit("second", bot);
   calls[0]!.reply.reject(new Error("offline"));
-  await flush();
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
   calls[1]!.reply.resolve({ requestKey: "input-2" });
-  await flush();
+  await vi.waitFor(() => expect(queue.pendingInputs()[1]?.state).toBe("accepted"));
   queue.retry(key);
   expect(calls.map((call) => call.text)).toEqual(["first", "second", "first"]);
   calls[2]!.reply.resolve({ requestKey: "input-1" });
-  await flush();
+  await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("accepted"));
 });
 
 it("never retries a final rejected input even through the queue API", async () => {
@@ -161,7 +158,7 @@ it("never retries a final rejected input even through the queue API", async () =
     makeKey: () => "key",
   });
   queue.submit("hello", bot);
-  await flush();
+  await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("failed"));
   expect(queue.pendingInputs()[0]).toMatchObject({
     state: "failed",
     rejectionReason: "Account is not linked",

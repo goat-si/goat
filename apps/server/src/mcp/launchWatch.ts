@@ -4,9 +4,12 @@ import {
   type OrchestrationV2Notification,
   type OrchestrationV2RunStatus,
   ProjectId,
+  ModelSelection,
   RunId,
   RuntimeMode,
   ThreadId,
+  ThreadReplicaMetadata,
+  type ThreadReplicaStatus,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
@@ -47,10 +50,35 @@ export const LaunchWatchWebhookTarget = Schema.Union([
 ]);
 export type LaunchWatchWebhookTarget = typeof LaunchWatchWebhookTarget.Type;
 
+const WatchRecovery = Schema.Struct({
+  request: Schema.Struct({
+    operationId: Schema.String,
+    projectId: ProjectId,
+    modelSelection: Schema.optional(ModelSelection),
+  }),
+  destinationHost: Schema.NullOr(Schema.String),
+  capturedRunId: RunId,
+  capturedDigest: Schema.String,
+  requestDigest: Schema.String,
+  sourceRunId: RunId,
+  status: Schema.Literals(["reserved", "launch_unknown", "launched"]),
+  threadId: Schema.NullOr(ThreadId),
+  runId: Schema.NullOr(RunId),
+  sourceInterrupted: Schema.Boolean,
+});
+
 export const LaunchWatch = Schema.Struct({
   id: Schema.String,
   /** Fresh whenever an absent watch is registered, so a stale follower cannot act on it. */
   incarnation: Schema.String,
+  checkpointReplication: Schema.optional(Schema.Literals(["on", "off"])),
+  replicaCeiling: Schema.optional(RuntimeMode),
+  replica: Schema.optional(ThreadReplicaMetadata),
+  replicaAttempt: Schema.optional(Schema.Struct({ runId: RunId, reason: Schema.String })),
+  replicaAttempts: Schema.optional(Schema.Array(RunId)),
+  recovery: Schema.optional(WatchRecovery),
+  /** Unwatch detaches reports; it cannot erase a retired source's fence. */
+  detached: Schema.optional(Schema.Boolean),
   /** Null for a launch from outside any thread, whose reports go only to the completion webhook. */
   launcherThreadId: Schema.NullOr(ThreadId),
   /**
@@ -100,6 +128,34 @@ export const LaunchWatch = Schema.Struct({
 });
 export type LaunchWatch = typeof LaunchWatch.Type;
 
+export const replicaStatus = (watch: LaunchWatch): ThreadReplicaStatus => ({
+  checkpointReplication: watch.checkpointReplication ?? "off",
+  replica:
+    watch.replica === undefined
+      ? null
+      : {
+          runId: watch.replica.runId,
+          capturedAt: watch.replica.capturedAt,
+          bytes: watch.replica.bytes,
+          sha256: watch.replica.sha256,
+          contextSha256: watch.replica.contextSha256,
+          repositoryKey: watch.replica.repositoryKey,
+        },
+  skippedReason:
+    watch.replicaAttempt?.reason === "captured" ? null : (watch.replicaAttempt?.reason ?? null),
+  recovery:
+    watch.recovery === undefined
+      ? null
+      : {
+          operationId: watch.recovery.request.operationId,
+          status: watch.recovery.status,
+          destinationHost: watch.recovery.destinationHost,
+          threadId: watch.recovery.threadId,
+          runId: watch.recovery.runId,
+          sourceInterruptPending: !watch.recovery.sourceInterrupted,
+        },
+});
+
 export const LaunchWatchDocument = Schema.Struct({
   version: Schema.Literal(1),
   watches: Schema.Array(LaunchWatch),
@@ -115,7 +171,7 @@ export const EXCERPT_MAX_CHARS = 1_500;
 const SUMMARY_MAX_CHARS = 120;
 
 /** Run statuses after which a run does no more work. */
-export const TERMINAL_RUN_STATUSES = [
+const TERMINAL_RUN_STATUSES = [
   "completed",
   "failed",
   "cancelled",
@@ -287,7 +343,7 @@ export function recordContact(watch: LaunchWatch, now: number): LaunchWatch {
     : { ...watch, lastEpisode: watch.outage.episode, outage: null, updatedAt: now };
 }
 
-export function notificationOutcome(
+function notificationOutcome(
   status: LaunchWatchTerminalStatus,
 ): OrchestrationV2Notification["outcome"] {
   switch (status) {
@@ -417,7 +473,7 @@ export function outageWake(input: {
   const { watch, outage } = input;
   return {
     ...wakeIds(watch, `outage:${watch.incarnation}:${outage.episode}`),
-    text: `host_unavailable: GOAT cannot reach ${where(watch)} to follow ${named(watch, null).toLowerCase()} (${identity(watch)}). ${outage.failures} attempts failed, the last with: ${truncate(outage.lastError, 500)} It keeps retrying with backoff and reports the run once it reaches the host again; the thread itself may still be running there. ${STOP_HINT}`,
+    text: `host_unavailable: GOAT cannot reach ${where(watch)} to follow ${named(watch, null).toLowerCase()} (${identity(watch)}). ${outage.failures} attempts failed, the last with: ${truncate(outage.lastError, 500)} It keeps retrying with backoff and reports the run once it reaches the host again; the thread itself may still be running there. ${watch.replica === undefined ? "No checkpoint copy is available." : `A checkpoint from ${watch.replica.capturedAt} (${watch.replica.bytes} bytes) is retained. Explicit recovery is available through goat_thread_handoff_host; the disconnected source can still produce external side effects.`} ${STOP_HINT}`,
     notification: {
       source: { kind: "background_task" },
       outcome: "unknown",

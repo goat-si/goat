@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import {
+  ChannelWorkerObservation,
   MemoryTaskGrantCeiling,
   CommandId,
   MessageId,
@@ -18,6 +19,7 @@ import {
   OrchestratorMcpFailure,
   OrchestratorMcpThreadSendResult,
   OrchestrationV2RunStatus,
+  type ChannelWorkerObservation as ChannelWorkerObservationType,
   type RemoteDispatchView,
   type RemoteRelaySend,
   type RemoteReport,
@@ -98,6 +100,7 @@ const Row = Schema.Struct({
   task_id: Schema.NullOr(NodeId),
   parent_run_id: Schema.NullOr(RunId),
   pending_request_ids: Schema.NullOr(Schema.fromJsonString(Schema.Array(RuntimeRequestId))),
+  observation: Schema.optional(Schema.NullOr(Schema.fromJsonString(ChannelWorkerObservation))),
   relay_send: Schema.Number,
   relay_attempted: Schema.Number,
   last_error: Schema.NullOr(Schema.String),
@@ -111,6 +114,7 @@ type Row = typeof Row.Type;
 const RELAY_REQUEST_OUTCOME_LIMIT = 1_000;
 const decodeRows = Schema.decodeUnknownEffect(Schema.Array(Row));
 const encodeRequestIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(RuntimeRequestId)));
+const encodeObservation = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerObservation));
 const decodeReportWait = Schema.decodeUnknownEffect(RemoteOriginReportsWaitResult);
 const decodeSend = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendResult);
 const decodeFailure = (cause: unknown) => new RemoteDispatchError({ stage: "decode", cause });
@@ -142,6 +146,8 @@ export interface RemoteDispatchRecord {
   readonly task: { readonly taskId: NodeId; readonly parentRunId: RunId } | null;
   /** The launched task run's open questions, as last observed. */
   readonly pendingRequestIds: ReadonlyArray<RuntimeRequestId>;
+  /** The launched task run's last observation, echoed so a wait releases once per change. */
+  readonly observation: ChannelWorkerObservationType | null;
   readonly lastError: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -170,6 +176,7 @@ const publicRow = (r: Row): RemoteDispatchRecord => ({
       ? { taskId: r.task_id, parentRunId: r.parent_run_id }
       : null,
   pendingRequestIds: r.pending_request_ids ?? [],
+  observation: r.observation ?? null,
   lastError: r.last_error,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -433,6 +440,13 @@ const make = Effect.gen(function* () {
       latest_at = ${last?.createdAt ?? r.latest_at}, state = ${state}, updated_at = ${at},
       last_error = NULL
       WHERE correlation_id = ${id}`;
+              // Only the launched run's observation. A later run, or an older remote that sends
+              // none, leaves the previous report in place or clears it.
+              if (observed !== null && observed.runId === r.launched_run_id) {
+                yield* sql`UPDATE remote_dispatches SET
+                  observation = ${observed.observation === undefined ? null : encodeObservation(observed.observation)}
+                  WHERE correlation_id = ${id}`;
+              }
             }),
           ),
         );
@@ -773,6 +787,8 @@ const make = Effect.gen(function* () {
                     status: r.known_run_status,
                     // Echoed back so an open question releases the wait once, not every call.
                     pendingRequestIds: r.pending_request_ids ?? [],
+                    // Omitted when unset, so an older remote is not released on every call.
+                    ...(r.observation == null ? {} : { observation: r.observation }),
                   },
           }),
         ),

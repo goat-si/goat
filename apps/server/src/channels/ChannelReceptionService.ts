@@ -17,6 +17,7 @@ import * as NodeOS from "node:os";
 
 import {
   CHANNEL_HOST_WORKSPACE_LABEL,
+  type ChannelInboundMessage,
   type ChannelInputId,
   type ChannelConversationId,
   type ChannelReceptionHostFact,
@@ -35,6 +36,7 @@ import {
   type ChannelOutboundKind,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
+import { channelEvidenceLabels } from "@goat/shared/channelEvidence";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   classifyTextGenerationFailure,
@@ -57,6 +59,7 @@ import * as MemoryService from "../memory/MemoryService.ts";
 import * as MemorySyncService from "../memory/MemorySyncService.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
@@ -90,12 +93,22 @@ import {
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import {
   approvalCard,
+  approvalChoiceLabels,
   type ApprovalReply,
   type OpenApprovalCard,
   openApprovalCards,
   parseApprovalReply,
   whichApproval,
 } from "./channelApprovalCards.ts";
+import {
+  approvalCodeOrder,
+  choiceAt,
+  latestDeliveredChoices,
+  numberedChoiceLines,
+  parseNumberedReply,
+  singleQuestionChoice,
+  type DeliveredChoices,
+} from "./channelDecisionChoices.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
 import {
@@ -168,12 +181,13 @@ const replyDelivery = (input: {
 }): ChannelLedger.ChannelOutboxInsert => {
   const deliveryId = deliveryIdFor(input.causeKey);
   const options = input.options === undefined || input.options.length === 0 ? [] : input.options;
-  // The GOAT bot shows choices as buttons; other transports read them as a list.
+  // The GOAT app shows choices as buttons. Slack keeps the labels for Block Kit buttons and
+  // also lists them, so a notification or a typed number still works. iMessage and the rest
+  // get the numbered list only.
   const buttons = input.destination.kind === "goat" && options.length > 0;
-  const text =
-    buttons || options.length === 0
-      ? input.text
-      : input.text + "\n" + options.map((option) => "• " + option).join("\n");
+  const listed = !buttons && options.length > 0;
+  const text = listed ? input.text + "\n" + numberedChoiceLines(options) : input.text;
+  const keepOptions = buttons || (input.destination.kind === "slack" && options.length > 0);
   return {
     deliveryId,
     causeKey: input.causeKey,
@@ -189,7 +203,7 @@ const replyDelivery = (input: {
         ? {}
         : { taskId: input.task.taskId, taskVersion: input.task.version }),
       ...(input.mentionActorId === undefined ? {} : { mentionActorId: input.mentionActorId }),
-      ...(buttons ? { options } : {}),
+      ...(keepOptions ? { options } : {}),
     },
   };
 };
@@ -216,7 +230,7 @@ const boundTail = (
  * The GOAT Bot turn a follow-up in this conversation steers: the newest turn whose coding thread
  * is running here. Messages in other conversations, or when no turn runs, start their own.
  */
-export const turnToSteer = (tasks: ReadonlyArray<ChannelTask>): ChannelTask | undefined =>
+const turnToSteer = (tasks: ReadonlyArray<ChannelTask>): ChannelTask | undefined =>
   tasks
     .filter(
       (task) =>
@@ -239,6 +253,7 @@ const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -702,9 +717,28 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => undefined),
     );
 
+  /** Same words a local answer records, and the provenance a remote respond requires. */
+  const approvalReason = (
+    decision: ApprovalReply["decision"],
+    answerer: ChannelRequester,
+    via: ChannelRequester["originKind"],
+  ) =>
+    (decision === "accept" ? "Approved" : "Denied") +
+    " by " +
+    answerer.displayName +
+    " from GOAT Bot (" +
+    via +
+    ").";
+
+  const approvalSent = (decision: ApprovalReply["decision"], title: string) =>
+    decision === "accept"
+      ? "Approved. " + title + " continues."
+      : "Denied. I told the agent on " + title + " not to.";
+
   /**
-   * Answers one approval for a person allowed to answer for the work's requester. The command id
-   * comes from the input, so a reception that runs again after a restart cannot answer twice.
+   * Answers one approval for a person allowed to answer for the work's requester. A local answer's
+   * command id comes from the input, so a reception that runs again after a restart cannot answer
+   * twice. An approval held on another machine is sent there; that request resolves once.
    */
   const answerApproval = (
     card: OpenApprovalCard,
@@ -717,7 +751,46 @@ const make = Effect.gen(function* () {
       if (answerer === undefined || !mayAnswerFor(answerer, card.task.requester)) {
         return CHANNEL_COPY.approvalNotAllowed;
       }
-      const verb = decision === "accept" ? "Approved" : "Denied";
+      const host = card.approval.host;
+      if (host !== undefined) {
+        const reason = approvalReason(decision, answerer, via);
+        const sent = yield* ssh
+          .callHostTool(
+            {
+              host,
+              tool: "goat_pending_request_respond",
+              arguments: {
+                threadId: card.approval.threadId,
+                requestId: card.approval.requestId,
+                decision,
+                reason,
+              },
+              writes: true,
+              approvals: true,
+              timeoutMs: 90_000,
+            },
+            // The answerer's own ceiling. mayAnswerFor already requires it to cover the requester,
+            // and the remote session never falls back to a narrower one.
+            Effect.succeed(answerer.runtimeModeCeiling),
+          )
+          .pipe(
+            Effect.as("sent" as const),
+            Effect.catch((cause) =>
+              Effect.logWarning("GOAT Bot approval not answered", { cause }).pipe(
+                Effect.as(
+                  cause instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+                    cause.message.includes("answer approvals")
+                    ? ("refused" as const)
+                    : ("failed" as const),
+                ),
+              ),
+            ),
+          );
+        if (sent === "refused") return CHANNEL_COPY.approvalRemoteRefused;
+        return sent === "sent"
+          ? approvalSent(decision, card.task.title)
+          : CHANNEL_COPY.approvalFailed;
+      }
       const sent = yield* threads
         .dispatch({
           type: "runtime-request.respond",
@@ -728,7 +801,7 @@ const make = Effect.gen(function* () {
           respondedBy: {
             type: "client",
             label: "GOAT Bot",
-            reason: verb + " by " + answerer.displayName + " from GOAT Bot (" + via + ").",
+            reason: approvalReason(decision, answerer, via),
           },
         })
         .pipe(
@@ -737,11 +810,7 @@ const make = Effect.gen(function* () {
             Effect.logWarning("GOAT Bot approval not answered", { cause }).pipe(Effect.as(false)),
           ),
         );
-      if (sent) {
-        return decision === "accept"
-          ? "Approved. " + card.task.title + " continues."
-          : "Denied. I told the agent on " + card.task.title + " not to.";
-      }
+      if (sent) return approvalSent(decision, card.task.title);
       const pending = yield* threads
         .getThreadRecords(card.approval.threadId, ["runtimeRequests"])
         .pipe(
@@ -791,6 +860,24 @@ const make = Effect.gen(function* () {
     });
 
   /**
+   * The ledger card can lag the thread: someone may have answered in the thread before this pass
+   * rewrote the observation. A local request that is no longer pending is not an open card. A
+   * remote request stays listed; this machine cannot see its status. A read failure stays listed
+   * so the answer path can say it could not be passed on.
+   */
+  const approvalStillPending = (card: OpenApprovalCard) =>
+    card.approval.host !== undefined
+      ? Effect.succeed(true)
+      : threads.getThreadRecords(card.approval.threadId, ["runtimeRequests"]).pipe(
+          Effect.map((records) =>
+            records.runtimeRequests.some(
+              (request) => request.id === card.approval.requestId && request.status === "pending",
+            ),
+          ),
+          Effect.orElseSucceed(() => true),
+        );
+
+  /**
    * What an approve or deny reply does: a bare verb answers the only open card (or asks which of
    * several); a code answers the request it was issued for, or says it was already answered.
    * Undefined means the message was not about a card and goes to the model as usual.
@@ -803,7 +890,11 @@ const make = Effect.gen(function* () {
     via: ChannelRequester["originKind"],
   ) =>
     Effect.gen(function* () {
-      const open = openApprovalCards(yield* ledger.listConversationNeedsYou(conversationId));
+      const listed = openApprovalCards(yield* ledger.listConversationNeedsYou(conversationId));
+      const open: Array<OpenApprovalCard> = [];
+      for (const card of listed) {
+        if (yield* approvalStillPending(card)) open.push(card);
+      }
       const answer = (card: OpenApprovalCard) =>
         Effect.gen(function* () {
           return {
@@ -829,6 +920,100 @@ const make = Effect.gen(function* () {
       return card === undefined
         ? { text: CHANNEL_COPY.approvalAlreadyAnswered, options: undefined, task: undefined }
         : yield* answer(card);
+    });
+
+  /**
+   * The numbered list a Slack or iMessage reply of "2" refers to: the latest open approval
+   * card or question in this conversation. Cards that were never sent have no code and are
+   * skipped. Questions come from the recent tasks plus any older task still needing a person.
+   */
+  const deliveredChoices = (
+    conversationId: ChannelConversationId,
+    tasks: ReadonlyArray<ChannelTask>,
+  ) =>
+    Effect.gen(function* () {
+      const needing = yield* ledger.listConversationNeedsYou(conversationId);
+      const seen = new Set(tasks.map((task) => task.taskId));
+      const questions = [...tasks, ...needing.filter((task) => !seen.has(task.taskId))].flatMap(
+        (task) =>
+          task.openQuestions.flatMap((question): ReadonlyArray<DeliveredChoices> =>
+            question.options === undefined || question.options.length === 0
+              ? []
+              : [
+                  {
+                    at: question.askedAt,
+                    tie: 0,
+                    options: question.options,
+                    target: {
+                      type: "question",
+                      taskId: task.taskId,
+                      questionId: question.questionId,
+                    },
+                  },
+                ],
+          ),
+      );
+      const coded = yield* Effect.forEach(openApprovalCards(needing), (card) =>
+        ledger.approvalCodeForRequest(card.approval.requestId).pipe(
+          Effect.map((found): DeliveredChoices | undefined =>
+            found === undefined
+              ? undefined
+              : {
+                  at: found.issuedAt,
+                  tie: approvalCodeOrder(found.code),
+                  options: approvalChoiceLabels(found.code),
+                  target: { type: "approval" },
+                },
+          ),
+        ),
+      );
+      return latestDeliveredChoices([
+        ...questions,
+        ...coded.flatMap((entry) => (entry === undefined ? [] : [entry])),
+      ]);
+    });
+
+  /**
+   * A choice answered before the model runs. A number on Slack or iMessage selects the latest
+   * open list. A label equal to the only open question's option answers that question. An
+   * approval word is left for the approval parser, which already checks who may answer.
+   */
+  const inboundChoice = (
+    message: ChannelInboundMessage,
+    conversationId: ChannelConversationId,
+    tasks: ReadonlyArray<ChannelTask>,
+  ) =>
+    Effect.gen(function* () {
+      if (message.intent !== "message" || message.kind === "mcp") return undefined;
+      if (message.kind === "slack" || message.kind === "imessage") {
+        const number = parseNumberedReply(message.text);
+        if (number !== undefined) {
+          const choices = yield* deliveredChoices(conversationId, tasks);
+          const label = choices === undefined ? undefined : choiceAt(choices, number);
+          if (choices !== undefined && label !== undefined) {
+            return choices.target.type === "approval"
+              ? { type: "approval-label" as const, text: label }
+              : {
+                  type: "question" as const,
+                  taskId: choices.target.taskId,
+                  questionId: choices.target.questionId,
+                  answer: label,
+                };
+          }
+        }
+      }
+      if (parseApprovalReply(message.text) !== undefined) return undefined;
+      // The tasks already read for this pass. A label is not worth a second scan of older work;
+      // a number still looks those up, because an old approval card stays answerable.
+      const questions = tasks.flatMap((task) =>
+        task.openQuestions.map((question) => ({
+          taskId: task.taskId,
+          questionId: question.questionId,
+          options: question.options,
+        })),
+      );
+      const matched = singleQuestionChoice(message.text, questions);
+      return matched === undefined ? undefined : { type: "question" as const, ...matched };
     });
 
   const receive: ChannelReceptionService["Service"]["receive"] = (inputId, owner) =>
@@ -929,12 +1114,16 @@ const make = Effect.gen(function* () {
       });
       const tasks = yield* ledger.listConversationTasks(conversationId);
 
-      // An approve or deny for an open approval card is decided here, without a model. Agents
-      // never answer approvals, so an MCP message always goes the usual way.
+      // A number or an option label is decided here, before the model. A number on an approval
+      // card becomes that button's label ("Deny A1") so the approval parser and mayAnswerFor
+      // run unchanged. Agents never answer approvals or questions, so MCP goes the usual way.
+      const choice = yield* inboundChoice(message, conversationId, tasks);
       const approvalReply =
-        message.intent === "message" && requester.originKind !== "mcp"
-          ? parseApprovalReply(message.text)
-          : undefined;
+        choice?.type === "question"
+          ? undefined
+          : message.intent === "message" && requester.originKind !== "mcp"
+            ? parseApprovalReply(choice?.type === "approval-label" ? choice.text : message.text)
+            : undefined;
       const answer =
         approvalReply === undefined
           ? undefined
@@ -979,133 +1168,149 @@ const make = Effect.gen(function* () {
       const bot = (yield* ledger.getBot(stored.ownerId))?.bot;
       const targets = yield* allowedTargets(bot?.projectId);
       const outcome: ReceptionOutcome =
-        message.intent === "answer" &&
-        message.taskId !== undefined &&
-        message.questionId !== undefined
+        choice?.type === "question"
           ? {
               ok: true,
               result: {
                 replyText: CHANNEL_COPY.answerForwarded,
                 action: {
                   type: "answer_question",
-                  taskId: message.taskId,
-                  questionId: message.questionId,
-                  answer: message.text.trim() === "" ? "(no answer)" : message.text,
+                  taskId: choice.taskId,
+                  questionId: choice.questionId,
+                  answer: choice.answer,
                 },
               },
             }
-          : yield* Effect.gen(function* () {
-              const tail = yield* ledger.readConversationTail(
-                conversationId,
-                CHANNEL_RECEPTION_TAIL_LIMITS.messages,
-              );
-              const shells = yield* listThreads;
-              const recent = recentThreads(shells, targets, bot?.threadId);
-              const facts = yield* hostFacts(shells);
-              const notes = yield* readChannelBotNotes(fileSystem, botFiles);
-              // Everything this pass sees about other work is judged with the link as it is now.
-              const viewer = yield* viewerNow(requester, message.connectionId);
-              const journal = journalFor(
-                yield* visibleTasks(viewer, conversationId).pipe(
-                  Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
-                ),
-              );
-              const skills = yield* listChannelBotSkills(fileSystem, path, botFiles);
-              const base: ChannelReceptionInput = {
-                mode: "input",
-                conversationId,
-                originKind: message.kind,
-                inputText: message.text,
-                tail: boundTail(
-                  tail.flatMap((entry) =>
-                    entry.inputId === inputId
-                      ? []
-                      : [
-                          { role: "user" as const, text: entry.text, at: entry.receivedAt },
-                          ...(entry.replyText === undefined
-                            ? []
-                            : [
-                                {
-                                  role: "assistant" as const,
-                                  text: entry.replyText,
-                                  at: entry.receivedAt,
-                                },
-                              ]),
-                        ],
-                  ),
-                ),
-                tasks: tasks.map((task) => ({
-                  taskId: task.taskId,
-                  ...(task.kind === undefined ? {} : { kind: task.kind }),
-                  title: task.title,
-                  status: task.status,
-                  ...(task.resultSummary === undefined
-                    ? {}
-                    : { resultSummary: task.resultSummary }),
-                  ...((task.worker?.host ?? task.host) === undefined
-                    ? {}
-                    : { host: task.worker?.host ?? task.host }),
-                  ...((task.observed?.pullRequests ?? []).length === 0
-                    ? {}
-                    : { pullRequests: task.observed!.pullRequests.map(pullRequestLabel) }),
-                  openQuestions: task.openQuestions.map((question) => ({
-                    questionId: question.questionId,
-                    text: question.text,
-                  })),
-                })),
-                allowedTargets: targets,
-                ...(hosts.length === 0 ? {} : { allowedHosts: hosts }),
-                ...(recent.length === 0 ? {} : { recentThreads: recent }),
-                ...(facts.length === 0 ? {} : { hostFacts: facts }),
-                ...(notes === "" ? {} : { notes }),
-                ...(journal === "" ? {} : { journal }),
-                ...(skills.length === 0 ? {} : { skills }),
-                requester,
-              };
-              const first = yield* generateOutcome({ ...base, readsAllowed: true });
-              if (!first.ok || first.result.action.type !== "read") return first;
-              // One round of reads, then the answer. Reads run within what this requester
-              // may see; a second request to read is answered with what the pass wrote.
-              // The first pass can take most of a minute; judge the link again before reading.
-              const reader = yield* viewerNow(requester, message.connectionId);
-              const results = yield* runReads(
-                first.result.action.reads,
-                reader,
-                conversationId,
-                message.connectionId,
-                inputId,
-              );
-              // The first pass wrote its queries from what it could see then. When the link
-              // narrowed since, a query may quote work the person can no longer see.
-              const narrowed =
-                reader.principalId !== viewer.principalId ||
-                viewer.grantedScopes.some((scope) => !reader.grantedScopes.includes(scope));
-              const readResults = narrowed
-                ? results.map((result) => ({ ...result, query: "(withheld)" }))
-                : results;
-              const journalNow = journalFor(
-                yield* visibleTasks(reader, conversationId).pipe(
-                  Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
-                ),
-              );
-              const { journal: _journal, ...rest } = base;
-              const second = yield* generateOutcome({
-                ...rest,
-                ...(journalNow === "" ? {} : { journal: journalNow }),
-                readsAllowed: false,
-                readResults,
-              });
-              // A pass that asks to read again found nothing to answer from; say so plainly.
-              if (!second.ok || second.result.action.type !== "read") return second;
-              const foundNothing: ReceptionOutcome = {
+          : message.intent === "answer" &&
+              message.taskId !== undefined &&
+              message.questionId !== undefined
+            ? {
                 ok: true,
                 result: {
-                  replyText: CHANNEL_COPY.readFoundNothing,
-                  action: { type: "report_only" },
+                  replyText: CHANNEL_COPY.answerForwarded,
+                  action: {
+                    type: "answer_question",
+                    taskId: message.taskId,
+                    questionId: message.questionId,
+                    answer: message.text.trim() === "" ? "(no answer)" : message.text,
+                  },
                 },
-              };
-              return foundNothing;
-            });
+              }
+            : yield* Effect.gen(function* () {
+                const tail = yield* ledger.readConversationTail(
+                  conversationId,
+                  CHANNEL_RECEPTION_TAIL_LIMITS.messages,
+                );
+                const shells = yield* listThreads;
+                const recent = recentThreads(shells, targets, bot?.threadId);
+                const facts = yield* hostFacts(shells);
+                const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+                // Everything this pass sees about other work is judged with the link as it is now.
+                const viewer = yield* viewerNow(requester, message.connectionId);
+                const journal = journalFor(
+                  yield* visibleTasks(viewer, conversationId).pipe(
+                    Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
+                  ),
+                );
+                const skills = yield* listChannelBotSkills(fileSystem, path, botFiles);
+                const base: ChannelReceptionInput = {
+                  mode: "input",
+                  conversationId,
+                  originKind: message.kind,
+                  inputText: message.text,
+                  tail: boundTail(
+                    tail.flatMap((entry) =>
+                      entry.inputId === inputId
+                        ? []
+                        : [
+                            { role: "user" as const, text: entry.text, at: entry.receivedAt },
+                            ...(entry.replyText === undefined
+                              ? []
+                              : [
+                                  {
+                                    role: "assistant" as const,
+                                    text: entry.replyText,
+                                    at: entry.receivedAt,
+                                  },
+                                ]),
+                          ],
+                    ),
+                  ),
+                  tasks: tasks.map((task) => ({
+                    taskId: task.taskId,
+                    ...(task.kind === undefined ? {} : { kind: task.kind }),
+                    title: task.title,
+                    status: task.status,
+                    ...(task.resultSummary === undefined
+                      ? {}
+                      : { resultSummary: task.resultSummary }),
+                    ...((task.worker?.host ?? task.host) === undefined
+                      ? {}
+                      : { host: task.worker?.host ?? task.host }),
+                    ...((task.observed?.pullRequests ?? []).length === 0
+                      ? {}
+                      : { pullRequests: task.observed!.pullRequests.map(pullRequestLabel) }),
+                    openQuestions: task.openQuestions.map((question) => ({
+                      questionId: question.questionId,
+                      text: question.text,
+                    })),
+                    ...(task.observed?.result === undefined
+                      ? {}
+                      : { evidence: channelEvidenceLabels(task.observed.result) }),
+                  })),
+                  allowedTargets: targets,
+                  ...(hosts.length === 0 ? {} : { allowedHosts: hosts }),
+                  ...(recent.length === 0 ? {} : { recentThreads: recent }),
+                  ...(facts.length === 0 ? {} : { hostFacts: facts }),
+                  ...(notes === "" ? {} : { notes }),
+                  ...(journal === "" ? {} : { journal }),
+                  ...(skills.length === 0 ? {} : { skills }),
+                  requester,
+                };
+                const first = yield* generateOutcome({ ...base, readsAllowed: true });
+                if (!first.ok || first.result.action.type !== "read") return first;
+                // One round of reads, then the answer. Reads run within what this requester
+                // may see; a second request to read is answered with what the pass wrote.
+                // The first pass can take most of a minute; judge the link again before reading.
+                const reader = yield* viewerNow(requester, message.connectionId);
+                const results = yield* runReads(
+                  first.result.action.reads,
+                  reader,
+                  conversationId,
+                  message.connectionId,
+                  inputId,
+                );
+                // The first pass wrote its queries from what it could see then. When the link
+                // narrowed since, a query may quote work the person can no longer see.
+                const narrowed =
+                  reader.principalId !== viewer.principalId ||
+                  viewer.grantedScopes.some((scope) => !reader.grantedScopes.includes(scope));
+                const readResults = narrowed
+                  ? results.map((result) => ({ ...result, query: "(withheld)" }))
+                  : results;
+                const journalNow = journalFor(
+                  yield* visibleTasks(reader, conversationId).pipe(
+                    Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
+                  ),
+                );
+                const { journal: _journal, ...rest } = base;
+                const second = yield* generateOutcome({
+                  ...rest,
+                  ...(journalNow === "" ? {} : { journal: journalNow }),
+                  readsAllowed: false,
+                  readResults,
+                });
+                // A pass that asks to read again found nothing to answer from; say so plainly.
+                if (!second.ok || second.result.action.type !== "read") return second;
+                const foundNothing: ReceptionOutcome = {
+                  ok: true,
+                  result: {
+                    replyText: CHANNEL_COPY.readFoundNothing,
+                    action: { type: "report_only" },
+                  },
+                };
+                return foundNothing;
+              });
 
       const now = DateTime.formatIso(yield* DateTime.now);
       if (!outcome.ok) {
@@ -1531,6 +1736,13 @@ const make = Effect.gen(function* () {
 
   const narrationFor = (task: ChannelTask, event: ChannelLedger.ChannelPendingEvent["event"]) => {
     switch (event.type) {
+      case "task.dispatch.claimed":
+        return event.payload.target.placementReason === undefined
+          ? undefined
+          : {
+              kind: "receipt" as const,
+              text: task.title + " → " + event.payload.target.placementReason,
+            };
       case "task.completed":
         // A turn's summary is GOAT Bot's own answer, written for the person on the bot's model.
         if (task.kind === "turn") {
@@ -1590,6 +1802,22 @@ const make = Effect.gen(function* () {
           stored.task,
           pending.event.payload.observed.needsYou,
         );
+        const result = pending.event.payload.observed.result;
+        if (result?.observedCheck !== undefined && result.observedCheck.status !== "running") {
+          deliveries.push(
+            replyDelivery({
+              causeKey: "narration:" + pending.event.eventId + ":evidence",
+              destination: stored.task.originAddress,
+              kind: "receipt",
+              text:
+                "Check evidence for " +
+                stored.task.title +
+                "\n" +
+                channelEvidenceLabels(result).join("\n"),
+              task: stored.task,
+            }),
+          );
+        }
         yield* ledger.completeNarration({ owner, sequence: pending.sequence, deliveries, now });
         yield* wake.wake;
         return;
@@ -1630,7 +1858,12 @@ const make = Effect.gen(function* () {
           causeKey: "narration:" + pending.event.eventId + ":origin",
           destination: origin,
           kind: base.kind,
-          text: worded,
+          text: [
+            worded,
+            ...(base.kind === "result" || base.kind === "failure"
+              ? channelEvidenceLabels(task.observed?.result)
+              : []),
+          ].join("\n"),
           task,
           mentionActorId: mentionFor(origin, task.requester.externalActorId),
           options: "options" in base ? base.options : undefined,

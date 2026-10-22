@@ -1,4 +1,5 @@
 import type {
+  OrchestrationV2NativeSubagentSummary,
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
@@ -7,13 +8,24 @@ import type {
   ThreadPullRequestLink,
 } from "@goat/contracts";
 import { isOrchestrationV2WorkActive } from "@goat/contracts";
+import * as Predicate from "effect/Predicate";
 
+import { resolveGoatMcpToolId } from "./goatMcpToolPresentation.ts";
 import { threadPullRequestKeyOf } from "./threadPullRequests.ts";
 
 const BACKGROUND_TURN_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "command_execution",
   "dynamic_tool",
   "subagent",
+]);
+
+// Plans and text streams can stay open across tool calls without executing work.
+const EXECUTION_TURN_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
+  ...BACKGROUND_TURN_ITEM_TYPES,
+  "file_change",
+  "file_search",
+  "web_search",
+  "compaction",
 ]);
 
 const TERMINAL_RUN_STATUSES = new Set<OrchestrationV2Run["status"]>([
@@ -46,6 +58,40 @@ export function turnItemUpdateCanEndBackgroundWork(
   item: Pick<OrchestrationV2TurnItem, "type" | "status">,
 ): boolean {
   return BACKGROUND_TURN_ITEM_TYPES.has(item.type) && !isOrchestrationV2WorkActive(item.status);
+}
+
+export function deriveBlockedOnThreadWait(input: {
+  readonly activeRun: Pick<OrchestrationV2Run, "id" | "status"> | null;
+  readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
+}): boolean {
+  if (input.activeRun?.status !== "running") return false;
+  let hasWait = false;
+  for (const item of input.turnItems) {
+    if (
+      item.runId !== input.activeRun.id ||
+      !EXECUTION_TURN_ITEM_TYPES.has(item.type) ||
+      (item.status !== "running" && item.status !== "waiting") ||
+      // App-owned rows track the child, including the child a blocking delegate is waiting for.
+      (item.type === "subagent" && item.origin === "app_owned")
+    ) {
+      continue;
+    }
+    if (item.type !== "dynamic_tool") return false;
+    const tool = resolveGoatMcpToolId(item.toolName);
+    if (
+      tool !== "goat_thread_wait" &&
+      tool !== "t3_thread_wait" &&
+      !(
+        tool === "delegate_task" &&
+        Predicate.isObject(item.input) &&
+        Reflect.get(item.input, "mode") === "wait"
+      )
+    ) {
+      return false;
+    }
+    hasWait = true;
+  }
+  return hasWait;
 }
 
 export function backgroundWorkHoldsCompletion(
@@ -267,4 +313,29 @@ function pullRequestWatchTasks(
           },
         ],
   );
+}
+
+/**
+ * Provider-native subagents this thread's turns started and that are still working, read from
+ * the parent's lifecycle items. Their child threads have no runs, so this is the only live signal.
+ */
+export function activeNativeSubagents(input: {
+  readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly runs?: ReadonlyArray<PendingBackgroundWorkRun>;
+}): Array<OrchestrationV2NativeSubagentSummary> {
+  const summaries: Array<OrchestrationV2NativeSubagentSummary> = [];
+  for (const item of pendingBackgroundTurnItems(input)) {
+    if (item.type !== "subagent" || item.origin !== "provider_native") continue;
+    if (item.status !== "pending" && item.status !== "running" && item.status !== "waiting") {
+      continue;
+    }
+    const title = item.title?.trim() || item.prompt.trim() || null;
+    summaries.push({
+      id: item.subagentId,
+      childThreadId: item.childThreadId,
+      title,
+      status: item.status,
+    });
+  }
+  return summaries;
 }

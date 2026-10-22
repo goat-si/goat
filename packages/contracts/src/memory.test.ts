@@ -228,6 +228,38 @@ describe("memory canonical contracts", () => {
       } as never),
     ).toThrow();
   });
+  it("decodes provenance from a newer import format and keeps known formats byte-identical", () => {
+    const importSource = (format: string) => ({
+      sourceId: id(9),
+      format,
+      parserVersion: "aside-semantic-v1",
+      sourceLocator: "aside/default/slot:agent",
+      sourceItemKey: "agent/git.md#current",
+      sourceFingerprint: "a".repeat(64),
+      contentFingerprint: "b".repeat(64),
+      sourceAliases: [],
+      acceptedContentFingerprints: [],
+    });
+    const withFormat = (format: string) => ({
+      ...operation,
+      revision: {
+        ...revision,
+        provenance: { environmentId: "env", importSource: importSource(format) },
+      },
+    });
+    const known = decode(M.MemoryOperation, withFormat("omo"));
+    expect(M.encodeMemoryOperation(known)).toBe(
+      M.encodeMemoryOperation(decode(M.MemoryOperation, withFormat("omo"))),
+    );
+    expect(JSON.parse(M.encodeMemoryOperation(known)).revision.provenance.importSource).toEqual(
+      importSource("omo"),
+    );
+    const newer = decode(M.MemoryOperation, withFormat("aside"));
+    expect(M.decodeMemoryOperation(M.encodeMemoryOperation(newer))).toEqual(newer);
+    for (const format of ["", "Aside", "a".repeat(33), "aside/v2"])
+      rejects(M.MemoryOperation, withFormat(format));
+    rejects(M.MemoryImportFormat, "aside");
+  });
   it("encodes tombstones without recoverable content", () => {
     const value = decode(M.MemoryOperation, {
       protocolVersion: 1,
@@ -2290,6 +2322,13 @@ it("opts into retained local space without changing legacy sync status requests"
   round(M.MemorySyncStatusInput, { includeRetainedLocalSpaceId: true });
   rejects(M.MemorySyncStatusInput, { includeRetainedLocalSpaceId: false });
   rejects(M.MemorySyncStatusInput, { includeRetainedLocalSpaceId: null });
+  round(M.MemorySyncStatusInput, { includeGenerationHold: true });
+  round(M.MemorySyncStatusInput, {
+    includeRetainedLocalSpaceId: true,
+    includeGenerationHold: true,
+  });
+  rejects(M.MemorySyncStatusInput, { includeGenerationHold: false });
+  rejects(M.MemorySyncStatusInput, { includeGenerationHold: true, extra: true });
 });
 
 // Frozen outer response shapes from origin/dev before automatic hub initialization.

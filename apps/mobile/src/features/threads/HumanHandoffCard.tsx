@@ -1,7 +1,8 @@
 import { codexRouteErrorMessage } from "@goat/client-runtime/state/provider-instance-display";
+import { computerUseGrantLabel } from "@goat/client-runtime/computerUseGrant";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import * as DateTime from "effect/DateTime";
-import { useIsFocused } from "@react-navigation/native";
+import { useIsFocused, useNavigation } from "@react-navigation/native";
 import { CopyTextButton } from "./CopyTextButton";
 import { AsyncResult } from "effect/reactivity";
 import * as Option from "effect/Option";
@@ -15,8 +16,12 @@ import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
+  AuthSettingsWriteScope,
+  COMPUTER_USE_GRANT_HANDOFF_PATH,
+  computerUseGrantLiveUntil,
   isHandoffPending,
   isProviderHandoffPath,
+  PROVIDER_SETUP_HANDOFF_PATH,
   type EnvironmentId,
   type Handoff,
   type HandoffHuman,
@@ -44,6 +49,10 @@ export function HumanHandoffCard(props: HumanHandoffCardProps) {
     props.handoff.target.environmentId,
     AuthProvidersManageScope,
   );
+  const canWriteSettings = useEnvironmentScope(
+    props.handoff.target.environmentId,
+    AuthSettingsWriteScope,
+  );
   const canTargetPermission = useAtomValue(
     (isProviderHandoffPath(props.handoff.target.path)
       ? serverEnvironment.mutateProviderInstance
@@ -53,8 +62,10 @@ export function HumanHandoffCard(props: HumanHandoffCardProps) {
     ).permissionAtom(props.handoff.target.environmentId),
   );
   const canTarget =
-    canTargetPermission &&
-    (!isProviderHandoffPath(props.handoff.target.path) || canManageProviders);
+    props.handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH
+      ? canWriteSettings
+      : canTargetPermission &&
+        (!isProviderHandoffPath(props.handoff.target.path) || canManageProviders);
   return (
     <HumanHandoffCardContent
       key={`${props.environmentId}:${props.handoff.handoffId}:${canOpen}:${canRespond}:${canTarget}`}
@@ -66,8 +77,12 @@ export function HumanHandoffCard(props: HumanHandoffCardProps) {
 function HumanHandoffCardContent(props: HumanHandoffCardProps) {
   const { handoff } = props;
   const isSsh = handoff.target.path.startsWith("ssh.");
-  const isProvider = isProviderHandoffPath(handoff.target.path);
+  const isComputerUse = handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+  // Computer use grants share the provider cards' host-bound review, labels and gating.
+  const isProvider = isProviderHandoffPath(handoff.target.path) || isComputerUse;
   const isProviderHome = handoff.target.path === "provider.home_request";
+  const isProviderSetup = handoff.target.path === PROVIDER_SETUP_HANDOFF_PATH;
+  const navigation = useNavigation();
   const isKeyAuth = handoff.kind === "terminal" && handoff.target.path === "ssh.host_prepare";
   const canCancel = handoff.target.path !== "ssh.host_add" && !isKeyAuth;
   const resolvedLabel =
@@ -88,6 +103,10 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
     handoff.target.environmentId,
     AuthProvidersManageScope,
   );
+  const canWriteSettings = useEnvironmentScope(
+    handoff.target.environmentId,
+    AuthSettingsWriteScope,
+  );
   const canTargetPermission = useAtomValue(
     (isProvider
       ? serverEnvironment.mutateProviderInstance
@@ -96,7 +115,10 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
         : serverEnvironment.prepareSshHost
     ).permissionAtom(handoff.target.environmentId),
   );
-  const canTarget = canTargetPermission && (!isProvider || canManageProviders);
+  const canTarget = isComputerUse
+    ? canWriteSettings
+    : canTargetPermission && (!isProvider || canManageProviders);
+  const liveUntil = useComputerUseGrantLiveUntil(handoff);
   const canOpen = useAtomValue(serverEnvironment.openHandoff.permissionAtom(props.environmentId));
   const allowed = useAtomValue(
     serverEnvironment.respondHandoff.permissionAtom(props.environmentId),
@@ -183,6 +205,21 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
       setBusy(false);
     }
   };
+  const openProviderSetup = () => {
+    if (human === null) return;
+    const setup = human.providerSetup;
+    navigation.navigate("SettingsSheet", {
+      screen: "SettingsContent",
+      params: {
+        screen: "SettingsProviderAccounts",
+        params: {
+          environmentId: handoff.target.environmentId,
+          ...(setup?.driver ? { driver: setup.driver } : {}),
+          ...(setup?.instanceId ? { instanceId: setup.instanceId } : {}),
+        },
+      },
+    });
+  };
   return (
     <View className="mb-3 gap-3 rounded-[20px] border border-border bg-card-alt p-4">
       <Text className="font-goat-bold text-base text-foreground">{handoff.title}</Text>
@@ -199,9 +236,25 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
         </Text>
       )}
       {!pending ? (
-        <Text className="font-sans text-sm text-foreground-muted">
-          {handoff.resolvedBy ? `${resolvedLabel} by ${handoff.resolvedBy}` : resolvedLabel}
-        </Text>
+        isComputerUse ? (
+          <View className="gap-2">
+            <Text className="font-sans text-sm text-foreground-muted">
+              {computerUseGrantLabel(handoff, liveUntil)}
+            </Text>
+            {liveUntil !== null && !props.inherited ? (
+              <Button
+                tone="secondary"
+                label="End computer use"
+                disabled={busy || !allowed || !canTarget}
+                onPress={() => void act("cancelled")}
+              />
+            ) : null}
+          </View>
+        ) : (
+          <Text className="font-sans text-sm text-foreground-muted">
+            {handoff.resolvedBy ? `${resolvedLabel} by ${handoff.resolvedBy}` : resolvedLabel}
+          </Text>
+        )
       ) : props.inherited ? (
         <Text className="font-sans text-sm text-foreground-muted">
           Review this request in its original thread.
@@ -217,6 +270,14 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
             />
           ) : (
             <>
+              {isProviderSetup ? (
+                <Button
+                  tone="primary"
+                  label="Open setup"
+                  disabled={busy || !allowed || !canTarget}
+                  onPress={openProviderSetup}
+                />
+              ) : null}
               <Text className="font-sans text-sm text-foreground">{human.location}</Text>
               {human.fingerprint ? (
                 <>
@@ -429,4 +490,16 @@ function VisibleSshHandoffProgress({
       ) : null}
     </View>
   );
+}
+
+/** An approved computer use admission: when it ends, refreshed once when that time passes. */
+function useComputerUseGrantLiveUntil(handoff: Handoff): Date | null {
+  const [now, setNow] = useState(() => Date.now());
+  const until = computerUseGrantLiveUntil(handoff, now) ?? undefined;
+  useEffect(() => {
+    if (until === undefined) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, until - Date.now()) + 50);
+    return () => clearTimeout(timer);
+  }, [until]);
+  return until === undefined ? null : new Date(until);
 }

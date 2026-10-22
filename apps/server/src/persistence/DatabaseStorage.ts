@@ -1,9 +1,21 @@
-import type { DatabaseStorageStatus } from "@goat/contracts";
+import {
+  HostMaintenanceError,
+  type DatabaseStorageStatus,
+  type HostStorageCompactionResult,
+  type HostStorageHealth,
+} from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -11,11 +23,17 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { resolveHostCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
+import * as Metrics from "../observability/Metrics.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
+import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as Settings from "../serverSettings.ts";
 
 /** Pages returned per reclaim pass; one minute of churn, not a backlog. */
 const RECLAIM_PAGES_PER_PASS = 1024;
+const COMPACTION_INTERVAL = Duration.hours(6);
+/** The memory store's own sample, so its pages are measured once, by the memory worker. */
+const memoryStoreTotal = Metric.withAttributes(Metrics.memoryStoreBytes, { area: "total" });
 
 export class DatabaseStorage extends Context.Service<
   DatabaseStorage,
@@ -24,6 +42,10 @@ export class DatabaseStorage extends Context.Service<
     readonly reclaim: Effect.Effect<void>;
     /** Current file accounting, re-published after each maintenance pass. Null until first read. */
     readonly status: Stream.Stream<DatabaseStorageStatus | null>;
+    /** Memory versus history, for host status. Null until the first pass. */
+    readonly health: Effect.Effect<HostStorageHealth | null>;
+    /** Runs the scheduled history compaction now. A call while one runs waits for that run. */
+    readonly compactNow: Effect.Effect<HostStorageHealth, HostMaintenanceError>;
   }
 >()("goat/persistence/DatabaseStorage") {}
 
@@ -36,9 +58,18 @@ export class DatabaseStorage extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+  const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
+  const settings = yield* Settings.ServerSettingsService;
   const config = yield* ServerConfig.ServerConfig;
+  const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const statusRef = yield* SubscriptionRef.make<DatabaseStorageStatus | null>(null);
+  const healthRef = yield* Ref.make<HostStorageHealth | null>(null);
+  const compaction = yield* Ref.make<{
+    readonly since: string | null;
+    readonly last: HostStorageCompactionResult | null;
+    readonly running: Deferred.Deferred<HostStorageHealth, HostMaintenanceError> | null;
+  }>({ since: null, last: null, running: null });
 
   // The notice shows this verbatim; quote for the host's shell. Desktop
   // installs have no `t3` on PATH, so the command names their launcher.
@@ -52,18 +83,58 @@ const make = Effect.gen(function* () {
   const doctorTargetsThisDatabase =
     path.resolve(config.dbPath) ===
     path.resolve(config.baseDir, "userdata", path.basename(config.dbPath));
+  const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+  const readHealth = Effect.gen(function* () {
+    const pages = yield* sql<{ readonly page_count: number }>`PRAGMA page_count`;
+    const free = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
+    const size = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;
+    const pageSize = size[0]?.page_size ?? 0;
+    const databaseBytes = (pages[0]?.page_count ?? 0) * pageSize;
+    const reclaimableBytes = (free[0]?.freelist_count ?? 0) * pageSize;
+    // Every memory btree holds at least one page, so zero means no sample has been taken yet.
+    const sampled = (yield* Metric.value(memoryStoreTotal)).value;
+    const memoryBytes = sampled > 0 ? sampled : null;
+    const { since, last } = yield* Ref.get(compaction);
+    // Either failing leaves its fields out; the file accounting still stands.
+    const budget = yield* settings.getSettings.pipe(
+      Effect.map((current) => current.storageCleanup.historyBudgetBytes),
+      Effect.orElseSucceed(() => null),
+    );
+    const archived = yield* archive.stats.pipe(Effect.orElseSucceed(() => null));
+    const health: HostStorageHealth = {
+      databaseBytes,
+      memoryBytes,
+      historyBytes: Math.max(0, databaseBytes - reclaimableBytes - (memoryBytes ?? 0)),
+      ...(budget === null ? {} : { historyBudgetBytes: budget }),
+      ...(archived === null
+        ? {}
+        : { archivedThreads: archived.threads, archiveBytes: archived.fileBytes }),
+      reclaimableBytes,
+      measuredAt: yield* nowIso,
+      ...(since === null ? {} : { compactingSince: since }),
+      ...(last === null ? {} : { lastCompaction: last }),
+    };
+    yield* Ref.set(healthRef, health);
+    return health;
+  });
+
   const publishStatus = Effect.gen(function* () {
+    yield* readHealth;
     if (!doctorTargetsThisDatabase) return;
     const pages = yield* sql<{ readonly page_count: number }>`PRAGMA page_count`;
     const free = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
     const size = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;
     const mode = yield* sql<{ readonly auto_vacuum: number }>`PRAGMA auto_vacuum`;
     const pageSize = size[0]?.page_size ?? 0;
+    const archived = yield* archive.stats;
     const next: DatabaseStorageStatus = {
       databaseBytes: (pages[0]?.page_count ?? 0) * pageSize,
       reclaimableBytes: (free[0]?.freelist_count ?? 0) * pageSize,
       incrementalVacuumEnabled: mode[0]?.auto_vacuum === 2,
       compactCommand,
+      archivedThreads: archived.threads,
+      archiveBytes: archived.fileBytes,
     };
     // Every set reaches each open Storage page; most passes change nothing.
     if (!Equal.equals(yield* SubscriptionRef.get(statusRef), next)) {
@@ -89,21 +160,107 @@ const make = Effect.gen(function* () {
     Effect.catch((cause) => Effect.logWarning("Database space reclamation failed", { cause })),
   );
 
-  const compact = maintenance.compactEventStore.pipe(
-    Effect.tap((result) =>
-      result.deletedEventCount > 0 || result.deletedReceiptCount > 0
-        ? Effect.logInfo("Compacted orchestration history", result)
-        : Effect.void,
+  // Even a pass that deletes nothing scans the event store. Persist completion
+  // so restarting does not trigger another scan before the six-hour interval.
+  const compactedAtPath = path.join(path.dirname(config.dbPath), "compacted-at");
+  const runCompaction = Effect.gen(function* () {
+    const before = yield* readHealth;
+    yield* Ref.update(compaction, (state) => ({ ...state, since: before.measuredAt }));
+    yield* readHealth;
+    const result = yield* maintenance.compactEventStore;
+    const { storageCleanup } = yield* settings.getSettings;
+    // Archiving whole idle threads first leaves trimming only what is still over budget.
+    const archived = yield* archive.runPass({
+      archiveAfterDays: storageCleanup.historyArchiveAfterDays,
+      deleteAfterDays: storageCleanup.historyArchiveDeleteAfterDays,
+      now: yield* Clock.currentTimeMillis,
+    });
+    if (archived.archivedThreads > 0 || archived.deletedArchives > 0) {
+      yield* Effect.logInfo("Archived idle thread history", archived);
+    }
+    const history = yield* maintenance.boundHistory({
+      budgetBytes: storageCleanup.historyBudgetBytes,
+      now: yield* Clock.currentTimeMillis,
+    });
+    const completedAt = yield* Clock.currentTimeMillis;
+    yield* fs.writeFileString(compactedAtPath, String(completedAt)).pipe(Effect.ignore);
+    if (result.deletedEventCount > 0 || result.deletedReceiptCount > 0) {
+      yield* Effect.logInfo("Compacted orchestration history", result);
+    }
+    if (history.trimmedRows > 0) {
+      yield* Effect.logInfo("Bounded orchestration history", {
+        ...history,
+        budgetBytes: storageCleanup.historyBudgetBytes,
+      });
+    }
+    yield* reclaim;
+    const mode = yield* sql<{ readonly auto_vacuum: number }>`PRAGMA auto_vacuum`;
+    const after = yield* readHealth;
+    const last: HostStorageCompactionResult = {
+      finishedAt: after.measuredAt,
+      removedEvents: result.deletedEventCount,
+      freedBytes: Math.max(0, before.databaseBytes - after.databaseBytes),
+      needsOfflineCompaction: mode[0]?.auto_vacuum !== 2 && after.reclaimableBytes > 0,
+    };
+    yield* Ref.update(compaction, (state) => ({ ...state, last }));
+  }).pipe(
+    Effect.ensuring(Ref.update(compaction, (state) => ({ ...state, since: null }))),
+    Effect.andThen(publishStatus),
+    Effect.andThen(Ref.get(healthRef)),
+    Effect.flatMap((health) =>
+      health === null
+        ? Effect.fail(new HostMaintenanceError({ operation: "compact_storage", message: "" }))
+        : Effect.succeed(health),
     ),
+    Effect.mapError(
+      (cause) =>
+        new HostMaintenanceError({
+          operation: "compact_storage",
+          message:
+            "Could not compact this machine's history" +
+            (cause instanceof Error && cause.message.length > 0 ? ": " + cause.message : "."),
+        }),
+    ),
+  );
+
+  const compactNow = Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const fresh = yield* Deferred.make<HostStorageHealth, HostMaintenanceError>();
+      const joined = yield* Ref.modify(compaction, (state) =>
+        state.running === null ? [null, { ...state, running: fresh }] : [state.running, state],
+      );
+      if (joined !== null) return yield* restore(Deferred.await(joined));
+      const exit = yield* Effect.exit(restore(runCompaction));
+      yield* Ref.update(compaction, (state) => ({ ...state, running: null }));
+      yield* Deferred.done(fresh, exit);
+      return yield* exit;
+    }),
+  );
+
+  const compact = compactNow.pipe(
     Effect.catch((cause) =>
       Effect.logWarning("Orchestration history compaction failed", { cause }),
     ),
   );
+  const lastCompactedAt = yield* fs.readFileString(compactedAtPath).pipe(
+    Effect.map(Number),
+    Effect.orElseSucceed(() => Number.NaN),
+  );
+  const intervalMs = Duration.toMillis(COMPACTION_INTERVAL);
+  const untilDueMs = Number.isFinite(lastCompactedAt)
+    ? lastCompactedAt + intervalMs - (yield* Clock.currentTimeMillis)
+    : 0;
+  const firstCompactionDelay = Duration.millis(
+    Math.min(intervalMs, Math.max(Duration.toMillis(Duration.minutes(1)), untilDueMs)),
+  );
 
   yield* forkParked(
-    Effect.sleep("1 minute").pipe(
+    Effect.sleep(firstCompactionDelay).pipe(
       Effect.andThen(
-        compact.pipe(Effect.andThen(publishStatus), Effect.repeat(Schedule.spaced("6 hours"))),
+        compact.pipe(
+          Effect.andThen(publishStatus),
+          Effect.repeat(Schedule.spaced(COMPACTION_INTERVAL)),
+        ),
       ),
     ),
   );
@@ -116,7 +273,12 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  return DatabaseStorage.of({ reclaim, status: SubscriptionRef.changes(statusRef) });
+  return DatabaseStorage.of({
+    reclaim,
+    status: SubscriptionRef.changes(statusRef),
+    health: Ref.get(healthRef),
+    compactNow,
+  });
 });
 
 export const layer = Layer.effect(DatabaseStorage, make);

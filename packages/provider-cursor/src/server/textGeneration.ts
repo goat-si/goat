@@ -15,6 +15,7 @@ import { type ProviderSetupError, TextGenerationError } from "@goat/contracts";
 import type { CursorSettings } from "../settings.ts";
 
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import { cursorSdkModelSelection } from "./sdkModel.ts";
 import type { CursorAuth } from "./auth.ts";
 import * as CursorSdk from "./CursorSdk.ts";
@@ -64,33 +65,34 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
   const { Agent, SqliteLocalAgentStore } = yield* CursorSdk.CursorSdk;
   const resolvedEnvironment = environment ?? process.env;
 
-  const resolveCursorApiKey = (operation: TextGenerationOperations.Operation) =>
-    Effect.gen(function* () {
-      if (!cursorSettings.enabled) {
-        return yield* new TextGenerationError({
-          operation,
-          detail: "Cursor is disabled in GOAT settings.",
-        });
-      }
+  const resolveCursorApiKey = Effect.fn("CursorTextGeneration.resolveCursorApiKey")(function* (
+    operation: TextGenerationOperations.Operation,
+  ) {
+    if (!cursorSettings.enabled) {
+      return yield* new TextGenerationError({
+        operation,
+        detail: "Cursor is disabled in GOAT settings.",
+      });
+    }
 
-      const apiKey = resolveApiKey
-        ? yield* resolveApiKey
-        : resolvedEnvironment.CURSOR_API_KEY?.trim();
-      if (!apiKey) {
-        return yield* new TextGenerationError({
-          operation,
-          detail: "Sign in with Cursor or add CURSOR_API_KEY in provider settings.",
-        });
-      }
+    const apiKey = resolveApiKey
+      ? yield* resolveApiKey
+      : resolvedEnvironment.CURSOR_API_KEY?.trim();
+    if (!apiKey) {
+      return yield* new TextGenerationError({
+        operation,
+        detail: "Sign in with Cursor or add CURSOR_API_KEY in provider settings.",
+      });
+    }
 
-      return apiKey;
-    });
+    return apiKey;
+  });
 
   // Ignores `cwd`: the agent runs in an empty temp directory, away from the project.
-  const runCursorSelected = <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) => {
-    const { operation, prompt, modelSelection } = input;
-    const isMemory = TextGenerationOperations.isMemoryOperation(operation);
-    return Effect.gen(function* () {
+  const runCursorSelected = Effect.fn("CursorTextGeneration.runCursorJson")(
+    function* <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) {
+      const { operation, prompt, modelSelection } = input;
+      const isMemory = TextGenerationOperations.isMemoryOperation(operation);
       const apiKey = yield* resolveCursorApiKey(operation);
       // The SDK loads sandbox.json independently of settingSources and lets it
       // expand the writable paths. Its public API cannot override that policy.
@@ -99,6 +101,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
           operation,
           detail:
             "Cursor text generation cannot enforce workspace isolation with a custom ~/.cursor/sandbox.json. Use another text-generation provider.",
+          // Typed so memory pauses this model: the policy refuses every request.
+          cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
         });
       }
       const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cursor-text-" });
@@ -166,7 +170,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
                     new TextGenerationError({
                       operation,
                       detail: "Cursor memory generation requires its isolated sandbox.",
-                      cause,
+                      // Typed so memory pauses this model: the sandbox is missing on every try.
+                      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
                     }),
                   )
                 : createCursorAgent(false),
@@ -254,22 +259,25 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         rawResult,
       );
       return { result, effectiveModel: selectedModel.id };
-    }).pipe(
-      // Scope this call inside `withAccess`, so sign-out closes the agent before its store.
-      Effect.scoped,
-      (effect) => (withAccess ? withAccess(effect) : effect),
-      Effect.scoped,
-      Effect.mapError((cause) =>
-        isTextGenerationError(cause)
-          ? cause
-          : new TextGenerationError({
-              operation,
-              detail: "Cursor SDK text generation failed.",
-              cause,
-            }),
-      ),
-    );
-  };
+    },
+    (effect, input) => {
+      const { operation } = input;
+      return effect.pipe(
+        Effect.scoped,
+        (effect) => (withAccess ? withAccess(effect) : effect),
+        Effect.scoped,
+        Effect.mapError((cause) =>
+          isTextGenerationError(cause)
+            ? cause
+            : new TextGenerationError({
+                operation,
+                detail: "Cursor SDK text generation failed.",
+                cause,
+              }),
+        ),
+      );
+    },
+  );
 
   return TextGenerationOperations.fromRunner(
     "CursorTextGeneration",

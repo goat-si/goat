@@ -1,9 +1,8 @@
 import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { SshConnectionProfile } from "@goat/client-runtime/connection";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
-import { act, type ComponentProps } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { type ComponentProps } from "react";
+import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
@@ -78,11 +77,11 @@ import type { SavedSshWorktreeOption } from "../lib/sshWorktree";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 
-let root: Root;
-let container: HTMLDivElement;
+import { act, render } from "../../test/render";
 
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+vi.mock(import("../hooks/useAddProjectTargets"), () => ({ useAddProjectTargets: () => [] }));
+
+async function setup() {
   state.worktreePath = "/tmp/worktree";
   state.serverThread = true;
   state.realBranch = false;
@@ -93,107 +92,41 @@ beforeEach(() => {
     draftThreadsByThreadKey: {},
     logicalProjectDraftThreadKeyByLogicalProjectKey: {},
   });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
-});
-
-function render(props: Partial<ComponentProps<typeof BranchToolbar>>) {
-  return act(async () =>
-    root.render(
-      <BranchToolbar
-        layout="panel"
-        panelSection="workspace"
-        environmentId={EnvironmentId.make("local")}
-        threadId={ThreadId.make("thread")}
-        showGitControls
-        envMode="local"
-        envLocked={false}
-        startFromOrigin={false}
-        onStartFromOriginChange={vi.fn()}
-        onEnvModeChange={vi.fn()}
-        {...props}
-      />,
-    ),
-  );
+  const screen = await render(null);
+  const container = screen.container;
+  function renderToolbar(props: Partial<ComponentProps<typeof BranchToolbar>>) {
+    return act(async () =>
+      screen.rerender(
+        <BranchToolbar
+          layout="panel"
+          panelSection="workspace"
+          environmentId={EnvironmentId.make("local")}
+          threadId={ThreadId.make("thread")}
+          projectId={ProjectId.make("source")}
+          worktreePath={state.worktreePath}
+          isServerThread={state.serverThread}
+          showGitControls
+          envMode="local"
+          envLocked={false}
+          startFromOrigin={false}
+          onStartFromOriginChange={vi.fn()}
+          onEnvModeChange={vi.fn()}
+          {...props}
+        />,
+      ),
+    );
+  }
+  function workspaceTrigger(layout: (typeof LAYOUTS)[number]) {
+    return container.querySelector<HTMLButtonElement>(
+      layout === "wide"
+        ? '[aria-label="Workspace"]'
+        : layout === "panel"
+          ? '[aria-label="Run context"]'
+          : '[data-composer-shortcut*="composer.workspace"]',
+    )!;
+  }
+  return Object.assign(screen, { renderToolbar, workspaceTrigger });
 }
-
-it("keeps machine choices usable when the combined row's workspace is locked", async () => {
-  const onEnvironmentChange = vi.fn();
-  await render({
-    onEnvironmentChange,
-    availableEnvironments: ["local", "remote"].map((id) => ({
-      environmentId: EnvironmentId.make(id),
-      projectId: ProjectId.make("project"),
-      label: id,
-      isPrimary: id === "local",
-      machine: "server",
-    })),
-  });
-  const trigger = container.querySelector("button")!;
-  expect(trigger.textContent).toBe("Worktree");
-  expect(container.querySelectorAll("button")).toHaveLength(1);
-
-  // A ctrl-click is a macOS secondary click; it must not open the menu.
-  await act(async () => {
-    trigger.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, ctrlKey: true }));
-  });
-  expect(document.querySelector('[role="menu"]')).toBeNull();
-
-  await userEvent.click(trigger);
-  await expect
-    .element(page.getByRole("menuitemradio", { name: "New worktree" }))
-    .toHaveAttribute("aria-disabled", "true");
-  await userEvent.click(page.getByRole("menuitemradio", { name: "remote" }));
-  expect(onEnvironmentChange).toHaveBeenCalledWith("remote");
-});
-
-it("shows a started thread's primary machine as a static label in the composer", async () => {
-  await render({
-    layout: "composer",
-    showGitControls: false,
-    availableEnvironments: ["local", "remote"].map((id) => ({
-      environmentId: EnvironmentId.make(id),
-      projectId: ProjectId.make("project"),
-      label: id,
-      isPrimary: id === "local",
-      machine: "server",
-    })),
-  });
-  expect(container.textContent).toBe("local");
-  expect(container.querySelector("button")).toBeNull();
-});
-
-it.each([
-  ["local", null, "/tmp/project"],
-  ["worktree", null, null],
-  ["worktree", "/tmp/worktree", "/tmp/worktree"],
-] as const)(
-  "copies only an existing workspace path with mode %s and worktree %s",
-  async (envMode, worktreePath, copiedPath) => {
-    state.worktreePath = worktreePath;
-    await render({ envMode });
-    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    await act(async () => {
-      container.querySelector('[aria-label="Run context"]')!.dispatchEvent(event);
-    });
-    expect(event.defaultPrevented).toBe(copiedPath !== null);
-    if (copiedPath === null) {
-      expect(state.showContextMenu).not.toHaveBeenCalled();
-      expect(state.writeTextToClipboard).not.toHaveBeenCalled();
-    } else {
-      await vi.waitFor(() =>
-        expect(state.writeTextToClipboard).toHaveBeenCalledWith(copiedPath, "workspace path"),
-      );
-    }
-  },
-);
 
 const sshOption: SavedSshWorktreeOption = {
   destination: { connectionId: "saved", environmentId: EnvironmentId.make("ssh") },
@@ -209,22 +142,16 @@ const sshOption: SavedSshWorktreeOption = {
 
 const LAYOUTS = ["composer", "panel", "wide"] as const;
 
-function workspaceTrigger(layout: (typeof LAYOUTS)[number]) {
-  return container.querySelector<HTMLButtonElement>(
-    layout === "wide"
-      ? '[aria-label="Workspace"]'
-      : layout === "panel"
-        ? '[aria-label="Run context"]'
-        : '[data-composer-shortcut*="composer.workspace"]',
-  )!;
-}
 const menuItem = (text: string) =>
   [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find(
     (node) => node.textContent === text,
   );
+
 const session = (draftId: DraftId) => useComposerDraftStore.getState().getDraftSession(draftId);
 
 it.each(LAYOUTS)("shows workspace modes and retires the old option in %s", async (layout) => {
+  await using screen = await setup();
+  const { workspaceTrigger } = screen;
   state.serverThread = false;
   const draftId = DraftId.make("panel-draft");
   const projectRef = scopeProjectRef(EnvironmentId.make("remote"), ProjectId.make("project"));
@@ -252,7 +179,7 @@ it.each(LAYOUTS)("shows workspace modes and retires the old option in %s", async
   const renderModes = () =>
     act(async () => {
       const envMode = session(draftId)!.envMode;
-      root.render(
+      await screen.rerender(
         <div className="group/composer-context" data-compact="">
           {layout === "wide" ? (
             <BranchToolbarEnvModeSelector
@@ -264,6 +191,9 @@ it.each(LAYOUTS)("shows workspace modes and retires the old option in %s", async
             />
           ) : (
             <BranchToolbar
+              projectId={ProjectId.make("source")}
+              worktreePath={null}
+              isServerThread={false}
               layout={layout}
               panelSection="workspace"
               draftId={draftId}
@@ -313,17 +243,20 @@ it.each([
 ] as const)(
   "labels locked wide mode with force=%s mode=%s path=%s",
   async (forceNewWorktree, effectiveEnvMode, activeWorktreePath, label) => {
-    await act(async () =>
-      root.render(
-        <BranchToolbarEnvModeSelector
-          forceNewWorktree={forceNewWorktree}
-          envLocked
-          effectiveEnvMode={effectiveEnvMode}
-          activeWorktreePath={activeWorktreePath}
-          activeEnvironment={{ isPrimary: false, label: "Build host" }}
-          onEnvModeChange={vi.fn()}
-        />,
-      ),
+    await using screen = await setup();
+    const { container } = screen;
+    await act(
+      async () =>
+        await screen.rerender(
+          <BranchToolbarEnvModeSelector
+            forceNewWorktree={forceNewWorktree}
+            envLocked
+            effectiveEnvMode={effectiveEnvMode}
+            activeWorktreePath={activeWorktreePath}
+            activeEnvironment={{ isPrimary: false, label: "Build host" }}
+            onEnvModeChange={vi.fn()}
+          />,
+        ),
     );
     expect(container.textContent).toBe(label);
     expect(container.querySelector("button")).toBeNull();
@@ -333,6 +266,8 @@ it.each([
 it.each(LAYOUTS.flatMap((layout) => [[layout, "mouse"] as const, [layout, "keyboard"] as const]))(
   "selects and clears saved SSH hosts through the right submenu in %s with %s",
   async (layout, activation) => {
+    await using screen = await setup();
+    const { workspaceTrigger } = screen;
     state.serverThread = false;
     const draftId = DraftId.make("ssh-menu");
     const source = scopeProjectRef(EnvironmentId.make("local"), ProjectId.make("source"));
@@ -360,7 +295,7 @@ it.each(LAYOUTS.flatMap((layout) => [[layout, "mouse"] as const, [layout, "keybo
               .getState()
               .setDraftThreadContext(draftId, { envMode, sshDestination: null }),
         };
-        root.render(
+        await screen.rerender(
           layout === "wide" ? (
             <BranchToolbarEnvModeSelector
               {...common}
@@ -370,6 +305,9 @@ it.each(LAYOUTS.flatMap((layout) => [[layout, "mouse"] as const, [layout, "keybo
             />
           ) : (
             <BranchToolbar
+              projectId={ProjectId.make("source")}
+              worktreePath={null}
+              isServerThread={false}
               {...common}
               draftId={draftId}
               layout={layout}
@@ -435,6 +373,8 @@ it.each(LAYOUTS.flatMap((layout) => [[layout, "mouse"] as const, [layout, "keybo
 );
 
 it("does not auto-pick a local base branch or open the branch keybinding while SSH is selected", async () => {
+  await using screen = await setup();
+  const { renderToolbar: render } = screen;
   state.realBranch = true;
   state.serverThread = false;
   const draftId = DraftId.make("branch-ssh");
@@ -463,6 +403,8 @@ it("does not auto-pick a local base branch or open the branch keybinding while S
 });
 
 it.each(LAYOUTS)("keeps blocked SSH hosts visible with the reason in %s", async (layout) => {
+  await using screen = await setup();
+  const { workspaceTrigger } = screen;
   state.serverThread = false;
   const draftId = DraftId.make("blocked-ssh");
   const environmentId = EnvironmentId.make("local");
@@ -489,33 +431,37 @@ it.each(LAYOUTS)("keeps blocked SSH hosts visible with the reason in %s", async 
       onSshDestinationChange: select,
       onEnvModeChange: vi.fn(),
     };
-    await act(async () =>
-      root.render(
-        layout === "wide" ? (
-          <BranchToolbarEnvModeSelector
-            key={reason}
-            {...common}
-            envLocked={false}
-            effectiveEnvMode="local"
-            activeWorktreePath={null}
-          />
-        ) : (
-          <BranchToolbar
-            key={reason}
-            {...common}
-            layout={layout}
-            panelSection="workspace"
-            environmentId={environmentId}
-            threadId={threadId}
-            draftId={draftId}
-            showGitControls
-            envMode="local"
-            envLocked={false}
-            startFromOrigin={false}
-            onStartFromOriginChange={vi.fn()}
-          />
+    await act(
+      async () =>
+        await screen.rerender(
+          layout === "wide" ? (
+            <BranchToolbarEnvModeSelector
+              key={reason}
+              {...common}
+              envLocked={false}
+              effectiveEnvMode="local"
+              activeWorktreePath={null}
+            />
+          ) : (
+            <BranchToolbar
+              projectId={ProjectId.make("source")}
+              worktreePath={null}
+              isServerThread={false}
+              key={reason}
+              {...common}
+              layout={layout}
+              panelSection="workspace"
+              environmentId={environmentId}
+              threadId={threadId}
+              draftId={draftId}
+              showGitControls
+              envMode="local"
+              envLocked={false}
+              startFromOrigin={false}
+              onStartFromOriginChange={vi.fn()}
+            />
+          ),
         ),
-      ),
     );
     await userEvent.click(workspaceTrigger(layout));
     await vi.waitFor(() => expect(menuItem("Work on SSH")).toBeDefined());

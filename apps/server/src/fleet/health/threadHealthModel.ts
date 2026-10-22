@@ -10,7 +10,7 @@ import type {
  * docs/internals/agentic-k8s.md "Thread health". Stateless: lastActivityAt moves on every provider
  * event, so no previous read is needed. A pending question or queued run is waiting, never a stall.
  */
-export const STALL_AFTER_MS = 20 * 60_000;
+const STALL_AFTER_MS = 20 * 60_000;
 
 export type ThreadHealth =
   | { readonly _tag: "waiting" | "unknown" }

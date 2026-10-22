@@ -1,6 +1,7 @@
 import type {
   ConnectionAddedBy,
   DesktopSshEnvironmentTarget,
+  DesktopSshPreparationProgress,
   EnvironmentId,
 } from "@goat/contracts";
 import { resolveRemotePairingTarget } from "@goat/shared/remote";
@@ -46,6 +47,7 @@ export interface PairingConnectionInput {
 }
 
 export interface SshConnectionInput {
+  readonly onPreparationProgress?: (progress: DesktopSshPreparationProgress) => Effect.Effect<void>;
   readonly keyOnly?: boolean;
   readonly addedBy?: ConnectionAddedBy;
   readonly target: DesktopSshEnvironmentTarget;
@@ -257,11 +259,12 @@ export const prepareSshRegistration = Effect.fn(
   "clientRuntime.connection.onboarding.prepareSshRegistration",
 )(function* (input: SshConnectionInput) {
   const gateway = yield* ClientCapabilities.SshEnvironmentGateway;
-  const provisioned = yield* gateway.provision(
-    input.target,
-    input.expectedEnvironmentId,
-    input.keyOnly === undefined ? undefined : { keyOnly: input.keyOnly },
-  );
+  const provisioned = yield* gateway.provision(input.target, input.expectedEnvironmentId, {
+    ...(input.keyOnly === undefined ? {} : { keyOnly: input.keyOnly }),
+    ...(input.onPreparationProgress === undefined
+      ? {}
+      : { onPreparationProgress: input.onPreparationProgress }),
+  });
   const connectionId = `ssh:${provisioned.environmentId}:${sshTargetKey(provisioned.bootstrap.target)}`;
   const label = input.label?.trim() || provisioned.label || provisioned.bootstrap.target.alias;
 

@@ -1,10 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
-
+import { LaneKind } from "@goat/contracts";
 import {
   GOAT_ORCHESTRATION_INSTRUCTIONS,
-  goatAcpPromptWithInstructions,
-  goatOrchestrationPromptForFirstRun,
-  goatOrchestrationSystemPrompt,
+  GOAT_ORCHESTRATION_SECTIONS,
 } from "./orchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
@@ -33,72 +31,29 @@ describe("T3 orchestration provider instructions", () => {
     );
   });
 
-  it("documents structured schedules instead of JSON strings", () => {
-    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "structured object, never as JSON text");
-    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, '"everyMs":3600000');
-    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "bindToCurrentThread=false");
+  it("spreads work across connected machines", () => {
+    for (const text of [
+      "### Spread work across machines",
+      "`goat_host_status`",
+      "`goat_ssh_host_list`",
+      "`goat_host_link_list`",
+      "`goat_cloud_machine_list`",
+      "`goat_provider_host_matrix`",
+      "`goat_ssh_thread_launch` and a worktree",
+      "the user's browser, local files, signed-in desktop apps",
+      "Cordoned or Draining",
+      "Do not keep retrying a host that stopped answering",
+      "Do not create or resume a Boat cloud machine",
+      "which host ran what",
+    ]) {
+      assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, text);
+    }
   });
 
-  it("injects prompt fallback only for an MCP-enabled first run", () => {
-    const prompt = "Inspect the repository.";
-    const injected = goatOrchestrationPromptForFirstRun({
-      prompt,
-      runOrdinal: 1,
-      hasGoatMcp: true,
-    });
-
-    assert.include(injected, "<t3_code_orchestration_instructions>");
-    assert.include(injected, `<user_request>\n${prompt}\n</user_request>`);
-    assert.equal(
-      goatOrchestrationPromptForFirstRun({ prompt, runOrdinal: 2, hasGoatMcp: true }),
-      prompt,
-    );
-    assert.equal(
-      goatOrchestrationPromptForFirstRun({ prompt, runOrdinal: 1, hasGoatMcp: false }),
-      prompt,
-    );
-  });
-
-  it("only exposes the system prompt when the T3 MCP server is attached", () => {
-    assert.equal(goatOrchestrationSystemPrompt(false), undefined);
-    assert.equal(goatOrchestrationSystemPrompt(true), GOAT_ORCHESTRATION_INSTRUCTIONS);
-  });
-
-  it("gives ACP sessions provider-neutral mode, browser, and orchestration guidance", () => {
-    const injected = goatAcpPromptWithInstructions({
-      prompt: "Inspect the repository.",
-      state: { interactionMode: "default", hasGoatMcp: true },
-    });
-
-    assert.include(injected, "GOAT interaction mode: Default");
-    assert.include(injected, "GOAT collaborative browser");
-    assert.include(injected, "GOAT orchestration");
-    assert.include(injected, "<user_request>\nInspect the repository.\n</user_request>");
-  });
-
-  it("reinjects ACP guidance only when mode or tool availability changes", () => {
-    const prompt = "Continue.";
-    const defaultState = { interactionMode: "default", hasGoatMcp: true } as const;
-
-    assert.equal(
-      goatAcpPromptWithInstructions({ prompt, state: defaultState, previousState: defaultState }),
-      prompt,
-    );
-    assert.include(
-      goatAcpPromptWithInstructions({
-        prompt,
-        state: { ...defaultState, interactionMode: "plan" },
-        previousState: defaultState,
-      }),
-      "GOAT interaction mode: Plan",
-    );
-    const withoutMcp = goatAcpPromptWithInstructions({
-      prompt,
-      state: { interactionMode: "default", hasGoatMcp: false },
-    });
-    assert.include(withoutMcp, "GOAT interaction mode: Default");
-    assert.notInclude(withoutMcp, "GOAT collaborative browser");
-    assert.notInclude(withoutMcp, "GOAT orchestration");
+  it("keeps every section under Codex's per-entry limit", () => {
+    for (const section of GOAT_ORCHESTRATION_SECTIONS) {
+      assert.isBelow(new TextEncoder().encode(section).length, 4000);
+    }
   });
 });
 
@@ -117,6 +72,29 @@ it("explains question decisions and question-aware waits", () => {
     "Only local user-input questions still arrive.",
     'SSH-host questions then need `goat_thread_wait({host})` or `goat_pending_request_list({scope:"launched", hosts})`. Approvals are no longer reported; check `goat_thread_read` or tell the user the thread may be waiting.',
     "Forward to the user any decision your own user has not authorized, such as pushing, deploying, sending outside, or starting new work beyond the request.",
+  ]) {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, text);
+  }
+});
+
+it("asks agents to check host pressure before heavy lanes", () => {
+  assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "`goat_host_status` with `placement:{}`");
+  assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, '"Resource pressure:"');
+});
+
+it("names every lane kind and routes each lane to dispatch or a native subagent", () => {
+  for (const kind of LaneKind.literals) {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, `\`${kind}\``);
+  }
+  for (const text of [
+    "### Choose dispatch or native for each lane",
+    "`goat_ssh_thread_launch`); its own worktree, branch, or PR",
+    "to outlive this thread or be steered by a person",
+    "Native subagents (Codex `spawn_agent`, Claude Code Task)",
+    '`fork_turns` omitted or `"all"` forks the full history',
+    "`maxLanes`) covers both ways",
+    "`goat_thread_report_result`",
+    "`goat_origin_report`",
   ]) {
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, text);
   }

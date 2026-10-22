@@ -41,3 +41,26 @@ export const authorizeSshHost = (
         return yield* denied();
     }
   });
+
+/**
+ * Lets a thread agent ask a person to approve something it may not do itself.
+ * It only creates the approval card: whatever runs afterwards is authorized
+ * against the approving person's own session. The thread needs a live,
+ * writable credential for its running turn, and gains no other authority.
+ */
+export const authorizeApprovalRequest = (scope: McpInvocationScope) =>
+  Effect.gen(function* () {
+    if (
+      scope.thread === undefined ||
+      scope.client !== undefined ||
+      scope.readOnly === true ||
+      !scope.capabilities.has("orchestration") ||
+      scope.reauthorize === undefined ||
+      !scope.grantedScopes?.includes("orchestration:read")
+    )
+      return yield* new EnvironmentAuthorizationError({
+        requiredScope: "orchestration:read",
+        message: "Only a running, writable GOAT thread can ask for this approval.",
+      });
+    yield* scope.reauthorize(["orchestration:read"]);
+  });

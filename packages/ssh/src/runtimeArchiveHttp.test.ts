@@ -13,6 +13,7 @@ import {
 } from "./runtimeArchiveHttp.ts";
 import { prepareRemoteRuntime } from "./tunnel.ts";
 import { makeSuccessfulProcess, uploadTarget } from "./tunnel.fixture.ts";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 const isNotPublished = Schema.is(RuntimeArchiveNotPublished);
 const isNetworkError = Schema.is(RuntimeArchiveNetworkError);
@@ -155,7 +156,7 @@ describe("public HTTPS SSH runtime supply", () => {
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped();
       const calls: string[] = [];
-      const spawner = ChildProcessSpawner.make((command) =>
+      const spawner = lazyChildProcessSpawner((command) =>
         Effect.gen(function* () {
           if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
           if (command.command === "gh") {

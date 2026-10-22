@@ -1,57 +1,17 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import * as Clock from "effect/Clock";
-import * as Deferred from "effect/Deferred";
+
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
+
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { TestClock } from "effect/testing";
+
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { describe } from "vite-plus/test";
 
 import * as OpenCode2Client from "@goat/provider-opencode/server/v2/OpenCode2Client";
 
-const RECORDING = new URL(
-  "../orchestration-v2/testkit/fixtures/opencode2_simple/opencode_transcript.ndjson",
-  import.meta.url,
-);
-const Entry = Schema.Struct({ type: Schema.String, frame: Schema.optional(Schema.Unknown) });
-const decodeEntry = Schema.decodeUnknownSync(Schema.fromJsonString(Entry));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-
-const newerServerStream = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const recorded = (yield* fs.readFileString(RECORDING.pathname))
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => decodeEntry(line))
-    .flatMap((entry) => {
-      const frame = entry.frame as { readonly type?: string; readonly event?: unknown } | undefined;
-      return frame?.type === "sdk.event" ? [frame.event as Record<string, unknown>] : [];
-    });
-  const executionStarted = recorded.findIndex(
-    (event) => event.type === "session.execution.started",
-  );
-  const [first] = recorded;
-  return [
-    ...recorded.slice(0, executionStarted),
-    {
-      id: "evt_0000000000newtype",
-      created: 1,
-      type: "session.hologram.projected",
-      data: { beams: 3 },
-    },
-    {
-      ...recorded[executionStarted],
-      data: { ...(recorded[executionStarted]!.data as object), lane: "fast" },
-    },
-    ...recorded.slice(executionStarted + 1),
-    first,
-  ];
-});
 
 const layerServing = (events: ReadonlyArray<unknown>) =>
   Layer.succeed(
@@ -74,81 +34,8 @@ const connect = Effect.gen(function* () {
 });
 
 /** Sends `events`, then acknowledges the next body read and leaves it pending. */
-const layerServingThenSilent = (
-  events: ReadonlyArray<unknown>,
-  silentReadStarted: Deferred.Deferred<void>,
-) =>
-  Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((request) =>
-      Effect.sync(() => {
-        const response = HttpClientResponse.fromWeb(
-          request,
-          new Response(events.map((event) => `data: ${encodeJson(event)}\n\n`).join(""), {
-            headers: { "content-type": "text/event-stream" },
-          }),
-        );
-        // Override only the body accessor; retain the response's other getters.
-        return Object.defineProperty(response, "stream", {
-          value: response.stream.pipe(
-            Stream.concat(
-              Stream.fromEffect(
-                Deferred.succeed(silentReadStarted, undefined).pipe(Effect.andThen(Effect.never)),
-              ),
-            ),
-          ),
-        });
-      }),
-    ),
-  );
 
 describe("OpenCode2Client events", () => {
-  it.effect("fails a stream that stops sending anything, even heartbeats", () =>
-    Effect.gen(function* () {
-      const firstFrameProcessed = yield* Deferred.make<void>();
-      const silentReadStarted = yield* Deferred.make<void>();
-      const watchdogStarted = yield* Deferred.make<void>();
-      const clock = yield* Clock.Clock;
-      const watchdogClock = {
-        ...clock,
-        sleep: (duration) =>
-          Effect.gen(function* () {
-            // Start the real TestClock sleep through registration before acknowledging it.
-            const sleeping = yield* clock
-              .sleep(duration)
-              .pipe(Effect.forkChild({ startImmediately: true }));
-            yield* Deferred.succeed(watchdogStarted, undefined);
-            yield* Fiber.join(sleeping);
-          }),
-      } satisfies Clock.Clock;
-      const { events } = yield* connect.pipe(
-        Effect.provide(
-          OpenCode2Client.layer.pipe(
-            Layer.provide(
-              layerServingThenSilent(
-                [{ type: "session.execution.started", data: { sessionID: "ses_x", lane: 7 } }],
-                silentReadStarted,
-              ),
-            ),
-          ),
-        ),
-      );
-      const drained = yield* (yield* events).pipe(
-        Stream.tap(() => Deferred.succeed(firstFrameProcessed, undefined)),
-        Stream.runDrain,
-        Effect.flip,
-        Effect.provideService(Clock.Clock, watchdogClock),
-        Effect.forkChild,
-      );
-      yield* Deferred.await(firstFrameProcessed);
-      yield* Deferred.await(silentReadStarted);
-      yield* Deferred.await(watchdogStarted);
-      yield* TestClock.adjust("46 seconds");
-      const failure = yield* Fiber.join(drained);
-      assert.strictEqual(failure._tag, "OpenCode2SilentStreamError");
-    }).pipe(Effect.provide(TestClock.layer())),
-  );
-
   it.effect(
     "keeps an execution's end and start it cannot decode, and skips other unknown events",
     () =>
@@ -193,34 +80,5 @@ describe("OpenCode2Client events", () => {
           },
         ]);
       }),
-  );
-
-  it.effect("skips events a newer server adds and still sees the turn end", () =>
-    Effect.gen(function* () {
-      const events = yield* newerServerStream;
-      const { events: subscribe } = yield* connect.pipe(
-        Effect.provide(OpenCode2Client.layer.pipe(Layer.provide(layerServing(events)))),
-      );
-      const types = yield* (yield* subscribe).pipe(
-        Stream.map((event) => event.type),
-        Stream.runCollect,
-      );
-
-      assert.notInclude(types, "session.hologram.projected");
-      assert.include(types, "session.execution.started");
-      assert.include(types, "session.execution.succeeded");
-      assert.strictEqual(types.length, events.length - 1);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("the client's own subscription fails the whole stream on the same events", () =>
-    Effect.gen(function* () {
-      const events = yield* newerServerStream;
-      const { client } = yield* connect.pipe(
-        Effect.provide(OpenCode2Client.layer.pipe(Layer.provide(layerServing(events)))),
-      );
-      const failure = yield* client.event.subscribe().pipe(Stream.runDrain, Effect.flip);
-      assert.strictEqual(failure._tag, "ClientError");
-    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

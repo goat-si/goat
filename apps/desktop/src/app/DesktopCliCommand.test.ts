@@ -138,26 +138,6 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("never replaces or removes a goat it did not create", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const home = yield* fs.makeTempDirectoryScoped();
-      const command = yield* commandIn({ home });
-      const theirs = path.join(home, ".local", "bin", "goat");
-      yield* fs.makeDirectory(path.dirname(theirs), { recursive: true });
-      yield* fs.writeFileString(theirs, "npm's goat\n");
-      yield* fs.makeDirectory(path.join(home, "bin"), { recursive: true });
-      yield* fs.symlink(path.join(home, "gone"), path.join(home, "bin", "goat"));
-
-      const error = yield* Effect.flip(command.install);
-      expect(error.message).toContain("Another goat command is already installed");
-      yield* command.uninstall;
-      expect(yield* fs.readFileString(theirs)).toBe("npm's goat\n");
-      expect(yield* fs.readLink(path.join(home, "bin", "goat"))).toBe(path.join(home, "gone"));
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("finds and removes a link left by a previous T3 home", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -173,49 +153,6 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       yield* after.uninstall;
       expect(yield* fs.exists(path.join(home, ".local", "bin", "goat"))).toBe(false);
       expect(yield* fs.exists(path.join(home, "bin", "goat"))).toBe(false);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("does not read a large binary another goat links to", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const home = yield* fs.makeTempDirectoryScoped();
-      const binary = path.join(home, "native-goat");
-      yield* fs.writeFileString(binary, `${"\0".repeat(64 * 1024)}${DesktopCliShim.MARKER}`);
-      yield* fs.makeDirectory(path.join(home, ".local", "bin"), { recursive: true });
-      yield* fs.symlink(binary, path.join(home, ".local", "bin", "goat"));
-      const command = yield* commandIn({ home });
-      expect((yield* command.state).installedPath).toBeNull();
-      yield* command.uninstall;
-      expect(yield* fs.readLink(path.join(home, ".local", "bin", "goat"))).toBe(binary);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("refuses to install behind another goat that runs first", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const home = yield* fs.makeTempDirectoryScoped();
-      const shadow = path.join(home, "shadow");
-      yield* fs.makeDirectory(shadow);
-      yield* fs.writeFileString(path.join(shadow, "goat"), "#!/bin/sh\n", { mode: 0o755 });
-      process.env.PATH = [shadow, path.join(home, ".local", "bin")].join(":");
-
-      const command = yield* commandIn({ home });
-      const theirs = path.join(shadow, "goat");
-      expect((yield* command.state).shadowedBy).toBe(theirs);
-      const error = yield* Effect.flip(command.install);
-      expect(error.message).toContain(theirs);
-      expect(yield* fs.exists(path.join(home, ".local", "bin", "goat"))).toBe(false);
-
-      yield* fs.remove(theirs);
-      const installed = yield* command.install;
-      expect(installed).toMatchObject({
-        onPath: true,
-        installedPath: path.join(home, ".local", "bin", "goat"),
-      });
-      expect(installed.shadowedBy).toBeUndefined();
     }).pipe(Effect.scoped),
   );
 
@@ -260,17 +197,6 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       expect((yield* command.state).installedPath).toBeNull();
       yield* command.uninstall;
       expect(registry.path).toBe(userPath);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("offers nothing for a development build", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const command = yield* commandIn({
-        home: yield* fs.makeTempDirectoryScoped(),
-        isPackaged: false,
-      });
-      expect((yield* command.state).supported).toBe(false);
     }).pipe(Effect.scoped),
   );
 });

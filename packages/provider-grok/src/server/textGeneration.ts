@@ -38,18 +38,25 @@ const isTextGenerationError = Schema.is(TextGenerationError);
 
 export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(function* (
   grokSettings: GrokSettings,
-  environment: NodeJS.ProcessEnv = process.env,
-  options: { readonly memoryRunnerContext?: MemoryGenerationRunnerContext } = {},
+  baseEnvironment: NodeJS.ProcessEnv = process.env,
+  options: {
+    readonly memoryRunnerContext?: MemoryGenerationRunnerContext;
+    /** Re-read at each launch so a key saved after startup reaches the CLI. */
+    readonly resolveEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
+  } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-  const runGrokSelected = <S extends Schema.Top>(request: TextGenerationOperations.Request<S>) => {
-    const { operation, cwd, prompt, modelSelection } = request;
-    return Effect.gen(function* () {
+  const runGrokSelected = Effect.fn("GrokTextGeneration.runGrokJson")(
+    function* <S extends Schema.Top>(request: TextGenerationOperations.Request<S>) {
+      const { operation, cwd, prompt, modelSelection } = request;
       const memory = TextGenerationOperations.isMemoryOperation(operation);
+      const environment = options.resolveEnvironment
+        ? yield* options.resolveEnvironment
+        : baseEnvironment;
       const isolated = memory
         ? yield* requireGrokMemoryIsolation(operation, environment).pipe(
             Effect.provideService(FileSystem.FileSystem, fs),
@@ -177,7 +184,8 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
             new TextGenerationError({
               operation,
               detail: "Failed to set Grok ACP base model for text generation.",
-              cause,
+              // Memory treats a model it cannot select as unavailable until settings change.
+              cause: memory ? new MemoryGenerationRunnerError({ code: "unavailable" }) : cause,
             }),
         });
         promptStarted = true;
@@ -261,20 +269,24 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         trimmed,
       );
       return { result, effectiveModel: effectiveModel ?? modelSelection.model };
-    }).pipe(
-      Effect.mapError((cause) =>
-        isTextGenerationError(cause)
-          ? cause
-          : new TextGenerationError({
-              operation,
-              detail: "Grok ACP text generation failed.",
-              cause,
-            }),
-      ),
-      Effect.scoped,
-      Effect.provideService(FileSystem.FileSystem, fs),
-    );
-  };
+    },
+    (effect, request) => {
+      const { operation } = request;
+      return effect.pipe(
+        Effect.mapError((cause) =>
+          isTextGenerationError(cause)
+            ? cause
+            : new TextGenerationError({
+                operation,
+                detail: "Grok ACP text generation failed.",
+                cause,
+              }),
+        ),
+        Effect.scoped,
+        Effect.provideService(FileSystem.FileSystem, fs),
+      );
+    },
+  );
 
   return TextGenerationOperations.fromRunner(
     "GrokTextGeneration",

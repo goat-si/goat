@@ -30,12 +30,15 @@ interface RegisteredTool {
 }
 
 type AgentStartHook = (
-  event: { systemPrompt: string },
+  event: {
+    systemPrompt: string;
+    systemPromptOptions?: { sections?: Record<string, string> | null; forceSystemPrompt?: string };
+  },
   ctx: {
     model?: { api: string };
     ui: { notify: (message: string, severity: string) => void };
   },
-) => Promise<{ systemPrompt: string }>;
+) => Promise<{ systemPrompt: string } | undefined>;
 
 export async function loadMcpBridge(
   options: {
@@ -50,6 +53,10 @@ export async function loadMcpBridge(
       readonly description?: string;
       readonly annotations?: { readonly readOnlyHint?: boolean };
     }>;
+    /** A stdio MCP server the bridge starts as the managed Cua Driver. */
+    readonly cua?: { readonly command: string; readonly args: ReadonlyArray<string> };
+    /** The per-turn computer use gate file the adapter writes. */
+    readonly cuaGate?: string;
   } = {},
 ) {
   const handlers = new Map<string, AgentStartHook>();
@@ -99,88 +106,97 @@ export async function loadMcpBridge(
       "async function",
     ),
   );
-  await NodeVM.runInNewContext(`${source}\ngoatMcpExtension(pi)`, {
-    process: {
-      env: {
-        GOAT_MCP_URL: "http://fixture.invalid/mcp",
-        GOAT_MCP_BEARER_TOKEN: "fixture-token",
-        GOAT_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
-        GOAT_PI_RUNTIME_MODE: options.runtimeMode,
+  await NodeVM.runInNewContext(
+    `${source}\ngoatMcpExtension(pi)`,
+    {
+      process: {
+        env: {
+          GOAT_MCP_URL: "http://fixture.invalid/mcp",
+          GOAT_MCP_BEARER_TOKEN: "fixture-token",
+          GOAT_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
+          GOAT_PI_RUNTIME_MODE: options.runtimeMode,
+          ...(options.cua === undefined
+            ? {}
+            : { GOAT_CUA_MCP: JSON.stringify({ ...options.cua, env: {} }) }),
+          ...(options.cuaGate === undefined ? {} : { GOAT_CUA_GATE: options.cuaGate }),
+        },
+      },
+      AbortSignal,
+      NodePath,
+      Type: { Unsafe: (schema: unknown) => schema },
+      fetch: async (
+        url: string,
+        transport: {
+          body: string;
+          headers: Record<string, string>;
+          signal?: AbortSignal;
+        },
+      ) => {
+        transport.signal?.throwIfAborted();
+        transports.push({
+          url,
+          authorization: transport.headers.authorization!,
+          signal: transport.signal,
+        });
+        const request = JSON.parse(transport.body) as {
+          id: number;
+          method: string;
+          params?: unknown;
+        };
+        requests.push(request);
+        const result =
+          request.method === "tools/list"
+            ? { tools: catalog }
+            : request.method === "tools/call"
+              ? (options.result ?? {
+                  content: [{ type: "text", text: "browser snapshot" }],
+                })
+              : {};
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+      pi: {
+        on: (name: string, handler: AgentStartHook) => handlers.set(name, handler),
+        registerTool: (tool: RegisteredTool) => {
+          registrations.push(tool.name);
+          if (options.allowsTool && !options.allowsTool(tool.name)) return;
+          const index = tools.findIndex((current) => current.name === tool.name);
+          if (index === -1) tools.push(tool);
+          else tools[index] = tool;
+        },
+        getActiveTools: () => activeTools,
+        setActiveTools: (names: string[]) => {
+          activeTools = names.filter((name) => options.allowsTool?.(name) ?? true);
+        },
+        getAllTools: () => [
+          ...tools.map((tool) => ({
+            name: tool.name,
+            sourceInfo: { path: bridgeSourcePath },
+          })),
+          ...(options.toolSearchAvailable &&
+          !options.toolSearchDisabled &&
+          (options.allowsTool?.("tool_search") ?? true)
+            ? [
+                {
+                  name: "tool_search",
+                  sourceInfo: { path: "builtin:tool-search" },
+                },
+              ]
+            : []),
+        ],
+        ...(options.modern
+          ? {
+              registerMcpServer: (name: string, config: Record<string, unknown>) =>
+                servers.push({ name, config }),
+              unregisterMcpServer: () => servers.splice(0),
+            }
+          : {}),
       },
     },
-    AbortSignal,
-    NodePath,
-    Type: { Unsafe: (schema: unknown) => schema },
-    fetch: async (
-      url: string,
-      transport: {
-        body: string;
-        headers: Record<string, string>;
-        signal?: AbortSignal;
-      },
-    ) => {
-      transport.signal?.throwIfAborted();
-      transports.push({
-        url,
-        authorization: transport.headers.authorization!,
-        signal: transport.signal,
-      });
-      const request = JSON.parse(transport.body) as {
-        id: number;
-        method: string;
-        params?: unknown;
-      };
-      requests.push(request);
-      const result =
-        request.method === "tools/list"
-          ? { tools: catalog }
-          : request.method === "tools/call"
-            ? (options.result ?? {
-                content: [{ type: "text", text: "browser snapshot" }],
-              })
-            : {};
-      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }), {
-        headers: { "content-type": "application/json" },
-      });
-    },
-    pi: {
-      on: (name: string, handler: AgentStartHook) => handlers.set(name, handler),
-      registerTool: (tool: RegisteredTool) => {
-        registrations.push(tool.name);
-        if (options.allowsTool && !options.allowsTool(tool.name)) return;
-        const index = tools.findIndex((current) => current.name === tool.name);
-        if (index === -1) tools.push(tool);
-        else tools[index] = tool;
-      },
-      getActiveTools: () => activeTools,
-      setActiveTools: (names: string[]) => {
-        activeTools = names.filter((name) => options.allowsTool?.(name) ?? true);
-      },
-      getAllTools: () => [
-        ...tools.map((tool) => ({
-          name: tool.name,
-          sourceInfo: { path: bridgeSourcePath },
-        })),
-        ...(options.toolSearchAvailable &&
-        !options.toolSearchDisabled &&
-        (options.allowsTool?.("tool_search") ?? true)
-          ? [
-              {
-                name: "tool_search",
-                sourceInfo: { path: "builtin:tool-search" },
-              },
-            ]
-          : []),
-      ],
-      ...(options.modern
-        ? {
-            registerMcpServer: (name: string, config: Record<string, unknown>) =>
-              servers.push({ name, config }),
-            unregisterMcpServer: () => servers.splice(0),
-          }
-        : {}),
-    },
-  });
+    // The driver bridge loads node:child_process on first use.
+    { importModuleDynamically: NodeVM.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER },
+  );
   return {
     handlers,
     tools,

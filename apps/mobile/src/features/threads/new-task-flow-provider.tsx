@@ -24,6 +24,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { sanitizeNewRefName } from "@goat/shared/git";
+import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
 import { resolveNewThreadEnvMode, resolveProjectSettings } from "@goat/shared/projectSettings";
 import { goatProjectFileReadPath } from "@goat/client-runtime/goat-project-file";
 import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
@@ -79,7 +80,7 @@ import {
   rememberModelOptions,
   withRememberedModelOptions,
 } from "../../state/use-model-option-memory";
-import { useDebouncedValue, usePaginatedBranches } from "../../state/queries";
+import { useBranches, useDebouncedValue, usePaginatedBranches } from "../../state/queries";
 import { vcsEnvironment } from "../../state/vcs";
 import {
   flattenQueuedThreadMessages,
@@ -119,6 +120,7 @@ import {
   filterNewTaskBranches,
   resolveNewTaskBranchWorktreePath,
   resolveNewTaskLocalWorkspaceSelection,
+  resolveNewTaskWorkspaceSelection,
 } from "./new-task-context-presentation";
 import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
@@ -169,6 +171,8 @@ type NewTaskFlowContextValue = {
   readonly selectedProjectKey: string | null;
   readonly selectedModelKey: string | null;
   readonly workspaceMode: WorkspaceMode;
+  readonly isGitRepo: boolean;
+  readonly isGitRepoKnown: boolean;
   readonly canChooseWorkspace: boolean;
   readonly selectedBranchName: string | null;
   readonly selectedWorktreePath: string | null;
@@ -435,6 +439,22 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const selectedProjectDraft = useComposerDraft(selectedProjectDraftKey);
   const prompt = selectedProjectDraft.text;
   const attachments = selectedProjectDraft.attachments;
+  const projectGitStatus = useEnvironmentQuery(
+    selectedProject !== null && selectedProject.workspaceRoot !== ""
+      ? vcsEnvironment.status({
+          environmentId: selectedProject.environmentId,
+          input: { cwd: selectedProject.workspaceRoot },
+        })
+      : null,
+  );
+  const currentCheckoutBranchName = projectGitStatus.data?.refName ?? null;
+  // The unfiltered ref list also provides repository capability while offline.
+  const projectBranches = useBranches({
+    environmentId: selectedProject?.environmentId ?? null,
+    cwd: selectedProject?.workspaceRoot || null,
+  });
+  const knownIsGitRepo = projectGitStatus.data?.isRepo ?? projectBranches.data?.isRepo ?? null;
+  const isGitRepo = knownIsGitRepo ?? true;
   const fileAccessSession = useEnvironmentQuery(
     selectedProject !== null && selectedProject.workspaceRoot !== ""
       ? environmentSession.sessionStateAtom(selectedProject.environmentId)
@@ -454,7 +474,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     canReadFiles && selectedProject !== null && selectedProject.workspaceRoot !== ""
       ? projectEnvironment.readFile({
           environmentId: selectedProject.environmentId,
-          input: { cwd: selectedProject.workspaceRoot, relativePath: GOAT_PROJECT_FILE_NAME },
+          input: {
+            cwd: selectedProject.workspaceRoot,
+            relativePath: GOAT_PROJECT_FILE_NAME,
+            allowMissing: true,
+          },
         })
       : null,
   );
@@ -480,7 +504,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       : legacyProjectFileQuery.data
   ) as ProjectReadFileResult | null;
   const goatProjectFile =
-    goatProjectFileData === null || goatProjectFileData.truncated
+    goatProjectFileData === null ||
+    goatProjectFileData.exists === false ||
+    goatProjectFileData.truncated
       ? null
       : parseGoatProjectFile(goatProjectFileData.contents);
   const projectSettings = resolveProjectSettings(
@@ -513,17 +539,20 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     selectedProjectDraft.workspaceSelection?.mode !== undefined ||
     projectSettings.sources.defaultThreadEnvMode !== "environment" ||
     (!goatProjectFileQuery.isPending && !legacyProjectFileQuery.isPending && !fileAccessPending);
-  const workspaceMode = canChooseWorkspace
-    ? (selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode)
-    : "local";
-  const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
-  const selectedWorktreePath = selectedProjectDraft.workspaceSelection?.worktreePath ?? null;
+  const workspaceSelection = resolveNewTaskWorkspaceSelection({
+    selection: canChooseWorkspace ? selectedProjectDraft.workspaceSelection : undefined,
+    fallback: { mode: defaultWorkspaceMode, branch: null, worktreePath: null },
+    isGitRepo,
+  });
+  const workspaceMode = workspaceSelection.mode;
+  const selectedBranchName = workspaceSelection.branch;
+  const selectedWorktreePath = workspaceSelection.worktreePath;
   // Keep the user's explicit choice separate from the resolved display value:
   // only the explicit flag is ever written back to the draft, so the resolved
   // value keeps tracking the server setting when the config loads late.
   const draftStartFromOrigin = selectedProjectDraft.workspaceSelection?.startFromOrigin;
   const startFromOrigin =
-    draftStartFromOrigin ?? projectSettings.settings.newWorktreesStartFromOrigin;
+    isGitRepo && (draftStartFromOrigin ?? projectSettings.settings.newWorktreesStartFromOrigin);
   const defaultRuntimeMode = editingPendingTask
     ? (editingPendingTask.runtimeMode ?? DEFAULT_RUNTIME_MODE)
     : projectSettings.settings.defaultRuntimeMode;
@@ -678,15 +707,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     allBranchRefs,
     Arr.filter((branch) => !branch.isRemote),
   );
-  const projectGitStatus = useEnvironmentQuery(
-    branchTarget.environmentId !== null && branchTarget.cwd !== null
-      ? vcsEnvironment.status({
-          environmentId: branchTarget.environmentId,
-          input: { cwd: branchTarget.cwd },
-        })
-      : null,
-  );
-  const currentCheckoutBranchName = projectGitStatus.data?.refName ?? null;
 
   const filteredBranches = filterNewTaskBranches(allBranchRefs, branchQuery);
 
@@ -978,8 +998,21 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     if ((text.length === 0 && draft.attachments.length === 0) || !draftModelSelection) {
       return null;
     }
-    const workspaceSelection = canChooseWorkspace ? draft.workspaceSelection : undefined;
-    const mode = workspaceSelection?.mode ?? workspaceMode;
+    if (
+      threadContextsOutsideEnvironment({
+        text: draft.text,
+        records: draft.context?.records ?? [],
+        environmentId: selectedProject.environmentId,
+      }).length > 0
+    ) {
+      return null;
+    }
+    const workspaceSelection = resolveNewTaskWorkspaceSelection({
+      selection: canChooseWorkspace ? draft.workspaceSelection : undefined,
+      fallback: { mode: workspaceMode, branch: null, worktreePath: null },
+      isGitRepo,
+    });
+    const mode = workspaceSelection.mode;
     // When the selection is the stand-in built from the queued snapshot,
     // persist the original (possibly absent) snapshot values — the
     // stand-in's placeholder title/workspaceRoot must never be written back
@@ -1138,6 +1171,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     selectedProjectKey,
     selectedModelKey,
     workspaceMode,
+    isGitRepo,
+    isGitRepoKnown: knownIsGitRepo !== null,
     canChooseWorkspace,
     selectedBranchName,
     selectedWorktreePath,

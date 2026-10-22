@@ -9,8 +9,11 @@ import {
   selectCheckpointMemory,
   selectCheckpointReceipt,
   selectCheckpointIndependent,
+  measureCheckpointRevisionHistory,
 } from "./MemoryCheckpointInventory.ts";
 import { futureForgetReserve } from "./MemoryCheckpointBound.ts";
+
+const noLineage: ReadonlySet<M.MemoryRevisionId> = new Set();
 
 const decodeSpace = Schema.decodeUnknownEffect(M.MemorySpaceId);
 const decodeMemory = Schema.decodeUnknownEffect(M.MemoryId);
@@ -41,7 +44,10 @@ const validateCheckpointLifecycles = Effect.fnUntraced(function* (spaces: Iterab
  * The reserved space is the existing counters' PK prefix, so reading touched keys
  * does not scan the corpus or all cached counters. Refresh and delta commit together.
  */
-export const refreshCheckpointAccounting = Effect.fnUntraced(function* () {
+export const refreshCheckpointAccounting = Effect.fnUntraced(function* (
+  /** Migrations that run before revisions carry `checkpoint_bytes` decode every revision instead. */
+  revisionSizes: "cached" | "recompute" = "cached",
+) {
   const sql = yield* SqlClient.SqlClient;
   const pendingLifecycle = sql<{
     dimension: string;
@@ -82,8 +88,17 @@ export const refreshCheckpointAccounting = Effect.fnUntraced(function* () {
         (${space},'hub_snapshot_bytes','',0),(${space},'hub_snapshot_rows','',0),(${space},'checkpoint_initialized','',1)`;
     }
     const independent = key.scope_key.startsWith("l:") || key.scope_key.startsWith("s:");
-    const inventory = memory
-      ? yield* selectCheckpointMemory(space, yield* decodeMemory(id), now, false)
+    const memoryId = memory ? yield* decodeMemory(id) : undefined;
+    const cachedSizes = revisionSizes === "cached";
+    // Cached sizes cover the history; only the revisions admission selects are decoded here.
+    const inventory = memoryId
+      ? yield* selectCheckpointMemory(
+          space,
+          memoryId,
+          now,
+          false,
+          cachedSizes ? noLineage : undefined,
+        )
       : independent
         ? yield* selectCheckpointIndependent(space, undefined, {
             kind: key.scope_key.startsWith("l:") ? "l" : "s",
@@ -92,6 +107,15 @@ export const refreshCheckpointAccounting = Effect.fnUntraced(function* () {
         : yield* selectCheckpointReceipt(space, id);
     yield* validateCheckpointInventory(space, inventory);
     const size = checkpointInventorySize(inventory);
+    if (memoryId && cachedSizes && inventory.identities.length && !inventory.tombstones.length) {
+      const history = yield* measureCheckpointRevisionHistory(
+        space,
+        memoryId,
+        inventory.revisions.map(({ revision }) => revision.revisionId),
+      );
+      size.bytes += history.bytes;
+      size.rows += history.rows;
+    }
     if (memory) {
       const reserves = yield* sql<{
         reserve_bytes: number;

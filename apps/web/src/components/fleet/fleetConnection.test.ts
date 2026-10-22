@@ -4,6 +4,7 @@ import {
   fleetConnectionLegend,
   fleetConnectionVisual,
   presentFleetConnection,
+  presentFleetMachineConnection,
   type FleetConnectionInput,
   type FleetConnectionState,
 } from "./fleetConnection";
@@ -120,5 +121,51 @@ describe("fleetConnectionLegend", () => {
       "Not connected",
       "Needs attention",
     ]);
+  });
+});
+
+describe("presentFleetMachineConnection", () => {
+  const away = presentFleetConnection(
+    connection("reconnecting", { unreachable: true, error: ASLEEP }),
+  );
+  const up = presentFleetConnection(connection("connected"));
+
+  it("shows a stopped Boat machine as stopped, apart from a host that is away", () => {
+    const stopped = presentFleetMachineConnection({ status: "stopped", source: "record" }, away);
+    expect(stopped).toMatchObject({ state: "stopped", label: "Stopped" });
+    expect(stopped.reason).toContain("Resume it");
+    expect(fleetConnectionVisual(stopped.state).glyph).toBe("square");
+    expect(fleetConnectionVisual(away.state).glyph).toBe("ring");
+    // Both stay quiet: neither is something to fix right now.
+    expect(fleetConnectionVisual(stopped.state).quiet).toBe(true);
+    expect(fleetConnectionLegend([stopped, away, up]).map((entry) => entry.label)).toEqual([
+      "Connected",
+      "Not connected",
+      "Stopped",
+    ]);
+  });
+
+  it("names Boat's transitions and failures even without a connection", () => {
+    const present = (status: Parameters<typeof presentFleetMachineConnection>[0]) =>
+      presentFleetMachineConnection(status, null);
+    expect(present({ status: "starting", source: "record" })).toMatchObject({
+      state: "connecting",
+      label: "Starting",
+    });
+    expect(present({ status: "stopping", source: "record" })).toMatchObject({
+      state: "connecting",
+      label: "Stopping",
+    });
+    expect(present({ status: "failed", source: "record" })).toMatchObject({
+      state: "attention",
+      label: "Failed",
+    });
+  });
+
+  it("lets the connection decide while Boat says running or its state is unknown", () => {
+    expect(presentFleetMachineConnection({ status: "running", source: "record" }, away)).toBe(away);
+    expect(presentFleetMachineConnection({ status: "unknown", source: "alias" }, up)).toBe(up);
+    expect(presentFleetMachineConnection(null, away)).toBe(away);
+    expect(presentFleetMachineConnection(null, null).state).toBe("unknown");
   });
 });

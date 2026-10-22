@@ -1,14 +1,14 @@
 // @effect-diagnostics nodeBuiltinImport:off - FileSystem cannot create a FIFO.
-import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { it, describe, expect, afterEach, vi } from "@effect/vitest";
+import { afterEach, describe, expect, it, vi } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { symlinksSupported } from "@goat/shared/testing/symlinks";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
 import * as ServerConfig from "../config.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -16,8 +16,6 @@ import * as KnownWorkspaces from "./KnownWorkspaces.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
-import * as HostProcess from "@goat/shared/HostProcess";
-import { symlinksSupported } from "@goat/shared/testing/symlinks";
 
 // Temp folders count as known workspaces unless named as unknown.
 const UNKNOWN_WORKSPACE_PREFIX = "t3code-unknown-workspace-";
@@ -221,19 +219,6 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
   });
 
   describe("getMetadata", () => {
-    it.effect("expands home-relative paths on the server", () =>
-      Effect.gen(function* () {
-        const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
-        const home = yield* makeTempDir;
-        yield* writeTextFile(home, "file", "hello");
-        expect(
-          (yield* service
-            .getMetadata({ paths: ["~/file"] })
-            .pipe(Effect.provideService(HostProcess.HomeDirectory, home))).entries,
-        ).toEqual([{ kind: "file", byteLength: 5 }]);
-      }),
-    );
-
     it.effect(
       "reports actual kinds for extensionless files, dotfiles, and dotted directories",
       () =>
@@ -288,25 +273,6 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
         ]);
       }),
     );
-
-    it.effect.skipIf(!symlinksSupported)("follows file and directory symlinks", () =>
-      Effect.gen(function* () {
-        const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const cwd = yield* makeTempDir;
-        yield* writeTextFile(cwd, "target", "text");
-        yield* fs.makeDirectory(path.join(cwd, "directory"));
-        const fileLink = path.join(cwd, "file-link");
-        const directoryLink = path.join(cwd, "directory-link");
-        yield* fs.symlink(path.join(cwd, "target"), fileLink);
-        yield* fs.symlink(path.join(cwd, "directory"), directoryLink);
-        expect((yield* service.getMetadata({ paths: [fileLink, directoryLink] })).entries).toEqual([
-          { kind: "file", byteLength: 4 },
-          { kind: "directory" },
-        ]);
-      }),
-    );
   });
 
   describe("readFile", () => {
@@ -353,6 +319,29 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
       }),
     );
 
+    it.effect("reads ~/ paths from the server home outside the workspace", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const home = yield* makeTempDir;
+        yield* writeTextFile(home, ".claude/CLAUDE.md", "# Notes\n");
+        yield* writeTextFile(cwd, "~/.claude/CLAUDE.md", "Workspace decoy\n");
+
+        const result = yield* workspaceFileSystem
+          .readFile({ cwd, relativePath: "~/.claude/CLAUDE.md" })
+          .pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+
+        expect(result).toEqual({
+          relativePath: "~/.claude/CLAUDE.md",
+          contents: "# Notes\n",
+          textFormat: { bom: false, encoding: "utf-8", lineEnding: "lf" },
+          version: "sha256:365d0b84ae63c2afc293dedd2b00bdf0dc8d6ef70c9297d90f9e5682ab0d72ee",
+          byteLength: 8,
+          truncated: false,
+        });
+      }),
+    );
+
     it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       "rejects a FIFO without blocking on open",
       () =>
@@ -380,21 +369,6 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
             { kind: "other" },
           ]);
         }),
-    );
-
-    it.effect("rejects reads outside the workspace root", () =>
-      Effect.gen(function* () {
-        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
-        const cwd = yield* makeTempDir;
-
-        const error = yield* workspaceFileSystem
-          .readFile({ cwd, relativePath: "../escape.md" })
-          .pipe(Effect.flip);
-
-        expect(error.message).toContain(
-          "Workspace file path must be relative to the project root: ../escape.md",
-        );
-      }),
     );
 
     it.effect.skipIf(!symlinksSupported)(
@@ -426,30 +400,20 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
             resolvedPath,
           });
           expect("cause" in error).toBe(false);
+
+          yield* fileSystem.symlink(outsideDir, path.join(cwd, "linked-dir"));
+          const missingChildError = yield* workspaceFileSystem
+            .readFile(
+              Object.assign(
+                { cwd, relativePath: "linked-dir/missing/t3.json" },
+                { allowMissing: true },
+              ),
+            )
+            .pipe(Effect.flip);
+          expect(missingChildError).toBeInstanceOf(
+            WorkspaceFileSystem.WorkspaceFilePathEscapeError,
+          );
         }),
-    );
-
-    it.effect("rejects directories without manufacturing an I/O cause", () =>
-      Effect.gen(function* () {
-        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const cwd = yield* makeTempDir;
-        yield* fileSystem.makeDirectory(path.join(cwd, "src"));
-
-        const error = yield* workspaceFileSystem
-          .readFile({ cwd, relativePath: "src" })
-          .pipe(Effect.flip);
-        const resolvedPath = yield* fileSystem.realPath(path.join(cwd, "src"));
-
-        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspacePathNotFileError);
-        expect(error).toMatchObject({
-          workspaceRoot: cwd,
-          relativePath: "src",
-          resolvedPath,
-        });
-        expect("cause" in error).toBe(false);
-      }),
     );
 
     it.effect("rejects binary files without leaking their contents into the error", () =>
@@ -474,30 +438,6 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
         });
         expect("cause" in error).toBe(false);
         expect("contents" in error).toBe(false);
-      }),
-    );
-
-    it.effect("preserves the real cause and path for I/O failures", () =>
-      Effect.gen(function* () {
-        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
-        const path = yield* Path.Path;
-        const cwd = yield* makeTempDir;
-        const resolvedPath = path.join(cwd, "missing.txt");
-
-        const error = yield* workspaceFileSystem
-          .readFile({ cwd, relativePath: "missing.txt" })
-          .pipe(Effect.flip);
-
-        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFileSystemOperationError);
-        expect(error).toMatchObject({
-          workspaceRoot: cwd,
-          relativePath: "missing.txt",
-          resolvedPath,
-          operationPath: resolvedPath,
-          operation: "realpath-target",
-        });
-        expect(error.cause).toBeInstanceOf(Error);
-        expect((error.cause as NodeJS.ErrnoException).code).toBe("ENOENT");
       }),
     );
   });

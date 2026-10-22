@@ -108,6 +108,10 @@ const executeBundle = (source, sandboxModules) => {
     {
       process: sandboxProcess,
       require: requireSandboxModule,
+      // Sandboxed preloads retain Chromium's web encoding APIs.
+      TextEncoder,
+      TextDecoder,
+      window: { addEventListener: () => undefined },
     },
     {
       filename: "desktop-preload.cjs",

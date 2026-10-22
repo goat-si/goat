@@ -17,6 +17,7 @@ import * as Tracer from "effect/Tracer";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import { TestClock } from "effect/testing";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 import * as SshAuth from "./auth.ts";
 import * as SshTunnel from "./tunnel.ts";
 import {
@@ -126,7 +127,7 @@ const fixture = Effect.gen(function* () {
     entered: Deferred.Deferred<void>;
     release: Deferred.Deferred<void>;
   } | null = null;
-  const spawner = ChildProcessSpawner.make((command) =>
+  const spawner = lazyChildProcessSpawner((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
       sshCalls.push(command.args);
@@ -620,6 +621,7 @@ describe("SSH pending replacement reconciliation", () => {
           yield* manager.ensureEnvironment(uploadTarget, { refreshRuntime: true });
           assert.equal(f.count.launches, 2);
           assert.include(f.launchScripts[1]!, "REFRESH_IF_IDLE=1");
+          assert.include(f.launchScripts[1]!, "DRAIN_AUTOMATIC=0");
           f.setMode("ready");
           yield* manager.ensureEnvironment(uploadTarget, {
             refreshRuntime: true,
@@ -692,7 +694,7 @@ describe("SSH pending replacement reconciliation", () => {
   );
 
   it.effect(
-    "manual updates serialize per target while status reads preparing without waiting",
+    "compatible manual updates share preparation while status reads preparing without waiting",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture;
@@ -724,10 +726,44 @@ describe("SSH pending replacement reconciliation", () => {
           yield* Deferred.succeed(f.releaseLaunch, undefined);
           yield* Fiber.join(first);
           yield* Fiber.join(second);
-          assert.equal(f.count.launches, 2);
+          assert.equal(f.count.launches, 1);
           assert.deepEqual(phases, ["connecting", "checking", "starting"]);
         }).pipe(Effect.provide(f.layer), Effect.scoped);
       }),
+  );
+
+  it.effect("managed aliases coalesce explicit and implicit effective key-only policy", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.installPin();
+      f.setMode("blocked");
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const first = yield* manager.ensureEnvironment(uploadTarget).pipe(Effect.forkChild);
+        yield* Deferred.await(f.launchEntered);
+        const observed = yield* Deferred.make<void>();
+        let disposition: string | undefined;
+        const second = yield* manager
+          .ensureEnvironment(uploadTarget, {
+            keyOnly: true,
+            onPreparationAdmission: (admission) => {
+              disposition = admission.disposition;
+            },
+            onPreparationProgress: () => {
+              Deferred.doneUnsafe(observed, Exit.void);
+            },
+          })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(observed);
+        assert.equal(disposition, "join");
+        f.setMode("ready");
+        yield* Deferred.succeed(f.releaseLaunch, undefined);
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+        assert.equal(f.count.launches, 1);
+        assert.equal(f.count.prompts, 0);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    }),
   );
 
   it.effect("a confirmed call never grants force or its observer to the background retry", () =>
@@ -744,6 +780,7 @@ describe("SSH pending replacement reconciliation", () => {
           },
         });
         assert.include(f.launchScripts[0]!, "DRAIN_FORCE=1");
+        assert.include(f.launchScripts[0]!, "DRAIN_AUTOMATIC=0");
         assert.equal((yield* manager.status(uploadTarget)).status?.state, "update_waiting");
         const observed = [...phases];
         f.setMode("ready");
@@ -753,6 +790,7 @@ describe("SSH pending replacement reconciliation", () => {
         yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
         assert.equal(f.count.launches, 2);
         assert.include(f.launchScripts[1]!, "DRAIN_FORCE=0");
+        assert.include(f.launchScripts[1]!, "DRAIN_AUTOMATIC=0");
         assert.deepEqual(phases, observed);
         assert.equal(f.count.prompts, 0);
       }).pipe(Effect.provide(f.layer), Effect.scoped);
@@ -817,13 +855,22 @@ describe("SSH pending replacement reconciliation", () => {
           if (action === "stale") f.setStale(true);
           let interrupt: (() => void) | undefined;
           let interrupted = false;
+          const preparationFinished = yield* Deferred.make<void>();
           const tracer = Tracer.make({
             span(options) {
               if (!interrupted && options.name === "ssh/tunnel.closeTunnelEntry") {
                 interrupted = true;
+                f.setStale(false);
                 interrupt?.();
               }
-              return new Tracer.NativeSpan(options);
+              const span = new Tracer.NativeSpan(options);
+              const end = span.end.bind(span);
+              span.end = (at, exit) => {
+                end(at, exit);
+                if (options.name === "ssh/tunnel.ensureTunnelEntry")
+                  Deferred.doneUnsafe(preparationFinished, Exit.void);
+              };
+              return span;
             },
           });
           const closing = yield* Effect.withFiber((fiber) => {
@@ -841,9 +888,10 @@ describe("SSH pending replacement reconciliation", () => {
           }
           assert.isTrue(Exit.isFailure(yield* Fiber.await(closing)));
           assert.isTrue(interrupted);
+          if (action !== "disconnect") yield* Deferred.await(preparationFinished);
           assert.equal(f.count.kills, 1);
         }).pipe(Effect.provide(f.layer), Effect.scoped);
-        assert.equal(f.count.kills, 1);
+        assert.equal(f.count.kills, action === "disconnect" ? 1 : 2);
       }),
   );
 
@@ -1197,7 +1245,10 @@ describe("SSH archive refresh retry", () => {
           yield* TestClock.adjust("1 minute");
           yield* Deferred.await(f.completed[2]!);
           const second = yield* manager.ensureEnvironment(uploadTarget, agent);
-          assert.deepEqual(second, first);
+          if ("type" in first || "type" in second)
+            return yield* Effect.die("Expected ready attachments");
+          assert.notEqual(second.attachmentId, first.attachmentId);
+          assert.deepEqual({ ...second, attachmentId: first.attachmentId! }, first);
           assert.equal(f.count.launches, 2);
           assert.equal(f.count.forwards, 1);
           assert.equal(f.count.kills, 0);
@@ -1439,7 +1490,10 @@ describe("SSH drain-unavailable attachment", () => {
           yield* TestClock.adjust("1 minute");
           yield* Deferred.await(f.published[1]!);
           const repeated = yield* manager.ensureEnvironment(uploadTarget, agent);
-          assert.deepEqual(repeated, first);
+          if ("type" in first || "type" in repeated)
+            return yield* Effect.die("Expected ready attachments");
+          assert.notEqual(repeated.attachmentId, first.attachmentId);
+          assert.deepEqual({ ...repeated, attachmentId: first.attachmentId! }, first);
           assert.equal(f.count.launches, 2);
           assert.equal(f.count.forwards, 1);
           assert.equal(f.count.kills, 0);
@@ -1710,6 +1764,40 @@ it.effect("a changed managed pin cannot reconstruct drain readiness", () =>
   }).pipe(Effect.scoped),
 );
 
+it.effect(
+  "fresh status proof cannot revive an attachment hint invalidated by an earlier owner probe",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      f.setMode("drain-attached");
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const first = yield* manager.ensureEnvironment(uploadTarget);
+        if ("type" in first) return yield* Effect.die("Expected a ready forward");
+        f.setProbe({ liveOwned: false });
+        assert.equal((yield* manager.status(uploadTarget)).status?.state, "update_blocked");
+        f.setProbe({ liveDrain: true });
+        assert.equal((yield* manager.status(uploadTarget)).status?.state, "ready");
+        const hint = yield* Effect.result(
+          manager.ensureEnvironment(uploadTarget, {
+            preparedAttachmentId: first.attachmentId!,
+            issuePairingToken: true,
+          }),
+        );
+        assert.isTrue(Result.isFailure(hint));
+        if (Result.isFailure(hint)) assert.equal(hint.failure._tag, "SshEnsureSupersededError");
+        const fresh = yield* manager.ensureEnvironment(uploadTarget, {
+          reuseWhileRefreshPending: true,
+        });
+        if ("type" in fresh) return yield* Effect.die("Expected a revalidated forward");
+        assert.notEqual(fresh.attachmentId, first.attachmentId);
+        assert.equal(f.count.pairings, 0);
+        assert.equal(f.count.launches, 1);
+        assert.equal(f.count.forwards, 1);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    }),
+);
+
 it.effect("terminal setup failure fences drain publication across the forward-state read", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
@@ -1718,7 +1806,9 @@ it.effect("terminal setup failure fences drain publication across the forward-st
       const manager = yield* SshTunnel.SshEnvironmentManager;
       const operation = yield* manager.beginSetupOperation(uploadTarget, "drain-publication");
       const gate = yield* f.holdNextForwardState;
-      const launch = yield* manager.ensureEnvironment(uploadTarget).pipe(Effect.forkChild);
+      const launch = yield* manager
+        .ensureEnvironment(uploadTarget)
+        .pipe(Effect.result, Effect.forkChild);
       yield* Deferred.await(gate.entered);
       yield* manager.publishSetupOutcome(uploadTarget, operation, {
         kind: "error",
@@ -1727,7 +1817,10 @@ it.effect("terminal setup failure fences drain publication across the forward-st
         fix: { actor: "human", instruction: "Authorize setup again" },
       });
       yield* Deferred.succeed(gate.release, undefined);
-      yield* Fiber.join(launch);
+      const superseded = yield* Fiber.join(launch);
+      assert.isTrue(Result.isFailure(superseded));
+      if (Result.isFailure(superseded))
+        assert.equal(superseded.failure._tag, "SshEnsureSupersededError");
       const result = yield* manager.status(uploadTarget);
       assert.equal(result.status?.state, "failed");
       assert.equal(result.status?.failure?.reason, "authorization_revoked");

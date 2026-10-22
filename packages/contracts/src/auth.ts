@@ -57,6 +57,14 @@ export const AuthRelayWriteScope = "relay:write" as const;
 export const AuthMemoryReadScope = "memory:read" as const;
 export const AuthMemoryWriteScope = "memory:write" as const;
 export const AuthMemorySyncScope = "memory:sync" as const;
+/**
+ * Lets a client reach the hub's nodes through `/hub/nodes`. What it may do on a node is still
+ * capped by the session the hub holds there. Granted only on request (`goat pair --hub-proxy`):
+ * signed sessions decode their scopes strictly, so a server rolled back to a build without it
+ * rejects every session that carries it, and keeping it out of the default limits that to hub
+ * pairings.
+ */
+export const AuthHubProxyScope = "hub:proxy" as const;
 export const AuthEnvironmentScope = Schema.Literals([
   AuthMemoryReadScope,
   AuthMemoryWriteScope,
@@ -79,6 +87,7 @@ export const AuthEnvironmentScope = Schema.Literals([
   AuthAccessWriteScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  AuthHubProxyScope,
 ]);
 export type AuthEnvironmentScope = typeof AuthEnvironmentScope.Type;
 export const AuthEnvironmentScopes = Schema.Array(AuthEnvironmentScope);
@@ -409,6 +418,11 @@ export const AuthSessionState = Schema.Struct({
   permissions: authScopeResponseFields.permissions,
   sessionMethod: Schema.optionalKey(ServerAuthSessionMethod),
   expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+  /**
+   * True when a hub answers for one of its nodes. The hub forwards only some actions there, so
+   * clients hide the rest instead of offering what the hub will refuse.
+   */
+  proxiedByHub: Schema.optionalKey(Schema.Boolean),
 });
 export type AuthSessionState = typeof AuthSessionState.Type;
 

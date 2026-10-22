@@ -1,9 +1,9 @@
 import {
   EnvironmentAuthorizationError,
-  type AuthEnvironmentScope,
-  type MemoryTaskGrantCeiling,
   ProviderInstanceId,
   ThreadId,
+  type AuthEnvironmentScope,
+  type MemoryTaskGrantCeiling,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -14,9 +14,9 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
 
+import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 
 export interface McpMemoryPolicy {
   readonly grant: MemoryTaskGrantCeiling;
@@ -550,12 +550,22 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       yield* SynchronizedRef.update(state, (before) => {
         const current = pruneIdle(before, timestamp);
         const records = new Map(current.records);
+        const tombstones = new Map(current.tombstones);
+        for (const [tokenHash, tombstone] of current.tombstones) {
+          if (
+            tombstone.reason === "expired" &&
+            tombstone.record?.scope.thread.threadId === threadId
+          ) {
+            records.set(tokenHash, { ...tombstone.record, lastAliveAt: timestamp });
+            tombstones.delete(tokenHash);
+          }
+        }
         for (const [tokenHash, record] of current.records) {
           if (record.scope.thread.threadId === threadId) {
             records.set(tokenHash, { ...record, lastAliveAt: timestamp });
           }
         }
-        return registryState(records, current.tombstones);
+        return registryState(records, tombstones);
       });
     },
   );
@@ -644,23 +654,8 @@ const make = Effect.acquireRelease(
 
 export const layer = Layer.effect(McpSessionRegistry, make);
 
-export const issueActiveMcpCredential = (
-  request: McpCredentialRequest,
-): Effect.Effect<McpIssuedCredential | undefined> =>
-  activeMcpSessionRegistry
-    ? activeMcpSessionRegistry
-        .revokeThread(request.threadId)
-        .pipe(Effect.andThen(activeMcpSessionRegistry.issue(request)))
-    : Effect.undefined;
-
 export const touchActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.touch(threadId) : Effect.void;
-
-const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
-  activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeThread(threadId) : Effect.void;
-
-const revokeAllActiveMcpCredentials = (): Effect.Effect<void> =>
-  activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeAll : Effect.void;
 
 export const __testing = {
   make: makeWithOptions,

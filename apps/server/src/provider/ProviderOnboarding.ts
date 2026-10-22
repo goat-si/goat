@@ -37,6 +37,7 @@ import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
+import { authorizeApprovalRequest } from "../sshRemote/SshHostAuthorization.ts";
 import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
 import * as ProviderAuthService from "./ProviderAuthService.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
@@ -55,7 +56,7 @@ const SIGN_IN: Readonly<Record<string, { readonly kind: ProviderSignInKind }>> =
   devinCloud: { kind: "linked" },
   antigravity: { kind: "browser" },
   acpRegistry: { kind: "agent" },
-  grok: { kind: "environment" },
+  grok: { kind: "credentials" },
   opencode: { kind: "command" },
 };
 
@@ -169,9 +170,12 @@ const make = Effect.gen(function* () {
           "unsupported",
           "Ask from a thread on this environment, or sign in from GOAT's model picker.",
         );
-      if (!scope.reauthorize || !scope.grantedScopes?.includes("orchestration:operate"))
+      const allowed = yield* authorizeApprovalRequest(scope).pipe(
+        Effect.as(true),
+        Effect.catchTags({ EnvironmentAuthorizationError: () => Effect.succeed(false) }),
+      );
+      if (!allowed)
         return error("capability_denied", "The requesting thread must have live authorization.");
-      yield* scope.reauthorize(["orchestration:operate"]);
       const view = yield* threads.getThreadSnapshot(scope.thread.threadId);
       const run = view.projection.runs.at(-1);
       if (!run || run.rootNodeId === null)

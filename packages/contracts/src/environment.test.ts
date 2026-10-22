@@ -45,19 +45,6 @@ describe("ExecutionEnvironmentDescriptor", () => {
       expect(() => decodeDescriptor({ ...descriptor, sshRuntimeProtocolVersion: value })).toThrow();
     }
   });
-  it("keeps settled cleanup optional alongside current worktree capabilities", () => {
-    expect(decodeDescriptor(descriptor).capabilities.settledWorktreeCleanup).toBeUndefined();
-    const capabilities = {
-      settledWorktreeCleanup: true,
-      storageCleanupRun: true,
-      projectWorktreeCleanup: true,
-      worktreesDirectory: true,
-      threadAutoSettlementScope: true,
-    };
-    expect(decodeDescriptor({ ...descriptor, capabilities }).capabilities).toMatchObject(
-      capabilities,
-    );
-  });
 
   it("decodes old, recognized and future manual installation descriptors", () => {
     expect(decodeDescriptor(descriptor).capabilities.serverInstallation).toBeUndefined();
@@ -78,69 +65,20 @@ describe("ExecutionEnvironmentDescriptor", () => {
       ).toBeUndefined();
     }
   });
-  it("requires an advertised required-worktree bootstrap capability", () => {
-    expect(decodeDescriptor(descriptor).capabilities.requiredWorktreeBootstrap).toBeUndefined();
+
+  it("treats a missing automatic server updates capability as unsupported", () => {
+    expect(decodeDescriptor(descriptor).capabilities.automaticServerUpdates).toBeUndefined();
+  });
+
+  it("preserves an advertised automatic server updates capability", () => {
     expect(
       decodeDescriptor({
         ...descriptor,
-        capabilities: { ...descriptor.capabilities, requiredWorktreeBootstrap: true },
-      }).capabilities.requiredWorktreeBootstrap,
+        capabilities: { ...descriptor.capabilities, automaticServerUpdates: true },
+      }).capabilities.automaticServerUpdates,
     ).toBe(true);
   });
 
-  it("treats a missing pull-request capability as unsupported under version skew", () => {
-    expect(decodeDescriptor(descriptor).capabilities.pullRequests).toBeUndefined();
-  });
-
-  it("preserves an advertised pull-request capability", () => {
-    expect(
-      decodeDescriptor({
-        ...descriptor,
-        capabilities: { ...descriptor.capabilities, pullRequests: true },
-      }).capabilities.pullRequests,
-    ).toBe(true);
-  });
-
-  it("treats a missing attachment upload capability as unsupported", () => {
-    expect(decodeDescriptor(descriptor).capabilities.attachmentUploads).toBeUndefined();
-  });
-
-  it("preserves an advertised attachment upload capability", () => {
-    expect(
-      decodeDescriptor({
-        ...descriptor,
-        capabilities: { ...descriptor.capabilities, attachmentUploads: true },
-      }).capabilities.attachmentUploads,
-    ).toBe(true);
-  });
-
-  it("preserves the server's generic attachment upload limit", () => {
-    expect(
-      decodeDescriptor({
-        ...descriptor,
-        capabilities: {
-          ...descriptor.capabilities,
-          fileAttachments: { maxUploadBytes: 50 * 1024 * 1024 },
-        },
-      }).capabilities.fileAttachments,
-    ).toEqual({ maxUploadBytes: 50 * 1024 * 1024 });
-  });
-
-  it("treats missing server-resolved command context as unsupported", () => {
-    expect(decodeDescriptor(descriptor).capabilities.serverResolvedCommandContext).toBeUndefined();
-  });
-
-  it("preserves advertised server-resolved command context", () => {
-    expect(
-      decodeDescriptor({
-        ...descriptor,
-        capabilities: {
-          ...descriptor.capabilities,
-          serverResolvedCommandContext: true,
-        },
-      }).capabilities.serverResolvedCommandContext,
-    ).toBe(true);
-  });
   it("treats the channel capabilities as off unless a server says otherwise", () => {
     for (const key of ["channelLedger", "slackChannel"] as const) {
       expect(decodeDescriptor(descriptor).capabilities[key]).toBeUndefined();

@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   ArchiveIcon,
+  InboxIcon,
   BrainIcon,
   BlocksIcon,
   BotIcon,
@@ -22,6 +23,7 @@ import {
   PlugIcon,
   PaletteIcon,
   SearchIcon,
+  ServerIcon,
   Settings2Icon,
   XIcon,
 } from "~/components/solar";
@@ -76,6 +78,8 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/providers": BotIcon,
   "/settings/integrations": BlocksIcon,
   "/settings/goat-bot": MessageCircleIcon,
+  "/settings/decision-inbox": InboxIcon,
+  "/settings/hub": ServerIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/storage": HardDriveIcon,
@@ -97,7 +101,7 @@ const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 
 function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   const Icon = SETTINGS_SECTION_ICONS[to];
-  return <Icon className="mt-0.5 size-3.5 shrink-0 text-sidebar-muted-foreground/60" />;
+  return <Icon className="size-3.5 h-5 shrink-0 text-sidebar-muted-foreground/60" />;
 }
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {

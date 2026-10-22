@@ -26,7 +26,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { fromJsonStringPretty } from "@goat/shared/schemaJson";
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
-import { windowsSystemTar } from "./build-cli-archive.ts";
+import { windowsSystemTar } from "./lib/windows-tar.ts";
 
 export const NPM_LAUNCHER_PACKAGE_NAME = "goat";
 // Kept here rather than in apps/server/package.json: the desktop bundle inlines that

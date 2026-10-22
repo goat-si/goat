@@ -1242,6 +1242,7 @@ it.effect.skipIf(sshdTestBinaries === undefined)(
           : undefined;
 
       const before = yield* f.unchanged;
+      // oxlint-disable-next-line goat/no-wall-clock-in-tests -- Real Git over an SSH socket relay must enforce the keepalive deadline; a virtual clock cannot drive OpenSSH.
       const startedAtNs = process.hrtime.bigint();
       const fetchFiber = yield* f.sync
         .fetchBack({
@@ -1279,6 +1280,7 @@ it.effect.skipIf(sshdTestBinaries === undefined)(
       assert.strictEqual(relay.openSockets, 2);
 
       const error = yield* Fiber.join(fetchFiber);
+      // oxlint-disable-next-line goat/no-wall-clock-in-tests -- Measure the real OpenSSH keepalive failure deadline while preserving the 30-second regression assertion.
       const elapsedMs = Number(process.hrtime.bigint() - startedAtNs) / 1_000_000;
       assert.deepInclude(error, {
         stage: "fetch",

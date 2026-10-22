@@ -57,6 +57,15 @@ learned route still has to answer as this environment before it is used.
 GitHub routing trust covers the whole route list. Adding or changing a route
 revokes it; reordering does not, because the same addresses remain trusted.
 
+A hub's [node list](../../structure/ssh.md#hub-nodes) uses the same key: a node
+is the remote GOAT's own environment ID, so a client that later reaches it
+through the hub adds a route to the environment it already saved instead of
+re-keying its threads, deep links and credentials. The hub reads that ID from the
+node's identity file over SSH rather than from a launched runtime, so listing and
+checking never install, start or wake anything. Only the SSH-managed home
+(`$HOME/.goat`) counts; an old `.t3` home can belong to a different server, and
+reading it would merge two machines into one node.
+
 ## Hosted web is a client
 
 The hosted web app stores its connection catalog in the browser and connects

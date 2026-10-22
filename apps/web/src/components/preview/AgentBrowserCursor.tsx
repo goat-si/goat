@@ -1,5 +1,3 @@
-"use client";
-
 import type { DesktopPreviewPointerEvent } from "@goat/contracts";
 import { MousePointerIcon as MousePointer2 } from "~/components/solar";
 import { useEffect, useState } from "react";

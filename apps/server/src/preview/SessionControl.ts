@@ -80,13 +80,19 @@ export class SessionControl {
     );
   }
 
-  private async action<A>(allowed: () => boolean, run: () => Promise<A>) {
+  private async action<A>(allowed: () => boolean, run: () => Promise<A>, deadlineMs?: number) {
     this.assertOpen();
     if (!allowed()) throw new BrowserControlInterrupted("You do not control this browser tab.");
     const epoch = this.epoch;
     return this.enqueue(async () => {
       this.assertOpen();
       if (epoch !== this.epoch || !allowed()) throw new BrowserControlInterrupted();
+      if (deadlineMs !== undefined && performance.now() >= deadlineMs) {
+        throw new DOMException(
+          "This browser request expired before it could start.",
+          "TimeoutError",
+        );
+      }
       return run();
     });
   }
@@ -99,7 +105,7 @@ export class SessionControl {
    * An agent action. It may act on its own tab or on one a human opened, but
    * never while a human controls the tab; taking control interrupts it.
    */
-  agent<A>(agentId: string, run: (signal: AbortSignal) => Promise<A>) {
+  agent<A>(agentId: string, run: (signal: AbortSignal) => Promise<A>, deadlineMs?: number) {
     if (!this.agentMayAct(agentId))
       return Promise.reject(
         new BrowserControlInterrupted("This tab belongs to another agent.", "agentMismatch"),
@@ -119,6 +125,7 @@ export class SessionControl {
           this.activeAgentAction = undefined;
         }
       },
+      deadlineMs,
     );
   }
 

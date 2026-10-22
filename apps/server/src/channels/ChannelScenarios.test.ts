@@ -597,8 +597,8 @@ describe("GOAT bot boundary (scenario 6)", () => {
         yield* gateway.ingest(slackInput("how is it going", "Ev-q"), slackContext);
         yield* runtime.drain;
         const question = resultsTo(harness.slackSent, "question")[0];
-        assert.strictEqual(question?.message.text, "Which one?\n• CI fix\n• Release");
-        assert.isUndefined(question?.message.options);
+        assert.strictEqual(question?.message.text, "Which one?\n1. CI fix\n2. Release");
+        assert.deepStrictEqual(question?.message.options, ["CI fix", "Release"]);
       }).pipe(Effect.provide(harness.layer));
     },
   );
@@ -927,7 +927,7 @@ describe("duplicates and restarts (scenario 2)", () => {
         assert.strictEqual(resultsTo(harness.slackSent, "result").length, 1);
         assert.strictEqual(
           resultsTo(harness.slackSent, "result")[0]?.message.text,
-          "Done: recover result\nRecovered result.",
+          "Done: recover result\nRecovered result.\nReported tests: not reported\nGOAT check: pending",
         );
       }),
     ).pipe(Effect.provide(harness.layer));
@@ -1769,9 +1769,9 @@ describe("who may do what (scenario 4)", () => {
       assert.strictEqual(harness.world.launches.length, 0);
       const question = resultsTo(harness.slackSent, "question")[0];
       assert.include(question?.message.text ?? "", "Which project should I use?");
-      // Slack reads the choices as a list; the GOAT bot shows them as buttons.
-      assert.include(question?.message.text ?? "", "• Channel work");
-      assert.include(question?.message.text ?? "", "• Other work 1");
+      // Slack reads the choices as a numbered list; the GOAT bot shows them as buttons.
+      assert.match(question?.message.text ?? "", /\n\d+\. Channel work(?:\n|$)/);
+      assert.match(question?.message.text ?? "", /\n\d+\. Other work 1(?:\n|$)/);
       // The answer names a project; the dispatcher launches there.
       harness.script.current = (input) =>
         input.mode === "input"
@@ -1803,7 +1803,11 @@ describe("who may do what (scenario 4)", () => {
       yield* gateway.ingest(slackInput("do: which repo?", "Ev42"), slackContext);
       yield* runtime.drain;
       const question = resultsTo(harness.slackSent, "question")[0];
-      assert.include(question?.message.text ?? "", "• " + CHANNEL_HOST_WORKSPACE_LABEL);
+      assert.isTrue(
+        (question?.message.text ?? "")
+          .split("\n")
+          .some((line) => /^\d+\. /.test(line) && line.endsWith(CHANNEL_HOST_WORKSPACE_LABEL)),
+      );
       // Picking this machine runs the work at the root of the bot's own workspace.
       const task = yield* onlyTask;
       harness.script.current = (input) =>
@@ -2027,8 +2031,14 @@ describe("channel worker memory grants", () => {
         }
         yield* runtime.drain;
         const task = yield* onlyTask;
-        assert.strictEqual(task.status, "running");
         assert.include(task.requester.grantedScopes, "memory:write");
+        if (change === "removed") {
+          assert.strictEqual(task.status, "failed");
+          assert.isUndefined(task.target);
+          assert.lengthOf(harness.world.launches, 0);
+          return;
+        }
+        assert.strictEqual(task.status, "running");
         const expected = change === "read" ? "read" : undefined;
         assert.strictEqual(task.target?.memoryGrantCeiling, expected);
         assert.strictEqual(harness.world.launches[0]?.initialMessage?.memoryGrantCeiling, expected);
@@ -2552,6 +2562,7 @@ describe("completion (scenario 5)", () => {
       assert.strictEqual(held?.task.status, "running");
       assert.strictEqual(held?.completionHold, "background");
       assert.deepStrictEqual(held?.task.observed, {
+        result: { runId: task.worker!.runId!, observedCheckPending: true },
         pullRequests: [{ repository: link.repository, number: 123, url: link.url, watching: true }],
         needsYou: [],
       });
@@ -2563,6 +2574,7 @@ describe("completion (scenario 5)", () => {
       assert.strictEqual(done?.task.status, "completed");
       assert.isUndefined(done?.completionHold);
       assert.deepStrictEqual(done?.task.observed, {
+        result: { runId: task.worker!.runId!, observedCheckPending: true },
         pullRequests: [
           { repository: link.repository, number: 123, url: link.url, watching: false },
         ],
@@ -3031,9 +3043,14 @@ describe("completion (scenario 5)", () => {
       const current = yield* onlyTask;
       assert.strictEqual(current.status, "waiting_input");
       assert.deepStrictEqual(current.openQuestions, waiting.openQuestions);
-      assert.strictEqual(current.version, waiting.version);
+      assert.strictEqual(current.version, waiting.version + 1);
       assert.isFalse(yield* ledger.hasTaskEvent(proposalId));
-      assert.isFalse(yield* ledger.hasTaskEvent(taskEventIdFor(task.taskId, waiting.version + 1)));
+      assert.deepStrictEqual(current.observed?.result, {
+        runId: current.worker!.runId!,
+        observedCheckPending: true,
+      });
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).version, current.version);
       assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
       assert.strictEqual(resultsTo(harness.slackSent, "question").length, 1);
     }).pipe(Effect.provide(harness.layer));

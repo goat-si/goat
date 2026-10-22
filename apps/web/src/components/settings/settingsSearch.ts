@@ -25,6 +25,8 @@ export type SettingsPath =
   | "/settings/providers"
   | "/settings/integrations"
   | "/settings/goat-bot"
+  | "/settings/decision-inbox"
+  | "/settings/hub"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/storage"
@@ -87,6 +89,8 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/memory": "Memory",
   "/settings/integrations": "Integrations",
   "/settings/goat-bot": "GOAT Bot",
+  "/settings/decision-inbox": "Decision inbox",
+  "/settings/hub": "Hub",
   "/settings/scheduled-tasks": "Scheduled Tasks",
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
@@ -136,6 +140,45 @@ const SOURCE_CONTROL_HOST_SEARCH_ITEMS = sourceControlClients.definitions.flatMa
 );
 
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "decision-inbox",
+    title: "Decision inbox",
+    to: "/settings/decision-inbox",
+    searchTerms: ["decisions approvals questions pending answers"],
+  },
+  {
+    id: "hub-enabled",
+    title: "This machine is the hub",
+    to: "/settings/hub",
+    searchTerms: ["hub goatclaw opencodex home fleet parity remote link"],
+  },
+  {
+    id: "hub-cloud-holder",
+    title: "Cloud runs",
+    to: "/settings/hub",
+    searchTerms: ["cloud holder claude cloud cursor cloud devin cloud hub"],
+  },
+  {
+    id: "hub-permission-profiles",
+    title: "Permission profiles",
+    to: "/settings/hub",
+    searchTerms: ["goatclaw permission profiles supervisor agents capabilities limits"],
+  },
+  {
+    id: "hub-default-profile",
+    title: "Default profile",
+    to: "/settings/hub",
+    searchTerms: ["goatclaw default permission profile worker manager owner observer"],
+  },
+  {
+    id: "hub-devices",
+    title: "Hub devices",
+    to: "/settings/hub",
+    searchTerms: [
+      "devices parity verify fallback sign-in hub down remote link child hub client opencodex",
+      "add device join leave remove disconnect repair relink",
+    ],
+  },
   {
     id: "memory-records",
     title: "Memory",
@@ -272,6 +315,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["wide full width column layout messages composer monitor"],
   },
   {
+    id: "math-rendering",
+    title: "Render math",
+    to: "/settings/appearance",
+    searchTerms: ["latex tex katex equations formulas markdown"],
+  },
+  {
     id: "panel-animations",
     title: "Panel animations",
     to: "/settings/appearance",
@@ -356,6 +405,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["sidebar inactivity days no activity automatically"],
     requiresThreadAutoSettlement: true,
     scope: "project-defaults",
+  },
+  {
+    id: "compact-idle-threads",
+    title: "Compact idle Claude threads (beta)",
+    to: "/settings/general",
+    scope: "environment-defaults",
+    searchTerms: ["context compaction idle cache tokens usage summary beta experimental"],
   },
   {
     id: "auto-settle-merged-threads",
@@ -559,10 +615,10 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "start-from-origin",
-    title: "Start from origin",
+    title: "Start from remote",
     to: "/settings/general",
     scope: "project-defaults",
-    searchTerms: ["new worktrees latest matching remote branch local"],
+    searchTerms: ["new worktrees start remote origin latest fetched branch local"],
   },
   {
     id: "add-project-starts-in",
@@ -798,11 +854,27 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["xcode android studio sdk avd runtime"],
   },
   {
+    id: "computer-use",
+    title: "Computer use",
+    to: "/settings/integrations",
+    targetId: "computer",
+    searchTerms: [
+      "cua driver apps desktop screen click type agents control mac linux windows accessibility screen recording permissions",
+    ],
+  },
+  {
     id: "goat-bot-home",
     title: "Runs on",
     to: "/settings/goat-bot",
     targetId: "goat-bot",
     searchTerms: ["goat bot home computer environment cluster"],
+  },
+  {
+    id: "channel-auto-placement",
+    title: "Automatically choose a worker computer",
+    to: "/settings/goat-bot",
+    targetId: "goat-bot",
+    searchTerms: ["channel placement quota ssh host worker automatic"],
   },
   {
     id: "goat-bot-model",
@@ -1180,6 +1252,8 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/source-control": "environment-defaults",
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",
+  "/settings/decision-inbox": null,
+  "/settings/hub": "environment",
   "/settings/scheduled-tasks": null,
   "/settings/archived": "project-defaults",
 };

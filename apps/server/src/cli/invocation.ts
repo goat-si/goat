@@ -112,16 +112,15 @@ export const resolveServerInstallation = Effect.gen(function* () {
 }).pipe(Effect.orElseSucceed(() => null));
 
 /**
- * The literal spec the user typed (e.g. `t3@nightly`) is resolved away before
+ * The literal spec the user typed (e.g. `goat@nightly`) is resolved away before
  * our process starts, so re-derive it from the running version: nightly builds
  * re-suggest the nightly channel, anything else suggests the bare package.
  */
 function suggestedPackageSpec(version: string): string {
   const channel = /^[^-+]+-(nightly|preview)\./.exec(version)?.[1];
-  return channel === undefined ? "t3" : `t3@${channel}`;
+  return channel === undefined ? "goat" : `goat@${channel}`;
 }
-
-export function formatCliCommand(input: {
+function formatCliCommand(input: {
   readonly subcommand: string;
   readonly entryPath: string;
   readonly version: string;
@@ -181,21 +180,23 @@ const resolveInstallLauncher = Effect.gen(function* () {
  * installs. `args` are quoted for the host's shell: POSIX, or PowerShell on
  * Windows.
  */
-export const resolveHostCliCommand = (subcommand: string, args: ReadonlyArray<string> = []) =>
-  Effect.gen(function* () {
-    const platform = yield* HostProcess.Platform;
-    const withArgs = (prefix: string) =>
-      [prefix, ...args.map((arg) => hostShellWord(platform, arg))].join(" ");
-    const command = yield* resolveCliCommand(subcommand);
-    if (command !== `goat ${subcommand}`) return { command: withArgs(command), launcher: false };
-    if (yield* isCommandAvailable("goat")) return { command: withArgs(command), launcher: false };
-    const launcher = yield* resolveInstallLauncher;
-    if (Option.isNone(launcher)) return { command: withArgs(command), launcher: false };
-    // PowerShell runs a quoted path only through the call operator.
-    const quoted = hostShellWord(platform, launcher.value);
-    const call = platform === "win32" ? `& ${quoted}` : quoted;
-    return { command: withArgs(`${call} ${subcommand}`), launcher: true };
-  });
+export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand")(function* (
+  subcommand: string,
+  args: ReadonlyArray<string> = [],
+) {
+  const platform = yield* HostProcess.Platform;
+  const withArgs = (prefix: string) =>
+    [prefix, ...args.map((arg) => hostShellWord(platform, arg))].join(" ");
+  const command = yield* resolveCliCommand(subcommand);
+  if (command !== `goat ${subcommand}`) return { command: withArgs(command), launcher: false };
+  if (yield* isCommandAvailable("goat")) return { command: withArgs(command), launcher: false };
+  const launcher = yield* resolveInstallLauncher;
+  if (Option.isNone(launcher)) return { command: withArgs(command), launcher: false };
+  // PowerShell runs a quoted path only through the call operator.
+  const quoted = hostShellWord(platform, launcher.value);
+  const call = platform === "win32" ? `& ${quoted}` : quoted;
+  return { command: withArgs(`${call} ${subcommand}`), launcher: true };
+});
 
 /**
  * `sudo` resets PATH on most distributions, which drops a user-installed Node
@@ -203,16 +204,17 @@ export const resolveHostCliCommand = (subcommand: string, args: ReadonlyArray<st
  * carries PATH through unless Node is on root's PATH too. An absolute launcher
  * needs neither.
  */
-export const resolveRootCliCommand = (subcommand: string) =>
-  Effect.gen(function* () {
-    const { command, launcher } = yield* resolveHostCliCommand(subcommand);
-    if (launcher) return `sudo ${command}`;
-    const executablePath = yield* HostProcess.ExecutablePath;
-    const systemNode = ROOT_PATH_DIRECTORIES.some((directory) =>
-      executablePath.startsWith(`${directory}/`),
-    );
-    return systemNode ? `sudo ${command}` : `sudo env "PATH=$PATH" ${command}`;
-  });
+export const resolveRootCliCommand = Effect.fn("invocation.resolveRootCliCommand")(function* (
+  subcommand: string,
+) {
+  const { command, launcher } = yield* resolveHostCliCommand(subcommand);
+  if (launcher) return `sudo ${command}`;
+  const executablePath = yield* HostProcess.ExecutablePath;
+  const systemNode = ROOT_PATH_DIRECTORIES.some((directory) =>
+    executablePath.startsWith(`${directory}/`),
+  );
+  return systemNode ? `sudo ${command}` : `sudo env "PATH=$PATH" ${command}`;
+});
 
 const ROOT_PATH_DIRECTORIES = [
   "/usr/local/sbin",

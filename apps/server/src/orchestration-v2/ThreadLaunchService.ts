@@ -1,6 +1,7 @@
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import { splitStandingInstructions } from "@goat/shared/standingInstructions";
 import {
@@ -23,6 +24,7 @@ import {
   type ScheduledTaskId,
   ThreadId,
   describeWorktreesDirectoryUnavailable,
+  GitCommandError,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -43,6 +45,7 @@ import {
 } from "@goat/shared/git";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import { uniqueCommitsProblem } from "../vcs/GitVcsDriverCore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -186,12 +189,14 @@ export class ThreadLaunchBranchError extends Schema.TaggedError<ThreadLaunchBran
     workspaceRoot: Schema.String,
     branch: Schema.String,
     worktreePath: Schema.NullOr(Schema.String),
+    /** Why a launch cannot reuse the branch, such as commits its base lacks. */
+    problem: Schema.String,
   },
 ) {
   override get message(): string {
     return this.worktreePath === null
-      ? `Branch "${this.branch}" already exists in project "${this.projectTitle}" (${this.workspaceRoot}), and a new worktree needs a new branch.`
-      : `Branch "${this.branch}" is already checked out at ${this.worktreePath} in project "${this.projectTitle}".`;
+      ? `Branch "${this.branch}" already exists in project "${this.projectTitle}" (${this.workspaceRoot}) and ${this.problem}, so a new worktree cannot reuse it.`
+      : `Branch "${this.branch}" is already checked out at ${this.worktreePath} in project "${this.projectTitle}" and ${this.problem}, so a new worktree cannot reuse it.`;
   }
 }
 
@@ -261,6 +266,24 @@ function failureDetail(error: unknown): string {
     return `Workspace preparation failed during ${error.operation.replaceAll("-", " ")}: ${detail}`;
   }
   return `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+const isGitCommandError = Schema.is(GitCommandError);
+
+/**
+ * Most preparation failures are a request this machine cannot satisfy, such as a missing
+ * base ref. A stalled Git command is a slow or stuck host instead, which a later attempt
+ * can get past, so it is retryable and must not read as a bad request.
+ */
+export function preparationFailureClass(error: unknown): {
+  readonly class: "validation_error" | "unknown";
+  readonly code: string | null;
+  readonly retryable: boolean;
+} {
+  const cause = isThreadLaunchError(error) ? error.cause : error;
+  return isGitCommandError(cause) && cause.reason === "stalled"
+    ? { class: "unknown", code: "git_stalled", retryable: true }
+    : { class: "validation_error", code: null, retryable: false };
 }
 
 const make = Effect.gen(function* () {
@@ -335,8 +358,23 @@ const make = Effect.gen(function* () {
         const project = Option.getOrUndefined(yield* projects.getById(input.projectId));
         if (project === undefined) return undefined;
         const cwd = project.workspaceRoot;
-        if (!(yield* git.hasCommit({ cwd, refName: `refs/heads/${branch}` }))) return undefined;
-        return { project, worktreePath: yield* git.branchWorktreePath({ cwd, branch }) };
+        // A branch left by an earlier attempt is reused when that loses nothing; an
+        // unresolvable base leaves the decision to provisioning, which fetches it first.
+        const state = yield* git.inspectExistingBranch({ cwd, branch, baseRef: strategy.baseRef });
+        if (state === null) return undefined;
+        const problem =
+          state.uniqueCommits > 0
+            ? uniqueCommitsProblem(state.uniqueCommits, strategy.baseRef)
+            : state.dirty
+              ? "has uncommitted changes there"
+              : state.worktreePath !== null &&
+                  normalizeProjectPathForComparison(state.worktreePath) ===
+                    normalizeProjectPathForComparison(cwd)
+                ? "is the project's main checkout"
+                : null;
+        return problem === null
+          ? undefined
+          : { project, worktreePath: state.worktreePath, problem };
       }).pipe(Effect.orElseSucceed(() => undefined));
       if (taken !== undefined)
         return yield* new ThreadLaunchBranchError({
@@ -345,6 +383,7 @@ const make = Effect.gen(function* () {
           workspaceRoot: taken.project.workspaceRoot,
           branch,
           worktreePath: taken.worktreePath,
+          problem: taken.problem,
         });
     }
     // `:/text` is a commit search, which cannot be asked for a commit type.
@@ -359,7 +398,7 @@ const make = Effect.gen(function* () {
         return undefined;
       if (
         strategy.startFromOrigin === true &&
-        (yield* git.remoteExists({ cwd, remoteName: "origin" }))
+        (yield* git.resolveWorktreeBaseRemote({ cwd, refName: baseRef })) !== null
       )
         return undefined;
       // `git worktree add` also starts from a remote-tracking branch of that
@@ -415,6 +454,8 @@ const make = Effect.gen(function* () {
     const reused = input.reusedWorktree;
     const tracked = input.workspaceStrategy.type === "worktree" || reused !== undefined;
     let createdWorktreePath: string | null = null;
+    // Only a branch this launch created is deleted on rollback; a reused one predates it.
+    let createdBranch: string | null = null;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
     let runReleased = false;
@@ -440,8 +481,8 @@ const make = Effect.gen(function* () {
     }
     yield* Effect.gen(function* () {
       const initialMessage = input.initialMessage;
-      const generateBranchNameFor = (cwd: string, message: ThreadLaunchInitialMessage) =>
-        Effect.gen(function* () {
+      const generateBranchNameFor = Effect.fn("ThreadLaunchService.generateBranchNameFor")(
+        function* (cwd: string, message: ThreadLaunchInitialMessage) {
           const settings = resolveProjectSettings(
             yield* serverSettings.getSettings,
             input.projectId,
@@ -474,7 +515,8 @@ const make = Effect.gen(function* () {
                 exactName: settings.branchNamingMode === "custom",
               })),
             );
-        });
+        },
+      );
 
       const requestedBranch = input.workspaceStrategy.branch;
       let branch: string | null;
@@ -501,41 +543,29 @@ const make = Effect.gen(function* () {
             .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
         }
         let startRef = input.workspaceStrategy.baseRef;
-        const startFromOrigin =
+        let baseRefName = input.workspaceStrategy.baseRef;
+        const shouldFetch =
           input.workspaceStrategy.startFromOrigin === true &&
           (yield* git
-            .remoteExists({ cwd: project.workspaceRoot, remoteName: "origin" })
-            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId))));
-        yield* setupTracker.stageStatus(threadId, "fetch", startFromOrigin ? "running" : "skipped");
-        if (startFromOrigin) {
-          yield* git
-            .fetchRemote({
+            .resolveWorktreeBaseRemote({
               cwd: project.workspaceRoot,
-              remoteName: "origin",
+              refName: input.workspaceStrategy.baseRef,
+            })
+            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))) !== null;
+        yield* setupTracker.stageStatus(threadId, "fetch", shouldFetch ? "running" : "skipped");
+        if (shouldFetch) {
+          const remoteBase = yield* git
+            .fetchWorktreeBaseCommit({
+              cwd: project.workspaceRoot,
               refName: input.workspaceStrategy.baseRef,
             })
             .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
-          const remoteBaseExists = yield* git
-            .remoteBranchExists({
-              cwd: project.workspaceRoot,
-              refName: input.workspaceStrategy.baseRef,
-              remoteName: "origin",
-            })
-            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
-          if (remoteBaseExists) {
-            startRef = yield* git
-              .resolveRemoteTrackingCommit({
-                cwd: project.workspaceRoot,
-                refName: input.workspaceStrategy.baseRef,
-                fallbackRemoteName: "origin",
-              })
-              .pipe(
-                Effect.map((resolved) => resolved.commitSha),
-                Effect.mapError(mapError(input, "provision-worktree", threadId)),
-              );
+          if (remoteBase !== null) {
+            startRef = remoteBase.commitSha;
+            baseRefName = `refs/remotes/${remoteBase.remoteRefName}`;
           }
         }
-        if (startFromOrigin) yield* setupTracker.stageStatus(threadId, "fetch", "done");
+        if (shouldFetch) yield* setupTracker.stageStatus(threadId, "fetch", "done");
         if (
           branch !== null &&
           isTemporaryWorktreeBranch(branch) &&
@@ -552,20 +582,34 @@ const make = Effect.gen(function* () {
         yield* setupTracker.stageStatus(threadId, "checkout", "running");
         // Set from the fallback callback; the cast keeps TS from narrowing it to null.
         let worktreesDirectoryNotice = null as string | null;
+        let existingBranch = null as {
+          worktree: "reused" | "added";
+          fastForwarded: boolean;
+        } | null;
+        let hookStallNotice = null as string | null;
+        let sparseNotice = null as string | null;
         const worktree = yield* git
           .createWorktree(
             {
               cwd: project.workspaceRoot,
               refName: startRef,
               newRefName: branch!,
-              baseRefName: input.workspaceStrategy.baseRef,
+              baseRefName,
               path: null,
             },
             {
+              // A retry finds the branch and worktree an earlier failed attempt left behind.
+              reuseExistingBranch: true,
+              // The setup stage below runs this script and shows its output.
+              skipSetupHook: project.scripts.some((script) => script.runOnWorktreeCreate),
               progress: {
                 onWorktreeClaimed: (path) =>
                   Effect.sync(() => {
                     createdWorktreePath = path;
+                  }),
+                onExistingBranch: (outcome) =>
+                  Effect.sync(() => {
+                    existingBranch = outcome;
                   }),
                 onWorktreesDirectoryFallback: ({ configured, unavailable }) =>
                   Effect.sync(() => {
@@ -573,17 +617,44 @@ const make = Effect.gen(function* () {
                   }),
                 onCheckoutProgress: (progress) =>
                   setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
+                onHookStarted: (hookName) =>
+                  setupTracker.stage(threadId, "checkout", {
+                    percent: 100,
+                    detail: `Files checked out; running the repository's ${hookName} hook`,
+                  }),
+                onHookStalled: ({ hookName, detail }) =>
+                  Effect.sync(() => {
+                    hookStallNotice = `Kept the finished checkout; stopped waiting for the ${hookName} hook. ${detail}`;
+                  }),
+                onSparseCheckout: (excluded) =>
+                  Effect.sync(() => {
+                    sparseNotice = `Left out ${excluded.join(", ")} (worktreeSparseExclude); run git sparse-checkout disable in the worktree to add them`;
+                  }),
               },
             },
           )
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         worktreePath = worktree.worktree.path;
         branch = worktree.worktree.refName;
-        createdWorktreePath = worktreePath;
+        if (existingBranch?.worktree !== "reused") createdWorktreePath = worktreePath;
+        if (existingBranch === null) createdBranch = branch;
+        const existingBranchNotice =
+          existingBranch === null
+            ? null
+            : `${existingBranch.worktree === "reused" ? "Reused the clean worktree already on" : "Checked out the existing"} branch ${branch}, which had no commits of its own${existingBranch.fastForwarded ? "; fast-forwarded it to the base" : ""}`;
+        if (existingBranchNotice !== null) {
+          yield* Effect.logInfo(existingBranchNotice, { threadId, worktreePath });
+        }
         yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
-        yield* worktreesDirectoryNotice === null
-          ? setupTracker.stageStatus(threadId, "checkout", "done")
-          : setupTracker.stageStatus(threadId, "checkout", "warning", worktreesDirectoryNotice);
+        const checkoutWarning = worktreesDirectoryNotice ?? hookStallNotice;
+        yield* checkoutWarning === null
+          ? setupTracker.stageStatus(
+              threadId,
+              "checkout",
+              "done",
+              existingBranchNotice ?? sparseNotice,
+            )
+          : setupTracker.stageStatus(threadId, "checkout", "warning", checkoutWarning);
       }
 
       // A reused worktree is already recorded, and rewriting it could undo
@@ -809,12 +880,32 @@ const make = Effect.gen(function* () {
           ) {
             if (branchRename !== null) yield* Fiber.interrupt(branchRename);
             const removedPath = createdWorktreePath;
+            const removedBranch = createdBranch;
             // The thread forgets the worktree only once it is gone; a failed
             // removal leaves the directory for the user to clean up rather than
             // reusing a checkout that may be half written.
             yield* git
               .removeWorktree({ cwd: project.workspaceRoot, path: removedPath, force: true })
               .pipe(
+                Effect.andThen(
+                  removedBranch === null
+                    ? Effect.void
+                    : git
+                        .deleteLocalBranch({
+                          cwd: project.workspaceRoot,
+                          refName: removedBranch,
+                          force: true,
+                        })
+                        .pipe(
+                          Effect.catchCause((deleteCause) =>
+                            Effect.logWarning("Failed to delete an abandoned thread branch", {
+                              threadId,
+                              branch: removedBranch,
+                              cause: deleteCause,
+                            }),
+                          ),
+                        ),
+                ),
                 Effect.andThen(
                   threads
                     .dispatch({
@@ -862,8 +953,7 @@ const make = Effect.gen(function* () {
             failure: makeProviderFailure({
               cause,
               message: failureDetail(cause),
-              class: "validation_error",
-              retryable: false,
+              ...preparationFailureClass(cause),
             }),
           })
           .pipe(

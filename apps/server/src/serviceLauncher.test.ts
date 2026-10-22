@@ -1,36 +1,36 @@
-import * as NodeURL from "node:url";
-// @effect-diagnostics-next-line nodeBuiltinImport:off - observes the children the launcher spawns with Node built-ins.
-import type * as NodeChildProcess from "node:child_process";
-
+// @effect-diagnostics nodeBuiltinImport:off - observes the children the launcher spawns with Node built-ins.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@goat/contracts";
+import { SERVER_EXIT_CODE_DATABASE_AHEAD, SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import type * as NodeChildProcess from "node:child_process";
+import * as NodeURL from "node:url";
 import { vi } from "vite-plus/test";
-
-import {
-  databaseBackupBlocker,
-  Launcher,
-  PREPARED_TIMEOUT_MS,
-  PROBATION_MS,
-  SMOKE_TIMEOUT_MS,
-  smokeProbeHostname,
-  type BackupSpaceProbe,
-  readServiceState,
-  writeServiceState,
-} from "./serviceLauncher.ts";
-import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
 import {
   compareExactServiceVersions,
-  decodeServiceState,
   decodeServiceLauncherChildMessage,
+  decodeServiceState,
   isExactServiceVersion,
+  SERVICE_ENV_FILE,
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_RESTART_PENDING_FILE,
   SERVICE_STOP_MARKER_FILE,
 } from "./cloud/serviceProtocol.ts";
+import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
+import {
+  databaseBackupBlocker,
+  Launcher,
+  main,
+  PROBATION_MS,
+  readServiceEnvironment,
+  readServiceState,
+  SMOKE_TIMEOUT_MS,
+  smokeProbeHostname,
+  writeServiceState,
+  type BackupSpaceProbe,
+} from "./serviceLauncher.ts";
 
 const childObserver = vi.hoisted(() => ({
   current: undefined as ((child: NodeChildProcess.ChildProcess) => void) | undefined,
@@ -197,21 +197,82 @@ const writeFakeRuntime = (
     return entryPath;
   });
 
-it.layer(NodeServices.layer)("service state persistence", (it) => {
-  it.effect("durably replaces and strictly reads one state document", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-test-" });
-      const statePath = path.join(root, "runtime", "service-state.json");
-      const state = {
-        protocol: SERVICE_LAUNCHER_PROTOCOL,
-        activeVersion: "0.0.31",
-      } as const;
+const refusalCases = [
+  {
+    code: SERVER_EXIT_CODE_STATE_DIR_OWNED,
+    reason: "state-dir-owned",
+    message: "Another GOAT server owns this GOAT home. Stop it, then restart this service.",
+  },
+  {
+    code: SERVER_EXIT_CODE_DATABASE_AHEAD,
+    reason: "database-ahead",
+    message:
+      "This GOAT build is older than the data in this GOAT home. Update GOAT or install a newer service, then restart this service.",
+  },
+];
 
-      yield* Effect.promise(() => writeServiceState(statePath, state));
-      assert.deepEqual(yield* Effect.promise(() => readServiceState(statePath)), state);
-    }),
+const observeRefusal = (message: string) =>
+  Effect.gen(function* () {
+    const refused = Promise.withResolvers<"idle">();
+    const lines: Array<string> = [];
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+          lines.push(String(chunk));
+          if (String(chunk).includes(message)) refused.resolve("idle");
+          return true;
+        }),
+      ),
+      (spy) => Effect.sync(() => spy.mockRestore()),
+    );
+    return { refused: refused.promise, lines };
+  });
+
+it.layer(NodeServices.layer)("service state persistence", (it) => {
+  it.effect(
+    "loads optional service.env literally without changing inherited or managed variables",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-env-" });
+        const inherited = Object.freeze({
+          PATH: "inherited-path",
+          GOAT_HOME: root,
+          GOAT_BOOT_SERVICE_UNIT: "managed-unit",
+          GOAT_SERVICE_LAUNCHER_CONTEXT: "managed-context",
+          GOAT_PORT: "ambient",
+        });
+        assert.deepEqual(
+          yield* Effect.promise(() => readServiceEnvironment(root, inherited)),
+          inherited,
+        );
+        yield* fs.writeFileString(
+          path.join(root, SERVICE_ENV_FILE),
+          [
+            "# service configuration",
+            "export GOAT_PORT=1234 # inline comment",
+            'GOAT_TOKEN="literal $HOME ${USER} $(whoami) # token"',
+            'MULTILINE="first\nsecond"',
+            "EMPTY=",
+            "PATH=/bad",
+            "Path=/bad",
+            "GOAT_HOME=/bad",
+            "goat_home=/bad",
+            "GOAT_BOOT_SERVICE_UNIT=bad",
+            "goat_boot_service_unit=bad",
+            "GOAT_SERVICE_LAUNCHER_CONTEXT=bad",
+            "goat_service_launcher_context=bad",
+          ].join("\n"),
+        );
+        assert.deepEqual(yield* Effect.promise(() => readServiceEnvironment(root, inherited)), {
+          ...inherited,
+          GOAT_PORT: "1234",
+          GOAT_TOKEN: "literal $HOME ${USER} $(whoami) # token",
+          MULTILINE: "first\nsecond",
+          EMPTY: "",
+        });
+      }),
   );
 
   it.effect("a fresh launcher clears a restart deferred by t3 update", () =>
@@ -254,72 +315,123 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
     }),
   );
 
-  it.effect("stays idle instead of exiting when another server owns the T3 home", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-refused-" });
-      const statePath = path.join(root, "runtime", "service-state.json");
-      yield* writeFakeRuntime(
-        fs,
-        path,
-        path.join(root, "runtime", "goat", "versions", "1.0.0"),
-        `process.exit(${SERVER_EXIT_CODE_STATE_DIR_OWNED});\n`,
-      );
-      yield* Effect.promise(() =>
-        writeServiceState(statePath, {
-          protocol: SERVICE_LAUNCHER_PROTOCOL,
-          activeVersion: "1.0.0",
-        }),
-      );
-      const refused = Promise.withResolvers<void>();
-      yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-            if (String(chunk).includes("owns this GOAT home")) refused.resolve();
-            return true;
+  it.effect.each(refusalCases)(
+    "stays idle when the active server refuses with $code",
+    ({ code, message }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-refused-" });
+        const statePath = path.join(root, "runtime", "service-state.json");
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "goat", "versions", "1.0.0"),
+          `process.exit(${code});\n`,
+        );
+        yield* Effect.promise(() =>
+          writeServiceState(statePath, {
+            protocol: SERVICE_LAUNCHER_PROTOCOL,
+            activeVersion: "1.0.0",
           }),
-        ),
-        (spy) => Effect.sync(() => spy.mockRestore()),
-      );
-      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
-      let completed = false;
-      const running = launcher.run().finally(() => {
-        completed = true;
-      });
-      yield* Effect.promise(() => refused.promise);
-      assert.isFalse(completed);
-      yield* Effect.promise(() => launcher.stop("SIGTERM"));
-      yield* Effect.promise(() => running);
-    }),
+        );
+        const { refused, lines } = yield* observeRefusal(message);
+        const launcher = new Launcher(
+          root,
+          yield* Effect.promise(() => readServiceState(statePath)),
+        );
+        yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
+        const spawnCount = spawnedChildren.length;
+        let completed = false;
+        const running = launcher
+          .run()
+          .catch((error: unknown) => error)
+          .finally(() => {
+            completed = true;
+          });
+        assert.equal(yield* Effect.promise(() => Promise.race([refused, running])), "idle");
+        assert.isFalse(completed);
+        assert.equal(spawnedChildren.length - spawnCount, 1);
+        assert.deepEqual(lines, [`[service-launcher] ${message}\n`]);
+        yield* Effect.promise(() => launcher.stop("SIGTERM"));
+        yield* Effect.promise(() => running);
+      }),
   );
 
-  it.effect("serializes shutdown with launcher recovery", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-stop-" });
-      const statePath = path.join(root, "runtime", "service-state.json");
-      yield* writeFakeRuntime(
-        fs,
-        path,
-        path.join(root, "runtime", "goat", "versions", "1.0.0"),
-        "setInterval(() => {}, 1_000);\n",
-      );
-      yield* Effect.promise(() =>
-        writeServiceState(statePath, {
-          protocol: SERVICE_LAUNCHER_PROTOCOL,
-          activeVersion: "1.0.0",
-        }),
-      );
-
-      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
-      const running = launcher.run();
-      const stopping = launcher.stop("SIGTERM");
-      assert.isTrue(yield* fs.exists(path.join(root, "runtime", SERVICE_STOP_MARKER_FILE)));
-      yield* Effect.promise(() => stopping);
-      yield* Effect.promise(() => running);
-    }),
+  it.effect.each(refusalCases)(
+    "fails a pending update without restoring data when the active server refuses with $code",
+    ({ code, reason, message }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-refused-update-" });
+        const statePath = path.join(root, "runtime", "service-state.json");
+        const dbPath = path.join(root, "userdata", "statev2.sqlite");
+        yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
+        yield* fs.writeFileString(dbPath, "newer database");
+        yield* fs.writeFileString(dbPath + "-wal", "newer wal");
+        yield* fs.writeFileString(dbPath + "-shm", "newer shm");
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "goat", "versions", "1.0.0"),
+          `
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tryAcquireServerOwnerLock } from ${lockModuleUrl};
+const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
+if (context.update !== undefined) process.exit(0);
+process.on("message", message => {
+  if (message.type !== "update-accepted") return;
+  const backup = join(${JSON.stringify(root)}, "runtime", "db-backup", message.updateId);
+  mkdirSync(backup, { recursive: true });
+  writeFileSync(join(backup, "database"), "older snapshot");
+  const lock = tryAcquireServerOwnerLock(${JSON.stringify(path.dirname(dbPath))}, "service-launcher:" + message.updateId);
+  writeFileSync(join(backup, "owner-generation"), String(lock.generation));
+  lock.release();
+  process.exit(${code});
+});
+process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${JSON.stringify(dbPath)} });
+`,
+        );
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "goat", "versions", "1.1.0"),
+          "process.exit(17);",
+        );
+        yield* Effect.promise(() =>
+          writeServiceState(statePath, {
+            protocol: SERVICE_LAUNCHER_PROTOCOL,
+            activeVersion: "1.0.0",
+          }),
+        );
+        // Hold the handoff timer so the accepted update's active exit drives the transition.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+        const { refused, lines } = yield* observeRefusal(message);
+        const launcher = new Launcher(
+          root,
+          yield* Effect.promise(() => readServiceState(statePath)),
+        );
+        yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
+        const spawnCount = spawnedChildren.length;
+        const running = launcher.run().catch((error: unknown) => error);
+        assert.equal(yield* Effect.promise(() => Promise.race([refused, running])), "idle");
+        const state = yield* Effect.promise(() => readServiceState(statePath));
+        assert.equal(state.activeVersion, "1.0.0");
+        assert.equal(state.update?.status, "failed");
+        assert.equal(state.update?.status === "failed" ? state.update.reason : undefined, reason);
+        assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", state.update!.id)));
+        assert.equal(yield* fs.readFileString(dbPath), "newer database");
+        assert.equal(yield* fs.readFileString(dbPath + "-wal"), "newer wal");
+        assert.equal(yield* fs.readFileString(dbPath + "-shm"), "newer shm");
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
+        assert.equal(spawnedChildren.length - spawnCount, 1);
+        assert.deepEqual(lines, [`[service-launcher] ${message}\n`]);
+        yield* Effect.promise(() => launcher.stop("SIGTERM"));
+        assert.isUndefined(yield* Effect.promise(() => running));
+      }),
   );
 
   it.effect("commits only after the trial reports prepared", () =>
@@ -379,21 +491,33 @@ if (context.update?.status === "pending") {
     }),
   );
 
-  it.effect("rolls back a trial that reports the wrong update ID", () =>
+  it.effect("rolls back invalid trials with the startup environment", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-rollback-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const databasePath = path.join(root, "userdata", "state.sqlite");
+      const observationsPath = path.join(root, "environment-observations.jsonl");
+      const envPath = path.join(root, SERVICE_ENV_FILE);
+      yield* fs.writeFileString(envPath, "GOAT_TEST_SERVICE_TOKEN=initial\n");
+      vi.stubEnv("GOAT_HOME", root);
+      vi.stubEnv("GOAT_TEST_SERVICE_TOKEN", "inherited");
+      yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
       yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
       yield* fs.writeFileString(databasePath, "before trial");
       const encodedDatabasePath = JSON.stringify(databasePath);
       const childSource = `
+import { appendFileSync, writeFileSync } from "node:fs";
 const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
+appendFileSync(${JSON.stringify(observationsPath)}, JSON.stringify({
+  token: process.env.GOAT_TEST_SERVICE_TOKEN,
+  update: context.update?.status ?? "active",
+}) + "\\n");
 if (context.update?.status === "pending") {
   process.send({ type: "prepared", updateId: "wrong-update" });
 } else if (context.update === undefined) {
+  writeFileSync(${JSON.stringify(envPath)}, "GOAT_TEST_SERVICE_TOKEN=changed\\n");
   process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${encodedDatabasePath} });
   setInterval(() => {}, 1_000);
 } else {
@@ -415,9 +539,8 @@ if (context.update?.status === "pending") {
         }),
       );
 
-      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
       yield* Effect.promise(() =>
-        launcher.run().then(
+        main().then(
           () => Promise.reject(new Error("launcher unexpectedly completed")),
           () => Promise.resolve(),
         ),
@@ -430,91 +553,18 @@ if (context.update?.status === "pending") {
         state.update?.status === "rolled-back" ? state.update.reason : undefined,
         "invalid-prepared",
       );
+      const observations = (yield* fs.readFileString(observationsPath))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      assert.deepEqual(observations, [
+        { token: "initial", update: "active" },
+        { token: "initial", update: "pending" },
+        { token: "initial", update: "rolled-back" },
+      ]);
+      assert.equal(process.env.GOAT_TEST_SERVICE_TOKEN, "inherited");
+      assert.equal(yield* fs.readFileString(envPath), "GOAT_TEST_SERVICE_TOKEN=changed\n");
     }),
-  );
-
-  it.effect.each([
-    { prepares: true, status: "committed", activeVersion: "1.1.0" },
-    { prepares: false, status: "rolled-back", activeVersion: "1.0.0" },
-  ] as const)(
-    "gives a trial the full prepared window (prepares: $prepares)",
-    ({ prepares, status, activeVersion }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-slow-" });
-        const statePath = path.join(root, "runtime", "service-state.json");
-        const databasePath = path.join(root, "userdata", "state.sqlite");
-        yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
-        yield* fs.writeFileString(databasePath, "before trial");
-        const childSource = `
-const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
-if (context.update?.status !== "pending") process.exit(0);
-process.on("message", (message) => {
-  if (message.type === "test-prepare") process.send({ type: "prepared", updateId: context.update.id });
-  if (message.type === "committed") process.exit(0);
-});
-setInterval(() => {}, 1_000);
-`;
-        for (const version of ["1.0.0", "1.1.0"]) {
-          yield* writeFakeRuntime(
-            fs,
-            path,
-            path.join(root, "runtime", "goat", "versions", version),
-            childSource,
-          );
-        }
-        yield* Effect.promise(() =>
-          writeServiceState(statePath, {
-            protocol: SERVICE_LAUNCHER_PROTOCOL,
-            activeVersion: "1.0.0",
-            update: {
-              id: "update-1",
-              fromVersion: "1.0.0",
-              targetVersion: "1.1.0",
-              dbPath: databasePath,
-              status: "pending",
-            },
-          }),
-        );
-
-        // Effect schedules on setImmediate, so faking only timeouts leaves it running.
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
-        const preparedTimer = Promise.withResolvers<void>();
-        const schedule = globalThis.setTimeout;
-        const timerSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
-          // @effect-diagnostics-next-line globalTimers:off - This observes the standalone launcher's native deadline without polling.
-          const timer = schedule(...args);
-          if (args[1] === PREPARED_TIMEOUT_MS) preparedTimer.resolve();
-          return timer;
-        });
-        yield* Effect.addFinalizer(() => Effect.sync(() => timerSpy.mockRestore()));
-        const launcher = new Launcher(
-          root,
-          yield* Effect.promise(() => readServiceState(statePath)),
-          { probationMs: 0 },
-        );
-        const running = launcher.run().then(
-          () => Promise.reject(new Error("launcher unexpectedly completed")),
-          () => Promise.resolve(),
-        );
-        yield* Effect.promise(() => preparedTimer.promise);
-        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(121_000));
-        if (prepares) spawnedChildren.at(-1)!.send({ type: "test-prepare" });
-        else yield* Effect.promise(() => vi.advanceTimersByTimeAsync(PREPARED_TIMEOUT_MS));
-        yield* Effect.promise(() => running);
-
-        const state = yield* Effect.promise(() => readServiceState(statePath));
-        assert.equal(state.activeVersion, activeVersion);
-        assert.equal(state.update?.status, status);
-        if (!prepares) {
-          assert.equal(
-            state.update?.status === "rolled-back" ? state.update.reason : undefined,
-            "prepared-timeout",
-          );
-        }
-      }),
   );
 
   it.effect.each(["file", "symlink", "dangling symlink"] as const)(
@@ -783,43 +833,6 @@ setInterval(() => {}, 1_000);
     }),
   );
 
-  it.effect("fails the backup check when the database cannot be inspected", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-blocker-" });
-      const error = yield* Effect.promise(() =>
-        databaseBackupBlocker(root, path.join(root, "missing.sqlite"), {
-          readFreeBytes: () => Promise.resolve(0),
-        }).then(
-          () => undefined,
-          (cause: unknown) => cause,
-        ),
-      );
-      assert.equal((error as NodeJS.ErrnoException | undefined)?.code, "ENOENT");
-    }),
-  );
-
-  it.effect("recognizes a clone into the backup directory on this filesystem", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-clone-" });
-      const databasePath = path.join(root, "userdata", "state.sqlite");
-      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
-      yield* fs.writeFileString(databasePath, "database");
-      const blocker = yield* Effect.promise(() =>
-        databaseBackupBlocker(root, databasePath, { readFreeBytes: () => Promise.resolve(0) }),
-      );
-      assert.include(
-        blocker ?? "",
-        // oxlint-disable-next-line goat/no-global-process-runtime -- mirrors the standalone launcher's own platform check.
-        process.platform === "darwin" ? "1.0 GB needed, 0.0 GB free" : "GB needed, 0.0 GB free",
-      );
-      assert.deepEqual(yield* fs.readDirectory(path.join(root, "runtime", "db-backup")), []);
-    }),
-  );
-
   it.effect("keeps a database another server wrote between the backup and the rollback", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1043,7 +1056,7 @@ const healthFixture = (
   input: {
     readonly descriptor?: unknown;
     readonly status?: number;
-    readonly failStart?: boolean;
+    readonly failStart?: number;
     readonly hang?: boolean;
     readonly legacy?: boolean;
     readonly listenHost?: string;
@@ -1096,9 +1109,9 @@ process.on("message", message => {
 });
 if (context.update.status === "committed") {
   process.send({ type: "test-restarted" });
-} else if (${input.failStart ?? false}) {
+} else if (${input.failStart !== undefined}) {
   writeFileSync(dbPath, "failed migration");
-  process.exit(17);
+  process.exit(${input.failStart ?? 17});
 } else {
   const server = createServer((request, response) => {
     if (request.url !== "/.well-known/goat/environment") process.exit(19);
@@ -1184,7 +1197,12 @@ it.layer(NodeServices.layer)("post-update health", (it) => {
   );
 
   it.effect.each([
-    { name: "failed start", input: { failStart: true }, reason: "candidate-exited:17" },
+    { name: "failed start", input: { failStart: 17 }, reason: "candidate-exited:17" },
+    {
+      name: "database-ahead trial",
+      input: { failStart: SERVER_EXIT_CODE_DATABASE_AHEAD },
+      reason: "candidate-exited:79",
+    },
     {
       name: "wrong version",
       input: { descriptor: { ...validSmokeDescriptor, serverVersion: "9.0.0" } },
@@ -1243,6 +1261,35 @@ it.layer(NodeServices.layer)("post-update health", (it) => {
         "smoke-failed:timeout",
       );
     }),
+  );
+
+  it.effect.each(refusalCases)(
+    "does not roll back a committed probation when the server refuses with $code",
+    ({ code, message }) =>
+      Effect.gen(function* () {
+        const f = yield* healthFixture();
+        const { refused, lines } = yield* observeRefusal(message);
+        const spawnCount = spawnedChildren.length;
+        const { launcher, running } = yield* f.start({ now: () => 1000 });
+        const child = yield* f.wait("test-committed");
+        const committed = yield* Effect.promise(() => readServiceState(f.statePath));
+        child.send({ type: "test-exit", code });
+        assert.equal(yield* Effect.promise(() => Promise.race([refused, running])), "idle");
+        assert.deepEqual(yield* Effect.promise(() => readServiceState(f.statePath)), committed);
+        assert.equal(yield* f.fs.readFileString(f.dbPath), "committed writes");
+        assert.equal(yield* f.fs.readFileString(f.dbPath + "-wal"), "committed wal");
+        assert.equal(yield* f.fs.readFileString(f.dbPath + "-shm"), "committed shm");
+        assert.equal(
+          yield* f.fs.readFileString(
+            f.path.join(f.root, "runtime", "db-backup", f.pending.id, "database"),
+          ),
+          "original database",
+        );
+        assert.equal(spawnedChildren.length - spawnCount, 1);
+        assert.deepEqual(lines, [`[service-launcher] ${message}\n`]);
+        yield* Effect.promise(() => launcher.stop("SIGTERM"));
+        assert.isUndefined(yield* Effect.promise(() => running));
+      }),
   );
 
   it.effect.each([false, true])(

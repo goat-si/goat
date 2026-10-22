@@ -283,6 +283,8 @@ export function buildProjectCreateCommand(input: {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly workspaceRoot: string;
+  /** Through a hub, only an existing folder can be registered; the hub refuses creating one. */
+  readonly proxiedByHub: boolean;
 }): Extract<ProjectMutation, { type: "project.create" }> {
   return {
     type: "project.create",
@@ -290,7 +292,7 @@ export function buildProjectCreateCommand(input: {
     projectId: input.projectId,
     title: inferProjectTitleFromPath(input.workspaceRoot),
     workspaceRoot: input.workspaceRoot,
-    createWorkspaceRootIfMissing: true,
+    createWorkspaceRootIfMissing: !input.proxiedByHub,
     defaultModelSelection: null,
   };
 }

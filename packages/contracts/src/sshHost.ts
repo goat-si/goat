@@ -110,6 +110,15 @@ const SshHostStatusShape = Schema.Struct({
   runtimeVersion: Schema.NullOr(Schema.String),
   requestedVersion: Schema.String,
   phase: Schema.optionalKey(SshRuntimePhase),
+  /** Archive bytes this client has sent; only while it uploads, never for a host download. */
+  upload: Schema.optionalKey(
+    Schema.Struct({ sentBytes: Schema.Int, totalBytes: Schema.Int }).check(
+      Schema.makeFilter(
+        (upload) =>
+          upload.sentBytes >= 0 && upload.totalBytes > 0 && upload.sentBytes <= upload.totalBytes,
+      ),
+    ),
+  ),
   waitingReason: Schema.optionalKey(Schema.Literals(["busy", "unknown", "contended"])),
   detail: Schema.optionalKey(Schema.String),
   failure: Schema.optionalKey(SshHostFailure),
@@ -123,6 +132,7 @@ const SshHostStatusShape = Schema.Struct({
 /** Check a snapshot before publishing it through IPC or an SSH host tool. */
 export function validateSshHostStatus(status: typeof SshHostStatusShape.Type) {
   if ((status.state === "preparing") !== (status.phase !== undefined)) return false;
+  if (status.upload !== undefined && status.phase !== "uploading") return false;
   if (status.state === "failed" && status.failure === undefined) return false;
   if (
     status.refreshDeferred !== undefined &&
@@ -174,6 +184,75 @@ export const SshHostAddInput = Schema.Struct({
   identityFile: Schema.optional(TrimmedNonEmptyString),
 });
 export type SshHostAddInput = typeof SshHostAddInput.Type;
+
+export const SshPreflightStepId = Schema.Literals([
+  "reachability",
+  "host_key",
+  "key_auth",
+  "platform",
+  "disk",
+  "runtime",
+]);
+export type SshPreflightStepId = typeof SshPreflightStepId.Type;
+
+/** Display order; disk is evaluated after runtime because only a transfer needs free space. */
+export const SSH_PREFLIGHT_STEP_ORDER: ReadonlyArray<SshPreflightStepId> =
+  SshPreflightStepId.literals;
+
+export const SshPreflightStepState = Schema.Literals([
+  "passed",
+  "warning",
+  "needs_review",
+  "failed",
+  "skipped",
+]);
+export type SshPreflightStepState = typeof SshPreflightStepState.Type;
+
+export const SshPreflightStep = Schema.Struct({
+  id: SshPreflightStepId,
+  state: SshPreflightStepState,
+  /** One line a person can read without knowing SSH internals. */
+  summary: TrimmedNonEmptyString,
+  detail: Schema.optionalKey(TrimmedNonEmptyString),
+  fix: Schema.optionalKey(SshHostFix),
+  /** The negotiated host key, present only on a host_key step that needs review. */
+  fingerprint: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type SshPreflightStep = typeof SshPreflightStep.Type;
+
+export const SshPreflightInput = Schema.Struct({
+  /** An ~/.ssh/config alias, or user@address with an optional :port. */
+  host: TrimmedNonEmptyString,
+  user: Schema.optional(TrimmedNonEmptyString),
+  port: Schema.optional(PortSchema),
+  identityFile: Schema.optional(TrimmedNonEmptyString),
+});
+export type SshPreflightInput = typeof SshPreflightInput.Type;
+
+export const SshPreflightReport = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  destination: Schema.Struct({
+    // A person's own ~/.ssh/config alias; only aliases GOAT creates carry the SshHostAlias limit.
+    alias: Schema.optionalKey(TrimmedNonEmptyString),
+    /** The alias is GOAT's managed entry, so Forget host can remove it and its pin. */
+    managed: Schema.optionalKey(Schema.Literal(true)),
+    hostname: TrimmedNonEmptyString,
+    user: TrimmedNonEmptyString,
+    port: PortSchema,
+  }),
+  steps: Schema.Array(SshPreflightStep),
+  ready: Schema.Boolean,
+  platformKey: Schema.optionalKey(TrimmedNonEmptyString),
+}).check(
+  Schema.makeFilter(
+    (report) =>
+      report.steps.length === SSH_PREFLIGHT_STEP_ORDER.length &&
+      report.steps.every((step, index) => step.id === SSH_PREFLIGHT_STEP_ORDER[index]) &&
+      report.ready ===
+        report.steps.every((step) => step.state !== "failed" && step.state !== "needs_review"),
+  ),
+);
+export type SshPreflightReport = typeof SshPreflightReport.Type;
 
 export const SshHostPrepareInput = Schema.Struct({ host: SshHostAlias });
 export type SshHostPrepareInput = typeof SshHostPrepareInput.Type;
@@ -301,6 +380,7 @@ const quoteShellArgument = (value: string) => `'${value.replaceAll("'", "'\\''")
 export function buildSshKeyAuthInstructions(context: {
   readonly originLabel: string;
   readonly host: string;
+  readonly alias?: string;
   readonly user: string;
   readonly port: number;
   readonly publicKey?: string;
@@ -314,7 +394,9 @@ export function buildSshKeyAuthInstructions(context: {
   const command =
     context.publicKeyPath === undefined
       ? undefined
-      : `ssh-copy-id -i ${quoteShellArgument(context.publicKeyPath)} -p ${quoteShellArgument(String(context.port))} ${quoteShellArgument(`${context.user}@${context.host}`)}`;
+      : context.alias
+        ? `ssh-copy-id -i ${quoteShellArgument(context.publicKeyPath)} ${quoteShellArgument(context.alias)}`
+        : `ssh-copy-id -i ${quoteShellArgument(context.publicKeyPath)} -p ${quoteShellArgument(String(context.port))} ${quoteShellArgument(`${context.user}@${context.host}`)}`;
   return {
     originLabel: context.originLabel,
     instruction: `${introduction} Run this on ${context.originLabel}.`,

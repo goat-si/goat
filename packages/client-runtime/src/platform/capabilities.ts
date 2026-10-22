@@ -1,12 +1,14 @@
 import {
   type AuthClientPresentationMetadata,
   type DesktopSshEnvironmentBootstrap,
+  type DesktopSshPreparationProgress,
+  type DesktopSshAttemptContext,
   type DesktopSshEnvironmentTarget,
   EnvironmentId,
   type ExecutionEnvironmentDescriptor,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
 
 import type { ConnectionAttemptError } from "../connection/model.ts";
@@ -47,6 +49,17 @@ export class RelayDeviceIdentity extends Context.Service<
   }
 >()("@goat/client-runtime/platform/capabilities/RelayDeviceIdentity") {}
 
+/**
+ * A random id this client keeps across launches. Environments it connects to
+ * record its hash, so two environments opened from one device share an owner
+ * in analytics even when nobody is signed in.
+ */
+export class AnalyticsDevice extends Context.Reference<{
+  readonly id: Effect.Effect<Option.Option<string>>;
+}>("@goat/client-runtime/platform/capabilities/AnalyticsDevice", {
+  defaultValue: () => ({ id: Effect.succeedNone }),
+}) {}
+
 export class ClientPresentation extends Context.Service<
   ClientPresentation,
   {
@@ -71,7 +84,12 @@ export class SshEnvironmentGateway extends Context.Service<
     readonly provision: (
       target: DesktopSshEnvironmentTarget,
       expectedEnvironmentId?: EnvironmentId,
-      options?: { readonly keyOnly?: boolean },
+      options?: {
+        readonly keyOnly?: boolean;
+        readonly onPreparationProgress?: (
+          progress: DesktopSshPreparationProgress,
+        ) => Effect.Effect<void>;
+      },
     ) => Effect.Effect<ProvisionedSshEnvironment, ConnectionAttemptError>;
     /**
      * Starts or reuses the remote server for a saved connection. Returns
@@ -85,6 +103,10 @@ export class SshEnvironmentGateway extends Context.Service<
       readonly target: DesktopSshEnvironmentTarget;
       readonly bearerToken?: string;
       readonly onHostAnswered?: Effect.Effect<void>;
+      readonly onPreparationProgress?: (
+        progress: DesktopSshPreparationProgress,
+      ) => Effect.Effect<void>;
+      readonly attemptContext?: DesktopSshAttemptContext;
       /** Runs beside saved-session validation; its result is used only if that session is accepted. */
       readonly authorize?: (
         prepared: PreparedSshEnvironment,
@@ -96,3 +118,16 @@ export class SshEnvironmentGateway extends Context.Service<
     ) => Effect.Effect<void, ConnectionAttemptError>;
   }
 >()("@goat/client-runtime/platform/capabilities/SshEnvironmentGateway") {}
+
+export class PrimaryConnectionEndpoint extends Context.Service<
+  PrimaryConnectionEndpoint,
+  {
+    readonly endpoint: Effect.Effect<
+      {
+        readonly httpBaseUrl: string;
+        readonly bearerToken: Option.Option<string>;
+      },
+      ConnectionAttemptError
+    >;
+  }
+>()("@goat/client-runtime/platform/capabilities/PrimaryConnectionEndpoint") {}

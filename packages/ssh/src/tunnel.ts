@@ -9,7 +9,9 @@ import {
   LEGACY_SSH_NODE_SCRIPT_PATH_KEY,
 } from "@goat/contracts/legacyT3Names";
 import type {
+  AuthEnvironmentScope,
   DesktopSshEnvironmentReadyOrPending,
+  DesktopSshPreparationProgress,
   DesktopSshRuntimePendingResult,
   SshRuntimePendingReplacement,
   DesktopSshEnvironmentTarget,
@@ -21,10 +23,12 @@ import type {
   SshRuntimePhase,
 } from "@goat/contracts";
 import {
+  AuthEnvironmentScopes,
   SshRuntimePendingReplacementSchema,
   ORCHESTRATION_PROTOCOL_VERSION,
   RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
   RUNTIME_DRAIN_MAX_GRACE_SECONDS,
+  SERVER_EXIT_CODE_DATABASE_AHEAD,
   buildSshKeyAuthInstructions,
 } from "@goat/contracts";
 import {
@@ -74,6 +78,11 @@ import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as SshAuth from "./auth.ts";
+import {
+  makeEnsureFlights,
+  supersededPreparation,
+  type PreparationAdmission,
+} from "./ensureFlight.ts";
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
@@ -90,6 +99,7 @@ import {
   resolveSshTarget,
   runSshCommand,
   SshReconnectCost,
+  SshHostAnswered,
   SshConnectionSharing,
   healthySshMaster,
   type SshMasterConnection,
@@ -104,6 +114,8 @@ import {
   SshHttpBridgeError,
   SshInvalidTargetError,
   SshLaunchError,
+  SshEnsureSupersededError,
+  SshPreparationTimeoutError,
   SshPairingError,
   SshPasswordPromptError,
   SshReadinessError,
@@ -191,6 +203,16 @@ export interface RemoteGoatRunnerOptions {
   readonly confirmReplacement?: boolean;
   /** Drain window for a replacement, in seconds (default 60, at most 300). */
   readonly replacementGraceSeconds?: number;
+  /**
+   * A person asked for this refresh. Only refreshes without it, and without
+   * `confirmReplacement`, are automatic and let the runtime arbitrate the target.
+   */
+  readonly manualRefresh?: boolean;
+  /**
+   * The protocol the candidate build speaks, when it is not this build's own: a runtime that
+   * replaces itself with a newer release builds the launch script on that release's behalf.
+   */
+  readonly candidateProtocol?: { readonly ssh: number; readonly orchestration: number };
 }
 
 export interface PreparedRemoteRuntime {
@@ -428,6 +450,34 @@ valid_uint() {
 }
 valid_positive() { valid_uint "$1" && [ "$1" != 0 ]; }
 valid_port() { valid_uint "$1" && [ "$1" -le 65535 ]; }
+# A server this user runs from GOAT's own runtime directory for the default home is GOAT's
+# managed runtime, whichever client or person started it. Lost launch records (a manual
+# restart, a moved state directory) must not turn it into a foreign server nobody may replace.
+# Records that name a live process belong to someone: another server, an older client's
+# per-client directory, or an ownership change in progress. Attaching to a foreign server
+# removes its PID file, so a lost-records server has none.
+managed_orphan() {
+  orphan_pid="$1"; orphan_port="$2"; orphan_version="$3"; orphan_state="$4"
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 1 ;; esac
+  valid_positive "$orphan_pid" && valid_positive "$orphan_port" && valid_port "$orphan_port" &&
+    valid_version "$orphan_version" || return 1
+  [ ! -e "$orphan_state/draining" ] && [ ! -L "$orphan_state/draining" ] || return 1
+  case "$-" in *f*) orphan_noglob=1 ;; *) orphan_noglob=0 ;; esac
+  set +f
+  for orphan_record in "$HOME/.goat/ssh-launch/"*/pid; do
+    orphan_recorded="$(cat "$orphan_record" 2>/dev/null || true)"
+    if valid_positive "$orphan_recorded" && kill -0 "$orphan_recorded" 2>/dev/null; then
+      [ "$orphan_noglob" = 0 ] || set -f
+      return 1
+    fi
+  done
+  [ "$orphan_noglob" = 0 ] || set -f
+  orphan_dir="$HOME/.goat/runtime/goat/versions/$orphan_version"
+  [ -d "$orphan_dir" ] && [ ! -L "$orphan_dir" ] && [ -x "$orphan_dir/goat" ] && [ ! -L "$orphan_dir/goat" ] || return 1
+  orphan_uid="$(ps -o uid= -p "$orphan_pid" 2>/dev/null | awk 'NF==1 { print $1 }')"
+  [ -n "$orphan_uid" ] && [ "$orphan_uid" = "$(id -u)" ] || return 1
+  [ "$(ps -o command= -p "$orphan_pid" 2>/dev/null)" = "$orphan_dir/goat serve --host 127.0.0.1 --port $orphan_port --base-dir $HOME/.goat" ]
+}
 valid_protocol_field() { [ "$1" = unknown ] || valid_positive "$1"; }
 valid_own_tokens() {
   [ "$#" = 5 ] && valid_version "$1" && valid_protocol_field "$2" &&
@@ -526,6 +576,8 @@ type SshEnvironmentEffectError =
   | SshCommandError
   | SshInvalidTargetError
   | SshLaunchError
+  | SshEnsureSupersededError
+  | SshPreparationTimeoutError
   | SshPairingError
   | SshReadinessError
   | SshPasswordPromptError
@@ -571,9 +623,13 @@ interface SshAuthAttemptInput<T> extends SshAuthOperationInput<T> {
 export interface SshRuntimeProgress {
   readonly target: DesktopSshEnvironmentTarget;
   readonly phase: SshRuntimePhase;
+  readonly upload?: SshHostStatus["upload"];
 }
 export type SshRuntimeProgressCallback = (progress: SshRuntimeProgress) => void;
 export interface SshEnvironmentEnsureOptions {
+  readonly preparedAttachmentId?: string;
+  readonly onPreparationProgress?: (progress: DesktopSshPreparationProgress) => void;
+  readonly onPreparationAdmission?: (admission: PreparationAdmission) => void;
   readonly issuePairingToken?: boolean;
   readonly keyOnly?: boolean;
   readonly reuseWhileRefreshPending?: boolean;
@@ -587,9 +643,10 @@ function notifyRuntimePhase(
   target: DesktopSshEnvironmentTarget,
   phase: SshRuntimePhase,
   onPhase?: SshRuntimeProgressCallback,
+  upload?: SshHostStatus["upload"],
 ) {
   try {
-    onPhase?.({ target, phase });
+    onPhase?.({ target, phase, ...(upload === undefined ? {} : { upload }) });
   } catch {
     // The requesting view may already have gone away.
   }
@@ -670,6 +727,10 @@ export interface SshEnvironmentManagerShape {
     SshEnvironmentEffectError,
     SshEnvironmentEffectContext
   >;
+  readonly issueClientSession: (
+    target: DesktopSshEnvironmentTarget,
+    options: RemoteClientSessionOptions,
+  ) => Effect.Effect<RemoteClientSession, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
   /** Runs a POSIX `sh` script on the remote host with this manager's SSH auth. */
   readonly runRemoteScript: (
     target: DesktopSshEnvironmentTarget,
@@ -690,6 +751,8 @@ export interface RemoteMcpClientSessionOptions {
   readonly runtimeModeCeiling: string | null;
   /** Also grant `orchestration:approve`. A remote CLI that predates it fails the issue. */
   readonly approvals?: boolean;
+  /** Also grant `providers:manage`, only for a caller that holds it live on this machine. */
+  readonly providersManage?: boolean;
   /** Explicit task memory grants; an older CLI must refuse rather than omit them. */
   readonly memoryScopes?: ReadonlyArray<"memory:read" | "memory:write">;
 }
@@ -699,6 +762,19 @@ export interface RemoteMcpClientSession {
   readonly expiresAt: string | null;
   /** False when the remote CLI predates `--runtime-mode-ceiling` and kept its default. */
   readonly runtimeModeCeilingApplied: boolean;
+}
+
+export interface RemoteClientSessionOptions {
+  readonly subject: string;
+  readonly label: string;
+  readonly ttl: string;
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
+}
+
+export interface RemoteClientSession {
+  readonly token: string;
+  readonly expiresAt: string | null;
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
 }
 
 const RemoteLaunchResult = Schema.Union([
@@ -722,9 +798,18 @@ const RemoteMcpSessionResult = Schema.Struct({
   expiresAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+const RemoteClientSessionResult = Schema.Struct({
+  token: Schema.String,
+  expiresAt: Schema.optional(Schema.NullOr(Schema.String)),
+  scopes: AuthEnvironmentScopes,
+});
+
 const decodeRemoteLaunchResult = Schema.decodeEffect(fromLenientJson(RemoteLaunchResult));
 const decodeRemotePairingResult = Schema.decodeEffect(fromLenientJson(RemotePairingResult));
 const decodeRemoteMcpSessionResult = Schema.decodeEffect(fromLenientJson(RemoteMcpSessionResult));
+const decodeRemoteClientSessionResult = Schema.decodeEffect(
+  fromLenientJson(RemoteClientSessionResult),
+);
 
 const decodeRemoteJsonOutput = <A, E>(
   stdout: string,
@@ -925,6 +1010,10 @@ ensure_remote_node_path() {
   prepend_path_if_dir "/usr/local/bin"
   prepend_path_if_dir "/usr/bin"
   prepend_path_if_dir "/bin"
+  # lsof lives in sbin on macOS. A login PATH that already has node returns
+  # before these lines, so the launch script also prepends them unconditionally.
+  prepend_path_if_dir "/usr/sbin"
+  prepend_path_if_dir "/sbin"
 
   if [ -z "\${VOLTA_HOME:-}" ]; then
     VOLTA_HOME="$HOME/.volta"
@@ -1242,8 +1331,18 @@ else
     printf '%s\n' "$process_table" | awk -v p="$1" '$1==p { found=1 } END { print found ? "present" : "absent" }'
   }
   # An exited, unreaped server still passes kill -0; it cannot be reused.
+  # /proc is authoritative for that zombie. ps can return an empty stat under load
+  # and must not turn a dead server back into a live one.
   server_alive() {
     [ -n "$1" ] && kill -0 "$1" 2>/dev/null || return 1
+    if [ -r "/proc/$1/stat" ]; then
+      alive_state="$(sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | awk '{ print $1 }' || true)"
+      case "$alive_state" in
+        Z) return 1 ;;
+        ?*) return 0 ;;
+      esac
+    fi
+    kill -0 "$1" 2>/dev/null || return 1
     case "$(ps -o stat= -p "$1" 2>/dev/null || true)" in *Z*) return 1 ;; esac
   }
   server_kill() { kill "$1" 2>/dev/null; }
@@ -1348,6 +1447,19 @@ check_candidate_protocol() {
     printf 'No protocol signals; only an independently proven exact release is allowed.\\n' >&2; exit 1
   fi
 }
+# Only an owning launch holding the host replacement lock writes ownership records. Identity,
+# port and PID come first and the managed marker last, so a reader never sees ownership without identity.
+adopt_managed_orphan() {
+  [ "\${OWNING_LAUNCH:-0}" = 1 ] && [ "\${LOCK_HELD:-0}" = 1 ] && [ "\${LEGACY_PENDING:-0}" != 1 ] &&
+    [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || return 1
+  managed_orphan "$LIVE_PID" "$LIVE_PORT" "$LIVE_VERSION" "$STATE_DIR" || return 1
+  adopt_next="$STATE_DIR/identity.adopt.$$"
+  printf '%s\n' "$HOME/.goat/runtime/goat/versions/$LIVE_VERSION/goat serve --host 127.0.0.1 --port $LIVE_PORT --base-dir $DEFAULT_SERVER_HOME" >"$adopt_next" &&
+    mv -f "$adopt_next" "$STATE_DIR/identity" &&
+    printf '%s\n' "$LIVE_PORT" >"$PORT_FILE" && printf '%s\n' "$LIVE_PID" >"$PID_FILE" &&
+    printf 'managed\n' >"$MANAGED_FILE" || { rm -f "$adopt_next"; return 1; }
+  verify_owned_identity "$LIVE_PID" "$LIVE_PORT"
+}
 check_live_protocol() {
   LIVE_STATUS=none; LIVE_PID=0; LIVE_PORT=0; LIVE_VERSION=unknown
   LIVE_COMPATIBLE=0; LIVE_OWNED=0; NEEDS_OWNED_UPGRADE=0; REPLACEMENT_REASON=incompatible; comparison=
@@ -1361,6 +1473,7 @@ check_live_protocol() {
        [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$LIVE_PID" ] &&
        [ "$(cat "$PORT_FILE" 2>/dev/null || true)" = "$LIVE_PORT" ]; then LIVE_OWNED=1; fi
     if [ "$LIVE_STATUS" = live ]; then read_live_compat "$2" "$3" "$4"; fi
+    if [ "$LIVE_STATUS" = live ] && [ "$LIVE_OWNED" = 0 ] && adopt_managed_orphan; then LIVE_OWNED=1; fi
   else
     if [ -e "$DEFAULT_RUNTIME_FILE" ] || [ -e "$PORT_FILE" ] || [ -e "$PID_FILE" ]; then LIVE_STATUS=unknown; fi
   fi
@@ -1530,6 +1643,7 @@ REFRESH_LIVE_VERSION=@@GOAT_REFRESH_LIVE_VERSION@@
 EXPECTED_LIVE_RUNNER_SHA256=@@GOAT_LIVE_RUNNER_SHA256@@
 OWNING_LAUNCH=@@GOAT_OWNING_LAUNCH@@
 DRAIN_FORCE=@@GOAT_DRAIN_FORCE@@
+DRAIN_AUTOMATIC=@@GOAT_DRAIN_AUTOMATIC@@
 DRAIN_GRACE_SECONDS=@@GOAT_DRAIN_GRACE_SECONDS@@
 RUNNER_PUBLISHED=0; REFRESH_DECISION=; LEGACY_PENDING=0; LEGACY_COMMITTED=0
 LEGACY_TERMINATED=0; LEGACY_IDENTITY_LINK=; LEGACY_PUBLICATION_STARTED=0
@@ -1979,10 +2093,30 @@ export const REMOTE_RUNTIME_CLEANUP_SCRIPT = String.raw`cleanup_runtime_versions
     [ -d "$parent" ] && [ ! -L "$parent" ] || return 1
   done
   versions="$HOME/.goat/runtime/goat/versions"
-  [ -d /proc/self ] && command -v flock >/dev/null 2>&1 || return 1
+  # Linux names every process's executable and directory under /proc. macOS has no /proc,
+  # so lsof answers the same question there.
+  cleanup_lsof=
+  if [ ! -d /proc/self ]; then
+    for candidate in "$(command -v lsof 2>/dev/null || true)" /usr/sbin/lsof /sbin/lsof; do
+      if [ -n "$candidate" ] && [ -x "$candidate" ]; then cleanup_lsof="$candidate"; break; fi
+    done
+    [ -n "$cleanup_lsof" ] || return 1
+  fi
   [ ! -L "$versions/.maintenance.lock" ] || return 1
-  exec 9>"$versions/.maintenance.lock" || return 1
-  flock -n -x 9 || return 1
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$versions/.maintenance.lock" || return 1
+    flock -n -x 9 || return 1
+  else
+    # Without flock (macOS) an atomic directory is the mutex, released when this subshell
+    # exits. One a killed cleanup left behind over an hour ago is stale.
+    maintenance="$versions/.maintenance.lock.d"
+    [ ! -L "$maintenance" ] || return 1
+    if ! mkdir "$maintenance" 2>/dev/null; then
+      [ -n "$(find "$maintenance" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
+        rmdir "$maintenance" 2>/dev/null && mkdir "$maintenance" 2>/dev/null || return 1
+    fi
+    trap 'rmdir "$maintenance" 2>/dev/null || true' EXIT
+  fi
   set +f
   # Older clients do not take the maintenance mutex; their install locks still veto cleanup.
   for install in "$versions"/.*.install.lock*; do
@@ -2004,6 +2138,13 @@ export const REMOTE_RUNTIME_CLEANUP_SCRIPT = String.raw`cleanup_runtime_versions
     commands="$(ps -o command= -U "$uid")" && pids="$(ps -o pid= -U "$uid")" || return 1
     [ -n "$commands" ] && [ -n "$pids" ] || return 1
     paths="$commands"
+    if [ -n "$cleanup_lsof" ]; then
+      # Like an unreadable /proc entry, any lsof failure vetoes deletion.
+      open_paths="$("$cleanup_lsof" -n -P -w -a -u "$uid" -d cwd,txt -Fn 2>/dev/null)" || return 1
+      paths="$paths
+$(printf '%s\n' "$open_paths" | sed -n 's/^n//p')"
+      return 0
+    fi
     # ps alone misses chdir and exec with a custom argv[0]. An unreadable live process vetoes
     # deletion; one that exited since ps listed it has nothing left to protect.
     for pid in $pids; do
@@ -2034,26 +2175,39 @@ $cwd"
     fi
     "$live_binary" __ssh-helper compare-version "$@" "$first" "$second" 2>/dev/null
   }
-  older=
-  for dir in "$versions"/*; do
-    [ -d "$dir" ] && [ ! -L "$dir" ] || continue
-    [ -x "$dir/goat" ] && [ ! -L "$dir/goat" ] || continue
-    version="${"${dir##*/}"}"
-    valid_version "$version" || continue
-    [ ! -L "$dir/.install-complete" ] &&
-      [ "$(cat "$dir/.install-complete" 2>/dev/null)" = "$version" ] || continue
-    [ "$version" != "$SELECTED_VERSION" ] || continue
-    [ "$(cleanup_order "$SELECTED_VERSION" "$version")" = newer ] || continue
-    older="$older $version"
+  # A complete install that is provably older than the live build.
+  cleanup_older() {
+    dir="$versions/$1"
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ -x "$dir/goat" ] && [ ! -L "$dir/goat" ] || return 1
+    valid_version "$1" && [ "$1" != "$SELECTED_VERSION" ] || return 1
+    [ ! -L "$dir/.install-complete" ] && [ "$(cat "$dir/.install-complete" 2>/dev/null)" = "$1" ] || return 1
+    [ "$(cleanup_order "$SELECTED_VERSION" "$1")" = newer ]
+  }
+  cleanup_ifs="$IFS"; IFS='
+'
+  # Install markers, most recent first. Version names never contain a newline.
+  installed="$(ls -t "$versions"/*/.install-complete 2>/dev/null || true)"
+  # One rollback build is kept: the older build installed last, which this host ran before
+  # the live one.
+  previous=
+  for marker in $installed; do
+    # Only the list splits on newlines; commands inside split words as usual.
+    IFS="$cleanup_ifs"
+    version="${"${marker%/.install-complete}"}"; version="${"${version##*/}"}"
+    if cleanup_older "$version"; then previous="$version"; break; fi
   done
-  for version in $older; do
-    [ "$version" != "$retained" ] && [ "$version" != "$REQUESTED_VERSION" ] || continue
-    # Preserve every maximal older build when the rollback candidates cannot be totally ordered.
-    removable=0
-    for other in $older; do
-      if [ "$(cleanup_order "$other" "$version")" = newer ]; then removable=1; break; fi
-    done
-    [ "$removable" = 1 ] || continue
+  # Each check starts goat, so a long backlog is pruned over several connections within the
+  # caller's deadline, oldest installs first.
+  started="$(date +%s)"
+  IFS='
+'
+  for marker in $(printf '%s\n' "$installed" | awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }'); do
+    IFS="$cleanup_ifs"
+    [ $(( $(date +%s) - started )) -lt 6 ] || break
+    version="${"${marker%/.install-complete}"}"; version="${"${version##*/}"}"
+    [ "$version" != "$previous" ] && [ "$version" != "$retained" ] &&
+      [ "$version" != "$REQUESTED_VERSION" ] || continue
+    cleanup_older "$version" || continue
     dir="$versions/$version"
     cleanup_process_paths || return 1
     case "$paths" in *"$dir/"*|*"$dir
@@ -2066,13 +2220,46 @@ $cwd"
     rm -rf "$trash" || return 1
     printf 'ssh.runtime.cleanup.removed version=%s\n' "$version" >&2
   done
+  IFS="$cleanup_ifs"
+  # Staging exists only while an install holds its lock, and none is held now.
+  for leftover in "$versions"/.staging-* "$versions"/.trash-*; do
+    [ -d "$leftover" ] && [ ! -L "$leftover" ] || continue
+    [ -n "$(find "$leftover" -maxdepth 0 -mmin +60 2>/dev/null)" ] || continue
+    rm -rf "$leftover" || return 1
+    printf 'ssh.runtime.cleanup.removed leftover=%s\n' "${"${leftover##*/}"}" >&2
+  done
 }
 (cleanup_runtime_versions) || { printf 'ssh.runtime.cleanup.skipped inspection, lock, or cleanup failed\n' >&2 || true; }
 `;
 
 // Retained archives have a port-only wait-ready helper. Inspect the kernel's socket owner
 // in the launch shell instead, without adding helper arguments or starts on reconnect.
-export const REMOTE_LAUNCH_LISTENER_SCRIPT = String.raw`server_owns_listener() (
+export const REMOTE_LAUNCH_LISTENER_SCRIPT = String.raw`# macOS login shells often omit /usr/sbin, which is where lsof lives, and archive
+# launches never call ensure_remote_node_path. Resolve lsof without that PATH.
+ensure_listener_path() {
+  prepend_path_if_dir "/usr/sbin"
+  prepend_path_if_dir "/sbin"
+  export PATH
+}
+listener_lsof() {
+  if command -v lsof >/dev/null 2>&1; then
+    command -v lsof
+    return 0
+  fi
+  for candidate in /usr/sbin/lsof /sbin/lsof; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+listener_probe_available() {
+  if [ "$GOAT_HOST_WINDOWS" = 1 ]; then return 0; fi
+  if [ -d /proc/self/fd ]; then return 0; fi
+  listener_lsof >/dev/null 2>&1
+}
+server_owns_listener() (
   # Protocol parsing leaves noglob enabled; socket fd discovery needs expansion.
   set +f
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
@@ -2089,7 +2276,8 @@ export const REMOTE_LAUNCH_LISTENER_SCRIPT = String.raw`server_owns_listener() (
       END { exit !found }
     ' /proc/"$1"/net/tcp 2>/dev/null
   else
-    lsof -nP -a -p "$1" -iTCP@127.0.0.1:"$2" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$1"
+    lsof_bin="$(listener_lsof)" || return 1
+    "$lsof_bin" -nP -a -p "$1" -iTCP@127.0.0.1:"$2" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$1"
   fi
 )
 wait_launched_listener() {
@@ -2182,6 +2370,17 @@ recheck_selected_before_use
 REMOTE_PID=""
 REMOTE_PORT=""
 REMOTE_MANAGED=""
+# Refuse before drain or a fresh start. Stopping the server and then failing
+# this check would leave the host with nothing to attach to.
+ensure_listener_path
+if ! listener_probe_available; then
+  if [ "$NEEDS_OWNED_UPGRADE" = 1 ] || [ "$LIVE_STATUS" = live ]; then
+    printf 'Cannot verify the launched GOAT listener: this host needs /proc or lsof. The existing server was left running.\\n' >&2
+  else
+    printf 'Cannot verify the launched GOAT listener: this host needs /proc or lsof.\\n' >&2
+  fi
+  exit 1
+fi
 if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   UPGRADE_PID="$LIVE_PID"; UPGRADE_PORT="$LIVE_PORT"; UPGRADE_VERSION="$LIVE_VERSION"
   UPGRADE_INSTANCE="$LIVE_INSTANCE_ID"
@@ -2215,7 +2414,16 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   PREVIOUS_IDENTITY="$(cat "$STATE_DIR/identity")" || ownership_unverified
   PREVIOUS_RUNNER="$STATE_DIR/run-t3.previous"
   if [ -f "$RETAINED_SNAPSHOT_FILE" ]; then cp -p "$RETAINED_SNAPSHOT_FILE" "$PREVIOUS_RUNNER"
-  else cp -p "$RUNNER_FILE" "$PREVIOUS_RUNNER"; fi
+  elif [ -e "$RUNNER_FILE" ] || [ -L "$RUNNER_FILE" ] || [ "$GOAT_ARCHIVE_MODE" != 1 ]; then cp -p "$RUNNER_FILE" "$PREVIOUS_RUNNER"
+  else
+    # An adopted server lost its runner with its records. Rollback restarts its installed
+    # release through this app's runner with only the archive version changed.
+    awk -v v="$UPGRADE_VERSION" '/^GOAT_ARCHIVE_VERSION=/ { print "GOAT_ARCHIVE_VERSION=\\047" v "\\047"; next }
+      /^T3_ARCHIVE_VERSION=/ { print "T3_ARCHIVE_VERSION=\\047" v "\\047"; next } { print }' "$RUNNER_CANDIDATE_FILE.pin" >"$PREVIOUS_RUNNER" &&
+      chmod 700 "$PREVIOUS_RUNNER" || ownership_unverified
+    [ "$(read_runner_hint "$PREVIOUS_RUNNER" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})" = "$UPGRADE_VERSION" ] &&
+      [ "$(read_runner_hint "$PREVIOUS_RUNNER" T3_ARCHIVE_VERSION T3_ARCHIVE_VERSION)" = "$UPGRADE_VERSION" ] || ownership_unverified
+  fi
   # The server, not this script, stops itself: it refuses new turns, lets running work
   # finish within the grace window, and exits. Unconfirmed, an expired window cancels.
   drain_force=
@@ -2223,7 +2431,12 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   # A lost response or a dead SSH owner cannot prove the server stopped draining.
   printf '%s\\n' "$UPGRADE_INSTANCE" > "$STATE_DIR/draining.next.$$"
   mv "$STATE_DIR/draining.next.$$" "$STATE_DIR/draining"
-  drain_result="$("$RUNNER_CANDIDATE_FILE.pin" __ssh-helper drain --port "$UPGRADE_PORT" --instance-id "$UPGRADE_INSTANCE" --target-version "$TARGET_VERSION" --grace-seconds "$DRAIN_GRACE_SECONDS" $drain_force --token-file "$DEFAULT_SERVER_HOME/userdata/runtime-control.token" 2>/dev/null || true)"
+  # Only an automatic refresh of an older runtime is a request the runtime may arbitrate. A
+  # reconciliation retry keeps the marker: the runtime joins a drain that is still active and
+  # arbitrates only a request that would start a new one.
+  drain_automatic=0
+  if [ "$DRAIN_AUTOMATIC" = 1 ] && [ "$REPLACEMENT_REASON" = older ]; then drain_automatic=1; fi
+  drain_result="$(GOAT_RUNTIME_DRAIN_AUTOMATIC="$drain_automatic" "$RUNNER_CANDIDATE_FILE.pin" __ssh-helper drain --port "$UPGRADE_PORT" --instance-id "$UPGRADE_INSTANCE" --target-version "$TARGET_VERSION" --grace-seconds "$DRAIN_GRACE_SECONDS" $drain_force --token-file "$DEFAULT_SERVER_HOME/userdata/runtime-control.token" 2>/dev/null || true)"
   case "$drain_result" in
     drained) ;;
     cancelled) rm -f "$STATE_DIR/draining" "$PREVIOUS_RUNNER"; DRAIN_UNCERTAIN=0; emit_pending busy ;;
@@ -2265,11 +2478,15 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
       REFRESH_DECISION=replaced ;;
     rolled-back)
       if [ "$LIVE_COMPATIBLE" != 1 ]; then
+        # The restored server is a new instance, so the fence for the drained one is done.
+        rm -f "$STATE_DIR/draining"
         printf 'GOAT %s did not start on the remote host; GOAT %s was restored and is running, but this app cannot attach to it. See %s.\n' "$TARGET_VERSION" "$supervise_version" "$LOG_FILE" >&2; exit 1
       fi
       printf 'GOAT %s did not start on the remote host; GOAT %s was restored.\n' "$TARGET_VERSION" "$supervise_version" >&2
       REMOTE_PID="$supervise_pid"; REMOTE_PORT="$UPGRADE_PORT"; REMOTE_MANAGED=managed
       SELECTED_VERSION="$supervise_version" ;;
+    old-alive)
+      printf 'The drained GOAT %s server on the remote host did not exit, so it was left running and not replaced. Reconnect after it stops; see %s.\\n' "$UPGRADE_VERSION" "$LOG_FILE" >&2; exit 1 ;;
     *)
       printf 'Remote runtime replacement failed; see %s.\n' "$LOG_FILE" >&2; exit 1 ;;
   esac
@@ -2294,11 +2511,20 @@ else
   fi
   publish_selected_runner
 fi
+# A runtime older than this host's database exits before ready on every start. The marker
+# names that runtime, so later launches report it without starting it again, until another
+# runtime is selected or a newer server writes the database.
+DATABASE_AHEAD_FILE="$STATE_DIR/database-ahead"
+database_ahead_exit() {
+  printf 'GOAT %s on this host cannot open its data because a newer GOAT build already upgraded it. Update this app or the GOAT runtime on this host, then reconnect.\\n' "$SELECTED_VERSION" >&2
+  exit 1
+}
+database_ahead_marked() {
+  [ -f "$DATABASE_AHEAD_FILE" ] && [ "$(cat "$DATABASE_AHEAD_FILE" 2>/dev/null || true)" = "$SELECTED_VERSION" ] || return 1
+  [ -z "$(find "$DEFAULT_SERVER_HOME/userdata" -maxdepth 1 -name 'statev2.sqlite*' -newer "$DATABASE_AHEAD_FILE" 2>/dev/null || true)" ]
+}
 LAUNCH_ATTEMPTS=0
 while [ -z "$REMOTE_PORT" ]; do
-  if [ "$GOAT_HOST_WINDOWS" = 0 ] && [ ! -d /proc/self/fd ] && ! command -v lsof >/dev/null 2>&1; then
-    printf 'Cannot verify the launched GOAT listener: this host needs /proc or lsof.\\n' >&2; exit 1
-  fi
   LAUNCH_ATTEMPTS=$((LAUNCH_ATTEMPTS + 1))
   REMOTE_PORT="$(pick_port)" || true
   if [ -z "$REMOTE_PORT" ]; then
@@ -2313,6 +2539,7 @@ while [ -z "$REMOTE_PORT" ]; do
   if [ "$LIVE_STATUS" != none ]; then
     printf 'A server appeared before launch; reconnect without replacing it.\\n' >&2; exit 1
   fi
+  if database_ahead_marked; then database_ahead_exit; fi
   if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then
     GOAT_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
     SPAWN_IDENTITY="$GOAT_RUNTIME_DIR/goat"
@@ -2354,6 +2581,17 @@ while [ -z "$REMOTE_PORT" ]; do
         continue
       fi
     fi
+    database_ahead=0
+    if ! server_alive "$REMOTE_PID"; then
+      launch_exit=0
+      if [ "$GOAT_HOST_WINDOWS" = 0 ]; then wait "$REMOTE_PID" 2>/dev/null || launch_exit=$?; fi
+      # Windows launches and runtimes that predate the exit code only leave these errors in the log.
+      if [ "$launch_exit" = ${SERVER_EXIT_CODE_DATABASE_AHEAD} ] ||
+         tail -c "+$((LAUNCH_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null |
+           grep -q -e 'upgraded by a newer GOAT build' -e 'Cannot move GOAT migrations onto ids another migration recorded' -e 'would skip required schema migrations'; then
+        database_ahead=1
+      fi
+    fi
     printf 'Remote GOAT server did not become ready with its own listener on 127.0.0.1:%s.\\n' "$REMOTE_PORT" >&2
     if [ -s "$LOG_FILE" ]; then
       tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
@@ -2363,8 +2601,14 @@ while [ -z "$REMOTE_PORT" ]; do
     if server_alive "$REMOTE_PID"; then server_kill "$REMOTE_PID" || true; fi
     wait_for_pid_exit "$REMOTE_PID"
     rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
+    if [ "$database_ahead" = 1 ]; then
+      printf '%s\\n' "$SELECTED_VERSION" >"$DATABASE_AHEAD_FILE.next.$$"
+      mv "$DATABASE_AHEAD_FILE.next.$$" "$DATABASE_AHEAD_FILE"
+      database_ahead_exit
+    fi
     exit 1
   fi
+  rm -f "$DATABASE_AHEAD_FILE"
   # A held published fallback becomes an ordinary runtime only once its own server is ready
   # and owns the port, so it serves this host's data.
   if [ "@@GOAT_REQUIRE_FRESH_HOST@@" = 1 ]; then rm -f "$HOME/.goat/runtime/goat/held/$SELECTED_VERSION"; fi
@@ -2431,6 +2675,14 @@ else
 fi
 `;
 
+const REMOTE_CLIENT_SESSION_SCRIPT = `set -eu
+STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
+DEFAULT_SERVER_HOME="$HOME/.goat"
+@@GOAT_RUNNER_SETUP@@
+recheck_selected_before_use
+"$RUNNER_FILE" auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject @@GOAT_SUBJECT@@ @@GOAT_SCOPES@@ --ttl @@GOAT_TTL@@ --label @@GOAT_LABEL@@ --json
+`;
+
 const REMOTE_STOP_SCRIPT = `set -eu
 DEFAULT_SERVER_HOME="$HOME/.goat"
 STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
@@ -2475,13 +2727,15 @@ if [ "$REMOTE_MANAGED" = managed ] && [ -n "$REMOTE_PID" ]; then
     fi
     verify_owned_identity "$REMOTE_PID" "$REMOTE_PORT" || ownership_unverified
     server_kill "$REMOTE_PID" || true
+    STOP_WAIT_ATTEMPTS=@@GOAT_STOP_WAIT_ATTEMPTS@@
+    STOP_WAIT_INTERVAL=@@GOAT_STOP_WAIT_INTERVAL@@
     WAIT_COUNT=0
-    while server_alive "$REMOTE_PID" && [ "$WAIT_COUNT" -lt 20 ]; do
+    while server_alive "$REMOTE_PID" && [ "$WAIT_COUNT" -lt "$STOP_WAIT_ATTEMPTS" ]; do
       WAIT_COUNT=$((WAIT_COUNT + 1))
-      sleep 0.1
+      sleep "$STOP_WAIT_INTERVAL"
     done
     if server_alive "$REMOTE_PID"; then
-      printf 'Remote GOAT server with PID %s did not stop within 2 seconds. Its ownership files were kept.\\n' "$REMOTE_PID" >&2
+      printf 'Remote GOAT server with PID %s did not stop within @@GOAT_STOP_WAIT_LABEL@@. Its ownership files were kept.\\n' "$REMOTE_PID" >&2
       exit 1
     fi
   fi
@@ -2572,6 +2826,8 @@ function buildRemoteRunnerSetupScript(
   return applyScriptPlaceholders(REMOTE_RUNNER_SETUP_SCRIPT, {
     GOAT_OWNING_LAUNCH: verifyOwnedBeforePublication ? "1" : "0",
     GOAT_DRAIN_FORCE: input?.confirmReplacement === true ? "1" : "0",
+    GOAT_DRAIN_AUTOMATIC:
+      input?.confirmReplacement !== true && input?.manualRefresh !== true ? "1" : "0",
     GOAT_DRAIN_GRACE_SECONDS: String(
       Math.min(
         Math.max(
@@ -2638,8 +2894,10 @@ capture_reconnect_baseline() {
     GOAT_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
     GOAT_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteGoatRunnerScript(input)),
     GOAT_PROTOCOL_GUARD: applyScriptPlaceholders(REMOTE_PROTOCOL_GUARD_SCRIPT, {
-      GOAT_SSH_PROTOCOL: String(SSH_RUNTIME_PROTOCOL_VERSION),
-      GOAT_ORCHESTRATION_PROTOCOL: String(ORCHESTRATION_PROTOCOL_VERSION),
+      GOAT_SSH_PROTOCOL: String(input?.candidateProtocol?.ssh ?? SSH_RUNTIME_PROTOCOL_VERSION),
+      GOAT_ORCHESTRATION_PROTOCOL: String(
+        input?.candidateProtocol?.orchestration ?? ORCHESTRATION_PROTOCOL_VERSION,
+      ),
       GOAT_RECONNECT_LIVE_GUARD: reconnect
         ? `  # A folded reconnect may only attach to the owned selection; a race must re-enter preparation.
   if [ "$LIVE_STATUS" != live ] || [ "$LIVE_VERSION" != "$SELECTED_VERSION" ] ||
@@ -2702,6 +2960,7 @@ export function buildRemoteMcpSessionScript(
     GOAT_MEMORY_SCOPES: (options.memoryScopes?.length ?? 0) > 0 ? "required" : "none",
     GOAT_EXTRA_SCOPES:
       (options.approvals === true ? "--scope orchestration:approve " : "") +
+      (options.providersManage === true ? "--scope providers:manage " : "") +
       (options.memoryScopes ?? []).map((scope) => `--scope ${shellSingleQuote(scope)} `).join(""),
     GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
       ...selection,
@@ -2709,6 +2968,69 @@ export function buildRemoteMcpSessionScript(
     }),
   });
 }
+
+export function buildRemoteClientSessionScript(
+  stateKey: string,
+  options: RemoteClientSessionOptions,
+  input?: RemoteGoatRunnerOptions,
+  selection = requestedRuntime(input),
+): string {
+  if (options.scopes.length === 0) {
+    throw new Error("A remote client session requires explicit scopes.");
+  }
+  if (options.subject === "mcp-client") {
+    throw new Error("The mcp-client subject cannot access client HTTP or WebSocket endpoints.");
+  }
+  return applyScriptPlaceholders(REMOTE_CLIENT_SESSION_SCRIPT, {
+    GOAT_STATE_KEY: stateKey,
+    GOAT_SUBJECT: shellSingleQuote(options.subject),
+    GOAT_SCOPES: options.scopes.map((scope) => `--scope ${shellSingleQuote(scope)}`).join(" "),
+    GOAT_TTL: shellSingleQuote(options.ttl),
+    GOAT_LABEL: shellSingleQuote(options.label),
+    GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
+      ...selection,
+      mayUpgradeOwnedServer: false,
+    }),
+  });
+}
+
+export const decodeRemoteClientSessionOutput = Effect.fn(
+  "ssh/tunnel.decodeRemoteClientSessionOutput",
+)(function* (stdout: string, requestedScopes: ReadonlyArray<AuthEnvironmentScope>) {
+  const session = yield* decodeRemoteJsonOutput(stdout, decodeRemoteClientSessionResult).pipe(
+    Effect.mapError(
+      (cause) =>
+        new SshPairingError({
+          message: "The remote GOAT CLI did not return a client session with explicit scopes.",
+          stdout,
+          cause,
+        }),
+    ),
+  );
+  if (session.token.trim().length === 0) {
+    return yield* new SshPairingError({
+      message: "The remote GOAT CLI returned an empty client session token.",
+      stdout,
+    });
+  }
+  const requested = new Set(requestedScopes);
+  const granted = new Set(session.scopes);
+  if (
+    requested.size === 0 ||
+    granted.size !== requested.size ||
+    !session.scopes.every((scope) => requested.has(scope))
+  ) {
+    return yield* new SshPairingError({
+      message: "The remote GOAT CLI returned client session scopes that differ from the request.",
+      stdout,
+    });
+  }
+  return {
+    token: session.token,
+    expiresAt: session.expiresAt ?? null,
+    scopes: session.scopes,
+  } satisfies RemoteClientSession;
+});
 
 /** The session script's refusal when the remote CLI cannot issue requested memory scopes. */
 const MEMORY_SCOPES_UNSUPPORTED = /^GOAT_SESSION_ERROR=memory_scopes_unsupported runtime=(\S+)$/m;
@@ -2865,16 +3187,31 @@ export function remoteUploadCommand(
   script: string,
   archive: Uint8Array,
   platform: "darwin" | "linux" | "win32",
-): { readonly remoteCommandArgs: ReadonlyArray<string>; readonly stdin: Uint8Array } {
+): {
+  readonly remoteCommandArgs: ReadonlyArray<string>;
+  readonly stdin: Uint8Array;
+  readonly archiveOffset: number;
+  readonly archiveLength: number;
+} {
   if (platform !== "win32") {
-    return { remoteCommandArgs: ["sh", "-c", shellSingleQuote(script)], stdin: archive };
+    return {
+      remoteCommandArgs: ["sh", "-c", shellSingleQuote(script)],
+      stdin: archive,
+      archiveOffset: 0,
+      archiveLength: archive.byteLength,
+    };
   }
   const scriptBytes = new TextEncoder().encode(script);
   const stdin = new Uint8Array(scriptBytes.byteLength + archive.byteLength);
   stdin.set(scriptBytes);
   stdin.set(archive, scriptBytes.byteLength);
   const bootstrap = `upload_script="$(mktemp)" && dd bs=1 count=${scriptBytes.byteLength} of="$upload_script" 2>/dev/null && sh "$upload_script"; upload_status=$?; rm -f "$upload_script"; exit "$upload_status"`;
-  return { remoteCommandArgs: ["sh", "-c", shellSingleQuote(bootstrap)], stdin };
+  return {
+    remoteCommandArgs: ["sh", "-c", shellSingleQuote(bootstrap)],
+    stdin,
+    archiveOffset: scriptBytes.byteLength,
+    archiveLength: archive.byteLength,
+  };
 }
 
 export function buildRemoteRuntimeProbeScript(
@@ -3067,6 +3404,10 @@ probe_live() {
      [ "$(cat "$state/managed" 2>/dev/null || true)" = managed ] &&
      [ "$(cat "$state/pid" 2>/dev/null || true)" = "$5" ] &&
      [ "$(cat "$state/port" 2>/dev/null || true)" = "$6" ]; then live_owned=true; fi
+  if [ "$1" = live ] && [ "$live_owned" = false ] && [ -n "$state_key" ] &&
+     managed_orphan "$5" "$6" "$2" "$state"; then
+    live_fields="$live_fields,\\"liveAdoptable\\":true"
+  fi
   if [ "$1" = live ] && valid_version "$2"; then
     live_version="$2"
     live_fields="$live_fields$(printf ',"livePort":%s' "$6")"
@@ -3132,7 +3473,7 @@ printf '{"platform":"%s","arch":"%s","ready":%s,"liveOwned":%s,"identityAbsent":
 `;
 }
 
-const decodeRemoteRuntimeProbe = Schema.decodeEffect(
+const decodeRemoteRuntimeProbeFields = Schema.decodeEffect(
   fromLenientJson(
     Schema.Struct({
       platform: Schema.Literals(["darwin", "linux", "win32"]),
@@ -3177,9 +3518,23 @@ const decodeRemoteRuntimeProbe = Schema.decodeEffect(
       liveLacksMemoryScopes: Schema.optionalKey(Schema.Boolean),
       /** The live server drains for a replacement. Without it the client only attaches. */
       liveDrain: Schema.optionalKey(Schema.Boolean),
+      /** The live server is GOAT's managed runtime whose launch records were lost; see `managed_orphan`. */
+      liveAdoptable: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 );
+
+// An owning launch adopts such a server under the replacement lock before it acts, so every
+// decision treats it as owned. Its identity is written by that adoption, not inherited.
+type RemoteRuntimeProbe = Effect.Success<ReturnType<typeof decodeRemoteRuntimeProbeFields>>;
+const decodeRemoteRuntimeProbe = (input: string) =>
+  decodeRemoteRuntimeProbeFields(input).pipe(
+    Effect.map((probe): RemoteRuntimeProbe =>
+      probe.liveAdoptable === true && probe.liveOwned !== true
+        ? { ...probe, liveOwned: true, identityAbsent: false }
+        : probe,
+    ),
+  );
 
 /**
  * SSH failures (an unreachable host, a timeout, rejected authentication) keep their own error
@@ -3261,10 +3616,7 @@ const installOnHost = Effect.fn("ssh/tunnel.installOnHost")(function* (
  * install. It sorts above every `0.1.0-nightly.*` yet lacks their migrations, so starting it
  * against their database fails every launch.
  */
-export const compareHostRuntimeBuilds = (
-  left: RuntimeBuild,
-  right: RuntimeBuild,
-): number | undefined => {
+const compareHostRuntimeBuilds = (left: RuntimeBuild, right: RuntimeBuild): number | undefined => {
   const leftParsed = parseSemver(left.version);
   const rightParsed = parseSemver(right.version);
   const leftPlain = leftParsed?.prerelease.length === 0;
@@ -3669,10 +4021,25 @@ export const prepareRemoteRuntime = (
             ),
           catch: runtimePreparationError,
         });
-        notifyRuntimePhase(target, "uploading", onPhase);
+        const { archiveOffset, archiveLength, ...uploadCommand } = remoteUploadCommand(
+          script,
+          archive.bytes,
+          probe.platform,
+        );
+        notifyRuntimePhase(target, "uploading", onPhase, {
+          sentBytes: 0,
+          totalBytes: archiveLength,
+        });
         yield* runSshCommand(target, {
           ...authOptions,
-          ...remoteUploadCommand(script, archive.bytes, probe.platform),
+          ...uploadCommand,
+          onStdinProgress: (sentBytes) => {
+            if (sentBytes <= archiveOffset) return;
+            notifyRuntimePhase(target, "uploading", onPhase, {
+              sentBytes: Math.min(sentBytes - archiveOffset, archiveLength),
+              totalBytes: archiveLength,
+            });
+          },
           timeoutStage: "runtime-install",
           timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
         }).pipe(
@@ -4118,9 +4485,44 @@ function archiveUnavailableText(alias: string, error: SshLaunchError, directory:
   };
 }
 
+const DEFAULT_STOP_WAIT_ATTEMPTS = 20;
+const DEFAULT_STOP_WAIT_INTERVAL_SECONDS = "0.1";
+const STOP_WAIT_INTERVAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+
+/** Production waits 20×0.1s. Tests pass interval `0` so the loop follows process exit. */
+function stopWaitPlaceholders(options: {
+  readonly stopWaitAttempts?: number;
+  readonly stopWaitIntervalSeconds?: string;
+}): {
+  readonly GOAT_STOP_WAIT_ATTEMPTS: string;
+  readonly GOAT_STOP_WAIT_INTERVAL: string;
+  readonly GOAT_STOP_WAIT_LABEL: string;
+} {
+  const attempts = options.stopWaitAttempts ?? DEFAULT_STOP_WAIT_ATTEMPTS;
+  const interval = options.stopWaitIntervalSeconds ?? DEFAULT_STOP_WAIT_INTERVAL_SECONDS;
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > 1_000_000) {
+    throw new Error(`stopWaitAttempts must be an integer from 1 to 1000000, got ${attempts}`);
+  }
+  if (!STOP_WAIT_INTERVAL_PATTERN.test(interval)) {
+    throw new Error(`stopWaitIntervalSeconds must be a non-negative decimal, got ${interval}`);
+  }
+  return {
+    GOAT_STOP_WAIT_ATTEMPTS: String(attempts),
+    GOAT_STOP_WAIT_INTERVAL: interval,
+    GOAT_STOP_WAIT_LABEL:
+      attempts === DEFAULT_STOP_WAIT_ATTEMPTS && interval === DEFAULT_STOP_WAIT_INTERVAL_SECONDS
+        ? "2 seconds"
+        : "the stop deadline",
+  };
+}
+
 export function buildRemoteStopScript(
   stateKey: string,
-  options: { readonly ownedOnly?: boolean } = {},
+  options: {
+    readonly ownedOnly?: boolean;
+    readonly stopWaitAttempts?: number;
+    readonly stopWaitIntervalSeconds?: string;
+  } = {},
 ): string {
   return applyScriptPlaceholders(REMOTE_STOP_SCRIPT, {
     GOAT_STATE_KEY: stateKey,
@@ -4128,6 +4530,7 @@ export function buildRemoteStopScript(
     GOAT_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
     GOAT_REPLACEMENT_LOCK: REMOTE_REPLACEMENT_LOCK_SCRIPT,
     GOAT_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
+    ...stopWaitPlaceholders(options),
   });
 }
 
@@ -4241,6 +4644,14 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
     runner?: RemoteGoatRunnerOptions,
     onPhase?: SshRuntimeProgressCallback,
     previousSelection?: PreparedRemoteRuntime,
+    onLaunched?: (launch: {
+      readonly status: "ready" | "pending";
+      readonly pending?: SshRuntimePendingReplacement;
+    }) => Effect.Effect<
+      void,
+      never,
+      ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+    >,
   ): Effect.fn.Return<
     | {
         readonly status: "ready";
@@ -4254,133 +4665,146 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
     SshCommandError | SshInvalidTargetError | SshLaunchError,
     ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
   > {
-    const stateKey = REMOTE_RUNTIME_STATE_KEY;
-    yield* Effect.logInfo("ssh.remoteServer.launch.start", {
-      ...sshTargetLogFields(target),
-      ...sshRunnerLogFields(runner),
-      stateKey,
-    });
-    const canFoldProbe =
-      previousSelection?.reconnectProbe !== undefined &&
-      previousSelection.requestedVersion === runner?.archiveVersion?.trim() &&
-      previousSelection.runner.archiveCommitTime === runner?.archiveCommitTime &&
-      (previousSelection.runner.keepExistingRunner === true) ===
-        (runner?.keepExistingRunner === true) &&
-      previousSelection.upgradeFailure === undefined &&
-      previousSelection.updateBlocked === undefined &&
-      !isNodeScriptRunner(runner) &&
-      runner?.refreshOwnedRuntimeOnFirstConnection !== true &&
-      runner?.confirmReplacement !== true;
-    const launch = (selected: PreparedRemoteRuntime, expectedProbe?: string) =>
-      runSshCommand(target, {
-        remoteCommandArgs: ["sh", "-l", "-s", "--", stateKey],
-        stdin:
-          isNodeScriptRunner(selected.runner) || selected.hostPlatform === "win32"
-            ? buildRemoteLaunchScript(selected.runner, selected)
-            : buildReconnectLaunchScript(selected, expectedProbe),
-        timeoutStage: "runtime-launch",
-        timeoutMs: isNodeScriptRunner(selected.runner)
-          ? REMOTE_LAUNCH_TIMEOUT_MS
-          : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
-        ...input,
-      });
-    let folded = canFoldProbe
-      ? yield* measureSshReconnectStep(
-          "runtime-probe-folded",
-          launch(
-            { ...previousSelection, uploaded: false, requireInstalled: true },
-            previousSelection.reconnectProbe,
-          ),
-        )
-      : undefined;
-    const observedProbe = folded?.stdout
-      .split(/\r?\n/u)
-      .find((line) => line.startsWith("GOAT_RECONNECT_PROBE="))
-      ?.slice("GOAT_RECONNECT_PROBE=".length);
-    if (
-      folded !== undefined &&
-      getLastNonEmptyOutputLine(folded.stdout) === '{"status":"reprobe"}'
-    ) {
-      yield* Effect.logDebug("ssh.runtime.reconnect.reprobe", sshTargetLogFields(target));
-      folded = undefined;
-    }
-    const selected =
-      folded !== undefined && previousSelection !== undefined
-        ? { ...previousSelection, uploaded: false, requireInstalled: true }
-        : yield* prepareRemoteRuntime(
-            target,
-            input ?? {},
-            runner,
-            stateKey,
-            true,
-            onPhase,
-            observedProbe,
-          );
-    yield* Effect.annotateCurrentSpan("goat.runtime.selectedVersion", selected.version);
-    yield* Effect.annotateCurrentSpan("goat.runtime.requestedVersion", selected.requestedVersion);
-    const result = folded ?? (yield* launch(selected));
-    if (!getLastNonEmptyOutputLine(result.stdout)) {
-      return yield* new SshLaunchError({
-        message: "SSH launch did not return a remote port.",
-        stdout: result.stdout,
-      });
-    }
-    const parsed = yield* decodeRemoteLaunchOutput(
-      result.stdout
-        .split(/\r?\n/u)
-        .filter((line) => !line.startsWith("GOAT_RECONNECT_PROBE="))
-        .join("\n"),
-    ).pipe(
-      Effect.mapError(
-        (cause) =>
-          new SshLaunchError({
-            message: "SSH launch returned unparseable output.",
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const stateKey = REMOTE_RUNTIME_STATE_KEY;
+        yield* Effect.logInfo("ssh.remoteServer.launch.start", {
+          ...sshTargetLogFields(target),
+          ...sshRunnerLogFields(runner),
+          stateKey,
+        });
+        const canFoldProbe =
+          previousSelection?.reconnectProbe !== undefined &&
+          previousSelection.requestedVersion === runner?.archiveVersion?.trim() &&
+          previousSelection.runner.archiveCommitTime === runner?.archiveCommitTime &&
+          (previousSelection.runner.keepExistingRunner === true) ===
+            (runner?.keepExistingRunner === true) &&
+          previousSelection.upgradeFailure === undefined &&
+          previousSelection.updateBlocked === undefined &&
+          !isNodeScriptRunner(runner) &&
+          runner?.refreshOwnedRuntimeOnFirstConnection !== true &&
+          runner?.confirmReplacement !== true;
+        const launch = (selected: PreparedRemoteRuntime, expectedProbe?: string) => {
+          const command = runSshCommand(target, {
+            remoteCommandArgs: ["sh", "-l", "-s", "--", stateKey],
+            stdin:
+              isNodeScriptRunner(selected.runner) || selected.hostPlatform === "win32"
+                ? buildRemoteLaunchScript(selected.runner, selected)
+                : buildReconnectLaunchScript(selected, expectedProbe),
+            timeoutStage: "runtime-launch",
+            timeoutMs: isNodeScriptRunner(selected.runner)
+              ? REMOTE_LAUNCH_TIMEOUT_MS
+              : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
+            ...input,
+          });
+          return onLaunched === undefined ? restore(command) : command;
+        };
+        let folded = canFoldProbe
+          ? yield* measureSshReconnectStep(
+              "runtime-probe-folded",
+              launch(
+                { ...previousSelection, uploaded: false, requireInstalled: true },
+                previousSelection.reconnectProbe,
+              ),
+            )
+          : undefined;
+        const observedProbe = folded?.stdout
+          .split(/\r?\n/u)
+          .find((line) => line.startsWith("GOAT_RECONNECT_PROBE="))
+          ?.slice("GOAT_RECONNECT_PROBE=".length);
+        if (
+          folded !== undefined &&
+          getLastNonEmptyOutputLine(folded.stdout) === '{"status":"reprobe"}'
+        ) {
+          yield* Effect.logDebug("ssh.runtime.reconnect.reprobe", sshTargetLogFields(target));
+          folded = undefined;
+        }
+        const selected =
+          folded !== undefined && previousSelection !== undefined
+            ? { ...previousSelection, uploaded: false, requireInstalled: true }
+            : yield* restore(
+                prepareRemoteRuntime(
+                  target,
+                  input ?? {},
+                  runner,
+                  stateKey,
+                  true,
+                  onPhase,
+                  observedProbe,
+                ),
+              );
+        yield* Effect.annotateCurrentSpan("goat.runtime.selectedVersion", selected.version);
+        yield* Effect.annotateCurrentSpan(
+          "goat.runtime.requestedVersion",
+          selected.requestedVersion,
+        );
+        const result = folded ?? (yield* launch(selected));
+        if (!getLastNonEmptyOutputLine(result.stdout)) {
+          return yield* new SshLaunchError({
+            message: "SSH launch did not return a remote port.",
             stdout: result.stdout,
-            cause,
-          }),
-      ),
-    );
-    if (parsed.status === "pending") return parsed;
-    const pending =
-      parsed.pending ??
-      (folded !== undefined && parsed.selectedVersion === previousSelection?.version
-        ? previousSelection?.reconnectPending
-        : undefined);
-    if (!Number.isInteger(parsed.remotePort)) {
-      return yield* new SshLaunchError({
-        message: `SSH launch returned an invalid remote port: ${String(parsed.remotePort)}.`,
-        stdout: result.stdout,
-      });
-    }
-    yield* Effect.logInfo("ssh.remoteServer.launch.ready", {
-      ...sshTargetLogFields(target),
-      remotePort: parsed.remotePort,
-      remoteServerKind: parsed.serverKind ?? null,
-      selectedVersion: parsed.selectedVersion ?? selected.version,
-      requestedVersion: selected.requestedVersion,
-      refresh: parsed.refresh ?? null,
-      stateKey,
-    });
-    let probeOutput = result.stdout
-      .split(/\r?\n/u)
-      .find((line) => line.startsWith("GOAT_RECONNECT_PROBE="))
-      ?.slice("GOAT_RECONNECT_PROBE=".length);
-    if (
-      !isNodeScriptRunner(selected.runner) &&
-      // Garbage appears only when this launch installed a runtime; skip the round trip otherwise.
-      (selected.uploaded === true || !selected.requireInstalled) &&
-      parsed.pending === undefined &&
-      parsed.refresh === undefined &&
-      parsed.selectedVersion === selected.version
-    ) {
-      // A separate round trip makes even a hung cleanup or a dropped SSH connection best-effort.
-      yield* Effect.gen(function* () {
-        const cleanup = yield* runSshCommand(target, {
-          ...input,
-          // The trailing word is only $1 to the script; it names this call in traces and tests.
-          remoteCommandArgs: ["sh", "-l", "-s", "goat-runtime-cleanup"],
-          timeoutMs: runner?.cleanupTimeoutMs ?? 10_000,
-          stdin: `set -eu
+          });
+        }
+        const parsed = yield* decodeRemoteLaunchOutput(
+          result.stdout
+            .split(/\r?\n/u)
+            .filter((line) => !line.startsWith("GOAT_RECONNECT_PROBE="))
+            .join("\n"),
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new SshLaunchError({
+                message: "SSH launch returned unparseable output.",
+                stdout: result.stdout,
+                cause,
+              }),
+          ),
+        );
+        if (parsed.status === "pending") return parsed;
+        const pending =
+          parsed.pending ??
+          (folded !== undefined && parsed.selectedVersion === previousSelection?.version
+            ? previousSelection?.reconnectPending
+            : undefined);
+        if (!Number.isInteger(parsed.remotePort)) {
+          return yield* new SshLaunchError({
+            message: `SSH launch returned an invalid remote port: ${String(parsed.remotePort)}.`,
+            stdout: result.stdout,
+          });
+        }
+        // The response and cleanup ownership must be atomic with respect to interruption.
+        if (onLaunched !== undefined)
+          yield* onLaunched({ status: "ready", ...(pending === undefined ? {} : { pending }) });
+        yield* Effect.logInfo("ssh.remoteServer.launch.ready", {
+          ...sshTargetLogFields(target),
+          remotePort: parsed.remotePort,
+          remoteServerKind: parsed.serverKind ?? null,
+          selectedVersion: parsed.selectedVersion ?? selected.version,
+          requestedVersion: selected.requestedVersion,
+          refresh: parsed.refresh ?? null,
+          stateKey,
+        });
+        let probeOutput = result.stdout
+          .split(/\r?\n/u)
+          .find((line) => line.startsWith("GOAT_RECONNECT_PROBE="))
+          ?.slice("GOAT_RECONNECT_PROBE=".length);
+        if (
+          !isNodeScriptRunner(selected.runner) &&
+          // Garbage appears only when this launch installed a runtime; skip the round trip otherwise.
+          (selected.uploaded === true || !selected.requireInstalled) &&
+          parsed.pending === undefined &&
+          parsed.refresh === undefined &&
+          parsed.selectedVersion === selected.version
+        ) {
+          // A separate round trip makes even a hung cleanup or a dropped SSH connection best-effort.
+          yield* restore(
+            Effect.gen(function* () {
+              const cleanup = yield* runSshCommand(target, {
+                ...input,
+                // The trailing word is only $1 to the script; it names this call in traces and tests.
+                remoteCommandArgs: ["sh", "-l", "-s", "goat-runtime-cleanup"],
+                timeoutMs: runner?.cleanupTimeoutMs ?? 10_000,
+                stdin: `set -eu
 DEFAULT_SERVER_HOME="$HOME/.goat"
 STATE_DIR="$DEFAULT_SERVER_HOME/ssh-launch/${stateKey}"
 DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"
@@ -4406,96 +4830,99 @@ ${REMOTE_RUNTIME_FACT_WARMUP_SCRIPT}
 # A fresh install could not be keyed before warm-up; return its baseline in this round trip.
 ${buildReconnectProbeScript(selected)}
 if probe_output="$(reconnect_probe capture)"; then printf 'GOAT_RECONNECT_PROBE=%s\\n' "$probe_output"; fi`,
-        });
-        probeOutput =
-          cleanup.stdout
-            .split(/\r?\n/u)
-            .find((line) => line.startsWith("GOAT_RECONNECT_PROBE="))
-            ?.slice("GOAT_RECONNECT_PROBE=".length) ?? probeOutput;
-        for (const line of cleanup.stderr.split(/\r?\n/u)) {
-          if (line.startsWith("ssh.runtime.cleanup.")) {
-            yield* Effect.logInfo("ssh.runtime.cleanup.result", {
-              ...sshTargetLogFields(target),
-              detail: line,
-            });
+              });
+              probeOutput =
+                cleanup.stdout
+                  .split(/\r?\n/u)
+                  .find((line) => line.startsWith("GOAT_RECONNECT_PROBE="))
+                  ?.slice("GOAT_RECONNECT_PROBE=".length) ?? probeOutput;
+              for (const line of cleanup.stderr.split(/\r?\n/u)) {
+                if (line.startsWith("ssh.runtime.cleanup.")) {
+                  yield* Effect.logInfo("ssh.runtime.cleanup.result", {
+                    ...sshTargetLogFields(target),
+                    detail: line,
+                  });
+                }
+              }
+            }).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("ssh.runtime.cleanup.failed", {
+                  ...sshTargetLogFields(target),
+                  cause,
+                }),
+              ),
+            ),
+          );
+        }
+        const reusedVersion = parsed.selectedVersion;
+        const cachedSelection: PreparedRemoteRuntime =
+          reusedVersion === selected.version || isNodeScriptRunner(selected.runner)
+            ? selected
+            : {
+                ...selected,
+                version: reusedVersion,
+                source: parsed.pending === undefined ? "live" : "retained",
+                runner: {
+                  ...selected.runner,
+                  archiveVersion: reusedVersion,
+                  refreshOwnedRuntimeOnFirstConnection: false,
+                },
+                retainedRunnerSha256: selected.expectedLiveRunnerSha256 ?? null,
+                refreshIfIdle: false,
+              };
+        const durableSelection = {
+          ...cachedSelection,
+          runner: { ...cachedSelection.runner, confirmReplacement: false },
+        };
+        delete durableSelection.refreshIfIdle;
+        delete durableSelection.expectedLiveVersion;
+        delete durableSelection.expectedLiveRunnerSha256;
+        delete durableSelection.reconnectProbe;
+        delete durableSelection.reconnectPending;
+        if (pending !== undefined) durableSelection.reconnectPending = pending;
+        if (
+          probeOutput !== undefined &&
+          selected.upgradeFailure === undefined &&
+          selected.updateBlocked === undefined &&
+          parsed.selectedVersion === cachedSelection.version
+        ) {
+          const probe = yield* decodeRemoteRuntimeProbe(probeOutput).pipe(Effect.option);
+          if (
+            Option.isSome(probe) &&
+            probe.value.reconnectKey !== undefined &&
+            probe.value.platform !== "win32" &&
+            probe.value.liveStatus === "live" &&
+            probe.value.liveOwned === true &&
+            probe.value.identityAbsent === false &&
+            probe.value.liveVersion === cachedSelection.version &&
+            probe.value.retainedVersion === cachedSelection.version &&
+            (cachedSelection.source !== "retained" ||
+              cachedSelection.retainedRunnerSha256 === null ||
+              probe.value.retainedRunnerSha256 === cachedSelection.retainedRunnerSha256) &&
+            probe.value.liveSignals !== undefined &&
+            probe.value.liveBinarySignals !== undefined &&
+            matchesSignals(probe.value.liveSignals, selected.requestedVersion ?? "") &&
+            matchesSignals(probe.value.liveBinarySignals, selected.requestedVersion ?? "")
+          ) {
+            durableSelection.reconnectProbe = probeOutput;
+            durableSelection.source = "retained";
+            durableSelection.retainedRunnerSha256 = probe.value.retainedRunnerSha256 ?? null;
           }
         }
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("ssh.runtime.cleanup.failed", {
-            ...sshTargetLogFields(target),
-            cause,
-          }),
-        ),
-      );
-    }
-    const reusedVersion = parsed.selectedVersion;
-    const cachedSelection: PreparedRemoteRuntime =
-      reusedVersion === selected.version || isNodeScriptRunner(selected.runner)
-        ? selected
-        : {
-            ...selected,
-            version: reusedVersion,
-            source: parsed.pending === undefined ? "live" : "retained",
-            runner: {
-              ...selected.runner,
-              archiveVersion: reusedVersion,
-              refreshOwnedRuntimeOnFirstConnection: false,
-            },
-            retainedRunnerSha256: selected.expectedLiveRunnerSha256 ?? null,
-            refreshIfIdle: false,
-          };
-    const durableSelection = {
-      ...cachedSelection,
-      runner: { ...cachedSelection.runner, confirmReplacement: false },
-    };
-    delete durableSelection.refreshIfIdle;
-    delete durableSelection.expectedLiveVersion;
-    delete durableSelection.expectedLiveRunnerSha256;
-    delete durableSelection.reconnectProbe;
-    delete durableSelection.reconnectPending;
-    if (pending !== undefined) durableSelection.reconnectPending = pending;
-    if (
-      probeOutput !== undefined &&
-      selected.upgradeFailure === undefined &&
-      selected.updateBlocked === undefined &&
-      parsed.selectedVersion === cachedSelection.version
-    ) {
-      const probe = yield* decodeRemoteRuntimeProbe(probeOutput).pipe(Effect.option);
-      if (
-        Option.isSome(probe) &&
-        probe.value.reconnectKey !== undefined &&
-        probe.value.platform !== "win32" &&
-        probe.value.liveStatus === "live" &&
-        probe.value.liveOwned === true &&
-        probe.value.identityAbsent === false &&
-        probe.value.liveVersion === cachedSelection.version &&
-        probe.value.retainedVersion === cachedSelection.version &&
-        (cachedSelection.source !== "retained" ||
-          cachedSelection.retainedRunnerSha256 === null ||
-          probe.value.retainedRunnerSha256 === cachedSelection.retainedRunnerSha256) &&
-        probe.value.liveSignals !== undefined &&
-        probe.value.liveBinarySignals !== undefined &&
-        matchesSignals(probe.value.liveSignals, selected.requestedVersion ?? "") &&
-        matchesSignals(probe.value.liveBinarySignals, selected.requestedVersion ?? "")
-      ) {
-        durableSelection.reconnectProbe = probeOutput;
-        durableSelection.source = "retained";
-        durableSelection.retainedRunnerSha256 = probe.value.retainedRunnerSha256 ?? null;
-      }
-    }
-    notifyRuntimePhase(target, "starting", onPhase);
-    return {
-      status: "ready",
-      remotePort: parsed.remotePort,
-      remoteServerKind: parsed.serverKind ?? null,
-      selectedRuntime: {
-        ...durableSelection,
-        requireInstalled: !isNodeScriptRunner(selected.runner),
-      },
-      ...(parsed.refresh === undefined ? {} : { refresh: parsed.refresh }),
-      ...(pending === undefined ? {} : { pending }),
-    };
+        notifyRuntimePhase(target, "starting", onPhase);
+        return {
+          status: "ready" as const,
+          remotePort: parsed.remotePort,
+          remoteServerKind: parsed.serverKind ?? null,
+          selectedRuntime: {
+            ...durableSelection,
+            requireInstalled: !isNodeScriptRunner(selected.runner),
+          },
+          ...(parsed.refresh === undefined ? {} : { refresh: parsed.refresh }),
+          ...(pending === undefined ? {} : { pending }),
+        };
+      }),
+    );
   },
 );
 
@@ -4646,6 +5073,49 @@ export const issueRemoteMcpClientSession = Effect.fn("ssh/tunnel.issueRemoteMcpC
     return session;
   },
 );
+
+const issueRemoteClientSession = Effect.fn("ssh/tunnel.issueRemoteClientSession")(function* (
+  target: DesktopSshEnvironmentTarget,
+  sessionOptions: RemoteClientSessionOptions,
+  input?: SshAuth.SshAuthOptions,
+  runner?: RemoteGoatRunnerOptions,
+  prepared?: PreparedRemoteRuntime,
+): Effect.fn.Return<
+  RemoteClientSession,
+  SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
+  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+> {
+  const stateKey = REMOTE_RUNTIME_STATE_KEY;
+  const selected =
+    prepared ??
+    (yield* prepareRemoteRuntime(
+      target,
+      input ?? {},
+      { ...runner, keepExistingRunner: true },
+      stateKey,
+    ));
+  const result = yield* runSshCommand(target, {
+    remoteCommandArgs: ["sh", "-s"],
+    timeoutStage: "pairing",
+    stdin: buildRemoteClientSessionScript(stateKey, sessionOptions, selected.runner, {
+      ...selected,
+      mayUpgradeOwnedServer: false,
+    }),
+    ...(isNodeScriptRunner(selected.runner) ? {} : { timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS }),
+    ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
+    ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
+    ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
+  });
+  const session = yield* decodeRemoteClientSessionOutput(result.stdout, sessionOptions.scopes);
+  yield* Effect.logInfo("ssh.remoteServer.clientSession.issued", {
+    selectedVersion: selected.version,
+    requestedVersion: selected.requestedVersion,
+    source: selected.source,
+    ...sshTargetLogFields(target),
+    stateKey,
+  });
+  return session;
+});
 
 const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
   target: DesktopSshEnvironmentTarget,
@@ -4831,6 +5301,29 @@ const existingTunnelCheck = (entry: SshTunnelEntry, minimumMs: number) => ({
   timeoutMs: Math.max(minimumMs, entry.readiness.probeTimeoutMs * 2),
   probeTimeoutMs: entry.readiness.probeTimeoutMs,
 });
+
+const decodeForwardDescriptor = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ serverVersion: Schema.optionalKey(Schema.String) })),
+);
+
+/**
+ * The version the server behind an open forward reports now. A server replaced on the same
+ * port (another client's update, a self-update, a manual restart) still answers the forward,
+ * so readiness alone would keep reporting the version this client attached to.
+ */
+const readForwardServerVersion = (entry: SshTunnelEntry) =>
+  Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
+    const response = yield* client.get(
+      new URL("/.well-known/goat/environment", entry.httpBaseUrl).toString(),
+    );
+    if (response.status !== 200) return undefined;
+    return (yield* decodeForwardDescriptor(yield* response.text)).serverVersion;
+  }).pipe(
+    Effect.timeoutOption(`${entry.readiness.probeTimeoutMs} millis`),
+    Effect.map((version) => (version._tag === "Some" ? version.value : undefined)),
+    Effect.orElseSucceed(() => undefined),
+  );
 
 const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: {
   readonly selectedRuntime: PreparedRemoteRuntime;
@@ -5200,6 +5693,23 @@ function runtimeFailureResult(
       return { kind: "ok", status: { ...base, state: "update_blocked", detail: diagnostic } };
     }
   }
+  if (/cannot open its data because a newer GOAT build already upgraded it/iu.test(diagnostic)) {
+    return {
+      kind: "ok",
+      status: {
+        ...base,
+        state: "failed",
+        detail: diagnostic,
+        failure: {
+          reason: "operation_failed",
+          fix: {
+            actor: "human",
+            instruction: `Update this app or the GOAT runtime on ${host}, then reconnect.`,
+          },
+        },
+      },
+    };
+  }
   const source = `${error.message}\n${evidence}`;
   const proxy = sshLocalProxyFailure(source);
   if (proxy !== undefined) {
@@ -5273,7 +5783,10 @@ function runtimeFailureResult(
   };
 }
 
-const withReconnectCost = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+const withSshCost = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  message: string,
+): Effect.Effect<A, E, R> =>
   Effect.gen(function* () {
     const current = yield* SshReconnectCost;
     if (current?.active) return yield* effect;
@@ -5293,7 +5806,7 @@ const withReconnectCost = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effe
           const wallMs = (yield* Clock.currentTimeMillis) - startedAt;
           // A retained tunnel's diagnostic drain must not mutate an already emitted summary.
           cost.active = false;
-          yield* Effect.logInfo("ssh.reconnect.cost").pipe(
+          yield* Effect.logInfo(message).pipe(
             Effect.annotateLogs({
               spawns: cost.spawns,
               authentications: cost.authentications,
@@ -5307,6 +5820,9 @@ const withReconnectCost = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effe
       ),
     );
   });
+
+const withReconnectCost = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  withSshCost(effect, "ssh.reconnect.cost");
 
 const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.make")(function* (
   options: SshEnvironmentManagerOptions = {},
@@ -5333,6 +5849,28 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const intent = pendingReplacements.get(key);
     if (intent !== undefined) intent.reconnectSelection = undefined;
   };
+  interface Attachment {
+    readonly id: string;
+    readonly operationId: string;
+    readonly generation: number;
+    readonly selection: PreparedRemoteRuntime;
+    readonly localPort: number;
+    readonly remotePort: number;
+    readonly version: string | null;
+    readonly pin: ManagedPin | undefined;
+  }
+  interface PreparedEnsure {
+    readonly operationId: string;
+    readonly key: string;
+    readonly generation: number;
+    readonly runner: RemoteGoatRunnerOptions | undefined;
+    readonly result: SshTunnelEntry | DesktopSshRuntimePendingResult;
+    readonly attachment?: Attachment;
+  }
+  const attachments = new WeakMap<SshTunnelEntry, Attachment>();
+  const flights = yield* makeEnsureFlights<PreparedEnsure, SshEnvironmentEffectError>({
+    scope: managerScope,
+  });
   const firstConnectionDecisions = new Set<string>();
   const generations = new Map<string, number>();
   const resolvedTargets = new Map<string, DesktopSshEnvironmentTarget>();
@@ -5628,9 +6166,20 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     requestedVersion: string,
     phase: SshRuntimePhase,
     onPhase?: SshRuntimeProgressCallback,
+    upload?: SshHostStatus["upload"],
   ) => {
     if (setupTerminalFailure(key)) return;
     const previous = statuses.get(key);
+    const previousUpload = previous?.status?.upload;
+    if (
+      upload !== undefined &&
+      previousUpload !== undefined &&
+      upload.totalBytes === previousUpload.totalBytes &&
+      upload.sentBytes >= previousUpload.sentBytes &&
+      upload.sentBytes - previousUpload.sentBytes < 1024 * 1024 &&
+      upload.sentBytes !== upload.totalBytes
+    )
+      return;
     statuses.set(key, {
       kind: "ok",
       status: {
@@ -5639,10 +6188,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         runtimeVersion: previous?.status?.runtimeVersion ?? null,
         state: "preparing",
         phase,
+        ...(upload === undefined ? {} : { upload }),
         ...setupFields(key, "runtime"),
       },
     });
-    notifyRuntimePhase(target, phase, onPhase);
+    notifyRuntimePhase(target, phase, onPhase, upload);
   };
   const deferredArchiveRefresh = (requestedVersion: string) => ({
     reason: "archive_unavailable" as const,
@@ -5745,6 +6295,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     runner: RemoteGoatRunnerOptions | undefined,
     error: SshEnvironmentEffectError,
   ) {
+    if (error instanceof SshEnsureSupersededError) return;
     const generation = generations.get(key) ?? 0;
     let result = runtimeFailureResult(
       target.alias || target.hostname,
@@ -5862,6 +6413,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const closeTunnelEntry = Effect.fn("ssh/tunnel.closeTunnelEntry")(function* (
     entry: SshTunnelEntry,
   ) {
+    attachments.delete(entry);
     yield* Effect.logDebug("ssh.tunnel.close.start", {
       ...sshTargetLogFields(entry.target),
       key: entry.key,
@@ -5929,7 +6481,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       attempt,
       destination: target.alias.trim() || target.hostname.trim(),
       username: target.username,
-      prompt: `Enter the SSH password for ${hostSpec}.`,
+      prompt: `Enter the SSH password or verification code for ${hostSpec}.`,
     });
     if (password === null) {
       yield* Effect.logWarning("ssh.auth.passwordPrompt.cancelled", {
@@ -6045,7 +6597,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   }): Effect.fn.Return<
     SshTunnelEntry | DesktopSshRuntimePendingResult,
     SshEnvironmentEffectError,
-    SshEnvironmentEffectContext
+    SshEnvironmentEffectContext | Scope.Scope
   > {
     yield* Effect.logDebug("ssh.environment.tunnel.create.start", {
       ...sshTargetLogFields(input.resolvedTarget),
@@ -6062,8 +6614,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const managedPin = yield* validateManagedPin(input.resolvedTarget);
     const identity = reconnectIdentity(input.resolvedTarget, input.runner, managedPin);
     if (closed || (generations.get(input.key) ?? 0) !== generation)
-      return yield* new SshLaunchError({ message: "SSH connection was cancelled.", stdout: "" });
-    const phase: SshRuntimeProgressCallback = ({ phase }) => {
+      return yield* supersededPreparation();
+    const phase: SshRuntimeProgressCallback = ({ phase, upload }) => {
       // A background refresh of a host whose forward still works keeps its published status;
       // "preparing" would drop provider diagnosis and flap a healthy host every ten minutes.
       if (input.background === true && tunnels.has(input.key)) return;
@@ -6074,24 +6626,48 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           input.runner?.archiveVersion?.trim() ?? "",
           phase,
           input.onPhase,
+          upload,
         );
       }
     };
+    // The caller skipped "connecting" while a forward existed; that forward was found stale.
+    if (input.previousLocalPort !== undefined && !tunnels.has(input.key))
+      phase({ target: input.resolvedTarget, phase: "connecting" });
+    const launchScope = yield* Scope.Scope;
+    let launchTransferred = false;
     const operation = (authOptions: SshAuth.SshAuthOptions) =>
       Effect.gen(function* () {
         yield* ensureSshMaster(input.resolvedTarget, authOptions, managerScope);
         const currentPin = yield* readManagedPin(input.resolvedTarget);
-        return yield* launchOrReuseRemoteServer(
-          input.resolvedTarget,
-          authOptions,
-          input.runner,
-          phase,
-          (selectionRevisions.get(input.key) ?? 0) === revision &&
-            previousSelection?.generation === (generations.get(input.key) ?? 0) &&
-            previousSelection.identity ===
-              reconnectIdentity(input.resolvedTarget, input.runner, currentPin)
-            ? previousSelection.runtime
-            : undefined,
+        // Preparation is cancellable; launch registers cleanup before restoring interruption.
+        return yield* Effect.interruptible(
+          launchOrReuseRemoteServer(
+            input.resolvedTarget,
+            authOptions,
+            input.runner,
+            phase,
+            (selectionRevisions.get(input.key) ?? 0) === revision &&
+              previousSelection?.generation === (generations.get(input.key) ?? 0) &&
+              previousSelection.identity ===
+                reconnectIdentity(input.resolvedTarget, input.runner, currentPin)
+              ? previousSelection.runtime
+              : undefined,
+            (launch) =>
+              Effect.addFinalizer(() =>
+                Effect.gen(function* () {
+                  if (
+                    launchTransferred ||
+                    launch.status !== "ready" ||
+                    launch.pending !== undefined ||
+                    options.leaveRemoteServerRunning === true ||
+                    pendingReplacements.has(input.key) ||
+                    tunnels.has(input.key)
+                  )
+                    return;
+                  yield* stopRemoteServer(input.resolvedTarget, authOptions).pipe(Effect.ignore);
+                }),
+              ).pipe(Effect.provideService(Scope.Scope, launchScope)),
+          ),
         );
       });
     const launchStartedAt = yield* Clock.currentTimeMillis;
@@ -6122,7 +6698,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           ? Effect.void
           : Effect.sync(() => {
               const previous = input.previous ?? tunnels.get(input.key);
-              if (previous !== undefined) previous.uncertainDrain = true;
+              if (previous !== undefined) {
+                previous.uncertainDrain = true;
+                attachments.delete(previous);
+              }
             }),
       ),
     );
@@ -6172,14 +6751,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const launchMs = (yield* Clock.currentTimeMillis) - launchStartedAt;
     if (closed || (generations.get(input.key) ?? 0) !== generation) {
       const stop = remoteLaunch.status === "ready" && remoteLaunch.pending === undefined;
-      if (closed) {
-        if (stop && options.leaveRemoteServerRunning !== true)
-          yield* stopRemoteServer(input.resolvedTarget, backgroundAuth(input.key)).pipe(
-            Effect.ignore,
-            Effect.uninterruptible,
-          );
-      } else cancelledLaunches.set(input.key, stop);
-      return yield* new SshLaunchError({ message: "SSH connection was cancelled.", stdout: "" });
+      if (!closed) {
+        cancelledLaunches.set(input.key, stop);
+        launchTransferred = true;
+      }
+      return yield* supersededPreparation();
     }
     const archiveFailure =
       remoteLaunch.status === "ready" ? remoteLaunch.selectedRuntime.upgradeFailure : undefined;
@@ -6192,8 +6768,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         previousIntent.requestedRunner.archiveVersion === input.runner.archiveVersion;
       const intent = {
         target: input.resolvedTarget,
+        // A person's request stays manual on every retry, so the runtime never arbitrates it.
         requestedRunner: sameIntent
-          ? previousIntent.requestedRunner
+          ? {
+              ...previousIntent.requestedRunner,
+              ...(input.runner.manualRefresh === true ? { manualRefresh: true } : {}),
+            }
           : { ...input.runner, confirmReplacement: false },
         generation,
         ...(managedPin === undefined ? {} : { managedPin }),
@@ -6230,9 +6810,21 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       }
     }
     if (setupTerminalFailure(input.key)) pendingReplacements.delete(input.key);
+    // The host already runs the requested build (another client, a self-update or a person
+    // replaced it), so an intent kept from the older server must not report or retry an update.
+    if (
+      remoteLaunch.status === "ready" &&
+      remoteLaunch.pending === undefined &&
+      !needsArchiveRetry &&
+      remoteLaunch.selectedRuntime.version === remoteLaunch.selectedRuntime.requestedVersion
+    )
+      pendingReplacements.delete(input.key);
     if (remoteLaunch.status === "pending") {
       const previous = input.previous ?? tunnels.get(input.key);
-      if (previous !== undefined) previous.attachmentInvalidated = true;
+      if (previous !== undefined) {
+        previous.attachmentInvalidated = true;
+        attachments.delete(previous);
+      }
       return pendingResult(input.resolvedTarget, remoteLaunch.pending);
     }
     const reconnectSelection = {
@@ -6254,6 +6846,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       input.previous.attachmentInvalidated = false;
       input.previous.uncertainDrain = false;
       input.previous.reconnectSelection = reconnectSelection;
+      launchTransferred = true;
       return input.previous;
     }
     if (input.previous !== undefined) {
@@ -6317,77 +6910,78 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     );
     if (closed || (generations.get(input.key) ?? 0) !== generation) {
       yield* Scope.close(entryScope, Exit.void);
-      if (!closed) cancelledLaunches.set(input.key, remoteLaunch.pending === undefined);
-      else if (remoteLaunch.pending === undefined && options.leaveRemoteServerRunning !== true)
-        yield* stopRemoteServer(input.resolvedTarget, backgroundAuth(input.key)).pipe(
-          Effect.ignore,
-          Effect.uninterruptible,
-        );
-      return yield* new SshLaunchError({ message: "SSH connection was cancelled.", stdout: "" });
+      if (!closed) {
+        cancelledLaunches.set(input.key, remoteLaunch.pending === undefined);
+        launchTransferred = true;
+      }
+      return yield* supersededPreparation();
     }
-    tunnels.set(input.key, tunnelEntry);
-    tunnelEntry.reconnectSelection = reconnectSelection;
-    if (remoteLaunch.pending === undefined && !needsArchiveRetry)
-      pendingReplacements.delete(input.key);
-    const spawnerService = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const cryptoService = yield* Crypto.Crypto;
-    const fileSystemService = yield* FileSystem.FileSystem;
-    const pathService = yield* Path.Path;
-    yield* Scope.addFinalizer(
-      entryScope,
-      Effect.gen(function* () {
-        const stopRemote = tunnels.get(tunnelEntry.key) === tunnelEntry;
-        if (stopRemote) {
-          tunnels.delete(tunnelEntry.key);
-        }
-        yield* tunnelEntry.process
-          .kill({
-            killSignal: "SIGTERM",
-            forceKillAfter: TUNNEL_SHUTDOWN_TIMEOUT_MS,
-          })
-          .pipe(Effect.ignore);
-        if (
-          !stopRemote ||
-          options.leaveRemoteServerRunning === true ||
-          pendingReplacements.has(tunnelEntry.key)
-        ) {
-          return;
-        }
-        yield* Effect.logDebug("ssh.environment.tunnel.finalizer.start", {
-          ...sshTargetLogFields(tunnelEntry.target),
-          key: tunnelEntry.key,
-          localPort: tunnelEntry.localPort,
-          remotePort: tunnelEntry.remotePort,
-        });
-        const authSecret =
-          input.keyOnly === true ? null : (authSecrets.get(tunnelEntry.key) ?? null);
-        yield* stopRemoteServer(
-          tunnelEntry.target,
-          authSecret === null
-            ? {
-                batchMode: "yes",
-                interactiveAuth: false,
-              }
-            : {
-                authSecret,
-                batchMode: "no",
-                interactiveAuth: true,
-              },
-        ).pipe(
-          Effect.provideService(SshConnectionSharing, sharing),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawnerService),
-          Effect.provideService(Crypto.Crypto, cryptoService),
-          Effect.provideService(FileSystem.FileSystem, fileSystemService),
-          Effect.provideService(Path.Path, pathService),
-        );
-        yield* Effect.logDebug("ssh.environment.tunnel.finalizer.succeeded", {
-          ...sshTargetLogFields(tunnelEntry.target),
-          key: tunnelEntry.key,
-          localPort: tunnelEntry.localPort,
-          remotePort: tunnelEntry.remotePort,
-        });
-      }).pipe(Effect.ignore),
-    );
+    yield* Effect.gen(function* () {
+      tunnels.set(input.key, tunnelEntry);
+      tunnelEntry.reconnectSelection = reconnectSelection;
+      if (remoteLaunch.pending === undefined && !needsArchiveRetry)
+        pendingReplacements.delete(input.key);
+      const spawnerService = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const cryptoService = yield* Crypto.Crypto;
+      const fileSystemService = yield* FileSystem.FileSystem;
+      const pathService = yield* Path.Path;
+      yield* Scope.addFinalizer(
+        entryScope,
+        Effect.gen(function* () {
+          const stopRemote = tunnels.get(tunnelEntry.key) === tunnelEntry;
+          if (stopRemote) {
+            tunnels.delete(tunnelEntry.key);
+          }
+          yield* tunnelEntry.process
+            .kill({
+              killSignal: "SIGTERM",
+              forceKillAfter: TUNNEL_SHUTDOWN_TIMEOUT_MS,
+            })
+            .pipe(Effect.ignore);
+          if (
+            !stopRemote ||
+            options.leaveRemoteServerRunning === true ||
+            pendingReplacements.has(tunnelEntry.key)
+          ) {
+            return;
+          }
+          yield* Effect.logDebug("ssh.environment.tunnel.finalizer.start", {
+            ...sshTargetLogFields(tunnelEntry.target),
+            key: tunnelEntry.key,
+            localPort: tunnelEntry.localPort,
+            remotePort: tunnelEntry.remotePort,
+          });
+          const authSecret =
+            input.keyOnly === true ? null : (authSecrets.get(tunnelEntry.key) ?? null);
+          yield* stopRemoteServer(
+            tunnelEntry.target,
+            authSecret === null
+              ? {
+                  batchMode: "yes",
+                  interactiveAuth: false,
+                }
+              : {
+                  authSecret,
+                  batchMode: "no",
+                  interactiveAuth: true,
+                },
+          ).pipe(
+            Effect.provideService(SshConnectionSharing, sharing),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawnerService),
+            Effect.provideService(Crypto.Crypto, cryptoService),
+            Effect.provideService(FileSystem.FileSystem, fileSystemService),
+            Effect.provideService(Path.Path, pathService),
+          );
+          yield* Effect.logDebug("ssh.environment.tunnel.finalizer.succeeded", {
+            ...sshTargetLogFields(tunnelEntry.target),
+            key: tunnelEntry.key,
+            localPort: tunnelEntry.localPort,
+            remotePort: tunnelEntry.remotePort,
+          });
+        }).pipe(Effect.ignore),
+      );
+      launchTransferred = true;
+    }).pipe(Effect.uninterruptible);
     yield* Effect.logDebug("ssh.environment.tunnel.create.succeeded", {
       ...sshTargetLogFields(input.resolvedTarget),
       key: input.key,
@@ -6399,6 +6993,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
 
   const createTunnelEntry = (input: Parameters<typeof createTunnel>[0]) =>
     createTunnel(input).pipe(
+      Effect.scoped,
       Effect.ensuring(
         Effect.gen(function* () {
           const master = sharing.masters.get(input.key);
@@ -6430,6 +7025,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     // A forward whose ssh process already exited (after sleep, or a keepalive timeout) cannot
     // answer, so skip the readiness window. An unreadable state falls back to the HTTP check.
     const forwardRunning = yield* entry.process.isRunning.pipe(Effect.orElseSucceed(() => true));
+    let runtimeChanged = false;
     if (!forwardRunning) {
       yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
         ...logFields,
@@ -6440,13 +7036,30 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         waitForHttpReady(existingTunnelCheck(entry, EXISTING_TUNNEL_CHECK_TIMEOUT_MS)),
       );
       if (Exit.isSuccess(readinessExit)) {
-        yield* Effect.logDebug("ssh.environment.tunnel.reused", logFields);
-        return true;
+        const selectedVersion = entry.selectedRuntime.version;
+        const liveVersion =
+          selectedVersion === null || selectedVersion === ""
+            ? undefined
+            : yield* readForwardServerVersion(entry);
+        if (liveVersion === undefined || liveVersion === selectedVersion) {
+          yield* Effect.logDebug("ssh.environment.tunnel.reused", logFields);
+          return true;
+        }
+        // Reconnecting re-reads the live server, so the reported version and every runtime
+        // decision follow the server that now answers, never this attachment's old selection.
+        runtimeChanged = true;
+        yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
+          ...logFields,
+          reason: "runtime-changed",
+          selectedVersion,
+          liveVersion,
+        });
+      } else {
+        yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
+          ...logFields,
+          cause: readinessExit.cause,
+        });
       }
-      yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
-        ...logFields,
-        cause: readinessExit.cause,
-      });
     }
     yield* Effect.gen(function* () {
       if (tunnels.get(key) === entry) {
@@ -6455,6 +7068,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         // whose host-side fingerprint is still checked by the folded command.
         if (
           retainSelection &&
+          !runtimeChanged &&
           !closed &&
           !forgotten.has(key) &&
           entry.attachmentInvalidated !== true &&
@@ -6464,7 +7078,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           selection.generation === (generations.get(key) ?? 0)
         )
           reconnectSelections.set(key, selection);
-        if (entry.attachmentInvalidated === true || entry.uncertainDrain === true)
+        if (entry.attachmentInvalidated === true || entry.uncertainDrain === true || runtimeChanged)
           invalidateReconnectSelection(key);
         tunnels.delete(key);
       }
@@ -6613,7 +7227,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const startRetry = Effect.gen(function* () {
     if (retryStarted) return;
     retryStarted = true;
-    const context = yield* Effect.context<SshEnvironmentEffectContext>();
+    const context = (yield* Effect.context<SshEnvironmentEffectContext>()).pipe(
+      Context.omit(Scope.Scope, SshHostAnswered, SshReconnectCost),
+    );
     yield* Effect.gen(function* () {
       while (true) {
         yield* Effect.sleep("1 minute");
@@ -6621,57 +7237,99 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         const now = yield* Clock.currentTimeMillis;
         for (const [key, intent] of pendingReplacements) {
           if (intent.nextAttemptAt > now) continue;
-          yield* withTargetLock(
-            key,
-            Effect.gen(function* () {
-              if (
-                closed ||
-                pendingReplacements.get(key) !== intent ||
-                (generations.get(key) ?? 0) !== intent.generation
-              )
-                return;
-              if (intent.managedPin !== undefined) {
-                const current = yield* readManagedPin(intent.target).pipe(
-                  Effect.orElseSucceed(() => undefined),
-                );
-                if (!samePin(intent.managedPin, current)) {
-                  pendingReplacements.delete(key);
-                  generations.set(key, (generations.get(key) ?? 0) + 1);
-                  invalidateReconnectSelection(key);
-                  setupOperations.delete(key);
-                  acquisitionFailures.delete(key);
-                  forgotten.add(key);
-                  const error = pinError(
-                    current !== undefined && current.fingerprint !== intent.managedPin.fingerprint,
-                  );
-                  yield* publishFailure(key, intent.target, intent.requestedRunner, error);
-                  const entry = tunnels.get(key);
-                  if (entry !== undefined) {
-                    tunnels.delete(key);
-                    yield* closeTunnelEntry(entry);
-                  }
-                  authSecrets.delete(key);
-                  return;
-                }
-              }
-              intent.nextAttemptAt = (yield* Clock.currentTimeMillis) + 600_000;
-              const result = yield* ensureTunnelEntry(
-                key,
-                intent.target,
-                {
-                  ...intent.requestedRunner,
-                  refreshOwnedRuntimeOnFirstConnection: true,
-                  confirmReplacement: false,
-                },
-                true,
-              );
-              if (closed || (generations.get(key) ?? 0) !== intent.generation) return;
-              yield* publishResult(key, intent.target, result, intent.requestedRunner);
-              if (!("type" in result) && !pendingReplacements.has(key)) {
-                firstConnectionDecisions.add(
-                  `${key}:${intent.requestedRunner.archiveVersion ?? intent.requestedRunner.nodeScriptPath ?? ""}`,
-                );
-              }
+          const retryRunner = {
+            ...intent.requestedRunner,
+            refreshOwnedRuntimeOnFirstConnection: true,
+            confirmReplacement: false,
+          };
+          yield* Effect.scoped(
+            flights.join({
+              key,
+              generation: intent.generation,
+              intent: preparationIntent(retryRunner, { keyOnly: true, refreshRuntime: true }, true),
+              terminal: preparationTerminal,
+              prepare: (report) =>
+                withTargetLock(
+                  key,
+                  Effect.gen(function* () {
+                    if (
+                      closed ||
+                      pendingReplacements.get(key) !== intent ||
+                      (generations.get(key) ?? 0) !== intent.generation
+                    )
+                      return yield* supersededPreparation();
+                    if (intent.managedPin !== undefined) {
+                      const current = yield* readManagedPin(intent.target).pipe(
+                        Effect.orElseSucceed(() => undefined),
+                      );
+                      if (!samePin(intent.managedPin, current)) {
+                        pendingReplacements.delete(key);
+                        generations.set(key, (generations.get(key) ?? 0) + 1);
+                        invalidateReconnectSelection(key);
+                        setupOperations.delete(key);
+                        acquisitionFailures.delete(key);
+                        forgotten.add(key);
+                        const error = pinError(
+                          current !== undefined &&
+                            current.fingerprint !== intent.managedPin.fingerprint,
+                        );
+                        yield* publishFailure(key, intent.target, intent.requestedRunner, error);
+                        const entry = tunnels.get(key);
+                        if (entry !== undefined) {
+                          tunnels.delete(key);
+                          yield* closeTunnelEntry(entry);
+                        }
+                        authSecrets.delete(key);
+                        return yield* error;
+                      }
+                    }
+                    intent.nextAttemptAt = (yield* Clock.currentTimeMillis) + 600_000;
+                    const result = yield* ensureTunnelEntry(
+                      key,
+                      intent.target,
+                      retryRunner,
+                      true,
+                      true,
+                      false,
+                      ({ phase, upload }) => report.onPhase(phase, upload),
+                    );
+                    if (closed || (generations.get(key) ?? 0) !== intent.generation)
+                      return yield* supersededPreparation();
+                    yield* publishResult(key, intent.target, result, intent.requestedRunner);
+                    if (!("type" in result) && !pendingReplacements.has(key)) {
+                      firstConnectionDecisions.add(
+                        `${key}:${intent.requestedRunner.archiveVersion ?? intent.requestedRunner.nodeScriptPath ?? ""}`,
+                      );
+                    }
+                    const pin = yield* readManagedPin(intent.target);
+                    return {
+                      key,
+                      operationId: report.operationId,
+                      generation: intent.generation,
+                      runner: retryRunner,
+                      result,
+                      ...("type" in result
+                        ? {}
+                        : {
+                            attachment: rememberAttachment(
+                              result,
+                              intent.generation,
+                              report.operationId,
+                              pin,
+                            ),
+                          }),
+                    };
+                  }),
+                ).pipe(
+                  withReconnectCost,
+                  Effect.provideService(SshReconnectCost, null),
+                  Effect.provideService(SshHostAnswered, report.onHostAnswered),
+                  Effect.annotateLogs({
+                    key,
+                    generation: intent.generation,
+                    operationId: report.operationId,
+                  }),
+                ),
             }),
           ).pipe(
             Effect.tapError((cause) =>
@@ -6696,13 +7354,206 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     );
   });
 
+  // Only preparation policy participates: tokens, callbacks and request identity are per waiter.
+  const preparationIntent = (
+    runner: RemoteGoatRunnerOptions | undefined,
+    requestOptions: SshEnvironmentEnsureOptions | undefined,
+    background = false,
+  ) =>
+    JSON.stringify({
+      background,
+      keyOnly: requestOptions?.keyOnly === true,
+      refreshRuntime: requestOptions?.refreshRuntime === true,
+      confirmReplacement: requestOptions?.confirmReplacement === true,
+      reuseWhileRefreshPending: requestOptions?.reuseWhileRefreshPending === true,
+      allowFoldedProbe:
+        requestOptions?.refreshRuntime !== true && requestOptions?.confirmReplacement !== true,
+      nodeScriptPath: runner?.nodeScriptPath ?? null,
+      nodeEngineRange: runner?.nodeEngineRange ?? null,
+      archiveVersion: runner?.archiveVersion ?? null,
+      archiveCommitTime: runner?.archiveCommitTime ?? null,
+      archiveSource: runner?.archiveSource ?? null,
+      releaseBaseUrl: runner?.releaseBaseUrl ?? null,
+      archiveDirectory: runner?.archiveDirectory ?? null,
+      bundledArchiveDirectory: runner?.bundledArchiveDirectory ?? null,
+      hostDownload: runner?.hostDownload === true,
+      publishedFallback: runner?.publishedFallback === true,
+      ghCommand: runner?.ghCommand ?? null,
+      cleanupTimeoutMs: runner?.cleanupTimeoutMs ?? null,
+      keepExistingRunner: runner?.keepExistingRunner === true,
+      refreshOwnedRuntimeOnFirstConnection: runner?.refreshOwnedRuntimeOnFirstConnection === true,
+      runnerConfirmReplacement: runner?.confirmReplacement === true,
+      replacementGraceSeconds: runner?.replacementGraceSeconds ?? null,
+    });
+  const preparationTerminal = (prepared: PreparedEnsure) => {
+    if (
+      closed ||
+      (generations.get(prepared.key) ?? 0) !== prepared.generation ||
+      (!("type" in prepared.result) && tunnels.get(prepared.key) !== prepared.result)
+    )
+      return { outcome: "superseded" as const };
+    const runtimeStatus = statuses.get(prepared.key)?.status;
+    return prepared.attachment !== undefined &&
+      runtimeStatus !== undefined &&
+      (runtimeStatus.state === "ready" || runtimeStatus.state === "providers_not_ready") &&
+      !("type" in prepared.result) &&
+      prepared.result.attachmentInvalidated !== true &&
+      prepared.result.uncertainDrain !== true
+      ? { outcome: "ready" as const, attachmentId: prepared.attachment.id, runtimeStatus }
+      : { outcome: "pending" as const };
+  };
+  const rememberAttachment = (
+    entry: SshTunnelEntry,
+    generation: number,
+    operationId: string,
+    pin: ManagedPin | undefined,
+  ): Attachment => {
+    const previous = attachments.get(entry);
+    if (
+      previous !== undefined &&
+      previous.generation === generation &&
+      previous.selection === entry.selectedRuntime &&
+      samePin(previous.pin, pin)
+    )
+      return previous;
+    const attachment = {
+      id: `${operationId}-attachment`,
+      operationId,
+      generation,
+      selection: entry.selectedRuntime,
+      localPort: entry.localPort,
+      remotePort: entry.remotePort,
+      version: entry.selectedRuntime.version,
+      pin,
+    };
+    attachments.set(entry, attachment);
+    return attachment;
+  };
+  const validatePreparedAttachment = Effect.fn("ssh/tunnel.validatePreparedAttachment")(function* (
+    key: string,
+    entry: SshTunnelEntry,
+    attachment: Attachment,
+  ) {
+    if (
+      closed ||
+      (generations.get(key) ?? 0) !== attachment.generation ||
+      tunnels.get(key) !== entry ||
+      attachments.get(entry) !== attachment ||
+      attachment.selection !== entry.selectedRuntime ||
+      attachment.localPort !== entry.localPort ||
+      attachment.remotePort !== entry.remotePort ||
+      attachment.version !== entry.selectedRuntime.version ||
+      entry.attachmentInvalidated === true ||
+      entry.uncertainDrain === true
+    )
+      return yield* supersededPreparation();
+    const pin = yield* readManagedPin(entry.target).pipe(
+      Effect.mapError(() => {
+        attachments.delete(entry);
+        return supersededPreparation();
+      }),
+    );
+    if (!samePin(attachment.pin, pin)) {
+      attachments.delete(entry);
+      return yield* supersededPreparation();
+    }
+    if (!(yield* keepAnsweringTunnel(key, entry))) {
+      attachments.delete(entry);
+      return yield* supersededPreparation();
+    }
+    if (
+      closed ||
+      (generations.get(key) ?? 0) !== attachment.generation ||
+      tunnels.get(key) !== entry ||
+      Boolean(entry.attachmentInvalidated) ||
+      Boolean(entry.uncertainDrain) ||
+      entry.selectedRuntime !== attachment.selection
+    )
+      return yield* supersededPreparation();
+  });
+  const finishEnsureEnvironment = Effect.fn("ssh/tunnel.finishEnsureEnvironment")(function* (
+    prepared: PreparedEnsure,
+    ticket: RequestTicket,
+    requestOptions?: SshEnvironmentEnsureOptions,
+  ) {
+    return yield* withTargetLock(
+      prepared.key,
+      Effect.gen(function* () {
+        const { key, generation, runner, result: entry } = prepared;
+        if (closed || ensureSuperseded(ticket) || (generations.get(key) ?? 0) !== generation)
+          return yield* supersededPreparation();
+        if ("type" in entry) return entry;
+        if (prepared.attachment === undefined) return yield* supersededPreparation();
+        yield* validatePreparedAttachment(key, entry, prepared.attachment);
+        if (requestOptions?.preparedAttachmentId !== undefined) {
+          yield* Effect.sync(() => {
+            try {
+              requestOptions.onPreparationAdmission?.({
+                operationId: prepared.operationId,
+                disposition: "attachment-completion",
+                generation,
+              });
+            } catch {
+              /* A detached observer does not own the attachment. */
+            }
+          });
+        }
+        const pairingResult = requestOptions?.issuePairingToken
+          ? yield* runWithSshAuth({
+              key,
+              keyOnly: requestOptions?.keyOnly === true || managedAliases.has(entry.target.alias),
+              target: entry.target,
+              operation: (authOptions) =>
+                issueRemotePairingToken(entry.target, authOptions, runner, entry.selectedRuntime),
+            })
+          : null;
+        const currentPin = yield* readManagedPin(entry.target).pipe(
+          Effect.mapError(() => supersededPreparation()),
+        );
+        if (
+          closed ||
+          ensureSuperseded(ticket) ||
+          (generations.get(key) ?? 0) !== generation ||
+          tunnels.get(key) !== entry ||
+          entry.selectedRuntime !== prepared.attachment.selection ||
+          entry.attachmentInvalidated === true ||
+          entry.uncertainDrain === true ||
+          !samePin(prepared.attachment.pin, currentPin)
+        )
+          return yield* supersededPreparation();
+        yield* Effect.logInfo("ssh.environment.ensure.succeeded", {
+          ...sshTargetLogFields(entry.target),
+          key,
+          operationId: prepared.operationId,
+          localPort: entry.localPort,
+          remotePort: entry.remotePort,
+          issuedPairingToken: pairingResult !== null,
+        });
+        const pendingReplacement = pendingReplacements.get(key)?.pending;
+        return {
+          target: entry.target,
+          httpBaseUrl: entry.httpBaseUrl,
+          wsBaseUrl: entry.wsBaseUrl,
+          pairingToken: pairingResult?.credential ?? null,
+          attachmentId: prepared.attachment.id,
+          remotePort: entry.remotePort,
+          ...(entry.remoteServerKind ? { remoteServerKind: entry.remoteServerKind } : {}),
+          ...(entry.selectedRuntime.version
+            ? { remoteServerVersion: entry.selectedRuntime.version }
+            : {}),
+          ...(pendingReplacement === undefined ? {} : { pendingReplacement }),
+        };
+      }),
+    );
+  });
+
   const ensureEnvironmentAttempt = Effect.fn("ssh/tunnel.ensureEnvironment")(function* (
     target: DesktopSshEnvironmentTarget,
-    requestOptions?: Parameters<SshEnvironmentManagerShape["ensureEnvironment"]>[1],
+    requestOptions?: SshEnvironmentEnsureOptions,
   ): Effect.fn.Return<
     DesktopSshEnvironmentReadyOrPending,
     SshEnvironmentEffectError,
-    SshEnvironmentEffectContext
+    SshEnvironmentEffectContext | Scope.Scope
   > {
     const ticket = yield* takeRequestTicket(target, "ensure");
     const requestKey = targetConnectionKey(target);
@@ -6718,30 +7569,13 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       invalidateReconnectSelection(knownKey);
     const runner =
       options.resolveCliRunner === undefined ? undefined : yield* options.resolveCliRunner;
-    if (ensureSuperseded(ticket) || (generations.get(knownKey) ?? 0) !== requestGeneration)
-      return yield* new SshLaunchError({ message: "SSH connection was cancelled.", stdout: "" });
-    forgotten.delete(knownKey);
-    const reusingPending = (key: string) =>
-      requestOptions?.reuseWhileRefreshPending === true &&
-      requestOptions.refreshRuntime !== true &&
-      pendingReplacements.has(key) &&
-      tunnels.has(key);
-    const announcedConnecting =
-      !reusingPending(knownKey) && statuses.get(knownKey)?.status?.state !== "preparing";
-    if (announcedConnecting) {
-      publishPhase(
-        knownKey,
-        target,
-        runner?.archiveVersion?.trim() ?? "",
-        "connecting",
-        requestOptions?.onPhase,
-      );
-    }
+    if (
+      closed ||
+      ensureSuperseded(ticket) ||
+      (generations.get(knownKey) ?? 0) !== requestGeneration
+    )
+      return yield* supersededPreparation();
     yield* startRetry;
-    yield* Effect.logInfo("ssh.environment.ensure.start", {
-      ...sshTargetLogFields(target),
-      issuePairingToken: requestOptions?.issuePairingToken === true,
-    });
     const baseResolved = yield* resolveSshTarget(target.alias || target.hostname, target).pipe(
       Effect.tapError((error) =>
         Effect.suspend(() =>
@@ -6758,12 +7592,16 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ...(target.username !== null ? { username: target.username } : {}),
       ...(target.port !== null ? { port: target.port } : {}),
     };
-    if (ensureSuperseded(ticket) || (generations.get(knownKey) ?? 0) !== requestGeneration)
-      return yield* new SshLaunchError({ message: "SSH connection was cancelled.", stdout: "" });
+    if (
+      closed ||
+      ensureSuperseded(ticket) ||
+      (generations.get(knownKey) ?? 0) !== requestGeneration
+    )
+      return yield* supersededPreparation();
     const key = targetConnectionKey(resolvedTarget);
     if (key !== knownKey) invalidateReconnectSelection(knownKey);
     const admittedGeneration = generations.get(key) ?? 0;
-    resolvedTargets.set(targetConnectionKey(target), resolvedTarget);
+    resolvedTargets.set(requestKey, resolvedTarget);
     if (key !== knownKey && !statuses.has(key)) {
       const initial = statuses.get(knownKey);
       if (initial !== undefined) statuses.set(key, initial);
@@ -6778,136 +7616,166 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ...sshRunnerLogFields(runner),
       key,
     });
-    return yield* withTargetLock(
+    if (requestOptions?.preparedAttachmentId !== undefined) {
+      const prepared = yield* withTargetLock(
+        key,
+        Effect.gen(function* () {
+          const entry = tunnels.get(key);
+          const attachment = entry === undefined ? undefined : attachments.get(entry);
+          if (
+            entry === undefined ||
+            attachment === undefined ||
+            attachment.id !== requestOptions.preparedAttachmentId
+          )
+            return yield* supersededPreparation();
+          return {
+            key,
+            operationId: attachment.operationId,
+            generation: admittedGeneration,
+            runner,
+            result: entry,
+            attachment,
+          };
+        }),
+      );
+      return yield* finishEnsureEnvironment(prepared, ticket, requestOptions);
+    }
+    const managedPin = yield* readManagedPin(resolvedTarget);
+    const preparationOptions = {
+      keyOnly: requestOptions?.keyOnly === true || managedPin !== undefined,
+      refreshRuntime: requestOptions?.refreshRuntime === true,
+      confirmReplacement: requestOptions?.confirmReplacement === true,
+      reuseWhileRefreshPending: requestOptions?.reuseWhileRefreshPending === true,
+    };
+    const onHostAnswered = yield* SshHostAnswered;
+    const context = (yield* Effect.context<SshEnvironmentEffectContext>()).pipe(
+      Context.omit(Scope.Scope, SshHostAnswered, SshReconnectCost),
+    );
+    const lease = yield* flights.join({
       key,
-      Effect.gen(function* () {
-        if (ensureSuperseded(ticket) || (generations.get(key) ?? 0) !== admittedGeneration) {
-          yield* Effect.logInfo("ssh.environment.ensure.superseded", {
-            ...sshTargetLogFields(resolvedTarget),
-            key,
-          });
-          return yield* new SshLaunchError({
-            message: "SSH connection was cancelled.",
-            stdout: "",
-          });
-        }
-        forgotten.delete(key);
-        const ensureGeneration = generations.get(key) ?? 0;
-        const decisionKey = `${key}:${runner?.archiveVersion ?? runner?.nodeScriptPath ?? ""}`;
-        if (requestOptions?.refreshRuntime === true) acquisitionFailures.delete(key);
-        if (!reusingPending(key))
-          publishPhase(
-            key,
-            resolvedTarget,
-            runner?.archiveVersion?.trim() ?? "",
-            "connecting",
-            announcedConnecting ? undefined : requestOptions?.onPhase,
-          );
-        const connectionRunner =
-          runner === undefined
-            ? undefined
-            : {
-                ...runner,
-                refreshOwnedRuntimeOnFirstConnection:
-                  runner.keepExistingRunner !== true &&
-                  (requestOptions?.refreshRuntime === true ||
-                    (!firstConnectionDecisions.has(decisionKey) &&
-                      !pendingReplacements.has(key))) &&
-                  runner.refreshOwnedRuntimeOnFirstConnection === true,
-                confirmReplacement: requestOptions?.confirmReplacement === true,
-              };
-        const entry = yield* ensureTunnelEntry(
+      generation: admittedGeneration,
+      intent: preparationIntent(runner, preparationOptions),
+      ...(requestOptions?.onPreparationProgress === undefined
+        ? {}
+        : { onProgress: requestOptions.onPreparationProgress }),
+      ...(requestOptions?.onPreparationAdmission === undefined
+        ? {}
+        : { onAdmission: requestOptions.onPreparationAdmission }),
+      ...(requestOptions?.onPhase === undefined
+        ? {}
+        : {
+            onPhase: (phase, upload) =>
+              notifyRuntimePhase(resolvedTarget, phase, requestOptions.onPhase, upload),
+          }),
+      onHostAnswered,
+      terminal: preparationTerminal,
+      onFailure: (error) =>
+        Effect.suspend(() => {
+          if (closed || (generations.get(key) ?? 0) !== admittedGeneration) return Effect.void;
+          invalidateReconnectSelection(key);
+          return publishFailure(key, resolvedTarget, runner, error);
+        }).pipe(Effect.provide(context)),
+      prepare: (report) =>
+        withTargetLock(
           key,
-          resolvedTarget,
-          connectionRunner,
-          false,
-          requestOptions?.keyOnly === true,
-          requestOptions?.reuseWhileRefreshPending === true &&
-            requestOptions.refreshRuntime !== true,
-          requestOptions?.onPhase,
-          requestOptions?.refreshRuntime !== true && requestOptions?.confirmReplacement !== true,
-          reconnectSelection,
-        );
-        if (ensureSuperseded(ticket) || (generations.get(key) ?? 0) !== ensureGeneration)
-          return yield* new SshLaunchError({
-            message: "SSH connection was cancelled.",
-            stdout: "",
-          });
-        if ("type" in entry) {
-          yield* publishResult(key, resolvedTarget, entry, runner);
-          return entry;
-        }
-
-        const pairingResult = requestOptions?.issuePairingToken
-          ? yield* runWithSshAuth({
+          Effect.gen(function* () {
+            if (closed || (generations.get(key) ?? 0) !== admittedGeneration)
+              return yield* supersededPreparation();
+            forgotten.delete(key);
+            const reusingPending =
+              preparationOptions.reuseWhileRefreshPending === true &&
+              preparationOptions.refreshRuntime !== true &&
+              pendingReplacements.has(key) &&
+              tunnels.has(key);
+            const onPhase: SshRuntimeProgressCallback = ({ phase, upload }) =>
+              report.onPhase(phase, upload);
+            // A caller reusing a forward that still answers must not flip a ready host to
+            // "preparing"; agents call this before every remote tool. A forward that turns out
+            // stale publishes its reconnect from createTunnel.
+            if (!reusingPending && !tunnels.has(key))
+              publishPhase(
+                key,
+                resolvedTarget,
+                runner?.archiveVersion?.trim() ?? "",
+                "connecting",
+                onPhase,
+              );
+            if (preparationOptions.refreshRuntime === true) acquisitionFailures.delete(key);
+            const decisionKey = `${key}:${runner?.archiveVersion ?? runner?.nodeScriptPath ?? ""}`;
+            const connectionRunner =
+              runner === undefined
+                ? undefined
+                : {
+                    ...runner,
+                    refreshOwnedRuntimeOnFirstConnection:
+                      runner.keepExistingRunner !== true &&
+                      (preparationOptions.refreshRuntime === true ||
+                        (!firstConnectionDecisions.has(decisionKey) &&
+                          !pendingReplacements.has(key))) &&
+                      runner.refreshOwnedRuntimeOnFirstConnection === true,
+                    confirmReplacement: preparationOptions.confirmReplacement === true,
+                    ...(preparationOptions.refreshRuntime === true ? { manualRefresh: true } : {}),
+                  };
+            const entry = yield* ensureTunnelEntry(
               key,
-              keyOnly: requestOptions?.keyOnly === true || managedAliases.has(resolvedTarget.alias),
-              target: entry.target,
-              operation: (authOptions) =>
-                issueRemotePairingToken(entry.target, authOptions, runner, entry.selectedRuntime),
-            })
-          : null;
-        const pairingToken = pairingResult?.credential ?? null;
-
-        yield* Effect.logInfo("ssh.environment.ensure.succeeded", {
-          ...sshTargetLogFields(entry.target),
-          key,
-          localPort: entry.localPort,
-          remotePort: entry.remotePort,
-          remoteServerKind: entry.remoteServerKind,
-          issuedPairingToken: pairingToken !== null,
-        });
-        if (
-          connectionRunner?.refreshOwnedRuntimeOnFirstConnection === true &&
-          !pendingReplacements.has(key)
-        ) {
-          firstConnectionDecisions.add(decisionKey);
-        }
-        if (ensureSuperseded(ticket) || (generations.get(key) ?? 0) !== ensureGeneration)
-          return yield* new SshLaunchError({
-            message: "SSH connection was cancelled.",
-            stdout: "",
-          });
-        // A busy runtime that still answers is used now and replaced when idle; say so.
-        const pendingReplacement = pendingReplacements.get(key)?.pending;
-        yield* publishResult(key, resolvedTarget, entry, runner);
-        return {
-          target: entry.target,
-          httpBaseUrl: entry.httpBaseUrl,
-          wsBaseUrl: entry.wsBaseUrl,
-          pairingToken,
-          remotePort: entry.remotePort,
-          ...(entry.remoteServerKind ? { remoteServerKind: entry.remoteServerKind } : {}),
-          ...(entry.selectedRuntime.version
-            ? { remoteServerVersion: entry.selectedRuntime.version }
-            : {}),
-          ...(pendingReplacement === undefined ? {} : { pendingReplacement }),
-        };
-      }).pipe(
-        Effect.onExit((exit) =>
-          Effect.sync(() => {
+              resolvedTarget,
+              connectionRunner,
+              false,
+              preparationOptions.keyOnly === true,
+              preparationOptions.reuseWhileRefreshPending === true &&
+                preparationOptions.refreshRuntime !== true,
+              onPhase,
+              requestOptions?.refreshRuntime !== true &&
+                requestOptions?.confirmReplacement !== true,
+              reconnectSelection,
+            );
+            if (closed || (generations.get(key) ?? 0) !== admittedGeneration)
+              return yield* supersededPreparation();
             if (
-              Exit.isFailure(exit) &&
-              !ensureSuperseded(ticket) &&
-              (generations.get(key) ?? 0) === admittedGeneration
+              !("type" in entry) &&
+              connectionRunner?.refreshOwnedRuntimeOnFirstConnection === true &&
+              !pendingReplacements.has(key)
             )
-              invalidateReconnectSelection(key);
+              firstConnectionDecisions.add(decisionKey);
+            yield* publishResult(key, resolvedTarget, entry, runner);
+            const pin = yield* readManagedPin(resolvedTarget);
+            if (closed || (generations.get(key) ?? 0) !== admittedGeneration)
+              return yield* supersededPreparation();
+            return {
+              key,
+              operationId: report.operationId,
+              generation: admittedGeneration,
+              runner,
+              result: entry,
+              ...("type" in entry
+                ? {}
+                : {
+                    attachment: rememberAttachment(
+                      entry,
+                      admittedGeneration,
+                      report.operationId,
+                      pin,
+                    ),
+                  }),
+            };
+          }),
+        ).pipe(
+          withReconnectCost,
+          Effect.provideService(SshHostAnswered, report.onHostAnswered),
+          Effect.provideService(SshReconnectCost, null),
+          Effect.provide(context),
+          Effect.annotateLogs({
+            key,
+            generation: admittedGeneration,
+            operationId: report.operationId,
           }),
         ),
-      ),
-    ).pipe(
-      Effect.tapError((error) =>
-        Effect.suspend(() =>
-          !closed && !ensureSuperseded(ticket) && (generations.get(key) ?? 0) === admittedGeneration
-            ? publishFailure(key, resolvedTarget, runner, error)
-            : Effect.void,
-        ),
-      ),
-    );
+    });
+    return yield* finishEnsureEnvironment(lease.value, ticket, requestOptions);
   });
 
   const ensureEnvironment: SshEnvironmentManagerShape["ensureEnvironment"] = (...args) =>
-    withReconnectCost(ensureEnvironmentAttempt(...args));
+    withSshCost(Effect.scoped(ensureEnvironmentAttempt(...args)), "ssh.ensure.request.cost");
 
   const revalidateTunnels = Effect.fn("ssh/tunnel.revalidateTunnels")(function* () {
     yield* Effect.forEach(
@@ -6953,6 +7821,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const hadPending = pendingReplacements.has(key);
     generations.set(key, (generations.get(key) ?? 0) + 1);
     invalidateReconnectSelection(key);
+    yield* flights.retire(key, false);
     pendingReplacements.delete(key);
     statuses.delete(key);
     acquisitionFailures.delete(key);
@@ -7331,6 +8200,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     ) {
       // Historical launch proof cannot readmit an attachment rejected by a fresh probe.
       drainAttachment.entry.attachmentInvalidated = verifiedDrainDeferral === undefined;
+      if (drainAttachment.entry.attachmentInvalidated) attachments.delete(drainAttachment.entry);
     }
     const selected = tunnels.get(key)?.reconnectSelection ?? reconnectSelections.get(key);
     if (
@@ -7452,6 +8322,37 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     );
   });
 
+  const issueClientSession: SshEnvironmentManagerShape["issueClientSession"] = Effect.fn(
+    "ssh/tunnel.issueClientSession",
+  )(function* (target, sessionOptions) {
+    const { resolvedTarget, key } = yield* resolveManagedTarget(target);
+    yield* validateManagedPin(resolvedTarget);
+    const runner =
+      options.resolveCliRunner === undefined ? undefined : yield* options.resolveCliRunner;
+    if (pendingReplacements.has(key) && !tunnels.has(key)) {
+      return yield* new SshLaunchError({
+        message: "Remote runtime will be replaced when its work finishes.",
+        stdout: "",
+      });
+    }
+    return yield* withTargetLock(
+      key,
+      runWithSshAuth({
+        key,
+        keyOnly: managedAliases.has(resolvedTarget.alias),
+        target: resolvedTarget,
+        operation: (authOptions) =>
+          issueRemoteClientSession(
+            resolvedTarget,
+            sessionOptions,
+            authOptions,
+            runner,
+            tunnels.get(key)?.selectedRuntime,
+          ),
+      }),
+    );
+  });
+
   const runRemoteScript = Effect.fn("ssh/tunnel.runRemoteScript")(function* (
     target: DesktopSshEnvironmentTarget,
     input: { readonly script: string; readonly timeoutMs?: number },
@@ -7491,6 +8392,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const generation = (generations.get(key) ?? 0) + 1;
     generations.set(key, generation);
     invalidateReconnectSelection(key);
+    yield* flights.retire(key, false);
     pendingReplacements.delete(key);
     forgotten.delete(key);
     const setup: SshHostSetupProgress = { operationId, generation, stage: "runtime" };
@@ -7557,6 +8459,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         pendingReplacements.delete(key);
         generations.set(key, operation.generation + 1);
         invalidateReconnectSelection(key);
+        const attachmentEntry = tunnels.get(key);
+        if (attachmentEntry !== undefined) attachments.delete(attachmentEntry);
         const {
           phase: _phase,
           waitingReason: _waiting,
@@ -7621,6 +8525,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const generation = (generations.get(key) ?? 0) + 1;
     generations.set(key, generation);
     invalidateReconnectSelection(key);
+    yield* flights.retire(key, false);
     pendingReplacements.delete(key);
     acquisitionFailures.delete(key);
     setupOperations.delete(key);
@@ -7691,6 +8596,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     disconnectEnvironment: withSharing(disconnectEnvironment),
     revalidateTunnels: withSharing(revalidateTunnels),
     issueMcpClientSession: withSharing(issueMcpClientSession),
+    issueClientSession: withSharing(issueClientSession),
     runRemoteScript: withSharing(runRemoteScript),
   });
 });

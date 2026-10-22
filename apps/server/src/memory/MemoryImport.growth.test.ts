@@ -34,14 +34,15 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import migration from "../persistence/Migrations/073_Memory.ts";
-import hubMigration from "../persistence/Migrations/074_MemoryHubSync.ts";
-import searchMigration from "../persistence/Migrations/075_MemorySearchCounters.ts";
-import lineageMigration from "../persistence/Migrations/077_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/078_MemoryCheckpointAccounting.ts";
-import reportMigration from "../persistence/Migrations/079_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/080_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/081_MemoryRevertResults.ts";
+import migration from "../persistence/Migrations/076_Memory.ts";
+import hubMigration from "../persistence/Migrations/077_MemoryHubSync.ts";
+import searchMigration from "../persistence/Migrations/078_MemorySearchCounters.ts";
+import lineageMigration from "../persistence/Migrations/080_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
 import * as Service from "./MemoryService.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import type { ImportItem, PreparedImportCommit } from "./imports/MemoryImportTypes.ts";
@@ -55,6 +56,7 @@ const growthLayer = (filename: string) => {
       yield* searchMigration;
       yield* lineageMigration;
       yield* checkpointMigration;
+      yield* revisionSizeMigration;
       yield* reportMigration;
       yield* usageMigration;
       yield* revertMigration;
@@ -107,6 +109,7 @@ const growthLayer = (filename: string) => {
 describe.skipIf(process.env.GOAT_MEMORY_GROWTH !== "1")(
   "MemoryImport physical-growth source harness (requires GOAT_MEMORY_GROWTH=1)",
   () => {
+    // oxlint-disable-next-line goat/no-test-timeout-or-unreasoned-skip -- Opt-in GOAT_MEMORY_GROWTH benchmark imports all 16 rounds of large source fixtures and retains their full growth.
     it.effect(
       "records deterministic 64 noop / 16 change / 32 forget-rebuild workload",
       () =>

@@ -1,47 +1,57 @@
-import * as CodexRoute from "./provider/CodexRouteService.ts";
 import {
   DEFAULT_SERVER_SETTINGS as CLIENT_DEFAULT_SERVER_SETTINGS,
-  MemoryOwnerSourceReadPolicy,
+  ServerSettings as ClientServerSettings,
+  defaultInstanceIdForDriver,
+  type EnvironmentId,
+  isProviderDriverKind,
+  matchesMemorySourceReadRevokeAck,
   MEMORY_HUB_MAX_MEMBERS,
   type MemoryHubDisableInput,
   type MemoryHubDisableResult,
-  MemoryOwnerSourceReadPolicyUpdateInput,
-  MemorySourceReadRevokeAck,
-  matchesMemorySourceReadRevokeAck,
-  MemoryRpcError,
-  type MemoryOwnerSourceReadPolicyView,
-  type MemoryOwnerEnrollment,
-  type MemoryOwnerRemoval,
-  type EnvironmentId,
-  MemoryHubSettings,
-  MemorySpaceId,
   MemoryHubError,
   type MemoryHubForbiddenError,
+  MemoryHubSettings,
   MemoryOperationId,
+  type MemoryOwnerEnrollment,
+  type MemoryOwnerRemoval,
+  MemoryOwnerSourceReadPolicy,
+  MemoryOwnerSourceReadPolicyUpdateInput,
+  type MemoryOwnerSourceReadPolicyView,
+  MemoryRpcError,
+  MemorySourceReadRevokeAck,
+  MemorySpaceId,
   ModelSelection,
   ProjectId,
   ProjectScript,
   ProjectSettingsOverrides,
-  type ProviderInstanceConfig,
-  type ProviderInstanceMutation,
-  defaultInstanceIdForDriver,
-  isProviderDriverKind,
   ProviderDriverKind,
+  type ProviderInstanceConfig,
   ProviderInstanceId,
+  type ProviderInstanceMutation,
   resolveProviderInstanceEnabled,
   ResponseStreamingMode,
-  ServerSettings as ClientServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
 } from "@goat/contracts";
+import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
+import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
+import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
+import {
+  applyServerSettingsPatch,
+  assertNoMemoryHubSettingsPatch,
+  deriveLegacyProjectOverrides,
+  fallbackTextGenerationModelSelection,
+  isModelSelectionProviderEnabled,
+} from "@goat/shared/serverSettings";
+import { resolveSymlinkTarget } from "@goat/shared/symlink";
 import { normalizeThemePreference } from "@goat/shared/themePalettes";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
-import * as Equal from "effect/Equal";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -51,25 +61,15 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
-import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
-import { resolveSymlinkTarget } from "@goat/shared/symlink";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
-import { type DeepPartial, deepMerge } from "@goat/shared/Struct";
-import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
-import {
-  applyServerSettingsPatch,
-  assertNoMemoryHubSettingsPatch,
-  deriveLegacyProjectOverrides,
-  fallbackTextGenerationModelSelection,
-  isModelSelectionProviderEnabled,
-} from "@goat/shared/serverSettings";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import type * as MemoryStore from "./memory/MemoryStore.ts";
-import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as CodexRoute from "./provider/CodexRouteService.ts";
 import {
   readSecretFieldValues,
   sourceControlHostSecretName,
@@ -232,6 +232,7 @@ function ensureProviderInstanceMutationAllowed(
 }
 
 /** Used before any generic settings side effect, including device-host normalization. */
+
 export const rejectMemoryHubSettingsPatch = (patch: unknown, settingsPath: string) =>
   Effect.try({
     try: () => {
@@ -804,6 +805,20 @@ export class ServerSettingsService extends Context.Service<
       authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 
+    /**
+     * Read-modify-write: `patchFor` sees the latest stored settings inside the
+     * write lock and returns the patch to apply, so a nested key edited by
+     * another writer between a caller's read and its write is never lost.
+     */
+
+    readonly updateSettingsWith: (
+      patchFor: (
+        current: ServerSettings,
+      ) => Effect.Effect<ServerSettingsPatch, ServerSettingsError>,
+      /** Runs inside the write lock before `patchFor`, so a revoked grant cannot commit. */
+      authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
+    ) => Effect.Effect<ServerSettings, ServerSettingsError>;
+
     readonly updateProviderInstance: (
       mutation: ProviderInstanceMutation,
       patch?: ServerSettingsPatch,
@@ -818,6 +833,16 @@ export class ServerSettingsService extends Context.Service<
     readonly withStoredSettingsSnapshot?: <A, E, R>(
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E | ServerSettingsError, R>;
+
+    readonly checkpointReplicationPermit: (host: string) => Effect.Effect<
+      {
+        readonly choice: "on" | "off" | undefined;
+        readonly publish: <A, E, R>(
+          effect: Effect.Effect<A, E, R>,
+        ) => Effect.Effect<Option.Option<A>, E, R>;
+      },
+      ServerSettingsError
+    >;
 
     readonly streamChanges: Stream.Stream<ServerSettings>;
 
@@ -839,154 +864,271 @@ export class ServerSettingsService extends Context.Service<
   static readonly layerTest = (overrides: DeepPartial<ServerSettings> = {}) => layerTest(overrides);
 }
 
-const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
-  Effect.gen(function* () {
-    const { automaticGitFetchInterval, providerHealthRefreshInterval, ...overridesForMerge } =
-      overrides;
-    const merged = deepMerge(DEFAULT_SERVER_SETTINGS, overridesForMerge);
-    const initialSettings = yield* normalizeServerSettings({
-      ...merged,
-      ...(automaticGitFetchInterval !== undefined
-        ? { automaticGitFetchInterval: automaticGitFetchInterval as Duration.Duration }
-        : {}),
-      ...(providerHealthRefreshInterval !== undefined
-        ? { providerHealthRefreshInterval: providerHealthRefreshInterval as Duration.Duration }
-        : {}),
-    });
-    const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
-    const providerPolicy = yield* makeMemoryProviderPolicy;
-    const ownerPublication = yield* makeOwnerPolicyPublication;
-    yield* ownerPublication.initialize(initialSettings);
-    const ownerIdentity = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironmentIdentity);
-    yield* providerPolicy.publish(initialSettings.enableAgentMemoryAccess);
-    const writeSemaphore = yield* Semaphore.make(1);
-    const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
-    const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider));
-
-    const updateTestSettingsLocked = <E, R>(
-      update: (
-        current: ServerSettings,
-      ) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
-    ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
-      Ref.get(currentSettingsRef).pipe(
-        Effect.flatMap(update),
-        Effect.flatMap(normalizeServerSettings),
-        Effect.tap((nextSettings) =>
-          Effect.uninterruptible(
-            Ref.set(currentSettingsRef, nextSettings).pipe(
-              Effect.andThen(providerPolicy.publish(nextSettings.enableAgentMemoryAccess)),
-              Effect.andThen(ownerPublication.publish(ownerProjection(nextSettings))),
+// Publication holds only its host gate. A settings writer never waits for that gate
+// while holding the global write semaphore, so staged payload I/O cannot stall settings.
+const makeCheckpointReplicationAdmission = () => {
+  const gates = new Map<string, { gate: Semaphore.Semaphore; revision: number }>();
+  const forHost = (host: string) => {
+    let entry = gates.get(host);
+    if (entry === undefined) {
+      entry = { gate: Semaphore.makeUnsafe(1), revision: 0 };
+      gates.set(host, entry);
+    }
+    return entry;
+  };
+  const permit = Effect.fn("ServerSettings.checkpointReplicationPermit")(function* (
+    host: string,
+    read: Effect.Effect<ServerSettings, ServerSettingsError>,
+  ) {
+    const entry = forHost(host);
+    return yield* entry.gate.withPermits(1)(
+      Effect.gen(function* () {
+        const settings = yield* read;
+        const revision = entry.revision;
+        return {
+          choice: settings.fleet.hosts?.[host]?.checkpointReplication,
+          publish: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            entry.gate.withPermits(1)(
+              Effect.suspend(() =>
+                entry.revision === revision
+                  ? effect.pipe(Effect.map(Option.some))
+                  : Effect.succeed(Option.none<A>()),
+              ),
             ),
-          ),
-        ),
-        Effect.map(resolveTextGenerationProvider),
-      );
-    const updateTestSettings = <E, R>(
-      update: (
-        current: ServerSettings,
-      ) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
-    ) => writeSemaphore.withPermits(1)(updateTestSettingsLocked(update));
-    const applyHubLocked: MemoryHubSettingsTransitions["Service"]["applyMemoryHubTransition"] = (
-      input,
-      permit,
-    ) =>
-      updateTestSettingsLocked((current) =>
-        Ref.get(hubMarkerRef).pipe(
-          Effect.flatMap((marker) => transitionMemoryHubSettings(current, input, permit, marker)),
-        ),
-      ).pipe(
-        Effect.tap((next) =>
-          Ref.get(hubMarkerRef).pipe(
-            Effect.flatMap((previous) =>
-              Ref.set(hubMarkerRef, {
-                requestId: input.requestId,
-                version: next.memoryHubVersion,
-                provenance: next.memoryHubProvenance ?? null,
-                ...(next.memoryHub.mode === "hub" && next.memoryHub.memorySpaceId !== null
-                  ? { previousHubSpace: next.memoryHub.memorySpaceId }
-                  : previous?.previousHubSpace
-                    ? { previousHubSpace: previous.previousHubSpace }
-                    : {}),
-              }),
-            ),
-          ),
-        ),
-        Effect.map((next) => ({
-          settings: next.memoryHub,
-          version: next.memoryHubVersion,
-          provenance: next.memoryHubProvenance ?? null,
-        })),
-      );
-
-    const ownerServices = ownerPolicyServices(
-      ownerPublication,
-      ownerIdentity,
-      (effect) => writeSemaphore.withPermits(1)(effect),
-      getSettings,
-      updateTestSettingsLocked,
+        };
+      }),
     );
-    return {
-      committedOwnerPolicy: ownerServices.committed,
-      ownerPolicyAdministration: ownerServices.administration,
-      start: Effect.void,
-      ready: Effect.void,
-      getSettings,
-      updateSettings: (patch, authorizeAtCommit) =>
-        updateTestSettings((currentSettings) =>
-          (authorizeAtCommit ?? Effect.void).pipe(
-            Effect.andThen(rejectMemoryHubSettingsPatch(patch, "test settings")),
-            Effect.map(() => applyServerSettingsPatch(currentSettings, patch)),
+  });
+  const tryCommit = <A, E, R>(
+    current: ServerSettings,
+    next: ServerSettings,
+    commit: Effect.Effect<A, E, R>,
+  ) => {
+    const changed = [
+      ...new Set([
+        ...Object.keys(current.fleet.hosts ?? {}),
+        ...Object.keys(next.fleet.hosts ?? {}),
+      ]),
+    ]
+      .filter(
+        (host) =>
+          current.fleet.hosts?.[host]?.checkpointReplication !==
+          next.fleet.hosts?.[host]?.checkpointReplication,
+      )
+      .sort()
+      .map(forHost);
+    let guarded = commit.pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          for (const entry of changed) entry.revision++;
+        }),
+      ),
+      Effect.map(Option.some),
+      Effect.uninterruptible,
+    );
+    for (const entry of changed.toReversed())
+      guarded = entry.gate.withPermitsIfAvailable(1)(guarded).pipe(Effect.map(Option.flatten));
+    return guarded.pipe(
+      Effect.map((result) =>
+        Option.isSome(result)
+          ? { done: true as const, value: result.value }
+          : {
+              done: false as const,
+              wait: Effect.forEach(changed, ({ gate }) => gate.withPermits(1)(Effect.void), {
+                discard: true,
+              }),
+            },
+      ),
+    );
+  };
+  const retry = Effect.fn("ServerSettings.retryCheckpointPublication")(function* <A, E, R>(
+    attempt: Effect.Effect<
+      { done: true; value: A } | { done: false; wait: Effect.Effect<void> },
+      E,
+      R
+    >,
+  ) {
+    for (let attemptNumber = 0; attemptNumber < 16; attemptNumber++) {
+      const result = yield* attempt;
+      if (result.done) return result.value;
+      yield* result.wait;
+    }
+    return yield* new ServerSettingsError({
+      settingsPath: "checkpointReplication",
+      operation: "normalize",
+      cause: "Checkpoint publication remained busy; retry this settings change.",
+    });
+  });
+  return { permit, tryCommit, retry };
+};
+
+const makeTest = Effect.fn("serverSettings.makeTest")(function* (
+  overrides: DeepPartial<ServerSettings> = {},
+) {
+  const { automaticGitFetchInterval, providerHealthRefreshInterval, ...overridesForMerge } =
+    overrides;
+  const merged = deepMerge(DEFAULT_SERVER_SETTINGS, overridesForMerge);
+  const initialSettings = yield* normalizeServerSettings({
+    ...merged,
+    ...(automaticGitFetchInterval !== undefined
+      ? { automaticGitFetchInterval: automaticGitFetchInterval as Duration.Duration }
+      : {}),
+    ...(providerHealthRefreshInterval !== undefined
+      ? { providerHealthRefreshInterval: providerHealthRefreshInterval as Duration.Duration }
+      : {}),
+  });
+  const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
+  const providerPolicy = yield* makeMemoryProviderPolicy;
+  const ownerPublication = yield* makeOwnerPolicyPublication;
+  yield* ownerPublication.initialize(initialSettings);
+  const ownerIdentity = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironmentIdentity);
+  yield* providerPolicy.publish(initialSettings.enableAgentMemoryAccess);
+  const writeSemaphore = yield* Semaphore.make(1);
+  const checkpointAdmission = makeCheckpointReplicationAdmission();
+  const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
+  const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider));
+
+  const updateTestSettingsLocked = <E, R>(
+    update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
+  ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
+    Ref.get(currentSettingsRef).pipe(
+      Effect.flatMap(update),
+      Effect.flatMap(normalizeServerSettings),
+      Effect.tap((nextSettings) =>
+        Effect.uninterruptible(
+          Ref.set(currentSettingsRef, nextSettings).pipe(
+            Effect.andThen(providerPolicy.publish(nextSettings.enableAgentMemoryAccess)),
+            Effect.andThen(ownerPublication.publish(ownerProjection(nextSettings))),
           ),
         ),
-      updateProviderInstance: (mutation, patch = {}) =>
-        updateTestSettings((currentSettings) =>
-          Effect.gen(function* () {
-            yield* rejectMemoryHubSettingsPatch(patch, "test settings");
-            yield* ensureProviderInstanceMutationAllowed(
-              currentSettings,
-              mutation,
-              "test settings",
-            );
-            const patched = applyServerSettingsPatch(currentSettings, patch);
-            return applyProviderInstanceMutation(patched, mutation);
-          }),
-        ),
-      applyMemoryHubTransition: (input, permit) =>
-        writeSemaphore.withPermits(1)(applyHubLocked(input, permit)),
-      adminSettings: hubAdministrationSettings(
-        getSettings,
-        (effect) => writeSemaphore.withPermits(1)(effect),
-        Ref.get(hubMarkerRef),
-        applyHubLocked,
-        Effect.succeed({ state: "current" as const }),
       ),
-      withSettingsSnapshot: (use) =>
-        writeSemaphore.withPermits(1)(getSettings.pipe(Effect.flatMap(use))),
-      committedProviderPolicy: providerPolicy.service,
-      committedHubSettings: {
-        readPublication: Effect.succeed({ state: "current" as const }),
-        read: Ref.get(currentSettingsRef).pipe(
-          Effect.map((current) => ({
-            settings: current.memoryHub,
-            version: current.memoryHubVersion,
-            provenance: current.memoryHubProvenance ?? null,
-          })),
+      Effect.map(resolveTextGenerationProvider),
+    );
+  const updateTestSettings = <E, R>(
+    update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
+  ) =>
+    checkpointAdmission.retry(
+      writeSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const current = yield* Ref.get(currentSettingsRef);
+          const next = yield* update(current);
+          return yield* checkpointAdmission.tryCommit(
+            current,
+            next,
+            updateTestSettingsLocked(() => Effect.succeed(next)),
+          );
+        }),
+      ),
+    );
+  const applyHubLocked: MemoryHubSettingsTransitions["Service"]["applyMemoryHubTransition"] = (
+    input,
+    permit,
+  ) =>
+    updateTestSettingsLocked((current) =>
+      Ref.get(hubMarkerRef).pipe(
+        Effect.flatMap((marker) => transitionMemoryHubSettings(current, input, permit, marker)),
+      ),
+    ).pipe(
+      Effect.tap((next) =>
+        Ref.get(hubMarkerRef).pipe(
+          Effect.flatMap((previous) =>
+            Ref.set(hubMarkerRef, {
+              requestId: input.requestId,
+              version: next.memoryHubVersion,
+              provenance: next.memoryHubProvenance ?? null,
+              ...(next.memoryHub.mode === "hub" && next.memoryHub.memorySpaceId !== null
+                ? { previousHubSpace: next.memoryHub.memorySpaceId }
+                : previous?.previousHubSpace
+                  ? { previousHubSpace: previous.previousHubSpace }
+                  : {}),
+            }),
+          ),
         ),
-      },
-      streamChanges: Stream.empty,
-      subscribeChanges: Effect.succeed(Stream.empty),
-    } satisfies ServerSettingsService["Service"] &
-      MemoryHubSettingsTransitions["Service"] & {
-        adminSettings: MemoryHubAdminSettings["Service"];
-        committedHubSettings: MemoryHubCommittedSettings["Service"];
-        committedProviderPolicy: MemoryProviderCommittedPolicy["Service"];
-        committedOwnerPolicy: MemoryOwnerSourceReadCommittedPolicy["Service"];
-        ownerPolicyAdministration: MemoryOwnerSourceReadPolicyAdministration["Service"];
-      };
-  });
+      ),
+      Effect.map((next) => ({
+        settings: next.memoryHub,
+        version: next.memoryHubVersion,
+        provenance: next.memoryHubProvenance ?? null,
+      })),
+    );
+
+  const ownerServices = ownerPolicyServices(
+    ownerPublication,
+    ownerIdentity,
+    (effect) => writeSemaphore.withPermits(1)(effect),
+    getSettings,
+    updateTestSettingsLocked,
+  );
+
+  return {
+    committedOwnerPolicy: ownerServices.committed,
+    ownerPolicyAdministration: ownerServices.administration,
+    start: Effect.void,
+    ready: Effect.void,
+    getSettings,
+    updateSettings: (patch, authorizeAtCommit) =>
+      updateTestSettings((currentSettings) =>
+        (authorizeAtCommit ?? Effect.void).pipe(
+          Effect.andThen(rejectMemoryHubSettingsPatch(patch, "test settings")),
+          Effect.map(() => applyServerSettingsPatch(currentSettings, patch)),
+        ),
+      ),
+    updateSettingsWith: (patchFor, authorizeAtCommit) =>
+      updateTestSettings((currentSettings) =>
+        Effect.gen(function* () {
+          if (authorizeAtCommit) yield* authorizeAtCommit;
+          const patch = yield* patchFor(currentSettings);
+          yield* rejectMemoryHubSettingsPatch(patch, "test settings");
+          return applyServerSettingsPatch(currentSettings, patch);
+        }),
+      ),
+    updateProviderInstance: (mutation, patch = {}) =>
+      updateTestSettings((currentSettings) =>
+        Effect.gen(function* () {
+          yield* rejectMemoryHubSettingsPatch(patch, "test settings");
+          yield* ensureProviderInstanceMutationAllowed(currentSettings, mutation, "test settings");
+          const patched = applyServerSettingsPatch(currentSettings, patch);
+          return applyProviderInstanceMutation(patched, mutation);
+        }),
+      ),
+    applyMemoryHubTransition: (input, permit) =>
+      writeSemaphore.withPermits(1)(applyHubLocked(input, permit)),
+    adminSettings: hubAdministrationSettings(
+      getSettings,
+      (effect) => writeSemaphore.withPermits(1)(effect),
+      Ref.get(hubMarkerRef),
+      applyHubLocked,
+      Effect.succeed({ state: "current" as const }),
+    ),
+    checkpointReplicationPermit: (host) => checkpointAdmission.permit(host, getSettings),
+    withSettingsSnapshot: (use) =>
+      writeSemaphore.withPermits(1)(getSettings.pipe(Effect.flatMap(use))),
+    committedProviderPolicy: providerPolicy.service,
+    committedHubSettings: {
+      readPublication: Effect.succeed({ state: "current" as const }),
+      read: Ref.get(currentSettingsRef).pipe(
+        Effect.map((current) => ({
+          settings: current.memoryHub,
+          version: current.memoryHubVersion,
+          provenance: current.memoryHubProvenance ?? null,
+        })),
+      ),
+    },
+    streamChanges: Stream.empty,
+    subscribeChanges: Effect.succeed(Stream.empty),
+  } satisfies ServerSettingsService["Service"] &
+    MemoryHubSettingsTransitions["Service"] & {
+      adminSettings: MemoryHubAdminSettings["Service"];
+      committedHubSettings: MemoryHubCommittedSettings["Service"];
+      committedProviderPolicy: MemoryProviderCommittedPolicy["Service"];
+      committedOwnerPolicy: MemoryOwnerSourceReadCommittedPolicy["Service"];
+      ownerPolicyAdministration: MemoryOwnerSourceReadPolicyAdministration["Service"];
+    };
+});
 
 // Keep fixtures accepting a settings-only replacement compatible. Memory
 // composition opts into the complete context already built by settingsLayers.
+
 export function layerTest(
   overrides: DeepPartial<ServerSettings>,
   services: "memoryHub",
@@ -1201,6 +1343,8 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "goatBotModelSelection",
   "textGenerationModelSelection",
   "pullRequestMergeMethod",
+  // goatclaw's permission profiles: a partial record would lose the profile defaultProfile names.
+  "profiles",
 ]);
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
@@ -1326,6 +1470,7 @@ const make = Effect.gen(function* () {
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const sql = yield* SqlClient.SqlClient;
   const writeSemaphore = yield* Semaphore.make(1);
+  const checkpointAdmission = makeCheckpointReplicationAdmission();
   const routeState = yield* Effect.serviceOption(CodexRoute.CodexRouteState);
   const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
   const providerPolicy = yield* makeMemoryProviderPolicy;
@@ -1513,8 +1658,8 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  const moveInlineSettingsSecrets = (settings: ServerSettings) =>
-    Effect.gen(function* () {
+  const moveInlineSettingsSecrets = Effect.fn("serverSettings.moveInlineSettingsSecrets")(
+    function* (settings: ServerSettings) {
       const pending: SettingsSecret[] = [];
       mapSettingsSecrets(settings, (secret) => {
         if (secret.kind === "field" && !secret.redacted && secret.value.length > 0) {
@@ -1540,7 +1685,8 @@ const make = Effect.gen(function* () {
       return mapSettingsSecrets(settings, (secret) =>
         moved.has(secret.secretName) ? { value: "", redacted: true } : secret,
       );
-    });
+    },
+  );
 
   const loadSettingsFromDisk = Effect.gen(function* () {
     let settings: ServerSettings = DEFAULT_SERVER_SETTINGS;
@@ -1731,10 +1877,8 @@ const make = Effect.gen(function* () {
     Effect.andThen(Cache.get(settingsCache, cacheKey)),
   );
 
-  const materializeSettingsSecrets = (
-    settings: ServerSettings,
-  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
-    Effect.gen(function* () {
+  const materializeSettingsSecrets = Effect.fn("serverSettings.materializeSettingsSecrets")(
+    function* (settings: ServerSettings): Effect.fn.Return<ServerSettings, ServerSettingsError> {
       const storedSecrets = new Map<string, string>();
       const pending = new Map<string, SettingsSecret>();
       mapSettingsSecrets(settings, (secret) => {
@@ -1766,7 +1910,8 @@ const make = Effect.gen(function* () {
             : secret.value,
         redacted: secret.sensitive && secret.kind === "environment" && secret.redacted,
       }));
-    });
+    },
+  );
 
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
@@ -1979,30 +2124,47 @@ const make = Effect.gen(function* () {
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
     targetIds: ReadonlyArray<ProviderInstanceId> = [],
   ) => {
-    if (Option.isNone(routeState))
-      return writeSemaphore.withPermits(1)(updateSettingsWhileLocked(update));
-    const routes = routeState.value;
-    const commit = writeSemaphore.withPermits(1)(
+    const attempt = writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        const { settings: current } = yield* reloadSettings;
-        const settings = yield* updateSettingsWhileLocked(update);
-        const changed = [
-          ...new Set([
-            ...Object.keys(current.providerInstances),
-            ...Object.keys(settings.providerInstances),
-          ]),
-        ]
-          .map((id) => id as ProviderInstanceId)
-          .filter(
-            (id) =>
-              CodexRoute.instanceFingerprint(current.providerInstances[id]) !==
-              CodexRoute.instanceFingerprint(settings.providerInstances[id]),
-          );
-        return { settings, applied: routes.awaitApplied([...new Set([...changed, ...targetIds])]) };
+        const { settings: current, parseFailure } = yield* reloadSettings;
+        if (Option.isSome(parseFailure))
+          return yield* new ServerSettingsError({
+            settingsPath,
+            operation: "read-file",
+            cause: parseFailure.value,
+          });
+        const next = yield* update(current);
+        return yield* checkpointAdmission.tryCommit(
+          current,
+          next,
+          Effect.gen(function* () {
+            const settings = yield* updateSettingsWhileLocked(() => Effect.succeed(next));
+            const changed = [
+              ...new Set([
+                ...Object.keys(current.providerInstances),
+                ...Object.keys(settings.providerInstances),
+              ]),
+            ]
+              .map((id) => id as ProviderInstanceId)
+              .filter(
+                (id) =>
+                  CodexRoute.instanceFingerprint(current.providerInstances[id]) !==
+                  CodexRoute.instanceFingerprint(settings.providerInstances[id]),
+              );
+            return {
+              settings,
+              applied: Option.isSome(routeState)
+                ? routeState.value.awaitApplied([...new Set([...changed, ...targetIds])])
+                : Effect.void,
+            };
+          }),
+        );
       }),
     );
-    return routes.admission
-      .withPermits(1)(commit)
+    return checkpointAdmission
+      .retry(
+        Option.isSome(routeState) ? routeState.value.admission.withPermits(1)(attempt) : attempt,
+      )
       .pipe(Effect.flatMap(({ settings, applied }) => applied.pipe(Effect.as(settings))));
   };
   const applyHubLocked: MemoryHubSettingsTransitions["Service"]["applyMemoryHubTransition"] = (
@@ -2156,6 +2318,7 @@ const make = Effect.gen(function* () {
     getSettingsFromCache,
     updateSettingsWhileLocked,
   );
+
   return {
     committedOwnerPolicy: ownerServices.committed,
     ownerPolicyAdministration: ownerServices.administration,
@@ -2173,6 +2336,15 @@ const make = Effect.gen(function* () {
             Effect.map(() => applyServerSettingsPatch(current, patch)),
           ),
         Object.keys(patch.providerInstances ?? {}).map((id) => id as ProviderInstanceId),
+      ),
+    updateSettingsWith: (patchFor, authorizeAtCommit) =>
+      updateAndPersistSettings((current) =>
+        Effect.gen(function* () {
+          if (authorizeAtCommit) yield* authorizeAtCommit;
+          const patch = yield* patchFor(current);
+          yield* rejectMemoryHubSettingsPatch(patch, settingsPath);
+          return applyServerSettingsPatch(current, patch);
+        }),
       ),
     updateProviderInstance: (mutation, patch = {}, approval, authorizeAtCommit) =>
       updateAndPersistSettings(
@@ -2222,6 +2394,7 @@ const make = Effect.gen(function* () {
       ),
       readPublication: Ref.get(committedHubRef).pipe(Effect.map((s) => s.publication)),
     },
+    checkpointReplicationPermit: (host) => checkpointAdmission.permit(host, getSettingsFromCache),
     withSettingsSnapshot,
     withStoredSettingsSnapshot: <A, E, R>(
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
@@ -2259,7 +2432,6 @@ const make = Effect.gen(function* () {
       ownerPolicyAdministration: MemoryOwnerSourceReadPolicyAdministration["Service"];
     };
 });
-
 const settingsLayers = (
   service: ServerSettingsService["Service"] &
     MemoryHubSettingsTransitions["Service"] & {

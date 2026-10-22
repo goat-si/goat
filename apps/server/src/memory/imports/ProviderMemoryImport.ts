@@ -5,6 +5,7 @@ import * as NodeUtil from "node:util";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
+import * as Renderer from "@goat/provider-core/server/memoryContext";
 import { scanMemoryValue } from "../MemorySecretScanner.ts";
 import { MemoryAccessError } from "../MemoryService.ts";
 import { MemoryStoreConflict } from "../MemoryStore.ts";
@@ -47,6 +48,25 @@ const importError = (error: ImportError): ImportError => {
     return new M.MemoryImportRpcError({ issue: "bootstrap_required" });
   return error;
 };
+const frameId = "00000000-0000-4000-8000-000000000000";
+/**
+ * Whether the body could ever enter the turn-start memory frame: rendered alone with
+ * the smallest scope an imported memory gets. False means it is stored but never
+ * injected automatically, whatever scope it is mapped to.
+ */
+const fitsTurnStart = (text: string, address: { readonly environmentId: M.EnvironmentId }) =>
+  Renderer.memoryContextFits(
+    Renderer.renderMemoryContext([
+      {
+        memoryId: M.MemoryId.make(frameId),
+        revisionId: M.MemoryRevisionId.make(frameId),
+        scope: { kind: "user" },
+        provenance: { environmentId: address.environmentId },
+        assertionKind: "inference",
+        text,
+      },
+    ]),
+  );
 const validateOutput = Schema.decodeUnknownEffect(M.MemoryImportProviderResult);
 const validPayload = Schema.is(M.MemoryPayload);
 const validCapacity = Schema.is(M.MemoryCapacityExceeded);
@@ -282,6 +302,9 @@ export const makeProviderMemoryImport: MakeProviderMemoryImport = (
                 : {}),
               ...(c.title && !suppressed && issue !== "secret_detected" ? { title: c.title } : {}),
               ...(issue ? { issue } : {}),
+              ...(input.includeTurnStartFit && !issue && !fitsTurnStart(c.payload.text, address)
+                ? { tooLargeForTurnStart: true as const }
+                : {}),
             });
           }
           const output = {

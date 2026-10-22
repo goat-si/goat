@@ -9,6 +9,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
+import { admitLaunch, withPressure } from "../../pressureAdmission.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import { readCaller, unavailable } from "../../threadAccess.ts";
 
@@ -49,7 +50,8 @@ const handlers = {
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        return yield* service.delegateTask(scope, input);
+        const pressure = yield* admitLaunch(input.target?.host ?? null);
+        return withPressure(yield* service.delegateTask(scope, input), pressure);
       }),
     ),
   ),
@@ -218,6 +220,43 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* HostThreadsMcpService.HostThreadsMcpService;
       return yield* service.threadStatus(scope, input);
+    }),
+  ),
+  goat_thread_replication_set: McpToolAccess.writesEnvironment((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.configureReplication(scope, input);
+    }),
+  ),
+  goat_thread_checkpoint_capture: McpToolAccess.writesThreads(
+    (input) => [input.threadId],
+    (input) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+        return yield* service.captureCheckpoint(scope, input);
+      }),
+  ),
+  goat_thread_checkpoint_reconcile: McpToolAccess.writesEnvironment((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.reconcileCheckpoint(scope, input);
+    }),
+  ),
+  goat_thread_checkpoint_restore: McpToolAccess.writesEnvironment((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.restoreCheckpoint(scope, input);
+    }),
+  ),
+  goat_thread_handoff_host: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.recoverCheckpoint(scope, input);
     }),
   ),
   goat_thread_watch: McpToolAccess.actsAsCaller((input) =>

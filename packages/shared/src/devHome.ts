@@ -35,33 +35,32 @@ const pointsAtLinkedWorktree = (gitFileContents: string, path: Path.Path): boole
   return segments.length >= 3 && segments.at(-2) === "worktrees";
 };
 
-export const resolveGitWorktreePath = (
+export const resolveGitWorktreePath = Effect.fn("devHome.resolveGitWorktreePath")(function* (
   cwd: string,
-): Effect.Effect<string | undefined, never, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
+): Effect.fn.Return<string | undefined, never, FileSystem.FileSystem | Path.Path> {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
-    let directory = path.resolve(cwd);
-    for (;;) {
-      const gitPath = path.join(directory, ".git");
-      const info = yield* fileSystem.stat(gitPath).pipe(Effect.option);
-      if (Option.isSome(info)) {
-        if (info.value.type !== "File") {
-          return undefined;
-        }
-        const contents = yield* fileSystem
-          .readFileString(gitPath)
-          .pipe(Effect.orElseSucceed(() => ""));
-        return pointsAtLinkedWorktree(contents, path) ? directory : undefined;
-      }
-      const parent = path.dirname(directory);
-      if (parent === directory) {
+  let directory = path.resolve(cwd);
+  for (;;) {
+    const gitPath = path.join(directory, ".git");
+    const info = yield* fileSystem.stat(gitPath).pipe(Effect.option);
+    if (Option.isSome(info)) {
+      if (info.value.type !== "File") {
         return undefined;
       }
-      directory = parent;
+      const contents = yield* fileSystem
+        .readFileString(gitPath)
+        .pipe(Effect.orElseSucceed(() => ""));
+      return pointsAtLinkedWorktree(contents, path) ? directory : undefined;
     }
-  });
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      return undefined;
+    }
+    directory = parent;
+  }
+});
 
 /**
  * The worktree-local data directory for `cwd`, or undefined outside a linked
@@ -69,14 +68,13 @@ export const resolveGitWorktreePath = (
  * back because it is missing would send callers at the shared home.
  * A worktree set up before the GOAT rename keeps its `.t3` (see `resolveGoatHome`).
  */
-export const resolveWorktreeHome = (
+export const resolveWorktreeHome = Effect.fn("devHome.resolveWorktreeHome")(function* (
   cwd: string,
-): Effect.Effect<string | undefined, never, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const worktreePath = yield* resolveGitWorktreePath(cwd);
-    if (worktreePath === undefined) {
-      return undefined;
-    }
-    // The dev runner hands this home to the server as an explicit base dir, which reads userdata.
-    return yield* resolveGoatHome(worktreePath, "userdata");
-  });
+): Effect.fn.Return<string | undefined, never, FileSystem.FileSystem | Path.Path> {
+  const worktreePath = yield* resolveGitWorktreePath(cwd);
+  if (worktreePath === undefined) {
+    return undefined;
+  }
+  // The dev runner hands this home to the server as an explicit base dir, which reads userdata.
+  return yield* resolveGoatHome(worktreePath, "userdata");
+});

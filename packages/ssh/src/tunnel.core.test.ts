@@ -52,6 +52,8 @@ import {
   isRemoteLaunch,
 } from "./tunnel.fixture.ts";
 import { nextVersion, shell, fixture } from "./tunnel.runnerSwitch.fixture.ts";
+import { killGroupWithTestOwner } from "./testParentLifetime.fixture.ts";
+import { makeEnsureFlightFixture } from "./tunnel.ensure-flight.fixture.ts";
 
 // Archive acquisition stays local to these transport doubles.
 beforeEach(() => vi.stubGlobal("fetch", async () => new Response(null, { status: 404 })));
@@ -376,6 +378,9 @@ describe("ssh tunnel scripts", () => {
       SshTunnel.buildRemoteStopScript(stateKey),
       'rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE"',
     );
+    assert.include(SshTunnel.buildRemoteStopScript(stateKey), "did not stop within 2 seconds");
+    assert.include(SshTunnel.buildRemoteStopScript(stateKey), "STOP_WAIT_INTERVAL=0.1");
+    assert.include(SshTunnel.buildRemoteStopScript(stateKey), "STOP_WAIT_ATTEMPTS=20");
     assert.include(
       launch,
       'DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"',
@@ -391,6 +396,24 @@ describe("ssh tunnel scripts", () => {
     assert.isBelow(
       launch.indexOf("check_live_protocol\n"),
       launch.indexOf('mv "$RUNNER_NEXT" "$RUNNER_FILE"'),
+    );
+  });
+
+  it("checks for lsof before a runtime replacement can stop the server", () => {
+    const launch = SshTunnel.buildRemoteLaunchScript(ARCHIVE);
+    assert.include(launch, 'prepend_path_if_dir "/usr/sbin"');
+    assert.include(launch, 'prepend_path_if_dir "/sbin"');
+    assert.include(launch, "for candidate in /usr/sbin/lsof /sbin/lsof; do");
+    const probe = launch.indexOf("if ! listener_probe_available; then");
+    const drain = launch.indexOf('__ssh-helper drain --port "$UPGRADE_PORT"');
+    const loop = launch.indexOf('while [ -z "$REMOTE_PORT" ]; do');
+    assert.isAbove(probe, 0);
+    assert.isBelow(probe, drain);
+    assert.isBelow(probe, loop);
+    assert.equal(launch.indexOf("this host needs /proc or lsof", loop), -1);
+    assert.include(
+      launch,
+      "Cannot verify the launched GOAT listener: this host needs /proc or lsof. The existing server was left running.",
     );
   });
 
@@ -1589,16 +1612,20 @@ describe("archive runner script", () => {
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const child = yield* spawner.spawn(
-        ChildProcess.make(remoteShell, args, {
-          env: {
-            PATH: pathPrefix ? `${pathPrefix}:${process.env.PATH ?? ""}` : (process.env.PATH ?? ""),
-            HOME: home,
-          },
-          extendEnv: false,
-          ...(bytes === undefined
-            ? {}
-            : { stdin: { stream: Stream.make(bytes), endOnDone: true } }),
-        }),
+        killGroupWithTestOwner(
+          ChildProcess.make(remoteShell, args, {
+            env: {
+              PATH: pathPrefix
+                ? `${pathPrefix}:${process.env.PATH ?? ""}`
+                : (process.env.PATH ?? ""),
+              HOME: home,
+            },
+            extendEnv: false,
+            ...(bytes === undefined
+              ? {}
+              : { stdin: { stream: Stream.make(bytes), endOnDone: true } }),
+          }),
+        ),
       );
       const [stdout, stderr, exitCode] = yield* Effect.all(
         [
@@ -1856,56 +1883,49 @@ describe("archive runner script", () => {
         assert.isFalse(yield* fs.exists(lock));
         assert.equal((yield* fs.readFileString(`${bin}/sleep-calls`)).trim().split("\n").length, 4);
       }).pipe(Effect.provide(NodeServices.layer)),
-    60_000,
   );
 
   describe.skipIf(windowsHost)("lock waits", () => {
     it.effect.each([
       "a dead owner's lock it cannot empty",
       "a candidate it cannot publish",
-    ] as const)(
-      "waits out %s instead of spinning",
-      (blocker) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-lock-stuck-" });
-          const releaseBaseUrl = yield* makeMirror(root);
-          const home = `${root}/home`;
-          const lock = `${home}/.goat/runtime/goat/versions/.${archiveVersion}.install.lock`;
-          const bin = `${root}/bin`;
-          const runner = `${root}/runner.sh`;
-          yield* fs.makeDirectory(bin);
-          if (blocker === "a candidate it cannot publish") {
-            // No lock exists, but every publication fails.
-            yield* fs.makeDirectory(`${home}/.goat/runtime/goat/versions`, { recursive: true });
-            yield* fs.writeFileString(`${bin}/mv`, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-          } else {
-            // A find that cannot delete leaves the stale lock in place, whatever
-            // the test user's permissions.
-            yield* fs.makeDirectory(lock, { recursive: true });
-            yield* fs.writeFileString(`${lock}/pid`, "999999\n");
-            yield* fs.writeFileString(`${bin}/find`, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-          }
-          yield* fs.writeFileString(
-            `${bin}/sleep`,
-            '#!/bin/sh\necho x >> "$(dirname "$0")/sleep-calls"\n',
-            { mode: 0o700 },
-          );
-          const script = SshTunnel.buildRemoteGoatRunnerScript({ archiveVersion, releaseBaseUrl });
-          assert.include(script, 'if [ "$GOAT_LOCK_WAITED" -ge 360 ]; then');
-          yield* fs.writeFileString(runner, script.replace("-ge 360 ]", "-ge 3 ]"));
-          const result = yield* runRunner(home, runner, bin);
-          assert.equal(result.exitCode, 1);
-          assert.include(result.stderr, "has held");
-          // Each failed attempt still sleeps and counts toward the timeout.
-          assert.equal(
-            (yield* fs.readFileString(`${bin}/sleep-calls`)).trim().split("\n").length,
-            3,
-          );
-          if (blocker === "a candidate it cannot publish") assert.isFalse(yield* fs.exists(lock));
-          else assert.equal((yield* fs.readFileString(`${lock}/pid`)).trim(), "999999");
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      60_000,
+    ] as const)("waits out %s instead of spinning", (blocker) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-lock-stuck-" });
+        const releaseBaseUrl = yield* makeMirror(root);
+        const home = `${root}/home`;
+        const lock = `${home}/.goat/runtime/goat/versions/.${archiveVersion}.install.lock`;
+        const bin = `${root}/bin`;
+        const runner = `${root}/runner.sh`;
+        yield* fs.makeDirectory(bin);
+        if (blocker === "a candidate it cannot publish") {
+          // No lock exists, but every publication fails.
+          yield* fs.makeDirectory(`${home}/.goat/runtime/goat/versions`, { recursive: true });
+          yield* fs.writeFileString(`${bin}/mv`, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+        } else {
+          // A find that cannot delete leaves the stale lock in place, whatever
+          // the test user's permissions.
+          yield* fs.makeDirectory(lock, { recursive: true });
+          yield* fs.writeFileString(`${lock}/pid`, "999999\n");
+          yield* fs.writeFileString(`${bin}/find`, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+        }
+        yield* fs.writeFileString(
+          `${bin}/sleep`,
+          '#!/bin/sh\necho x >> "$(dirname "$0")/sleep-calls"\n',
+          { mode: 0o700 },
+        );
+        const script = SshTunnel.buildRemoteGoatRunnerScript({ archiveVersion, releaseBaseUrl });
+        assert.include(script, 'if [ "$GOAT_LOCK_WAITED" -ge 360 ]; then');
+        yield* fs.writeFileString(runner, script.replace("-ge 360 ]", "-ge 3 ]"));
+        const result = yield* runRunner(home, runner, bin);
+        assert.equal(result.exitCode, 1);
+        assert.include(result.stderr, "has held");
+        // Each failed attempt still sleeps and counts toward the timeout.
+        assert.equal((yield* fs.readFileString(`${bin}/sleep-calls`)).trim().split("\n").length, 3);
+        if (blocker === "a candidate it cannot publish") assert.isFalse(yield* fs.exists(lock));
+        else assert.equal((yield* fs.readFileString(`${lock}/pid`)).trim(), "999999");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
   });
 
@@ -2975,5 +2995,117 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote process
       );
       assert.equal(Number(yield* probe.exitCode), 0);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+});
+
+describe("validated preparation attachment completion", () => {
+  it.effect(
+    "renews pairing on a live attachment without another preparation or phase publication",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* makeEnsureFlightFixture;
+        f.state.holdUpload = false;
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const bootstrap = yield* manager.ensureEnvironment(uploadTarget);
+          if ("type" in bootstrap) return yield* Effect.die("Expected a ready attachment");
+          assert.isString(bootstrap.attachmentId);
+          const before = { ...f.count };
+          const phases: string[] = [];
+          const admissions: string[] = [];
+          const options = {
+            preparedAttachmentId: bootstrap.attachmentId!,
+            issuePairingToken: true,
+            onPhase: () => phases.push("phase"),
+            onPreparationProgress: () => phases.push("progress"),
+            onPreparationAdmission: ({ disposition }: { disposition: string }) =>
+              admissions.push(disposition),
+          };
+          const first = yield* manager.ensureEnvironment(uploadTarget, options);
+          const second = yield* manager.ensureEnvironment(uploadTarget, options);
+          if ("type" in first || "type" in second)
+            return yield* Effect.die("Expected fresh credentials");
+          assert.notEqual(first.pairingToken, second.pairingToken);
+          assert.equal(first.attachmentId, bootstrap.attachmentId);
+          assert.deepEqual(f.count, { ...before, pairings: 2 });
+          assert.deepEqual(phases, []);
+          assert.deepEqual(admissions, ["attachment-completion", "attachment-completion"]);
+        }).pipe(Effect.provide(f.layer), Effect.scoped);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect.each([
+    "exited",
+    "removed",
+    "generation",
+    "rotated",
+    "uncertain-drain",
+    "invalid-pin",
+  ] as const)(
+    "rejects a %s attachment neutrally and never uploads/pairs through the hint",
+    (change) =>
+      Effect.gen(function* () {
+        const f = yield* makeEnsureFlightFixture;
+        f.state.holdUpload = false;
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const bootstrap = yield* manager.ensureEnvironment(uploadTarget);
+          if ("type" in bootstrap) return yield* Effect.die("Expected a ready attachment");
+          switch (change) {
+            case "exited":
+              f.state.forwardAlive = false;
+              break;
+            case "removed":
+              yield* manager.disconnectEnvironment(uploadTarget);
+              break;
+            case "generation":
+              yield* manager.beginSetupOperation(uploadTarget, "successor");
+              break;
+            case "rotated":
+              yield* manager.ensureEnvironment(uploadTarget, { refreshRuntime: true });
+              break;
+            case "uncertain-drain":
+              f.state.launchFails = true;
+              assert.isTrue(
+                Result.isFailure(
+                  yield* Effect.result(
+                    manager.ensureEnvironment(uploadTarget, { refreshRuntime: true }),
+                  ),
+                ),
+              );
+              f.state.launchFails = false;
+              break;
+            case "invalid-pin": {
+              const fs = yield* FileSystem.FileSystem;
+              const directory = `${f.root}/.ssh/goat-hosts`;
+              yield* fs.makeDirectory(directory, { recursive: true });
+              yield* fs.writeFileString(`${directory}/devbox.conf`, "Host devbox\n");
+              yield* fs.writeFileString(`${directory}/devbox.known_hosts`, "invalid pin\n");
+              break;
+            }
+          }
+          const before = { ...f.count };
+          const result = yield* Effect.result(
+            manager.ensureEnvironment(uploadTarget, {
+              preparedAttachmentId: bootstrap.attachmentId!,
+              issuePairingToken: true,
+            }),
+          );
+          assert.isTrue(Result.isFailure(result));
+          if (Result.isFailure(result))
+            assert.equal(result.failure._tag, "SshEnsureSupersededError");
+          assert.equal(f.count.acquisitions, before.acquisitions);
+          assert.equal(f.count.uploads, before.uploads);
+          assert.equal(f.count.launches, before.launches);
+          assert.equal(f.count.pairings, 0);
+          if (change === "exited" || change === "removed") {
+            const renewed = yield* manager.ensureEnvironment(uploadTarget);
+            assert.notProperty(renewed, "type");
+            assert.equal(f.count.forwards, 2);
+            assert.equal(f.count.uploads, 1);
+            assert.equal(f.count.kills, 1);
+          }
+        }).pipe(Effect.provide(f.layer), Effect.scoped);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

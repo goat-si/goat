@@ -11,8 +11,9 @@ GOAT Bot screen shows only a chip for the work and its final report.
    connection itself, so the app needs no public URL.
 2. Give it an app-level token with `connections:write`, and a bot token with
    `chat:write`, `app_mentions:read`, and `im:history`. Subscribe the bot to
-   the `app_mention` and `message.im` events, then install the app to your
-   workspace.
+   the `app_mention` and `message.im` events. Turn on **Interactivity** —
+   Socket Mode delivers button presses, so the app needs no Request URL — then
+   install the app to your workspace.
 3. In GOAT, open **Settings → GOAT Bot → Slack** for the machine that
    should do the work. Paste both tokens, list the channel IDs where mentions
    may start work, and turn on **Use Slack**. Tokens stay on that machine and
@@ -39,7 +40,19 @@ GOAT Bot screen shows only a chip for the work and its final report.
   it is on it and looks into it itself, then answers in the same conversation.
   Messages you send while it works are added to what it is doing. It uses the
   model chosen under **Settings → GOAT Bot** (by default, the default model for
-  new threads), and asks before running commands its provider treats as risky.
+  new threads). It runs with full access, never more than the person who asked
+  may use, so it can read files, logs, and status anywhere on the machine
+  without asking. It is told to change nothing itself and to start a coding
+  task or ask you when something needs changing. That rule is part of its
+  instructions; GOAT does not block changes, so link people at a lower access
+  level if they should not be able to make the bot change things.
+- GOAT Bot and work started from Slack never see or control this computer's
+  screen on their own, even when [computer use](./computer-use.md) is on. When
+  a task needs it, GOAT asks for approval in that task's thread, for a set time.
+  Someone allowed to change GOAT's settings approves it in the GOAT app on
+  desktop, web, or mobile; replying in Slack does not approve it. Approval
+  admits that thread until the time shown, not each action, and you can end it
+  early from the request.
 - Ask GOAT Bot about earlier work ("did the login PR merge?", "what did the
   docs thread do?", "when did I mention the lighthouse score?") and it looks
   it up itself and answers, without starting a coding agent. It reads the work
@@ -52,19 +65,35 @@ GOAT Bot screen shows only a chip for the work and its final report.
 - Ask GOAT Bot "what's pending?" to see everything still open: queued,
   running, waiting on you, or finished but not yet reported to you. Say "stop
   everything" (or name one piece of work) to stop it, including anything it
-  handed to subagents. Work running on another machine stops its current turn
-  there; subagents it started there finish on their own.
+  handed to subagents, on this machine or another one. A machine still on an
+  older GOAT stops only the current turn; subagents it started there finish on
+  their own.
+- When more than one machine is connected, GOAT Bot spreads research across
+  the ones with room to spare and tells you which machine ran what. It never
+  starts a Boat cloud machine unless you ask.
 - GOAT Bot runs up to four pieces of your work at once. More wait in order and
   start as earlier ones finish; the reply says when something is queued.
+- **Settings → GOAT Bot → Automatically choose a worker computer** lets work
+  use an already-connected SSH computer with the same repository and requested
+  model. It is off by default. Turning it on allows the worker's instructions,
+  notes and named skills to go to the selected computer. GOAT prefers ready
+  accounts with more quota left and less channel work, and shows why it chose
+  one. Naming a computer keeps work there. Unknown or unavailable repositories
+  are skipped; GOAT does not prepare computers or sign in for this choice.
+  Retrying automatically placed work chooses again; a running worker never
+  moves automatically.
 - Work counts as waiting on you when the agent working on it, or a subagent it
-  started in GOAT, needs your approval or an answer. Subagents that run on
-  another service are not counted yet.
-- When work on this machine needs an approval, GOAT Bot sends a card saying
-  what the agent wants to do. Tap Approve or Deny in GOAT, or reply "approve"
-  or "deny" in Slack or iMessage. If several approvals are waiting, add the
-  card's code, such as "approve A2". Only people with the same
-  access as whoever asked for the work can answer. Approvals for work on other
-  machines are still answered in that thread in GOAT.
+  started in GOAT, needs your approval or an answer. That includes a subagent
+  running in GOAT on another machine. Subagents that run on another service
+  are not counted.
+- When work needs an approval, GOAT Bot sends a card saying what the agent
+  wants to do. Tap Approve or Deny in GOAT. In Slack, tap the button or reply
+  with its number (`2` is the second choice), or reply "approve" or "deny".
+  The same number works in iMessage, which has no buttons. If several
+  approvals are waiting, add the card's code, such as "approve A2". Only
+  people with the same access as whoever asked for the work can answer. An
+  approval on another GOAT machine is sent there; if that machine can't take
+  it, answer it in that thread.
 - Ask GOAT Bot to remember a standing rule ("always reply in Korean") and it
   follows it from then on, in Slack and in GOAT. It keeps a note only when the
   message you send asks for it, and each note names the message it came from.
@@ -104,8 +133,9 @@ GOAT Bot screen shows only a chip for the work and its final report.
 ## iMessage (Mac)
 
 GOAT can read direct text messages from allowed iMessage handles on the Mac running its server
-and reply in the same conversation. Group chats and attachments are not supported. Give the app
-that launches the server **Full Disk Access** to read Messages. macOS asks separately for
+and reply in the same conversation. Group chats and attachments are not supported. An approval
+or question lists choices as `1.`, `2.`, and so on; reply with that number to choose it. Give the
+app that launches the server **Full Disk Access** to read Messages. macOS asks separately for
 **Automation** access when GOAT sends through Messages; Messages must be signed in.
 
 Run `goat imessage enable --allow +15551234567` on that Mac, then

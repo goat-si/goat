@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act } from "react";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
@@ -22,7 +21,6 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
 vi.mock("./useMobileGoatBotSession", () => ({ useMobileGoatBotSession: () => ({}) }));
-vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => null }));
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({

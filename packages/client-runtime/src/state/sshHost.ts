@@ -70,6 +70,12 @@ export function sshHostProgressText(progress: SshHandoffProgressResult) {
     return result.code === "host_unreachable"
       ? `Can't reach ${progress.host}. Check that it's running and reachable, then try again.`
       : result.message;
+  if (
+    result.kind === "ok" &&
+    result.status.setup === undefined &&
+    !["failed", "untrusted", "trust_pending"].includes(result.status.state)
+  )
+    return "Host key pinned. The agent can continue.";
   if (result.status.state === "ready" && result.status.setup?.stage === "diagnosis")
     return "Runtime ready · Checking providers";
   return sshRuntimeStatusText(result.status);

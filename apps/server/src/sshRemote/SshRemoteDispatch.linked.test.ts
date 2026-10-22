@@ -1,3 +1,5 @@
+import * as ServerSettings from "../serverSettings.ts";
+import * as Stream from "effect/Stream";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { RuntimeMode } from "@goat/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
@@ -90,10 +92,12 @@ const withLinkedHost = <A, E>(
       forgetEnvironment: noSsh,
       disconnectEnvironment: noSsh,
       revalidateTunnels: () => Effect.void,
+      issueClientSession: () => Effect.die("unused"),
       issueMcpClientSession: noSsh,
       runRemoteScript: noSsh,
     });
     const links = LinkedHosts.LinkedHosts.of({
+      changes: Stream.empty,
       list: Effect.succeed([LINK.host]),
       find: (name) => Effect.succeed(name === "box" ? Option.some(LINK) : Option.none()),
       names: Effect.succeed(["box"]),
@@ -112,6 +116,7 @@ const withLinkedHost = <A, E>(
         Effect.result,
         Effect.provide(
           SshRemoteDispatch.layer.pipe(
+            Layer.provide(ServerSettings.layerTest()),
             Layer.provide(Layer.succeed(LinkedHosts.LinkedHosts, links)),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-linked-dispatch-" })),
             Layer.provide(FetchHttpClient.layer),

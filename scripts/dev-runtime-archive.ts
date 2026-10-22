@@ -28,6 +28,36 @@ import serverPackageJson from "../apps/server/package.json" with { type: "json" 
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 const repoRoot = NodeURL.fileURLToPath(new URL("..", import.meta.url));
+const absoluteNodePath = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+
+/**
+ * `vp exec node` follows PATH and can ignore VP_NODE_VERSION.
+ * `vp env which node` is the Node vp selected; its directory is pinned so later
+ * `vp exec` / `vp run` children use it. The probe runs that binary. When which
+ * is empty, `vp env exec` is the form that honors VP_NODE_VERSION.
+ */
+export async function pinSelectedNodeOnPath(
+  env: NodeJS.ProcessEnv,
+  run: (
+    command: string,
+    args: ReadonlyArray<string>,
+    env: NodeJS.ProcessEnv,
+  ) => Promise<{ stdout: string }>,
+): Promise<{ readonly command: string; readonly args: ReadonlyArray<string> }> {
+  let located = "";
+  try {
+    const which = await run("vp", ["env", "which", "node"], env);
+    located = which.stdout.trim().split(/\r?\n/).pop()?.trim() ?? "";
+  } catch {
+    located = "";
+  }
+  if (absoluteNodePath(located)) {
+    env.PATH = `${NodePath.dirname(located)}${NodePath.delimiter}${env.PATH ?? ""}`;
+    return { command: located, args: ["-p", "process.version"] };
+  }
+  return { command: "vp", args: ["env", "exec", "node", "-p", "process.version"] };
+}
+
 export const supportsSea = (version: string) => {
   const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
   return (
@@ -192,7 +222,8 @@ export async function buildDevRuntimeArchive(input: {
       timeout,
     });
   };
-  const probe = await run(vp, ["exec", "node", "-p", "process.version"]);
+  const pinned = await pinSelectedNodeOnPath(env, (command, args) => run(command, [...args]));
+  const probe = await run(pinned.command, [...pinned.args]);
   if (!supportsSea(probe.stdout) || probe.stdout.trim().replace(/^v/, "") !== env.VP_NODE_VERSION)
     throw new Error(`vp selected unsuitable SEA Node: ${probe.stdout.trim()}`);
   const home = await Effect.runPromise(

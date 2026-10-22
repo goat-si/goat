@@ -1,4 +1,9 @@
-import { EnvironmentId } from "@goat/contracts";
+import {
+  type DesktopSshPreparationProgress,
+  type SshHostStatus,
+  EnvironmentId,
+} from "@goat/contracts";
+import { RelayEnvironmentEndpointFailure } from "@goat/contracts/relay";
 import * as Schema from "effect/Schema";
 
 const ConnectionTargetBase = {
@@ -38,11 +43,20 @@ export class SshConnectionTarget extends Schema.TaggedClass<SshConnectionTarget>
   },
 ) {}
 
+export class HubProxyConnectionTarget extends Schema.TaggedClass<HubProxyConnectionTarget>()(
+  "HubProxyConnectionTarget",
+  { ...ConnectionTargetBase, connectionId: Schema.String },
+) {}
+
+export const hubProxyConnectionId = (hubEnvironmentId: string, nodeId: string): string =>
+  `hub:${hubEnvironmentId}:${encodeURIComponent(nodeId)}`;
+
 export const ConnectionTarget = Schema.Union([
   PrimaryConnectionTarget,
   BearerConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
+  HubProxyConnectionTarget,
 ]);
 export type ConnectionTarget = typeof ConnectionTarget.Type;
 
@@ -50,6 +64,7 @@ export const PersistedConnectionTarget = Schema.Union([
   BearerConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
+  HubProxyConnectionTarget,
 ]);
 export type PersistedConnectionTarget = typeof PersistedConnectionTarget.Type;
 
@@ -79,12 +94,41 @@ export const ConnectionBlockedReason = Schema.Literals([
 ]);
 export type ConnectionBlockedReason = typeof ConnectionBlockedReason.Type;
 
+/** A part of the path to an environment: this device, T3 Connect, the host's tunnel, or T3 Code on the host. */
+export const ConnectionHop = Schema.Literals(["device", "relay", "tunnel", "server"]);
+export type ConnectionHop = typeof ConnectionHop.Type;
+
+/** The relay's endpoint failures plus the causes the client can name from other errors. */
+export const ConnectionFailureCause = Schema.Literals([
+  ...RelayEnvironmentEndpointFailure.literals,
+  "clock_skew",
+  "not_linked",
+  "relay_error",
+  "tunnel_pending",
+  "tunnel_not_enabled",
+]);
+export type ConnectionFailureCause = typeof ConnectionFailureCause.Type;
+
+/**
+ * Where and why a failure happened, when the code that saw it knows. See
+ * `presentConnectionDiagnosis`. `via` names the route when the hop alone does
+ * not: T3 Code on the host can fail behind the tunnel or on a direct route.
+ */
+const ConnectionFailureFields = {
+  hop: Schema.optionalKey(ConnectionHop),
+  via: Schema.optionalKey(Schema.Literals(["relay", "direct"])),
+  failureCause: Schema.optionalKey(ConnectionFailureCause),
+  httpStatus: Schema.optionalKey(Schema.Number),
+};
+
 export class ConnectionTransientError extends Schema.TaggedError<ConnectionTransientError>()(
   "ConnectionTransientError",
   {
     reason: ConnectionTransientReason,
     detail: Schema.String,
     traceId: Schema.optionalKey(Schema.String),
+    sshPreparationTimedOut: Schema.optionalKey(Schema.Boolean),
+    ...ConnectionFailureFields,
   },
 ) {
   override get message(): string {
@@ -98,6 +142,7 @@ export class ConnectionBlockedError extends Schema.TaggedError<ConnectionBlocked
     reason: ConnectionBlockedReason,
     detail: Schema.String,
     traceId: Schema.optionalKey(Schema.String),
+    ...ConnectionFailureFields,
 
     serverUpdateRequired: Schema.optionalKey(Schema.Boolean),
     localProxyUnavailable: Schema.optionalKey(Schema.Boolean),
@@ -108,7 +153,44 @@ export class ConnectionBlockedError extends Schema.TaggedError<ConnectionBlocked
   }
 }
 
-export type ConnectionAttemptError = ConnectionTransientError | ConnectionBlockedError;
+export class ConnectionAttemptSuperseded extends Schema.TaggedError<ConnectionAttemptSuperseded>()(
+  "ConnectionAttemptSuperseded",
+  {
+    reason: Schema.Literal("superseded"),
+    detail: Schema.String,
+    traceId: Schema.optionalKey(Schema.String),
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+export type ConnectionFailure = ConnectionTransientError | ConnectionBlockedError;
+export type ConnectionAttemptError = ConnectionFailure | ConnectionAttemptSuperseded;
+
+export interface ConnectionAttemptIdentity {
+  readonly supervisorId: string;
+  readonly attemptId: number;
+  readonly routeId: string;
+}
+
+export interface ConnectionFailureOrigin extends ConnectionAttemptIdentity {
+  readonly stage: ConnectionAttemptStage;
+  readonly setupTimeout: boolean;
+}
+
+export interface ConnectionSshPreparation extends ConnectionAttemptIdentity {
+  readonly operationId: string;
+  readonly phase: Exclude<DesktopSshPreparationProgress["phase"], null>;
+  readonly hostAnswered: boolean;
+}
+
+export interface ConnectionSshRuntimeReady extends ConnectionAttemptIdentity {
+  readonly operationId: string;
+  readonly attachmentId: string;
+  readonly runtimeStatus: SshHostStatus;
+}
 
 export const DPOP_ACCESS_TOKEN_REFRESH_SKEW_MS = 60_000;
 
@@ -149,7 +231,10 @@ export interface SupervisorConnectionState {
   readonly stage: ConnectionAttemptStage | null;
   readonly attempt: number;
   readonly generation: number;
-  readonly lastFailure: ConnectionAttemptError | null;
+  readonly lastFailure: ConnectionFailure | null;
+  readonly failureOrigin?: ConnectionFailureOrigin;
+  readonly sshPreparation?: ConnectionSshPreparation;
+  readonly sshRuntimeReady?: ConnectionSshRuntimeReady;
   readonly retryAt: number | null;
 }
 

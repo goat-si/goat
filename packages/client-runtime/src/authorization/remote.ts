@@ -8,19 +8,18 @@ import {
   type AuthEnvironmentScope,
 } from "@goat/contracts";
 import { encodeOAuthScope } from "@goat/shared/oauthScope";
+import { hashTelemetryId } from "@goat/shared/telemetryId";
 import * as Effect from "effect/Effect";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
+import { environmentEndpointUrl, environmentRoutePrefix } from "../environment/endpoint.ts";
+import * as Option from "effect/Option";
+import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
   executeEnvironmentHttpRequest,
   makeEnvironmentHttpApiGroupClient,
   type RemoteEnvironmentRequestError,
 } from "../rpc/http.ts";
 
-export {
-  RemoteEnvironmentAuthInvalidJsonError,
-  RemoteEnvironmentAuthTimeoutError,
-  RemoteEnvironmentAuthUndeclaredStatusError,
-} from "../rpc/http.ts";
+export { RemoteEnvironmentAuthUndeclaredStatusError } from "../rpc/http.ts";
 export type RemoteEnvironmentAuthError = RemoteEnvironmentRequestError;
 
 const DEFAULT_REMOTE_REQUEST_TIMEOUT_MS = 10_000;
@@ -38,10 +37,31 @@ const clientMetadataTokenExchangeFields = (
   };
 };
 
+/** Hashes of who is connecting. Only hashes leave the client. */
+export interface ClientOwnerParams {
+  readonly connect?: string;
+  readonly device?: string;
+}
+
+/**
+ * Tells the environment, for analytics, which T3 Connect account and device
+ * are connecting, so it can count the environment as theirs.
+ */
+export const readClientOwnerParams = Effect.gen(function* () {
+  const session = yield* Effect.serviceOption(ClientCapabilities.CloudSession);
+  const account = Option.isSome(session) ? yield* session.value.identity : Option.none();
+  const device = yield* (yield* ClientCapabilities.AnalyticsDevice).id;
+  return {
+    ...(Option.isSome(account) ? { connect: hashTelemetryId(account.value.accountId) } : {}),
+    ...(Option.isSome(device) ? { device: hashTelemetryId(device.value) } : {}),
+  } satisfies ClientOwnerParams;
+});
+
 export const appendClientConnectionParams = (
   url: URL,
   clientMetadata: AuthClientPresentationMetadata | undefined,
   connectionMethod?: ClientConnectionMethod,
+  owners?: ClientOwnerParams,
 ): void => {
   if (clientMetadata?.surface) {
     url.searchParams.set("clientSurface", clientMetadata.surface);
@@ -79,6 +99,12 @@ export const appendClientConnectionParams = (
   }
   if (connectionMethod) {
     url.searchParams.set("connectionMethod", connectionMethod);
+  }
+  if (owners?.connect) {
+    url.searchParams.set("clientOwner", owners.connect);
+  }
+  if (owners?.device) {
+    url.searchParams.set("clientDevice", owners.device);
   }
 };
 
@@ -224,11 +250,18 @@ export const resolveRemoteWebSocketConnectionUrl = Effect.fn(
   });
 
   const url = new URL(input.wsBaseUrl);
-  if (url.pathname === "" || url.pathname === "/") {
-    url.pathname = "/ws";
+  const routePrefix = environmentRoutePrefix(new URL(input.httpBaseUrl));
+  const socketPath = url.pathname.replace(/\/+$/, "");
+  if (socketPath === "" || (routePrefix !== "" && socketPath === routePrefix)) {
+    url.pathname = `${socketPath}/ws`;
   }
   url.searchParams.set("wsTicket", issued.ticket);
-  appendClientConnectionParams(url, input.clientMetadata, input.connectionMethod);
+  appendClientConnectionParams(
+    url,
+    input.clientMetadata,
+    input.connectionMethod,
+    yield* readClientOwnerParams,
+  );
   return url.toString();
 });
 
@@ -250,10 +283,17 @@ export const resolveRemoteDpopWebSocketConnectionUrl = Effect.fn(
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
   });
   const url = new URL(input.wsBaseUrl);
-  if (url.pathname === "" || url.pathname === "/") {
-    url.pathname = "/ws";
+  const routePrefix = environmentRoutePrefix(new URL(input.httpBaseUrl));
+  const socketPath = url.pathname.replace(/\/+$/, "");
+  if (socketPath === "" || (routePrefix !== "" && socketPath === routePrefix)) {
+    url.pathname = `${socketPath}/ws`;
   }
   url.searchParams.set("wsTicket", issued.ticket);
-  appendClientConnectionParams(url, input.clientMetadata, input.connectionMethod);
+  appendClientConnectionParams(
+    url,
+    input.clientMetadata,
+    input.connectionMethod,
+    yield* readClientOwnerParams,
+  );
   return url.toString();
 });

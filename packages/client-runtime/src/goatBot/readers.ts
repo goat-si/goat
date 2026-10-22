@@ -4,6 +4,7 @@ import type {
   ChannelTaskChip,
   ChannelTaskStatus,
 } from "@goat/contracts";
+import { channelEvidenceLabels } from "@goat/shared/channelEvidence";
 
 import type {
   GoatBotBotTone,
@@ -95,6 +96,10 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
   const summary = chip.summary?.trim() ?? "";
   const host = chip.worker?.host;
   const placement = chip.placementReason?.trim() ?? "";
+  const placementLabel =
+    host !== undefined && placement.startsWith(host + " · ")
+      ? placement.slice(host.length + 3)
+      : placement;
   const requester = prefix === null ? chip.requesterLabel : `${prefix} · ${chip.requesterLabel}`;
   return {
     key: chip.taskId,
@@ -106,12 +111,13 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     sourceLabel: [
       requester,
       ...(host === undefined ? [] : [`on ${host}`]),
-      ...(placement === "" ? [] : [placement]),
+      ...(placementLabel === "" ? [] : [placementLabel]),
     ].join(" · "),
     continuationLabel:
       chip.movedFrom === undefined ? null : `Continued from ${chip.movedFrom.host}`,
     summary: summary.length > 0 ? summary : null,
     attentionLabel: attentionLabel(chip),
+    evidenceLabels: channelEvidenceLabels(chip.observed?.result),
     pullRequests: pullRequestLinks(chip),
     target:
       chip.worker === undefined

@@ -6,7 +6,7 @@ import type {
   WorktreeSubmodules,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { isTemporaryWorktreeBranch, sanitizeNewRefName } from "@goat/shared/git";
+import { sanitizeNewRefName } from "@goat/shared/git";
 export {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
@@ -20,6 +20,10 @@ export interface EnvironmentOption {
   isPrimary: boolean;
   machine: EnvironmentMachineKind;
 }
+
+/** "Add to another machine" stays muted until hovered: easy to find, quieter than the machines. */
+export const ADD_TO_MACHINE_LABEL_CLASS =
+  "flex min-w-0 items-center gap-1.5 opacity-55 in-data-highlighted:opacity-100 in-data-popup-open:opacity-100";
 
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
@@ -182,11 +186,10 @@ export function resolveBranchTriggerLabel(input: {
     return "Select ref";
   }
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
-    const baseRef =
-      startFromOrigin && resolvedActiveBranchIsRemote === false
-        ? `origin/${resolvedActiveBranch}`
-        : resolvedActiveBranch;
-    return `From ${baseRef}`;
+    // Only the server can determine a local branch's configured remote.
+    return startFromOrigin && resolvedActiveBranchIsRemote === false
+      ? `From ${resolvedActiveBranch} (remote)`
+      : `From ${resolvedActiveBranch}`;
   }
   return resolvedActiveBranch;
 }
@@ -198,35 +201,20 @@ export function resolveBranchToolbarPrBranch(input: {
   return input.activeThreadBranch === input.resolvedActiveBranch ? input.activeThreadBranch : null;
 }
 
-export function resolveCheckoutBranchMismatch(input: {
+export function resolveLocalCheckoutBranchMismatch(input: {
   effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
   activeThreadBranch: string | null;
   currentGitBranch: string | null;
-}) {
+}): { threadBranch: string; currentBranch: string } | null {
   const { effectiveEnvMode, activeWorktreePath, activeThreadBranch, currentGitBranch } = input;
-  const isLocalCheckout = effectiveEnvMode === "local" && activeWorktreePath === null;
-  const isEstablishedWorktree = effectiveEnvMode === "worktree" && activeWorktreePath !== null;
-  if (!isLocalCheckout && !isEstablishedWorktree) {
+  if (effectiveEnvMode !== "local" || activeWorktreePath !== null) {
     return null;
   }
   if (!activeThreadBranch || !currentGitBranch || activeThreadBranch === currentGitBranch) {
     return null;
   }
-  // Cached status can predate the automatic rename of a temporary worktree branch.
-  if (
-    isEstablishedWorktree &&
-    !isTemporaryWorktreeBranch(activeThreadBranch) &&
-    isTemporaryWorktreeBranch(currentGitBranch)
-  ) {
-    return null;
-  }
-  return {
-    threadBranch: activeThreadBranch,
-    currentBranch: currentGitBranch,
-    // Restoring a worktree checkout could switch the branch for sibling threads.
-    canRestoreThreadBranch: isLocalCheckout,
-  };
+  return { threadBranch: activeThreadBranch, currentBranch: currentGitBranch };
 }
 
 export function resolveBranchSelectionTarget(input: {

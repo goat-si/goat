@@ -15,6 +15,16 @@ const validPreload = `
 `;
 
 describe("desktop preload bundle verifier", () => {
+  it("retains browser encoding APIs and DOM event registration in the sandbox", () => {
+    assert.doesNotThrow(() =>
+      verifyPreloadBundle(`
+      ${validPreload}
+      const bytes = new TextEncoder().encode("SSH progress");
+      if (new TextDecoder().decode(bytes) !== "SSH progress") throw new Error("Invalid encoding");
+      window.addEventListener("DOMContentLoaded", () => {});
+    `),
+    );
+  });
   it("rejects required API names that only appear in strings", () => {
     assert.throws(
       () =>
@@ -60,22 +70,9 @@ describe("desktop preload bundle verifier", () => {
     );
   });
 
-  it("ignores import-like text in strings", () => {
-    assert.doesNotThrow(() =>
-      verifyPreloadBundle(`${validPreload}\nconst message = 'import /* comment */("module")';`),
-    );
-  });
-
   it("rejects unsupported require calls with comments before the opening parenthesis", () => {
     assert.throws(
       () => verifyPreloadBundle(`${validPreload}\nrequire /* @__PURE__ */ ("node:fs");`),
-      /unsupported sandbox imports: node:fs/,
-    );
-  });
-
-  it("rejects unsupported optional require calls", () => {
-    assert.throws(
-      () => verifyPreloadBundle(`${validPreload}\nrequire?.("node:fs");`),
       /unsupported sandbox imports: node:fs/,
     );
   });

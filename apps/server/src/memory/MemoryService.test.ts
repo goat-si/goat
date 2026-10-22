@@ -19,16 +19,17 @@ import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import migration from "../persistence/Migrations/073_Memory.ts";
-import hubMigration from "../persistence/Migrations/074_MemoryHubSync.ts";
-import lineageMigration from "../persistence/Migrations/077_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/078_MemoryCheckpointAccounting.ts";
-import reportMigration from "../persistence/Migrations/079_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/080_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/081_MemoryRevertResults.ts";
+import migration from "../persistence/Migrations/076_Memory.ts";
+import hubMigration from "../persistence/Migrations/077_MemoryHubSync.ts";
+import lineageMigration from "../persistence/Migrations/080_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
 import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
-import searchMigration from "../persistence/Migrations/075_MemorySearchCounters.ts";
+import searchMigration from "../persistence/Migrations/078_MemorySearchCounters.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import * as Service from "./MemoryService.ts";
@@ -42,6 +43,7 @@ const database = Layer.effectDiscard(
     Effect.andThen(hubMigration),
     Effect.andThen(lineageMigration),
     Effect.andThen(checkpointMigration),
+    Effect.andThen(revisionSizeMigration),
     Effect.andThen(reportMigration),
     Effect.andThen(usageMigration),
     Effect.andThen(revertMigration),
@@ -3480,97 +3482,94 @@ it.effect.each([{ hubSequence: null }, { hubSequence: 1 }])(
       );
     }).pipe(checkUsage, Effect.provide(live)),
 );
-it.effect(
-  "r2 M1 foreign operation backlog leaves local report capacity available",
-  () =>
-    Effect.gen(function* () {
-      const service = yield* Service.MemoryService;
-      const sql = yield* SqlClient.SqlClient;
-      const storage = yield* Store.MemoryStore;
-      const { op } = yield* stageReportRevert;
-      const foreign = M.EnvironmentId.make("foreign");
-      for (let n = 0; n <= M.MEMORY_REPORT_MAX_PENDING_ITEMS; n++) {
-        const operationId = M.MemoryOperationId.make(id(10000 + n));
-        const revisionId = M.MemoryRevisionId.make(id(20000 + n));
-        const foreignMemoryId = M.MemoryId.make(id(30000 + n));
-        // Independent approved histories may arrive before their ancestry. Do not turn
-        // the quota regression into a quadratic replay of one ever-growing aggregate.
-        const parents = [M.MemoryRevisionId.make(id(40000 + n))];
-        const operation: M.MemoryOperation = {
-          ...op,
+it.effect("r2 M1 foreign operation backlog leaves local report capacity available", () =>
+  Effect.gen(function* () {
+    const service = yield* Service.MemoryService;
+    const sql = yield* SqlClient.SqlClient;
+    const storage = yield* Store.MemoryStore;
+    const { op } = yield* stageReportRevert;
+    const foreign = M.EnvironmentId.make("foreign");
+    for (let n = 0; n <= M.MEMORY_REPORT_MAX_PENDING_ITEMS; n++) {
+      const operationId = M.MemoryOperationId.make(id(10000 + n));
+      const revisionId = M.MemoryRevisionId.make(id(20000 + n));
+      const foreignMemoryId = M.MemoryId.make(id(30000 + n));
+      // Independent approved histories may arrive before their ancestry. Do not turn
+      // the quota regression into a quadratic replay of one ever-growing aggregate.
+      const parents = [M.MemoryRevisionId.make(id(40000 + n))];
+      const operation: M.MemoryOperation = {
+        ...op,
+        memoryId: foreignMemoryId,
+        operationId,
+        originEnvironmentId: foreign,
+        expectedHeads: parents,
+        revision: {
+          ...op.revision,
           memoryId: foreignMemoryId,
+          parents,
           operationId,
-          originEnvironmentId: foreign,
-          expectedHeads: parents,
-          revision: {
-            ...op.revision,
-            memoryId: foreignMemoryId,
-            parents,
-            operationId,
-            revisionId,
-            payloadRef: revisionId,
-            provenance: { environmentId: foreign },
-          },
-        };
-        const receipt: M.MemoryHubReceipt = {
-          operationId,
-          memoryId: foreignMemoryId,
-          operationDigest: memoryOperationDigest(operation),
-          outcome: "accepted",
-          hubSequence: n + 1,
-        };
-        yield* storage.apply(
-          decideMemoryOperation(
-            yield* storage.loadAggregate(space, foreignMemoryId),
-            operation,
-            Store.approvedReplica,
-            undefined,
-            receipt,
-          ),
-        );
-        if (n === 0)
-          assert.deepStrictEqual(yield* sql`SELECT count(*) AS count FROM memory_report_outbox`, [
-            { count: 0 },
-          ]);
-      }
-      assert.deepStrictEqual(yield* sql`SELECT count(*) AS count FROM memory_report_outbox`, [
-        { count: 0 },
-      ]);
-      assert.strictEqual(
-        (yield* sql`SELECT 1 FROM memory_events WHERE json_extract(receipt_json,'$.hubSequence') IS NOT NULL`)
-          .length,
-        M.MEMORY_REPORT_MAX_PENDING_ITEMS + 1,
-      );
-      // Model the exact pre-fix foreign intent for one body-bearing approved event.
-      const legacyId = Store.resolutionReportId(
-        space,
-        M.MemoryOperationId.make(id(10000)),
-        op.revertsResolutionId,
-      );
-      yield* sql`INSERT INTO memory_report_outbox(report_id,space,memory_id,operation_id,resolution_id,resolving_environment_id,outcome,state,created_at) VALUES (${legacyId},${space},${id(30000)},${id(10000)},${op.revertsResolutionId},${foreign},'reverted','pending',0)`;
-      yield* storage.transact(storage.normalizeForeignReportIntentsTx(environmentId));
-      assert.deepStrictEqual(yield* sql`SELECT count(*) AS count FROM memory_report_outbox`, [
-        { count: 0 },
-      ]);
-      yield* service.applyReceived(op, {
-        operationId: op.operationId,
-        memoryId,
-        operationDigest: memoryOperationDigest(op),
+          revisionId,
+          payloadRef: revisionId,
+          provenance: { environmentId: foreign },
+        },
+      };
+      const receipt: M.MemoryHubReceipt = {
+        operationId,
+        memoryId: foreignMemoryId,
+        operationDigest: memoryOperationDigest(operation),
         outcome: "accepted",
-        hubSequence: 3000,
-      });
-      assert.strictEqual(yield* service.nextReportWakeAt(0), 0);
-      assert.strictEqual(
-        (yield* service.acquireReports({ owner: environmentId, now: 0, until: 1000, limit: 32 }))
-          .length,
-        1,
+        hubSequence: n + 1,
+      };
+      yield* storage.apply(
+        decideMemoryOperation(
+          yield* storage.loadAggregate(space, foreignMemoryId),
+          operation,
+          Store.approvedReplica,
+          undefined,
+          receipt,
+        ),
       );
-      assert.deepStrictEqual(
-        yield* sql`SELECT value FROM memory_quota_counters WHERE space=${space} AND dimension='report_items'`,
-        [{ value: 1 }],
-      );
-    }).pipe(checkUsage, Effect.provide(live)),
-  { timeout: 600000 },
+      if (n === 0)
+        assert.deepStrictEqual(yield* sql`SELECT count(*) AS count FROM memory_report_outbox`, [
+          { count: 0 },
+        ]);
+    }
+    assert.deepStrictEqual(yield* sql`SELECT count(*) AS count FROM memory_report_outbox`, [
+      { count: 0 },
+    ]);
+    assert.strictEqual(
+      (yield* sql`SELECT 1 FROM memory_events WHERE json_extract(receipt_json,'$.hubSequence') IS NOT NULL`)
+        .length,
+      M.MEMORY_REPORT_MAX_PENDING_ITEMS + 1,
+    );
+    // Model the exact pre-fix foreign intent for one body-bearing approved event.
+    const legacyId = Store.resolutionReportId(
+      space,
+      M.MemoryOperationId.make(id(10000)),
+      op.revertsResolutionId,
+    );
+    yield* sql`INSERT INTO memory_report_outbox(report_id,space,memory_id,operation_id,resolution_id,resolving_environment_id,outcome,state,created_at) VALUES (${legacyId},${space},${id(30000)},${id(10000)},${op.revertsResolutionId},${foreign},'reverted','pending',0)`;
+    yield* storage.transact(storage.normalizeForeignReportIntentsTx(environmentId));
+    assert.deepStrictEqual(yield* sql`SELECT count(*) AS count FROM memory_report_outbox`, [
+      { count: 0 },
+    ]);
+    yield* service.applyReceived(op, {
+      operationId: op.operationId,
+      memoryId,
+      operationDigest: memoryOperationDigest(op),
+      outcome: "accepted",
+      hubSequence: 3000,
+    });
+    assert.strictEqual(yield* service.nextReportWakeAt(0), 0);
+    assert.strictEqual(
+      (yield* service.acquireReports({ owner: environmentId, now: 0, until: 1000, limit: 32 }))
+        .length,
+      1,
+    );
+    assert.deepStrictEqual(
+      yield* sql`SELECT value FROM memory_quota_counters WHERE space=${space} AND dimension='report_items'`,
+      [{ value: 1 }],
+    );
+  }).pipe(checkUsage, Effect.provide(live)),
 );
 
 it.effect.each(["disabled", "other-space", "writer-wait"] as const)(

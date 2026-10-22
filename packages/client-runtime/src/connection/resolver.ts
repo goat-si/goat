@@ -1,6 +1,15 @@
+import {
+  AuthWebSocketTicketResult,
+  ExecutionEnvironmentDescriptor as DescriptorSchema,
+} from "@goat/contracts";
+import { HubProxyAuthSource } from "./hubProxyAuthSource.ts";
+import { hubProxyHttpBaseUrl, requestHubProxyJson } from "./hubProxyHttp.ts";
+import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import type {
   AuthClientPresentationMetadata,
   ExecutionEnvironmentDescriptor,
+  DesktopSshPreparationProgress,
+  DesktopSshAttemptContext,
 } from "@goat/contracts";
 import { withRelayClientTracing } from "@goat/shared/relayTracing";
 import * as Context from "effect/Context";
@@ -10,7 +19,11 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 
-import { appendClientConnectionParams } from "../authorization/remote.ts";
+import {
+  appendClientConnectionParams,
+  type ClientOwnerParams,
+  readClientOwnerParams,
+} from "../authorization/remote.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
@@ -48,12 +61,18 @@ import { credentialConnectionId } from "./routes.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { withSshConnectionTiming } from "./sshTiming.ts";
 
+export interface SshPreparationOptions {
+  readonly attemptContext?: DesktopSshAttemptContext;
+  readonly onPreparationProgress?: (progress: DesktopSshPreparationProgress) => Effect.Effect<void>;
+}
+
 export class ConnectionResolver extends Context.Service<
   ConnectionResolver,
   {
     readonly prepare: (
       entry: ConnectionCatalogEntry,
       onHostAnswered?: Effect.Effect<void>,
+      options?: SshPreparationOptions,
     ) => Effect.Effect<PreparedConnection, ConnectionAttemptError>;
     /**
      * Authorizes a socket without the orchestration protocol gate, for hosts
@@ -69,6 +88,9 @@ export class ConnectionResolver extends Context.Service<
   }
 >()("@goat/client-runtime/connection/resolver/ConnectionResolver") {}
 
+const decodeHubDescriptor = Schema.decodeUnknownEffect(Schema.toCodecJson(DescriptorSchema));
+const decodeHubTicket = Schema.decodeUnknownEffect(Schema.toCodecJson(AuthWebSocketTicketResult));
+
 const isBearerProfile = Schema.is(BearerConnectionProfile);
 const isSshProfile = Schema.is(SshConnectionProfile);
 const sameBearerCredential = Schema.toEquivalence(BearerConnectionCredential);
@@ -77,12 +99,13 @@ const isBearerCredential = Schema.is(BearerConnectionCredential);
 function primarySocketUrl(
   target: PrimaryConnectionTarget,
   clientMetadata: AuthClientPresentationMetadata | undefined,
+  owners: ClientOwnerParams,
 ): string {
   const url = new URL(target.wsBaseUrl);
   if (url.pathname === "" || url.pathname === "/") {
     url.pathname = "/ws";
   }
-  appendClientConnectionParams(url, clientMetadata, "direct");
+  appendClientConnectionParams(url, clientMetadata, "direct", owners);
   return url.toString();
 }
 
@@ -100,7 +123,7 @@ const makePrimaryBroker = Effect.fn("clientRuntime.connection.broker.makePrimary
         environmentId: target.environmentId,
         label: target.label,
         httpBaseUrl: target.httpBaseUrl,
-        socketUrl: primarySocketUrl(target, presentation.metadata),
+        socketUrl: primarySocketUrl(target, presentation.metadata, yield* readClientOwnerParams),
         httpAuthorization: null,
         target,
       } satisfies PreparedConnection;
@@ -210,6 +233,7 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
   return Effect.fn("clientRuntime.connection.broker.ssh")(function* (
     entry: ConnectionCatalogEntry & { readonly target: SshConnectionTarget },
     onHostAnswered?: Effect.Effect<void>,
+    options?: SshPreparationOptions,
   ) {
     const target = entry.target;
     const profile = yield* Effect.fromOption(entry.profile, () =>
@@ -255,6 +279,10 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
       target: profile.target,
       ...(savedToken === undefined ? {} : { bearerToken: savedToken }),
       ...(onHostAnswered === undefined ? {} : { onHostAnswered }),
+      ...(options?.onPreparationProgress === undefined
+        ? {}
+        : { onPreparationProgress: options.onPreparationProgress }),
+      ...(options?.attemptContext === undefined ? {} : { attemptContext: options.attemptContext }),
       authorize,
     });
     const preparedCredential = new BearerConnectionCredential({
@@ -302,16 +330,75 @@ export const make = Effect.gen(function* () {
   const relay = yield* makeRelayBroker();
   const ssh = yield* makeSshBroker();
   const httpClient = yield* HttpClient.HttpClient;
+  const hubAuth = yield* Effect.serviceOption(HubProxyAuthSource);
+  const presentation = yield* ClientCapabilities.ClientPresentation;
+  const hubProxy = Effect.fn("ConnectionResolver.hubProxy")(function* (
+    entry: ConnectionCatalogEntry,
+  ) {
+    const profile = Option.getOrNull(entry.profile);
+    if (
+      profile?._tag !== "HubProxyConnectionProfile" ||
+      profile.environmentId !== entry.target.environmentId ||
+      entry.target._tag !== "HubProxyConnectionTarget" ||
+      profile.connectionId !== entry.target.connectionId
+    ) {
+      return yield* new ConnectionBlockedError({
+        reason: "configuration",
+        detail: "The hub proxy profile is unavailable or does not match the node.",
+      });
+    }
+    if (Option.isNone(hubAuth))
+      return yield* new ConnectionBlockedError({
+        reason: "configuration",
+        detail: "Hub proxy authorization is unavailable on this client.",
+      });
+    const auth = yield* hubAuth.value.resolve(profile);
+    const httpBaseUrl = hubProxyHttpBaseUrl(auth.httpBaseUrl, profile.nodeId);
+    const descriptor = yield* requestHubProxyJson(
+      auth,
+      environmentEndpointUrl(httpBaseUrl, "/.well-known/goat/environment"),
+      decodeHubDescriptor,
+    );
+    if (descriptor.environmentId !== entry.target.environmentId)
+      return yield* environmentMismatchError({
+        expected: entry.target.environmentId,
+        actual: descriptor.environmentId,
+      });
+    const ticket = yield* requestHubProxyJson(
+      auth,
+      environmentEndpointUrl(httpBaseUrl, "/api/auth/websocket-ticket"),
+      decodeHubTicket,
+      "POST",
+    );
+    const socket = new URL(environmentEndpointUrl(httpBaseUrl, "/ws"));
+    socket.protocol = socket.protocol === "https:" ? "wss:" : "ws:";
+    socket.searchParams.set("wsTicket", ticket.ticket);
+    appendClientConnectionParams(socket, presentation.metadata, "direct");
+    return {
+      descriptor,
+      prepared: {
+        environmentId: entry.target.environmentId,
+        label: entry.target.label,
+        target: entry.target,
+        httpBaseUrl,
+        socketUrl: socket.toString(),
+        httpAuthorization: auth.authorization,
+      } satisfies PreparedConnection,
+    };
+  });
 
   const authorize = Effect.fn("clientRuntime.connection.broker.authorize")(function* (
     entry: ConnectionCatalogEntry,
     onHostAnswered?: Effect.Effect<void>,
+    options?: SshPreparationOptions,
   ) {
     const target: ConnectionTarget = entry.target;
     yield* Effect.annotateCurrentSpan({
       "connection.environment.id": target.environmentId,
       "connection.target.kind": target._tag,
     });
+    if (target._tag === "HubProxyConnectionTarget")
+      return yield* hubProxy(entry).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
     const { prepared, verifiedEndpoint } = yield* (() => {
       switch (target._tag) {
         case "PrimaryConnectionTarget":
@@ -327,7 +414,7 @@ export const make = Effect.gen(function* () {
             Effect.map((prepared) => ({ prepared, verifiedEndpoint: undefined })),
           );
         case "SshConnectionTarget":
-          return ssh({ ...entry, target }, onHostAnswered);
+          return ssh({ ...entry, target }, onHostAnswered, options);
       }
     })();
     const descriptor =
@@ -351,8 +438,9 @@ export const make = Effect.gen(function* () {
   const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
     entry: ConnectionCatalogEntry,
     onHostAnswered?: Effect.Effect<void>,
+    options?: SshPreparationOptions,
   ) {
-    const { prepared, descriptor } = yield* authorize(entry, onHostAnswered);
+    const { prepared, descriptor } = yield* authorize(entry, onHostAnswered, options);
     const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
     if (compatibilityError !== null) {
       return yield* compatibilityError;

@@ -62,6 +62,10 @@ export function FleetConnectionGlyph(props: {
           <path d="M0 -3.4 A3.4 3.4 0 0 0 0 3.4 Z" className={FILL[tone]} />
         </>
       ) : null}
+      {glyph === "square" ? (
+        // A stop mark: solid, where the away ring is dashed and hollow.
+        <rect x={-3} y={-3} width={6} height={6} rx={1} className={FILL[tone]} />
+      ) : null}
       {glyph === "alert" ? (
         <>
           <path

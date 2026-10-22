@@ -225,8 +225,9 @@ it.effect(
           NodeServices.layer,
           delivery,
           Layer.mock(Scheduler.Scheduler)({
-            register: <E, R>(_name: string, work: Effect.Effect<void, E, R>) =>
+            register: <E, R>(name: string, work: Effect.Effect<void, E, R>) =>
               Effect.gen(function* () {
+                if (name !== "scheduled-tasks") return;
                 const context = yield* Effect.context<R>();
                 due = work.pipe(Effect.provideContext(context), Effect.orDie);
               }),

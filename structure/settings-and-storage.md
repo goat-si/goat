@@ -26,6 +26,8 @@ not explicit. The derived paths include:
 | `server-runtime.json`          | Runtime identity for an already-running server         |
 | `server-owner.lock`            | One server's ownership of this directory               |
 
+Notes are not under the state directory. `notesDir` is `<baseDir>/notes` beside `userdata`, so a person can find and edit the files, except for dev state, which keeps them in `<baseDir>/dev/notes`. That folder is its own git repository; [`notes.md`](notes.md) owns its rules.
+
 A server holds `server-owner.lock` (`apps/server/src/serverOwnerLock.ts`) from before its database
 opens until it exits, so one state directory has one server. The lock file also logs every owner,
 which the service launcher reads before it restores a database backup; see
@@ -63,11 +65,11 @@ base directory, which selects `userdata` rather than `dev`.
 `statev2.sqlite` is missing and a sibling `state.sqlite` exists, it copies the V1 file into the V2
 path once, using a read-only snapshot. If the V2 file already exists, the V1 file is left alone.
 
-Orchestration v2 tables, the channel ledger (`apps/server/src/persistence/Migrations/067_ChannelLedger.ts`),
-and remote dispatch (`apps/server/src/persistence/Migrations/066_RemoteDispatches.ts`,
-`apps/server/src/persistence/Migrations/065_RemoteReports.ts`,
-`apps/server/src/persistence/Migrations/068_RemoteDispatchQuestions.ts`,
-`apps/server/src/persistence/Migrations/070_RemoteReportRelay.ts`) are migrations on this database.
+Orchestration v2 tables, the channel ledger (`apps/server/src/persistence/Migrations/071_ChannelLedger.ts`),
+and remote dispatch (`apps/server/src/persistence/Migrations/070_RemoteDispatches.ts`,
+`apps/server/src/persistence/Migrations/069_RemoteReports.ts`,
+`apps/server/src/persistence/Migrations/072_RemoteDispatchQuestions.ts`,
+`apps/server/src/persistence/Migrations/074_RemoteReportRelay.ts`) are migrations on this database.
 Launch watches are the exception that is not a table: they are JSON at
 `<stateDir>/thread-launch-watches.json`. See [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md).
 

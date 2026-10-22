@@ -41,6 +41,14 @@ export class SshPairingError extends Data.TaggedError("SshPairingError")<{
   readonly cause?: unknown;
 }> {}
 
+export class SshEnsureSupersededError extends Data.TaggedError("SshEnsureSupersededError")<{
+  readonly message: string;
+}> {}
+
+export class SshPreparationTimeoutError extends Data.TaggedError("SshPreparationTimeoutError")<{
+  readonly message: string;
+}> {}
+
 export class SshHttpBridgeError extends Data.TaggedError("SshHttpBridgeError")<{
   readonly message: string;
   readonly status?: number;

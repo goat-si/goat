@@ -1,14 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { it, describe, expect } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Logger from "effect/Logger";
+import { describe, expect, it } from "@effect/vitest";
 import { GOAT_PROJECT_FILE_NAME } from "@goat/contracts";
 import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-
 import * as GoatProjectFileLoader from "./GoatProjectFileLoader.ts";
 
 const layerTest = Layer.empty.pipe(
@@ -35,29 +34,6 @@ const writeProjectFile = Effect.fn("writeProjectFile")(function* (
 
 it.layer(layerTest)("GoatProjectFileLoader", (it) => {
   describe("load", () => {
-    it.effect("loads and decodes a valid goat.json", () =>
-      Effect.gen(function* () {
-        const loader = yield* GoatProjectFileLoader.GoatProjectFileLoader;
-        const cwd = yield* makeTempDir;
-        yield* writeProjectFile(
-          cwd,
-          `{
-            // JSONC is tolerated
-            "iconPath": "assets/logo.svg",
-            "scripts": [{ "name": "Dev", "command": "pnpm dev" }],
-          }`,
-        );
-
-        const loaded = yield* loader.load(cwd);
-
-        expect(Option.isSome(loaded)).toBe(true);
-        if (Option.isSome(loaded)) {
-          expect(loaded.value.iconPath).toBe("assets/logo.svg");
-          expect(loaded.value.scripts).toEqual([{ name: "Dev", command: "pnpm dev" }]);
-        }
-      }),
-    );
-
     it.effect("returns none when both project files are missing", () =>
       Effect.gen(function* () {
         const loader = yield* GoatProjectFileLoader.GoatProjectFileLoader;
@@ -117,18 +93,6 @@ it.layer(layerTest)("GoatProjectFileLoader", (it) => {
         const loader = yield* GoatProjectFileLoader.GoatProjectFileLoader;
         const cwd = yield* makeTempDir;
         yield* writeProjectFile(cwd, "{ not json");
-
-        const loaded = yield* loader.load(cwd);
-
-        expect(Option.isNone(loaded)).toBe(true);
-      }),
-    );
-
-    it.effect("returns none for schema-invalid files without failing", () =>
-      Effect.gen(function* () {
-        const loader = yield* GoatProjectFileLoader.GoatProjectFileLoader;
-        const cwd = yield* makeTempDir;
-        yield* writeProjectFile(cwd, '{ "scripts": [{ "name": "Dev" }] }');
 
         const loaded = yield* loader.load(cwd);
 

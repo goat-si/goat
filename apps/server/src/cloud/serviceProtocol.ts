@@ -6,6 +6,7 @@ import type { ServerSelfUpdateOutcome } from "@goat/contracts";
 // ignore unknown fields, and new launchers still accept trials without a port.
 export const SERVICE_LAUNCHER_PROTOCOL = 3 as const;
 export const SERVICE_LAUNCHER_CONTEXT_ENV = "GOAT_SERVICE_LAUNCHER_CONTEXT";
+export const SERVICE_ENV_FILE = "service.env";
 export const SERVICE_STATE_FILE = "service-state.json";
 /** Written by the launcher just before an explicit stop kills its child, so
     the child can tell "the service is going away" from "the launcher is about

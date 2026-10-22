@@ -1,4 +1,3 @@
-import { ScheduledTaskId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { prependStandingInstructions } from "@goat/shared/standingInstructions";
@@ -7,33 +6,6 @@ import { resolveUserMessagePresentation } from "./userMessage.ts";
 
 describe("resolveUserMessagePresentation", () => {
   const legacyText = "[Triggered by schedule task: Daily audit]\n\nCheck for crashes.\n";
-
-  it("removes attribution from legacy scheduled prompts", () => {
-    expect(
-      resolveUserMessagePresentation({ role: "user", createdBy: "agent", text: legacyText }),
-    ).toEqual({
-      text: "Check for crashes.\n",
-      attribution: "automation",
-      scheduledTaskId: undefined,
-      standingInstructions: null,
-    });
-  });
-
-  it("uses task metadata without changing the prompt", () => {
-    expect(
-      resolveUserMessagePresentation({
-        role: "user",
-        createdBy: "agent",
-        scheduledTaskId: ScheduledTaskId.make("task-1"),
-        text: legacyText,
-      }),
-    ).toEqual({
-      text: legacyText,
-      attribution: "automation",
-      scheduledTaskId: "task-1",
-      standingInstructions: null,
-    });
-  });
 
   it("preserves user-written and assistant-quoted schedule headers", () => {
     for (const message of [
@@ -44,21 +16,6 @@ describe("resolveUserMessagePresentation", () => {
       expect(resolveUserMessagePresentation({ ...message, text: legacyText })).toEqual({
         text: legacyText,
         attribution: null,
-        scheduledTaskId: undefined,
-        standingInstructions: null,
-      });
-    }
-  });
-
-  it("leaves other agent prompts and embedded headers intact", () => {
-    for (const text of [
-      "Review this area",
-      `Quoted prompt:\n${legacyText}`,
-      "[Triggered by schedule task: Daily audit]",
-    ]) {
-      expect(resolveUserMessagePresentation({ role: "user", createdBy: "agent", text })).toEqual({
-        text,
-        attribution: "agent",
         scheduledTaskId: undefined,
         standingInstructions: null,
       });

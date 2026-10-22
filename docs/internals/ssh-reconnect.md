@@ -64,7 +64,10 @@ classifier's tests use the real strings. Both runtime status and reconnect
 supervision use the browser-safe [shared failure rules](../../packages/shared/src/sshFailure.ts)
 for proxy diagnoses and reachability. Status checks retain both the normalized
 SSH message and raw stderr as evidence; selecting one public diagnostic line
-must not discard the connection failure's meaning.
+must not discard the connection failure's meaning. The exact neutral supersession sentence
+(`SSH preparation superseded by a newer connection intent.`), its typed tag, and the legacy
+exact `SSH connection was cancelled.` are ownership outcomes rather than authentication blocks.
+Real password or setup prompt dismissal, expiry, and window closure still block for input.
 
 - **Unreachable.** ssh exited before it reached the host: connect timeout, no
   route, refused, could not resolve, a banner timeout, or a proxy that closes
@@ -155,23 +158,24 @@ GOAT's cap is longer because an SSH attempt spawns a process and can wait 10 s
 for `ConnectTimeout`, and a sleeping laptop can stay away for hours. The long
 cap never delays a return: every signal that conditions changed skips the wait.
 
-Setup starts with a 15 s per-route budget. Each environment's supervisor keeps
-its last five successful setup durations in memory, measured with the Effect
-Clock's monotonic time from that route's preparation start to its entering
-`synchronizing` (or completion when that stage is absent). The per-route budget
-is 1.5 times the largest sample, bounded to 15–45 s. It is multiplied by the
-route count; each route reaching `synchronizing` still adds 75 s for its snapshot.
-Until the host answers in the current attempt, the per-route budget stays 15 s.
-Failed routes' preparation and synchronization waits do not enter the sample.
-A first consecutive setup timeout after the host answers retries immediately
-without counting a failure. SSH reports the final host's authenticated answer
-through the desktop bridge while preparation is still running; a jump host's
-login and plain `preparing` do not qualify. `opening` also proves an answer.
-Retries of the same route retain the original preparation start, including
-counted retries, so joining in-flight preparation does not understate its cost.
-A second consecutive slow timeout, a silent host, and a stalled snapshot keep
-normal failure counting. Successful establishment
-ends the slow-timeout streak.
+Ordinary setup starts with a 15 s per-route budget. Each environment's supervisor keeps
+its last five successful ordinary setup durations in memory using the Effect Clock. The budget
+is 1.5 times the largest sample, bounded to 15–45 s, with existing route-count accounting.
+An unanswered SSH route keeps its 15 s allowance; a jump host's answer does not qualify as the
+final host. Each route reaching `synchronizing` still adds 75 s for its snapshot.
+
+Once the final SSH host answers and an active checking, installation or starting phase arrives,
+the manager's original total 15-minute preparation ceiling governs that segment. It includes
+lock wait and runtime acquisition and cannot be renewed by progress, Retry or another window
+joining. The manager interrupts expired work; the supervisor counts that timeout once without
+the immediate free slow-setup retry. Terminal progress ends this allowance immediately, and
+ordinary opening then gets its own setup budget followed by the existing snapshot allowance.
+Installation duration is excluded from ordinary adaptive samples. Older bridges keep ordinary
+setup behavior, but repeated native ensures still join the same bounded preparation.
+
+A first consecutive ordinary setup timeout after the host answers retries immediately without
+counting a failure. A second consecutive slow timeout, a silent host, and a stalled snapshot keep
+normal failure counting. Successful establishment ends the slow-timeout streak.
 
 A long resume (`application-active-reconnect`) resets the ladder and opens a
 30 s window measured with the Effect Clock's monotonic time. Failed attempts
@@ -227,10 +231,13 @@ the same environment and answers the token as signed in with the scopes a
 fresh pairing would grant. Every pairing adds a session on the host, so
 minting one per reconnect only fills its client list. A runtime older than
 this app's standard scopes grants the same narrower set to every pairing; the
-client remembers, in memory, what a pairing granted per server instance and
-SSH target, and stops asking that server for scopes it never grants. A server
-restart or upgrade (a new instance), another SSH target, a revoked or expired
-token, or a narrower grant pairs again
+secure credential storage records what a pairing granted for that token, server instance/version,
+SSH target and the current standard scopes. Reuse requires matching evidence even across
+windows and launches. A server restart, changed target, revoked token or insufficient grant
+requires renewal. Within one connection invocation, renewal validates the just-prepared native
+attachment and issues a fresh caller-only pairing credential without preparing or installing again.
+The credential is exchanged once; it is never cached or shared between callers. Descriptor
+identity checks still precede bearer use and token exchange
 ([`prepareDesktopSshEnvironment`](../../apps/web/src/connection/platform.ts)).
 
 The server closes an RPC `/ws` connection after 120 s without inbound transport

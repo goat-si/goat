@@ -13,7 +13,7 @@ import { deriveMessagesTimelineRows } from "./chat/MessagesTimeline.logic";
 afterEach(resetHeldThreadTimeline);
 
 it.each([false, true])(
-  "preserves running tool rows across a held thread switch (runless=%s)",
+  "preserves running tool rows when returning to a remembered thread (runless=%s)",
   (runless) => {
     const startedAt = "2026-01-01T00:00:00Z";
     const runId = runless ? null : RunId.make("running-run");
@@ -68,9 +68,15 @@ it.each([false, true])(
     expect(liveRows.some((row) => row.kind === "turn-fold")).toBe(false);
     expect(liveRows.some((row) => row.kind === "work-live")).toBe(true);
     rememberReadyThreadTimeline({ threadKey: "env:thread-a", entries, activity });
-    const displayed = resolveThreadSwitchTimeline({
+    const uncached = resolveThreadSwitchTimeline({
       loading: true,
       activeThreadKey: "env:thread-b",
+      nextEntries: [] as TimelineEntry[],
+    });
+    expect(uncached).toEqual({ entries: [], displayThreadKey: "env:thread-b" });
+    const displayed = resolveThreadSwitchTimeline({
+      loading: true,
+      activeThreadKey: "env:thread-a",
       nextEntries: [] as TimelineEntry[],
     });
     expect(displayed.displayThreadKey).toBe("env:thread-a");

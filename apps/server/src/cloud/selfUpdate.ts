@@ -8,39 +8,40 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import packageJson from "../../package.json" with { type: "json" };
-import * as Crypto from "effect/Crypto";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as HashSet from "effect/HashSet";
-import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as FileSystem from "effect/FileSystem";
+import * as HashSet from "effect/HashSet";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
+import packageJson from "../../package.json" with { type: "json" };
 
 import { CLI_RELEASE_BASE_URL_ENV } from "@goat/shared/cliRelease";
 
-import * as MaintenanceAudit from "../maintenance/MaintenanceAudit.ts";
-import * as RuntimeAdmission from "../runtimeAdmission.ts";
-import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as DesktopAppUpdate from "../desktopUpdate/DesktopAppUpdate.ts";
+import * as MaintenanceAudit from "../maintenance/MaintenanceAudit.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as RuntimeAdmission from "../runtimeAdmission.ts";
 import {
   ensurePinnedRuntimeInstalled,
   pinnedRuntimeCommand,
   PinnedRuntimeInstallError,
   PinnedRuntimePreflightBlockedError,
+  prunePinnedRuntimes,
 } from "./pinnedRuntime.ts";
-import { decodeServicePreflightResult } from "./servicePreflight.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
+import { decodeServicePreflightResult } from "./servicePreflight.ts";
 import { isExactServiceVersion, SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
 export const SERVER_UPDATE_BUSY_REASON =
@@ -157,34 +158,33 @@ export const withRunningThreadContinuation = Effect.fn(
   return ServerSelfUpdate.of({
     ...input.selfUpdate,
     update,
-    commitDesktopUpdate: (requestId) =>
-      Effect.gen(function* () {
-        const shouldContinue = yield* Ref.modify(desktopContinuationTokens, (tokens) => [
-          HashSet.has(tokens, requestId),
-          HashSet.remove(tokens, requestId),
-        ]);
-        let handoffAccepted = false;
-        let continuationThreadIds: ReadonlyArray<ThreadId> = [];
-        return yield* clearOnError(
-          Effect.gen(function* () {
-            continuationThreadIds = shouldContinue ? yield* input.prepare : [];
-            return yield* input.selfUpdate.commitDesktopUpdate(requestId, () =>
-              Effect.sync(() => {
-                handoffAccepted = true;
-              }),
-            );
-          }),
-          () => continuationThreadIds,
-          () => handoffAccepted,
-        ).pipe(
-          Effect.catchCause((cause) =>
-            (shouldContinue && !handoffAccepted
-              ? Ref.update(desktopContinuationTokens, HashSet.add(requestId))
-              : Effect.void
-            ).pipe(Effect.andThen(Effect.failCause(cause))),
-          ),
-        );
-      }),
+    commitDesktopUpdate: Effect.fn("selfUpdate.commitDesktopUpdate")(function* (requestId) {
+      const shouldContinue = yield* Ref.modify(desktopContinuationTokens, (tokens) => [
+        HashSet.has(tokens, requestId),
+        HashSet.remove(tokens, requestId),
+      ]);
+      let handoffAccepted = false;
+      let continuationThreadIds: ReadonlyArray<ThreadId> = [];
+      return yield* clearOnError(
+        Effect.gen(function* () {
+          continuationThreadIds = shouldContinue ? yield* input.prepare : [];
+          return yield* input.selfUpdate.commitDesktopUpdate(requestId, () =>
+            Effect.sync(() => {
+              handoffAccepted = true;
+            }),
+          );
+        }),
+        () => continuationThreadIds,
+        () => handoffAccepted,
+      ).pipe(
+        Effect.catchCause((cause) =>
+          (shouldContinue && !handoffAccepted
+            ? Ref.update(desktopContinuationTokens, HashSet.add(requestId))
+            : Effect.void
+          ).pipe(Effect.andThen(Effect.failCause(cause))),
+        ),
+      );
+    }),
   });
 });
 
@@ -216,6 +216,19 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
       });
     }
   });
+
+  // A managed server starting means its launcher has settled on a version, so runtimes left by
+  // earlier updates can go.
+  if (launcher.managed) {
+    yield* prunePinnedRuntimes({ baseDir: serverConfig.baseDir, keep: [packageJson.version] }).pipe(
+      Effect.tap((removed) =>
+        removed.length === 0
+          ? Effect.void
+          : Effect.logInfo("Removed unused GOAT runtimes.", { versions: removed }),
+      ),
+      Effect.forkScoped,
+    );
+  }
 
   const capability: ServerSelfUpdateCapability | null =
     serverConfig.mode === "desktop" ? "desktop-managed" : launcher.managed ? "boot-service" : null;

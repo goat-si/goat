@@ -1,6 +1,9 @@
 /** The reply column width shared by rendering and agent guidance. */
 export const HTML_RENDER_COLUMN_WIDTH = 728;
 
+/** Maximum frame height shared by clients and agent guidance. */
+export const HTML_RENDER_MAX_FIT_HEIGHT = 20_000;
+
 /** Agent-facing reference for the injected variables, used in tool descriptions. */
 const HTML_RENDER_THEME_GUIDE = [
   "GOAT injects its active theme as CSS custom properties on :root, and they follow the user's theme and light/dark mode live:",
@@ -28,4 +31,4 @@ const PAGE_RULES =
 
 export const htmlPreviewDescription = `Render an HTML page in GOAT's headless browser and get back a PNG screenshot, contentHeight (the height the page needs at this width), and its console output: log, info, warning, error, and uncaught exceptions, with stack traces pointing into page.html. console.log is a fine way to report your own checks. Use it to check and iterate on a page before html_render. The first preview on a machine can report that GOAT is still installing its preview browser; call again a minute later. ${PAGE_RULES} The page gets the theme variables and layout described in html_render.`;
 
-export const htmlRenderDescription = `Show a finished HTML page (chart, table, diagram, collage, mockup) inline in this thread, above your final text reply; call it before writing that reply. The reader already sees the page, so the reply should not announce it, say where it is, or restate it: add only what the page doesn't say. Preview with html_preview first. GOAT fits the frame to the page's height at each reader's width. A height below the page's contentHeight caps the frame there, and the rest scrolls inside it. ${PAGE_RULES} ${HTML_RENDER_LAYOUT_GUIDE} ${HTML_RENDER_THEME_GUIDE}`;
+export const htmlRenderDescription = `Show a finished HTML page (chart, table, diagram, collage, mockup) inline in this thread, above your final text reply; call it before writing that reply. The reader already sees the page, so the reply should not announce it, say where it is, or restate it: add only what the page doesn't say. Preview with html_preview first. GOAT fits the frame to the page's height at each reader's width. On mobile, a height below the page's contentHeight caps the frame there, and the rest scrolls inside it; web and desktop fit the whole page, up to ${HTML_RENDER_MAX_FIT_HEIGHT}px. ${PAGE_RULES} ${HTML_RENDER_LAYOUT_GUIDE} ${HTML_RENDER_THEME_GUIDE}`;

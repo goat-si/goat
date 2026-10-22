@@ -206,6 +206,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               force: true,
               grace: 60,
             });
+            // A person's confirmation is never an automatic request the runtime may drop.
+            assert.deepInclude(log, { type: "drain-body", version: OLDER, automatic: false });
             assert.isFalse(log.some((entry) => entry.type === "activity"));
             assert.isFalse(isAlive(f.pid));
           } else {
@@ -325,6 +327,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           force: false,
           grace: 60,
         });
+        // The first-connection refresh is automatic, so the runtime may arbitrate it.
+        assert.deepInclude(log, { type: "drain-body", version: OLDER, automatic: true });
         assert.deepInclude(log, {
           type: "supervise",
           version: ARCHIVE.archiveVersion,
@@ -480,6 +484,39 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           );
           assert.isFalse(yield* f.fs.exists(`${f.state}/replacement-backup`));
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("drops the drain fence after rolling back an incompatible replacement", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: OLDER,
+          drain: true,
+          ssh: SSH_RUNTIME_PROTOCOL_VERSION - 1,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+        });
+        yield* f.fs.writeFileString(`${f.test}/fail-start-${ARCHIVE.archiveVersion}`, "");
+        const result = yield* f.run("launch", false, { confirmReplacement: true });
+        assert.isTrue(Result.isFailure(result), describeFailure(result));
+        if (Result.isFailure(result))
+          assert.include(
+            String((result.failure as { stderr?: string }).stderr ?? result.failure),
+            "was restored and is running, but this app cannot attach",
+          );
+        const log = yield* events(f);
+        assert.deepInclude(log, {
+          type: "supervise",
+          version: ARCHIVE.archiveVersion,
+          status: "rolled-back",
+        });
+        assert.isFalse(yield* f.fs.exists(`${f.state}/draining`));
+        const runtime = JSON.parse(
+          yield* f.fs.readFileString(`${f.home}/.goat/userdata/server-runtime.json`),
+        ) as { serverVersion?: string; pid?: number };
+        assert.equal(runtime.serverVersion, OLDER);
+        assert.isTrue(isAlive(runtime.pid ?? 0));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
     it.live.each(["idle", "busy"] as const)(

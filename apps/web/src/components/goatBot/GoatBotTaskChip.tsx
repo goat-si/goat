@@ -96,6 +96,11 @@ export function GoatBotTaskChip({
               ))}
             </div>
           ) : null}
+          {card.evidenceLabels?.map((label) => (
+            <div key={label} className="text-xs break-words">
+              {label}
+            </div>
+          ))}
         </div>
         <div className="flex min-h-9 flex-wrap items-center justify-between gap-1 border-t border-black/10 px-3 py-1 text-xs text-muted-foreground dark:border-white/10">
           <time dateTime={card.updatedAt} className="shrink-0">

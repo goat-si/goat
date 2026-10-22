@@ -1,6 +1,7 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   sshRuntimeBuildOrder,
+  sshRuntimePhaseText,
   sshRuntimeRecoveryText,
   sshRuntimeStatusText,
   sshRuntimeTargetKey,
@@ -8,6 +9,7 @@ import {
 import {
   buildSshKeyAuthInstructions,
   type DesktopSshEnvironmentTarget,
+  type DesktopSshPreparationProgress,
   type EnvironmentId,
   type SshRuntimeUpdateMode,
 } from "@goat/contracts";
@@ -31,6 +33,8 @@ type SshRuntimeSettingsRowProps = {
   readonly enabled: boolean;
   readonly pendingAdd?: boolean;
   readonly connecting?: boolean;
+  readonly preparationInSubtitle?: boolean;
+  readonly preparationProgress?: Pick<DesktopSshPreparationProgress, "phase">;
   readonly originLabel?: string;
   readonly onRetry?: () => void;
   readonly onReviewTrust?: () => void;
@@ -56,14 +60,23 @@ function SshRuntimeSettingsRowContent({
   originLabel,
   pendingAdd,
   connecting,
+  preparationProgress,
+  preparationInSubtitle,
   onReviewTrust,
   onOpenApproval,
 }: SshRuntimeSettingsRowProps) {
   const registry = useContext(RegistryContext);
   const { alias, hostname, username, port } = target;
-  const input = { environmentId, target: { alias, hostname, username, port } };
+  const [input] = useState(() => ({ environmentId, target: { alias, hostname, username, port } }));
   const result = useAtomValue(sshRuntime.statusAtom(input));
   const status = result?.status;
+  const phase =
+    preparationProgress !== undefined
+      ? preparationProgress.phase
+      : status?.state === "preparing"
+        ? (status.phase ?? "connecting")
+        : null;
+  const phaseText = enabled && phase !== null ? sshRuntimePhaseText(phase) : null;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
@@ -149,14 +162,17 @@ function SshRuntimeSettingsRowContent({
 
   return (
     <div className="mt-1 max-w-lg space-y-1 text-xs text-muted-foreground">
+      {!preparationInSubtitle ? (
+        <p role="status" aria-live="polite">
+          {phaseText}
+        </p>
+      ) : null}
       {status ? (
-        <div role="status">
-          {pendingAdd && status.state !== "preparing" ? (
+        <div>
+          {pendingAdd && status.state !== "preparing" && phaseText === null ? (
             <p>{sshRuntimeStatusText(status)}</p>
           ) : null}
-          {status.state === "preparing" ? <p>{`Setting up GOAT on ${status.host}…`}</p> : null}
-          {status.state === "preparing" ? <p>{sshRuntimeStatusText(status)}</p> : null}
-          {recovery && status.state !== "trust_pending" ? (
+          {recovery && status.state !== "trust_pending" && phaseText === null ? (
             <p>
               {recovery}
               {status.state === "auth_failed" ? " GOAT connects with SSH keys only." : ""}
@@ -173,14 +189,17 @@ function SshRuntimeSettingsRowContent({
           ) : null}
         </div>
       ) : null}
-      {errorMessage ? <p role="alert">{errorMessage}</p> : null}
+      {errorMessage && phaseText === null ? <p role="alert">{errorMessage}</p> : null}
       {result?.kind === "error" &&
       result.code !== "host_unreachable" &&
       fix &&
-      recovery === null ? (
+      recovery === null &&
+      phaseText === null ? (
         <p>{fix.instruction}</p>
       ) : null}
-      {commandError && result?.kind !== "error" ? <p role="alert">{commandError}</p> : null}
+      {commandError && result?.kind !== "error" && phaseText === null ? (
+        <p role="alert">{commandError}</p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         {status?.state === "untrusted" && onReviewTrust ? (
           <Button variant="outline" size="xs" disabled={busy} onClick={onReviewTrust}>

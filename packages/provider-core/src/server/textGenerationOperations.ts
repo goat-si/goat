@@ -18,6 +18,7 @@ import { buildChannelReceptionPrompt, toChannelReceptionResult } from "./channel
 import {
   buildMemoryConflictPrompt,
   buildMemorySummaryPrompt,
+  memoryEvidenceSources,
   memoryResultFromModelOutput,
 } from "./memoryGenerationPrompts.ts";
 import { unsupportedMemoryRunner, type MemoryRunner } from "./memoryGenerationRunner.ts";
@@ -142,7 +143,10 @@ export function fromRunner(
         ...request,
       });
       const result = yield* decodeMemoryConflictExecution(
-        { ...generated, result: memoryResultFromModelOutput(generated.result) },
+        {
+          ...generated,
+          result: memoryResultFromModelOutput(generated.result, memoryEvidenceSources(input)),
+        },
         { onExcessProperty: "error" },
       ).pipe(
         Effect.mapError(
@@ -175,7 +179,10 @@ export function fromRunner(
         ...request,
       });
       const result = yield* decodeMemorySummaryExecution(
-        { ...generated, result: memoryResultFromModelOutput(generated.result) },
+        {
+          ...generated,
+          result: memoryResultFromModelOutput(generated.result, memoryEvidenceSources(input)),
+        },
         { onExcessProperty: "error" },
       ).pipe(
         Effect.mapError(
@@ -237,6 +244,7 @@ export function fromRunner(
         diffPatch: input.diffPatch,
         policy: input.policy,
         changeRequestTemplate: input.changeRequestTemplate,
+        threadContext: input.threadContext,
       }),
     });
     return { title: sanitizePrTitle(generated.title), body: generated.body.trim() };

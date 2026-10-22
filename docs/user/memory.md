@@ -8,6 +8,8 @@ Remembering conversations starts on in every new environment, which acts as its 
 
 GOAT summarizes finished conversations using the text generation model by default. On web or desktop, choose a separate **Memory model** in **Settings → Memory** if you prefer. Turn off **Remember conversations** there (or in mobile Memory settings) to stop creating new summaries; saved memories remain. The sharing control is separate: turning sharing off keeps memory on this device.
 
+If the provider keeps refusing a memory model, GOAT pauses generation, shows why under **Settings → Memory**, and retries later; generation resumes right away when the memory model or the provider's version changes.
+
 To share memory, use **Add device** in the hub’s Memory settings. Every device that shares memory can save and edit memories equally. If sharing is off, choose **Make this device the hub** to turn it back on, or add the device from another hub.
 
 ## Save and find memories

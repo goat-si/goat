@@ -46,7 +46,9 @@ const memberProjectFilesAtom = Atom.family((membersKey: string) => {
       paths.set(physicalProjectKey, relativePath);
       files.set(
         physicalProjectKey,
-        data === null || data.truncated ? null : parseGoatProjectFile(data.contents),
+        data === null || data.exists === false || data.truncated
+          ? null
+          : parseGoatProjectFile(data.contents),
       );
     }
     return { files, paths };

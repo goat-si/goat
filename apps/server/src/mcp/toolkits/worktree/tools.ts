@@ -1,29 +1,29 @@
-import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
-  WorktreeMcpFailure,
   OrchestratorMcpFailure,
+  ThreadId,
   VcsListRefsInput,
   VcsListRefsResult,
-  WorktreeMcpHandoffInput,
-  WorktreeMcpHandoffResult,
-  WorktreeMcpStatusResult,
   WorktreeMcpCleanupInput,
   WorktreeMcpCleanupResult,
+  WorktreeMcpFailure,
+  WorktreeMcpHandoffInput,
+  WorktreeMcpHandoffResult,
   WorktreeMcpInventoryInput,
   WorktreeMcpInventoryResult,
   WorktreeMcpRemoveInput,
   WorktreeMcpRemoveResult,
-  ThreadId,
+  WorktreeMcpStatusResult,
 } from "@goat/contracts";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { Tool, Toolkit } from "effect/ai";
 import * as Schema from "effect/Schema";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
-import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
-import { Tool, Toolkit } from "effect/ai";
+import * as ProjectService from "../../../project/ProjectService.ts";
+import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 
-import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as WorktreeInventoryService from "../../WorktreeInventoryService.ts";
 import * as WorktreeMcpService from "../../WorktreeMcpService.ts";
 

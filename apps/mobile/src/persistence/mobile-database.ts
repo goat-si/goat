@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { SQLiteDatabase } from "expo-sqlite";
 
-const DATABASE_SCHEMA_VERSION = 1;
+const DATABASE_SCHEMA_VERSION = 2;
 const LEGACY_CACHE_DIRECTORIES = [
   "connection-shell-snapshots",
   "shell-snapshots",
@@ -60,6 +60,9 @@ const MobileDatabaseOperation = Schema.Literals([
   "inspect-caches",
   "load-preferences",
   "save-preferences",
+  "load-note-outbox",
+  "save-note-outbox",
+  "remove-note-outbox",
 ]);
 
 export class MobileDatabaseError extends Schema.TaggedError<MobileDatabaseError>()(
@@ -195,6 +198,17 @@ async function migrateLegacyFileCaches(database: SQLiteDatabase): Promise<boolea
 export class MobileDatabase extends Context.Service<
   MobileDatabase,
   {
+    readonly loadNoteOutbox: Effect.Effect<ReadonlyArray<string>, MobileDatabaseError>;
+    readonly saveNoteOutbox: (
+      environmentId: string,
+      path: string,
+      payload: string,
+      updatedAt: number,
+    ) => Effect.Effect<void, MobileDatabaseError>;
+    readonly removeNoteOutbox: (
+      environmentId: string,
+      path: string,
+    ) => Effect.Effect<void, MobileDatabaseError>;
     readonly loadCache: (
       environmentId: EnvironmentId,
       kind: ClientCacheKind,
@@ -268,6 +282,14 @@ const makeAvailable = Effect.gen(function* () {
               CREATE INDEX IF NOT EXISTS client_cache_environment_updated
                 ON client_cache (environment_id, updated_at DESC);
 
+              CREATE TABLE IF NOT EXISTS note_outbox (
+                environment_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (environment_id, path)
+              ) WITHOUT ROWID;
+
               CREATE TABLE IF NOT EXISTS client_preferences (
                 singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
                 payload TEXT NOT NULL,
@@ -276,7 +298,8 @@ const makeAvailable = Effect.gen(function* () {
             `);
       });
       if ((schema?.user_version ?? 0) < DATABASE_SCHEMA_VERSION) {
-        const migrated = await migrateLegacyFileCaches(database);
+        const migrated =
+          (schema?.user_version ?? 0) >= 1 || (await migrateLegacyFileCaches(database));
         if (migrated) {
           await database.execAsync(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION};`);
         }
@@ -286,6 +309,37 @@ const makeAvailable = Effect.gen(function* () {
   });
 
   return MobileDatabase.of({
+    loadNoteOutbox: Effect.tryPromise({
+      try: () =>
+        database.getAllAsync<{ readonly payload: string }>(
+          "SELECT payload FROM note_outbox ORDER BY updated_at",
+        ),
+      catch: databaseError("load-note-outbox"),
+    }).pipe(Effect.map((rows) => rows.map((row) => row.payload))),
+    saveNoteOutbox: (environmentId, path, payload, updatedAt) =>
+      Effect.tryPromise({
+        try: () =>
+          database.runAsync(
+            `INSERT INTO note_outbox (environment_id, path, payload, updated_at)
+        VALUES (?, ?, ?, ?) ON CONFLICT (environment_id, path) DO UPDATE SET
+        payload = excluded.payload, updated_at = excluded.updated_at`,
+            environmentId,
+            path,
+            payload,
+            updatedAt,
+          ),
+        catch: databaseError("save-note-outbox"),
+      }).pipe(Effect.asVoid),
+    removeNoteOutbox: (environmentId, path) =>
+      Effect.tryPromise({
+        try: () =>
+          database.runAsync(
+            "DELETE FROM note_outbox WHERE environment_id = ? AND path = ?",
+            environmentId,
+            path,
+          ),
+        catch: databaseError("remove-note-outbox"),
+      }).pipe(Effect.asVoid),
     loadCache: Effect.fn("MobileDatabase.loadCache")((environmentId, kind, cacheKey) =>
       Effect.tryPromise({
         try: () =>
@@ -453,6 +507,9 @@ const makeAvailable = Effect.gen(function* () {
 function makeUnavailable(error: MobileDatabaseError): MobileDatabase["Service"] {
   const fail = Effect.fail(error);
   return MobileDatabase.of({
+    loadNoteOutbox: fail,
+    saveNoteOutbox: () => fail,
+    removeNoteOutbox: () => fail,
     loadCache: () => fail,
     listCache: () => fail,
     saveCache: () => fail,

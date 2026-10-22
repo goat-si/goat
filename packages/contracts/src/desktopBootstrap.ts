@@ -10,6 +10,9 @@ import { PortSchema, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts
 // A supervisor must not restart a server refused by the state-directory owner.
 export const SERVER_EXIT_CODE_STATE_DIR_OWNED = 78;
 
+// A supervisor must not restart a server whose database a newer build migrated; only a newer build can open it.
+export const SERVER_EXIT_CODE_DATABASE_AHEAD = 79;
+
 const GoatDesktopBackendBootstrap = Schema.Struct({
   mode: Schema.Literal("desktop"),
   noBrowser: Schema.Boolean,

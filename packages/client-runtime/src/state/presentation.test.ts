@@ -1,15 +1,24 @@
 import { describe, expect, it } from "@effect/vitest";
-import { EnvironmentId, type ServerConfig } from "@goat/contracts";
+import { EnvironmentId, type ServerConfig, type SshHostStatus } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
-import { AVAILABLE_CONNECTION_STATE, PrimaryConnectionTarget } from "../connection/model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  PrimaryConnectionTarget,
+  ConnectionTransientError,
+} from "../connection/model.ts";
 import {
   createEnvironmentPresentationAtoms,
   createEnvironmentSummaryAtoms,
   createEnvironmentShellSyncAtom,
   shellSyncMessage,
 } from "./presentation.ts";
+import {
+  connectionStatusText,
+  connectionStatusTitle,
+  connectionProgressLabel,
+} from "../connection/presentation.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
 import type { EnvironmentShellState } from "./shell.ts";
 import { v2ShellSnapshot } from "./orchestrationV2TestFixtures.ts";
@@ -110,167 +119,29 @@ function harness() {
   });
   const configs = Atom.family((_id: EnvironmentId) => Atom.make<ServerConfig | null>(config()));
   const state = Atom.make(AsyncResult.success(AVAILABLE_CONNECTION_STATE));
+  const runtimeStatus = Atom.make<SshHostStatus | undefined>(undefined);
   const full = createEnvironmentPresentationAtoms({
     catalogValueAtom: catalog,
     stateAtom: () => state,
     serverConfigValueAtom: configs,
+    sshRuntimeStatusAtom: () => runtimeStatus,
   });
   const summaries = createEnvironmentSummaryAtoms({
     catalogValueAtom: catalog,
     presentationAtom: full.presentationAtom,
   });
-  return { catalog, configs, state, full, ...summaries, registry: AtomRegistry.make() };
+  return {
+    catalog,
+    configs,
+    state,
+    runtimeStatus,
+    full,
+    ...summaries,
+    registry: AtomRegistry.make(),
+  };
 }
 
 describe("environment summary subscriptions", () => {
-  it("publishes full config updates without notifying membership, labels, connections or capability consumers", () => {
-    const h = harness();
-    h.registry.get(h.full.presentationsAtom);
-    h.registry.get(h.environmentIdsAtom);
-    h.registry.get(h.identitiesAtom);
-    h.registry.get(h.environmentsAtom);
-    h.registry.get(h.pullRequestsSupportedAtom);
-    h.registry.get(h.machineByIdAtom);
-    const counts = { full: 0, ids: 0, labels: 0, connections: 0, capability: 0, machines: 0 };
-    const stops = [
-      h.registry.subscribe(h.machineByIdAtom, () => counts.machines++),
-      h.registry.subscribe(h.full.presentationsAtom, () => counts.full++),
-      h.registry.subscribe(h.environmentIdsAtom, () => counts.ids++),
-      h.registry.subscribe(h.identitiesAtom, () => counts.labels++),
-      h.registry.subscribe(h.environmentsAtom, () => counts.connections++),
-      h.registry.subscribe(h.pullRequestsSupportedAtom, () => counts.capability++),
-    ];
-    const initialIds = h.registry.get(h.environmentIdsAtom);
-    const initialLabels = h.registry.get(h.identitiesAtom);
-    try {
-      for (let i = 0; i < 20; i++) {
-        const next = config(false, `/workspace-${i}`);
-        h.registry.set(h.configs(FIRST), next);
-        expect(h.registry.get(h.full.presentationsAtom).get(FIRST)?.serverConfig?.cwd).toBe(
-          next.cwd,
-        );
-        expect(h.registry.get(h.environmentIdsAtom)).toBe(initialIds);
-        expect(h.registry.get(h.identitiesAtom)).toBe(initialLabels);
-        h.registry.get(h.environmentsAtom);
-        expect(h.registry.get(h.machineByIdAtom).get(FIRST)).toBe("desktop");
-        expect(h.registry.get(h.pullRequestsSupportedAtom)).toBe(false);
-      }
-      expect(counts).toEqual({
-        full: 20,
-        ids: 0,
-        labels: 0,
-        connections: 0,
-        capability: 0,
-        machines: 0,
-      });
-      h.registry.set(h.catalog, {
-        isReady: true,
-        entries: new Map([
-          [FIRST, entry(FIRST, "Renamed")],
-          [SECOND, entry(SECOND)],
-        ]),
-      });
-      expect(h.registry.get(h.identitiesAtom)[0]?.label).toBe("Renamed");
-      expect(h.registry.get(h.environmentIdsAtom)).toBe(initialIds);
-      expect(h.registry.get(h.environmentsAtom)[0]?.environmentLabel).toBe("Renamed");
-      expect(counts.labels).toBe(1);
-      expect(counts.ids).toBe(0);
-    } finally {
-      stops.forEach((stop) => stop());
-      h.registry.dispose();
-    }
-  });
-
-  it("keeps presentations identical when only provider statuses change", () => {
-    const h = harness();
-    const pushes = { presentations: 0, providers: 0, configs: 0 };
-    const stops = [
-      h.registry.subscribe(h.full.presentationsAtom, () => pushes.presentations++),
-      h.registry.subscribe(h.full.providersByEnvironmentAtom, () => pushes.providers++),
-      h.registry.subscribe(h.full.serverConfigsAtom, () => pushes.configs++),
-    ];
-    try {
-      const base = config();
-      h.registry.set(h.configs(FIRST), { ...base, providers: [] } as ServerConfig);
-      const presentations = h.registry.get(h.full.presentationsAtom);
-      const configs = h.registry.get(h.full.serverConfigsAtom);
-      const before = { ...pushes };
-      const providers = [{ instanceId: "codex" }] as unknown as ServerConfig["providers"];
-      h.registry.set(h.configs(FIRST), { ...base, providers } as ServerConfig);
-
-      expect(h.registry.get(h.full.presentationsAtom)).toBe(presentations);
-      expect(h.registry.get(h.full.providersByEnvironmentAtom).get(FIRST)).toBe(providers);
-      expect(
-        h.registry.get(h.full.presentationsWithProvidersAtom).get(FIRST)?.serverConfig,
-      ).toEqual({ ...base, providers });
-      expect(h.registry.get(h.full.serverConfigsAtom)).toBe(configs);
-      expect(pushes.presentations).toBe(before.presentations);
-      expect(pushes.configs).toBe(before.configs);
-      expect(pushes.providers).toBe(before.providers + 1);
-
-      h.registry.set(h.configs(FIRST), { ...base, cwd: "/moved", providers } as ServerConfig);
-      expect(h.registry.get(h.full.presentationsAtom).get(FIRST)?.serverConfig?.cwd).toBe("/moved");
-      expect(h.registry.get(h.full.serverConfigsAtom).get(FIRST)?.cwd).toBe("/moved");
-      expect(h.registry.get(h.full.providersByEnvironmentAtom).get(FIRST)).toBe(providers);
-    } finally {
-      stops.forEach((stop) => stop());
-      h.registry.dispose();
-    }
-  });
-
-  it("keeps connected search targets stable through config refreshes and updates them on disconnect", () => {
-    const h = harness();
-    let changes = 0;
-    const stop = h.registry.subscribe(h.connectedEnvironmentIdsAtom, () => changes++);
-    try {
-      expect(h.registry.get(h.connectedEnvironmentIdsAtom)).toEqual([]);
-      h.registry.set(
-        h.state,
-        AsyncResult.success({
-          ...AVAILABLE_CONNECTION_STATE,
-          phase: "connected",
-          generation: 1,
-        }),
-      );
-      const connected = h.registry.get(h.connectedEnvironmentIdsAtom);
-      expect(connected).toEqual([FIRST, SECOND]);
-      const connectionChanges = changes;
-      expect(connectionChanges).toBeGreaterThan(0);
-      for (let index = 0; index < 20; index++) {
-        h.registry.set(h.configs(FIRST), config(false, `/workspace-${index}`));
-        expect(h.registry.get(h.connectedEnvironmentIdsAtom)).toBe(connected);
-      }
-      expect(changes).toBe(connectionChanges);
-      h.registry.set(h.state, AsyncResult.success(AVAILABLE_CONNECTION_STATE));
-      expect(h.registry.get(h.connectedEnvironmentIdsAtom)).toEqual([]);
-      expect(changes).toBeGreaterThan(connectionChanges);
-    } finally {
-      stop();
-      h.registry.dispose();
-    }
-  });
-
-  it("updates machine icons and preserves cached icons for disabled environments", () => {
-    const h = harness();
-    try {
-      expect(h.registry.get(h.machineByIdAtom).get(FIRST)).toBe("desktop");
-      h.registry.set(h.configs(FIRST), {
-        ...config(),
-        settings: { environmentIcon: "laptop" },
-      } as ServerConfig);
-      expect(h.registry.get(h.machineByIdAtom).get(FIRST)).toBe("laptop");
-      h.registry.set(h.catalog, {
-        isReady: true,
-        entries: new Map([[FIRST, { ...entry(FIRST), enabled: false }]]),
-      });
-      expect(h.registry.get(h.machineByIdAtom)).toEqual(new Map([[FIRST, "laptop"]]));
-      h.registry.set(h.configs(FIRST), null);
-      expect(h.registry.get(h.machineByIdAtom).get(FIRST)).toBe("server");
-    } finally {
-      h.registry.dispose();
-    }
-  });
-
   it("tracks capabilities across environments, config loss and removal", () => {
     const h = harness();
     const stop = h.registry.subscribe(h.pullRequestsSupportedAtom, () => {});
@@ -300,6 +171,69 @@ describe("environment summary subscriptions", () => {
       expect(h.registry.get(h.environmentIdsAtom)).toEqual([]);
       expect(h.registry.get(h.identitiesAtom)).toEqual([]);
       expect(h.registry.get(h.environmentsAtom)).toEqual([]);
+    } finally {
+      stop();
+      h.registry.dispose();
+    }
+  });
+});
+
+describe("shared SSH owner invalidation", () => {
+  it("updates every status consumer on owner failure and keeps attempt provenance", () => {
+    const h = harness();
+    const identity = { supervisorId: "fixture", attemptId: 2, routeId: "ssh:fixture" };
+    const ready = {
+      ...identity,
+      operationId: "op-2",
+      attachmentId: "attachment-2",
+      runtimeStatus: {
+        host: "fixture",
+        state: "ready",
+        runtimeVersion: null,
+        requestedVersion: "1.0.0",
+      } as const,
+    };
+    const failureOrigin = {
+      ...identity,
+      attemptId: 1,
+      stage: "preparing",
+      setupTimeout: true,
+    } as const;
+    const snapshot = {
+      ...AVAILABLE_CONNECTION_STATE,
+      desired: true,
+      phase: "connecting",
+      stage: "opening",
+      attempt: 2,
+      lastFailure: new ConnectionTransientError({
+        reason: "timeout",
+        detail: "Old setup timed out.",
+      }),
+      failureOrigin,
+    } as const;
+    h.registry.set(h.state, AsyncResult.success(snapshot));
+    const atom = h.full.presentationAtom(FIRST);
+    const stop = h.registry.subscribe(atom, () => {});
+    try {
+      expect(h.registry.get(atom)?.connection.error).toBe("Old setup timed out.");
+      h.registry.set(h.state, AsyncResult.success({ ...snapshot, sshRuntimeReady: ready }));
+      const initial = h.registry.get(atom)!.connection;
+      expect(connectionStatusText(initial)).toBe("Runtime ready · Opening connection");
+      expect(initial.sshRuntimeReady).toBe(ready);
+      for (const state of ["failed", "stopped", "untrusted"] as const) {
+        h.registry.set(h.runtimeStatus, { ...ready.runtimeStatus, state });
+        const connection = h.registry.get(atom)!.connection;
+        expect(connectionStatusText(connection)).toContain("Old setup timed out.");
+        expect(connectionStatusTitle(connection)).not.toContain("Runtime ready");
+        expect(connectionProgressLabel(connection, 0)).toBe("Opening connection");
+        expect(connection.sshRuntimeReady).toBeUndefined();
+        expect(connection.failureOrigin).toBe(failureOrigin);
+        expect(connection.failure?.detail).toBe("Old setup timed out.");
+        expect(Option.getOrThrow(AsyncResult.value(h.registry.get(h.state)))).toEqual({
+          ...snapshot,
+          sshRuntimeReady: ready,
+        });
+      }
     } finally {
       stop();
       h.registry.dispose();

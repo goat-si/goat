@@ -19,6 +19,7 @@ import {
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
+import { warmBundledDevPlugin } from "./vite/warmBundledDev";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -91,8 +92,16 @@ const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 
 
 const browserTestProject = {
   extends: true,
-  // Pre-bundled so the first test importing userEvent does not trigger a mid-run reload.
-  optimizeDeps: { include: ["vite-plus/test/browser"] },
+  // Pre-bundled so a late first import does not trigger a mid-run reload. The
+  // dependency scan misses autocomplete because tests reach it only through lazy imports.
+  optimizeDeps: {
+    include: [
+      "vite-plus/test/browser",
+      "@base-ui/react/autocomplete",
+      "@effect/vitest",
+      "zustand/vanilla",
+    ],
+  },
   test: {
     name: "browser",
     include: ["src/**/*.browser.test.{ts,tsx}"],
@@ -105,7 +114,7 @@ const browserTestProject = {
     // project runs after the unit project.
     maxWorkers: Math.max(1, Math.min(8, NodeOS.availableParallelism() - 1)),
     sequence: { groupOrder: 1 },
-    setupFiles: ["./src/test/browserNoMotion.ts"],
+    setupFiles: ["./src/test/browserNoMotion.ts", "./test/browserSetup.ts"],
     api: { port: browserTestApiPort, strictPort: false },
     browser: {
       enabled: true,
@@ -113,6 +122,13 @@ const browserTestProject = {
       provider: playwright(),
       instances: [{ browser: "chromium" }],
       screenshotFailures: false,
+      commands: {
+        // Playwright's mouse outlives each test, so whatever mounts under its last
+        // position starts hovered. test/browserSetup.ts parks it off the page before each test.
+        resetPointer: async ({ page }) => {
+          await page.mouse.move(-1, -1);
+        },
+      },
     },
   },
 } satisfies TestProjectInlineConfiguration;
@@ -192,6 +208,7 @@ export default defineConfig(() => {
       tanstackRouter({ autoCodeSplitting: true }),
       react({ compiler: true }),
       tailwindPlugins(bundledDev),
+      warmBundledDevPlugin(),
     ],
     optimizeDeps: {
       include: [
@@ -245,7 +262,8 @@ export default defineConfig(() => {
       // Transform the whole module graph at server start instead of on the
       // first request. Without this, a cold worktree discovers and transforms
       // modules one import-level at a time while the browser waits — which
-      // over a tailnet origin turns into minutes of waterfall.
+      // over a tailnet origin turns into minutes of waterfall. Bundled dev
+      // ignores this; warmBundledDevPlugin covers it there.
       ...(process.env.VITEST
         ? {}
         : {
@@ -263,7 +281,9 @@ export default defineConfig(() => {
                 {
                   target: devProxyTarget,
                   changeOrigin: !DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES.has(prefix),
-                  ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
+                  ...(prefix === "/ws" || prefix === "/api" || prefix === "/hub"
+                    ? { ws: true }
+                    : {}),
                 },
               ]),
             ),

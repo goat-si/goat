@@ -34,6 +34,22 @@ function makeStorage(initial: Readonly<Record<string, string>>) {
 }
 
 describe("mobile connection catalog storage", () => {
+  it.effect("refuses a future catalog without deleting or rewriting it", () =>
+    Effect.gen(function* () {
+      const raw = JSON.stringify({ schemaVersion: 99 });
+      const memory = makeStorage({ [CONNECTION_CATALOG_KEY]: raw });
+      const catalog = yield* make().pipe(
+        Effect.provideService(MobileSecureStorage.MobileSecureStorage, memory.storage),
+      );
+      expect(yield* Effect.flip(catalog.read)).toMatchObject({ _tag: "ConnectionTransientError" });
+      expect(yield* Effect.flip(catalog.update((document) => document))).toMatchObject({
+        _tag: "ConnectionTransientError",
+      });
+      expect(memory.deleted).toEqual([]);
+      expect(memory.values.get(CONNECTION_CATALOG_KEY)).toBe(raw);
+    }),
+  );
+
   it.effect("recovers from a corrupt current catalog", () =>
     Effect.gen(function* () {
       const memory = makeStorage({

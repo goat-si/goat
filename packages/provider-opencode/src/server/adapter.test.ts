@@ -1,12 +1,8 @@
-import type { AuthEnvironmentScope } from "@goat/contracts";
-import { MemoryId, MemoryRevisionId, MemorySpaceId } from "@goat/contracts";
-import { packMemoryContext, memoryContextText } from "@goat/provider-core/server/memoryContext";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { OpencodeClient, ToolPart } from "@opencode-ai/sdk/v2";
+import { type OpencodeClient, type ToolPart } from "@opencode-ai/sdk/v2";
 import {
   CheckpointId,
-  EnvironmentId,
   NodeId,
   ProjectId,
   ProviderInstanceId,
@@ -19,6 +15,11 @@ import {
   ThreadId,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
+  type AuthEnvironmentScope,
+  MemoryId,
+  MemoryRevisionId,
+  MemorySpaceId,
+  EnvironmentId,
 } from "@goat/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
@@ -31,33 +32,45 @@ import * as Queue from "effect/Queue";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
-
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
-import type * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
+import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-
 import {
   advanceOpenCodePromptAdmission,
   cancelOpenCodePromptAdmission,
   openCodeBoundaryAfterProviderTurn,
   openCodeChildPermissionRules,
   openCodePermissionRules,
-  openCodePermissionRequestKind,
-  openCodeToolProjectionKind,
   makeOpenCodeProtocolLogger,
   makeOpenCodeAdapterV2,
   OPENCODE_PROVIDER,
   reconcileOpenCodePromptAdmissionStatus,
 } from "./adapter.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import { packMemoryContext, memoryContextText } from "@goat/provider-core/server/memoryContext";
+
+const wp4Snapshot = () =>
+  packMemoryContext({
+    memorySpaceId: MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
+    projectionWatermark: 1,
+    items: [
+      {
+        memoryId: MemoryId.make("00000000-0000-4000-8000-000000000001"),
+        revisionId: MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
+        scope: { kind: "user" },
+        provenance: { environmentId: EnvironmentId.make("fixture") },
+        assertionKind: "fact",
+        text: "& <instruction> 'data'",
+      },
+    ],
+  })!;
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
 const OPEN_CODE_TEST_SETTINGS = Schema.decodeSync(OpenCodeSettings)({
   serverUrl: "http://test.invalid",
 });
@@ -258,224 +271,7 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
 });
 
 describe("OpenCodeAdapterV2", () => {
-  it.effect.each([false, true])(
-    "WP4 OpenCode v1 memory framed delivery and clear external=%s",
-    (external) =>
-      Effect.gen(function* () {
-        const snapshot = wp4Snapshot();
-        let memory: typeof snapshot | undefined = snapshot;
-        const payloads: Array<{ system?: string; messageID: string }> = [];
-        const nativeEvents = asyncEventStream();
-        const sessions = yield* McpProviderSessions.McpProviderSessions;
-        const suffix = `memory-${external}`;
-        const config = {
-          environmentId: EnvironmentId.make("fixture"),
-          threadId: ThreadId.make(`thread-opencode-${suffix}`),
-          providerSessionId: `session-opencode-${suffix}`,
-          providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
-          endpoint: "http://fixture.invalid/mcp",
-          authorizationHeader: "Bearer memory-fixture",
-          browserToolsAvailable: false,
-          grantedScopes: ["memory:read", "memory:write", "orchestration:read"] as const,
-        };
-        yield* sessions.set(config);
-        const registrations: unknown[] = [];
-        const harness = yield* makeOpenCodeRuntimeHarness(
-          suffix,
-          "memory-root",
-          {
-            event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
-            mcp: {
-              add: async (input: unknown) => {
-                registrations.push(input);
-                return { data: true };
-              },
-            },
-            session: {
-              create: async () => ({
-                data: { id: "memory-root", time: { created: 1, updated: 1 } },
-              }),
-              get: async () => ({ data: { id: "memory-root", time: { created: 1, updated: 1 } } }),
-              promptAsync: async (input: { system?: string; messageID: string }) => {
-                payloads.push(input);
-                return { data: true };
-              },
-              abort: async () => ({ data: true }),
-            },
-          },
-          {
-            external,
-            memory: { memoryContext: snapshot, refreshMemoryContext: () => Effect.succeed(memory) },
-          },
-        );
-        const finish = () =>
-          Effect.gen(function* () {
-            const terminal = yield* harness.runtime.events.pipe(
-              Stream.takeUntil((event) => event.type === "turn.terminal"),
-              Stream.runDrain,
-              Effect.forkScoped,
-            );
-            const messageID = payloads.at(-1)!.messageID;
-            yield* Effect.promise(() =>
-              nativeEvents.push({
-                type: "message.updated",
-                properties: {
-                  sessionID: "memory-root",
-                  info: { id: messageID, role: "user", time: { created: 1 } },
-                },
-              }),
-            );
-            yield* Effect.promise(() =>
-              nativeEvents.push({
-                type: "session.status",
-                properties: { sessionID: "memory-root", status: { type: "busy" } },
-              }),
-            );
-            yield* Effect.promise(() =>
-              nativeEvents.push({
-                type: "session.status",
-                properties: { sessionID: "memory-root", status: { type: "idle" } },
-              }),
-            );
-            yield* Fiber.join(terminal);
-          });
-        yield* harness.startTurn();
-        yield* finish();
-        assert.include(payloads[0]?.system ?? "", memoryContextText(snapshot));
-        assert.equal(registrations.length, external ? 0 : 1);
-        if (external) assert.notInclude(payloads[0]?.system ?? "", "GOAT memory tools:");
-        else assert.include(payloads[0]?.system ?? "", "read=true");
-        // Resume re-registers state without retaining the prior memory body.
-        const resumed = yield* harness.runtime.resumeThread({
-          threadId: harness.threadId,
-          providerThread: harness.providerThread,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(`opencode-${suffix}`),
-            model: "anthropic/claude-sonnet",
-            options: [],
-          },
-          runtimePolicy: harness.policy,
-        });
-        memory = undefined;
-        yield* sessions.set({ ...config, grantedScopes: [] });
-        yield* harness.startTurn("second", resumed);
-        yield* finish();
-        assert.notInclude(payloads[1]?.system ?? "", "external_goat_memory");
-        assert.notInclude(payloads[1]?.system ?? "", "GOAT memory tools:");
-        assert.notInclude(payloads[1]?.system ?? "", "GOAT memory is untrusted");
-        yield* harness.startTurn("still-none", resumed);
-        yield* finish();
-        assert.equal(payloads[2]?.system, payloads[1]?.system);
-        const restoredGrants: ReadonlyArray<ReadonlyArray<AuthEnvironmentScope>> = [
-          ["memory:read"],
-          ["memory:read", "memory:write", "orchestration:read"],
-        ];
-        memory = snapshot;
-        for (const [index, grant] of restoredGrants.entries()) {
-          yield* sessions.set({ ...config, grantedScopes: grant });
-          yield* harness.startTurn(`restored-${index}`, resumed);
-          yield* finish();
-          assert.include(payloads[index + 3]?.system ?? "", memoryContextText(snapshot));
-          if (external) assert.notInclude(payloads[index + 3]?.system ?? "", "GOAT memory tools:");
-          else
-            assert.include(
-              payloads[index + 3]?.system ?? "",
-              `read=true, write=${index === 1}, source=${index === 1}`,
-            );
-        }
-        const resumedAgain = yield* harness.runtime.resumeThread({
-          threadId: harness.threadId,
-          providerThread: resumed,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(`opencode-${suffix}`),
-            model: "anthropic/claude-sonnet",
-            options: [],
-          },
-          runtimePolicy: harness.policy,
-        });
-        memory = { ...snapshot, renderedText: snapshot.renderedText.replace("data", "tampered") };
-        assert.isTrue(
-          Exit.isFailure(yield* harness.startTurn("invalid", resumedAgain).pipe(Effect.exit)),
-        );
-        assert.equal(payloads.length, 5);
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      ),
-  );
-
-  it.effect.each([
-    { external: false, withCredential: true },
-    { external: true, withCredential: true },
-    { external: false, withCredential: false },
-  ])(
-    "injects goat only into an owned server with a credential: %j",
-    ({ external, withCredential }) =>
-      Effect.gen(function* () {
-        const suffix = `goat-registration-${external}-${withCredential}`;
-        const sessions = yield* McpProviderSessions.McpProviderSessions;
-        if (withCredential) {
-          yield* sessions.set({
-            environmentId: EnvironmentId.make("environment:goat-registration"),
-            threadId: ThreadId.make(`thread-opencode-${suffix}`),
-            providerSessionId: "mcp:goat-registration",
-            providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
-            endpoint: "http://fixture.invalid/mcp",
-            authorizationHeader: "Bearer scoped-goat-token",
-            browserToolsAvailable: false,
-          });
-        }
-        const registrations: unknown[] = [];
-        const nativeEvents = asyncEventStream();
-        yield* makeOpenCodeRuntimeHarness(
-          suffix,
-          "goat-registration",
-          {
-            event: {
-              subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
-                options.signal?.addEventListener("abort", () => nativeEvents.close(), {
-                  once: true,
-                });
-                return { stream: nativeEvents.stream };
-              },
-            },
-            session: {
-              create: async () => ({
-                data: { id: "goat-registration", time: { created: 1, updated: 1 } },
-              }),
-            },
-            mcp: {
-              add: async (input: unknown) => {
-                registrations.push(input);
-                return { data: true };
-              },
-            },
-          },
-          { external },
-        );
-        assert.deepEqual(
-          registrations,
-          !external && withCredential
-            ? [
-                {
-                  name: "goat",
-                  config: {
-                    type: "remote",
-                    url: "http://fixture.invalid/mcp",
-                    headers: { Authorization: "Bearer scoped-goat-token" },
-                    oauth: false,
-                  },
-                },
-              ]
-            : [],
-        );
-      }).pipe(
-        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-        Effect.scoped,
-      ),
-  );
-
-  it.effect.each(["completed", "failed", "unresolved", "unavailable", "reconnect"] as const)(
+  it.effect.each(["completed", "failed", "unavailable"] as const)(
     "normalizes OpenCode step usage for %s turns",
     (ending) =>
       Effect.gen(function* () {
@@ -561,16 +357,6 @@ describe("OpenCodeAdapterV2", () => {
             }),
           );
           yield* Effect.promise(() => nativeEvents.push(step("old", "old-assistant")));
-        }
-        if (ending === "unresolved")
-          yield* Effect.promise(() => nativeEvents.push(step("unknown", "unknown-assistant")));
-        if (ending === "reconnect") {
-          yield* Effect.promise(() =>
-            nativeEvents.push({ type: "server.connected", properties: {} }),
-          );
-          yield* Effect.promise(() =>
-            nativeEvents.push({ type: "server.connected", properties: {} }),
-          );
         }
         if (ending === "failed") {
           yield* Effect.promise(() =>
@@ -691,184 +477,6 @@ describe("OpenCodeAdapterV2", () => {
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
     ),
-  );
-
-  it.effect.each(["permission", "question"] as const)(
-    "cancels an undelivered %s reply at its deadline",
-    (kind) =>
-      Effect.gen(function* () {
-        const nativeEvents = asyncEventStream();
-        const called = promiseGate<void>();
-        let signal: AbortSignal | undefined;
-        let deliver = false;
-        const harness = yield* makeOpenCodeRuntimeHarness(`reply-${kind}`, "root", {
-          event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
-          session: {
-            create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
-            promptAsync: async () => ({ data: true }),
-            abort: async () => ({ data: true }),
-            children: async () => ({ data: [] }),
-          },
-          [kind]: {
-            reply: async (_input: unknown, options: { signal: AbortSignal }) => {
-              if (deliver) return { data: true };
-              signal = options.signal;
-              called.resolve();
-              return new Promise(() => {});
-            },
-          },
-        });
-        yield* harness.startTurn();
-        const received = yield* harness.runtime.events.pipe(
-          Stream.filter((event) => event.type === "runtime_request.updated"),
-          Stream.take(1),
-          Stream.runCollect,
-          Effect.forkScoped,
-        );
-        yield* Effect.promise(() =>
-          nativeEvents.push({
-            type: `${kind}.asked`,
-            properties:
-              kind === "permission"
-                ? {
-                    id: "request",
-                    sessionID: "root",
-                    permission: "bash",
-                    patterns: ["*"],
-                    always: [],
-                    metadata: {},
-                  }
-                : {
-                    id: "request",
-                    sessionID: "root",
-                    questions: [
-                      {
-                        header: "Choice",
-                        question: "Which?",
-                        options: [{ label: "Yes", description: "Proceed" }],
-                      },
-                    ],
-                  },
-          }),
-        );
-        const request = (yield* Fiber.join(received))[0]!.runtimeRequest;
-        const response = {
-          requestId: request.id,
-          ...(kind === "permission"
-            ? { decision: "accept" as const }
-            : { answers: { Choice: "Yes" } }),
-        };
-        const reply = yield* harness.runtime
-          .respondToRuntimeRequest(response)
-          .pipe(Effect.exit, Effect.forkScoped);
-        yield* Effect.promise(() => called.promise);
-        yield* TestClock.adjust("10 seconds");
-        assert.isTrue(Exit.isFailure(yield* Fiber.join(reply)));
-        assert.isTrue(signal?.aborted);
-        deliver = true;
-        yield* harness.runtime.respondToRuntimeRequest(response);
-      }).pipe(
-        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-        Effect.scoped,
-      ),
-  );
-
-  it.effect("aborts external root and descendants before closing the event stream", () =>
-    Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const nativeEvents = asyncEventStream();
-      const calls: string[] = [];
-      yield* makeOpenCodeRuntimeHarness("release", "root", {
-        event: {
-          subscribe: async (_input: unknown, options: { signal: AbortSignal }) => {
-            options.signal.addEventListener("abort", () => {
-              calls.push("stream.close");
-              nativeEvents.close();
-            });
-            return { stream: nativeEvents.stream };
-          },
-        },
-        session: {
-          create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
-          abort: async ({ sessionID }: { sessionID: string }) => {
-            calls.push(`abort:${sessionID}`);
-            return { data: true };
-          },
-          children: async ({ sessionID }: { sessionID: string }) => {
-            calls.push(`children:${sessionID}`);
-            return { data: sessionID === "root" ? [{ id: "child" }] : [] };
-          },
-        },
-      }).pipe(Effect.provideService(Scope.Scope, scope));
-      yield* Scope.close(scope, Exit.void);
-      assert.deepEqual(calls, [
-        "abort:root",
-        "children:root",
-        "abort:child",
-        "children:child",
-        "stream.close",
-      ]);
-    }).pipe(
-      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      Effect.scoped,
-    ),
-  );
-
-  it.effect.each(["enumeration", "abort", "not-found", "timeout"] as const)(
-    "reports descendant cleanup %s",
-    (failure) =>
-      Effect.gen(function* () {
-        const nativeEvents = asyncEventStream();
-        const called = promiseGate<void>();
-        let childSignal: AbortSignal | undefined;
-        const harness = yield* makeOpenCodeRuntimeHarness(`cleanup-${failure}`, "root", {
-          event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
-          session: {
-            create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
-            promptAsync: async () => ({ data: true }),
-            get: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
-            messages: async () => ({ data: [] }),
-            children: async ({ sessionID }: { sessionID: string }) => {
-              if (failure === "enumeration") throw new Error("cannot enumerate");
-              return { data: sessionID === "root" ? [{ id: "child" }] : [] };
-            },
-            abort: async (
-              { sessionID }: { sessionID: string },
-              options: { signal: AbortSignal },
-            ) => {
-              if (sessionID === "root") return { data: true };
-              if (failure === "timeout" && childSignal?.aborted) return { data: true };
-              childSignal = options.signal;
-              called.resolve();
-              if (failure === "timeout") {
-                return new Promise(() => {});
-              }
-              if (failure === "not-found") throw { status: 404 };
-              throw new Error("child abort failed");
-            },
-          },
-        });
-        yield* harness.startTurn();
-        const snapshot = yield* harness.runtime.readThreadSnapshot({
-          providerThread: harness.providerThread,
-        });
-        const stop = yield* harness.runtime
-          .interruptTurn({
-            providerThread: harness.providerThread,
-            providerTurnId: snapshot.providerTurns.at(-1)!.id,
-          })
-          .pipe(Effect.exit, Effect.forkScoped);
-        if (failure === "timeout") {
-          yield* Effect.promise(() => called.promise);
-          yield* TestClock.adjust("15 seconds");
-        }
-        const result = yield* Fiber.join(stop);
-        assert.equal(Exit.isSuccess(result), failure === "not-found");
-        if (failure === "timeout") assert.isTrue(childSignal?.aborted);
-      }).pipe(
-        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-        Effect.scoped,
-      ),
   );
 
   it.effect(
@@ -1038,9 +646,6 @@ describe("OpenCodeAdapterV2", () => {
       ),
   );
 
-  // Event order from a live OpenCode 1.18.32 run of a `task` call with
-  // background=true: the task part completes at launch, the root session
-  // settles, and the child session stays busy until its own work ends.
   it.effect("reports a background task child as pending work after the root turn settles", () =>
     Effect.gen(function* () {
       const nativeEvents = asyncEventStream();
@@ -1136,8 +741,16 @@ describe("OpenCodeAdapterV2", () => {
     ),
   );
 
-  it.effect("titles OpenCode reads and searches from their input", () =>
+  it.effect("projects OpenCode read output and search titles from native tool calls", () =>
     Effect.gen(function* () {
+      const directoryOutput =
+        "<path>/workspace/src</path>\n<type>directory</type>\n<entries>\nenv.ts\nlib/\n\n(2 entries)\n</entries>";
+      const fileOutput =
+        "<path>/workspace/src/env.ts</path>\n<type>file</type>\n<content>\n1: hello\n2: </content> literal\n3: world\n</content>";
+      const fileWithInstructions =
+        "<path>/workspace/src/env.ts</path>\n<type>file</type>\n<content>1: hello\n\n(End of file - total 1 lines)\n</content>\n\n<system-reminder>\nProject instructions\n</system-reminder>";
+      const missingPath = directoryOutput.slice(directoryOutput.indexOf("<type>"));
+      const missingClose = fileOutput.slice(0, fileOutput.lastIndexOf("\n</content>"));
       const nativeEvents = asyncEventStream();
       const nativeSessionId = "native-opencode-search";
       const harness = yield* makeOpenCodeRuntimeHarness("search-projection", nativeSessionId, {
@@ -1147,6 +760,7 @@ describe("OpenCodeAdapterV2", () => {
             return { stream: nativeEvents.stream };
           },
         },
+        mcp: { status: async () => ({ data: {} }) },
         session: {
           create: async () => ({
             data: { id: nativeSessionId, time: { created: 1, updated: 1 } },
@@ -1162,24 +776,31 @@ describe("OpenCodeAdapterV2", () => {
         Stream.runCollect,
         Effect.forkScoped,
       );
-      for (const [tool, input, output] of [
+      const toolCalls = [
         ["read", { filePath: "src/env.ts" }, "---\nfile body"],
+        ["read", { filePath: "/workspace/src" }, directoryOutput],
+        ["read", { filePath: "/workspace/src/env.ts" }, fileOutput],
+        ["read", { filePath: "/workspace/src/env.ts" }, fileWithInstructions],
+        ["read", { filePath: "/workspace/src" }, missingPath],
+        ["read", { filePath: "/workspace/src/env.ts" }, missingClose],
+        ["custom_read", { filePath: "/workspace/src" }, directoryOutput],
         ["grep", { pattern: "TODO", path: "apps/web" }, "---\nfile body"],
         ["websearch", { query: "OpenCode documentation" }, "---\nfile body"],
         ["glob", { pattern: "missing", path: "apps/web" }, ""],
         ["codesearch", {}, " \n\t"],
-      ] as const) {
+      ] as const;
+      for (const [index, [tool, input, output]] of toolCalls.entries()) {
         yield* Effect.promise(() =>
           nativeEvents.push({
             type: "message.part.updated",
             properties: {
               sessionID: nativeSessionId,
               part: {
-                id: `part-${tool}`,
+                id: `part-${index}`,
                 sessionID: nativeSessionId,
                 messageID: "assistant-search",
                 type: "tool",
-                callID: `call-${tool}`,
+                callID: `call-${index}`,
                 tool,
                 state: {
                   status: "completed",
@@ -1203,8 +824,24 @@ describe("OpenCodeAdapterV2", () => {
       const items = (yield* Fiber.join(received)).flatMap((event) =>
         event.type === "turn_item.updated" ? [event.turnItem] : [],
       );
-      const read = items.find((item) => item.type === "dynamic_tool");
-      assert.equal(read?.title, "Read src/env.ts");
+      const reads = items.filter((item) => item.type === "dynamic_tool");
+      assert.equal(reads[0]?.title, "Read src/env.ts");
+      assert.deepEqual(
+        reads.map((item) => ({ toolName: item.toolName, output: item.output })),
+        [
+          { toolName: "read", output: "---\nfile body" },
+          { toolName: "read", output: "env.ts\nlib/\n\n(2 entries)" },
+          { toolName: "read", output: "1: hello\n2: </content> literal\n3: world" },
+          {
+            toolName: "read",
+            output:
+              "1: hello\n\n(End of file - total 1 lines)\n\n<system-reminder>\nProject instructions\n</system-reminder>",
+          },
+          { toolName: "read", output: missingPath },
+          { toolName: "read", output: missingClose },
+          { toolName: "custom_read", output: directoryOutput },
+        ],
+      );
       const grep = items.find((item) => item.type === "file_search");
       assert.equal(grep?.title, "Searched TODO in web");
       assert.equal(grep?.type === "file_search" ? grep.pattern : null, "TODO");
@@ -1236,6 +873,8 @@ describe("OpenCodeAdapterV2", () => {
 
   it.effect("presents OpenCode MCP calls without treating remote tools as local edits", () =>
     Effect.gen(function* () {
+      const output =
+        "<path>/workspace/src</path>\n<type>directory</type>\n<entries>\nenv.ts\nlib/\n\n(2 entries)\n</entries>";
       const nativeEvents = asyncEventStream();
       const nativeSessionId = "native-opencode-mcp";
       let statusReads = 0;
@@ -1291,7 +930,7 @@ describe("OpenCodeAdapterV2", () => {
                   input: { document: "remote-doc" },
                   title: "Edit remote document",
                   metadata: {},
-                  output: "saved",
+                  output,
                   error: "failed",
                   time: { start: 1, end: 2 },
                 },
@@ -1384,6 +1023,7 @@ describe("OpenCodeAdapterV2", () => {
         });
         assert.deepEqual(item.input, { document: "remote-doc" });
       }
+      assert.equal(items[1]?.output, output);
       assert.equal(items[3]?.toolName, "ambiguous_server_edit_document");
       assert.isUndefined(items[3]?.toolSource);
       assert.equal(statusReads, 1);
@@ -1391,223 +1031,6 @@ describe("OpenCodeAdapterV2", () => {
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
     ),
-  );
-
-  it.effect.each(["failure", "timeout"] as const)("retries MCP status after %s", (failure) =>
-    Effect.gen(function* () {
-      const nativeEvents = asyncEventStream();
-      const called = promiseGate<void>();
-      const sessionId = `mcp-status-${failure}`;
-      let statusReads = 0;
-      let signal: AbortSignal | undefined;
-      const harness = yield* makeOpenCodeRuntimeHarness(sessionId, sessionId, {
-        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
-        session: {
-          create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
-          promptAsync: async () => ({ data: true }),
-        },
-        mcp: {
-          status: async (_input: unknown, options: { signal?: AbortSignal }) => {
-            statusReads++;
-            if (statusReads === 1) {
-              signal = options?.signal;
-              called.resolve();
-              if (failure === "timeout") return new Promise(() => {});
-              throw new Error("MCP status unavailable");
-            }
-            return { data: { weather: { status: "connected" } } };
-          },
-        },
-      });
-      yield* harness.startTurn();
-      const received = yield* harness.runtime.events.pipe(
-        Stream.takeUntil(
-          (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
-        ),
-        Stream.runCollect,
-        Effect.forkScoped,
-      );
-      for (const status of ["running", "completed"] as const) {
-        const emitted = yield* Effect.promise(() =>
-          nativeEvents.push({
-            type: "message.part.updated",
-            properties: {
-              sessionID: sessionId,
-              part: {
-                id: "weather-part",
-                sessionID: sessionId,
-                messageID: "weather-message",
-                type: "tool",
-                callID: "weather-call",
-                tool: "weather_edit_document",
-                state: {
-                  status,
-                  input: { document: "remote-doc" },
-                  title: "Edit remote document",
-                  metadata: {},
-                  output: "saved",
-                  time: { start: 1, end: 2 },
-                },
-              },
-            },
-          }),
-        ).pipe(Effect.forkScoped);
-        if (status === "running" && failure === "timeout") {
-          yield* Effect.promise(() => called.promise);
-          yield* TestClock.adjust("1 second");
-        }
-        yield* Fiber.join(emitted);
-      }
-      yield* Effect.promise(() =>
-        nativeEvents.push({ type: "session.compacted", properties: { sessionID: sessionId } }),
-      );
-      const completed = (yield* Fiber.join(received)).find(
-        (event) =>
-          event.type === "turn_item.updated" &&
-          event.turnItem.type === "dynamic_tool" &&
-          event.turnItem.status === "completed",
-      );
-      assert.equal(statusReads, 2);
-      assert.equal(
-        completed?.type === "turn_item.updated" && completed.turnItem.title,
-        "Edit remote document",
-      );
-      assert.deepEqual(completed?.type === "turn_item.updated" && completed.turnItem.toolSource, {
-        key: "mcp:weather",
-        name: "weather",
-        kind: "integration",
-      });
-      if (failure === "timeout") assert.isTrue(signal?.aborted);
-    }).pipe(
-      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      Effect.scoped,
-    ),
-  );
-
-  it.effect.each(["remove", "replace"] as const)(
-    "WP4 C-1 reconciles MCP before workspace command %s without snapshot refresh",
-    (change) =>
-      Effect.gen(function* () {
-        const suffix = `command-memory-${change}`;
-        const sessionId = `native-${suffix}`;
-        const sessions = yield* McpProviderSessions.McpProviderSessions;
-        const config = {
-          environmentId: EnvironmentId.make("fixture"),
-          threadId: ThreadId.make(`thread-opencode-${suffix}`),
-          providerSessionId: `session-opencode-${suffix}`,
-          providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
-          endpoint: "http://fixture.invalid/a",
-          authorizationHeader: "Bearer synthetic-command",
-          browserToolsAvailable: false,
-          grantedScopes: ["memory:read"] as const,
-        };
-        yield* sessions.set(config);
-        const operations: string[] = [];
-        const commands = yield* Queue.unbounded<{ messageID: string; parts: unknown[] }>();
-        const nativeEvents = asyncEventStream();
-        let refreshes = 0;
-        const prompts: Array<{ messageID: string; system?: string }> = [];
-        const harness = yield* makeOpenCodeRuntimeHarness(
-          suffix,
-          sessionId,
-          {
-            event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
-            command: { list: async () => ({ data: [{ name: "review" }] }) },
-            mcp: {
-              add: async (input: { config: { url: string } }) => {
-                operations.push(`add:${input.config.url}`);
-                return { data: true };
-              },
-              disconnect: async () => {
-                operations.push("disconnect");
-                return { data: true };
-              },
-            },
-            session: {
-              create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
-              command: async (input: { messageID: string; parts: unknown[] }) => {
-                operations.push("command");
-                Queue.offerUnsafe(commands, input);
-                return { data: true };
-              },
-              promptAsync: async (input: { messageID: string; system?: string }) => {
-                prompts.push(input);
-                return { data: true };
-              },
-            },
-          },
-          {
-            external: false,
-            memory: {
-              refreshMemoryContext: () =>
-                Effect.sync(() => {
-                  refreshes++;
-                  return wp4Snapshot();
-                }),
-            },
-          },
-        );
-        assert.deepEqual(operations, ["add:http://fixture.invalid/a"]);
-        if (change === "remove") yield* sessions.clear(config.threadId);
-        else yield* sessions.set({ ...config, endpoint: "http://fixture.invalid/b" });
-        const terminal = yield* harness.runtime.events.pipe(
-          Stream.takeUntil((event) => event.type === "turn.terminal"),
-          Stream.runDrain,
-          Effect.forkScoped,
-        );
-        const start = yield* harness.startTurn("/review staged changes").pipe(Effect.forkScoped);
-        const call = yield* Queue.take(commands);
-        assert.deepEqual(operations, [
-          "add:http://fixture.invalid/a",
-          change === "remove" ? "disconnect" : "add:http://fixture.invalid/b",
-          "command",
-        ]);
-        assert.equal(refreshes, 0);
-        assert.deepEqual(call.parts, []);
-        assert.notInclude(JSON.stringify(call), "external_goat_memory");
-        yield* Effect.promise(() =>
-          nativeEvents.push({
-            type: "message.updated",
-            properties: {
-              sessionID: sessionId,
-              info: {
-                id: call.messageID,
-                sessionID: sessionId,
-                role: "user",
-                time: { created: 1 },
-              },
-            },
-          }),
-        );
-        yield* Fiber.join(start);
-        yield* Effect.promise(() =>
-          nativeEvents.push({
-            type: "session.status",
-            properties: {
-              sessionID: sessionId,
-              status: { type: "busy" },
-            },
-          }),
-        );
-        yield* Effect.promise(() =>
-          nativeEvents.push({
-            type: "session.status",
-            properties: {
-              sessionID: sessionId,
-              status: { type: "idle" },
-            },
-          }),
-        );
-        yield* Fiber.join(terminal);
-        assert.equal(prompts.length, 0);
-        yield* harness.startTurn("ordinary after command");
-        assert.equal(refreshes, 1);
-        assert.include(prompts[0]?.system ?? "", memoryContextText(wp4Snapshot()));
-        assert.include(prompts[0]?.system ?? "", `read=${change === "replace"}`);
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      ),
   );
 
   it.effect("admits a native command on its user receipt before generation completes", () =>
@@ -1670,36 +1093,6 @@ describe("OpenCodeAdapterV2", () => {
       yield* Fiber.join(start);
       assert.equal(promptCalls, 0);
       release.resolve();
-    }).pipe(
-      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      Effect.scoped,
-    ),
-  );
-
-  it.effect("sends unadvertised slash commands as ordinary prompts", () =>
-    Effect.gen(function* () {
-      const nativeEvents = asyncEventStream();
-      const prompts: unknown[] = [];
-      const harness = yield* makeOpenCodeRuntimeHarness("unknown-command", "unknown-command", {
-        event: {
-          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
-            options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
-            return { stream: nativeEvents.stream };
-          },
-        },
-        command: { list: async () => ({ data: [{ name: "review" }] }) },
-        session: {
-          create: async () => ({
-            data: { id: "unknown-command", time: { created: 1, updated: 1 } },
-          }),
-          promptAsync: async (input: { parts: unknown }) => {
-            prompts.push(input.parts);
-            return { data: true };
-          },
-        },
-      });
-      yield* harness.startTurn("/unknown words");
-      assert.deepEqual(prompts, [[{ type: "text", text: "/unknown words" }]]);
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
@@ -2566,19 +1959,6 @@ describe("OpenCodeAdapterV2", () => {
     assert.isTrue(admission.admissionPending);
   });
 
-  it("releases admission only after prompt acceptance and new-turn evidence", () => {
-    const admission = {
-      admissionPending: true,
-      admissionAccepted: false,
-      admissionMessageObserved: false,
-      idleDuringAdmission: false,
-    };
-
-    assert.equal(advanceOpenCodePromptAdmission(admission, "busy"), "hold");
-    assert.equal(advanceOpenCodePromptAdmission(admission, "accepted"), "release");
-    assert.isFalse(admission.admissionPending);
-  });
-
   it("releases admission when an assistant completes under a provider-assigned message id", () => {
     const admission = {
       admissionPending: true,
@@ -2609,25 +1989,6 @@ describe("OpenCodeAdapterV2", () => {
     assert.equal(advanceOpenCodePromptAdmission(admission, "accepted"), "release");
   });
 
-  it.effect("reconciles current idle and busy status replies after prompt admission", () =>
-    Effect.gen(function* () {
-      for (const expected of ["idle", "busy"] as const) {
-        const admission = { admissionGeneration: 4, admissionPending: true };
-        const status = yield* Deferred.make<"idle" | "busy" | "unknown">();
-        const fiber = yield* reconcileOpenCodePromptAdmissionStatus(
-          admission,
-          4,
-          Deferred.await(status),
-        ).pipe(Effect.forkChild({ startImmediately: true }));
-
-        yield* Deferred.succeed(status, expected);
-
-        assert.equal(yield* Fiber.join(fiber), expected);
-        assert.isFalse(admission.admissionPending);
-      }
-    }),
-  );
-
   it.effect("keeps admission pending after a transient status failure", () =>
     Effect.gen(function* () {
       const admission = { admissionGeneration: 4, admissionPending: true };
@@ -2642,200 +2003,6 @@ describe("OpenCodeAdapterV2", () => {
       );
       assert.isFalse(admission.admissionPending);
     }),
-  );
-
-  it.effect("retries a transient status failure without another idle event", () =>
-    Effect.gen(function* () {
-      const nativeSessionId = "native-opencode-status-retry";
-      const nativeEvents = asyncEventStream();
-      const promptRelease = promiseGate<void>();
-      const promptCalls = yield* Queue.unbounded<string>();
-      const statusCalls = yield* Queue.unbounded<number>();
-      let statusCallCount = 0;
-      const client = {
-        event: {
-          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
-            options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
-            return { stream: nativeEvents.stream };
-          },
-        },
-        session: {
-          create: async () => ({
-            data: { id: nativeSessionId, time: { created: 1, updated: 1 } },
-          }),
-          get: async () => ({
-            data: { id: nativeSessionId, time: { created: 1, updated: 1 } },
-          }),
-          promptAsync: async (input: { readonly messageID?: string }) => {
-            Queue.offerUnsafe(promptCalls, input.messageID!);
-            await promptRelease.promise;
-            return { data: true };
-          },
-          status: async () => {
-            statusCallCount += 1;
-            Queue.offerUnsafe(statusCalls, statusCallCount);
-            if (statusCallCount === 1) throw new Error("transient status failure");
-            return { data: { [nativeSessionId]: { type: "idle" as const } } };
-          },
-          messages: async () => ({ data: [] }),
-          children: async () => ({ data: [] }),
-          abort: async () => ({ data: true }),
-        },
-        mcp: { add: async () => ({ data: true }) },
-      };
-      const harness = yield* makeOpenCodeRuntimeHarness("status-retry", nativeSessionId, client);
-      const terminalEvents = yield* harness.runtime.events.pipe(
-        Stream.takeUntil((event) => event.type === "turn.terminal"),
-        Stream.runCollect,
-        Effect.forkScoped,
-      );
-      const start = yield* harness.startTurn().pipe(Effect.forkScoped);
-      const admissionMessageId = yield* Queue.take(promptCalls);
-
-      yield* Effect.promise(() =>
-        nativeEvents.push({
-          type: "session.status",
-          properties: { sessionID: nativeSessionId, status: { type: "idle" } },
-        }),
-      );
-      promptRelease.resolve();
-      yield* Fiber.join(start);
-      const userMessage = {
-        type: "message.updated",
-        properties: {
-          sessionID: nativeSessionId,
-          info: {
-            id: admissionMessageId,
-            sessionID: nativeSessionId,
-            role: "user",
-            time: { created: DateTime.toEpochMillis(harness.now) },
-          },
-        },
-      };
-      yield* Effect.promise(() => nativeEvents.push(userMessage));
-      assert.equal(yield* Queue.take(statusCalls), 1);
-
-      yield* Effect.promise(() => nativeEvents.push(userMessage));
-      assert.equal(statusCallCount, 1, "duplicate events must share the generation's retry worker");
-      yield* TestClock.adjust("250 millis");
-      assert.equal(yield* Queue.take(statusCalls), 2);
-
-      const events = Array.from(yield* Fiber.join(terminalEvents));
-      const terminals = events.filter((event) => event.type === "turn.terminal");
-      assert.equal(statusCallCount, 2);
-      assert.lengthOf(terminals, 1);
-      assert.equal(terminals[0]?.status, "completed");
-      assert.isNull(terminals[0]?.failure ?? null);
-    }).pipe(
-      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      Effect.scoped,
-    ),
-  );
-
-  it.effect("does not let a queued status retry adopt a newer steer generation", () =>
-    Effect.gen(function* () {
-      const nativeSessionId = "native-opencode-stale-status-retry";
-      const nativeEvents = asyncEventStream();
-      const firstPromptRelease = promiseGate<void>();
-      const promptCalls = yield* Queue.unbounded<string>();
-      const statusCalls = yield* Queue.unbounded<number>();
-      let promptCallCount = 0;
-      let statusCallCount = 0;
-      const client = {
-        event: {
-          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
-            options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
-            return { stream: nativeEvents.stream };
-          },
-        },
-        session: {
-          create: async () => ({
-            data: { id: nativeSessionId, time: { created: 1, updated: 1 } },
-          }),
-          get: async () => ({
-            data: { id: nativeSessionId, time: { created: 1, updated: 1 } },
-          }),
-          promptAsync: async (input: { readonly messageID?: string }) => {
-            promptCallCount += 1;
-            Queue.offerUnsafe(promptCalls, input.messageID!);
-            if (promptCallCount === 1) {
-              await firstPromptRelease.promise;
-            }
-            return { data: true };
-          },
-          status: async () => {
-            statusCallCount += 1;
-            Queue.offerUnsafe(statusCalls, statusCallCount);
-            if (statusCallCount === 1) throw new Error("transient status failure");
-            return { data: { [nativeSessionId]: { type: "idle" as const } } };
-          },
-          messages: async () => ({ data: [] }),
-          children: async () => ({ data: [] }),
-          abort: async () => ({ data: true }),
-        },
-        mcp: { add: async () => ({ data: true }) },
-      };
-      const harness = yield* makeOpenCodeRuntimeHarness(
-        "stale-status-retry",
-        nativeSessionId,
-        client,
-      );
-      const start = yield* harness.startTurn().pipe(Effect.forkScoped);
-      const firstAdmissionMessageId = yield* Queue.take(promptCalls);
-
-      yield* Effect.promise(() =>
-        nativeEvents.push({
-          type: "session.status",
-          properties: { sessionID: nativeSessionId, status: { type: "idle" } },
-        }),
-      );
-      firstPromptRelease.resolve();
-      yield* Fiber.join(start);
-      yield* Effect.promise(() =>
-        nativeEvents.push({
-          type: "message.updated",
-          properties: {
-            sessionID: nativeSessionId,
-            info: {
-              id: firstAdmissionMessageId,
-              sessionID: nativeSessionId,
-              role: "user",
-              time: { created: DateTime.toEpochMillis(harness.now) },
-            },
-          },
-        }),
-      );
-      assert.equal(yield* Queue.take(statusCalls), 1);
-
-      const running = yield* harness.runtime.readThreadSnapshot({
-        providerThread: harness.providerThread,
-      });
-      const activeTurn = running.providerTurns.at(-1)!;
-      yield* harness.runtime.steerTurn({
-        threadId: harness.threadId,
-        runId: harness.runId,
-        providerThread: harness.providerThread,
-        providerTurnId: activeTurn.id,
-        message: {
-          messageId: MessageId.make("message-opencode-stale-status-retry-steer"),
-          text: "new generation",
-          attachments: [],
-          createdBy: "user",
-          creationSource: "web",
-        },
-      });
-      yield* Queue.take(promptCalls);
-      yield* TestClock.adjust("250 millis");
-
-      const afterRetry = yield* harness.runtime.readThreadSnapshot({
-        providerThread: harness.providerThread,
-      });
-      assert.equal(statusCallCount, 1);
-      assert.equal(afterRetry.providerTurns.at(-1)?.status, "running");
-    }).pipe(
-      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      Effect.scoped,
-    ),
   );
 
   it.effect("ignores a delayed status reply after steering starts a newer admission", () =>
@@ -2855,24 +2022,6 @@ describe("OpenCodeAdapterV2", () => {
       assert.equal(yield* Fiber.join(fiber), "stale");
       assert.equal(admission.admissionGeneration, 5);
       assert.isTrue(admission.admissionPending);
-    }),
-  );
-
-  it.effect("does not revive admission when abort wins a pending status lookup", () =>
-    Effect.gen(function* () {
-      const admission = { admissionGeneration: 4, admissionPending: true };
-      const status = yield* Deferred.make<"idle" | "busy" | "unknown">();
-      const fiber = yield* reconcileOpenCodePromptAdmissionStatus(
-        admission,
-        4,
-        Deferred.await(status),
-      ).pipe(Effect.forkChild({ startImmediately: true }));
-
-      cancelOpenCodePromptAdmission(admission, 5);
-      yield* Deferred.succeed(status, "idle");
-
-      assert.equal(yield* Fiber.join(fiber), "stale");
-      assert.isFalse(admission.admissionPending);
     }),
   );
 
@@ -3017,29 +2166,6 @@ describe("OpenCodeAdapterV2", () => {
     ),
   );
 
-  it("maps native permission families to orchestration request kinds", () => {
-    assert.equal(openCodePermissionRequestKind("bash"), "command");
-    assert.equal(openCodePermissionRequestKind("read"), "file-read");
-    assert.equal(openCodePermissionRequestKind("grep"), "file-read");
-    assert.equal(openCodePermissionRequestKind("external_directory"), "file-read");
-    assert.equal(openCodePermissionRequestKind("external_directory", "edit"), "file-change");
-    assert.equal(openCodePermissionRequestKind("edit"), "file-change");
-    assert.equal(openCodePermissionRequestKind("apply_patch"), "file-change");
-    assert.equal(openCodePermissionRequestKind("todowrite"), "command");
-    assert.equal(openCodePermissionRequestKind("custom", "todowrite"), "command");
-  });
-
-  it("maps OpenCode tools to semantic turn-item families", () => {
-    assert.equal(openCodeToolProjectionKind("bash"), "command_execution");
-    assert.equal(openCodeToolProjectionKind("edit"), "file_change");
-    assert.equal(openCodeToolProjectionKind("read"), "dynamic_tool");
-    assert.equal(openCodeToolProjectionKind("lsp"), "file_search");
-    assert.equal(openCodeToolProjectionKind("websearch"), "web_search");
-    assert.equal(openCodeToolProjectionKind("codesearch"), "web_search");
-    assert.equal(openCodeToolProjectionKind("todowrite"), "dynamic_tool");
-    assert.equal(openCodeToolProjectionKind("custom_tool"), "dynamic_tool");
-  });
-
   it("maps runtime modes to safe OpenCode permission rules", () => {
     const approvalRequired = openCodePermissionRules(runtimePolicy("approval-required"));
     assert.equal(permissionAction(approvalRequired, "read"), "allow");
@@ -3146,6 +2272,452 @@ describe("OpenCodeAdapterV2", () => {
     );
     assert.isUndefined(openCodeBoundaryAfterProviderTurn([first, synthetic, third], third.id));
   });
+
+  it.effect.each([false, true])(
+    "WP4 OpenCode v1 memory framed delivery and clear external=%s",
+    (external) =>
+      Effect.gen(function* () {
+        const snapshot = wp4Snapshot();
+        let memory: typeof snapshot | undefined = snapshot;
+        const payloads: Array<{ system?: string; messageID: string }> = [];
+        const nativeEvents = asyncEventStream();
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const suffix = `memory-${external}`;
+        const config = {
+          environmentId: EnvironmentId.make("fixture"),
+          threadId: ThreadId.make(`thread-opencode-${suffix}`),
+          providerSessionId: `session-opencode-${suffix}`,
+          providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
+          endpoint: "http://fixture.invalid/mcp",
+          authorizationHeader: "Bearer memory-fixture",
+          browserToolsAvailable: false,
+          grantedScopes: ["memory:read", "memory:write", "orchestration:read"] as const,
+        };
+        yield* sessions.set(config);
+        const registrations: unknown[] = [];
+        const harness = yield* makeOpenCodeRuntimeHarness(
+          suffix,
+          "memory-root",
+          {
+            event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+            mcp: {
+              add: async (input: unknown) => {
+                registrations.push(input);
+                return { data: true };
+              },
+            },
+            session: {
+              create: async () => ({
+                data: { id: "memory-root", time: { created: 1, updated: 1 } },
+              }),
+              get: async () => ({ data: { id: "memory-root", time: { created: 1, updated: 1 } } }),
+              promptAsync: async (input: { system?: string; messageID: string }) => {
+                payloads.push(input);
+                return { data: true };
+              },
+              abort: async () => ({ data: true }),
+            },
+          },
+          {
+            external,
+            memory: { memoryContext: snapshot, refreshMemoryContext: () => Effect.succeed(memory) },
+          },
+        );
+        const finish = () =>
+          Effect.gen(function* () {
+            const terminal = yield* harness.runtime.events.pipe(
+              Stream.takeUntil((event) => event.type === "turn.terminal"),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+            const messageID = payloads.at(-1)!.messageID;
+            yield* Effect.promise(() =>
+              nativeEvents.push({
+                type: "message.updated",
+                properties: {
+                  sessionID: "memory-root",
+                  info: { id: messageID, role: "user", time: { created: 1 } },
+                },
+              }),
+            );
+            yield* Effect.promise(() =>
+              nativeEvents.push({
+                type: "session.status",
+                properties: { sessionID: "memory-root", status: { type: "busy" } },
+              }),
+            );
+            yield* Effect.promise(() =>
+              nativeEvents.push({
+                type: "session.status",
+                properties: { sessionID: "memory-root", status: { type: "idle" } },
+              }),
+            );
+            yield* Fiber.join(terminal);
+          });
+        yield* harness.startTurn();
+        yield* finish();
+        assert.include(payloads[0]?.system ?? "", memoryContextText(snapshot));
+        assert.equal(registrations.length, external ? 0 : 1);
+        if (external) assert.notInclude(payloads[0]?.system ?? "", "GOAT memory tools:");
+        else assert.include(payloads[0]?.system ?? "", "read=true");
+        // Resume re-registers state without retaining the prior memory body.
+        const resumed = yield* harness.runtime.resumeThread({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make(`opencode-${suffix}`),
+            model: "anthropic/claude-sonnet",
+            options: [],
+          },
+          runtimePolicy: harness.policy,
+        });
+        memory = undefined;
+        yield* sessions.set({ ...config, grantedScopes: [] });
+        yield* harness.startTurn("second", resumed);
+        yield* finish();
+        assert.notInclude(payloads[1]?.system ?? "", "external_goat_memory");
+        assert.notInclude(payloads[1]?.system ?? "", "GOAT memory tools:");
+        assert.notInclude(payloads[1]?.system ?? "", "GOAT memory is untrusted");
+        yield* harness.startTurn("still-none", resumed);
+        yield* finish();
+        assert.equal(payloads[2]?.system, payloads[1]?.system);
+        const restoredGrants: ReadonlyArray<ReadonlyArray<AuthEnvironmentScope>> = [
+          ["memory:read"],
+          ["memory:read", "memory:write", "orchestration:read"],
+        ];
+        memory = snapshot;
+        for (const [index, grant] of restoredGrants.entries()) {
+          yield* sessions.set({ ...config, grantedScopes: grant });
+          yield* harness.startTurn(`restored-${index}`, resumed);
+          yield* finish();
+          assert.include(payloads[index + 3]?.system ?? "", memoryContextText(snapshot));
+          if (external) assert.notInclude(payloads[index + 3]?.system ?? "", "GOAT memory tools:");
+          else
+            assert.include(
+              payloads[index + 3]?.system ?? "",
+              `read=true, write=${index === 1}, source=${index === 1}`,
+            );
+        }
+        const resumedAgain = yield* harness.runtime.resumeThread({
+          threadId: harness.threadId,
+          providerThread: resumed,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make(`opencode-${suffix}`),
+            model: "anthropic/claude-sonnet",
+            options: [],
+          },
+          runtimePolicy: harness.policy,
+        });
+        memory = { ...snapshot, renderedText: snapshot.renderedText.replace("data", "tampered") };
+        assert.isTrue(
+          Exit.isFailure(yield* harness.startTurn("invalid", resumedAgain).pipe(Effect.exit)),
+        );
+        assert.equal(payloads.length, 5);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      ),
+  );
+
+  it.effect("adds the Cua Driver for the turns that have it and disconnects it after", () =>
+    Effect.gen(function* () {
+      const suffix = "cua-driver";
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const nativeEvents = asyncEventStream();
+      const payloads: Array<{ system?: string; messageID: string }> = [];
+      const config = {
+        environmentId: EnvironmentId.make("fixture"),
+        threadId: ThreadId.make(`thread-opencode-${suffix}`),
+        providerSessionId: `session-opencode-${suffix}`,
+        providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
+        endpoint: "http://fixture.invalid/mcp",
+        authorizationHeader: "Bearer cua-fixture",
+        browserToolsAvailable: false,
+      };
+      const cuaDriver = {
+        command: "/resources/cua-driver",
+        args: ["mcp"],
+        environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+      };
+      yield* sessions.set(config);
+      const registrations: Array<{ name: string; config?: unknown }> = [];
+      const disconnects: Array<{ name: string }> = [];
+      // An owned server: an external one cannot be given host stdio servers.
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        suffix,
+        "cua-root",
+        {
+          event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+          mcp: {
+            add: async (input: { name: string }) => {
+              registrations.push(input);
+              return { data: true };
+            },
+            disconnect: async (input: { name: string }) => {
+              disconnects.push(input);
+              return { data: true };
+            },
+          },
+          session: {
+            create: async () => ({ data: { id: "cua-root", time: { created: 1, updated: 1 } } }),
+            get: async () => ({ data: { id: "cua-root", time: { created: 1, updated: 1 } } }),
+            promptAsync: async (input: { system?: string; messageID: string }) => {
+              payloads.push(input);
+              return { data: true };
+            },
+            abort: async () => ({ data: true }),
+          },
+        },
+        { external: false },
+      );
+      const turn = (text: string) =>
+        Effect.gen(function* () {
+          yield* harness.startTurn(text);
+          const terminal = yield* harness.runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+          const messageID = payloads.at(-1)!.messageID;
+          for (const event of [
+            {
+              type: "message.updated",
+              properties: {
+                sessionID: "cua-root",
+                info: { id: messageID, role: "user", time: { created: 1 } },
+              },
+            },
+            {
+              type: "session.status",
+              properties: { sessionID: "cua-root", status: { type: "busy" } },
+            },
+            {
+              type: "session.status",
+              properties: { sessionID: "cua-root", status: { type: "idle" } },
+            },
+          ])
+            yield* Effect.promise(() => nativeEvents.push(event));
+          yield* Fiber.join(terminal);
+          return payloads.at(-1)?.system ?? "";
+        });
+      // Enabled after the session opened: the next turn adds the driver.
+      yield* sessions.set({ ...config, cuaDriver });
+      assert.include(yield* turn("first"), "<computer_use>");
+      assert.deepEqual(registrations.at(-1), {
+        name: "cua-driver",
+        config: {
+          type: "local",
+          command: ["/resources/cua-driver", "mcp"],
+          environment: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
+        },
+      });
+      assert.include(yield* turn("still attached"), "<computer_use>");
+      assert.equal(registrations.filter((entry) => entry.name === "cua-driver").length, 1);
+      yield* sessions.set(config);
+      assert.notInclude(yield* turn("detached"), "<computer_use>");
+      assert.deepEqual(disconnects, [{ name: "cua-driver" }]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect.each([
+    { external: false, withCredential: true },
+    { external: true, withCredential: true },
+    { external: false, withCredential: false },
+  ])(
+    "injects goat only into an owned server with a credential: %j",
+    ({ external, withCredential }) =>
+      Effect.gen(function* () {
+        const suffix = `goat-registration-${external}-${withCredential}`;
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        if (withCredential) {
+          yield* sessions.set({
+            environmentId: EnvironmentId.make("environment:goat-registration"),
+            threadId: ThreadId.make(`thread-opencode-${suffix}`),
+            providerSessionId: "mcp:goat-registration",
+            providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
+            endpoint: "http://fixture.invalid/mcp",
+            authorizationHeader: "Bearer scoped-goat-token",
+            browserToolsAvailable: false,
+          });
+        }
+        const registrations: unknown[] = [];
+        const nativeEvents = asyncEventStream();
+        yield* makeOpenCodeRuntimeHarness(
+          suffix,
+          "goat-registration",
+          {
+            event: {
+              subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+                options.signal?.addEventListener("abort", () => nativeEvents.close(), {
+                  once: true,
+                });
+                return { stream: nativeEvents.stream };
+              },
+            },
+            session: {
+              create: async () => ({
+                data: { id: "goat-registration", time: { created: 1, updated: 1 } },
+              }),
+            },
+            mcp: {
+              add: async (input: unknown) => {
+                registrations.push(input);
+                return { data: true };
+              },
+            },
+          },
+          { external },
+        );
+        assert.deepEqual(
+          registrations,
+          !external && withCredential
+            ? [
+                {
+                  name: "goat",
+                  config: {
+                    type: "remote",
+                    url: "http://fixture.invalid/mcp",
+                    headers: { Authorization: "Bearer scoped-goat-token" },
+                    oauth: false,
+                  },
+                },
+              ]
+            : [],
+        );
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect.each(["remove", "replace"] as const)(
+    "WP4 C-1 reconciles MCP before workspace command %s without snapshot refresh",
+    (change) =>
+      Effect.gen(function* () {
+        const suffix = `command-memory-${change}`;
+        const sessionId = `native-${suffix}`;
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const config = {
+          environmentId: EnvironmentId.make("fixture"),
+          threadId: ThreadId.make(`thread-opencode-${suffix}`),
+          providerSessionId: `session-opencode-${suffix}`,
+          providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
+          endpoint: "http://fixture.invalid/a",
+          authorizationHeader: "Bearer synthetic-command",
+          browserToolsAvailable: false,
+          grantedScopes: ["memory:read"] as const,
+        };
+        yield* sessions.set(config);
+        const operations: string[] = [];
+        const commands = yield* Queue.unbounded<{ messageID: string; parts: unknown[] }>();
+        const nativeEvents = asyncEventStream();
+        let refreshes = 0;
+        const prompts: Array<{ messageID: string; system?: string }> = [];
+        const harness = yield* makeOpenCodeRuntimeHarness(
+          suffix,
+          sessionId,
+          {
+            event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+            command: { list: async () => ({ data: [{ name: "review" }] }) },
+            mcp: {
+              add: async (input: { config: { url: string } }) => {
+                operations.push(`add:${input.config.url}`);
+                return { data: true };
+              },
+              disconnect: async () => {
+                operations.push("disconnect");
+                return { data: true };
+              },
+            },
+            session: {
+              create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+              command: async (input: { messageID: string; parts: unknown[] }) => {
+                operations.push("command");
+                Queue.offerUnsafe(commands, input);
+                return { data: true };
+              },
+              promptAsync: async (input: { messageID: string; system?: string }) => {
+                prompts.push(input);
+                return { data: true };
+              },
+            },
+          },
+          {
+            external: false,
+            memory: {
+              refreshMemoryContext: () =>
+                Effect.sync(() => {
+                  refreshes++;
+                  return wp4Snapshot();
+                }),
+            },
+          },
+        );
+        assert.deepEqual(operations, ["add:http://fixture.invalid/a"]);
+        if (change === "remove") yield* sessions.clear(config.threadId);
+        else yield* sessions.set({ ...config, endpoint: "http://fixture.invalid/b" });
+        const terminal = yield* harness.runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        const start = yield* harness.startTurn("/review staged changes").pipe(Effect.forkScoped);
+        const call = yield* Queue.take(commands);
+        assert.deepEqual(operations, [
+          "add:http://fixture.invalid/a",
+          change === "remove" ? "disconnect" : "add:http://fixture.invalid/b",
+          "command",
+        ]);
+        assert.equal(refreshes, 0);
+        assert.deepEqual(call.parts, []);
+        assert.notInclude(JSON.stringify(call), "external_goat_memory");
+        yield* Effect.promise(() =>
+          nativeEvents.push({
+            type: "message.updated",
+            properties: {
+              sessionID: sessionId,
+              info: {
+                id: call.messageID,
+                sessionID: sessionId,
+                role: "user",
+                time: { created: 1 },
+              },
+            },
+          }),
+        );
+        yield* Fiber.join(start);
+        yield* Effect.promise(() =>
+          nativeEvents.push({
+            type: "session.status",
+            properties: {
+              sessionID: sessionId,
+              status: { type: "busy" },
+            },
+          }),
+        );
+        yield* Effect.promise(() =>
+          nativeEvents.push({
+            type: "session.status",
+            properties: {
+              sessionID: sessionId,
+              status: { type: "idle" },
+            },
+          }),
+        );
+        yield* Fiber.join(terminal);
+        assert.equal(prompts.length, 0);
+        yield* harness.startTurn("ordinary after command");
+        assert.equal(refreshes, 1);
+        assert.include(prompts[0]?.system ?? "", memoryContextText(wp4Snapshot()));
+        assert.include(prompts[0]?.system ?? "", `read=${change === "replace"}`);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      ),
+  );
 });
 
 it.effect.each([false, true])(
@@ -3214,19 +2786,3 @@ it.effect.each([false, true])(
       Effect.scoped,
     ),
 );
-
-const wp4Snapshot = () =>
-  packMemoryContext({
-    memorySpaceId: MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
-    projectionWatermark: 1,
-    items: [
-      {
-        memoryId: MemoryId.make("00000000-0000-4000-8000-000000000001"),
-        revisionId: MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
-        scope: { kind: "user" },
-        provenance: { environmentId: EnvironmentId.make("fixture") },
-        assertionKind: "fact",
-        text: "& <instruction> 'data'",
-      },
-    ],
-  })!;

@@ -43,6 +43,7 @@ import {
   extractXAiBackgroundTaskCompletion,
   extractXAiKilledBackgroundTasks,
   extractXAiMonitorTaskId,
+  xAiBackgroundShellTaskId,
   isXAiPersistentMonitor,
   extractXAiExitPlanMarkdown,
   registerXAiSubagentFinished,
@@ -55,8 +56,12 @@ import {
   XAiExitPlanModeRequest,
 } from "./xaiAcpExtension.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
+import { applyStoredGrokApiKey, GROK_CREDENTIAL_NAMESPACE, readStoredGrokApiKey } from "./auth.ts";
 import { acpPermissionDisposition } from "@goat/provider-acp/server/clientPolicy";
-import { sessionModelStateFromInitialize } from "@goat/provider-acp/server/runtimeModel";
+import {
+  findModelConfigOption,
+  sessionModelStateFromInitialize,
+} from "@goat/provider-acp/server/runtimeModel";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -81,7 +86,7 @@ export const GROK_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(GROK_DRIVER_K
 const DEFAULT_GROK_SETTINGS = Schema.decodeSync(GrokSettings)({});
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 
-export const GrokProviderCapabilitiesV2 = {
+const GrokProviderCapabilitiesV2 = {
   ...AcpProviderCapabilitiesV2,
   sessions: {
     ...AcpProviderCapabilitiesV2.sessions,
@@ -114,6 +119,8 @@ export interface GrokAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: GrokSettings;
   readonly environment: NodeJS.ProcessEnv;
+  /** Read at each launch so a key saved after this adapter was created reaches the CLI. */
+  readonly readStoredApiKey?: Effect.Effect<string | undefined>;
   readonly hostPlatform: NodeJS.Platform;
   readonly selfInvocation: SelfInvocation;
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
@@ -261,33 +268,37 @@ export function makeGrokAcpAdapterFlavor(
         ? window
         : undefined;
     },
-    applyModelSelection: ({ runtime, startResult, modelSelection }) =>
-      Effect.gen(function* () {
-        const legacy = startResult.initializeResult.protocolVersion === 1;
-        const options = legacy ? [] : yield* runtime.getConfigOptions;
-        const configuredModel = options.find((option) => option.category === "model")?.currentValue;
-        return yield* applyGrokAcpModelSelection({
-          runtime: legacy
-            ? runtime
-            : { setSessionModel: (model) => runtime.setModel(model).pipe(Effect.as({})) },
-          currentModelId: legacy
-            ? currentGrokModelIdFromSessionSetup(startResult.sessionSetupResult)
-            : typeof configuredModel === "string"
-              ? configuredModel
-              : undefined,
-          requestedModelId: resolveGrokAcpBaseModelId(modelSelection.model),
-          mapError: (cause) => cause,
-        });
-      }),
+    applyModelSelection: Effect.fn("GrokAdapter.applyModelSelection")(function* ({
+      runtime,
+      startResult,
+      modelSelection,
+    }) {
+      const legacy = startResult.initializeResult.protocolVersion === 1;
+      const options = legacy ? [] : yield* runtime.getConfigOptions;
+      const configuredModel = findModelConfigOption(options)?.currentValue;
+      return yield* applyGrokAcpModelSelection({
+        runtime: legacy
+          ? runtime
+          : { setSessionModel: (model) => runtime.setModel(model).pipe(Effect.as({})) },
+        currentModelId: legacy
+          ? currentGrokModelIdFromSessionSetup(startResult.sessionSetupResult)
+          : configuredModel,
+        requestedModelId: resolveGrokAcpBaseModelId(modelSelection.model),
+        mapError: (cause) => cause,
+      });
+    }),
     makeRuntime:
       options.makeRuntime ??
       (({ runtimePolicy, ...input }) =>
-        makeGrokAcpRuntime({
-          ...input,
-          interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
-          grokSettings: options.settings,
-          environment: options.environment,
-          runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
+        Effect.gen(function* () {
+          const stored = options.readStoredApiKey ? yield* options.readStoredApiKey : undefined;
+          return yield* makeGrokAcpRuntime({
+            ...input,
+            interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
+            grokSettings: options.settings,
+            environment: applyStoredGrokApiKey(options.environment, stored),
+            runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
+          });
         })),
     // In its Auto mode Grok decides routine actions itself and only asks about
     // what its classifier blocked, so every prompt it sends goes to the user.
@@ -319,6 +330,7 @@ export function makeGrokAcpAdapterFlavor(
         homeDirectory,
       }),
     extractBackgroundTaskId: extractXAiMonitorTaskId,
+    isBackgroundCommandTool: (toolCall) => xAiBackgroundShellTaskId(toolCall) !== undefined,
     extractBackgroundToolMutation: extractXAiAcpBackgroundToolMutation,
     extractBackgroundTaskCompletion: (toolCall) => [
       ...extractXAiBackgroundTaskCompletion(toolCall),
@@ -365,6 +377,10 @@ export const GrokAdapterV2Driver: ProviderAdapterDriver<GrokSettings, GrokAdapte
     function* (input: ProviderAdapterDriverCreateInput<GrokSettings>) {
       const hostEnvironment = yield* HostProcess.Environment;
       const hostPlatform = yield* HostProcess.Platform;
+      const credentials = yield* (yield* ProviderHost.ProviderHost).credentials(
+        GROK_CREDENTIAL_NAMESPACE,
+        input.instanceId,
+      );
       const selfInvocation = yield* resolveSelfInvocation();
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
       const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
@@ -373,6 +389,7 @@ export const GrokAdapterV2Driver: ProviderAdapterDriver<GrokSettings, GrokAdapte
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
         environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        readStoredApiKey: readStoredGrokApiKey(credentials),
         hostPlatform,
         selfInvocation,
         continuationRequests,
@@ -419,10 +436,15 @@ const layer: Layer.Layer<
     const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
     const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
     const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
+    const credentials = yield* (yield* ProviderHost.ProviderHost).credentials(
+      GROK_CREDENTIAL_NAMESPACE,
+      GROK_DEFAULT_INSTANCE_ID,
+    );
     return yield* makeGrokAdapterV2({
       instanceId: GROK_DEFAULT_INSTANCE_ID,
       settings: DEFAULT_GROK_SETTINGS,
       environment: hostEnvironment,
+      readStoredApiKey: readStoredGrokApiKey(credentials),
       hostPlatform,
       selfInvocation,
       continuationRequests,

@@ -160,9 +160,10 @@ export function isMachO(bytes: Uint8Array): boolean {
 // machine (its home, workspace and checkout) fail anywhere they appear.
 // On Windows and Linux, Electron's runtime (the renamed electron executable, its
 // libraries, .pak files and locales) sits beside resources/ in the unpacked app;
-// GOAT's own code lives under resources/.
+// GOAT's own code lives under resources/. Cua Driver under resources/cua-driver is a
+// vendored upstream release whose executables carry the paths of the CI that built them.
 const thirdParty =
-  /(?:^|\/)node_modules\/|\/Contents\/Frameworks\/|(?:^|\/)(?:(?:win|linux)(?:-[a-z0-9]+)?-unpacked|__appImage-[a-z0-9]+)\/(?!resources\/)/;
+  /(?:^|\/)node_modules\/|\/Contents\/Frameworks\/|\/[Rr]esources\/cua-driver\/|(?:^|\/)(?:(?:win|linux)(?:-[a-z0-9]+)?-unpacked|__appImage-[a-z0-9]+)\/(?!resources\/)/;
 // GOAT's own workspace packages stay GOAT code even when they land in node_modules.
 const goatPackage = /(?:^|\/)node_modules\/@goat\//;
 const buildPath =

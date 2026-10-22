@@ -21,7 +21,7 @@ import {
   RUNTIME_MANIFEST_ARCHIVE_ENTRY,
 } from "@goat/shared/runtimeManifest";
 import { runtimeManifestMismatch } from "./lib/runtime-manifest.ts";
-import { windowsSystemTar } from "./build-cli-archive.ts";
+import { windowsSystemTar } from "./lib/windows-tar.ts";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 export class CliArchiveSmokeError extends Schema.TaggedError<CliArchiveSmokeError>()(

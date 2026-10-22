@@ -6,11 +6,7 @@ import {
   resolveRelayClerkTokenOptions,
   resolveRelayTracingConfig,
 } from "./publicConfig";
-import {
-  buildConnectCliClerkAuthorizeUrl,
-  connectCliAuthRoutesEnabled,
-  hasConnectCliAuthConfig,
-} from "./connectCliAuth";
+import { buildConnectCliClerkAuthorizeUrl, connectCliAuthRoutesEnabled } from "./connectCliAuth";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -39,7 +35,6 @@ describe("GOAT Connect disabled with complete public configuration", () => {
     expect(hasCloudPublicConfig()).toBe(false);
     expect(resolveRelayTracingConfig()).toBeNull();
     expect(() => resolveRelayClerkTokenOptions()).toThrowError(CloudPublicConfigMissingError);
-    expect(hasConnectCliAuthConfig()).toBe(false);
     expect(connectCliAuthRoutesEnabled()).toBe(false);
     expect(
       buildConnectCliClerkAuthorizeUrl({

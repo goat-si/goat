@@ -69,7 +69,12 @@ import { useProjects, useServerConfigs, waitForProject } from "../../state/entit
 import { filesystemEnvironment } from "../../state/filesystem";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
-import { environmentSession, useEnvironmentScope, readEnvironmentScope } from "../../state/session";
+import {
+  environmentSession,
+  readEnvironmentProxiedByHub,
+  readEnvironmentScope,
+  useEnvironmentScope,
+} from "../../state/session";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { sourceControlEnvironment } from "../../state/sourceControl";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
@@ -723,6 +728,7 @@ function useCreateProject(environment: EnvironmentOption | null) {
       commandId: CommandId.make(uuidv4()),
       projectId,
       workspaceRoot,
+      proxiedByHub: readEnvironmentProxiedByHub(environment.environmentId),
     });
     const result = await createProject({
       environmentId: environment.environmentId,

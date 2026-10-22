@@ -23,6 +23,7 @@ import * as Client from "./MemoryHubClient.ts";
 import * as Hub from "./MemoryHubService.ts";
 import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
+import * as Hold from "./MemoryGenerationHold.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { memoryOperationDigest } from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
@@ -142,6 +143,7 @@ const selectionKey = Schema.encodeSync(Schema.fromJsonString(M.MemoryModelSelect
 // New conflict claims freeze the memory model; frozen tickets keep theirs across devices.
 const memorySelection = (s: M.ServerSettings) =>
   s.memoryEnabled ? resolveMemoryModelSelection(s, undefined) : null;
+const decodeMemorySelection = Schema.decodeUnknownEffect(M.MemoryModelSelection);
 const decodePull = Schema.decodeUnknownEffect(M.MemoryHubPullResult);
 const decodeSource = Schema.decodeUnknownEffect(M.MemorySourceReadOutcome);
 const decodeGenerated = Schema.decodeUnknownEffect(M.ResolveMemoryConflictExecutionResult);
@@ -172,6 +174,7 @@ const holdClass = (e: Error): Store.MemoryHoldClass =>
           ].includes(failureCode(e))
         ? "protocol"
         : "availability";
+const HELD_CLAIM_DEFER_MS = 60_000;
 const transient = (e: Error) =>
   e._tag === "MemoryStorageError" ||
   (e._tag === "MemoryHubError" &&
@@ -188,6 +191,7 @@ const make = Effect.gen(function* () {
   const runtime = yield* MemorySyncRuntime;
   const quota = yield* Quota.MemoryQuotaService;
   const generation = yield* Generation.TextGeneration;
+  const hold = yield* Hold.shared;
   const identity = yield* Environment.ServerEnvironmentIdentity;
   const local = yield* identity.getEnvironmentId;
   const scope = yield* Scope.Scope;
@@ -463,7 +467,22 @@ const make = Effect.gen(function* () {
       Effect.interruptible,
       Effect.timeout("15 seconds"),
       Effect.map((result) => result.released),
-      Effect.catch(() => Effect.succeed(false)),
+      // The Hub answers fenced when it holds no lease for this attempt, for example after a
+      // release whose response was lost; nothing is held, so callers may retire the attempt.
+      // The client raises the same code locally once settings no longer bind this connection,
+      // which proves nothing about the lease.
+      Effect.catch((error) =>
+        error._tag === "MemoryHubError" && error.code === "fenced"
+          ? readSettings.pipe(
+              Effect.map((current) =>
+                r.connection
+                  ? Client.isCurrentConnection(current, r.connection)
+                  : current.memoryHubVersion === r.settings.memoryHubVersion,
+              ),
+              Effect.orElseSucceed(() => false),
+            )
+          : Effect.succeed(false),
+      ),
     );
   };
   const eligibility = Effect.fnUntraced(function* (ticket: M.MemoryResolutionLease) {
@@ -701,12 +720,25 @@ const make = Effect.gen(function* () {
         yield* ensureEpoch(r.settings.memoryHubVersion);
         yield* eligibility(row.ticket);
         generationAttempted = true;
+        const holdKey = yield* hold.keyFor(input.modelSelection);
         const generated = yield* Effect.scoped(
           Effect.gen(function* () {
             // Renewal failure interrupts the provider, including a hung one-shot execution.
             return yield* Effect.raceFirst(
-              model(input).pipe(
-                Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })),
+              hold.guard(holdKey, model(input)).pipe(
+                // A held model or a refusal that repeats retires this attempt without a failure
+                // report (generation_failed is definitive but unreported): its lease is released
+                // and the conflict is claimed again once the model is no longer held.
+                Effect.mapError(
+                  (error) =>
+                    new M.MemoryHubError({
+                      code:
+                        error._tag === "MemoryGenerationHeld" ||
+                        Hold.deterministicFailure(error) !== undefined
+                          ? "generation_failed"
+                          : "invalid_output",
+                    }),
+                ),
               ),
               renew.pipe(Effect.flatMap(() => Effect.never)),
             );
@@ -1028,6 +1060,23 @@ const make = Effect.gen(function* () {
       ),
     );
   });
+  const heldSelection = (selection: unknown) =>
+    decodeMemorySelection(selection).pipe(
+      Effect.option,
+      Effect.flatMap((decoded) =>
+        Option.isSome(decoded)
+          ? hold.keyFor(decoded.value).pipe(Effect.flatMap(hold.isHeld))
+          : Effect.succeed(false),
+      ),
+    );
+  // Moving a held candidate back lets later due candidates (on healthy models) reach the
+  // bounded page; a minute keeps a model change from waiting out the old hold.
+  const deferHeld = (id: string) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.flatMap((now) =>
+        store.retryClaimCandidate(id, now + HELD_CLAIM_DEFER_MS, "generation_failed"),
+      ),
+    );
   const sweep: Effect.Effect<void, Error> = registryMutex.withPermit(
     Effect.gen(function* () {
       const r = yield* route();
@@ -1069,6 +1118,8 @@ const make = Effect.gen(function* () {
             if (!frozen) {
               const selection = memorySelection(yield* readSettings);
               if (!selection) return yield* new M.MemoryHubError({ code: "route_unavailable" });
+              // A held model would refuse at once: leave the conflict unclaimed until it is due.
+              if (yield* heldSelection(selection)) return yield* deferHeld(work.id);
               yield* runtime.available(selection);
               frozen = yield* store.transact(
                 store.prepareClaimAttemptTx({
@@ -1087,6 +1138,9 @@ const make = Effect.gen(function* () {
               );
             }
             if (!frozen) return;
+            // A claim frozen earlier waits only on its own model.
+            if (yield* heldSelection(frozen.claim.frozenDefaultModelSelection))
+              return yield* deferHeld(work.id);
             prepared.value = frozen;
             const claimed = yield* store.transact(
               Effect.gen(function* () {
@@ -2273,6 +2327,17 @@ const make = Effect.gen(function* () {
           return yield* new M.MemoryHubError({ code: "fenced" });
         const failure = lastFailure?.epoch === epoch ? lastFailure.code : undefined;
         const success = lastSuccess?.epoch === epoch ? lastSuccess.at : null;
+        const selected = memorySelection(current);
+        const memoryModel =
+          selected === null
+            ? Option.none<M.MemoryModelSelection>()
+            : yield* decodeMemorySelection(selected).pipe(Effect.option);
+        const generationHold =
+          "includeGenerationHold" in input &&
+          input.includeGenerationHold &&
+          Option.isSome(memoryModel)
+            ? yield* hold.status(yield* hold.keyFor(memoryModel.value))
+            : undefined;
         return {
           memorySpaceId: space,
           ...(includeRetained
@@ -2294,6 +2359,7 @@ const make = Effect.gen(function* () {
           storage,
           processing: persisted.processing,
           ...(failure ? { failureCode: failure } : {}),
+          ...(generationHold ? { generationHold } : {}),
         };
       }),
     readSource: (validated, permit) =>

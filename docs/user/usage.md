@@ -114,9 +114,10 @@ anything. The command is offered only for providers that appear under **Usage â†
 
 OpenCode Go reports its session, weekly, and monthly allowance when OpenCode runs locally in
 the environment. GOAT cannot report limits for external OpenCode servers because their credentials
-belong to the remote server. Limits need an OpenCode Go API key. A Console sign-in alone
-does not report them. Add your Go API key as `OPENCODE_API_KEY` in the OpenCode instance's
-**Environment variables**, then refresh provider status. Cursor reports
+belong to the remote server. Limits need an OpenCode Go API key, or an OpenCode Console connected
+in OpenCode with an API key. A Console browser sign-in alone does not report them. You can also add
+your Go API key as `OPENCODE_API_KEY` in the OpenCode instance's **Environment variables**, then
+refresh provider status. Cursor reports
 its monthly allowance, including separate Auto and API usage, using the CLI login or
 `CURSOR_AUTH_TOKEN`. On macOS, this includes the default Keychain login after you enable Cursor
 usage. Keychain login is used for limits only with Cursor's default API endpoint. If you configure
@@ -197,6 +198,40 @@ aliases, with `local` for this machine:
 `goat_scheduler_status` shows each machine's threads against these limits, its quota per
 provider, why it would refuse goal work now, the models cooling down after a failure, and recent
 placement decisions.
+
+## Machines under heavy load
+
+Each machine watches its own load, CPU, memory, disk space, and whether GOAT itself stalls. A
+machine that stays busy for two minutes is under heavy load; very high load or a GOAT stall of
+five seconds makes it overloaded. Fleet telemetry shows an alert for it. Agents that started work
+there get a notice naming the busy work and the machines with room, and an overloaded machine
+wakes them so they stop adding work to it. An agent launching onto a busy machine is told where
+else to go, and goals do not place work on an overloaded one.
+
+Thresholds and behavior live under `fleet.pressure`; these are the defaults:
+
+```json
+{
+  "fleet": {
+    "pressure": {
+      "elevatedLoadPerCore": 1.5,
+      "criticalLoadPerCore": 3,
+      "elevatedCpuPercent": 90,
+      "criticalEventLoopDelayMs": 5000,
+      "sustainMs": 120000,
+      "notifyCooldownMs": 900000,
+      "elevatedDelivery": "notice",
+      "criticalDelivery": "wake",
+      "admission": "warn"
+    }
+  }
+}
+```
+
+Memory and disk thresholds are `elevatedMemoryFreePercent` (10), `criticalMemoryFreePercent` (5),
+`elevatedDiskFreeGiB` (10), and `criticalDiskFreeGiB` (2). Set `admission` to `"block"` to refuse
+agent launches onto an overloaded machine, a delivery to `"off"` to silence that level, or
+`enabled` to `false` to turn this off.
 
 ## Connect a CLIProxyAPI hub
 

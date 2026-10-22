@@ -1,5 +1,8 @@
 import {
   DesktopHostTelemetryMessage,
+  PRIMARY_LOCAL_ENVIRONMENT_ID,
+  type DesktopCuaDriverRequest,
+  type DesktopCuaDriverReport,
   type DesktopHostTelemetrySnapshot,
   type DesktopTelemetryControlMessage,
   type DesktopTelemetryCancelDesktopUpdate,
@@ -64,6 +67,9 @@ export class DesktopTelemetryPublisher extends Context.Service<
     readonly latest: Effect.Effect<Option.Option<DesktopHostTelemetrySnapshot>>;
     readonly changes: Stream.Stream<DesktopHostTelemetrySnapshot>;
     readonly encoded: Stream.Stream<Uint8Array>;
+    readonly encodedForSource: (sourceId: string) => Stream.Stream<Uint8Array>;
+    readonly cuaRequests: Stream.Stream<DesktopCuaDriverRequest>;
+    readonly publishCuaReport: (report: DesktopCuaDriverReport) => Effect.Effect<void>;
     readonly handleControlForSource: (
       sourceId: string,
       message: DesktopTelemetryControlMessage,
@@ -175,6 +181,25 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const updateRequestQueue = yield* Queue.unbounded<DesktopTelemetryRequestDesktopUpdate>();
   const updateCommitQueue = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
+  const cuaRequestQueue = yield* Queue.unbounded<DesktopCuaDriverRequest>();
+  interface CuaSource {
+    readonly reports: PubSub.PubSub<DesktopCuaDriverReport>;
+    requestId?: string;
+  }
+  let cuaSource: CuaSource | undefined;
+  const detachCuaSource = Effect.fn("DesktopTelemetryPublisher.detachCuaSource")(function* (
+    source: CuaSource,
+  ) {
+    if (cuaSource !== source) return;
+    cuaSource = undefined;
+    if (source.requestId)
+      yield* Queue.offer(cuaRequestQueue, {
+        version: 1,
+        type: "cuaDriverRequest",
+        requestId: source.requestId,
+        enabled: false,
+      });
+  });
 
   const offer = (event: PowerEvent): void => {
     Queue.offerUnsafe(powerEvents, event);
@@ -199,96 +224,98 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     ),
   ).pipe(Effect.forkScoped);
 
-  const sampleOnce = (allowSuspendRecovery: boolean) =>
-    Effect.gen(function* () {
-      const sampledAt = yield* DateTime.now;
-      const sampledAtUnixMs = DateTime.toEpochMillis(sampledAt);
-      const demand = (yield* Ref.get(diagnosticsDemandSources)).size > 0;
-      const [currentPower, idleSeconds, systemIdleState, onBattery, metrics] = yield* Effect.all(
-        [
-          Ref.get(powerState),
-          powerMonitor.getSystemIdleTime,
-          powerMonitor.getSystemIdleState(IDLE_THRESHOLD_SECONDS),
-          powerMonitor.isOnBatteryPower,
-          electronApp.getAppMetrics,
-        ],
-        { concurrency: "unbounded" },
-      );
-      // One Electron sampler preserves the shared CPU measurement interval.
-      yield* rendererHistory.recordMetrics(metrics);
-      const polledLocked =
-        systemIdleState === "unknown"
-          ? currentPower.locked
-          : booleanState(systemIdleState === "locked");
-      const polledOnBattery = booleanState(onBattery);
-      const observedPower = yield* Ref.modify(powerState, (latestPower) => {
-        const preserveEventLocked =
-          latestPower.lockedEventPending ||
-          latestPower.locked !== currentPower.locked ||
-          latestPower.lockedEventPending !== currentPower.lockedEventPending;
-        const preserveEventOnBattery =
-          latestPower.onBatteryEventPending ||
-          latestPower.onBattery !== currentPower.onBattery ||
-          latestPower.onBatteryEventPending !== currentPower.onBatteryEventPending;
-        const preserveEventSuspended =
-          latestPower.suspendedEventPending ||
-          latestPower.suspended !== currentPower.suspended ||
-          latestPower.suspendedEventPending !== currentPower.suspendedEventPending;
-        const next: PowerState = {
-          ...latestPower,
-          idle: idleState(systemIdleState),
-          locked: preserveEventLocked ? latestPower.locked : polledLocked,
-          lockedEventPending:
-            latestPower.lockedEventPending &&
-            (systemIdleState === "unknown" || polledLocked !== latestPower.locked),
-          suspended:
-            allowSuspendRecovery && !preserveEventSuspended ? false : latestPower.suspended,
-          suspendedEventPending: false,
-          onBattery: preserveEventOnBattery ? latestPower.onBattery : polledOnBattery,
-          onBatteryEventPending:
-            latestPower.onBatteryEventPending && polledOnBattery !== latestPower.onBattery,
+  const sampleOnce =
+    /* Periodic telemetry sampling should not generate its own tracing traffic. */
+    Effect.fnUntraced(
+      function* (allowSuspendRecovery: boolean) {
+        const sampledAt = yield* DateTime.now;
+        const sampledAtUnixMs = DateTime.toEpochMillis(sampledAt);
+        const demand = (yield* Ref.get(diagnosticsDemandSources)).size > 0;
+        const [currentPower, idleSeconds, systemIdleState, onBattery, metrics] = yield* Effect.all(
+          [
+            Ref.get(powerState),
+            powerMonitor.getSystemIdleTime,
+            powerMonitor.getSystemIdleState(IDLE_THRESHOLD_SECONDS),
+            powerMonitor.isOnBatteryPower,
+            electronApp.getAppMetrics,
+          ],
+          { concurrency: "unbounded" },
+        );
+        // One Electron sampler preserves the shared CPU measurement interval.
+        yield* rendererHistory.recordMetrics(metrics);
+        const polledLocked =
+          systemIdleState === "unknown"
+            ? currentPower.locked
+            : booleanState(systemIdleState === "locked");
+        const polledOnBattery = booleanState(onBattery);
+        const observedPower = yield* Ref.modify(powerState, (latestPower) => {
+          const preserveEventLocked =
+            latestPower.lockedEventPending ||
+            latestPower.locked !== currentPower.locked ||
+            latestPower.lockedEventPending !== currentPower.lockedEventPending;
+          const preserveEventOnBattery =
+            latestPower.onBatteryEventPending ||
+            latestPower.onBattery !== currentPower.onBattery ||
+            latestPower.onBatteryEventPending !== currentPower.onBatteryEventPending;
+          const preserveEventSuspended =
+            latestPower.suspendedEventPending ||
+            latestPower.suspended !== currentPower.suspended ||
+            latestPower.suspendedEventPending !== currentPower.suspendedEventPending;
+          const next: PowerState = {
+            ...latestPower,
+            idle: idleState(systemIdleState),
+            locked: preserveEventLocked ? latestPower.locked : polledLocked,
+            lockedEventPending:
+              latestPower.lockedEventPending &&
+              (systemIdleState === "unknown" || polledLocked !== latestPower.locked),
+            suspended:
+              allowSuspendRecovery && !preserveEventSuspended ? false : latestPower.suspended,
+            suspendedEventPending: false,
+            onBattery: preserveEventOnBattery ? latestPower.onBattery : polledOnBattery,
+            onBatteryEventPending:
+              latestPower.onBatteryEventPending && polledOnBattery !== latestPower.onBattery,
+          };
+          return [next, next] as const;
+        });
+        const nextSequence = yield* Ref.modify(sequence, (current) => [current + 1, current + 1]);
+        const snapshot: DesktopHostTelemetrySnapshot = {
+          version: 1,
+          type: "desktopTelemetry",
+          sequence: nextSequence,
+          sampledAtUnixMs,
+          electronPid: process.pid,
+          power: {
+            source: "electron-main",
+            idle: observedPower.idle,
+            idleSeconds,
+            locked: observedPower.locked,
+            suspended: observedPower.suspended,
+            onBattery: observedPower.onBattery,
+            lowPowerMode: "unknown",
+            thermalState: observedPower.thermalState,
+            stale: false,
+            updatedAt: sampledAt,
+          },
+          speedLimitPercent: observedPower.speedLimitPercent,
+          electronProcesses: (demand ? metrics : []).map((metric) => ({
+            pid: metric.pid,
+            creationTimeMs: Math.max(0, Math.round(metric.creationTime)),
+            type: metric.type,
+            ...(metric.name === undefined ? {} : { name: metric.name }),
+            ...(metric.serviceName === undefined ? {} : { serviceName: metric.serviceName }),
+            cpuPercent: metric.cpu.percentCPUUsage,
+            ...(metric.cpu.cumulativeCPUUsage === undefined
+              ? {}
+              : { cumulativeCpuSeconds: metric.cpu.cumulativeCPUUsage }),
+            idleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
+            workingSetBytes: Math.max(0, Math.round(metric.memory.workingSetSize * 1024)),
+            peakWorkingSetBytes: Math.max(0, Math.round(metric.memory.peakWorkingSetSize * 1024)),
+          })),
         };
-        return [next, next] as const;
-      });
-      const nextSequence = yield* Ref.modify(sequence, (current) => [current + 1, current + 1]);
-      const snapshot: DesktopHostTelemetrySnapshot = {
-        version: 1,
-        type: "desktopTelemetry",
-        sequence: nextSequence,
-        sampledAtUnixMs,
-        electronPid: process.pid,
-        power: {
-          source: "electron-main",
-          idle: observedPower.idle,
-          idleSeconds,
-          locked: observedPower.locked,
-          suspended: observedPower.suspended,
-          onBattery: observedPower.onBattery,
-          lowPowerMode: "unknown",
-          thermalState: observedPower.thermalState,
-          stale: false,
-          updatedAt: sampledAt,
-        },
-        speedLimitPercent: observedPower.speedLimitPercent,
-        electronProcesses: (demand ? metrics : []).map((metric) => ({
-          pid: metric.pid,
-          creationTimeMs: Math.max(0, Math.round(metric.creationTime)),
-          type: metric.type,
-          ...(metric.name === undefined ? {} : { name: metric.name }),
-          ...(metric.serviceName === undefined ? {} : { serviceName: metric.serviceName }),
-          cpuPercent: metric.cpu.percentCPUUsage,
-          ...(metric.cpu.cumulativeCPUUsage === undefined
-            ? {}
-            : { cumulativeCpuSeconds: metric.cpu.cumulativeCPUUsage }),
-          idleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
-          workingSetBytes: Math.max(0, Math.round(metric.memory.workingSetSize * 1024)),
-          peakWorkingSetBytes: Math.max(0, Math.round(metric.memory.peakWorkingSetSize * 1024)),
-        })),
-      };
 
-      yield* Ref.set(latest, Option.some(snapshot));
-      yield* PubSub.publish(changes, snapshot);
-    }).pipe(
+        yield* Ref.set(latest, Option.some(snapshot));
+        yield* PubSub.publish(changes, snapshot);
+      },
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterrupts(cause),
         (cause) =>
@@ -320,6 +347,12 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     message,
   ) => {
     switch (message.type) {
+      case "cuaDriverRequest":
+        return Effect.suspend(() => {
+          if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !cuaSource) return Effect.void;
+          cuaSource.requestId = message.requestId;
+          return Queue.offer(cuaRequestQueue, message).pipe(Effect.asVoid);
+        });
       case "setDiagnosticsDemand":
         return Ref.modify(diagnosticsDemandSources, (sources) => {
           const previous = sources.size > 0;
@@ -350,21 +383,24 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         return Queue.offer(updateCancellationQueue, message).pipe(Effect.asVoid);
     }
   };
-  const removeControlSource: DesktopTelemetryPublisher["Service"]["removeControlSource"] = (
-    sourceId,
-  ) =>
-    Ref.modify(diagnosticsDemandSources, (sources) => {
-      const previous = sources.size > 0;
-      const next = new Set(sources);
-      next.delete(sourceId);
-      return [[previous, next.size > 0] as const, next] as const;
-    }).pipe(
-      Effect.flatMap(([previous, enabled]) =>
-        previous === enabled
-          ? Effect.void
-          : Queue.offer(sampleTriggers, undefined).pipe(Effect.asVoid),
-      ),
-    );
+  const removeControlSource: DesktopTelemetryPublisher["Service"]["removeControlSource"] =
+    Effect.fn("DesktopTelemetryPublisher.removeControlSource")(function* (sourceId) {
+      if (sourceId === PRIMARY_LOCAL_ENVIRONMENT_ID && cuaSource) {
+        yield* detachCuaSource(cuaSource);
+      }
+      yield* Ref.modify(diagnosticsDemandSources, (sources) => {
+        const previous = sources.size > 0;
+        const next = new Set(sources);
+        next.delete(sourceId);
+        return [[previous, next.size > 0] as const, next] as const;
+      }).pipe(
+        Effect.flatMap(([previous, enabled]) =>
+          previous === enabled
+            ? Effect.void
+            : Queue.offer(sampleTriggers, undefined).pipe(Effect.asVoid),
+        ),
+      );
+    });
 
   const snapshots = Stream.unwrap(
     Effect.gen(function* () {
@@ -409,10 +445,41 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
       Effect.asVoid,
     );
 
+  const encodedForSource = (sourceId: string): Stream.Stream<Uint8Array> => {
+    if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID) return encoded;
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        const reports = yield* PubSub.unbounded<DesktopCuaDriverReport>();
+        const source: CuaSource = { reports };
+        yield* Effect.acquireRelease(
+          Effect.gen(function* () {
+            if (cuaSource) yield* detachCuaSource(cuaSource);
+            cuaSource = source;
+          }),
+          () => detachCuaSource(source),
+        );
+        const subscription = yield* PubSub.subscribe(reports);
+        const privateReports = Stream.fromSubscription(subscription).pipe(
+          Stream.filter(() => cuaSource === source),
+          Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)),
+        );
+        return Stream.merge(encoded, privateReports);
+      }),
+    );
+  };
+
   return DesktopTelemetryPublisher.of({
     latest: Ref.get(latest),
     changes: Stream.fromPubSub(changes),
     encoded,
+    encodedForSource,
+    cuaRequests: Stream.fromQueue(cuaRequestQueue),
+    publishCuaReport: (report) =>
+      Effect.suspend(() =>
+        cuaSource && cuaSource.requestId === report.requestId
+          ? PubSub.publish(cuaSource.reports, report).pipe(Effect.asVoid)
+          : Effect.void,
+      ),
     handleControlForSource,
     removeControlSource,
     publishUpdateReport,

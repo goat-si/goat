@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 
 import {
   BearerConnectionTarget,
+  HubProxyConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
@@ -46,7 +47,22 @@ export class SshConnectionProfile extends Schema.TaggedClass<SshConnectionProfil
   },
 ) {}
 
-export const ConnectionProfile = Schema.Union([BearerConnectionProfile, SshConnectionProfile]);
+export class HubProxyConnectionProfile extends Schema.TaggedClass<HubProxyConnectionProfile>()(
+  "HubProxyConnectionProfile",
+  {
+    ...ConnectionProfileBase,
+    hubEnvironmentId: EnvironmentId,
+    hubConnectionId: Schema.String,
+    nodeId: Schema.String,
+    hubLabel: Schema.optionalKey(Schema.String),
+  },
+) {}
+
+export const ConnectionProfile = Schema.Union([
+  BearerConnectionProfile,
+  SshConnectionProfile,
+  HubProxyConnectionProfile,
+]);
 export type ConnectionProfile = typeof ConnectionProfile.Type;
 
 export interface ConnectionRoute {
@@ -113,7 +129,13 @@ export class SshConnectionRegistration extends Schema.TaggedClass<SshConnectionR
   },
 ) {}
 
+export class HubProxyConnectionRegistration extends Schema.TaggedClass<HubProxyConnectionRegistration>()(
+  "HubProxyConnectionRegistration",
+  { target: HubProxyConnectionTarget, profile: HubProxyConnectionProfile },
+) {}
+
 export const ConnectionRegistration = Schema.Union([
+  HubProxyConnectionRegistration,
   RelayConnectionRegistration,
   BearerConnectionRegistration,
   SshConnectionRegistration,
@@ -145,6 +167,7 @@ export function connectionRegistrationCatalogEntry(
       };
     case "BearerConnectionRegistration":
     case "SshConnectionRegistration":
+    case "HubProxyConnectionRegistration":
       return {
         target: registration.target,
         profile: Option.some(registration.profile),

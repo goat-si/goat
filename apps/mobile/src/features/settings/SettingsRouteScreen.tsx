@@ -83,6 +83,11 @@ function ConfiguredSettingsRouteScreen() {
       >
         <SettingsSection title="Connections">
           <SettingsRow
+            icon="desktopcomputer"
+            label="Devices on this hub"
+            target="SettingsHubNodes"
+          />
+          <SettingsRow
             icon="person.crop.circle"
             label="T3 Account"
             value={accountLabel}
@@ -137,6 +142,11 @@ function LocalSettingsRouteScreen() {
           ) : null}
           <SettingsRow
             icon="desktopcomputer"
+            label="Devices on this hub"
+            target="SettingsHubNodes"
+          />
+          <SettingsRow
+            icon="desktopcomputer"
             label="Environments"
             value={`${environmentCount}`}
             valuePosition="trailing"
@@ -151,6 +161,7 @@ function LocalSettingsRouteScreen() {
 }
 
 function SettingsIndexSections() {
+  const navigation = useNavigation();
   const { supported: goatBotHomeSupported } = useMobileGoatBotHomeSettings();
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
   const noServerTargets = selectedTargets.length === 0;
@@ -184,6 +195,16 @@ function SettingsIndexSections() {
         {goatBotHomeSupported ? (
           <SettingsRow icon="text.bubble" label="GOAT Bot" target="SettingsGoatBot" />
         ) : null}
+        <SettingsRow
+          icon="questionmark.bubble"
+          label="Decision inbox"
+          onPress={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsDecisionInbox" },
+            })
+          }
+        />
         <SettingsRow icon="clock" label="Scheduled tasks" target="SettingsScheduledTasks" />
       </SettingsSection>
 

@@ -1,0 +1,44 @@
+{
+  "capture": {
+    "date": "2026-10-21",
+    "codexVersion": "0.163.0",
+    "openCodexChildVersion": "2.83.0",
+    "runtimeRole": "client",
+    "request": "account/rateLimits/read",
+    "inferenceBaseUrl": "http://127.0.0.1:10100/v1",
+    "controlInferenceBaseUrl": "http://127.0.0.1:1/v1",
+    "controlResult": "identical usage snapshot with unreachable inference endpoint",
+    "sanitization": "Only window-mapping fields retained; usage percentage and reset timestamp replaced. Account identifiers, credit balances and reset-credit details omitted. No notifications or turns were captured."
+  },
+  "response": {
+    "id": 2,
+    "result": {
+      "rateLimits": {
+        "limitId": "codex",
+        "planType": "pro",
+        "primary": {
+          "usedPercent": 37,
+          "windowDurationMins": 10080,
+          "resetsAt": 1784500000
+        },
+        "secondary": null,
+        "individualLimit": null,
+        "rateLimitReachedType": null
+      },
+      "rateLimitsByLimitId": {
+        "codex": {
+          "limitId": "codex",
+          "planType": "pro",
+          "primary": {
+            "usedPercent": 37,
+            "windowDurationMins": 10080,
+            "resetsAt": 1784500000
+          },
+          "secondary": null,
+          "individualLimit": null,
+          "rateLimitReachedType": null
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,9 @@
-import { CommandId, MessageId, type OrchestrationV2Command } from "@goat/contracts";
+import {
+  CommandId,
+  DEFAULT_FALLBACK_ON,
+  MessageId,
+  type OrchestrationV2Command,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -7,6 +12,7 @@ import * as Fallback from "../fleet/resources/Fallback.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export function limitRecoveryCommand(
@@ -75,6 +81,7 @@ export function limitRecoveryCommand(
 const makeSweep = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
   const settings = yield* ServerSettings.ServerSettingsService;
   // Optional so this worker's own tests need no fleet; without a chain it never switches.
   const fallback = yield* Effect.serviceOption(Fallback.Fallback);
@@ -82,15 +89,21 @@ const makeSweep = Effect.gen(function* () {
     const preferences = yield* settings.getSettings;
     const now = yield* DateTime.now;
     const ownership = yield* Fallback.GoalThreadOwnership;
-    // A chain for ordinary threads needs the unarmed failures even with auto-resume off;
-    // arming below still follows the user's settings.
+    // Fallback eligibility is independent of the user's wait-for-reset preferences.
     const coversThreads = Option.isSome(fallback) && (yield* fallback.value.coversThreads);
     const candidates = yield* projections.getLimitRecoveryCandidates({
       now,
-      autoResume: preferences.autoResumeLimitedThreads || coversThreads,
+      autoResume: preferences.autoResumeLimitedThreads,
       snooze: preferences.snoozeLimitedThreads,
-      // A limit without a reset time can still move to another model; nothing arms for it.
-      withoutReset: coversThreads,
+      fallbackTriggers: coversThreads
+        ? [
+            ...new Set(
+              Object.values(preferences.fleet.fallbackChains ?? {})
+                .filter((chain) => chain.scope === "goals_and_threads")
+                .flatMap((chain) => chain.on ?? DEFAULT_FALLBACK_ON),
+            ),
+          ]
+        : [],
     });
     const nowMs = DateTime.toEpochMillis(now);
     for (const thread of candidates) {
@@ -100,7 +113,6 @@ const makeSweep = Effect.gen(function* () {
       if (
         coversThreads &&
         Option.isSome(fallback) &&
-        thread.limitRecovery?.runId !== thread.latestRunId &&
         (yield* fallback.value.continueThread(thread.id))
       )
         continue;
@@ -111,7 +123,17 @@ const makeSweep = Effect.gen(function* () {
         preferences.snoozeLimitedThreads,
       );
       if (command === null) continue;
-      yield* threads.dispatch(command).pipe(
+      yield* Effect.gen(function* () {
+        if (command.type === "thread.metadata.update" && command.limitRecovery != null) {
+          yield* orchestrator.autoArmLimitRecovery({
+            commandId: command.commandId,
+            threadId: command.threadId,
+            limitRecovery: command.limitRecovery,
+          });
+        } else {
+          yield* threads.dispatch(command);
+        }
+      }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("orchestration-v2.limit-recovery.dispatch-failed", {
             threadId: thread.id,

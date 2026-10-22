@@ -1,132 +1,135 @@
-import { installRelayClient } from "./cloud/installRelayClient.ts";
-import * as CodexRoutes from "./provider/CodexRouteService.ts";
-import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
-import * as Handoffs from "./handoffs/Handoffs.ts";
-import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
-import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
-import * as MemoryService from "./memory/MemoryService.ts";
-import * as MemorySyncService from "./memory/MemorySyncService.ts";
-import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
-import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
-import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
-import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
-import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
+import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
+  HubProxyRpcError,
   OrchestrationDispatchCommandError,
   SLACK_CHANNEL_WS_METHODS,
+  ServerSettingsError,
 } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
+import * as Clock from "effect/Clock";
+import { installRelayClient } from "./cloud/installRelayClient.ts";
+import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
+import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
+import * as Handoffs from "./handoffs/Handoffs.ts";
+import * as HubNodes from "./hubNodes/HubNodes.ts";
+import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
+import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
+import * as MemoryService from "./memory/MemoryService.ts";
+import * as MemorySyncService from "./memory/MemorySyncService.ts";
+import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
+import * as NoteWorkService from "./notes/NoteWorkService.ts";
+import * as NotesService from "./notes/NotesService.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import * as CodexRoutes from "./provider/CodexRouteService.ts";
+import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
+import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
+import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
+import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 
+import {
+  AcpRegistryOperationError,
+  AssetWorkspaceContextNotFoundError,
+  AssetWorkspaceContextResolutionError,
+  AuthAccessStreamError,
+  AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
+  authScopeResponse,
+  AuthSessionId,
+  type HubDeviceOperationInput,
+  ChatAttachmentId,
+  ClientConnectionMethod,
+  ClientDeviceType,
+  ClientOs,
+  ClientSurface,
+  ClientWebDeployment,
+  CommandId,
+  EnvironmentAuthorizationError,
+  FilesystemBrowseError,
+  MemoryImportRpcError,
+  MemoryMutationReceipt,
+  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+  ORCHESTRATION_PROTOCOL_VERSION,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationGetFullThreadDiffError,
+  OrchestrationGetTurnDiffError,
+  OrchestrationSearchThreadsError,
+  OrchestrationV2DispatchCommandError,
+  OrchestrationV2GetShellSnapshotError,
+  OrchestrationV2GetThreadProjectionError,
+  OrchestrationV2SearchThreadError,
+  OrchestrationV2ThreadLaunchError,
+  PersistChatAttachmentsError,
+  ProjectListEntriesError,
+  ProjectMutationError,
+  ProjectReadFileError,
+  ProjectSearchContentsError,
+  ProjectSearchEntriesError,
+  ProjectWriteFileError,
+  ProviderSetupError,
+  ProviderUploadFeedbackError,
+  RpcClientId,
+  servesOrchestrationProtocol,
+  ThreadId,
+  WS_METHODS,
+  WsChannelRpcGroup,
+  WsCoreRpcGroup,
+  WsDecisionRpcGroup,
+  WsCoreServerRpcGroup,
+  WsCoreWorkspaceRpcGroup,
+  WsHubNodesRpcGroup,
+  WsMemoryAdministrationRpcGroup,
+  WsMemoryCoreRpcGroup,
+  WsMemoryImportRpcGroup,
+  WsNotesRpcGroup,
+  type AcpRegistryDeleteSessionInput,
+  type AcpRegistryDisableProviderInput,
+  type AcpRegistryImportSessionInput,
+  type AcpRegistryListProvidersInput,
+  type AcpRegistryListSessionsInput,
+  type AcpRegistrySetProviderInput,
+  type AuthAccessStreamEvent,
+  type AuthEnvironmentScope,
+  type ServerConfig as ClientServerConfig,
+  type DiscoveredLocalServerList,
+  type EditorId,
+  type FileManagerRevealKind,
+  type FilesystemBrowseFailure,
+  type GitActionProgressEvent,
+  type GitManagerServiceError,
+  type MessageId,
+  type OrchestrationClientOrigin,
+  type OrchestrationProjectShell,
+  type OrchestrationV2Command,
+  type OrchestrationV2ShellSnapshot,
+  type ProjectEntriesFailure,
+  type ProjectFileFailure,
+  type ProjectFileOperation,
+  type ProjectId,
+  type ProjectMutation,
+  type ProviderDriverKind,
+  type ProviderInstanceId,
+  type PullRequestRef,
+  type ScheduledTaskListResult,
+  type ServerConfigStreamEvent,
+  type ServerWorktreeCheckoutHealth,
+  type ServerLifecycleStreamEvent,
+  type TerminalMetadataStreamEvent,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
-import * as Base64 from "effect/encoding/Base64";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
-import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { rpcInitialItems } from "./rpcInitialItems.ts";
-import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
-import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
-import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
-import {
-  DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
-  AcpRegistryOperationError,
-  CommandId,
-  authScopeResponse,
-  AuthAccessStreamError,
-  type AuthAccessStreamEvent,
-  AuthOrchestrationOperateScope,
-  type AuthEnvironmentScope,
-  type ScheduledTaskListResult,
-  AuthSessionId,
-  ClientConnectionMethod,
-  ClientDeviceType,
-  ClientOs,
-  ClientSurface,
-  ClientWebDeployment,
-  type DiscoveredLocalServerList,
-  type EditorId,
-  type FileManagerRevealKind,
-  type OrchestrationClientOrigin,
-  type OrchestrationV2Command,
-  type GitActionProgressEvent,
-  type GitManagerServiceError,
-  type MessageId,
-  type AcpRegistryImportSessionInput,
-  type AcpRegistryDeleteSessionInput,
-  type AcpRegistryDisableProviderInput,
-  type AcpRegistryListProvidersInput,
-  type AcpRegistryListSessionsInput,
-  type AcpRegistrySetProviderInput,
-  OrchestrationGetFullThreadDiffError,
-  OrchestrationSearchThreadsError,
-  OrchestrationV2SearchThreadError,
-  OrchestrationGetTurnDiffError,
-  ORCHESTRATION_V2_WS_METHODS,
-  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
-  ORCHESTRATION_PROTOCOL_VERSION,
-  servesOrchestrationProtocol,
-  OrchestrationV2DispatchCommandError,
-  OrchestrationV2GetShellSnapshotError,
-  OrchestrationV2GetThreadProjectionError,
-  OrchestrationV2ThreadLaunchError,
-  type OrchestrationProjectShell,
-  type OrchestrationV2ShellSnapshot,
-  type ProjectEntriesFailure,
-  type ProjectFileFailure,
-  type ProjectFileOperation,
-  type ProjectMutation,
-  ProjectListEntriesError,
-  ProjectReadFileError,
-  ProjectSearchContentsError,
-  ProjectSearchEntriesError,
-  ProjectWriteFileError,
-  ProjectMutationError,
-  ProviderUploadFeedbackError,
-  ProviderSetupError,
-  type ServerConfig as ClientServerConfig,
-  type ServerConfigStreamEvent,
-  type ServerLifecycleStreamEvent,
-  type FilesystemBrowseFailure,
-  FilesystemBrowseError,
-  AssetWorkspaceContextNotFoundError,
-  AssetWorkspaceContextResolutionError,
-  ChatAttachmentId,
-  PersistChatAttachmentsError,
-  RpcClientId,
-  EnvironmentAuthorizationError,
-  type ProjectId,
-  type ProviderDriverKind,
-  type ProviderInstanceId,
-  ThreadId,
-  type TerminalAttachStreamEvent,
-  type TerminalError,
-  type TerminalEvent,
-  type TerminalMetadataStreamEvent,
-  type PullRequestRef,
-  WS_METHODS,
-  WsChannelRpcGroup,
-  WsCoreRpcGroup,
-  WsCoreServerRpcGroup,
-  WsCoreWorkspaceRpcGroup,
-  MemoryMutationReceipt,
-  MemoryImportRpcError,
-  WsMemoryCoreRpcGroup,
-  WsMemoryAdministrationRpcGroup,
-  WsMemoryImportRpcGroup,
-} from "@goat/contracts";
-import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
+import * as Base64 from "effect/encoding/Base64";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -135,22 +138,79 @@ import {
 } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
+import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
+import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
+import { rpcInitialItems } from "./rpcInitialItems.ts";
+import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
 
-import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
-import * as ServerConfig from "./config.ts";
-import * as EnvironmentTheme from "./environmentTheme.ts";
-import * as Keybindings from "./keybindings.ts";
-import * as ExternalLauncher from "./process/externalLauncher.ts";
-import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
-import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
-import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
-import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
-import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
-import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
+import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
+import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
-import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
+import { latestProviderVersionCacheKeys } from "@goat/provider-core/server/maintenanceResolver";
+import * as RelayClient from "@goat/shared/relayClient";
+import { isTelemetryIdHash } from "@goat/shared/telemetryId";
+import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
+import * as SqlClient from "effect/sql/SqlClient";
+import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
+import {
+  attachmentRelativePath,
+  chatAttachmentStableKey,
+  createDeterministicAttachmentId,
+} from "./attachmentStore.ts";
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
+import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
+import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
+import * as SessionStore from "./auth/SessionStore.ts";
+import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
+import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
+import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
+import * as ChannelGateway from "./channels/ChannelGateway.ts";
+import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
+import * as ChannelLedger from "./channels/ChannelLedger.ts";
+import * as SlackChannelSettings from "./channels/SlackChannelSettings.ts";
+import { ownerFromSession } from "./channels/channelOwner.ts";
+import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as ServerConfig from "./config.ts";
+import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
+import * as DeviceService from "./device/DeviceService.ts";
+import * as CuaDriver from "./cua/CuaDriver.ts";
+import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
+import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
+import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
+import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as EnvironmentTheme from "./environmentTheme.ts";
+import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
+import { refreshPushedPullRequests } from "./git/refreshPushedPullRequests.ts";
+import { parseBase64DataUrl } from "./imageMime.ts";
+import * as Keybindings from "./keybindings.ts";
+import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
+import * as HubParity from "./hub/HubParity.ts";
+import * as HubMembership from "./hub/HubMembership.ts";
+import type { McpInvocationScope } from "./mcp/McpInvocationContext.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
+import * as DefectReporter from "./observability/DefectReporter.ts";
+import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
+import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
+import { RpcInstrumentation, rpcInstrumentationLayer } from "./observability/RpcInstrumentation.ts";
+import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
+import { bufferLiveStream } from "./orchestration-v2/LiveStreamBudget.ts";
+import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
+import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
+import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
+import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import {
   archivedShellStreamItemFromThreadShell,
+  bufferShellLiveStream,
   buildActiveShellSnapshot,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
@@ -165,129 +225,86 @@ import {
   toShellApplicationEvent,
   type ShellApplicationEvent,
 } from "./orchestration-v2/ShellStream.ts";
-import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
-import { bufferLiveStream } from "./orchestration-v2/LiveStreamBudget.ts";
+import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import { coalesceThreadLiveStream } from "./orchestration-v2/ThreadLiveEventCoalescer.ts";
+import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
+import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import {
   buildBoundedThreadStreamSnapshot,
   decideThreadResume,
   isThreadReplayRawPayloadSafe,
-  threadReplayEncodedBytes,
   THREAD_RESUME_MAX_REPLAY_EVENTS,
+  threadReplayEncodedBytes,
 } from "./orchestration-v2/ThreadStream.ts";
+import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
+import {
+  projectDomainEventForWire,
+  projectThreadProjectionForWire,
+} from "./orchestration-v2/WireProjection.ts";
 import {
   buildBoundedThreadProjection,
   THREAD_HISTORY_PAGE_POLICY,
   THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
 } from "./orchestration-v2/threadHistoryPaging.ts";
-import {
-  projectDomainEventForWire,
-  projectThreadProjectionForWire,
-} from "./orchestration-v2/WireProjection.ts";
-import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
-import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
+import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
+import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
-import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
-import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
-import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
-import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
-import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
+import * as PreviewManager from "./preview/Manager.ts";
+import * as PortScanner from "./preview/PortScanner.ts";
+import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as ExternalLauncher from "./process/externalLauncher.ts";
+import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
+import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
+import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
+import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
+import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
+import { projectMutationOperation } from "./project/ProjectMutation.ts";
+import * as ProjectService from "./project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
+import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
+import { threadWorkspaceRoot } from "./project/threadWorkspaceRoot.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
-import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
-import { latestProviderVersionCacheKeys } from "@goat/provider-core/server/maintenanceResolver";
-import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
+import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
+import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
-import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
+import * as PullRequestService from "./pullRequest/PullRequestService.ts";
+import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
+import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as ReviewService from "./review/ReviewService.ts";
+import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
-import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
-import * as StorageCleanup from "./storageCleanup.ts";
-import * as TerminalManager from "./terminal/Manager.ts";
-import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
-import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
-import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
-import * as ServerBrowser from "./preview/ServerBrowser.ts";
-import * as DeviceService from "./device/DeviceService.ts";
-import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
-import * as PreviewManager from "./preview/Manager.ts";
-import { issueAssetUrl } from "./assets/AssetAccess.ts";
-import {
-  attachmentRelativePath,
-  chatAttachmentStableKey,
-  createDeterministicAttachmentId,
-} from "./attachmentStore.ts";
-import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
-import { parseBase64DataUrl } from "./imageMime.ts";
-import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
-import * as PortScanner from "./preview/PortScanner.ts";
-import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
-import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
-import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
-import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
-import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
-import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
-import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
-import * as GitWorkflowService from "./git/GitWorkflowService.ts";
-import { refreshPushedPullRequests } from "./git/refreshPushedPullRequests.ts";
-import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
-import * as ReviewService from "./review/ReviewService.ts";
-import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
-import * as ProjectService from "./project/ProjectService.ts";
-import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
-import { projectMutationOperation } from "./project/ProjectMutation.ts";
-import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
-import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
-import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
-import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
-import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
-import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
-import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
-import * as ChannelGateway from "./channels/ChannelGateway.ts";
-import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
-import * as ChannelLedger from "./channels/ChannelLedger.ts";
-import * as SlackChannelSettings from "./channels/SlackChannelSettings.ts";
-import { ownerFromSession } from "./channels/channelOwner.ts";
-import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
-import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
-import * as DefectReporter from "./observability/DefectReporter.ts";
-import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
-import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
-import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
-import { RpcInstrumentation, rpcInstrumentationLayer } from "./observability/RpcInstrumentation.ts";
-import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
-import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
-import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
-import * as HostResources from "./resourceTelemetry/HostResources.ts";
-import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
-import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-import { featureUsage } from "./telemetry/FeatureUsage.ts";
-import * as UsageService from "./usage/UsageService.ts";
-import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
-import * as PullRequestService from "./pullRequest/PullRequestService.ts";
-import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
-import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
-import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
-import * as SqlClient from "effect/sql/SqlClient";
-import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
-import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
+import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
-import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
+import * as StorageCleanup from "./storageCleanup.ts";
+import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
+import { featureUsage } from "./telemetry/FeatureUsage.ts";
+import type { TelemetryOwner } from "./telemetry/Identify.ts";
+import * as TerminalManager from "./terminal/Manager.ts";
+import { terminalOutputStream, withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
+import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as UsageService from "./usage/UsageService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
-import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
-import * as SessionStore from "./auth/SessionStore.ts";
-import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
-import * as RelayClient from "@goat/shared/relayClient";
-import { sameUsageLimitCommandCoverage, withUsageLimitsCommands } from "@goat/shared/usageLimits";
-import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
-import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
-import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
+import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
+import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
+import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
@@ -301,7 +318,7 @@ const resolveDiscoveryForConfig = <A, E, R>(
     Effect.map(Option.getOrElse(onTimeout)),
   );
 
-export const resolveAvailableEditorsForConfig = <A, E, R>(
+const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
 ) => resolveDiscoveryForConfig(discovery, () => []);
 
@@ -314,29 +331,30 @@ type EditorDiscovery = Pick<
   "resolveAvailableEditors" | "resolveFileManagerRevealKind"
 >;
 
-const resolveEditorConfig = <E, R>(
+const resolveEditorConfig = Effect.fn("ws.resolveEditorConfig")(function* <E, R>(
   availableEditors: ReadonlyArray<EditorId>,
   revealKind: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
-) =>
-  Effect.gen(function* () {
-    const fileManagerRevealKind = availableEditors.includes("file-manager")
-      ? yield* revealKind
-      : undefined;
-    return {
-      availableEditors,
-      ...(fileManagerRevealKind === undefined
-        ? {}
-        : {
-            shellRevealInFileManager: true,
-            shellRevealInFileManagerKind: fileManagerRevealKind,
-          }),
-    };
-  });
+) {
+  const fileManagerRevealKind = availableEditors.includes("file-manager")
+    ? yield* revealKind
+    : undefined;
+  return {
+    availableEditors,
+    ...(fileManagerRevealKind === undefined
+      ? {}
+      : {
+          shellRevealInFileManager: true,
+          shellRevealInFileManagerKind: fileManagerRevealKind,
+        }),
+  };
+});
 
 export const withLateEditorConfig = <E, R>(
   config: ClientServerConfig,
   liveUpdates: Stream.Stream<ServerConfigStreamEvent, E, R>,
   launcher: EditorDiscovery,
+  /** Defender probe results that land after the snapshot; Windows servers only. */
+  checkoutHealthChanges: Stream.Stream<ServerWorktreeCheckoutHealth> = Stream.empty,
 ) => {
   const lateEditorConfig = Stream.fromEffect(launcher.resolveAvailableEditors()).pipe(
     Stream.filter(
@@ -356,12 +374,25 @@ export const withLateEditorConfig = <E, R>(
     ),
     Stream.map((editorConfig) => ({ type: "editorsResolved" as const, editorConfig })),
   );
+  const lateCheckoutHealth = checkoutHealthChanges.pipe(
+    Stream.map((health) => ({ type: "checkoutHealthResolved" as const, health })),
+  );
 
-  return Stream.merge(liveUpdates, lateEditorConfig).pipe(
+  return Stream.merge(liveUpdates, Stream.merge(lateEditorConfig, lateCheckoutHealth)).pipe(
     Stream.mapAccum(
       (): ClientServerConfig => config,
       (current, event): readonly [ClientServerConfig, ReadonlyArray<ServerConfigStreamEvent>] => {
         switch (event.type) {
+          case "checkoutHealthResolved": {
+            // Every client applies a snapshot, so this reaches ones built before the field.
+            const same =
+              current.worktreeCheckoutHealth?.defender === event.health.defender &&
+              current.worktreeCheckoutHealth?.worktreesDirectory ===
+                event.health.worktreesDirectory;
+            if (same) return [current, []];
+            const next = { ...current, worktreeCheckoutHealth: event.health };
+            return [next, [{ version: 1, type: "snapshot", config: next }]];
+          }
           case "editorsResolved": {
             const {
               availableEditors: _editors,
@@ -584,7 +615,7 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 /** SQL-free live scope reads can safely run again after a source wait or inside a transaction. */
-export const memorySessionPermit = <E>(
+const memorySessionPermit = <E>(
   liveScopes: Effect.Effect<ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>, E>,
   capturedScopes: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
   required: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
@@ -631,6 +662,7 @@ const ServerWsRpcGroup = RpcAuthorization.AuthorizedWsRpcGroup.middleware(RpcIns
 const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
 const ServerWsCoreServerRpcGroup = WsCoreServerRpcGroup.middleware(RpcInstrumentation);
 const ServerWsCoreWorkspaceRpcGroup = WsCoreWorkspaceRpcGroup.middleware(RpcInstrumentation);
+const ServerWsNotesRpcGroup = WsNotesRpcGroup.middleware(RpcInstrumentation);
 const ServerWsChannelRpcGroup = WsChannelRpcGroup.middleware(RpcInstrumentation);
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
@@ -703,11 +735,11 @@ export const enqueuePublicOrchestrationCommand = <A, E>(
     Effect.andThen(Effect.suspend(() => startup.enqueueCommand(work))),
   );
 
-export function hasCompatibleOrchestrationProtocol(url: URL): boolean {
+function hasCompatibleOrchestrationProtocol(url: URL): boolean {
   return servesOrchestrationProtocol(url.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM));
 }
 
-export function shouldUseBoundedThreadSnapshot(input: {
+function shouldUseBoundedThreadSnapshot(input: {
   readonly acceptBoundedSnapshot?: boolean;
 }): boolean {
   return input.acceptBoundedSnapshot === true;
@@ -774,6 +806,28 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
     ...(hasDeviceModel ? { deviceModel, clientDeviceModel: deviceModel } : {}),
     ...(isClientConnectionMethod(connectionMethod) ? { connectionMethod } : {}),
   };
+}
+
+/**
+ * Owners a connecting client reports: its hashed T3 Connect account and its
+ * hashed device id. Only hashes are accepted, so a raw id never reaches analytics.
+ */
+function readClientOwners(
+  request: HttpServerRequest.HttpServerRequest,
+): ReadonlyArray<TelemetryOwner> {
+  const url = HttpServerRequest.toURL(request);
+  if (Option.isNone(url)) {
+    return [];
+  }
+  const params = url.value.searchParams;
+  return (
+    [
+      ["connect", params.get("clientOwner")],
+      ["device", params.get("clientDevice")],
+    ] as const
+  ).flatMap(([source, ownerId]) =>
+    ownerId !== null && isTelemetryIdHash(ownerId) ? [{ source, ownerId }] : [],
+  );
 }
 
 const canReplayPersistedRange = Effect.fnUntraced(function* (
@@ -1122,7 +1176,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       );
 
     const liveFrom = (afterSequence: number) =>
-      bufferLiveStream(
+      bufferShellLiveStream(
         toShellStream(
           applicationEvents.streamProjectedApplicationEvents({
             afterSequence,
@@ -1256,7 +1310,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
   },
 );
 
-const layerWsRpc = (
+export const layerWsRpc = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   connectionCatalogBroker: ConnectionCatalogBroker.ConnectionCatalogBroker["Service"],
   clientOrigin: OrchestrationClientOrigin,
@@ -1267,6 +1321,7 @@ const layerWsRpc = (
   Layer.unwrap(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const decisions = yield* DecisionInbox.DecisionInbox;
       const requireCatalogHost = RpcAuthorization.requireConnectionCatalogHost(currentSession);
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
@@ -1289,13 +1344,23 @@ const layerWsRpc = (
         .getEnvironmentId;
       // Channel calls act for the authenticated session; nothing here comes from client input.
       const channelOwner = ownerFromSession(channelEnvironmentId, currentSession);
+      const decisionCaller = {
+        kind: "client",
+        environmentId: channelEnvironmentId,
+        sessionId: currentSessionId,
+        scopes: currentSession.scopes,
+      } satisfies DecisionInbox.DecisionCaller;
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
       const remoteLaunchCatalog = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
       const cloudMachines = yield* CloudMachineService.CloudMachineService;
+      const hubProxy = yield* HubProxySessions.HubProxySessions;
+      const hubProxyRpcError = (error: HubProxySessions.HubProxyError) =>
+        new HubProxyRpcError({ reason: error.reason, detail: error.message });
       const projectService = yield* ProjectService.ProjectService;
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
+      const eventLoopMonitor = yield* EventLoopMonitor.EventLoopMonitor;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
 
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
@@ -1343,11 +1408,11 @@ const layerWsRpc = (
             );
       const usage = yield* UsageService.UsageService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
-      const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
       const repositoryIdentityResolver =
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
       const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const agentSessionImporter = yield* AgentSessionImporter.AgentSessionImporter;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
@@ -1378,7 +1443,30 @@ const layerWsRpc = (
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
+      const strayProcesses = yield* StrayProcesses.StrayProcesses;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const requireComputerUseDisplay = Effect.serviceOption(CuaDriver.CuaDriver).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.void,
+            onSome: (driver) =>
+              driver.admitEnable.pipe(
+                Effect.mapError(
+                  (error) =>
+                    new ServerSettingsError({
+                      settingsPath: config.settingsPath,
+                      operation: "enable-computer-use",
+                      code:
+                        error.operation === "install"
+                          ? "computer_use_install_failed"
+                          : "computer_use_unavailable",
+                      reason: error.message,
+                    }),
+                ),
+              ),
+          }),
+        ),
+      );
       const memory = yield* MemoryService.MemoryService;
       const memorySync = yield* MemorySyncService.MemorySyncService;
       const ownerPolicy = yield* ServerSettings.MemoryOwnerSourceReadPolicyAdministration;
@@ -1388,6 +1476,7 @@ const layerWsRpc = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+      const worktreeCheckoutHealth = yield* WorktreeCheckoutHealth.WorktreeCheckoutHealth;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
@@ -1407,16 +1496,6 @@ const layerWsRpc = (
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
-      const automaticGitFetchInterval = serverSettings.getSettings.pipe(
-        Effect.map(
-          (settings) => resolveServerBackgroundActivitySettings(settings).automaticGitFetchInterval,
-        ),
-        Effect.catch((cause) =>
-          Effect.logWarning("Failed to read automatic Git fetch interval setting", {
-            detail: cause.message,
-          }).pipe(Effect.as(DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL)),
-        ),
-      );
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
@@ -1440,6 +1519,7 @@ const layerWsRpc = (
       const memorySource = memoryPermit(["memory:read", "orchestration:read"]);
       const memorySettings = memoryPermit(["settings:write"]);
       const ownerSettings = memorySettings.pipe(Effect.mapError(memoryError));
+      const hubNodesHandlers = yield* makeHubNodesHandlers;
       const memoryHandlers = WsMemoryCoreRpcGroup.middleware(RpcInstrumentation).of({
         [WS_METHODS.memoryProjectBindingGet]: (input) =>
           memory.getProjectBinding(input, memoryWrite).pipe(Effect.mapError(memoryError)),
@@ -1510,6 +1590,31 @@ const layerWsRpc = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const hostResources = yield* HostResources.HostResources;
       const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
+      const hubParity = yield* HubParity.HubParity;
+      const hubMembership = yield* HubMembership.HubMembership;
+      /** Hub reads stay read-only; membership changes write, so their decisions can be filed. */
+      const hubScope = (access: "read-only" | "full-access") =>
+        Effect.gen(function* () {
+          const environmentId = yield* serverEnvironment.getEnvironmentId;
+          const issuedAt = yield* Clock.currentTimeMillis;
+          return {
+            environmentId,
+            capabilities: new Set(["orchestration"] as const),
+            issuedAt,
+            requestNamespace: `client-session:${currentSessionId}`,
+            thread: undefined,
+            client: { sessionId: currentSessionId, label: "GOAT client", access },
+          } satisfies McpInvocationScope;
+        });
+      // settings:write is the decision inbox's owner rule; anyone else takes H3's agent path.
+      const hubPerson = currentSession.scopes.includes(AuthSettingsWriteScope)
+        ? { sessionId: currentSessionId, scopes: currentSession.scopes }
+        : undefined;
+      const hubMembershipOperation =
+        (operation: "join" | "leave" | "repair") => (input: HubDeviceOperationInput) =>
+          hubScope("full-access").pipe(
+            Effect.flatMap((scope) => hubMembership[operation](scope, input, hubPerson)),
+          );
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -1863,64 +1968,69 @@ const layerWsRpc = (
           ),
         );
 
-      const loadServerConfig = (options: { readonly usageLimitsCommand: boolean }) =>
-        Effect.gen(function* () {
-          const keybindingsConfig = yield* keybindings.loadConfigState;
-          const currentProviders = yield* providerRegistry.getProviders;
-          const providers = options.usageLimitsCommand
-            ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
-            : currentProviders;
-          const settings = ServerSettings.redactServerSettingsForClient(
-            yield* serverSettings.getSettings,
-          );
-          const environment = yield* serverEnvironment.getDescriptor;
-          const auth = yield* serverAuth.getDescriptor();
-          const scratchWorkspaceRoot = yield* managedFolders.scratchRoot;
-          const editorConfig = yield* resolveEditorConfig(
-            yield* resolveAvailableEditorsForConfig(externalLauncher.resolveAvailableEditors()),
-            resolveFileManagerRevealKindForConfig(externalLauncher.resolveFileManagerRevealKind()),
-          );
+      const loadServerConfig = Effect.fn("ws.loadServerConfig")(function* (options: {
+        readonly usageLimitsCommand: boolean;
+      }) {
+        const keybindingsConfig = yield* keybindings.loadConfigState;
+        const currentProviders = yield* providerRegistry.getProviders.pipe(
+          Effect.flatMap(usageLimitSources.projectProviders),
+        );
+        const providers = options.usageLimitsCommand
+          ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
+          : currentProviders;
+        const settings = ServerSettings.redactServerSettingsForClient(
+          yield* serverSettings.getSettings,
+        );
+        const environment = yield* serverEnvironment.getDescriptor;
+        const auth = yield* serverAuth.getDescriptor();
+        const scratchWorkspaceRoot = yield* managedFolders.scratchRoot;
+        const lastEventLoopStall = yield* eventLoopMonitor.latestNoticeableStall;
+        const checkoutHealth = yield* worktreeCheckoutHealth.current;
+        const editorConfig = yield* resolveEditorConfig(
+          yield* resolveAvailableEditorsForConfig(externalLauncher.resolveAvailableEditors()),
+          resolveFileManagerRevealKindForConfig(externalLauncher.resolveFileManagerRevealKind()),
+        );
 
-          return {
-            environment,
-            auth,
-            cwd: config.cwd,
-            keybindingsConfigPath: config.keybindingsConfigPath,
-            keybindings: keybindingsConfig.keybindings,
-            issues: keybindingsConfig.issues,
-            providers,
-            ...editorConfig,
-            remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
-              remoteOpenTargets.resolveTargets(),
-            ),
-            directEndpoints: yield* resolveAvailableEditorsForConfig(directEndpoints.resolve()),
-            observability: {
-              logsDirectoryPath: config.logsDir,
-              localTracingEnabled: true,
-              ...(config.otlpTracesUrl !== undefined
-                ? { otlpTracesUrl: config.otlpTracesUrl }
-                : {}),
-              otlpTracesEnabled: config.otlpTracesUrl !== undefined,
-              ...(config.otlpMetricsUrl !== undefined
-                ? { otlpMetricsUrl: config.otlpMetricsUrl }
-                : {}),
-              otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
-              ...(config.otlpLogsUrl !== undefined ? { otlpLogsUrl: config.otlpLogsUrl } : {}),
-              otlpLogsEnabled: config.otlpLogsUrl !== undefined,
-            },
-            settings,
-            shellResumeCompletionMarker: true,
-            threadResumeCompletionMarker: true,
-            threadSnapshotPagination: true,
-            threadFind: true,
-            threadFindProgressive: true,
-            ...Option.match(scratchWorkspaceRoot, {
-              onNone: () => ({}),
-              onSome: (root) => ({ scratchWorkspaceRoot: root }),
-            }),
-            newProjectsRoot: managedFolders.namedProjectsRoot,
-          };
-        });
+        return {
+          environment,
+          auth,
+          cwd: config.cwd,
+          keybindingsConfigPath: config.keybindingsConfigPath,
+          keybindings: keybindingsConfig.keybindings,
+          issues: keybindingsConfig.issues,
+          providers,
+          ...editorConfig,
+          remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
+            remoteOpenTargets.resolveTargets(),
+          ),
+          directEndpoints: yield* resolveAvailableEditorsForConfig(directEndpoints.resolve()),
+          observability: {
+            logsDirectoryPath: config.logsDir,
+            localTracingEnabled: true,
+            ...(config.otlpTracesUrl !== undefined ? { otlpTracesUrl: config.otlpTracesUrl } : {}),
+            otlpTracesEnabled: config.otlpTracesUrl !== undefined,
+            ...(config.otlpMetricsUrl !== undefined
+              ? { otlpMetricsUrl: config.otlpMetricsUrl }
+              : {}),
+            otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
+            ...(config.otlpLogsUrl !== undefined ? { otlpLogsUrl: config.otlpLogsUrl } : {}),
+            otlpLogsEnabled: config.otlpLogsUrl !== undefined,
+          },
+          settings,
+          shellResumeCompletionMarker: true,
+          threadResumeCompletionMarker: true,
+          threadSnapshotPagination: true,
+          threadFind: true,
+          threadFindProgressive: true,
+          ...Option.match(scratchWorkspaceRoot, {
+            onNone: () => ({}),
+            onSome: (root) => ({ scratchWorkspaceRoot: root }),
+          }),
+          newProjectsRoot: managedFolders.namedProjectsRoot,
+          ...(lastEventLoopStall === undefined ? {} : { lastEventLoopStall }),
+          ...(checkoutHealth === null ? {} : { worktreeCheckoutHealth: checkoutHealth }),
+        };
+      });
 
       const refreshGitStatus = (cwd: string) =>
         vcsStatusBroadcaster
@@ -1998,6 +2108,20 @@ const layerWsRpc = (
         return result;
       });
 
+      const notes = yield* NotesService.NotesService;
+      const noteWork = yield* NoteWorkService.NoteWorkService;
+      const noteHandlers = ServerWsNotesRpcGroup.of({
+        [WS_METHODS.notesList]: (input) => notes.list(input),
+        [WS_METHODS.notesRead]: (input) => notes.read(input),
+        [WS_METHODS.notesWrite]: (input) => notes.write(input, "user"),
+        [WS_METHODS.notesMove]: (input) => notes.move(input, "user"),
+        [WS_METHODS.notesDelete]: (input) => notes.delete(input),
+        [WS_METHODS.notesSubscribe]: () => notes.subscribe,
+        [WS_METHODS.notesStartWork]: (input) =>
+          noteWork.startWork(input, clientOrigin.surface === "mobile" ? "mobile" : "web"),
+        [WS_METHODS.notesWorkTargets]: () => noteWork.workTargets,
+        [WS_METHODS.notesWorkTargetProjects]: (input) => noteWork.workTargetProjects(input),
+      });
       const channelHandlers = ServerWsChannelRpcGroup.of({
         [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
         [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: () => channelBots.status(channelOwner),
@@ -2041,6 +2165,13 @@ const layerWsRpc = (
           slackChannelSettings.configure(input, channelOwner),
         [SLACK_CHANNEL_WS_METHODS.disconnect]: (input) => slackChannelSettings.disconnect(input),
         [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: () => slackChannelSettings.streamStatus(),
+      });
+      const decisionHandlers = WsDecisionRpcGroup.middleware(RpcInstrumentation).of({
+        [WS_METHODS.decisionList]: (input) => decisions.list(decisionCaller, input),
+        [WS_METHODS.decisionGet]: (input) => decisions.get(decisionCaller, input.id),
+        [WS_METHODS.decisionRequest]: (input) => decisions.create(decisionCaller, input),
+        [WS_METHODS.decisionAnswer]: (input) => decisions.answer(decisionCaller, input),
+        [WS_METHODS.decisionWithdraw]: (input) => decisions.withdraw(decisionCaller, input.id),
       });
       const handlers = ServerWsCoreRpcGroup.of({
         [WS_METHODS.connectionCatalogServe]: () =>
@@ -2354,6 +2485,15 @@ const layerWsRpc = (
         // A client connecting to a saved machine never wakes it; Resume does.
         [WS_METHODS.cloudMachinesEnsureReady]: (input) =>
           cloudMachines.ensureReady(input.alias, { wake: false }),
+        [WS_METHODS.hubProxyPrepareNode]: (input) =>
+          hubProxy.prepare(input.nodeId).pipe(Effect.as({}), Effect.mapError(hubProxyRpcError)),
+        [WS_METHODS.hubProxyEnrollNode]: (input) =>
+          hubProxy.enroll(input).pipe(Effect.mapError(hubProxyRpcError)),
+        [WS_METHODS.hubProxyUnenrollNode]: (input) =>
+          hubProxy.unenroll(input.nodeId).pipe(
+            Effect.map((removed) => ({ removed })),
+            Effect.mapError(hubProxyRpcError),
+          ),
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),
@@ -2363,6 +2503,15 @@ const layerWsRpc = (
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
+        [WS_METHODS.serverCheckComputerUse]: (_input) =>
+          Effect.serviceOption(CuaDriver.CuaDriver).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.succeed({ platform: "other", running: false } as const),
+                onSome: (driver) => driver.status,
+              }),
+            ),
+          ),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
@@ -2463,8 +2612,9 @@ const layerWsRpc = (
               }),
             ),
           ),
-        [WS_METHODS.serverRefreshProviders]: (input) =>
-          Effect.gen(function* () {
+        [WS_METHODS.serverRefreshProviders]:
+          /* Request instrumentation already owns the span; keep this helper in that context. */
+          Effect.fnUntraced(function* (input) {
             if (input.refreshModels) {
               yield* modelManifest.forceRefresh;
               const instances = yield* providerInstances.listInstances;
@@ -2532,65 +2682,71 @@ const layerWsRpc = (
                 providers = yield* providerRegistry.refreshInstance(instance.instanceId);
               }
             }
-            return { providers };
+            return { providers: yield* usageLimitSources.projectProviders(providers) };
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
         [WS_METHODS.mcpAppsToolInfo]: (input) => mcpAppRequests.toolInfo(input),
         [WS_METHODS.mcpAppsUpdateModelContext]: (input) => mcpAppRequests.updateModelContext(input),
         [WS_METHODS.mcpAppsReadResource]: (input) => mcpAppRequests.readResource(input),
-        [WS_METHODS.providerUploadFeedback]: (input) =>
-          Effect.gen(function* () {
-            const projection = yield* threadManagement.getThreadRecords(input.threadId, [
-              "providerThreads",
-            ]);
-            const providerThread =
-              projection.providerThreads.find(
-                (candidate) => candidate.id === projection.thread.activeProviderThreadId,
-              ) ?? projection.providerThreads.at(-1);
-            const providerSessionId = providerThread?.providerSessionId ?? null;
-            if (providerThread === undefined || providerSessionId === null) {
-              return yield* Effect.fail(
-                new ProviderUploadFeedbackError({
-                  threadId: input.threadId,
-                  cause: "No provider session has run in this thread yet.",
-                }),
-              );
-            }
-            const runtime = Option.getOrNull(yield* providerSessionsV2.get(providerSessionId));
-            if (runtime === null) {
-              return yield* Effect.fail(
-                new ProviderUploadFeedbackError({
-                  threadId: input.threadId,
-                  cause: "The provider session is no longer running. Send a message first.",
-                }),
-              );
-            }
-            if (runtime.uploadFeedback === undefined) {
-              return yield* Effect.fail(
-                new ProviderUploadFeedbackError({
-                  threadId: input.threadId,
-                  cause: `Provider '${runtime.driver}' does not support feedback uploads.`,
-                }),
-              );
-            }
-            return yield* runtime.uploadFeedback({
-              providerThread,
-              ...(input.reason === undefined ? {} : { reason: input.reason }),
-            });
-          }).pipe(
-            Effect.mapError((cause) =>
-              isProviderUploadFeedbackError(cause)
-                ? cause
-                : new ProviderUploadFeedbackError({
+        [WS_METHODS.providerUploadFeedback]:
+          /* Request instrumentation already owns the span; keep this helper in that context. */
+          Effect.fnUntraced(
+            function* (input) {
+              const projection = yield* threadManagement.getThreadRecords(input.threadId, [
+                "providerThreads",
+              ]);
+              const providerThread =
+                projection.providerThreads.find(
+                  (candidate) => candidate.id === projection.thread.activeProviderThreadId,
+                ) ?? projection.providerThreads.at(-1);
+              const providerSessionId = providerThread?.providerSessionId ?? null;
+              if (providerThread === undefined || providerSessionId === null) {
+                return yield* Effect.fail(
+                  new ProviderUploadFeedbackError({
                     threadId: input.threadId,
-                    cause,
+                    cause: "No provider session has run in this thread yet.",
                   }),
-            ),
+                );
+              }
+              const runtime = Option.getOrNull(yield* providerSessionsV2.get(providerSessionId));
+              if (runtime === null) {
+                return yield* Effect.fail(
+                  new ProviderUploadFeedbackError({
+                    threadId: input.threadId,
+                    cause: "The provider session is no longer running. Send a message first.",
+                  }),
+                );
+              }
+              if (runtime.uploadFeedback === undefined) {
+                return yield* Effect.fail(
+                  new ProviderUploadFeedbackError({
+                    threadId: input.threadId,
+                    cause: `Provider '${runtime.driver}' does not support feedback uploads.`,
+                  }),
+                );
+              }
+              return yield* runtime.uploadFeedback({
+                providerThread,
+                ...(input.reason === undefined ? {} : { reason: input.reason }),
+              });
+            },
+            (effect, input) =>
+              effect.pipe(
+                Effect.mapError((cause) =>
+                  isProviderUploadFeedbackError(cause)
+                    ? cause
+                    : new ProviderUploadFeedbackError({
+                        threadId: input.threadId,
+                        cause,
+                      }),
+                ),
+              ),
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           providerMaintenanceRunner.updateProvider(input),
-        [WS_METHODS.providerConsumeResetCredit]: (input) =>
-          Effect.gen(function* () {
+        [WS_METHODS.providerConsumeResetCredit]:
+          /* Request instrumentation already owns the span; keep this helper in that context. */
+          Effect.fnUntraced(function* (input) {
             if ("sourceId" in input) return yield* usageLimitSources.consumeResetCredit(input);
             const instance = yield* providerInstances.getInstance(input.instanceId);
             if (instance === undefined || !instance.enabled) {
@@ -2660,13 +2816,15 @@ const layerWsRpc = (
           }),
         [WS_METHODS.serverCommitDesktopUpdate]: (input) =>
           serverSelfUpdate.commitDesktopUpdate(input.requestId),
-        [WS_METHODS.serverUpsertKeybinding]: (rule) =>
-          Effect.gen(function* () {
+        [WS_METHODS.serverUpsertKeybinding]:
+          /* Request instrumentation already owns the span; keep this helper in that context. */
+          Effect.fnUntraced(function* (rule) {
             const keybindingsConfig = yield* keybindings.upsertKeybindingRule(rule);
             return { keybindings: keybindingsConfig, issues: [] };
           }),
-        [WS_METHODS.serverRemoveKeybinding]: (rule) =>
-          Effect.gen(function* () {
+        [WS_METHODS.serverRemoveKeybinding]:
+          /* Request instrumentation already owns the span; keep this helper in that context. */
+          Effect.fnUntraced(function* (rule) {
             const keybindingsConfig = yield* keybindings.removeKeybindingRule(rule);
             return { keybindings: keybindingsConfig, issues: [] };
           }),
@@ -2685,11 +2843,15 @@ const layerWsRpc = (
             ),
           ),
         [WS_METHODS.serverGetDatabaseStorage]: () => databaseStorage.status,
+        [WS_METHODS.serverCompactStorage]: () => databaseStorage.compactNow,
+        [WS_METHODS.serverCleanUpStrayProcesses]: () => strayProcesses.cleanUp,
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
-        [WS_METHODS.serverUpdateSettings]: ({ patch, providerInstanceMutation }) =>
-          Effect.gen(function* () {
+        [WS_METHODS.serverUpdateSettings]:
+          /* Request instrumentation already owns the span; keep this helper in that context. */
+          Effect.fnUntraced(function* ({ patch, providerInstanceMutation }) {
             yield* ServerSettings.rejectMemoryHubSettingsPatch(patch, config.settingsPath);
+            if (patch.enableCua === true) yield* requireComputerUseDisplay;
             const deviceHosts = patch.deviceHosts
               ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
                   Effect.provide(deviceHostContext),
@@ -2712,16 +2874,25 @@ const layerWsRpc = (
           }),
         [WS_METHODS.serverGetProcessDiagnostics]: (_input) => processDiagnostics.read,
         [WS_METHODS.serverGetHostResources]: (_input) => hostResources.read,
-        [WS_METHODS.serverGetHostStatus]: (_input) =>
+        [WS_METHODS.serverGetHostStatus]: (input) =>
           serverEnvironment.getEnvironmentId.pipe(
             Effect.flatMap((environmentId) =>
               hostStatus.readForClient({
                 environmentId,
                 sessionId: currentSessionId,
                 reachHosts: currentSession.scopes.includes(AuthOrchestrationOperateScope),
+                ...(input.local === true ? { local: true } : {}),
               }),
             ),
           ),
+        [WS_METHODS.hubDeviceVerify]: (input) =>
+          hubScope("read-only").pipe(
+            Effect.flatMap((scope) => hubParity.verify(input.deviceAlias, scope)),
+            Effect.map((parity) => ({ deviceAlias: input.deviceAlias, parity })),
+          ),
+        [WS_METHODS.hubDeviceJoin]: hubMembershipOperation("join"),
+        [WS_METHODS.hubDeviceLeave]: hubMembershipOperation("leave"),
+        [WS_METHODS.hubDeviceRepair]: hubMembershipOperation("repair"),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>
@@ -2786,6 +2957,8 @@ const layerWsRpc = (
           withPullRequestViewer(input, pullRequests.diffFileContents(input)),
         [WS_METHODS.pullRequestsFilesViewed]: (input) =>
           withPullRequestViewer(input, pullRequests.filesViewed(input)),
+        [WS_METHODS.pullRequestsChangeBreakdown]: (input) =>
+          withPullRequestViewer(input, pullRequests.changeBreakdown(input)),
         [WS_METHODS.pullRequestsSetFilesViewed]: (input) =>
           withPullRequestViewer(input, pullRequests.setFilesViewed(input)),
         [WS_METHODS.pullRequestsRunAction]: (input) =>
@@ -2870,6 +3043,10 @@ const layerWsRpc = (
                   }),
                 ),
                 Effect.andThen(refreshGitStatus(project.workspaceRoot)),
+                // The folder was empty when the project was created, so the cached
+                // enrichment says "no repository" and clients cannot group it yet.
+                Effect.andThen(projectEnrichment.invalidate([project.workspaceRoot])),
+                Effect.andThen(projectEnrichment.request(project.workspaceRoot)),
                 Effect.ignoreCause({ log: true }),
               ),
           }),
@@ -2934,6 +3111,17 @@ const layerWsRpc = (
                 }),
             ),
           ),
+        [WS_METHODS.projectsListIgnoredFiles]: (input) =>
+          workspaceEntries.listIgnoredFiles(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProjectListEntriesError({
+                  ...input,
+                  ...projectEntriesFailureContext(cause),
+                  cause,
+                }),
+            ),
+          ),
         [WS_METHODS.projectsReadFile]: (input) =>
           workspaceFileSystem.readFile(input).pipe(
             Effect.mapError(
@@ -2989,8 +3177,9 @@ const layerWsRpc = (
         [WS_METHODS.agentSessionsScan]: () => agentSessionScanner.scan,
         [WS_METHODS.agentSessionsImport]: (input) =>
           agentSessionImporter.importRecentAgentThreads(input),
-        [WS_METHODS.assetsCreateUrl]: (input) =>
-          Effect.gen(function* () {
+        [WS_METHODS.assetsCreateUrl]:
+          /* Request instrumentation already owns the span; keep this helper in that context. */
+          Effect.fnUntraced(function* (input) {
             const path = yield* Path.Path;
             if (
               input.resource._tag === "attachment" ||
@@ -3032,10 +3221,9 @@ const layerWsRpc = (
                 ...(project.value.faviconPath
                   ? { projectFaviconPath: project.value.faviconPath }
                   : {}),
-                projectCheckoutPending:
-                  clone !== null &&
-                  clone.phase !== "done" &&
-                  clone.destinationPath === project.value.workspaceRoot,
+                ...(clone !== null && clone.destinationPath === project.value.workspaceRoot
+                  ? { projectCheckout: clone.phase === "done" ? "cloned" : "pending" }
+                  : {}),
               });
             }
             const thread = yield* threadManagement
@@ -3070,10 +3258,7 @@ const layerWsRpc = (
           }),
         [WS_METHODS.assetsPersistChatAttachments]: (input) =>
           persistChatAttachments(input).pipe(Effect.map((attachments) => ({ attachments }))),
-        [WS_METHODS.subscribeVcsStatus]: (input) =>
-          vcsStatusBroadcaster.streamStatus(input, {
-            automaticRemoteRefreshInterval: automaticGitFetchInterval,
-          }),
+        [WS_METHODS.subscribeVcsStatus]: (input) => vcsStatusBroadcaster.streamStatus(input),
         [WS_METHODS.subscribeWorktreeSetup]: (input) => worktreeSetupTracker.stream(input.threadId),
         [WS_METHODS.worktreeSetupCancel]: (input) =>
           worktreeSetupTracker
@@ -3145,6 +3330,8 @@ const layerWsRpc = (
         [WS_METHODS.sshHostStatus]: (input) => sshHostSetup.status(input),
         [WS_METHODS.sshHostHandoffProgress]: (input) =>
           sshHostSetup.handoffProgress(input, { kind: "client", sessionId: currentSessionId }),
+        [WS_METHODS.sshHostPreflight]: (input) =>
+          sshHostSetup.preflight(input, { kind: "client", sessionId: currentSessionId }),
         [WS_METHODS.sshHostProbe]: (input) => sshHostSetup.probe(input, currentSessionId),
         [WS_METHODS.sshHostTrust]: (input) => sshHostSetup.trust(input, currentSessionId),
         [WS_METHODS.sshHostPrepare]: (input) =>
@@ -3159,11 +3346,11 @@ const layerWsRpc = (
         [WS_METHODS.reviewGetDiffFileContents]: (input) => review.getDiffFileContents(input),
         [WS_METHODS.terminalOpen]: (input) => terminalManager.open(input),
         [WS_METHODS.terminalAttach]: (input) =>
-          Stream.callback<TerminalAttachStreamEvent, TerminalError>((queue) =>
-            Effect.acquireRelease(
-              terminalManager.attachStream(input, (event) => Queue.offer(queue, event)),
-              (unsubscribe) => Effect.sync(unsubscribe),
-            ).pipe(Effect.catchCause((cause) => Queue.failCause(queue, cause))),
+          terminalOutputStream(
+            (listener, registerCleanup) =>
+              terminalManager.attachStream(input, listener, registerCleanup),
+            (listener, registerCleanup) =>
+              terminalManager.resyncStream(input, listener, registerCleanup),
           ),
         [WS_METHODS.terminalWrite]: (input) => terminalManager.write(input),
         [WS_METHODS.terminalResize]: (input) => terminalManager.resize(input),
@@ -3171,19 +3358,14 @@ const layerWsRpc = (
         [WS_METHODS.terminalRestart]: (input) => terminalManager.restart(input),
         [WS_METHODS.terminalClose]: (input) => terminalManager.close(input),
         [WS_METHODS.terminalObserve]: (input) =>
-          Stream.callback<TerminalAttachStreamEvent, TerminalError>((queue) =>
-            Effect.acquireRelease(
-              terminalManager.observeStream(input, (event) => Queue.offer(queue, event)),
-              (unsubscribe) => Effect.sync(unsubscribe),
-            ).pipe(Effect.catchCause((cause) => Queue.failCause(queue, cause))),
+          terminalOutputStream(
+            (listener, registerCleanup) =>
+              terminalManager.observeStream(input, listener, registerCleanup),
+            (listener, registerCleanup) =>
+              terminalManager.resyncStream(input, listener, registerCleanup),
           ),
         [WS_METHODS.subscribeTerminalEvents]: (_input) =>
-          Stream.callback<TerminalEvent>((queue) =>
-            Effect.acquireRelease(
-              terminalManager.subscribe((event) => Queue.offer(queue, event)),
-              (unsubscribe) => Effect.sync(unsubscribe),
-            ),
-          ),
+          terminalOutputStream(terminalManager.subscribe),
         [WS_METHODS.subscribeTerminalMetadata]: (_input) =>
           Stream.callback<TerminalMetadataStreamEvent>((queue) =>
             Effect.acquireRelease(
@@ -3204,6 +3386,7 @@ const layerWsRpc = (
         [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
         [WS_METHODS.deviceConfigure]: (input) => deviceService.configure(input),
         [WS_METHODS.deviceTestHost]: (input) => deviceService.testHost(input),
+        [WS_METHODS.deviceEasAccount]: (input) => deviceService.easAccount(input),
         [WS_METHODS.deviceList]: (input) =>
           input.inspectOnly && !input.updateTool
             ? deviceService.inspect
@@ -3215,7 +3398,10 @@ const layerWsRpc = (
                     ? deviceService.retryHost(input.retryHostId)
                     : deviceService.list,
               ),
-        [WS_METHODS.deviceOpen]: (input) => deviceService.open(input),
+        [WS_METHODS.deviceOpen]: (input) =>
+          threadWorkspaceRoot(input.threadId).pipe(
+            Effect.flatMap((workspaceRoot) => deviceService.open(input, { workspaceRoot })),
+          ),
         [WS_METHODS.deviceClose]: (input) => deviceService.close(input),
         [WS_METHODS.deviceShutdown]: (input) => deviceService.shutdown(input),
         [WS_METHODS.deviceDetail]: (input) => deviceService.detail(input),
@@ -3251,8 +3437,12 @@ const layerWsRpc = (
           Stream.unwrap(
             Effect.gen(function* () {
               const usageLimitsCommand = input.usageLimitsCommand === true;
+              // Buffer changes through discovery and the initial snapshot's RPC ACK wait.
+              const keybindingsChanges = yield* keybindings.subscribeChanges;
+              const settingsChanges = yield* serverSettings.subscribeChanges;
+              const checkoutHealthChanges = yield* worktreeCheckoutHealth.subscribeChanges;
               const config = yield* loadServerConfig({ usageLimitsCommand });
-              const keybindingsUpdates = keybindings.streamChanges.pipe(
+              const keybindingsUpdates = keybindingsChanges.pipe(
                 Stream.map((event) => ({
                   version: 1 as const,
                   type: "keybindingsUpdated" as const,
@@ -3270,14 +3460,11 @@ const layerWsRpc = (
                   Stream.fromEffect(providerRegistry.getProviders),
                   providerRegistry.streamChanges,
                 ),
-                usageLimitSources.streamChanges.pipe(
-                  Stream.changesWith(
-                    usageLimitsCommand ? sameUsageLimitCommandCoverage : () => true,
-                  ),
-                ),
+                usageLimitSources.streamChanges,
                 (providers, sources) =>
                   usageLimitsCommand ? withUsageLimitsCommands(providers, sources) : providers,
               ).pipe(
+                Stream.mapEffect(usageLimitSources.projectProviders),
                 // Both sides replay their current value, so the first pairing normally
                 // repeats the snapshot the client already holds. Compare against that
                 // snapshot rather than dropping blindly: a refresh that landed between
@@ -3318,7 +3505,7 @@ const layerWsRpc = (
                       })),
                     )
                   : Stream.empty;
-              const settingsUpdates = serverSettings.streamChanges.pipe(
+              const settingsUpdates = settingsChanges.pipe(
                 Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
                 Stream.map((settings) => ({
                   version: 1 as const,
@@ -3340,7 +3527,7 @@ const layerWsRpc = (
 
               return Stream.concat(
                 rpcInitialItems([{ version: 1 as const, type: "snapshot" as const, config }]),
-                withLateEditorConfig(config, liveUpdates, externalLauncher),
+                withLateEditorConfig(config, liveUpdates, externalLauncher, checkoutHealthChanges),
               );
             }),
           ),
@@ -3415,6 +3602,8 @@ const layerWsRpc = (
       });
       // toLayer derives services from every handler key, so narrow each part with Pick.
       return Layer.mergeAll(
+        WsDecisionRpcGroup.middleware(RpcInstrumentation).toLayer(decisionHandlers),
+        WsHubNodesRpcGroup.middleware(RpcInstrumentation).toLayer(hubNodesHandlers),
         WsMemoryImportRpcGroup.middleware(RpcInstrumentation).toLayer(importHandlers),
         WsMemoryCoreRpcGroup.middleware(RpcInstrumentation).toLayer(memoryHandlers),
         WsMemoryAdministrationRpcGroup.middleware(RpcInstrumentation).toLayer(ownerHandlers),
@@ -3425,9 +3614,29 @@ const layerWsRpc = (
           Pick<typeof handlers, RpcGroup.Rpcs<typeof ServerWsCoreWorkspaceRpcGroup>["_tag"]>
         >(handlers),
         ServerWsChannelRpcGroup.toLayer(channelHandlers),
+        ServerWsNotesRpcGroup.toLayer(noteHandlers),
       );
     }),
   );
+
+export const makeHubNodesHandlers = Effect.gen(function* () {
+  const hubNodes = yield* HubNodes.HubNodes;
+  return WsHubNodesRpcGroup.middleware(RpcInstrumentation).of({
+    [WS_METHODS.hubNodesList]: () => hubNodes.snapshot,
+    [WS_METHODS.hubNodesSubscribe]: () => hubNodes.changes,
+    [WS_METHODS.hubNodesAdd]: (input) =>
+      Effect.flatMap(DateTime.now, (now) =>
+        hubNodes.add(input, {
+          addedBy: { kind: "user", at: DateTime.formatIso(now) },
+          beforeSave: Effect.void,
+        }),
+      ),
+    [WS_METHODS.hubNodesRemove]: (input) => hubNodes.remove(input),
+    [WS_METHODS.hubNodesCheck]: (input) => hubNodes.check(input),
+    [WS_METHODS.hubNodesImport]: (input) => hubNodes.importProfiles(input),
+    [WS_METHODS.hubNodesDismissNotice]: (input) => hubNodes.dismissNotice(input.id),
+  });
+});
 
 // RpcServer's default sends a socket-level Defect frame instead, and the client
 // ends every pending request on the socket with it.
@@ -3448,7 +3657,11 @@ export const layer = Layer.unwrap(
     const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
     const providerHostSync = yield* ProviderHostSync.ProviderHostSync;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
+    const notes = yield* NotesService.NotesService;
+    const noteWork = yield* NoteWorkService.NoteWorkService;
     const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
+    const hubParityService = yield* HubParity.HubParity;
+    const hubMembershipService = yield* HubMembership.HubMembership;
     const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
@@ -3485,6 +3698,7 @@ export const layer = Layer.unwrap(
         const clientAnalyticsProps = readClientAnalyticsProps(request);
         yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
         yield* analytics.record("client.connected", clientAnalyticsProps);
+        yield* analytics.recordOwners(readClientOwners(request), "client");
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
           yield* RpcServer.make(ServerWsRpcGroup, WS_RPC_SERVER_OPTIONS).pipe(
@@ -3545,8 +3759,12 @@ export const layer = Layer.unwrap(
                   reviewGuides,
                 ),
               ),
+              Layer.provide(Layer.succeed(NotesService.NotesService, notes)),
+              Layer.provide(Layer.succeed(NoteWorkService.NoteWorkService, noteWork)),
               // The goat_host_status tool's instance, so both share last-known samples.
               Layer.provide(Layer.succeed(HostStatusMcpService.HostStatusMcpService, hostStatus)),
+              Layer.provide(Layer.succeed(HubParity.HubParity, hubParityService)),
+              Layer.provide(Layer.succeed(HubMembership.HubMembership, hubMembershipService)),
               Layer.provide(Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(

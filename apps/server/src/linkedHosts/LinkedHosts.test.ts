@@ -249,6 +249,60 @@ describe("LinkedHosts", () => {
     }),
   );
 
+  it.live("preserves a same-name link and its token when the exchanged descriptor is refused", () =>
+    Effect.gen(function* () {
+      const { result } = yield* withHost((hostAuth) =>
+        Effect.gen(function* () {
+          const links = yield* LinkedHosts.LinkedHosts;
+          const input = {
+            name: "box",
+            url: `https://${HOST}`,
+            access: "read-only" as const,
+            clientName: "GOAT",
+            beforeSave: Effect.void,
+          };
+          yield* links.link({ ...input, code: yield* pairingCode(hostAuth) });
+          const before = Option.getOrThrow(yield* links.find("box"));
+          const refused = yield* links
+            .link({
+              ...input,
+              access: "full-access",
+              code: yield* pairingCode(hostAuth),
+              acceptDescriptor: (descriptor) => {
+                expect(descriptor).toEqual(DESCRIPTOR);
+                return Effect.fail("self_link" as const);
+              },
+            })
+            .pipe(Effect.flip);
+          return { refused, before, after: Option.getOrThrow(yield* links.find("box")) };
+        }),
+      );
+      expect(result.refused).toBe("self_link");
+      expect(result.after).toEqual(result.before);
+    }),
+  );
+
+  it.live("keeps a label the caller chose over the host's own", () =>
+    Effect.gen(function* () {
+      const { result } = yield* withHost((hostAuth) =>
+        Effect.gen(function* () {
+          const links = yield* LinkedHosts.LinkedHosts;
+          yield* links.link({
+            name: "box",
+            url: `https://${HOST}`,
+            code: yield* pairingCode(hostAuth),
+            access: "read-only",
+            clientName: "GOAT",
+            label: "Mac Studio",
+            beforeSave: Effect.void,
+          });
+          return (yield* links.list).find((host) => host.name === "box")?.label;
+        }),
+      );
+      expect(result).toBe("Mac Studio");
+    }),
+  );
+
   it.live("replaces a link by name and forgets it on unlink", () =>
     Effect.gen(function* () {
       const { result } = yield* withHost((hostAuth) =>

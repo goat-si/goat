@@ -19,7 +19,7 @@ export const ORCHESTRATION_PROTOCOL_VERSION_TEXT = `${ORCHESTRATION_PROTOCOL_VER
  * ORCHESTRATION_PROTOCOL_VERSION; lower this only together with the decoders and behavior that
  * keep the older protocol working, so a newer server keeps older clients connected.
  */
-export const ORCHESTRATION_PROTOCOL_MIN_SERVED: number = ORCHESTRATION_PROTOCOL_VERSION;
+export const ORCHESTRATION_PROTOCOL_MIN_SERVED: number = 1001;
 
 /** Whether this server accepts a client announcing `announced` as its orchestration protocol. */
 export function servesOrchestrationProtocol(announced: string | null | undefined): boolean {
@@ -94,9 +94,13 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       protocolVersion: Schema.Int,
       hub: Schema.optionalKey(Schema.Boolean),
       importProvider: Schema.optionalKey(Schema.Boolean),
+      /** Import preview can flag items too large for the turn-start frame; absent on older servers. */
+      importTurnStartFit: Schema.optionalKey(Schema.Boolean),
       refusedReverts: Schema.optionalKey(Schema.Boolean),
       resolutionInputs: Schema.optionalKey(Schema.Boolean),
       retainedLocalSpace: Schema.optionalKey(Schema.Boolean),
+      /** memory.syncStatus may report a paused memory model when the request opts in. */
+      generationHold: Schema.optionalKey(Schema.Boolean),
       /** Separate diagnostics/read and Settings reconcile RPCs; absent on older servers. */
       hubDiagnostics: Schema.optionalKey(Schema.Boolean),
     }),
@@ -159,10 +163,16 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
   serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
+  threadStop: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   threadPullRequestWatch: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
   serverSelfUpdate: Schema.optionalKey(ServerSelfUpdateCapability),
+  /**
+   * Older servers strip the unknown settings key, so the preference would
+   * snap back; clients disable the switch unless this is true.
+   */
+  automaticServerUpdates: Schema.optionalKey(Schema.Boolean),
   /** Manual commands must update this install, not the host's default global prefix. */
   serverInstallation: ForwardCompatibleOptional(ServerInstallation),
   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
@@ -174,6 +184,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
    */
   agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
+  /** Server answers projects.listIgnoredFiles. */
+  ignoredFileListing: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
   /** Server answers orchestration.subscribeCommandOutput. Absent on older servers,
@@ -185,6 +197,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   serverBrowser: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the bounded SSH runtime activity probe. */
   sshActivity: Schema.optionalKey(Schema.Boolean),
+  /** Server proxies its nodes' APIs below `/hub/nodes` for clients holding `hub:proxy`. */
+  hubProxy: Schema.optionalKey(Schema.Boolean),
   /** Server answers `POST /.well-known/goat/runtime/drain`: it can stop admitting turns, drain,
       and exit on its own for a replacement. Servers without it are attach-only. */
   drainRestart: Schema.optionalKey(Schema.Boolean),
@@ -250,6 +264,7 @@ export const RepositoryIdentity = Schema.Struct({
   canonicalKey: TrimmedNonEmptyString,
   locator: RepositoryIdentityLocator,
   webUrl: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Work tree root, or the git dir for a bare repository. */
   rootPath: Schema.optionalKey(TrimmedNonEmptyString),
   displayName: Schema.optionalKey(TrimmedNonEmptyString),
   provider: Schema.optionalKey(TrimmedNonEmptyString),

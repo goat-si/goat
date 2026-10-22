@@ -199,6 +199,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
         return yield* new TextGenerationError({
           operation: input.operation,
           detail: "OpenCode model selection must use the 'provider/model' format.",
+          ...(memory ? { cause: new MemoryGenerationRunnerError({ code: "unavailable" }) } : {}),
         });
       }
 
@@ -427,7 +428,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
               result.data?.info?.providerID !== parsedModel.providerID ||
               result.data?.info?.variant !== selectedVariant)
           )
-            return yield* failure("OpenCode did not confirm the selected memory model.");
+            return yield* failure("OpenCode did not confirm the selected memory model.", true);
           const responseParts = result.data?.parts ?? [];
           const rawText = getOpenCodeTextResponse(responseParts);
           if (rawText.length === 0) {
@@ -510,7 +511,12 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
               new TextGenerationError({
                 operation: input.operation,
                 detail: OpenCodeRuntime.openCodeRuntimeErrorDetail(cause),
-                cause,
+                // A runtime that cannot start or is too old fails every memory request; a held
+                // database lock clears on its own.
+                cause:
+                  memory && cause.reason !== "databaseLocked"
+                    ? new MemoryGenerationRunnerError({ code: "unavailable" })
+                    : cause,
               }),
             ),
         }),

@@ -14,6 +14,7 @@ import {
 } from "@react-navigation/native";
 import {
   NativeStackView,
+  type NativeStackHeaderItemMenu,
   type NativeStackNavigationEventMap,
   type NativeStackNavigationOptions,
   type NativeStackNavigatorProps,
@@ -46,9 +47,11 @@ import {
 import { V5StackHeader } from "../../native/V5StackHeader.ios";
 import type { AppNativeStackNavigationOptions } from "../../native/StackHeader";
 import {
+  collapsedSplitTransition,
   nativeWorkspacePopAction,
   projectWorkspaceStack,
   partitionStackPresentations,
+  type CollapsedSplitColumn,
 } from "../../native/workspace-stack-projection";
 import {
   NativePrimaryColumnContext,
@@ -66,7 +69,9 @@ function ColumnScreen(props: {
   readonly primary?: boolean;
   readonly selectedThreadKey?: string | null;
   readonly selectedPullRequestKey?: string | null;
+  readonly sidebarFilter?: NativeStackHeaderItemMenu;
   readonly onDismiss: (routeKey: string) => void;
+  readonly onAppearance: (type: "willAppear" | "didAppear" | "willDisappear", key: string) => void;
   readonly navigation: ViewProps["navigation"];
 }) {
   const { descriptor } = props;
@@ -87,15 +92,18 @@ function ColumnScreen(props: {
       onDismiss={(event) => {
         if (event.nativeEvent.isNativeDismiss) props.onDismiss(key);
       }}
-      onWillAppear={() =>
-        props.navigation.emit({ type: "transitionStart", target: key, data: { closing: false } })
-      }
-      onDidAppear={() =>
-        props.navigation.emit({ type: "transitionEnd", target: key, data: { closing: false } })
-      }
-      onWillDisappear={() =>
-        props.navigation.emit({ type: "transitionStart", target: key, data: { closing: true } })
-      }
+      onWillAppear={() => {
+        props.onAppearance("willAppear", key);
+        props.navigation.emit({ type: "transitionStart", target: key, data: { closing: false } });
+      }}
+      onDidAppear={() => {
+        props.onAppearance("didAppear", key);
+        props.navigation.emit({ type: "transitionEnd", target: key, data: { closing: false } });
+      }}
+      onWillDisappear={() => {
+        props.onAppearance("willDisappear", key);
+        props.navigation.emit({ type: "transitionStart", target: key, data: { closing: true } });
+      }}
       onDidDisappear={() =>
         props.navigation.emit({ type: "transitionEnd", target: key, data: { closing: true } })
       }
@@ -106,6 +114,7 @@ function ColumnScreen(props: {
             options={descriptor.options}
             canGoBack={!props.primary}
             primary={props.primary}
+            sidebarFilter={props.sidebarFilter}
           />
           <ColumnContent
             primary={props.primary}
@@ -139,7 +148,8 @@ function WorkspaceColumns(
   const hostRef = useRef<SplitHostCommands>(null);
   const activeDetailKey = props.detail.at(-1)?.key;
   const compactColumn = activeDetailKey ? "secondary" : "primary";
-  const shownCompactColumn = useRef(compactColumn);
+  const collapsed = useRef(!layout.usesSplitView);
+  const collapsedColumn = useRef<CollapsedSplitColumn>({ visible: compactColumn, leaving: null });
   const threadParams = props.detail.findLast((route) => route.name === "Thread")?.params;
   const pullRequestParams = props.detail.findLast(
     (route) =>
@@ -178,21 +188,43 @@ function WorkspaceColumns(
     },
     [props.navigation],
   );
+  const followCollapsedSplit = (
+    type: "willAppear" | "didAppear" | "willDisappear",
+    key: string,
+  ) => {
+    if (!collapsed.current || layout.usesSplitView) return;
+    const transition = collapsedSplitTransition(
+      collapsedColumn.current,
+      { type, key },
+      props.navigation.getState(),
+      props.primary.key,
+    );
+    collapsedColumn.current = transition.column;
+    if (transition.pop) props.navigation.dispatch(transition.pop);
+  };
 
   useEffect(() => {
-    if (layout.usesSplitView || shownCompactColumn.current === compactColumn) return;
-    shownCompactColumn.current = compactColumn;
+    if (layout.usesSplitView || collapsedColumn.current.visible === compactColumn) return;
+    collapsedColumn.current = { ...collapsedColumn.current, visible: compactColumn };
     hostRef.current?.show(compactColumn);
   }, [compactColumn, layout.usesSplitView]);
 
   const primary = props.descriptors[props.primary.key];
   if (!primary) return null;
+  const sidebarFilter = (primary.options as AppNativeStackNavigationOptions).nativeSidebarFilter;
   return (
     <Split.Host
       ref={hostRef}
       testID="adaptive-workspace-layout"
       preferredSplitBehavior="tile"
       topColumnForCollapsing={compactColumn}
+      onCollapse={() => {
+        collapsed.current = true;
+        collapsedColumn.current = { visible: compactColumn, leaving: null };
+      }}
+      onExpand={() => {
+        collapsed.current = false;
+      }}
       preferredDisplayMode={
         panes.primarySidebarVisible || (!layout.usesSplitView && !activeDetailKey)
           ? "oneBesideSecondary"
@@ -219,6 +251,7 @@ function WorkspaceColumns(
             selectedThreadKey={selectedThreadKey}
             selectedPullRequestKey={selectedPullRequestKey}
             onDismiss={handleNativeDismiss}
+            onAppearance={followCollapsedSplit}
             navigation={props.navigation}
           />
         </Split.Stack>
@@ -243,6 +276,7 @@ function WorkspaceColumns(
                 ],
               }}
               canGoBack={false}
+              sidebarFilter={sidebarFilter}
             />
             <ColumnContent>
               {showsBot ? (
@@ -274,7 +308,9 @@ function WorkspaceColumns(
                 key={route.key}
                 descriptor={descriptor}
                 onDismiss={handleNativeDismiss}
+                onAppearance={followCollapsedSplit}
                 navigation={props.navigation}
+                sidebarFilter={sidebarFilter}
               />
             ) : null;
           })}

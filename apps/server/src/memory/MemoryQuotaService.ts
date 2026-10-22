@@ -43,6 +43,8 @@ export class MemoryQuotaService extends Context.Service<
     readonly recordStorageSample: (
       environmentId: M.EnvironmentId,
       sharedMetrics?: { readonly walBytes: number | null },
+      /** A measurement the caller just took, so one maintenance cycle walks the btrees once. */
+      measured?: Effect.Success<ReturnType<Store.MemoryStore["Service"]["measureAllocation"]>>,
     ) => Effect.Effect<M.MemoryStorageGrowth, Store.MemoryStorageError>;
     readonly readStorageGrowth: (
       environmentId: M.EnvironmentId,
@@ -73,7 +75,7 @@ const storageError = (cause: unknown) =>
   new Store.MemoryStorageError({ stage: "quota-codec", cause });
 
 /** Exact-day endpoints; missing metrics or days remain unavailable rather than becoming zero growth. */
-export function storageDeltas(
+function storageDeltas(
   current: M.MemoryStorageSample | null,
   samples: ReadonlyArray<M.MemoryStorageSample>,
   clockDiscontinuity = false,
@@ -194,6 +196,18 @@ const make = Effect.gen(function* () {
             return yield* new Store.MemoryCapacityError({
               dimension: "fts_admission_brake",
               limit: M.MEMORY_FTS_ALLOCATED_BRAKE_BYTES,
+            });
+          // The per-dimension limits guard individual concerns; this guards their sum on disk.
+          // It reuses the live payload dimension so older clients and hub peers can decode it.
+          const storeBytes =
+            payloadBytes > oldPayloadBytes
+              ? yield* store.measuredMemoryBytes(input.environmentId)
+              : null;
+          if (storeBytes !== null && storeBytes >= M.MEMORY_STORE_BUDGET_BYTES)
+            return yield* new Store.MemoryCapacityError({
+              dimension: "live_payload_bytes",
+              current: storeBytes,
+              limit: M.MEMORY_STORE_BUDGET_BYTES,
             });
         }
         charge("lifetime_ids", usage.lifetimeIds, Number(identityNew), M.MEMORY_MAX_LIFETIME_IDS);
@@ -645,10 +659,11 @@ const make = Effect.gen(function* () {
   const recordStorageSample = Effect.fn("MemoryQuotaService.recordStorageSample")(function* (
     environmentId: M.EnvironmentId,
     sharedMetrics?: { walBytes: number | null },
+    alreadyMeasured?: Effect.Success<ReturnType<Store.MemoryStore["Service"]["measureAllocation"]>>,
   ) {
     const now = yield* Clock.currentTimeMillis;
     const logical = yield* store.logicalBytes;
-    const measured = yield* store.measureAllocation();
+    const measured = alreadyMeasured ?? (yield* store.measureAllocation());
     const sample = yield* sampleDecode({
       measuredAtUtc: DateTime.formatIso(DateTime.makeUnsafe(now)),
       utcDay: DateTime.formatIsoDateUtc(DateTime.makeUnsafe(now)),

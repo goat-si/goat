@@ -1588,6 +1588,8 @@ export class MemoryStore extends Context.Service<
       limit: number,
     ) => Effect.Effect<ReadonlyArray<M.MemoryOperation>, MemoryStorageError>;
     readonly enqueueWork: (work: MemoryWork) => Effect.Effect<void, MemoryStorageError>;
+    /** Makes summary and consolidation retries due now, after the model they waited on changed. */
+    readonly rearmGenerationWork: (now: number) => Effect.Effect<number, MemoryStorageError>;
     readonly claimWork: (
       id: string,
       owner: string,
@@ -1764,6 +1766,22 @@ export class MemoryStore extends Context.Service<
       MemoryStorageError
     >;
     readonly cleanupDerived: (limit: number) => Effect.Effect<number, MemoryStorageError>;
+    /** Memory btree bytes from the current storage sample, or null before the first one. */
+    readonly measuredMemoryBytes: (
+      environment: M.EnvironmentId,
+    ) => Effect.Effect<number | null, MemoryStorageError>;
+    /**
+     * Deletes summary work rows that no scan or summary can read again, among the pageRows
+     * outbox rows after afterRowId. nextRowId is null once the page reached the end.
+     */
+    readonly pruneSettledSummaryWork: (
+      environment: M.EnvironmentId,
+      afterRowId: number,
+      pageRows: number,
+    ) => Effect.Effect<
+      { readonly removed: number; readonly nextRowId: number | null },
+      MemoryStorageError
+    >;
     readonly mergeFts: () => Effect.Effect<boolean, MemoryStorageError>;
     readonly recordSample: (
       environment: M.EnvironmentId,
@@ -3323,7 +3341,7 @@ const make = Effect.gen(function* () {
             yield* stored(
               "revisions",
               sql<HistoryRevisionRow>`
-      SELECT r.*,p.body_json FROM memory_revisions r LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref WHERE r.space=${space} AND r.memory_id=${id}`,
+      SELECT r.space,r.revision_id,r.memory_id,r.operation_id,r.parents_json,r.scope_json,r.assertion_kind,r.provenance_json,r.payload_ref,r.created_at,p.body_json FROM memory_revisions r LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref WHERE r.space=${space} AND r.memory_id=${id}`,
             ),
             (row) => decodeHistoryRevision(row, space, id, visible),
           )
@@ -4508,6 +4526,13 @@ const make = Effect.gen(function* () {
     );
     return rows.length === 1;
   });
+  const rearmGenerationWork = Effect.fn("MemoryStore.rearmGenerationWork")(function* (now: number) {
+    const rows = yield* stored(
+      "rearm-generation-work",
+      sql`UPDATE memory_outbox SET next_attempt_at=${now} WHERE kind IN ('summary','consolidate') AND status='retry' AND next_attempt_at>${now} RETURNING id`,
+    );
+    return rows.length;
+  });
   const renewWork = Effect.fn("MemoryStore.renewWork")(function* (
     work: MemoryWork,
     now: number,
@@ -5603,17 +5628,22 @@ const make = Effect.gen(function* () {
     const pages = yield* stored("page-count", sql<{ page_count: number }>`PRAGMA page_count`);
     const size = yield* stored("page-size", sql<{ page_size: number }>`PRAGMA page_size`);
     const free = yield* stored("freelist", sql<{ freelist_count: number }>`PRAGMA freelist_count`);
-    const allocation = yield* sql<{
-      memory_bytes: number;
-      fts_bytes: number;
-    }>`SELECT coalesce(sum(pgsize),0) AS memory_bytes,coalesce(sum(CASE WHEN name LIKE 'memory_items_fts%' THEN pgsize ELSE 0 END),0) AS fts_bytes FROM dbstat WHERE name IN (SELECT name FROM sqlite_master WHERE (type='table' AND name LIKE 'memory_%') OR (type='index' AND tbl_name LIKE 'memory_%'))`.pipe(
-      Effect.map((rows) => rows[0]),
-      Effect.catch(() => Effect.succeed(undefined)),
-    );
+    // The name constraint lets dbstat walk only memory btrees. Unfiltered, it reads every
+    // page of the shared database, which takes seconds once orchestration history is large.
     const tableAllocations = yield* sql<{
       name: string;
       bytes: number;
-    }>`SELECT name,sum(pgsize) AS bytes FROM dbstat GROUP BY name`.pipe(Effect.option);
+    }>`SELECT name,sum(pgsize) AS bytes FROM dbstat WHERE name IN (SELECT name FROM sqlite_master WHERE (type='table' AND name LIKE 'memory_%') OR (type='index' AND tbl_name LIKE 'memory_%')) GROUP BY name`.pipe(
+      Effect.option,
+    );
+    const allocation = Option.isSome(tableAllocations)
+      ? {
+          memory_bytes: tableAllocations.value.reduce((sum, row) => sum + row.bytes, 0),
+          fts_bytes: tableAllocations.value
+            .filter((row) => row.name.startsWith("memory_items_fts"))
+            .reduce((sum, row) => sum + row.bytes, 0),
+        }
+      : undefined;
     const tables: M.MemoryStorageTableUsage[] = [];
     for (const table of M.MemoryStorageTable.literals) {
       const exists = yield* stored(
@@ -5694,6 +5724,57 @@ const make = Effect.gen(function* () {
       Effect.as(true),
       Effect.catch(() => Effect.succeed(false)),
     );
+  });
+  const measuredMemoryBytes = Effect.fn("MemoryStore.measuredMemoryBytes")(function* (
+    environment: M.EnvironmentId,
+  ) {
+    const rows = yield* stored(
+      "sample-memory-bytes",
+      sql<{
+        bytes: number | null;
+      }>`SELECT json_extract(current_sample_json,'$.memoryAllocatedBytes') AS bytes FROM memory_compaction_state WHERE space=${`_environment:${environment}`}`,
+    );
+    return rows[0]?.bytes ?? null;
+  });
+  // Completion already keeps one completed row per thread and kind. What remains are rows
+  // for threads that are gone and cancelled or failed rows behind a newer run. The recovery
+  // scan reads only each live thread's newest row, so neither can matter again. A page holds
+  // a fixed number of outbox rows, so one call costs the same on any backlog.
+  const pruneSettledSummaryWork = Effect.fn("MemoryStore.pruneSettledSummaryWork")(function* (
+    environment: M.EnvironmentId,
+    afterRowId: number,
+    pageRows: number,
+  ) {
+    const page = yield* stored(
+      "summary-work-page",
+      sql<{
+        last: number | null;
+        rows: number;
+      }>`SELECT max(rowid) AS last,count(*) AS rows FROM (SELECT rowid FROM memory_outbox WHERE rowid>${afterRowId} ORDER BY rowid LIMIT ${Math.max(1, pageRows)})`,
+    );
+    const last = page[0]?.last ?? null;
+    if (last === null) return { removed: 0, nextRowId: null };
+    const removed = yield* stored(
+      "summary-work-prune",
+      sql<{ id: string }>`DELETE FROM memory_outbox WHERE rowid IN (
+        SELECT o.rowid FROM memory_outbox o NOT INDEXED
+        WHERE o.rowid>${afterRowId} AND o.rowid<=${last} AND o.kind IN ('summary','consolidate')
+        AND o.status IN ('completed','cancelled','failed') AND json_extract(o.metadata_json,'$.kind')='summary'
+        AND json_extract(o.metadata_json,'$.sourceThread.environmentId')=${environment}
+        AND (
+          NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_threads t WHERE t.thread_id=json_extract(o.metadata_json,'$.sourceThread.threadId') AND t.deleted_at IS NULL)
+          OR (o.status IN ('cancelled','failed') AND EXISTS (
+            SELECT 1 FROM memory_outbox n WHERE n.kind IN ('summary','consolidate')
+            AND json_extract(n.metadata_json,'$.sourceThread.threadId')=json_extract(o.metadata_json,'$.sourceThread.threadId')
+            AND coalesce(json_extract(n.metadata_json,'$.observedThroughSequence'),json_extract(n.metadata_json,'$.sourceWatermark.throughSequence'))
+              >coalesce(json_extract(o.metadata_json,'$.observedThroughSequence'),json_extract(o.metadata_json,'$.sourceWatermark.throughSequence'))))
+        )
+      ) RETURNING id`,
+    );
+    return {
+      removed: removed.length,
+      nextRowId: (page[0]?.rows ?? 0) < Math.max(1, pageRows) ? null : last,
+    };
   });
   const recordSample = Effect.fn("MemoryStore.recordSample")(function* (
     environment: M.EnvironmentId,
@@ -12195,6 +12276,7 @@ const make = Effect.gen(function* () {
     dueWork,
     readWork,
     retryWork,
+    rearmGenerationWork,
     renewWork,
     rebindWorkModel,
     readThreadHookWatermark,
@@ -12253,6 +12335,8 @@ const make = Effect.gen(function* () {
     putFtsState,
     index,
     measureAllocation,
+    measuredMemoryBytes,
+    pruneSettledSummaryWork,
     mergeFts,
     cleanupDerived,
     recordSample,

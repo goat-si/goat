@@ -14,6 +14,8 @@ export interface ButtonProps {
   readonly loading?: boolean;
   readonly tone?: "primary" | "secondary" | "danger" | "text" | "contrast";
   readonly fullWidth?: boolean;
+  /** For a button that picks one option of several, so assistive technology announces the choice. */
+  readonly selected?: boolean;
 }
 
 const TONE_CLASS_NAMES = {
@@ -32,7 +34,7 @@ export function Button(props: ButtonProps) {
       accessibilityRole="button"
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityHint={props.accessibilityHint}
-      accessibilityState={{ disabled, busy: Boolean(props.loading) }}
+      accessibilityState={{ disabled, busy: Boolean(props.loading), selected: props.selected }}
       disabled={disabled}
       onPress={props.onPress}
       className={cn(

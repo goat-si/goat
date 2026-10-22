@@ -17,6 +17,7 @@ import * as ServerActivation from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerSelfUpdate from "./selfUpdate.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
+import * as SshRuntimeAutoUpdate from "./sshRuntimeAutoUpdate.ts";
 import type { ServiceUpdateRecord } from "./serviceProtocol.ts";
 import * as AutoUpdate from "./autoUpdate.ts";
 
@@ -100,6 +101,8 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
     readonly capability?: "boot-service" | "desktop-managed" | null;
     readonly lastUpdate?: ServiceUpdateRecord;
     readonly activated?: boolean;
+    /** Run as a client-launched SSH runtime instead of under the service launcher. */
+    readonly sshRuntime?: boolean;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -120,21 +123,48 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
     requests: 0,
     prepared: [] as string[],
     updates: [] as Parameters<ServerSelfUpdate.ServerSelfUpdate["Service"]["update"]>[],
+    sshOwned: true,
+    sshBusy: false,
+    sshFailedTarget: undefined as string | undefined,
+    sshActivations: [] as string[],
+    sshCleared: 0,
   };
   const prepareStarted = yield* Deferred.make<void>();
   const preparationGate = yield* Deferred.make<void>();
   let holdPreparation = false;
-  const selfUpdate = ServerSelfUpdate.ServerSelfUpdate.of({
-    capability: options.capability === undefined ? "boot-service" : options.capability,
+  const prepare = (targetVersion: string) =>
+    Effect.gen(function* () {
+      state.prepared.push(targetVersion);
+      yield* Deferred.succeed(prepareStarted, undefined);
+      if (holdPreparation) yield* Deferred.await(preparationGate);
+      if (state.failedPreparation)
+        return yield* new ServerSelfUpdateError({ reason: "checksum mismatch" });
+    });
+  const sshRuntime = SshRuntimeAutoUpdate.SshRuntimeAutoUpdate.of({
+    supported: options.sshRuntime === true,
+    owned: Effect.sync(() => state.sshOwned),
     isUpdating: Effect.sync(() => state.updating),
-    prepare: (targetVersion) =>
-      Effect.gen(function* () {
-        state.prepared.push(targetVersion);
-        yield* Deferred.succeed(prepareStarted, undefined);
-        if (holdPreparation) yield* Deferred.await(preparationGate);
-        if (state.failedPreparation)
-          return yield* new ServerSelfUpdateError({ reason: "checksum mismatch" });
+    failedTarget: Effect.sync(() => state.sshFailedTarget),
+    prepare,
+    activate: (targetVersion) =>
+      Effect.sync(() => {
+        state.sshActivations.push(targetVersion);
+        return state.sshBusy ? ("busy" as const) : ("requested" as const);
       }),
+    clearPending: Effect.sync(() => {
+      state.sshCleared++;
+    }),
+    admitDrain: () => Effect.succeed(true),
+  });
+  const selfUpdate = ServerSelfUpdate.ServerSelfUpdate.of({
+    capability:
+      options.sshRuntime === true
+        ? null
+        : options.capability === undefined
+          ? "boot-service"
+          : options.capability,
+    isUpdating: Effect.sync(() => state.updating),
+    prepare,
     update: (...args) =>
       Effect.gen(function* () {
         state.updates.push(args);
@@ -173,6 +203,7 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
   });
   const autoUpdate = yield* AutoUpdate.make({ ownVersion: options.ownVersion ?? "1.0.0" }).pipe(
     Effect.provideService(ServerSelfUpdate.ServerSelfUpdate, selfUpdate),
+    Effect.provideService(SshRuntimeAutoUpdate.SshRuntimeAutoUpdate, sshRuntime),
     Effect.provideService(ServiceLauncherClient.ServiceLauncherClient, {
       managed: true,
       ...(options.lastUpdate === undefined ? {} : { lastUpdate: options.lastUpdate }),
@@ -319,7 +350,7 @@ it.layer(NodeServices.layer)("server auto-update", (it) => {
         h.state.releases = [release(stable), release("1.0.1")];
         yield* TestClock.adjust(10 * MINUTE);
         expect((yield* h.awaitEvent("skipped"))[1]).toMatchObject({
-          reason: "previous-launcher-failure",
+          reason: "previous-failure",
         });
         expect(h.state.prepared).toEqual([]);
       }),
@@ -526,6 +557,99 @@ it.layer(NodeServices.layer)("server auto-update", (it) => {
       yield* TestClock.adjust(6 * HOUR);
       yield* h.awaitEvent("requested");
       expect(h.state.prepared).toHaveLength(2);
+    }),
+  );
+
+  it.effect("an owned SSH runtime activates through its own path, never the launcher", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(published + 10 * 24 * HOUR);
+      const h = yield* makeHarness({ sshRuntime: true });
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* h.awaitEvent("requested");
+      expect(h.state.prepared).toEqual([stable]);
+      expect(h.state.sshActivations).toEqual([stable]);
+      expect(h.state.updates).toEqual([]);
+    }),
+  );
+
+  it.effect.each(["1.0.0-dev.20261001.gabc", "1.0.0-pr.123.1", "1.0.0-preview.20261001.1"])(
+    "an SSH runtime on %s never checks, prepares or activates",
+    (ownVersion) =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(published + 10 * 24 * HOUR);
+        const h = yield* makeHarness({ sshRuntime: true, ownVersion });
+        yield* Fiber.join(h.fiber);
+        yield* TestClock.adjust(24 * HOUR);
+        expect(h.state.requests).toBe(0);
+        expect(h.state.prepared).toEqual([]);
+        expect(h.state.sshActivations).toEqual([]);
+      }),
+  );
+
+  it.effect("an SSH runtime that no longer owns its launch records does nothing", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(published + 10 * 24 * HOUR);
+      const h = yield* makeHarness({ sshRuntime: true });
+      h.state.sshOwned = false;
+      yield* TestClock.adjust(10 * MINUTE);
+      expect((yield* h.awaitEvent("skipped"))[1]).toMatchObject({ reason: "not-replaceable" });
+      expect(h.state.requests).toBe(0);
+      expect(h.state.sshActivations).toEqual([]);
+    }),
+  );
+
+  it.effect("a busy SSH runtime retries every ten minutes on the prepared target", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(published + 10 * 24 * HOUR);
+      const h = yield* makeHarness({ sshRuntime: true });
+      h.state.sshBusy = true;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* h.awaitEvent("deferred-busy");
+      yield* TestClock.adjust(10 * MINUTE - 1);
+      expect(h.state.sshActivations).toHaveLength(1);
+      yield* TestClock.adjust(1);
+      yield* h.awaitEvent("deferred-busy");
+      h.state.sshBusy = false;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* h.awaitEvent("requested");
+      expect(h.state.sshActivations).toEqual([stable, stable, stable]);
+      expect(h.state.prepared).toEqual([stable]);
+      expect(h.state.requests).toBe(1);
+    }),
+  );
+
+  it.effect("an SSH runtime never retries a target its supervisor rolled back", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(published + 10 * 24 * HOUR);
+      const h = yield* makeHarness({ sshRuntime: true });
+      h.state.sshFailedTarget = stable;
+      yield* TestClock.adjust(10 * MINUTE);
+      expect((yield* h.awaitEvent("skipped"))[1]).toMatchObject({ reason: "previous-failure" });
+      yield* TestClock.adjust(6 * HOUR);
+      yield* h.awaitEvent("skipped");
+      expect(h.state.prepared).toEqual([]);
+      expect(h.state.sshActivations).toEqual([]);
+      h.state.releases = [release("1.2.0")];
+      yield* TestClock.adjust(6 * HOUR);
+      yield* h.awaitEvent("requested");
+      expect(h.state.sshActivations).toEqual(["1.2.0"]);
+    }),
+  );
+
+  it.effect("opting out drops an SSH runtime's prepared target before it activates", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(published + 10 * 24 * HOUR);
+      const h = yield* makeHarness({ sshRuntime: true });
+      h.state.sshBusy = true;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* h.awaitEvent("deferred-busy");
+      h.state.enabled = false;
+      yield* TestClock.adjust(10 * MINUTE);
+      expect((yield* h.awaitEvent("skipped"))[1]).toMatchObject({ reason: "disabled" });
+      expect(h.state.sshActivations).toHaveLength(1);
+      expect(h.state.sshCleared).toBe(1);
+      yield* TestClock.adjust(24 * HOUR);
+      expect(h.state.sshActivations).toHaveLength(1);
     }),
   );
 });

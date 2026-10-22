@@ -1,11 +1,22 @@
 /**
- * Page scripts the renderer origin migration runs with `executeJavaScript`, first on the legacy
- * renderer origin to export its storage, then on the current one to import it. They are plain
- * source strings so the bundler cannot rewrite them; `STORAGE_VALUE_CODEC` is exported for tests.
+ * Page scripts the renderer origin migration runs with `executeJavaScript`: an exporter installed
+ * on the legacy renderer origin and an importer installed on the current one. Main then relays
+ * one bounded chunk at a time between them, so it never holds a whole origin (a large profile
+ * holds 100+ MB of IndexedDB blobs, and building that as one string aborts main with a V8 OOM).
+ * They are plain source strings so the bundler cannot rewrite them; `STORAGE_VALUE_CODEC` is
+ * exported for tests.
  *
  * IndexedDB values are structured-clone data, and the relay DPoP key is a `CryptoKey`, so values
  * travel as tagged JSON: CryptoKeys as JWK (they are extractable), binary data as base64.
  */
+
+export interface OriginChunkLimits {
+  /** Estimated stored bytes per chunk; a single larger value is skipped. */
+  readonly bytes: number;
+  readonly records: number;
+}
+
+export const ORIGIN_CHUNK_LIMITS: OriginChunkLimits = { bytes: 8 * 1024 * 1024, records: 1000 };
 
 export const STORAGE_VALUE_CODEC = String.raw`
 const TAG = "$goat";
@@ -23,6 +34,25 @@ function fromBase64(text) {
   const bytes = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
   return bytes;
+}
+/** Synchronous upper-bound guess of a value's encoded size, without reading blob contents. */
+function estimateSize(value) {
+  if (value === null || value === undefined || typeof value === "boolean") return 8;
+  if (typeof value === "number" || typeof value === "bigint") return 24;
+  if (typeof value === "string") return value.length * 2;
+  if (value instanceof Date || value instanceof RegExp) return 64;
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value.byteLength;
+  if (typeof Blob !== "undefined" && value instanceof Blob) return value.size;
+  if (typeof CryptoKey !== "undefined" && value instanceof CryptoKey) return 1024;
+  let total = 16;
+  if (value instanceof Map) {
+    for (const [key, item] of value) total += estimateSize(key) + estimateSize(item);
+  } else if (value instanceof Set || Array.isArray(value)) {
+    for (const item of value) total += estimateSize(item);
+  } else {
+    for (const [key, item] of Object.entries(value)) total += key.length * 2 + estimateSize(item);
+  }
+  return total;
 }
 async function encodeEntries(object) {
   const entries = await Promise.all(
@@ -144,77 +174,166 @@ function openVersion(name, version, upgrade) {
 }
 `;
 
-/** Resolves to a JSON string: this origin's localStorage items and every IndexedDB database. */
-export const ORIGIN_STORAGE_EXPORT_SCRIPT = `(async () => {
+/**
+ * Installs `globalThis.__goatOriginExport` and resolves to the size of this origin's storage.
+ * Each call of the installed function resolves to the next chunk, `{ done: false, database,
+ * store, records, bytes, chunk }`, and finally to `{ done: true, skipped, oversized }`. `chunk` is
+ * the chunk's JSON already quoted as a JS string literal, so main can splice it into the import
+ * script without making another copy of its own.
+ */
+export function originStorageExporterScript(limits: OriginChunkLimits = ORIGIN_CHUNK_LIMITS) {
+  return `(async (limits) => {
 ${STORAGE_VALUE_CODEC}
-const items = {};
-for (let i = 0; i < localStorage.length; i++) {
-  const key = localStorage.key(i);
-  if (key !== null) items[key] = localStorage.getItem(key);
-}
-const databases = [];
 let skipped = 0;
+let oversized = 0;
+function describeStores(database) {
+  const names = Array.from(database.objectStoreNames);
+  if (names.length === 0) return [];
+  const transaction = database.transaction(names, "readonly");
+  return names.map((name) => {
+    const store = transaction.objectStore(name);
+    return {
+      name,
+      keyPath: store.keyPath,
+      autoIncrement: store.autoIncrement,
+      indexes: Array.from(store.indexNames, (indexName) => {
+        const index = store.index(indexName);
+        return { name: indexName, keyPath: index.keyPath, unique: index.unique, multiEntry: index.multiEntry };
+      }),
+    };
+  });
+}
+/**
+ * Reads the records after \`after\` until the chunk budget is spent. Values are only collected
+ * here: a transaction commits as soon as it waits on anything but its own requests, so encoding
+ * (which reads blobs) happens after it ends, and the next page resumes from the last key.
+ */
+function readPage(database, storeName, after) {
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction([storeName], "readonly");
+    const range = after === undefined ? null : IDBKeyRange.lowerBound(after.key, true);
+    const pending = transaction.objectStore(storeName).openCursor(range);
+    const page = { records: [], bytes: 0, last: after, more: false };
+    pending.onsuccess = () => {
+      const cursor = pending.result;
+      if (cursor === null) return;
+      let size;
+      try {
+        size = estimateSize(cursor.value);
+      } catch {
+        size = Infinity;
+      }
+      if (size > limits.bytes) {
+        oversized++;
+        page.last = { key: cursor.primaryKey };
+        cursor.continue();
+        return;
+      }
+      if (page.records.length > 0 && (page.records.length >= limits.records || page.bytes + size > limits.bytes)) {
+        page.more = true;
+        return;
+      }
+      page.records.push([cursor.primaryKey, cursor.value]);
+      page.bytes += size;
+      page.last = { key: cursor.primaryKey };
+      cursor.continue();
+    };
+    pending.onerror = () => reject(pending.error);
+    transaction.oncomplete = () => resolve(page);
+    transaction.onabort = () => reject(transaction.error || new Error("Transaction aborted."));
+  });
+}
+const quote = (data) => JSON.stringify(JSON.stringify(data));
+async function* chunks() {
+  const items = {};
+  let bytes = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key === null) continue;
+    items[key] = localStorage.getItem(key);
+    bytes += (key.length + items[key].length) * 2;
+  }
+  yield { database: null, store: null, records: Object.keys(items).length, bytes, chunk: quote({ localStorage: items }) };
+  for (const info of await indexedDB.databases()) {
+    if (!info.name) continue;
+    const database = await openExisting(info.name);
+    if (database === null) continue;
+    try {
+      const schema = { name: info.name, version: database.version, stores: describeStores(database) };
+      if (schema.stores.length === 0) {
+        yield { database: info.name, store: null, records: 0, bytes: 0, chunk: quote({ database: schema, store: null, records: [] }) };
+        continue;
+      }
+      for (const store of schema.stores) {
+        let after;
+        let first = true;
+        for (;;) {
+          const page = await readPage(database, store.name, after);
+          const records = [];
+          for (const [key, value] of page.records) {
+            try {
+              records.push([await encode(key), await encode(value)]);
+            } catch {
+              skipped++;
+            }
+          }
+          page.records.length = 0;
+          if (first || records.length > 0) {
+            const chunk = quote({ database: schema, store: store.name, records });
+            yield { database: info.name, store: store.name, records: records.length, bytes: page.bytes, chunk };
+          }
+          first = false;
+          if (!page.more) break;
+          after = page.last;
+        }
+      }
+    } finally {
+      database.close();
+    }
+  }
+}
+const iterator = chunks();
+globalThis.__goatOriginExport = async () => {
+  const step = await iterator.next();
+  return step.done ? { done: true, skipped, oversized } : { done: false, ...step.value };
+};
+let usageBytes = null;
+try {
+  const estimate = await navigator.storage.estimate();
+  usageBytes = typeof estimate.usage === "number" ? estimate.usage : null;
+} catch {}
+let databases = 0;
+let stores = 0;
+let records = 0;
 for (const info of await indexedDB.databases()) {
   if (!info.name) continue;
   const database = await openExisting(info.name);
   if (database === null) continue;
   try {
+    databases++;
     const names = Array.from(database.objectStoreNames);
-    const pending = [];
-    if (names.length > 0) {
-      const transaction = database.transaction(names, "readonly");
-      for (const name of names) {
-        const store = transaction.objectStore(name);
-        pending.push({
-          name,
-          keyPath: store.keyPath,
-          autoIncrement: store.autoIncrement,
-          indexes: Array.from(store.indexNames, (indexName) => {
-            const index = store.index(indexName);
-            return { name: indexName, keyPath: index.keyPath, unique: index.unique, multiEntry: index.multiEntry };
-          }),
-          keys: request(store.getAllKeys()),
-          values: request(store.getAll()),
-        });
-      }
-    }
-    const stores = [];
-    for (const store of pending) {
-      const keys = await store.keys;
-      const values = await store.values;
-      const records = [];
-      for (let i = 0; i < keys.length; i++) {
-        try {
-          records.push([await encode(keys[i]), await encode(values[i])]);
-        } catch {
-          skipped++;
-        }
-      }
-      stores.push({ name: store.name, keyPath: store.keyPath, autoIncrement: store.autoIncrement, indexes: store.indexes, records });
-    }
-    databases.push({ name: info.name, version: database.version, stores });
+    stores += names.length;
+    if (names.length === 0) continue;
+    const transaction = database.transaction(names, "readonly");
+    const counts = names.map((name) => request(transaction.objectStore(name).count()));
+    for (const count of counts) records += await count;
   } finally {
     database.close();
   }
 }
-return JSON.stringify({ localStorage: items, databases, skipped });
-})()`;
+return { usageBytes, localStorageItems: localStorage.length, databases, stores, records };
+})(${JSON.stringify(limits)})`;
+}
+
+export const ORIGIN_STORAGE_EXPORT_NEXT_SCRIPT = "globalThis.__goatOriginExport()";
 
 /**
- * Imports an export into this origin without replacing anything it already holds: a localStorage
- * key or IndexedDB record that exists here keeps its value. Resolves to a JSON summary.
+ * Installs `globalThis.__goatOriginImport`, which imports one exporter chunk without replacing
+ * anything this origin already holds: a localStorage key or IndexedDB record that exists here
+ * keeps its value. It resolves to `{ localStorageItems, records, skipped }` for that chunk.
  */
-export function originStorageImportScript(payload: string): string {
-  return `(async (payload) => {
+export const ORIGIN_STORAGE_IMPORTER_SCRIPT = `(() => {
 ${STORAGE_VALUE_CODEC}
-const data = JSON.parse(payload);
-let localStorageItems = 0;
-for (const [key, value] of Object.entries(data.localStorage)) {
-  if (localStorage.getItem(key) === null) {
-    localStorage.setItem(key, value);
-    localStorageItems++;
-  }
-}
 const createStores = (target, stores) => {
   for (const source of stores) {
     if (target.objectStoreNames.contains(source.name)) continue;
@@ -224,40 +343,47 @@ const createStores = (target, stores) => {
     }
   }
 };
-let records = 0;
-let skipped = data.skipped;
-for (const source of data.databases) {
-  // Decode first: a transaction commits as soon as it waits on anything but its own requests.
-  const stores = [];
-  for (const store of source.stores) {
-    const decoded = [];
-    for (const [key, value] of store.records) {
-      try {
-        decoded.push([await decode(key), await decode(value)]);
-      } catch {
-        skipped++;
+async function openTarget(source) {
+  const database = await openExisting(source.name);
+  if (database === null) {
+    return openVersion(source.name, Math.max(1, source.version), (target) => createStores(target, source.stores));
+  }
+  const missing = source.stores.filter((store) => !database.objectStoreNames.contains(store.name));
+  if (missing.length === 0) return database;
+  const version = database.version + 1;
+  database.close();
+  return openVersion(source.name, version, (target) => createStores(target, missing));
+}
+globalThis.__goatOriginImport = async (data) => {
+  if (data.localStorage !== undefined) {
+    let localStorageItems = 0;
+    for (const [key, value] of Object.entries(data.localStorage)) {
+      if (localStorage.getItem(key) === null) {
+        localStorage.setItem(key, value);
+        localStorageItems++;
       }
     }
-    stores.push({ name: store.name, records: decoded });
+    return { localStorageItems, records: 0, skipped: 0 };
   }
-  let database = await openExisting(source.name);
-  if (database === null) {
-    database = await openVersion(source.name, Math.max(1, source.version), (target) => createStores(target, source.stores));
-  } else {
-    const missing = source.stores.filter((store) => !database.objectStoreNames.contains(store.name));
-    if (missing.length > 0) {
-      const version = database.version + 1;
-      database.close();
-      database = await openVersion(source.name, version, (target) => createStores(target, missing));
+  // Decode first: a transaction commits as soon as it waits on anything but its own requests.
+  const decoded = [];
+  let skipped = 0;
+  for (const [key, value] of data.records) {
+    try {
+      decoded.push([await decode(key), await decode(value)]);
+    } catch {
+      skipped++;
     }
   }
+  data.records.length = 0;
+  const database = await openTarget(data.database);
+  let records = 0;
   try {
-    if (stores.length === 0) continue;
-    const transaction = database.transaction(stores.map((store) => store.name), "readwrite");
-    const done = finished(transaction);
-    for (const store of stores) {
-      const target = transaction.objectStore(store.name);
-      for (const [key, value] of store.records) {
+    if (data.store !== null && decoded.length > 0) {
+      const transaction = database.transaction([data.store], "readwrite");
+      const done = finished(transaction);
+      const target = transaction.objectStore(data.store);
+      for (const [key, value] of decoded) {
         const added = target.keyPath === null ? target.add(value, key) : target.add(value);
         added.onsuccess = () => records++;
         // An existing record wins; keep the transaction alive.
@@ -266,12 +392,18 @@ for (const source of data.databases) {
           event.stopPropagation();
         };
       }
+      await done;
     }
-    await done;
   } finally {
     database.close();
   }
-}
-return JSON.stringify({ localStorageItems, databases: data.databases.length, records, skipped });
-})(${JSON.stringify(payload)})`;
+  return { localStorageItems: 0, records, skipped };
+};
+return true;
+})()`;
+
+/** Imports one quoted exporter chunk on a page where `ORIGIN_STORAGE_IMPORTER_SCRIPT` ran. */
+export function originStorageImportChunkScript(chunk: string): string {
+  // Parsed rather than inlined as an object literal: there a "__proto__" key sets the prototype.
+  return `globalThis.__goatOriginImport(JSON.parse(${chunk}))`;
 }

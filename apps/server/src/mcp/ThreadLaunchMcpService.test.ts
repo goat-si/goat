@@ -1,3 +1,5 @@
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as SqlClient from "effect/sql/SqlClient";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentAuthorizationError,
@@ -29,6 +31,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { newLaunchWatch } from "./launchWatch.ts";
+import { goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
 import { fakeCloudCapabilities } from "../orchestration-v2/testkit/FakeCloudAdapter.ts";
 
 const projectId = ProjectId.make("project:cloud-launch");
@@ -60,13 +63,16 @@ function fixture(
   unpublished = false,
   sourceRestriction: OrchestrationV2CloudSourceRestriction = "published-ref",
   registered?: Layer.Layer<ProviderRegistry.ProviderRegistry>,
+  profile?: string,
 ) {
   const launched: ThreadLaunch.ThreadLaunchInput[] = [];
   const sources: Parameters<CloudSource.CloudTaskSourceService["Service"]["resolve"]>[0][] = [];
   let routes = 0;
   const deps = Layer.mergeAll(
     NodeServices.layer,
-    ServerSettings.layerTest(),
+    ServerSettings.layerTest({
+      goatclaw: { enabled: profile !== undefined, defaultProfile: profile ?? "worker" },
+    }),
     ServerConfig.layerTest("/repo", { prefix: "goat-cloud-launch-ci-" }).pipe(
       Layer.provide(NodeServices.layer),
     ),
@@ -162,6 +168,7 @@ function fixture(
   return {
     layer: ThreadLaunchMcp.layer.pipe(
       Layer.provide(registered === undefined ? deps : Layer.merge(deps, registered)),
+      Layer.provideMerge(Sqlite.layerMemory),
     ),
     launched,
     sources,
@@ -319,3 +326,94 @@ it.effect(
     }).pipe(Effect.provide(f.layer));
   },
 );
+
+it.effect.each(["worker", "owner"])(
+  "thread launch cannot bypass the cloud capability through profile %s",
+  (profile) => {
+    const f = fixture(false, "published-ref", undefined, profile);
+    return Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES (${callerId}, ${projectId}, 'Caller', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`;
+      const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+      const launch = service
+        .launch(
+          scope,
+          { title: "Cloud", message: "Inspect", standingInstructions: false },
+          { runtimeMode: "full-access", interactionMode: "default" },
+        )
+        .pipe(Effect.result);
+      if (profile === "owner") {
+        const unrequested = yield* launch;
+        expect(unrequested._tag === "Failure" && unrequested.failure.message).toContain(
+          "bills a paid account",
+        );
+        yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+        VALUES ('caller-run', ${callerId}, 1, 'codex', 'running', '2026-10-21', '{"userMessageId":"caller-message"}')`;
+        yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)
+        VALUES ('caller-message', ${callerId}, 'caller-run', 'user', 0, '2026-10-21', '2026-10-21', '{"createdBy":"user","creationSource":"web"}')`;
+      }
+      const result = yield* launch;
+      if (profile === "worker") {
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(result.failure.code).toBe("capability_denied");
+        expect(f.launched).toHaveLength(0);
+      } else {
+        expect(result._tag).toBe("Success");
+        expect(f.launched).toHaveLength(1);
+        expect(yield* sql`SELECT profile_id FROM goatclaw_thread_profiles`).toEqual([
+          { profile_id: "owner" },
+        ]);
+      }
+    }).pipe(Effect.provide(f.layer));
+  },
+);
+it.effect("a goatclaw role launch carries the role's brief and binds the role's profile", () => {
+  const f = fixture(false, "published-ref", undefined, "owner");
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+    VALUES (${callerId}, ${projectId}, 'Caller', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`;
+    // The fixture's adapter is a cloud one, which goatclaw admits only in a turn a person started.
+    yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+    VALUES ('caller-run', ${callerId}, 1, 'codex', 'running', '2026-10-21', '{"userMessageId":"caller-message"}')`;
+    yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)
+    VALUES ('caller-message', ${callerId}, 'caller-run', 'user', 0, '2026-10-21', '2026-10-21', '{"createdBy":"user","creationSource":"web"}')`;
+    const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+    const launch = (message: string | undefined) =>
+      service.launch(
+        scope,
+        {
+          title: "Merge queue",
+          goatclawRole: "merge-manager",
+          standingInstructions: false,
+          ...(message === undefined ? {} : { message }),
+        },
+        { runtimeMode: "full-access", interactionMode: "default" },
+      );
+    expect((yield* launch(undefined).pipe(Effect.flip)).code).toBe("invalid_request");
+    yield* launch("Land #701.");
+    const text = f.launched[0]?.initialMessage?.text ?? "";
+    expect(text.startsWith(goatclawRoleTemplate("merge-manager").preamble)).toBe(true);
+    expect(text.endsWith("Land #701.")).toBe(true);
+    expect(yield* sql`SELECT profile_id FROM goatclaw_thread_profiles`).toEqual([
+      { profile_id: "merge-manager" },
+    ]);
+  }).pipe(Effect.provide(f.layer));
+});
+
+it.effect("role launches are refused while goatclaw is off", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+    const error = yield* service
+      .launch(
+        scope,
+        { title: "Sweep", goatclawRole: "issue-sweeper", message: "Triage." },
+        { runtimeMode: "full-access", interactionMode: "default" },
+      )
+      .pipe(Effect.flip);
+    expect(error.code).toBe("capability_denied");
+    expect(f.launched).toHaveLength(0);
+  }).pipe(Effect.provide(f.layer));
+});

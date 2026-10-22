@@ -21,6 +21,7 @@ import {
   pullRequestsFromLinks,
   SUBAGENT_DEPTH,
   SUBAGENT_THREADS,
+  scanSubagents,
   subagentRequests,
   usageLimitWait,
 } from "./channelWorkerObservation.ts";
@@ -299,6 +300,40 @@ describe("subagentRequests", () => {
         }),
       );
       assert.strictEqual(deep.length, SUBAGENT_DEPTH);
+    }),
+  );
+
+  it.effect("counts a live remote subagent toward the cap and skips a cloud child", () =>
+    Effect.gen(function* () {
+      const reads: Array<string> = [];
+      const remote = (id: string) =>
+        child(null, "running", {
+          remote: { host: "mini", threadId: null, correlationId: id },
+        });
+      const full = Array.from({ length: SUBAGENT_THREADS }, (_, index) => remote("r" + index));
+      const blocked = yield* scanSubagents([...full, child("local")], (threadId) =>
+        Effect.sync(() => {
+          reads.push(threadId);
+          return { runtimeRequests: [], subagents: [] };
+        }),
+      );
+      assert.strictEqual(reads.length, 0);
+      assert.strictEqual(blocked.remote.length, SUBAGENT_THREADS);
+      const cloud = child(null, "running");
+      const admitted = yield* scanSubagents(
+        [...full.slice(0, SUBAGENT_THREADS - 1), cloud, child("local")],
+        (threadId) =>
+          Effect.sync(() => {
+            reads.push(threadId);
+            return { runtimeRequests: [request("local")], subagents: [] };
+          }),
+      );
+      assert.deepStrictEqual(reads, ["local"]);
+      assert.strictEqual(admitted.remote.length, SUBAGENT_THREADS - 1);
+      assert.deepStrictEqual(
+        admitted.requests.map((item) => item.threadId),
+        ["local"],
+      );
     }),
   );
 });

@@ -29,10 +29,11 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import migration from "../persistence/Migrations/066_RemoteReports.ts";
-import dispatchMigration from "../persistence/Migrations/067_RemoteDispatches.ts";
-import threadRunResultsMigration from "../persistence/Migrations/070_ThreadRunResults.ts";
-import relayMigration from "../persistence/Migrations/071_RemoteReportRelay.ts";
+import migration from "../persistence/Migrations/069_RemoteReports.ts";
+import dispatchMigration from "../persistence/Migrations/070_RemoteDispatches.ts";
+import threadRunResultsMigration from "../persistence/Migrations/073_ThreadRunResults.ts";
+import relayMigration from "../persistence/Migrations/074_RemoteReportRelay.ts";
+import observedChecksMigration from "../persistence/Migrations/091_ThreadRunObservedChecks.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const threadId = ThreadId.make("remote-thread");
@@ -80,6 +81,7 @@ const setup = Effect.gen(function* () {
   yield* migration;
   yield* dispatchMigration;
   yield* threadRunResultsMigration;
+  yield* observedChecksMigration;
   yield* relayMigration;
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const changeTypes = [
@@ -399,7 +401,11 @@ test("observes completed A after B starts and summarizes only A's last assistant
       status: "completed",
       summary: "x".repeat(4000),
       holds: { backgroundTasks: 0, continuationPending: false },
-      observation: { pullRequests: [], needsYou: [] },
+      observation: {
+        pullRequests: [],
+        needsYou: [],
+        result: { runId: runA, observedCheckPending: true },
+      },
     });
     expect(result.latestRunId).toBe(runB);
     const latest = yield* service.wait({ ...waitInput, watchRunId: null });
@@ -540,7 +546,11 @@ test("replays a run update between initial snapshot and stream subscription", ({
       status: "completed",
       summary: null,
       holds: { backgroundTasks: 0, continuationPending: false },
-      observation: { pullRequests: [], needsYou: [] },
+      observation: {
+        pullRequests: [],
+        needsYou: [],
+        result: { runId: runA, observedCheckPending: true },
+      },
     });
     expect(state.subscriptions).toContainEqual({
       threadId,
@@ -750,6 +760,7 @@ test("a completed run stays held by its watched pull request without provider ba
     const result = yield* service.wait(waitInput);
     expect(result.observedRun?.holds?.backgroundTasks).toBeGreaterThanOrEqual(1);
     expect(result.observedRun?.observation).toEqual({
+      result: { runId: runA, observedCheckPending: true },
       pullRequests: [
         {
           repository: "goat-si/goat",
@@ -939,3 +950,62 @@ it.effect.each(["initial", "wakeup"] as const)(
       }),
     ),
 );
+
+test("returns late check evidence from the watched run only, after an authenticated wait", ({
+  service,
+  state,
+  sql,
+  subscribed,
+}) =>
+  Effect.gen(function* () {
+    state.runs = [run(runA, "completed")];
+    state.activeRunId = null;
+    yield* sql`INSERT INTO thread_run_results (thread_id, run_id, report_json, reported_at)
+      VALUES (${threadId}, ${runA}, ${JSON.stringify({ outcome: "succeeded", tests: { ok: true, passed: 12 } })}, '2026-10-12T00:00:00.000Z')`;
+    const first = yield* service.wait({ ...waitInput, timeoutMs: 0 });
+    expect(first.observedRun?.observation?.result).toEqual({
+      runId: runA,
+      tests: { ok: true, passed: 12 },
+      observedCheckPending: true,
+    });
+    const waiting = yield* service
+      .wait({ ...waitInput, knownRun: first.observedRun })
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    yield* sql`INSERT INTO thread_run_observed_checks (thread_id, run_id, status, command, exit_code, duration_ms, started_at, output_tail)
+      VALUES (${threadId}, ${runA}, 'completed', 'vp test run', 3, 1250, '2026-10-12T00:00:00.000Z', 'one test failed')`;
+    // The existing wait timeout re-reads evidence even without another run event.
+    yield* TestClock.adjust(waitInput.timeoutMs);
+    const late = yield* Fiber.join(waiting);
+    expect(late.timedOut).toBe(false);
+    expect(late.observedRun?.reported?.outcome).toBe("succeeded");
+    expect(late.observedRun?.observation?.result).toEqual({
+      runId: runA,
+      tests: { ok: true, passed: 12 },
+      observedCheckPending: false,
+      observedCheck: {
+        status: "completed",
+        command: "vp test run",
+        exitCode: 3,
+        durationMs: 1250,
+        at: "2026-10-12T00:00:00.000Z",
+        outputTail: "one test failed",
+      },
+    });
+    expect(
+      (yield* service
+        .wait({ ...waitInput, readKey: "2".repeat(64), timeoutMs: 0 })
+        .pipe(Effect.flip)).reason,
+    ).toBe("access_denied");
+    state.runs.push(run(runB, "completed", 2));
+    state.latestRunId = runB;
+    const other = yield* service.wait({ ...waitInput, watchRunId: runB, timeoutMs: 0 });
+    expect(other.observedRun?.observation?.result?.observedCheck).toBeUndefined();
+    expect(other.observedRun?.observation?.result?.tests).toBeUndefined();
+    const unchanged = yield* service.wait({
+      ...waitInput,
+      knownRun: late.observedRun,
+      timeoutMs: 0,
+    });
+    expect(unchanged.timedOut).toBe(true);
+  }));

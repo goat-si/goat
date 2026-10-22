@@ -107,7 +107,13 @@ const settingsWatcher = (
             ));
       yield* settingsChanges.pipe(
         Stream.runForEach((next) =>
-          mutator.reconcile(deriveProviderInstanceConfigMap(next.settings)).pipe(
+          (next.revision === undefined
+            ? serverSettings.getSettings
+            : Effect.succeed(next.settings)
+          ).pipe(
+            Effect.flatMap((current) =>
+              mutator.reconcile(deriveProviderInstanceConfigMap(current)),
+            ),
             Effect.tap(() =>
               Option.isSome(routeState) && next.revision
                 ? routeState.value.applied(next.revision)

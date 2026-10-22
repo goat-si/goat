@@ -9,6 +9,7 @@ export const OPEN_SYSTEM_SETTINGS_CHANNEL = "desktop:open-system-settings";
 export const PROBE_REMOTE_EDITORS_CHANNEL = "desktop:probe-remote-editors";
 export const MENU_ACTION_CHANNEL = "desktop:menu-action";
 export const PASTE_AS_TEXT_CHANNEL = "desktop:paste-as-text";
+export const REVEAL_WINDOW_CHANNEL = "desktop:reveal-window";
 export const SNAP_SHOT_EVENT_CHANNEL = "desktop:snap-shot-event";
 export const SYSTEM_WAKE_CHANNEL = "desktop:system-wake";
 export const WEB_LINK_OPEN_CHANNEL = "desktop:web-link-open";
@@ -31,6 +32,7 @@ export const CLI_COMMAND_GET_STATE_CHANNEL = "desktop:cli-command-get-state";
 export const CLI_COMMAND_INSTALL_CHANNEL = "desktop:cli-command-install";
 export const CLI_COMMAND_UNINSTALL_CHANNEL = "desktop:cli-command-uninstall";
 export const GET_APP_BRANDING_CHANNEL = "desktop:get-app-branding";
+export const GET_RELAY_TELEMETRY_ENABLED_CHANNEL = "desktop:get-relay-telemetry-enabled";
 export const GET_SYSTEM_LOCALE_CHANNEL = "desktop:get-system-locale";
 export const GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL = "desktop:get-local-environment-bootstraps";
 export const GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:get-local-environment-enabled";
@@ -61,6 +63,7 @@ export const CLEAR_CONNECTION_CATALOG_CHANNEL = "desktop:clear-connection-catalo
 export const DISCOVER_SSH_HOSTS_CHANNEL = "desktop:discover-ssh-hosts";
 export const RESOLVE_SSH_HOST_CHANNEL = "desktop:resolve-ssh-host";
 export const SSH_ENVIRONMENT_ANSWERED_CHANNEL = "desktop:ssh-environment-answered";
+export const SSH_ENVIRONMENT_PROGRESS_CHANNEL = "desktop:ssh-environment-progress";
 export const ENSURE_SSH_ENVIRONMENT_CHANNEL = "desktop:ensure-ssh-environment";
 export const SSH_HOST_STATUS_CHANNEL = "desktop:ssh-host-status";
 export const SSH_RUNTIME_UPDATE_CHANNEL = "desktop:ssh-runtime-update";
@@ -121,6 +124,9 @@ export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
 export const PREVIEW_OPEN_LINK_CHANNEL = "desktop:preview-open-link";
 
 export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";
+
+export const RESTART_CUA_DRIVER_CHANNEL = "desktop:restart-cua-driver";
+export const VERIFY_CUA_DRIVER_CHANNEL = "desktop:verify-cua-driver";
 
 export const CHECK_SYSTEM_PERMISSION_CHANNEL = "desktop:check-system-permission";
 

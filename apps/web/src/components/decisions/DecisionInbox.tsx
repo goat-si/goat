@@ -29,6 +29,14 @@ export function DecisionInbox() {
         </WorkspacePageHeader>
         <main className="min-h-0 flex-1 overflow-y-auto">
           <WorkspacePageContainer>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                Pending questions and approvals from threads.
+              </p>
+              <Button size="sm" variant="outline" render={<Link to="/settings/decision-inbox" />}>
+                Decision inbox and history
+              </Button>
+            </div>
             {snapshot.isLoading ? <p role="status">Loading decisions…</p> : null}
             {snapshot.errors.length > 0 ? (
               <div role="alert">
@@ -67,7 +75,9 @@ export function DecisionInbox() {
                 }
               />
             ) : !snapshot.isLoading && snapshot.errors.length === 0 ? (
-              <p role="status">All caught up. No decisions waiting on connected environments.</p>
+              <p role="status">
+                All caught up. No pending thread requests on connected environments.
+              </p>
             ) : null}
           </WorkspacePageContainer>
         </main>

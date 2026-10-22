@@ -164,6 +164,7 @@ describe("secure SSH pairing grants", () => {
         const f = fixture();
         yield* f.register;
         f.state.beforeSession = () => f.sessionBlocked;
+        f.state.failPairing = true;
         if (rejection === "unauthenticated") {
           f.state.authenticated = false;
           f.state.failPairing = true;
@@ -300,6 +301,7 @@ describe("secure SSH pairing grants", () => {
     Effect.gen(function* () {
       const f = fixture();
       yield* f.register;
+      f.state.failPairing = true;
       f.state.sessionError = new Error(
         `Error invoking remote method 'fetch-ssh-session-state': DesktopSshEnvironmentRequestError: [ssh_http:${status}] SSH remote API request failed during fetch-session-state.`,
       );

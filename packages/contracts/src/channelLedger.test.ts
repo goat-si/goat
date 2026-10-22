@@ -6,6 +6,7 @@ import {
   ChannelTaskChip,
   ChannelTaskEvent,
   ChannelTimelineRecord,
+  ChannelWorkerRun,
   isChannelTaskTerminal,
 } from "./index.ts";
 
@@ -277,5 +278,24 @@ describe("timeline records", () => {
         },
       }),
     ).toMatchObject({ entry: { meta: { inReplyToInputId: "input-1" } } });
+  });
+});
+
+describe("channel worker runs", () => {
+  const run = {
+    runId: "run-1",
+    taskId: "task-1",
+    generation: 1,
+    threadId: "thread-1",
+    status: "running",
+    startedAt: "2026-10-12T00:00:00.000Z",
+    updatedAt: "2026-10-12T00:00:00.000Z",
+  };
+
+  it("decodes a run stored before stalled existed, and a stalled run", () => {
+    expect(roundTrip(ChannelWorkerRun, run).status).toBe("running");
+    const stalled = roundTrip(ChannelWorkerRun, { ...run, status: "stalled" });
+    expect(stalled.status).toBe("stalled");
+    expect(stalled.endedAt).toBeUndefined();
   });
 });

@@ -1,6 +1,8 @@
 import {
   EnvironmentAuthorizationError,
   clientRpcRequiredScopes,
+  hubProxyHidesClientCall,
+  AuthHubProxyScope,
   authScopeRequiredResponse,
   type EnvironmentId,
   type MemoryHistoryInput,
@@ -27,6 +29,7 @@ import { createCommandPermissions } from "../state/commandPermissions.ts";
 
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
+import { isHubNodesUnsupportedError } from "../hubNodes.ts";
 import type { RpcSession } from "../rpc/session.ts";
 
 export class EnvironmentRpcUnavailableError extends Schema.TaggedError<EnvironmentRpcUnavailableError>()(
@@ -39,6 +42,7 @@ export class EnvironmentRpcUnavailableError extends Schema.TaggedError<Environme
 
 export interface EnvironmentRpcRequestObservation {
   readonly environmentId: string;
+  readonly environmentLabel: string;
   readonly method: string;
 }
 
@@ -60,6 +64,7 @@ export type EnvironmentRpcTag = keyof EnvironmentProtocolClient & string;
 type RpcMethod<TTag extends EnvironmentRpcTag> = EnvironmentProtocolClient[TTag];
 
 export type EnvironmentSubscriptionRpcTag =
+  | typeof WS_METHODS.notesSubscribe
   | typeof WS_METHODS.memoryChanges
   | typeof WS_METHODS.connectionCatalogServe
   | typeof WS_METHODS.codexAuthCallbackSubscribe
@@ -72,6 +77,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeAuthAccess
   | typeof WS_METHODS.subscribeServerConfig
   | typeof WS_METHODS.subscribeServerLifecycle
+  | typeof WS_METHODS.hubNodesSubscribe
   | typeof WS_METHODS.scheduledTasksSubscribe
   | typeof WS_METHODS.serverGetStorageCleanupReport
   | typeof WS_METHODS.serverGetDatabaseStorage
@@ -196,8 +202,20 @@ const authorizeRequest = Effect.fn("EnvironmentRpc.authorize")(function* (
   method: string,
   input: unknown,
 ) {
-  if (clientRpcRequiredScopes(method, input).length === 0) return;
   const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const required = clientRpcRequiredScopes(method, input);
+  // On a node reached through a hub, fail at once with the reason instead of after the hub refuses.
+  // The route decides, not cached session state, so a stale answer cannot mislead; a node whose
+  // preferred route is direct still meets the hub's own refusal if it falls back to the hub.
+  if (
+    supervisor.target._tag === "HubProxyConnectionTarget" &&
+    hubProxyHidesClientCall(method, input, required)
+  )
+    return yield* new EnvironmentAuthorizationError({
+      ...authScopeRequiredResponse(AuthHubProxyScope),
+      message: "This action is not available through the hub.",
+    });
+  if (required.length === 0) return;
   const guard = yield* RpcPermissionGuard;
   yield* guard.authorize(supervisor.target.environmentId, method, input);
 });
@@ -232,13 +250,34 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
     );
     if (tag === WS_METHODS.memorySyncStatus) {
       // Only an opted-in response may add fields unknown to a strict legacy decoder.
-      const { includeRetainedLocalSpaceId: _hint, ...legacyInput } = input as {
+      const {
+        includeRetainedLocalSpaceId: _retained,
+        includeGenerationHold: _hold,
+        ...legacyInput
+      } = input as {
         readonly includeRetainedLocalSpaceId?: true;
+        readonly includeGenerationHold?: true;
+      };
+      const memory = config.environment.capabilities.memory;
+      dispatchInput = {
+        ...legacyInput,
+        ...(memory?.retainedLocalSpace === true
+          ? { includeRetainedLocalSpaceId: true as const }
+          : {}),
+        ...(memory?.generationHold === true ? { includeGenerationHold: true as const } : {}),
+      } as EnvironmentRpcInput<TTag>;
+    }
+    if (
+      tag === WS_METHODS.memoryImportProvider &&
+      (input as { action?: string }).action === "preview"
+    ) {
+      const { includeTurnStartFit: _hint, ...legacyInput } = input as {
+        readonly includeTurnStartFit?: true;
       };
       dispatchInput = {
         ...legacyInput,
-        ...(config.environment.capabilities.memory?.retainedLocalSpace === true
-          ? { includeRetainedLocalSpaceId: true as const }
+        ...(config.environment.capabilities.memory?.importTurnStartFit === true
+          ? { includeTurnStartFit: true as const }
           : {}),
       } as EnvironmentRpcInput<TTag>;
     }
@@ -271,9 +310,23 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
   ) => Effect.Effect<EnvironmentRpcSuccess<TTag>, EnvironmentRpcFailure<TTag>>;
   const completeObservation = yield* observer.observe({
     environmentId: supervisor.target.environmentId,
+    environmentLabel: supervisor.target.label,
     method: tag,
   });
-  return yield* method(dispatchInput).pipe(Effect.ensuring(completeObservation));
+  return yield* method(dispatchInput).pipe(
+    // Older hubs encode a missing RPC as a defect rather than a typed failure.
+    Effect.catchCauseIf(
+      (cause) => tag.startsWith("hub.nodes.") && isHubNodesUnsupportedError(cause),
+      () =>
+        Effect.fail(
+          new EnvironmentRpcUnavailableError({
+            environmentId: supervisor.target.environmentId,
+            message: `Unknown request tag: ${tag}`,
+          }),
+        ),
+    ),
+    Effect.ensuring(completeObservation),
+  );
 });
 
 export function runStreamGuarded<TTag extends EnvironmentStreamCommandRpcTag>(
@@ -417,6 +470,12 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         : Effect.void,
                     ),
                     Stream.catchCause((cause) => {
+                      if (
+                        tag === WS_METHODS.hubNodesSubscribe &&
+                        isHubNodesUnsupportedError(cause)
+                      ) {
+                        return Stream.failCause(cause);
+                      }
                       const hasOnlyExpectedFailures =
                         cause.reasons.length > 0 &&
                         cause.reasons.every((reason) => reason._tag === "Fail");

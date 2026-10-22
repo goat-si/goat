@@ -10,12 +10,14 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   REMOTE_CAPABLE_EDITOR_IDS,
   SystemSettingsPaneSchema,
+  type SystemSettingsPane,
   type DesktopEnvironmentBootstrap,
   type PickedThemeFile,
 } from "@goat/contracts";
 import { PROJECT_FAVICON_EXTENSIONS } from "@goat/shared/projectFavicon";
 import { resolveEditorCommand } from "@goat/shared/editor";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { isRelayTracingEnabled } from "@goat/shared/otelEnvironment";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
@@ -38,6 +40,7 @@ import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as Electron from "electron";
 import * as MacPermissions from "../../permissions/MacPermissions.ts";
+import { macPermissionGranted } from "../../permissions/MacPermissionHelper.ts";
 import { safariPermissionCheck } from "../../preview/BrowserImport/SafariPermission.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
@@ -51,6 +54,12 @@ const ContextMenuPosition = Schema.Struct({
   x: Schema.Number,
   y: Schema.Number,
 });
+
+// Full Disk Access cannot be queried directly, so it is probed through Safari's data.
+const permissionCheck = (pane: SystemSettingsPane) =>
+  pane === "full-disk-access"
+    ? safariPermissionCheck
+    : Effect.succeed(() => Promise.resolve(macPermissionGranted(pane)));
 
 const ContextMenuInput = Schema.Struct({
   items: Schema.Array(ContextMenuItemSchema),
@@ -69,6 +78,14 @@ export const getAppBranding = DesktopIpc.makeSyncIpcMethod({
   handler: Effect.fn("desktop.ipc.window.getAppBranding")(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     return environment.branding;
+  }),
+});
+
+export const getRelayTelemetryEnabled = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.getRelayTelemetryEnabled")(function* () {
+    return isRelayTracingEnabled(yield* HostProcess.Environment);
   }),
 });
 
@@ -305,7 +322,7 @@ export const openSystemSettings = DesktopIpc.makeIpcMethod({
     const opened = yield* shell.openSystemSettings(pane);
     if (opened && environment.isPackaged) {
       const permissions = yield* MacPermissions.MacPermissions;
-      const isGranted = yield* safariPermissionCheck;
+      const isGranted = yield* permissionCheck(pane);
       yield* permissions.showHelper(pane, owner, isGranted);
     }
     return opened;
@@ -355,6 +372,24 @@ export const pasteAsText = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const revealWindow = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.REVEAL_WINDOW_CHANNEL,
+  payload: Schema.Undefined,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.revealWindow")(function* (_input, event) {
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const window = yield* electronWindow.main;
+    if (
+      event === undefined ||
+      Option.isNone(window) ||
+      window.value.webContents.id !== event.sender.id
+    ) {
+      return;
+    }
+    yield* electronWindow.reveal(window.value);
+  }),
+});
+
 const PICKED_THEME_FILE_MAX_BYTES = 256 * 1024;
 
 export const pickThemeFiles = DesktopIpc.makeIpcMethod({
@@ -398,10 +433,10 @@ export const checkSystemPermission = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL,
   payload: SystemSettingsPaneSchema,
   result: Schema.Boolean,
-  handler: Effect.fn("desktop.ipc.window.checkSystemPermission")(function* () {
+  handler: Effect.fn("desktop.ipc.window.checkSystemPermission")(function* (pane) {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     if (environment.platform !== "darwin") return false;
-    const check = yield* safariPermissionCheck;
+    const check = yield* permissionCheck(pane);
     return yield* Effect.promise(check);
   }),
 });

@@ -21,10 +21,18 @@ A new worktree sets itself up. When `git worktree add` creates a checkout, the
 `.vite-hooks/post-checkout` hook runs `node scripts/setup-worktree.ts` in it, whether GOAT, Codex,
 or an agent ran git. Setup installs dependencies, links the main checkout's env files, and warms the
 web dependency cache, so the command returns with a ready worktree, usually within a minute.
+When `vp` is not on `PATH`, setup installs with `pnpm install --frozen-lockfile`, then
+`npx vite-plus`, and prints which tool it ran.
 
 Git reads the hook from the checkout that runs `git worktree add`, so that checkout needs one
 `vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree
 created without the hook, run `node scripts/setup-worktree.ts` from its root.
+
+GOAT's own thread worktrees skip the hook: GOAT sets `GOAT_WORKTREE_SETUP=0` because it runs the
+same script as the `goat.json` setup action, with its output in the launch view. They also leave
+`.repos/` out through sparse checkout, which cut a Windows checkout from 29,631 files to 7,797.
+Read the references from the main checkout, or run `git sparse-checkout disable` in the worktree;
+`vpr sync:repos` does that itself before syncing.
 
 ## Choosing a dev process
 
@@ -65,9 +73,13 @@ when changing this setup:
   chunks. Static imports can work on first load and fail after a route split.
 - Bundled dev rebuilds Tailwind through watched files. Its ordinary Vite hot-update hook expects
   a server/module graph that Rolldown does not provide.
+- The app and its routes are lazy chunks, built on first request. A plugin pre-bundles the
+  startup chain when the server starts. Renaming or moving a startup route or the app entry
+  silently drops it from that list.
 
-The workarounds live in the [web entry](../../apps/web/src/bootstrap.ts) and
-[Tailwind plugin](../../apps/web/vite/tailwind.ts).
+The workarounds live in the [web entry](../../apps/web/src/bootstrap.ts),
+[Tailwind plugin](../../apps/web/vite/tailwind.ts), and
+[startup warmup](../../apps/web/vite/warmBundledDev.ts).
 
 #### Reusable dev credential
 

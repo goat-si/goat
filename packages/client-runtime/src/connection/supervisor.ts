@@ -1,3 +1,4 @@
+import type { DesktopSshPreparationProgress } from "@goat/contracts";
 import { withRelayClientTracing } from "@goat/shared/relayTracing";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -20,6 +21,10 @@ import * as Connectivity from "./connectivity.ts";
 import * as ConnectionDriver from "./driver.ts";
 import {
   type ConnectionAttemptError,
+  type ConnectionFailure,
+  type ConnectionFailureOrigin,
+  type ConnectionSshPreparation,
+  type ConnectionSshRuntimeReady,
   type ConnectionTarget,
   ConnectionTransientError,
   type NetworkStatus,
@@ -32,15 +37,19 @@ import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import {
   connectionRouteId,
+  connectionRouteKind,
   connectionRoutes,
   entryWithRoutes,
   type ReportedEndpoint,
 } from "./routes.ts";
 
+let supervisorInstanceSequence = 0;
+
 const RETRY_BASE_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 300_000;
 const SETUP_TIMEOUT_FLOOR_MS = 15_000;
 const SETUP_TIMEOUT_CAP_MS = 45_000;
+const SSH_PREPARATION_TIMEOUT_MS = 900_000;
 const SETUP_SAMPLE_COUNT = 5;
 const SETUP_HEADROOM = 1.5;
 const synchronizationTimeout = Duration.fromInputUnsafe("75 seconds");
@@ -74,7 +83,7 @@ interface PendingRetryTrace {
   readonly previousAttempt: Tracer.Span;
   readonly failureCount: number;
   readonly delayMs: number;
-  readonly reason: ConnectionAttemptError["reason"];
+  readonly reason: ConnectionFailure["reason"];
 }
 
 interface TracedAttemptFailure {
@@ -93,8 +102,9 @@ type AttemptOutcome =
       readonly _tag: "Failure";
       readonly established: boolean;
       readonly stable: boolean;
-      readonly failure: TracedAttemptFailure;
+      readonly failure: TracedAttemptFailure & { readonly error: ConnectionFailure };
       readonly slowSetupTimeout?: SetupPreparation;
+      readonly failureOrigin?: ConnectionFailureOrigin;
     };
 
 interface SetupPreparation {
@@ -108,6 +118,15 @@ interface EstablishmentProgress {
   readonly synchronizedRoutes: number;
   readonly hostAnswered: boolean;
   readonly setup: { readonly routeId: string; readonly elapsedMs: number } | null;
+  readonly stage: "preparing" | "opening" | "synchronizing";
+  readonly ordinaryStartedAt: bigint;
+  readonly sshPreparation: {
+    readonly operationId: string;
+    readonly deadline: bigint;
+    readonly phase: ConnectionSshPreparation["phase"];
+    readonly hostAnswered: boolean;
+  } | null;
+  readonly wake: Queue.Queue<void>;
 }
 
 type EstablishmentEvent =
@@ -122,7 +141,7 @@ type EstablishmentEvent =
       >;
     }
   | { readonly _tag: "Interrupted"; readonly resetRetry: boolean }
-  | { readonly _tag: "TimedOut" };
+  | { readonly _tag: "TimedOut"; readonly sshPreparationTimedOut: boolean };
 
 function exitUnlessInterrupted<A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -179,7 +198,7 @@ function offlineState(
   intent: SupervisorIntent,
   generation: number,
   attempt: number,
-  lastFailure: ConnectionAttemptError | null,
+  lastFailure: ConnectionFailure | null,
 ): SupervisorConnectionState {
   return {
     desired: true,
@@ -197,7 +216,7 @@ function connectingState(
   intent: SupervisorIntent,
   generation: number,
   attempt: number,
-  lastFailure: ConnectionAttemptError | null,
+  lastFailure: ConnectionFailure | null,
   stage: SupervisorConnectionState["stage"] = "preparing",
 ): SupervisorConnectionState {
   return {
@@ -223,11 +242,14 @@ function failureFromExit<A>(
   }
   const typedFailure = exit.cause.reasons.find(Cause.isFailReason);
   if (typedFailure) {
+    if (typedFailure.error.error._tag === "ConnectionAttemptSuperseded") {
+      return { _tag: "Interrupted", established, stable, resetRetry: false };
+    }
     return {
       _tag: "Failure",
       established,
       stable,
-      failure: typedFailure.error,
+      failure: { ...typedFailure.error, error: typedFailure.error.error },
     };
   }
   return {
@@ -286,6 +308,17 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   };
   const intent = yield* Ref.make(initialIntent);
   const attemptSequence = yield* Ref.make(0);
+  const supervisorId = `${yield* Random.nextInt}:${yield* Random.nextInt}:${++supervisorInstanceSequence}`;
+  const evidence = yield* Ref.make<{
+    readonly failureOrigin?: ConnectionFailureOrigin;
+    readonly sshPreparation?: ConnectionSshPreparation;
+    readonly sshRuntimeReady?: ConnectionSshRuntimeReady;
+  }>({});
+  // Rejoining or retrying the same native operation cannot renew its lifetime.
+  const preparations = new Map<
+    string,
+    { readonly operationId: string; readonly deadline?: bigint; readonly ended: boolean }
+  >();
   const signals = yield* Queue.unbounded<QueuedSupervisorSignal>();
   const resetRetryState = yield* Ref.make(false);
   const probeUnanswered = yield* Ref.make(false);
@@ -392,7 +425,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const setState = Effect.fn("EnvironmentSupervisor.setState")(function* (
     next: SupervisorConnectionState,
   ) {
-    yield* SubscriptionRef.set(state, next);
+    yield* SubscriptionRef.set(state, { ...next, ...(yield* Ref.get(evidence)) });
   });
 
   const signal = Effect.fn("EnvironmentSupervisor.signal")(function* (next: SupervisorSignal) {
@@ -439,7 +472,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const reportProgress = Effect.fn("EnvironmentSupervisor.reportProgress")(function* (
     attempt: number,
     generation: number,
-    lastFailure: ConnectionAttemptError | null,
+    lastFailure: ConnectionFailure | null,
     attemptActive: Ref.Ref<boolean>,
     progress: ConnectionDriver.ConnectionDriverProgress,
   ) {
@@ -463,46 +496,207 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const establishConnection = Effect.fnUntraced(function* (
     attempt: number,
     generation: number,
-    lastFailure: ConnectionAttemptError | null,
+    lastFailure: ConnectionFailure | null,
     establishmentProgress: Ref.Ref<EstablishmentProgress>,
     attemptActive: Ref.Ref<boolean>,
   ) {
-    return yield* driver.connect(yield* attemptEntry, (progress) =>
-      Effect.gen(function* () {
-        if (!(yield* Ref.get(attemptActive))) return;
-        const now = yield* Clock.monotonicTimeNanos;
-        yield* Ref.update(establishmentProgress, (current) => {
-          const preparation =
+    const sequence = yield* Ref.get(attemptSequence);
+    const terminalReports = new Map<string, DesktopSshPreparationProgress["outcome"]>();
+    return yield* driver.connect(
+      yield* attemptEntry,
+      (progress) =>
+        Effect.gen(function* () {
+          if (!(yield* Ref.get(attemptActive)) || (yield* Ref.get(attemptSequence)) !== sequence)
+            return;
+          const now = yield* Clock.monotonicTimeNanos;
+          const current = yield* Ref.get(establishmentProgress);
+          const routeId =
+            progress.stage === "preparing"
+              ? progress.routeId
+              : connectionRouteId(progress.prepared.target);
+          const native = progress.stage === "preparing" ? progress.sshPreparation : undefined;
+          const routeChanged = routeId !== undefined && routeId !== current.preparation.routeId;
+          // Only the driver's plain route-start report can change routes. Late SSH callbacks cannot.
+          if (
+            routeChanged &&
             progress.stage === "preparing" &&
-            progress.routeId !== undefined &&
-            progress.routeId !== current.preparation.routeId
-              ? {
-                  routeId: progress.routeId,
-                  startedAt: current.pendingPreparations.get(progress.routeId) ?? now,
-                }
-              : current.preparation;
-          return {
+            (native !== undefined || progress.hostAnswered)
+          )
+            return;
+          const recorded = routeId === undefined ? undefined : preparations.get(routeId);
+          const preparation = recorded?.operationId === native?.operationId ? recorded : undefined;
+          const terminal =
+            native === undefined ? undefined : terminalReports.get(native.operationId);
+          if (
+            native !== undefined &&
+            (native.phase !== null
+              ? preparation?.ended === true || terminal !== undefined
+              : terminal !== undefined &&
+                !(
+                  terminal === "ready" &&
+                  recorded?.operationId === native.operationId &&
+                  (native.outcome === "superseded" || native.outcome === "failed")
+                ))
+          )
+            return;
+          const identity =
+            routeId === undefined ? undefined : { supervisorId, attemptId: sequence, routeId };
+          let next: EstablishmentProgress = {
             ...current,
-            preparation,
+            stage: progress.stage,
+            preparation: routeChanged
+              ? { routeId, startedAt: current.pendingPreparations.get(routeId!) ?? now }
+              : current.preparation,
+            hostAnswered:
+              (routeChanged ? false : current.hostAnswered) ||
+              progress.stage !== "preparing" ||
+              (progress.stage === "preparing" &&
+                (progress.hostAnswered === true || native?.hostAnswered === true)),
+            sshPreparation: routeChanged ? null : current.sshPreparation,
             synchronizedRoutes:
               current.synchronizedRoutes + (progress.stage === "synchronizing" ? 1 : 0),
-            // Plain preparing precedes I/O; SSH must explicitly report the final host's answer.
-            hostAnswered:
-              current.hostAnswered ||
-              progress.stage !== "preparing" ||
-              progress.hostAnswered === true,
-            setup:
-              progress.stage === "synchronizing"
-                ? {
-                    routeId: connectionRouteId(progress.prepared.target),
-                    elapsedMs: Number(now - preparation.startedAt) / 1_000_000,
-                  }
-                : current.setup,
           };
-        });
-        yield* reportProgress(attempt, generation, lastFailure, attemptActive, progress);
-      }),
+          let visible = yield* Ref.get(evidence);
+          if (routeChanged) {
+            const { sshPreparation: _preparation, sshRuntimeReady: _ready, ...rest } = visible;
+            visible = rest;
+          }
+          if (native !== undefined && identity !== undefined) {
+            if (
+              current.sshPreparation !== null &&
+              current.sshPreparation.operationId !== native.operationId
+            )
+              return;
+            if (native.phase !== null) {
+              const candidate =
+                now + BigInt(Math.min(SSH_PREPARATION_TIMEOUT_MS, native.remainingMs)) * 1_000_000n;
+              const previous = preparation?.deadline;
+              const deadline =
+                previous === undefined || candidate < previous ? candidate : previous;
+              preparations.set(identity.routeId, {
+                operationId: native.operationId,
+                deadline,
+                ended: false,
+              });
+              next = {
+                ...next,
+                sshPreparation: {
+                  operationId: native.operationId,
+                  phase: native.phase,
+                  hostAnswered: native.hostAnswered,
+                  deadline,
+                },
+              };
+              visible = {
+                ...visible,
+                sshPreparation: {
+                  ...identity,
+                  operationId: native.operationId,
+                  phase: native.phase,
+                  hostAnswered: native.hostAnswered,
+                },
+              };
+            } else {
+              terminalReports.set(native.operationId, native.outcome);
+              preparations.set(identity.routeId, {
+                ...preparation,
+                operationId: native.operationId,
+                ended: true,
+              });
+              const { sshPreparation: _preparation, sshRuntimeReady: _ready, ...rest } = visible;
+              visible = rest;
+              // Pairing and socket opening start with their ordinary allowance after installation ends.
+              next = {
+                ...next,
+                sshPreparation: null,
+                ...(terminal === undefined
+                  ? {
+                      ordinaryStartedAt: now,
+                      preparation: { routeId, startedAt: now },
+                      setup: null,
+                    }
+                  : {}),
+              };
+              if (
+                native.outcome === "ready" &&
+                native.attachmentId !== undefined &&
+                native.runtimeStatus !== undefined
+              ) {
+                visible = {
+                  ...visible,
+                  sshRuntimeReady: {
+                    ...identity,
+                    operationId: native.operationId,
+                    attachmentId: native.attachmentId,
+                    runtimeStatus: native.runtimeStatus,
+                  },
+                };
+              }
+            }
+          }
+          if (progress.stage !== "preparing") {
+            const { sshPreparation: _preparation, ...rest } = visible;
+            visible = rest;
+            if (next.sshPreparation !== null) {
+              if (routeId !== undefined) {
+                preparations.set(routeId, {
+                  operationId: next.sshPreparation.operationId,
+                  deadline: next.sshPreparation.deadline,
+                  ended: true,
+                });
+              }
+              next = {
+                ...next,
+                sshPreparation: null,
+                ordinaryStartedAt: now,
+                preparation: { routeId, startedAt: now },
+              };
+            }
+          }
+          if (progress.stage === "synchronizing") {
+            next = {
+              ...next,
+              setup: {
+                routeId: connectionRouteId(progress.prepared.target),
+                elapsedMs: Number(now - next.preparation.startedAt) / 1_000_000,
+              },
+            };
+          }
+          yield* Ref.set(evidence, visible);
+          yield* Ref.set(establishmentProgress, next);
+          yield* Queue.offer(next.wake, undefined);
+          yield* reportProgress(attempt, generation, lastFailure, attemptActive, progress);
+        }),
+      { supervisorId, attemptId: sequence },
     );
+  });
+
+  // Low-cardinality dimensions for time-to-connected dashboards; the error
+  // detail stays in the span status, never in an attribute.
+  const annotateAttemptOutcome = Effect.fnUntraced(function* (
+    exit: Exit.Exit<ConnectionDriver.EnvironmentConnectionLease, ConnectionAttemptError>,
+  ) {
+    if (Exit.isSuccess(exit)) {
+      const leaseTarget = exit.value.prepared.target;
+      const route = (yield* currentRoutes).find(
+        (candidate) => connectionRouteId(candidate.target) === connectionRouteId(leaseTarget),
+      );
+      return yield* Effect.annotateCurrentSpan({
+        "connection.outcome": "connected",
+        "connection.route": connectionRouteKind(
+          route ?? { target: leaseTarget, profile: Option.none() },
+        ),
+      });
+    }
+    if (Cause.hasInterruptsOnly(exit.cause)) {
+      return yield* Effect.annotateCurrentSpan("connection.outcome", "interrupted");
+    }
+    const failure = exit.cause.reasons.find(Cause.isFailReason)?.error;
+    yield* Effect.annotateCurrentSpan({
+      "connection.outcome": "failed",
+      "connection.failure.tag": failure?._tag ?? "defect",
+      "connection.failure.reason": failure?.reason ?? "defect",
+    });
   });
 
   const traceRelayEstablishment = (
@@ -515,8 +709,12 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     generation: number,
     pendingRetry: Option.Option<PendingRetryTrace>,
   ) => {
+    // The span must end with the ConnectionAttemptError itself: the exporter
+    // can only describe an Error-like failure, and a TracedAttemptFailure
+    // wrapper reached it as "[object Object]". The wrapper is added outside.
+    let attemptSpan = Option.none<Tracer.Span>();
     const traced = Effect.gen(function* () {
-      const attemptSpan = yield* Effect.currentSpan.pipe(Effect.orDie);
+      attemptSpan = Option.some(yield* Effect.currentSpan.pipe(Effect.orDie));
       yield* annotateTarget(target);
       yield* Effect.annotateCurrentSpan({
         "connection.attempt": attempt,
@@ -526,13 +724,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           onSome: (retry) => retry.failureCount,
         }),
       });
-      const lease = yield* effect.pipe(
-        Effect.mapError((error): TracedAttemptFailure => ({
-          error,
-          attemptSpan: Option.some(attemptSpan),
-        })),
-      );
-      return { attemptSpan: Option.some(attemptSpan), lease };
+      return yield* effect.pipe(Effect.onExit(annotateAttemptOutcome));
     }).pipe(Effect.withSpan("relay.connection.attempt", { root: true }));
 
     return Option.match(pendingRetry, {
@@ -544,13 +736,17 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
             "connection.retry.reason": retry.reason,
           }),
         ),
-    }).pipe(withRelayClientTracing);
+    }).pipe(
+      Effect.map((lease) => ({ attemptSpan, lease })),
+      Effect.mapError((error): TracedAttemptFailure => ({ error, attemptSpan })),
+      withRelayClientTracing,
+    );
   };
 
   const establishTracedConnection = Effect.fnUntraced(function* (
     attempt: number,
     generation: number,
-    lastFailure: ConnectionAttemptError | null,
+    lastFailure: ConnectionFailure | null,
     pendingRetry: Option.Option<PendingRetryTrace>,
     establishmentProgress: Ref.Ref<EstablishmentProgress>,
     attemptActive: Ref.Ref<boolean>,
@@ -754,12 +950,16 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const runAttempt = Effect.fnUntraced(function* (
     attempt: number,
     generation: number,
-    lastFailure: ConnectionAttemptError | null,
+    lastFailure: ConnectionFailure | null,
     pendingRetry: Option.Option<PendingRetryTrace>,
     ignoreOffline: boolean,
     setupContinuation: SetupPreparation | undefined,
   ) {
     const sequence = yield* Ref.updateAndGet(attemptSequence, (current) => current + 1);
+    const routes = new Set((yield* currentRoutes).map((route) => connectionRouteId(route.target)));
+    for (const routeId of preparations.keys()) {
+      if (!routes.has(routeId)) preparations.delete(routeId);
+    }
     const ignoreOfflineState = yield* Ref.make(ignoreOffline);
     const attemptActive = yield* Ref.make(true);
     const switchingTo = yield* Ref.get(preferredRouteId);
@@ -776,6 +976,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       synchronizedRoutes: 0,
       hostAnswered: false,
       setup: null,
+      stage: "preparing",
+      ordinaryStartedAt: startedAt,
+      sshPreparation: null,
+      wake: yield* Queue.sliding<void>(1),
     });
     const setupBudgetMs = Math.min(
       SETUP_TIMEOUT_CAP_MS,
@@ -817,13 +1021,24 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           const budgetMs = progress.hostAnswered ? setupBudgetMs : SETUP_TIMEOUT_FLOOR_MS;
           const setup = Duration.toNanosUnsafe(Duration.millis(budgetMs * routeCount));
           const synchronized = BigInt(progress.synchronizedRoutes);
-          const deadline =
-            startedAt + setup + synchronized * Duration.toNanosUnsafe(synchronizationTimeout);
+          const active = progress.sshPreparation;
+          const preparing = active !== null && active.hostAnswered && active.phase !== "connecting";
+          const deadline = preparing
+            ? active.deadline
+            : progress.ordinaryStartedAt +
+              setup +
+              synchronized * Duration.toNanosUnsafe(synchronizationTimeout);
           const remaining = deadline - (yield* Clock.monotonicTimeNanos);
           if (remaining <= 0n) {
-            return { _tag: "TimedOut" } as const satisfies EstablishmentEvent;
+            return {
+              _tag: "TimedOut",
+              sshPreparationTimedOut: preparing,
+            } as const satisfies EstablishmentEvent;
           }
-          yield* Effect.sleep(Duration.nanos(remaining));
+          yield* Effect.raceFirst(
+            Effect.sleep(Duration.nanos(remaining)),
+            Queue.take(progress.wake),
+          );
         }
       }),
     ]);
@@ -836,19 +1051,39 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         resetRetry: establishment.resetRetry,
       } satisfies AttemptOutcome;
     }
+    const failedProgress = yield* Ref.get(establishmentProgress);
+    const failedOrigin =
+      failedProgress.preparation.routeId === undefined
+        ? undefined
+        : {
+            supervisorId,
+            attemptId: sequence,
+            routeId: failedProgress.preparation.routeId,
+            stage: failedProgress.stage,
+            setupTimeout: false,
+          };
     if (establishment._tag === "TimedOut") {
-      const progress = yield* Ref.get(establishmentProgress);
+      const progress = failedProgress;
+      yield* Ref.update(evidence, ({ sshPreparation: _preparation, ...current }) => current);
       return {
         _tag: "Failure",
         established: false,
         stable: false,
-        ...(progress.hostAnswered && progress.synchronizedRoutes === 0
+        ...(failedOrigin === undefined
+          ? {}
+          : { failureOrigin: { ...failedOrigin, setupTimeout: true } }),
+        ...(progress.hostAnswered &&
+        progress.synchronizedRoutes === 0 &&
+        !establishment.sshPreparationTimedOut
           ? { slowSetupTimeout: progress.preparation }
           : {}),
         failure: {
           error: new ConnectionTransientError({
             reason: "timeout",
-            detail: setupTimeoutDetail,
+            detail: establishment.sshPreparationTimedOut
+              ? "SSH runtime preparation exceeded its 15-minute limit."
+              : setupTimeoutDetail,
+            ...(establishment.sshPreparationTimedOut ? { sshPreparationTimedOut: true } : {}),
           }),
           attemptSpan: Option.none(),
         },
@@ -859,6 +1094,18 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         !Cause.hasInterruptsOnly(establishment.exit.cause) &&
         !establishment.exit.cause.reasons.some(Cause.isFailReason);
       const outcome = failureFromExit(target, establishment.exit, false, false);
+      yield* Ref.update(
+        evidence,
+        ({ sshPreparation: _preparation, sshRuntimeReady, ...current }) => ({
+          ...current,
+          ...(outcome._tag === "Failure" &&
+          outcome.failure.error._tag === "ConnectionTransientError" &&
+          outcome.failure.error.sshPreparationTimedOut !== true &&
+          sshRuntimeReady !== undefined
+            ? { sshRuntimeReady }
+            : {}),
+        }),
+      );
       if (isUnexpectedDefect) {
         const defect = establishment.exit.cause.reasons.find(Cause.isDieReason)?.defect;
         yield* Effect.logError("Connection attempt failed with an unexpected defect.").pipe(
@@ -870,7 +1117,17 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           }),
         );
       }
-      return outcome;
+      return outcome._tag !== "Failure" || failedOrigin === undefined
+        ? outcome
+        : {
+            ...outcome,
+            failureOrigin: {
+              ...failedOrigin,
+              setupTimeout:
+                outcome.failure.error._tag === "ConnectionTransientError" &&
+                outcome.failure.error.sshPreparationTimedOut === true,
+            },
+          };
     }
 
     const active = establishment.exit.value;
@@ -921,6 +1178,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     if (options?.learnRoutes !== undefined) {
       yield* learnRoutesFrom(options.learnRoutes, active.lease).pipe(Effect.forkScoped);
     }
+    yield* Ref.update(
+      evidence,
+      ({ failureOrigin: _origin, sshPreparation: _preparation, ...current }) => current,
+    );
     yield* setState({
       desired: true,
       network: currentIntent.network,
@@ -1015,7 +1276,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     let previousSlowSetupTimeout = false;
     let setupContinuation: SetupPreparation | undefined;
     let generation = 0;
-    let latestFailure: ConnectionAttemptError | null = null;
+    let latestFailure: ConnectionFailure | null = null;
     let pendingRetry = Option.none<PendingRetryTrace>();
     const resetRetryLadder = () => {
       failureCount = 0;
@@ -1047,6 +1308,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         latestFailure = null;
         replacing = false;
         yield* clearLease;
+        yield* Ref.set(evidence, {});
         yield* setState(availableState(currentIntent, generation));
         handleSignal(yield* waitForSignal);
         continue;
@@ -1111,9 +1373,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       if (retrySlowSetup) continue;
 
       const attemptSpan: Option.Option<Tracer.Span> = outcome.failure.attemptSpan;
-      const error: ConnectionAttemptError = outcome.failure.error;
+      const error: ConnectionFailure = outcome.failure.error;
       if (!outcome.established) {
         latestFailure = error;
+        yield* Ref.update(evidence, ({ failureOrigin: _origin, ...current }) => ({
+          ...current,
+          ...(outcome.failureOrigin === undefined ? {} : { failureOrigin: outcome.failureOrigin }),
+        }));
       }
       if (error._tag === "ConnectionBlockedError") {
         const blockedIntent = yield* Ref.get(intent);

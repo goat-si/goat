@@ -434,9 +434,11 @@ only.
 For SSH setup and runtime updates, the call returns the shared SSH
 `kind: "needs_human"` result with a handoff summary. The server's
 [SshHostSetup](../../apps/server/src/sshRemote/SshHostSetup.ts) continuation worker
-resumes approved `ssh.host_add`, `ssh.host_prepare`, and `ssh.runtime_update`
-targets after rechecking the approving session's target permissions. Fingerprints
-remain private human data. Key-registration instructions run in the person's
+resumes approved `ssh.host_prepare` and `ssh.runtime_update` targets after
+rechecking the approving session's target permissions. An approved `ssh.host_add`
+fingerprint only pins the host; the agent calls the tool again, which reruns the
+preflight before anything is installed. Fingerprints remain private human data; agents see
+only that the host key needs review. Key-registration instructions run in the person's
 terminal on the environment's owning machine; completion triggers another key-auth
 check, not an assumption that registration succeeded.
 
@@ -650,11 +652,19 @@ Sign-in details are visible only to the requester, approver, or a
 [ProviderHostSync](../../apps/server/src/provider/ProviderHostSync.ts) and its
 [installer and login rules](../../apps/server/src/provider/ProviderHostSyncRecipes.ts).
 
-SSH-issued remote sessions do not carry `providers:manage`. Consequently, the
-remote accepts an outside client with a `full-access` ceiling plus
-`orchestration:operate`, as sent by an approved sync from another machine. The
-origin enforces `providers:manage`; a follow-up issue tracks carrying that grant
-to the remote.
+Every provider write needs a live `providers:manage` grant, on the remote too.
+The origin asks the remote for an SSH-issued session carrying
+`providers:manage` only for calls it has already authorized against the
+caller's (or approver's) live `providers:manage`, so the remote can attribute
+the write instead of trusting any full-access outside client. A remote too old
+to issue that scope fails the call rather than falling back.
+
+Requesting an approval card (provider setup, login, sync, Codex home, SSH host
+trust, SSH runtime update now) needs only a running, writable thread
+credential, which carries `orchestration:read` and never
+`orchestration:operate`. What runs after approval is authorized against the
+approving person's session. See
+[authorizeApprovalRequest](../../apps/server/src/sshRemote/SshHostAuthorization.ts).
 
 **Single environment.** Five entries add providers and sign in on the caller's own
 environment:
@@ -725,7 +735,7 @@ Each PR ships on its own and leaves `tools/list` unchanged until phase 11.
 
 Testing follows the repository rules: focused tests for each behavior, effect
 worker draining instead of sleeps, and one real-client pass for the handoff cards
-(`test-t3-app` for web, `test-t3-mobile` for mobile).
+(`test-goat-app` for web, `test-goat-mobile` for mobile).
 
 ## Open questions
 

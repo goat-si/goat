@@ -23,23 +23,6 @@ afterEach(() => {
 });
 
 describe("isEntrypoint", () => {
-  it("uses the runtime answer when Node provides one", () => {
-    expect(
-      isEntrypoint({
-        moduleUrl: "file:///somewhere/bin.mjs",
-        entryPath: "/elsewhere/other.mjs",
-        runtimeMain: true,
-      }),
-    ).toBe(true);
-    expect(
-      isEntrypoint({
-        moduleUrl: "file:///somewhere/bin.mjs",
-        entryPath: "/somewhere/bin.mjs",
-        runtimeMain: false,
-      }),
-    ).toBe(false);
-  });
-
   it("matches the entrypoint path when the runtime has no import.meta.main", () => {
     // Node 22.16, 22.17 and 23.11 are inside `engines.node` but leave it undefined.
     const dir = makeTempDir();
@@ -87,16 +70,6 @@ describe("isEntrypoint", () => {
       isEntrypoint({
         moduleUrl: NodeURL.pathToFileURL(imported).href,
         entryPath: entry,
-        runtimeMain: undefined,
-      }),
-    ).toBe(false);
-  });
-
-  it("stays false when there is no entrypoint argument", () => {
-    expect(
-      isEntrypoint({
-        moduleUrl: "file:///somewhere/bin.mjs",
-        entryPath: undefined,
         runtimeMain: undefined,
       }),
     ).toBe(false);

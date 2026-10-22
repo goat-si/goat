@@ -1,5 +1,3 @@
-"use client";
-
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 
 import { useAtomValue } from "@effect/atom-react";

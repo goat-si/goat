@@ -23,6 +23,24 @@ export type HubClientFailure =
   | M.MemoryHubError
   | M.MemoryHubUnauthorizedError
   | M.MemoryHubForbiddenError;
+/**
+ * Whether settings still bind this connection. When they do not, the client fences a request
+ * locally without reaching the Hub.
+ */
+export const isCurrentConnection = (
+  current: Pick<M.ServerSettings, "memoryHub" | "memoryHubVersion">,
+  connection: HubConnection,
+) => {
+  const configured = current.memoryHub;
+  return (
+    configured.mode === "member" &&
+    current.memoryHubVersion === connection.epoch &&
+    configured.endpoint === connection.endpoint &&
+    configured.hubEnvironmentId === connection.hubEnvironmentId &&
+    configured.secretName === connection.secretName &&
+    configured.memorySpaceId === connection.memorySpaceId
+  );
+};
 const REQUEST_TIMEOUT_MS = 15000;
 const RESPONSE_MAX_BYTES = 1048576;
 const retrySchedule = Schedule.exponential("250 millis").pipe(Schedule.upTo({ times: 2 }));
@@ -94,15 +112,7 @@ const make = Effect.gen(function* () {
     const current = yield* settings.getSettings.pipe(
       Effect.mapError(() => new M.MemoryHubError({ code: "storage_failed" })),
     );
-    const configured = current.memoryHub;
-    if (
-      configured.mode !== "member" ||
-      current.memoryHubVersion !== connection.epoch ||
-      configured.endpoint !== connection.endpoint ||
-      configured.hubEnvironmentId !== connection.hubEnvironmentId ||
-      configured.secretName !== connection.secretName ||
-      configured.memorySpaceId !== connection.memorySpaceId
-    ) {
+    if (!isCurrentConnection(current, connection)) {
       return yield* new M.MemoryHubError({ code: "fenced" });
     }
   });

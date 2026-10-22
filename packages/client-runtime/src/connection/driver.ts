@@ -1,3 +1,4 @@
+import type { DesktopSshPreparationProgress } from "@goat/contracts";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -10,6 +11,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import type { ConnectionCatalogEntry, ConnectionRoute } from "./catalog.ts";
 import type {
   ConnectionAttemptError,
+  ConnectionAttemptIdentity,
   ConnectionAttemptStage,
   PreparedConnection,
 } from "./model.ts";
@@ -32,11 +34,13 @@ export type ConnectionDriverProgress =
   | {
       readonly stage: "preparing";
       readonly hostAnswered?: true;
+      readonly sshPreparation?: DesktopSshPreparationProgress;
       readonly routeId?: string;
     }
   | {
       readonly stage: Exclude<ConnectionAttemptStage, "preparing">;
       readonly prepared: PreparedConnection;
+      readonly routeId?: string;
     };
 
 export interface EnvironmentConnectionLease {
@@ -54,6 +58,7 @@ export class ConnectionDriver extends Context.Service<
     readonly connect: (
       entry: ConnectionCatalogEntry,
       reportProgress: (progress: ConnectionDriverProgress) => Effect.Effect<void>,
+      attemptContext?: Omit<ConnectionAttemptIdentity, "routeId">,
     ) => Effect.Effect<EnvironmentConnectionLease, ConnectionAttemptError, Scope.Scope>;
     readonly checkRoute: (
       entry: ConnectionCatalogEntry,
@@ -88,8 +93,8 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
       ? []
       : yield* Effect.forEach(routes, (route) => Effect.forkChild(checkRoute(route)));
   const attemptScope = yield* Scope.Scope;
-  let transient: ConnectionAttemptError | undefined;
-  let blocked: ConnectionAttemptError | undefined;
+  let transient: ConnectionTransientError | undefined;
+  let blocked: ConnectionBlockedError | undefined;
   // Each route gets its own scope so a half-open session closes before the next try.
   const attempt = Effect.fnUntraced(function* (route: ConnectionRoute) {
     const routeScope = yield* Scope.fork(attemptScope);
@@ -99,6 +104,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
       Effect.result,
     );
     if (result._tag === "Failure") {
+      if (result.failure._tag === "ConnectionAttemptSuperseded") return yield* result.failure;
       if (result.failure._tag === "ConnectionTransientError") transient ??= result.failure;
       else blocked ??= result.failure;
     }
@@ -161,6 +167,7 @@ export const make = Effect.gen(function* () {
   const connect = Effect.fn("ConnectionDriver.connect")(function* (
     entry: ConnectionCatalogEntry,
     reportProgress: (progress: ConnectionDriverProgress) => Effect.Effect<void>,
+    attemptContext?: Omit<ConnectionAttemptIdentity, "routeId">,
   ) {
     const target = entry.target;
     yield* Effect.annotateCurrentSpan({
@@ -168,24 +175,28 @@ export const make = Effect.gen(function* () {
       "connection.target.kind": target._tag,
       "connection.route.count": connectionRoutes(entry).length,
     });
-    yield* reportProgress({ stage: "preparing" });
     return yield* connectOverRoutes(
       entry,
       (route) => checkRoute(entry, route),
       Effect.fnUntraced(
         function* (route) {
-          yield* reportProgress({
-            stage: "preparing",
-            routeId: connectionRouteId(route.target),
-          });
+          const routeId = connectionRouteId(route.target);
+          yield* reportProgress({ stage: "preparing", routeId });
           const prepared = yield* resolver.prepare(
             routeEntry(entry, route),
-            reportProgress({ stage: "preparing", hostAnswered: true }),
+            reportProgress({ stage: "preparing", routeId, hostAnswered: true }),
+            {
+              ...(attemptContext === undefined
+                ? {}
+                : { attemptContext: { ...attemptContext, routeId } }),
+              onPreparationProgress: (sshPreparation) =>
+                reportProgress({ stage: "preparing", routeId, sshPreparation }),
+            },
           );
-          yield* reportProgress({ stage: "opening", prepared });
+          yield* reportProgress({ stage: "opening", routeId, prepared });
           const session = yield* Effect.gen(function* () {
             const session = yield* sessions.connect(prepared);
-            yield* reportProgress({ stage: "synchronizing", prepared });
+            yield* reportProgress({ stage: "synchronizing", routeId, prepared });
             yield* session.ready;
             return session;
           }).pipe((effect) =>

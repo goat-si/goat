@@ -854,6 +854,7 @@ describe("Memory hub assembled HTTP scenarios", () => {
         refusedReverts: true,
         resolutionInputs: true,
         retainedLocalSpace: true,
+        generationHold: true,
         hubDiagnostics: true,
       });
       yield* s.configure("disabled");

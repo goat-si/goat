@@ -97,6 +97,7 @@ const check = Effect.gen(function* () {
 });
 
 describe.runIf(process.env.GOAT_MEMORY_GROWTH === "1")("service receive scaling", () => {
+  // oxlint-disable-next-line goat/no-test-timeout-or-unreasoned-skip -- Opt-in GOAT_MEMORY_GROWTH benchmark measures thousands of SQLite receives and full chain growth.
   it.effect.each([
     { chain: false, counts: [1000, 2000], label: "1k / 2k independent memories" },
     { chain: true, counts: [250, 500], label: "long chain 250 / 500 revisions" },
@@ -109,8 +110,10 @@ describe.runIf(process.env.GOAT_MEMORY_GROWTH === "1")("service receive scaling"
           const ms = yield* Effect.gen(function* () {
             const storage = yield* Store.MemoryStore;
             assert.strictEqual((yield* storage.usage(space, { kind: "user" })).spaceItems, 0);
+            // oxlint-disable-next-line goat/no-wall-clock-in-tests -- GOAT_MEMORY_GROWTH gates this throughput benchmark; real elapsed time is the quantity being measured.
             const start = performance.now();
             for (let n = 0; n < count; n++) yield* receive(operation(n, fixture.chain), n);
+            // oxlint-disable-next-line goat/no-wall-clock-in-tests -- GOAT_MEMORY_GROWTH gates this throughput benchmark; preserve the measured scaling ratio.
             const elapsed = performance.now() - start;
             yield* check;
             const usage = yield* storage.usage(space, { kind: "user" });

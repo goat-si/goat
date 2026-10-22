@@ -18,6 +18,7 @@ import {
   HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS,
   clipHostStatusMessage,
   countHostThreads,
+  hostStatusProviders,
   hostStatusQuotas,
   isUnsupportedHostStatusMessage,
   markHostCompatibility,
@@ -201,6 +202,27 @@ it("refreshes stale quota and skips accounts that cannot report it", () => {
       limits: limits("2026-10-12T15:00:00.000Z"),
       fromCache: false,
     },
+  ]);
+});
+
+it("lists every configured provider, including one that reports no quota", () => {
+  expect(
+    hostStatusProviders([
+      {
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+        displayName: "Codex",
+        enabled: true,
+      },
+      {
+        instanceId: ProviderInstanceId.make("claude"),
+        driver: ProviderDriverKind.make("claude"),
+        enabled: false,
+      },
+    ]),
+  ).toEqual([
+    { instanceId: "codex", driver: "codex", displayName: "Codex", enabled: true },
+    { instanceId: "claude", driver: "claude", enabled: false },
   ]);
 });
 

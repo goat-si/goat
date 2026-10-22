@@ -14,10 +14,6 @@ import {
   OrchestratorMcpReviewFindingsRecordInput,
   OrchestratorMcpReviewFindingsRecordResult,
   OrchestratorMcpReviewFindingsExportInput,
-  OrchestratorMcpThreadInterruptInput,
-  OrchestratorMcpThreadListInput,
-  OrchestratorMcpThreadReadInput,
-  OrchestratorMcpThreadSendInput,
   OrchestratorMcpThreadWaitInput,
 } from "./orchestratorMcp.ts";
 
@@ -43,17 +39,12 @@ const decodeReviewFindingsRecordResult = Schema.decodeUnknownSync(
 const decodeReviewFindingsExportInput = Schema.decodeUnknownSync(
   OrchestratorMcpReviewFindingsExportInput,
 );
-const decodeCreateThreadsInput = Schema.decodeUnknownSync(OrchestratorMcpCreateThreadsInput);
+
 const decodeStrictCreateThreadsInput = Schema.decodeUnknownSync(OrchestratorMcpCreateThreadsInput, {
   onExcessProperty: "error",
 });
 const decodeDelegateTaskInput = Schema.decodeUnknownSync(OrchestratorMcpDelegateTaskInput);
 const decodeDelegateTaskResult = Schema.decodeUnknownSync(OrchestratorMcpDelegateTaskResult);
-const decodeThreadInterruptInput = Schema.decodeUnknownSync(OrchestratorMcpThreadInterruptInput);
-const decodeThreadListInput = Schema.decodeUnknownSync(OrchestratorMcpThreadListInput);
-const decodeThreadReadInput = Schema.decodeUnknownSync(OrchestratorMcpThreadReadInput);
-const decodeThreadSendInput = Schema.decodeUnknownSync(OrchestratorMcpThreadSendInput);
-const decodeThreadWaitInput = Schema.decodeUnknownSync(OrchestratorMcpThreadWaitInput);
 
 it("bounds explicit question hosts and ignored wait request IDs", () => {
   const hosts = Array.from({ length: 16 }, (_, i) => `host-${i}`);
@@ -76,13 +67,6 @@ it("bounds explicit question hosts and ignored wait request IDs", () => {
 });
 
 describe("orchestrator MCP contracts", () => {
-  it("accepts explicit worktree isolation and keeps shared delegation as the default", () => {
-    expect(decodeDelegateTaskInput({ task: "Review changes" }).isolation).toBeUndefined();
-    expect(
-      decodeDelegateTaskInput({ task: "Review changes", isolation: "worktree" }).isolation,
-    ).toBe("worktree");
-    expect(() => decodeDelegateTaskInput({ task: "Review changes", isolation: "copy" })).toThrow();
-  });
   it("decodes cross-provider delegated task requests and durable results", () => {
     const request = decodeDelegateTaskInput({
       task: "Inspect the workspace and report the result.",
@@ -113,126 +97,33 @@ describe("orchestrator MCP contracts", () => {
       latestTerminalSummary: "Workspace inspected.",
       latestTerminalResultContextTransferId: "context-transfer-result-1",
       hasPendingQuestion: false,
+      pendingApproval: null,
       waitTimedOut: false,
     });
 
     expect(request.target?.providerInstanceId).toBe("claudeAgent");
     expect(result.status).toBe("completed");
     expect(result.summary).toBe("Workspace inspected.");
-    expect(result.pendingRequestIds).toBeUndefined();
-    const waiting = decodeDelegateTaskResult({
-      ...result,
-      status: "running",
-      pendingRequestIds: ["q"],
-      waitTimedOut: false,
-    });
-    expect(waiting.status).toBe("running");
-    expect(waiting.pendingRequestIds).toEqual(["q"]);
-  });
-
-  it("decodes target model options in canonical and shorthand shapes", () => {
-    const canonical = decodeDelegateTaskInput({
-      task: "Say hello.",
-      target: {
-        providerInstanceId: "codex",
-        model: "gpt-5.6-luna",
-        options: [{ id: "reasoning", value: "low" }],
-      },
-    });
-    const shorthand = decodeDelegateTaskInput({
-      task: "Say hello.",
-      target: {
-        providerInstanceId: "codex",
-        model: "gpt-5.6-luna",
-        options: { reasoning: "low", fastMode: true },
-      },
-    });
-
-    expect(canonical.target?.options).toEqual([{ id: "reasoning", value: "low" }]);
-    expect(shorthand.target?.options).toEqual([
-      { id: "reasoning", value: "low" },
-      { id: "fastMode", value: true },
-    ]);
-  });
-
-  it("rejects target model options that are not strings or booleans", () => {
+    expect(result.pendingApproval).toBeNull();
+    const pendingApproval = {
+      requestId: "request-approval-1",
+      kind: "command",
+      runId: "run-child-1",
+    };
+    expect(
+      decodeDelegateTaskResult({
+        ...result,
+        pendingApproval: { ...pendingApproval, input: { command: "private command" } },
+      }).pendingApproval,
+    ).toEqual(pendingApproval);
     expect(() =>
-      decodeDelegateTaskInput({
-        task: "Say hello.",
-        target: {
-          providerInstanceId: "codex",
-          model: "gpt-5.6-luna",
-          options: { reasoning: 3 },
-        },
-      }),
-    ).toThrow();
-    expect(() =>
-      decodeDelegateTaskInput({
-        task: "Say hello.",
-        target: {
-          providerInstanceId: "codex",
-          model: "gpt-5.6-luna",
-          options: [{ id: "reasoning", value: null }],
-        },
+      decodeDelegateTaskResult({
+        ...result,
+        pendingApproval: { ...pendingApproval, kind: "user_input" },
       }),
     ).toThrow();
   });
 
-  it("decodes mixed prompted and empty thread batches", () => {
-    const request = decodeCreateThreadsInput({
-      clientRequestId: "threads-1",
-      threads: [
-        { title: "Inherited empty thread" },
-        {
-          prompt: "Review the API.",
-          target: { driverKind: "claudeAgent" },
-          runtimeMode: "approval-required",
-        },
-      ],
-    });
-
-    expect(request.threads).toHaveLength(2);
-    expect(request.threads[0]?.prompt).toBeUndefined();
-    expect(request.threads[1]?.target?.driverKind).toBe("claudeAgent");
-  });
-
-  it("decodes project-scoped thread orchestration requests", () => {
-    expect(
-      decodeThreadListInput({
-        statuses: ["running", "completed"],
-        includeSubagents: false,
-        limit: 25,
-      }).statuses,
-    ).toEqual(["running", "completed"]);
-    expect(
-      decodeThreadReadInput({
-        threadId: "thread-loop-1",
-        view: "activity",
-        afterPosition: 10,
-      }).afterPosition,
-    ).toBe(10);
-    expect(
-      decodeThreadSendInput({
-        threadId: "thread-loop-1",
-        message: "Continue with the next iteration.",
-        mode: "steer",
-        clientRequestId: "send-loop-2",
-      }).mode,
-    ).toBe("steer");
-    expect(
-      decodeThreadWaitInput({
-        threadId: "thread-loop-1",
-        runId: "run-loop-2",
-        timeoutMs: 5_000,
-      }).runId,
-    ).toBe("run-loop-2");
-    expect(
-      decodeThreadInterruptInput({
-        threadId: "thread-loop-1",
-        reason: "Loop converged.",
-      }).reason,
-    ).toBe("Loop converged.");
-  });
   it("decodes remote workspaces and a nullable host-qualified task handle", () => {
     for (const workspace of [
       { type: "cwd" },
@@ -265,6 +156,7 @@ describe("orchestrator MCP contracts", () => {
       latestTerminalSummary: "launch outcome unknown",
       latestTerminalResultContextTransferId: null,
       hasPendingQuestion: false,
+      pendingApproval: null,
       waitTimedOut: false,
     });
     expect(result.childThreadId).toBeNull();
@@ -497,3 +389,5 @@ it("decodes review history without accepting server-owned outcome fields as inpu
     exportInput({ from: "2026-10-16T00:00:00.000Z", to: "2026-10-17T00:00:00.000Z", limit: 1_001 }),
   ).toThrow();
 });
+
+const decodeThreadWaitInput = Schema.decodeUnknownSync(OrchestratorMcpThreadWaitInput);

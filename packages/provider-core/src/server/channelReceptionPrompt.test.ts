@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { ChannelConversationId, type ChannelReceptionInput } from "@goat/contracts";
+import { ChannelConversationId, ChannelTaskId, type ChannelReceptionInput } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -213,6 +213,68 @@ describe("channel reception reads", () => {
     }).prompt;
     expect(second).not.toContain("- read: look things up before answering");
     expect(second).toContain("[work: #123]\ngoat-si/goat#123 (merged)");
+  });
+});
+
+describe("channel reception language", () => {
+  const input = {
+    mode: "input",
+    conversationId: ChannelConversationId.make("conversation:1"),
+    originKind: "goat",
+    inputText: "Create a file named approval-demo.txt containing the word hello.",
+    tail: [],
+    tasks: [],
+    allowedTargets: [],
+    requester: {
+      ownerId: "owner",
+      principalId: "owner",
+      displayName: "Owner",
+      originKind: "goat",
+      runtimeModeCeiling: "full-access",
+      grantedScopes: [],
+    },
+  } satisfies ChannelReceptionInput;
+
+  it("names the script of an English message so the reply and title cannot default to another language", () => {
+    const prompt = buildChannelReceptionPrompt(input).prompt;
+    expect(prompt).toContain("Latin-script language");
+    expect(prompt).toContain("replyText, title, question, and instruction");
+    expect(prompt).toContain("Do not write them in Chinese");
+    expect(prompt.endsWith("another language.")).toBe(true);
+  });
+
+  it("names Korean, Japanese, and Chinese from the person's own words", () => {
+    expect(
+      buildChannelReceptionPrompt({ ...input, inputText: "승인 데모 파일을 만들어 줘" }).prompt,
+    ).toContain("The person's words are in Korean.");
+    expect(
+      buildChannelReceptionPrompt({ ...input, inputText: "このマシンにファイルを作って" }).prompt,
+    ).toContain("The person's words are in Japanese.");
+    expect(
+      buildChannelReceptionPrompt({ ...input, inputText: "在这台机器上创建文件" }).prompt,
+    ).toContain("The person's words are in Chinese.");
+  });
+
+  it("keeps a task update in the person's language when the update itself is in another", () => {
+    const prompt = buildChannelReceptionPrompt({
+      ...input,
+      mode: "task_event",
+      inputText: undefined,
+      taskEvent: {
+        taskId: ChannelTaskId.make("task:1"),
+        type: "task.completed",
+        summary: "已创建 approval-demo.txt",
+      },
+      tail: [
+        {
+          role: "user",
+          text: "Create a file named approval-demo.txt containing the word hello.",
+          at: "2026-10-20T00:00:00.000Z",
+        },
+      ],
+    }).prompt;
+    expect(prompt).toContain("Latin-script language");
+    expect(prompt).toContain("Say only what the update says happened.");
   });
 });
 

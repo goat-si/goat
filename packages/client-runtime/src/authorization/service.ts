@@ -105,7 +105,9 @@ const BEARER_DESCRIPTOR_CACHE_TTL_MS = 10_000;
 const DPOP_AUTHORIZATION_TIMEOUT_MS = 30_000;
 
 function mapDpopSocketError(error: RemoteEnvironmentAuthError | ConnectionAttemptError) {
-  return error._tag === "ConnectionTransientError" || error._tag === "ConnectionBlockedError"
+  return error._tag === "ConnectionTransientError" ||
+    error._tag === "ConnectionBlockedError" ||
+    error._tag === "ConnectionAttemptSuperseded"
     ? error
     : mapRemoteDpopEnvironmentError(error);
 }

@@ -3,9 +3,33 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./opencodexCompat": {
+      "types": "./src/opencodexCompat.ts",
+      "import": "./src/opencodexCompat.ts"
+    },
+    "./channelEvidence": {
+      "types": "./src/channelEvidence.ts",
+      "import": "./src/channelEvidence.ts"
+    },
     "./sshFailure": {
       "types": "./src/sshFailure.ts",
       "import": "./src/sshFailure.ts"
+    },
+    "./sshDestination": {
+      "types": "./src/sshDestination.ts",
+      "import": "./src/sshDestination.ts"
+    },
+    "./cuaDriverRelease": {
+      "types": "./src/cuaDriverRelease.ts",
+      "import": "./src/cuaDriverRelease.ts"
+    },
+    "./cuaDriverManifest": {
+      "types": "./src/cuaDriverManifest.ts",
+      "import": "./src/cuaDriverManifest.ts"
+    },
+    "./changedFileKind": {
+      "types": "./src/changedFileKind.ts",
+      "import": "./src/changedFileKind.ts"
     },
     "./githubMarkdownLinks": {
       "types": "./src/githubMarkdownLinks.ts",
@@ -219,6 +243,10 @@
       "types": "./src/dpopCommon.ts",
       "import": "./src/dpopCommon.ts"
     },
+    "./telemetryId": {
+      "types": "./src/telemetryId.ts",
+      "import": "./src/telemetryId.ts"
+    },
     "./relayAuth": {
       "types": "./src/relayAuth.ts",
       "import": "./src/relayAuth.ts"
@@ -371,6 +399,10 @@
       "types": "./src/HostProcess.ts",
       "import": "./src/HostProcess.ts"
     },
+    "./testing/lazyChildProcessSpawner": {
+      "types": "./src/testing/lazyChildProcessSpawner.ts",
+      "import": "./src/testing/lazyChildProcessSpawner.ts"
+    },
     "./testing/longTempDir": {
       "types": "./src/testing/longTempDir.ts",
       "import": "./src/testing/longTempDir.ts"
@@ -378,6 +410,10 @@
     "./testing/symlinks": {
       "types": "./src/testing/symlinks.ts",
       "import": "./src/testing/symlinks.ts"
+    },
+    "./testing/fileNames": {
+      "types": "./src/testing/fileNames.ts",
+      "import": "./src/testing/fileNames.ts"
     },
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
@@ -546,6 +582,10 @@
     "./PtyAdapter": {
       "types": "./src/PtyAdapter.ts",
       "import": "./src/PtyAdapter.ts"
+    },
+    "./markdownMath": {
+      "types": "./src/markdownMath.ts",
+      "import": "./src/markdownMath.ts"
     }
   },
   "scripts": {
@@ -559,12 +599,14 @@
     "effect": "catalog:",
     "jose": "catalog:",
     "mdast-util-directive": "catalog:",
+    "mdast-util-to-hast": "^13.2.1",
     "micromark-extension-directive": "catalog:",
     "micromark-util-character": "catalog:",
     "rehype-raw": "catalog:",
     "rehype-sanitize": "catalog:",
     "remark-breaks": "catalog:",
     "remark-gfm": "catalog:",
+    "remark-math": "6.0.0",
     "remark-parse": "catalog:",
     "remark-rehype": "catalog:",
     "unified": "catalog:",
@@ -573,6 +615,7 @@
   "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "@types/mdast": "^4.0.4",
     "@types/node": "catalog:",
     "micromark-util-types": "catalog:",
     "vite-plus": "catalog:"

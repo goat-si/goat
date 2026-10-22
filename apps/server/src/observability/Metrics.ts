@@ -2,8 +2,8 @@ import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Metric from "effect/Metric";
 import { dual } from "effect/Function";
+import * as Metric from "effect/Metric";
 
 import { compactMetricAttributes, outcomeFromExit } from "./Attributes.ts";
 
@@ -37,6 +37,36 @@ export const providerTurnsTotal = Metric.counter("goat_provider_turns_total", {
 
 export const providerTurnDuration = Metric.timer("goat_provider_turn_duration", {
   description: "Time for the provider adapter to start a turn, not how long the turn runs.",
+});
+
+// OTLP carries the unit, and Prometheus names the series by it: a unitless gauge gains `_ratio`.
+export const serverResidentBytes = Metric.gauge("goat_server_resident_bytes", {
+  description: "Resident memory of the server process.",
+  attributes: { unit: "By" },
+});
+
+export const serverHeapUsedBytes = Metric.gauge("goat_server_heap_used_bytes", {
+  description: "JavaScript heap in use by the server process.",
+  attributes: { unit: "By" },
+});
+
+export const serverCpuUtilization = Metric.gauge("goat_server_cpu_utilization", {
+  description: "CPU time the server used per second over the last sample; 1 is one full core.",
+});
+
+export const serverEventLoopUtilization = Metric.gauge("goat_server_event_loop_utilization", {
+  description: "Share of the last sample the server's event loop spent busy.",
+});
+
+export const serverEventLoopDelayMax = Metric.gauge("goat_server_event_loop_delay_max", {
+  description: "Longest event loop delay over the last sample.",
+  attributes: { unit: "ms" },
+});
+
+export const memoryStoreBytes = Metric.gauge("goat_memory_store_bytes", {
+  description:
+    "Allocated bytes of the memory_* tables and indexes at the last storage sample, by area.",
+  attributes: { unit: "By" },
 });
 
 export const gitCommandsTotal = Metric.counter("goat_git_commands_total", {
@@ -101,12 +131,13 @@ export interface WithMetricsOptions {
   ) => Readonly<Record<string, unknown>>;
 }
 
-const recordMetrics = (
-  options: WithMetricsOptions,
-  startedAt: bigint,
-  exit: Exit.Exit<unknown, unknown>,
-) =>
-  Effect.gen(function* () {
+const recordMetrics =
+  /* Instrumentation must not create its own span for every recorded operation. */
+  Effect.fnUntraced(function* (
+    options: WithMetricsOptions,
+    startedAt: bigint,
+    exit: Exit.Exit<unknown, unknown>,
+  ) {
     const duration = Duration.nanos((yield* Clock.monotonicTimeNanos) - startedAt);
     const baseAttributes =
       typeof options.attributes === "function" ? options.attributes() : (options.attributes ?? {});

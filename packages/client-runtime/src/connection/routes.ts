@@ -22,7 +22,8 @@ export type ConnectionRouteKind =
   | "tailnet"
   | "vpn"
   | "public"
-  | "ssh";
+  | "ssh"
+  | "hub-proxy";
 
 export const RELAY_ROUTE_ID = "relay";
 
@@ -34,6 +35,7 @@ export function connectionRouteId(target: ConnectionTarget): string {
       return RELAY_ROUTE_ID;
     case "BearerConnectionTarget":
     case "SshConnectionTarget":
+    case "HubProxyConnectionTarget":
       return target.connectionId;
   }
 }
@@ -88,6 +90,8 @@ export function connectionRouteKind(route: ConnectionRoute): ConnectionRouteKind
       return "relay";
     case "SshConnectionTarget":
       return "ssh";
+    case "HubProxyConnectionTarget":
+      return "hub-proxy";
     case "PrimaryConnectionTarget":
     case "BearerConnectionTarget": {
       const hostname = routeHostname(route);
@@ -110,7 +114,8 @@ const ROUTE_KIND_RANK: Record<ConnectionRouteKind, number> = {
   vpn: 2,
   public: 3,
   ssh: 4,
-  relay: 5,
+  "hub-proxy": 5,
+  relay: 6,
 };
 
 export function insertRoute(
@@ -175,6 +180,12 @@ export function connectionRouteLabel(route: ConnectionRoute): string {
       return profile?._tag === "SshConnectionProfile"
         ? `SSH ${profile.target.username ? `${profile.target.username}@` : ""}${profile.target.hostname}`
         : "SSH";
+    }
+    case "hub-proxy": {
+      const profile = Option.getOrNull(route.profile);
+      return profile?._tag === "HubProxyConnectionProfile" && profile.hubLabel
+        ? `via ${profile.hubLabel}`
+        : "via hub";
     }
     case "public":
       return routeHostname(route) ?? "Remote link";

@@ -1,5 +1,3 @@
-"use client";
-
 import { PlusIcon, XIcon } from "~/components/solar";
 import { useState } from "react";
 import type { ProviderDriverKind, ServerProviderModel } from "@goat/contracts";

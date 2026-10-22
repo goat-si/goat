@@ -1,9 +1,12 @@
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import type * as PlatformError from "effect/PlatformError";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { isSqlError } from "effect/sql/SqlError";
@@ -126,24 +129,40 @@ const readStorage = Effect.gen(function* () {
  * refused while any other connection has the file open, even an idle one,
  * which is how a running server or desktop app is detected.
  */
-const lockExclusively = (databasePath: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`PRAGMA busy_timeout = 0`;
-    yield* sql`PRAGMA locking_mode = EXCLUSIVE`;
-    yield* sql`BEGIN EXCLUSIVE`.pipe(
-      Effect.mapError((cause) =>
-        isSqlError(cause) && cause.reason._tag === "LockTimeoutError"
-          ? new DatabaseInUseError({ path: databasePath, cause })
-          : cause,
-      ),
-    );
-    yield* sql`COMMIT`;
-  });
+const lockExclusively = Effect.fn("DatabaseMaintenance.lockExclusively")(function* (
+  databasePath: string,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`PRAGMA busy_timeout = 0`;
+  yield* sql`PRAGMA locking_mode = EXCLUSIVE`;
+  yield* sql`BEGIN EXCLUSIVE`.pipe(
+    Effect.mapError((cause) =>
+      isSqlError(cause) && cause.reason._tag === "LockTimeoutError"
+        ? new DatabaseInUseError({ path: databasePath, cause })
+        : cause,
+    ),
+  );
+  yield* sql`COMMIT`;
+});
 
-const make = Effect.gen(function* () {
+export interface LegacyRemovalOptions {
+  /** Retries a delete that the OS reports busy, then reports the database in use. */
+  readonly busyRetry: Schedule.Schedule<unknown, PlatformError.PlatformError>;
+}
+
+export const defaultLegacyRemovalOptions: LegacyRemovalOptions = {
+  // Antivirus and indexers hold freshly closed files for moments on Windows.
+  busyRetry: Schedule.exponential("20 millis").pipe(Schedule.upTo({ times: 6 })),
+};
+
+const isBusy = (error: PlatformError.PlatformError) => error.reason._tag === "Busy";
+
+const make = Effect.fnUntraced(function* (options: LegacyRemovalOptions) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  // POSIX unlinks an open file, so the lock is held through the delete there.
+  // Windows refuses to delete a file any handle has open, this lock included.
+  const deleteWhileLocked = (yield* HostProcess.Platform) !== "win32";
   const legacyPath = (databasePath: string) =>
     path.join(path.dirname(databasePath), "state.sqlite");
 
@@ -223,15 +242,31 @@ const make = Effect.gen(function* () {
     function* (databasePath: string) {
       const legacy = legacyPath(databasePath);
       if (!(yield* fs.exists(legacy))) return;
-      // A version before 0.1.0 may still be running against it. Keep the lock
-      // while deleting, and delete the database before its WAL so a failure
-      // never leaves it without committed transactions.
-      yield* Effect.gen(function* () {
-        yield* lockExclusively(legacy);
-        for (const suffix of ["", "-wal", "-shm"]) {
-          yield* fs.remove(legacy + suffix, { force: true });
-        }
-      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: legacy })));
+      // Delete the database before its WAL so a failure never leaves it
+      // without committed transactions.
+      const deleteFiles = Effect.forEach(
+        ["", "-wal", "-shm"],
+        (suffix) => fs.remove(legacy + suffix, { force: true }),
+        { discard: true },
+      );
+      const openLegacy = NodeSqliteClient.layer({ filename: legacy });
+      // A version before 0.1.0 may still be running against it; the lock refuses then.
+      if (deleteWhileLocked) {
+        yield* Effect.andThen(lockExclusively(legacy), deleteFiles).pipe(
+          Effect.provide(openLegacy),
+        );
+        return;
+      }
+      // SQLite on Windows opens files without delete sharing, so an old server
+      // that opens the database after the lock is released makes the delete
+      // fail as busy instead of losing its data.
+      yield* lockExclusively(legacy).pipe(Effect.provide(openLegacy));
+      yield* deleteFiles.pipe(
+        Effect.retry({ schedule: options.busyRetry, while: isBusy }),
+        Effect.mapError((cause) =>
+          isBusy(cause) ? new DatabaseInUseError({ path: legacy, cause }) : cause,
+        ),
+      );
     },
     (effect, databasePath) =>
       effect.pipe(
@@ -246,4 +281,7 @@ const make = Effect.gen(function* () {
   return DatabaseMaintenance.of({ inspect, compact, removeLegacyDatabase });
 });
 
-export const layer = Layer.effect(DatabaseMaintenance, make);
+export const layerWith = (options: LegacyRemovalOptions) =>
+  Layer.effect(DatabaseMaintenance, make(options));
+
+export const layer = layerWith(defaultLegacyRemovalOptions);

@@ -10,6 +10,7 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 
 import {
   adoptLegacyEnv,
@@ -34,10 +35,11 @@ import {
   decodeServiceLauncherChildMessage,
   isExactServiceVersion,
   parseServiceState,
+  SERVICE_ENV_FILE,
   SERVICE_LAUNCHER_CONTEXT_ENV,
   SERVICE_LAUNCHER_PROTOCOL,
-  SERVICE_STATE_FILE,
   SERVICE_RESTART_PENDING_FILE,
+  SERVICE_STATE_FILE,
   SERVICE_STOP_MARKER_FILE,
 } from "./cloud/serviceProtocol.ts";
 import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
@@ -47,14 +49,16 @@ const HANDOFF_DELAY_MS = 2_000;
  * Migrations count toward it and can scale with the database: tens of GB on a cold page cache
  * take minutes. A missed window rolls back the database, so the next attempt pays the same cost.
  */
-export const PREPARED_TIMEOUT_MS = 30 * 60_000;
+const PREPARED_TIMEOUT_MS = 30 * 60_000;
 export const PROBATION_MS = 10 * 60_000;
 export const SMOKE_TIMEOUT_MS = 30_000;
 const TERMINATE_GRACE_MS = 5_000;
 const RESTORE_RETRY_MS = 5_000;
-// Matches SERVER_EXIT_CODE_STATE_DIR_OWNED in contracts. The standalone
-// launcher stays independent of the Effect-backed contracts package.
+// Match SERVER_EXIT_CODE_STATE_DIR_OWNED and SERVER_EXIT_CODE_DATABASE_AHEAD
+// in contracts/desktopBootstrap. The standalone launcher must stay independent
+// of its Effect runtime; subprocess tests use the authoritative contract values.
 const STATE_DIR_OWNED_EXIT_CODE = 78;
+const DATABASE_AHEAD_EXIT_CODE = 79;
 
 type TerminalStatus = "committed" | "rolled-back" | "failed";
 type ChildRole = "active" | "trial";
@@ -108,6 +112,36 @@ async function pathExists(target: string): Promise<boolean> {
     if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") return false;
     throw cause;
   }
+}
+
+const MANAGED_SERVICE_ENV_NAMES = new Set([
+  "PATH",
+  "GOAT_HOME",
+  "GOAT_BOOT_SERVICE_UNIT",
+  SERVICE_LAUNCHER_CONTEXT_ENV,
+]);
+
+export async function readServiceEnvironment(
+  baseDir: string,
+  inherited: NodeJS.ProcessEnv = process.env,
+): Promise<NodeJS.ProcessEnv> {
+  const environment = { ...inherited };
+  let contents: string;
+  try {
+    contents = await NodeFSP.readFile(NodePath.join(baseDir, SERVICE_ENV_FILE), "utf8");
+  } catch (cause) {
+    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") return environment;
+    throw cause;
+  }
+  for (const [name, value] of Object.entries(NodeUtil.parseEnv(contents))) {
+    if (
+      /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) &&
+      !MANAGED_SERVICE_ENV_NAMES.has(name.toUpperCase())
+    ) {
+      environment[name] = value;
+    }
+  }
+  return environment;
 }
 
 // Opened read-write: Windows refuses to flush a handle without write access.
@@ -584,6 +618,7 @@ export class Launcher {
   readonly #backupSpaceProbe: Partial<BackupSpaceProbe> | undefined;
   readonly #probationMs: number;
   readonly #now: () => number;
+  readonly #environment: Readonly<NodeJS.ProcessEnv>;
 
   constructor(
     baseDir: string,
@@ -592,12 +627,14 @@ export class Launcher {
       readonly backupSpaceProbe?: Partial<BackupSpaceProbe>;
       readonly probationMs?: number;
       readonly now?: () => number;
+      readonly environment?: Readonly<NodeJS.ProcessEnv>;
     } = {},
   ) {
     this.#baseDir = baseDir;
     this.#backupSpaceProbe = options.backupSpaceProbe;
     this.#probationMs = options.probationMs ?? PROBATION_MS;
     this.#now = options.now ?? Date.now;
+    this.#environment = { ...(options.environment ?? process.env) };
     this.#statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);
     this.#state = state;
   }
@@ -784,7 +821,7 @@ export class Launcher {
     const spawnArguments = runtimeSpawnArguments(paths);
     const child = NodeChildProcess.spawn(spawnArguments.command, spawnArguments.args, {
       env: {
-        ...process.env,
+        ...this.#environment,
         ...withLegacyEnvNames({ [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) }),
       },
       stdio: ["inherit", "inherit", "inherit", "ipc"],
@@ -1016,7 +1053,13 @@ export class Launcher {
     if (this.#child !== child || this.#stopping) return;
     this.#child = null;
     if (code === STATE_DIR_OWNED_EXIT_CODE) {
-      await this.#idleWhileStateDirOwned();
+      await this.#idleWhileRefused("state-dir-owned");
+      return;
+    }
+    // A trial still owns a restorable snapshot. An active build must not roll
+    // back to an even older runtime when the home already requires a newer one.
+    if (child.role === "active" && code === DATABASE_AHEAD_EXIT_CODE) {
+      await this.#idleWhileRefused("database-ahead");
       return;
     }
     if (this.#stopRequested || (await pathExists(stopMarkerPath(this.#baseDir)))) {
@@ -1063,16 +1106,16 @@ export class Launcher {
   /**
    * Exiting would make systemd or launchd start another refused server, so stay
    * idle until stopped or restarted. A pending update fails without restoring
-   * its backup: the other owner may have written to the database since.
+   * its backup: another build may have written to the database since.
    */
-  async #idleWhileStateDirOwned(): Promise<void> {
+  async #idleWhileRefused(reason: "state-dir-owned" | "database-ahead"): Promise<void> {
     this.#clearTimer();
     const pending = this.#state.update;
     if (pending?.status === "pending") {
       const next: ServiceState = {
         ...this.#state,
         activeVersion: pending.fromVersion,
-        update: terminalUpdate({ pending, status: "failed", reason: "state-dir-owned" }),
+        update: terminalUpdate({ pending, status: "failed", reason }),
       };
       await writeServiceState(this.#statePath, next);
       this.#state = next;
@@ -1082,7 +1125,9 @@ export class Launcher {
     // Signal listeners alone do not keep Node alive.
     this.#timer = setInterval(() => {}, 2_147_483_647);
     process.stderr.write(
-      "[service-launcher] Another GOAT server owns this GOAT home. Stop it, then restart this service.\n",
+      reason === "database-ahead"
+        ? "[service-launcher] This GOAT build is older than the data in this GOAT home. Update GOAT or install a newer service, then restart this service.\n"
+        : "[service-launcher] Another GOAT server owns this GOAT home. Stop it, then restart this service.\n",
     );
   }
 
@@ -1143,7 +1188,8 @@ export async function main(): Promise<void> {
   if (baseDir === undefined || baseDir === "") {
     throw new Error("GOAT_HOME is required by the GOAT service launcher.");
   }
+  const environment = await readServiceEnvironment(baseDir);
   const statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);
   const state = await readServiceState(statePath);
-  await new Launcher(baseDir, state).run();
+  await new Launcher(baseDir, state, { environment }).run();
 }

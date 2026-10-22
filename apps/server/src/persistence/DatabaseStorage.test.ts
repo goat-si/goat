@@ -3,16 +3,17 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Metric from "effect/Metric";
 
 import * as ServerConfig from "../config.ts";
+import * as Metrics from "../observability/Metrics.ts";
+import * as Settings from "../serverSettings.ts";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
 import * as DatabaseStorage from "./DatabaseStorage.ts";
 import * as Sqlite from "./Sqlite.ts";
 
@@ -29,17 +30,15 @@ const storageLayer = <E>(
 ) =>
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
+    Layer.provide(ThreadHistoryArchive.layer),
     Layer.provide(Layer.merge(EventStore.layer, ProjectionStore.layer)),
+    Layer.provide(Settings.layerTest()),
     Layer.provideMerge(Sqlite.layerMemory),
     Layer.provideMerge(config),
     Layer.provide(NodeServices.layer),
   );
 
 const testConfig = ServerConfig.layerTest(process.cwd(), { prefix: "database-storage-" });
-
-const currentStatus = Effect.flatMap(DatabaseStorage.DatabaseStorage, (storage) =>
-  storage.status.pipe(Stream.take(1), Stream.runHead),
-);
 
 it.effect("a new database returns freed pages online without losing data", () =>
   Effect.gen(function* () {
@@ -58,53 +57,27 @@ it.effect("a new database returns freed pages online without losing data", () =>
   }).pipe(Effect.provide(storageLayer(testConfig))),
 );
 
-it.effect("publishes file accounting and the doctor command after each pass", () =>
+it.effect("takes memory from the memory store's own sample and compacts history on demand", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const config = yield* ServerConfig.ServerConfig;
-    yield* sql`CREATE TABLE discarded (value BLOB)`;
-    yield* sql`INSERT INTO discarded VALUES (zeroblob(1048576))`;
-    yield* TestClock.adjust("1 minute");
-    const before = (yield* currentStatus).pipe(Option.getOrThrow);
-    assert.isNotNull(before);
-    assert.isAbove(before!.databaseBytes, 1048576);
-    assert.isTrue(before!.incrementalVacuumEnabled);
-    // Quoting follows the host shell, so check each word on its own.
-    assert.include(before!.compactCommand, "doctor");
-    assert.include(before!.compactCommand, "--base-dir");
-    assert.include(before!.compactCommand, config.baseDir);
-
-    // The next reclaim pass frees the dropped table and republishes.
-    yield* sql`DROP TABLE discarded`;
-    yield* TestClock.adjust("1 minute");
     const storage = yield* DatabaseStorage.DatabaseStorage;
-    const after = yield* storage.status.pipe(
-      Stream.filter((status) => status !== null && status.databaseBytes < before!.databaseBytes),
-      Stream.runHead,
-      Effect.map(Option.getOrThrow),
+    const mib = 1024 * 1024;
+    yield* sql`CREATE TABLE thread_history (body BLOB)`;
+    yield* sql`INSERT INTO thread_history VALUES (zeroblob(${3 * mib}))`;
+    yield* Metric.update(
+      Metric.withAttributes(Metrics.memoryStoreBytes, { area: "total" }),
+      2 * mib,
     );
-    assert.isAtMost(after!.databaseBytes, before!.databaseBytes - 1048576);
-    assert.equal(after!.reclaimableBytes, 0);
+    const [first, second] = yield* Effect.all([storage.compactNow, storage.compactNow], {
+      concurrency: "unbounded",
+    });
+    assert.equal(first.memoryBytes, 2 * mib);
+    assert.equal(first.historyBytes, first.databaseBytes - first.reclaimableBytes - 2 * mib);
+    assert.isAtLeast(first.databaseBytes, 3 * mib);
+    assert.isUndefined(first.compactingSince);
+    assert.equal(first.lastCompaction?.removedEvents, 0);
+    // The second call joined the first run instead of starting another.
+    assert.equal(second.lastCompaction?.finishedAt, first.lastCompaction?.finishedAt);
+    assert.deepEqual(yield* storage.health, first);
   }).pipe(Effect.provide(storageLayer(testConfig))),
-);
-
-it.effect("publishes nothing when doctor would repair a different database", () =>
-  Effect.gen(function* () {
-    yield* TestClock.adjust("1 minute");
-    assert.deepEqual(yield* currentStatus, Option.some(null));
-  }).pipe(
-    Effect.provide(
-      storageLayer(
-        // A dev server without an explicit home keeps state in <baseDir>/dev,
-        // while `doctor --base-dir` targets <baseDir>/userdata.
-        Layer.effect(
-          ServerConfig.ServerConfig,
-          Effect.gen(function* () {
-            const config = yield* ServerConfig.ServerConfig;
-            return { ...config, dbPath: `${config.baseDir}/dev/statev2.sqlite` };
-          }),
-        ).pipe(Layer.provide(testConfig)),
-      ),
-    ),
-  ),
 );

@@ -12,6 +12,9 @@ import * as MobilePreferences from "../../persistence/mobile-preferences";
 function fixture(initial: unknown = {}) {
   let stored = { payload: JSON.stringify(initial), updatedAt: 1 };
   const database = MobileDatabase.of({
+    loadNoteOutbox: Effect.succeed([]),
+    saveNoteOutbox: () => Effect.void,
+    removeNoteOutbox: () => Effect.void,
     loadCache: () => Effect.succeed(Option.none()),
     listCache: () => Effect.succeed([]),
     saveCache: () => Effect.void,

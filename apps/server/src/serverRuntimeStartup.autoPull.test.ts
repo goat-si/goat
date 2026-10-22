@@ -1,24 +1,28 @@
+import * as FileSystem from "effect/FileSystem";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import { DEFAULT_SERVER_SETTINGS, EnvironmentId, ProjectId } from "@goat/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
+  ProjectId,
+  ServerSettingsError,
+} from "@goat/contracts";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Scope from "effect/Scope";
-import { ServerSettingsError } from "@goat/contracts";
-import * as MemorySync from "./memory/MemorySyncService.ts";
-import { layerMemoryDefaultStarted } from "./server.ts";
-import * as Path from "effect/Path";
 import { HttpServer } from "effect/http";
+import * as Layer from "effect/Layer";
 import * as NetAddress from "effect/net/NetAddress";
-
+import * as Path from "effect/Path";
+import * as Scope from "effect/Scope";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "./config.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as Keybindings from "./keybindings.ts";
+import * as MemorySync from "./memory/MemorySyncService.ts";
 import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
 import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -30,6 +34,7 @@ import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import { layerMemoryDefaultStarted } from "./server.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -197,13 +202,18 @@ it.effect.each([
                 Effect.onInterrupt(() => Deferred.succeed(statusInterrupted, undefined)),
               ),
           }),
-          Layer.mock(AnalyticsService.AnalyticsService)({ record: () => Effect.void }),
+          Layer.mock(AnalyticsService.AnalyticsService)({
+            record: () => Effect.void,
+            recordOwners: () => Effect.void,
+          }),
           NodeCrypto.layer,
           Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
           Layer.mock(ExternalLauncher.ExternalLauncher)({}),
           Layer.mock(HttpServer.HttpServer)({
             address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 3773),
           }),
+          Layer.mock(ServerSecretStore.ServerSecretStore)({ get: () => Effect.succeedNone }),
+          FileSystem.layerNoop({}),
           Path.layer,
         );
 

@@ -116,6 +116,17 @@ export class MigrateDevDbPhaseError extends Schema.TaggedError<MigrateDevDbPhase
   }
 }
 
+export class MigrateDevDbDanglingForeignKeyError extends Schema.TaggedError<MigrateDevDbDanglingForeignKeyError>()(
+  "MigrateDevDbDanglingForeignKeyError",
+  {
+    violations: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Snapshot still has dangling foreign keys after pruning: ${this.violations}`;
+  }
+}
+
 export interface RunMigrateDevDbInput {
   readonly baseDir?: string | undefined;
   readonly source?: string | undefined;
@@ -150,6 +161,13 @@ interface ForeignKeyRow {
 interface ForeignKeyConstraint {
   readonly parentTable: string;
   readonly columns: ReadonlyArray<{ readonly from: string; readonly to: string | null }>;
+}
+
+interface ForeignKeyViolation {
+  readonly table: string;
+  readonly rowid: number | null;
+  readonly parent: string;
+  readonly fkid: number;
 }
 
 const quoteIdent = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`;
@@ -201,10 +219,13 @@ const parentExistsPredicates = (
   childTable: string,
   constraints: ReadonlyArray<ForeignKeyConstraint>,
   primaryKeys: ReadonlyMap<string, ReadonlyArray<string>>,
+  options?: { readonly includeSelf?: boolean },
 ): Array<string> => {
   const childRef = quoteIdent(childTable);
   return constraints.flatMap((fk) => {
-    if (fk.parentTable === childTable) return [];
+    // A self-reference cannot be filtered while the table is being inserted:
+    // the parent row is still in the source, not in main. Delete it afterwards.
+    if (fk.parentTable === childTable && options?.includeSelf !== true) return [];
     const parentPks = primaryKeys.get(fk.parentTable) ?? [];
     const resolved = fk.columns.map((col, idx) => ({
       from: col.from,
@@ -223,6 +244,85 @@ const parentExistsPredicates = (
     ];
   });
 };
+
+const describeForeignKeyViolations = (violations: ReadonlyArray<ForeignKeyViolation>) => {
+  const sample = violations
+    .slice(0, 12)
+    .map((row) => `${row.table} row ${row.rowid ?? "without rowid"} -> ${row.parent}`)
+    .join("; ");
+  const extra = violations.length > 12 ? `; and ${violations.length - 12} more` : "";
+  return `${violations.length} dangling foreign key${violations.length === 1 ? "" : "s"} (${sample}${extra})`;
+};
+
+/**
+ * `PRAGMA foreign_key_check` is the real constraint list. One pass deletes the
+ * rows that dangle now; the next pass catches children of those rows (a
+ * self-referential chain whose head was filtered out).
+ */
+const deleteDanglingForeignKeys = (
+  sql: SqlClient.SqlClient,
+  foreignKeys: ReadonlyMap<string, ReadonlyArray<ForeignKeyConstraint>>,
+  primaryKeys: ReadonlyMap<string, ReadonlyArray<string>>,
+) =>
+  Effect.gen(function* () {
+    for (let pass = 0; pass < 32; pass++) {
+      const violations = yield* sql.unsafe<ForeignKeyViolation>("PRAGMA foreign_key_check")
+        .unprepared;
+      if (violations.length === 0) return;
+
+      const rowidsByTable = new Map<string, Array<number>>();
+      const tablesWithoutRowid = new Set<string>();
+      for (const violation of violations) {
+        if (violation.rowid === null || violation.rowid === undefined) {
+          tablesWithoutRowid.add(violation.table);
+          continue;
+        }
+        const rowids = rowidsByTable.get(violation.table) ?? [];
+        rowids.push(Number(violation.rowid));
+        rowidsByTable.set(violation.table, rowids);
+      }
+
+      let removed = 0;
+      for (const [table, rowids] of rowidsByTable) {
+        const unique = [...new Set(rowids)].filter((id) => Number.isInteger(id));
+        for (let offset = 0; offset < unique.length; offset += 400) {
+          const chunk = unique.slice(offset, offset + 400);
+          if (chunk.length === 0) continue;
+          yield* sql.unsafe(`DELETE FROM ${quoteIdent(table)} WHERE rowid IN (${chunk.join(",")})`)
+            .unprepared;
+          const [changed] = yield* sql.unsafe<{ changes: number }>("SELECT changes() AS changes")
+            .unprepared;
+          removed += Number(changed?.changes ?? 0);
+        }
+      }
+      for (const table of tablesWithoutRowid) {
+        const predicates = parentExistsPredicates(
+          table,
+          foreignKeys.get(table) ?? [],
+          primaryKeys,
+          { includeSelf: true },
+        );
+        if (predicates.length === 0) continue;
+        yield* sql.unsafe(
+          `DELETE FROM main.${quoteIdent(table)} WHERE NOT (${predicates.join(" AND ")})`,
+        ).unprepared;
+        const [changed] = yield* sql.unsafe<{ changes: number }>("SELECT changes() AS changes")
+          .unprepared;
+        removed += Number(changed?.changes ?? 0);
+      }
+      if (removed === 0) {
+        return yield* new MigrateDevDbDanglingForeignKeyError({
+          violations: describeForeignKeyViolations(violations),
+        });
+      }
+    }
+    const remaining = yield* sql.unsafe<ForeignKeyViolation>("PRAGMA foreign_key_check").unprepared;
+    if (remaining.length > 0) {
+      return yield* new MigrateDevDbDanglingForeignKeyError({
+        violations: describeForeignKeyViolations(remaining),
+      });
+    }
+  });
 
 const removeDatabaseFiles = Effect.fn("removeDatabaseFiles")(function* (databasePath: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -383,6 +483,19 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
   );
   const filtered = tables.some((table) => table.name === "orchestration_v2_projection_threads");
 
+  // node:sqlite turns foreign keys on by default. The thread filter drops
+  // parent rows (remote_report_bindings, and any self-reference) that a child
+  // row still points at, so the INSERT fails before prune can run. The pragma
+  // cannot be changed inside a transaction; it would be silently ignored.
+  yield* sql.unsafe("PRAGMA foreign_keys = OFF").unprepared;
+  const [foreignKeyMode] = yield* sql.unsafe<{ foreign_keys: number }>("PRAGMA foreign_keys")
+    .unprepared;
+  if (Number(foreignKeyMode?.foreign_keys) !== 0) {
+    return yield* Effect.die(
+      "migrate-dev-db could not disable foreign keys before copying the snapshot",
+    );
+  }
+
   yield* sql.withTransaction(
     Effect.gen(function* () {
       for (const table of tables) yield* sql.unsafe(table.sql).unprepared;
@@ -426,6 +539,9 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
       }
       yield* sql`DELETE FROM main.sqlite_sequence`;
       yield* sql`INSERT INTO main.sqlite_sequence SELECT name, seq FROM src.sqlite_sequence`;
+      // Before indexes and triggers, so a dangling row is gone before a trigger
+      // observes it. Migrate opens a new connection and turns foreign keys back on.
+      yield* deleteDanglingForeignKeys(sql, foreignKeys, primaryKeys);
       for (const entry of schema) {
         if (entry.type !== "table" && !shadowTables.has(entry.name))
           yield* sql.unsafe(entry.sql).unprepared;
@@ -438,10 +554,11 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
 const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigrateDevDbInput) {
   const sql = yield* SqlClient.SqlClient;
 
-  // Threads the server would resume or start work on by itself. Its own
-  // recovery queries find most of them; usage-limit recovery also depends on
-  // settings, so any thread whose latest run failed or that has a recovery
-  // choice counts as live too.
+  // Threads the server would resume or start work on by itself. Recovery
+  // queries find runs and subagents still in flight. Usage-limit recovery can
+  // also resume a failed usage-limit run, armed or not, so those stay out of
+  // the seed. Any other failed run is stopped history and counts toward the
+  // per-project cap; treating every failure as live kept one thread.
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const recoveryThreadIds = yield* Effect.forEach(RECOVERY_KINDS, (kind) =>
     projections.getRecoveryThreadIds(kind),
@@ -451,13 +568,21 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
     yield* sql`INSERT INTO live_threads (thread_id) VALUES (${threadId})`;
   }
   yield* sql`INSERT OR IGNORE INTO live_threads (thread_id)
+    SELECT thread_id FROM orchestration_v2_projection_threads
+    WHERE json_extract(payload_json, '$.limitRecovery') IS NOT NULL
+    UNION
     SELECT r.thread_id FROM orchestration_v2_projection_runs r
     WHERE r.status = 'failed' AND r.ordinal = (
       SELECT MAX(latest.ordinal) FROM orchestration_v2_projection_runs latest
       WHERE latest.thread_id = r.thread_id)
-    UNION
-    SELECT thread_id FROM orchestration_v2_projection_threads
-    WHERE json_extract(payload_json, '$.limitRecovery') IS NOT NULL`;
+      AND EXISTS (
+        SELECT 1 FROM orchestration_v2_projection_turn_items item
+        WHERE item.thread_id = r.thread_id
+          AND item.run_id = r.run_id
+          AND item.type = 'error'
+          AND item.status = 'failed'
+          AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
+      )`;
 
   // Forks and subagents read history and results through their lineage, so a
   // thread family is cloned or dropped as a whole.
@@ -573,6 +698,9 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
           `DELETE FROM main.${quoteIdent(name)} WHERE NOT (${predicates.join(" AND ")})`,
         ).unprepared;
       }
+      // Thread deletes can orphan a self-reference the predicate above skips.
+      // Deferred checks would only fail the commit with a generic constraint error.
+      yield* deleteDanglingForeignKeys(sql, foreignKeys, primaryKeys);
     }),
   );
 

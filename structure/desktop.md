@@ -24,8 +24,11 @@ for a rolled-back build:
   On macOS Electron's item is service `<name> Safe Storage` with account `<name> Key`, and a
   packaged build's initial name is the staged package name `t3code` on every channel.
 - `apps/desktop/src/app/DesktopRendererOriginMigration.ts` copies localStorage and every IndexedDB
-  database from the legacy origin before the first window, never replacing existing data. Marker:
-  `renderer-origin-migrated`.
+  database from the legacy origin before the first window, never replacing existing data. Main
+  relays bounded chunks between a page on each origin; it must never hold the whole origin, which
+  can be 100+ MB of blobs and aborts main with a V8 OOM. Marker: `renderer-origin-migrated`; an
+  attempt that died leaves `renderer-origin-migration-attempt`, and the next launch marks it
+  aborted instead of retrying.
 
 The OS hands both `goat` and `t3code` links to the app (`getDesktopLinkSchemes`), and the server
 accepts both renderer origins (`DESKTOP_RENDERER_ORIGINS` in `apps/server/src/httpCors.ts`).
@@ -61,6 +64,29 @@ valid padding, so a non-catalog from this app's key also tries the sibling keys.
   empty catalog, since a missing file would re-import the legacy saved environments.
 - **Writes.** `set` and `clear` read the file on disk first. One this app cannot open is copied
   before it is replaced, and the change is refused when no copy can be made.
+
+## Computer use host
+
+When the server asks for a Cua Driver host on the private control pipe, the Electron main process
+owns it (`apps/desktop/src/cua/DesktopCuaDriver.ts`), so macOS attributes Accessibility and Screen
+Recording to GOAT rather than to the server child. On macOS it checks both permissions before
+starting and reports `unavailable` until they are granted. Packaged builds start the driver from
+`resources/cua-driver`; development builds need `GOAT_CUA_DRIVER_PATH`. The host reuses a running
+driver, retires a crashed one, and passes the same telemetry and update-check opt-outs as the
+standalone host ([server.md](server.md#computer-use)).
+
+Setup proves the macOS grants from inside the driver (`verify`): Electron's check comes first,
+then a fresh driver (TCC answers are cached per process) must report `host` attribution, pass
+`health_report`'s bundle identity for this process, and capture non-blank pixels plus an
+accessibility tree of a GOAT window. `check_permissions` alone cannot show that capture works.
+The check's driver is always stopped afterwards; the next agent turn starts its own.
+
+`stageCuaDriverExecutable` in `scripts/build-desktop-artifact.ts` downloads the pinned archive,
+checks its size and SHA-256, and stages only the executables: the universal binary on macOS, the
+driver, cursor theme tool and Wayland helper on Linux, and the driver, UIA worker and cursor theme
+tool on Windows. The SDK's native libraries come from `@trycua/cua-driver` and are unpacked beside
+`app.asar`; `patches/@ubjs__node@0.31.0-3.patch` makes the SDK loader find them there. The license
+notices are vendored in `apps/desktop/src/cua/notices/`.
 
 ## Shell
 

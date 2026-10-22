@@ -67,7 +67,7 @@ function GoatBotTaskCard(props: {
       {(textColor) => (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${card.title}. ${card.statusLabel}.${card.attentionLabel ? ` ${card.attentionLabel}.` : ""}${card.continuationLabel ? ` ${card.continuationLabel}.` : ""} ${action}`}
+          accessibilityLabel={`${card.title}. ${card.statusLabel}.${card.attentionLabel ? ` ${card.attentionLabel}.` : ""}${card.continuationLabel ? ` ${card.continuationLabel}.` : ""} ${(card.evidenceLabels ?? []).join(". ")} ${action}`}
           disabled={target.kind !== "thread" || unreachableHost !== null}
           onPress={() => {
             if (target.kind === "thread" && unreachableHost === null)
@@ -103,6 +103,11 @@ function GoatBotTaskCard(props: {
                 card.pullRequests.map((pullRequest) => pullRequest.label).join(", ")}
             </Text>
           ) : null}
+          {card.evidenceLabels?.map((label) => (
+            <Text key={label} className="text-xs" style={{ color: textColor }}>
+              {label}
+            </Text>
+          ))}
           <Text className="text-xs" style={{ color: textColor, opacity: 0.7 }}>
             {action === "Open thread" ? "Open thread ↗" : action}
           </Text>

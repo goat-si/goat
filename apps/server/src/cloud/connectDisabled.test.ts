@@ -1,3 +1,5 @@
+import * as ConnectReachability from "./ConnectReachability.ts";
+import { EnvironmentAuthenticatedPrincipal } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import { ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -43,6 +45,8 @@ const failOnUse = <I, S extends object>(key: Context.Key<I, S>) =>
   );
 
 const dependencies = Layer.mergeAll(
+  failOnUse(ConnectReachability.ConnectReachability),
+  failOnUse(EnvironmentAuthenticatedPrincipal),
   failOnUse(ServerSecretStore.ServerSecretStore),
   failOnUse(ServerEnvironment.ServerEnvironment),
   failOnUse(ManagedEndpointRuntime.CloudManagedEndpointRuntime),
@@ -104,7 +108,14 @@ it.effect("returns a local disabled CloudLink without acquiring cloud dependenci
         operation: "connect-disabled",
       });
     }
-  }).pipe(Effect.provide(CloudLink.layer.pipe(Layer.provide(dependencies)))),
+  }).pipe(
+    Effect.provide(
+      Layer.merge(
+        CloudLink.layer.pipe(Layer.provide(dependencies)),
+        failOnUse(EnvironmentAuthenticatedPrincipal),
+      ),
+    ),
+  ),
 );
 
 it.effect(

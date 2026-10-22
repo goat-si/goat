@@ -193,9 +193,9 @@ export const nativeScriptsBatch = Effect.fn("test.nativeScriptsBatch")(function*
     input: SshTunnel.RemoteGoatRunnerOptions;
     selection?: SshTunnel.PreparedRemoteRuntime | undefined;
   }>,
+  moduleUrl = new URL("./tunnel.ts", import.meta.url).href,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const moduleUrl = new URL("./tunnel.ts", import.meta.url).href;
   const script = `import * as t from ${JSON.stringify(moduleUrl)};
 const requests = ${JSON.stringify(requests)};
 console.log(JSON.stringify(requests.map(({ input, selection }) => ({ runner: t.buildRemoteGoatRunnerScript(input), launch: t.buildRemoteLaunchScript(input, selection), pairing: t.buildRemotePairingScript(${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, input, selection), mcp: t.buildRemoteMcpSessionScript(${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, { label: "fixture", ttl: "1h", runtimeModeCeiling: null }, input, selection), probe: t.buildRemoteRuntimeProbeScript(input.archiveVersion ?? "", ${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, true), upload: input.nodeScriptPath ? null : t.buildRemoteGoatUploadInstallerScript(input, "A".repeat(64)) }))));`;
@@ -222,7 +222,8 @@ console.log(JSON.stringify(requests.map(({ input, selection }) => ({ runner: t.b
 export const nativeScripts = (
   input: SshTunnel.RemoteGoatRunnerOptions,
   selection?: SshTunnel.PreparedRemoteRuntime,
-) => nativeScriptsBatch([{ input, selection }]).pipe(Effect.map((all) => all[0]!));
+  moduleUrl?: string,
+) => nativeScriptsBatch([{ input, selection }], moduleUrl).pipe(Effect.map((all) => all[0]!));
 
 // Archive doubles are Node scripts; emulate archive ps output only for the captured seed child.
 export const installArchivePsDouble = Effect.fn("test.installArchivePsDouble")(function* (
@@ -230,15 +231,22 @@ export const installArchivePsDouble = Effect.fn("test.installArchivePsDouble")(f
   pid: number,
   port: number,
   version: string,
+  /** A command that is not GOAT's managed invocation, for a server GOAT must not adopt. */
+  foreignCommand?: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const bin = `${home}/.test/identity-bin`;
   yield* fs.makeDirectory(bin, { recursive: true });
+  const command =
+    foreignCommand ??
+    `$HOME/.goat/runtime/goat/versions/${version}/goat serve --host 127.0.0.1 --port ${port} --base-dir $HOME/.goat`;
   yield* fs.writeFileString(
     `${bin}/ps`,
     `#!/bin/sh
 if [ "$1 $2 $3 $4" = '-o command= -p ${pid}' ]; then
-  printf '%s\\n' "$HOME/.goat/runtime/goat/versions/${version}/goat serve --host 127.0.0.1 --port ${port} --base-dir $HOME/.goat"
+  # A test hands the server to a foreign owner by naming another command here.
+  if [ -f "$HOME/.test/foreign-command" ]; then exec cat "$HOME/.test/foreign-command"; fi
+  printf '%s\\n' "${command}"
 else
   exec /bin/ps "$@"
 fi

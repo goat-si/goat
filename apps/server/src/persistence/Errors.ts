@@ -1,6 +1,12 @@
+import { SERVER_EXIT_CODE_DATABASE_AHEAD } from "@goat/contracts";
 import * as Predicate from "effect/Predicate";
+import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
+
+import packageJson from "../../package.json" with { type: "json" };
+
+const databaseAheadBuildVersion = packageJson.version.trim() || "this build";
 
 function summarizeSchemaIssue(issue: SchemaIssue.Issue): string {
   switch (issue._tag) {
@@ -64,6 +70,22 @@ export class PersistenceDecodeError extends Schema.TaggedError<PersistenceDecode
 
   override get message(): string {
     return `Decode error in ${this.operation}: ${this.issue}`;
+  }
+}
+
+export class DatabaseNewerThanBuildError extends Schema.TaggedError<DatabaseNewerThanBuildError>()(
+  "DatabaseNewerThanBuildError",
+  {
+    unknownMigrations: Schema.Array(Schema.String),
+    originalMessage: Schema.String,
+  },
+) {
+  // Distinct process exit code so a supervisor can tell "a newer build migrated
+  // this database" apart from a crash and stop restarting.
+  override readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_DATABASE_AHEAD;
+
+  override get message(): string {
+    return `This database was upgraded by a newer GOAT build; GOAT ${databaseAheadBuildVersion} cannot open it. Start that newer build, or update GOAT. Unknown migrations: ${this.unknownMigrations.join(", ")}.`;
   }
 }
 

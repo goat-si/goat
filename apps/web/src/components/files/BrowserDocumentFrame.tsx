@@ -86,8 +86,10 @@ export function BrowserDocumentFrame(props: {
   readonly onRetry?: (() => Promise<string | null>) | undefined;
   readonly htmlRender?: boolean;
   readonly threadRef?: ScopedThreadRef | undefined;
+  /** Stable resource identity and revision; defaults to src for callers that reload on URL changes. */
+  readonly documentKey?: string | undefined;
 }) {
-  const className = "min-h-0 flex-1 border-0 bg-white";
+  const key = props.documentKey ?? props.src;
   return props.pdf ? (
     <Suspense fallback={<FileSurfaceLoading />}>
       <PdfFilePreview
@@ -100,18 +102,25 @@ export function BrowserDocumentFrame(props: {
     </Suspense>
   ) : props.htmlRender ? (
     <HtmlRenderDocument
-      key={props.src}
+      key={key}
       src={props.src}
       title={props.title}
       threadRef={props.threadRef}
       className="min-h-0 flex-1"
     />
   ) : (
+    <FileDocument key={key} src={props.src} title={props.title} />
+  );
+}
+
+// URL renewals must not discard form input or scroll; a new key mounts a fresh document.
+function FileDocument(props: { readonly src: string; readonly title: string }) {
+  const [src] = useState(props.src);
+  return (
     <iframe
-      key={props.src}
-      src={props.src}
+      src={src}
       title={props.title}
-      className={className}
+      className="min-h-0 flex-1 border-0 bg-white"
       sandbox="allow-scripts allow-forms allow-popups allow-downloads"
     />
   );

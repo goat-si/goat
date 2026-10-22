@@ -4,6 +4,7 @@ import type {
   SshHostResult,
   SshHostStatus,
   SshRuntimeUpdateMode,
+  SshRuntimePhase,
 } from "@goat/contracts";
 import { compareRuntimeBuilds } from "@goat/shared/semver";
 import * as Effect from "effect/Effect";
@@ -57,9 +58,23 @@ export function sshRuntimeBuildOrder(status: SshHostStatus) {
       );
 }
 
+export function sshRuntimePhaseText(phase: SshRuntimePhase): string {
+  switch (phase) {
+    case "connecting":
+      return "Connecting to SSH host";
+    case "checking":
+      return "Checking GOAT runtime";
+    case "uploading":
+      return "Installing GOAT runtime — first setup can take a few minutes";
+    case "starting":
+      return "Starting GOAT";
+  }
+}
+
 /** Copy shared by the saved connection subtitle and its runtime details. */
 export function sshRuntimeStatusText(status: SshHostStatus): string {
-  const version = status.runtimeVersion ?? "unknown";
+  const version = status.runtimeVersion;
+  const runtime = version === null ? "" : ` · Runtime ${version}`;
   switch (status.state) {
     case "untrusted":
       return "Host fingerprint approval needed";
@@ -70,12 +85,17 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
     case "preparing": {
       switch (status.phase) {
         case "connecting":
-          return "Connecting";
+          return sshRuntimePhaseText("connecting");
         case "checking":
           return "Checking GOAT runtime";
-        case "uploading":
-          // The host downloads the release itself when it can, so this phase covers both.
-          return "Installing GOAT runtime (about 90 MB)";
+        case "uploading": {
+          const upload = status.upload;
+          if (upload === undefined) return sshRuntimePhaseText("uploading");
+          if (upload.sentBytes === upload.totalBytes) return "Installing GOAT runtime";
+          const sent = Math.floor(upload.sentBytes / (1024 * 1024));
+          const total = Math.ceil(upload.totalBytes / (1024 * 1024));
+          return `Uploading GOAT runtime: ${sent} of ${total} MB`;
+        }
         case "starting":
           return "Starting GOAT";
         case undefined:
@@ -85,9 +105,11 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
       return phase;
     }
     case "stopped":
-      return `Not running · Runtime ${version}`;
+      return `Not running${runtime}`;
     case "ready": {
-      if (status.refreshDeferred) return `Running ${version} · ${status.refreshDeferred.detail}`;
+      if (status.refreshDeferred)
+        return `${version === null ? "Runtime ready" : `Running ${version}`} · ${status.refreshDeferred.detail}`;
+      if (version === null) return "Runtime ready";
       if (status.runtimeVersion === status.requestedVersion)
         return `Up to date · Runtime ${version}`;
       const order = sshRuntimeBuildOrder(status);
@@ -100,7 +122,7 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
       return `${label} · Runtime ${version}`;
     }
     case "update_waiting":
-      return `Update waits for running work · Runtime ${version}`;
+      return `Update waits for running work${runtime}`;
     case "update_blocked": {
       const order =
         status.runtimeVersion === null
@@ -114,7 +136,7 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
         : `A GOAT server that this app didn't start is running on ${status.host}. Stop it on the host, then reconnect.`;
     }
     case "providers_not_ready":
-      return `Providers need attention · Runtime ${version}${status.refreshDeferred ? ` · ${status.refreshDeferred.detail}` : ""}`;
+      return `Providers need attention${runtime}${status.refreshDeferred ? ` · ${status.refreshDeferred.detail}` : ""}`;
     case "failed": {
       const failure = status.failure;
       if (!failure) return status.detail ?? `GOAT setup failed on ${status.host}.`;
@@ -184,6 +206,7 @@ export function sshRuntimeRecoveryText(status: SshHostStatus) {
       );
     case "ready": {
       if (deferredRecovery) return deferredRecovery;
+      if (status.runtimeVersion === null) return null;
       if (status.runtimeVersion === status.requestedVersion) return null;
       const order = sshRuntimeBuildOrder(status);
       if (order !== undefined && order > 0) return "Update this app to manage it.";

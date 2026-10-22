@@ -1,21 +1,20 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, vi } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
-import * as Clock from "effect/Clock";
-import * as Duration from "effect/Duration";
-import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
-import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
-import { TestClock } from "effect/testing";
-import { FetchHttpClient } from "effect/http";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { CLI_RELEASE_REPOSITORY } from "@goat/shared/cliRelease";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as HostProcess from "@goat/shared/HostProcess";
-
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import { TestClock } from "effect/testing";
 import {
   repointLauncher,
   resolveLauncherPath,
@@ -23,7 +22,35 @@ import {
   resolveNewestVersion,
 } from "./update.ts";
 
-it.layer(NodeServices.layer)("t3 update launcher", (it) => {
+it.effect("authenticates each release page until the requested channel is found", () =>
+  Effect.gen(function* () {
+    const pages: string[] = [];
+    const httpClient = HttpClient.make((request) => {
+      const url = new URL(request.url);
+      assert.equal(url.origin, "https://api.github.com");
+      assert.equal(url.pathname, `/repos/${CLI_RELEASE_REPOSITORY}/releases`);
+      assert.equal(request.headers.accept, "application/vnd.github+json");
+      assert.equal(request.headers.authorization, "Bearer gh-token");
+      const page = url.searchParams.get("page") ?? "";
+      pages.push(page);
+      const tag_name = page === "1" ? "v1.2.4-preview.20260101.1" : "v1.2.3";
+      return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json([{ tag_name }])));
+    });
+    const version = yield* resolveNewestVersion({
+      channel: "stable",
+      baseDir: yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped(),
+    }).pipe(
+      Effect.provideService(HostProcess.Environment, { GH_TOKEN: "gh-token" }),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.provide(NodeServices.layer),
+      Effect.scoped,
+    );
+    assert.equal(version, "1.2.3");
+    assert.deepStrictEqual(pages, ["1", "2"]);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.layer(NodeServices.layer)("goat update launcher", (it) => {
   it.effect("repoints a symlink that lives in a runtime versions tree", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -88,24 +115,24 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-update-" });
-      const launcher = path.join(root, "bin/goat");
+      const launcher = path.join(root, "bin/t3");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.writeFileString(launcher, "");
 
       const bare = yield* resolveLauncherPath.pipe(
-        Effect.provideService(HostProcess.InvokedAs, "goat"),
+        Effect.provideService(HostProcess.InvokedAs, "t3"),
         Effect.provideService(HostProcess.Environment, {
           PATH: `${path.join(root, "missing")}:${path.join(root, "bin")}`,
         }),
         Effect.provideService(HostProcess.WorkingDirectory, root),
       );
       const relative = yield* resolveLauncherPath.pipe(
-        Effect.provideService(HostProcess.InvokedAs, "./bin/goat"),
+        Effect.provideService(HostProcess.InvokedAs, "./bin/t3"),
         Effect.provideService(HostProcess.Environment, { PATH: "" }),
         Effect.provideService(HostProcess.WorkingDirectory, root),
       );
       const absent = yield* resolveLauncherPath.pipe(
-        Effect.provideService(HostProcess.InvokedAs, "goat"),
+        Effect.provideService(HostProcess.InvokedAs, "t3"),
         Effect.provideService(HostProcess.Environment, { PATH: path.join(root, "missing") }),
         Effect.provideService(HostProcess.WorkingDirectory, root),
       );

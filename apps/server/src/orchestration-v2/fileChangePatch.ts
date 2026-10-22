@@ -2,7 +2,12 @@
  * Builds the git-style patch of one edit, so a client can show what that tool call changed,
  * mid-turn and apart from other edits to the same file. Clients parse it with the same parser
  * as checkpoint diffs, so every file gets a `diff --git` header.
+ *
+ * Providers report absolute host paths. Prefixing those with `a/` yields `a//abs/path`, which
+ * `git apply` from the project root will not take. Paths inside the thread workspace become
+ * repo-relative; a file outside it keeps its absolute path.
  */
+import { workspaceRelativeFilePath } from "@goat/shared/path";
 
 const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m;
 
@@ -34,6 +39,12 @@ function headerPath(prefix: "a/" | "b/", path: string): string {
   return quotePath(`${prefix}${path}`);
 }
 
+/** Repo-relative when the file is inside the thread workspace; otherwise the path as given. */
+function patchPath(path: string, workspaceRoot: string | null | undefined): string {
+  const relative = workspaceRelativeFilePath(path, workspaceRoot);
+  return relative !== null && relative !== "." ? relative : path;
+}
+
 function contentLines(content: string, marker: "+" | "-"): string {
   const body = content.endsWith("\n") ? content.slice(0, -1) : content;
   const lines = body.split("\n").map((line) => `${marker}${line}`);
@@ -46,12 +57,18 @@ function lineCount(content: string): number {
   return content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
 }
 
-function wholeFileSection(path: string, content: string, kind: "add" | "delete"): string {
+function wholeFileSection(
+  path: string,
+  content: string,
+  kind: "add" | "delete",
+  workspaceRoot?: string | null,
+): string {
+  const name = patchPath(path, workspaceRoot);
   const count = lineCount(content);
   const header =
     kind === "add"
-      ? ["new file mode 100644", "--- /dev/null", `+++ ${headerPath("b/", path)}`]
-      : ["deleted file mode 100644", `--- ${headerPath("a/", path)}`, "+++ /dev/null"];
+      ? ["new file mode 100644", "--- /dev/null", `+++ ${headerPath("b/", name)}`]
+      : ["deleted file mode 100644", `--- ${headerPath("a/", name)}`, "+++ /dev/null"];
   const hunk =
     count === 0
       ? []
@@ -60,24 +77,31 @@ function wholeFileSection(path: string, content: string, kind: "add" | "delete")
           contentLines(content, kind === "add" ? "+" : "-"),
         ];
   return [
-    `diff --git ${headerPath("a/", path)} ${headerPath("b/", path)}`,
+    `diff --git ${headerPath("a/", name)} ${headerPath("b/", name)}`,
     ...header,
     ...hunk,
   ].join("\n");
 }
 
-function updateSection(path: string, hunks: string, oldPath = path): string {
-  const lines = [`diff --git ${headerPath("a/", oldPath)} ${headerPath("b/", path)}`];
-  if (oldPath !== path) {
+function updateSection(
+  path: string,
+  hunks: string,
+  oldPath = path,
+  workspaceRoot?: string | null,
+): string {
+  const next = patchPath(path, workspaceRoot);
+  const previous = patchPath(oldPath, workspaceRoot);
+  const lines = [`diff --git ${headerPath("a/", previous)} ${headerPath("b/", next)}`];
+  if (previous !== next) {
     // The parser keeps the old name only for a rename it recognizes by its similarity line.
     lines.push(
       `similarity index ${hunks.length === 0 ? 100 : 50}%`,
-      `rename from ${quotePath(oldPath)}`,
-      `rename to ${quotePath(path)}`,
+      `rename from ${quotePath(previous)}`,
+      `rename to ${quotePath(next)}`,
     );
   }
   if (hunks.length > 0) {
-    lines.push(`--- ${headerPath("a/", oldPath)}`, `+++ ${headerPath("b/", path)}`, hunks);
+    lines.push(`--- ${headerPath("a/", previous)}`, `+++ ${headerPath("b/", next)}`, hunks);
   }
   return lines.join("\n");
 }
@@ -101,20 +125,21 @@ export function codexFileChangePatch(
       | { readonly type: "delete" }
       | { readonly type: "update"; readonly move_path?: string | null | undefined };
   }>,
+  workspaceRoot?: string | null,
 ): string | undefined {
   const sections: Array<string> = [];
   for (const change of changes) {
     switch (change.kind.type) {
       case "add":
       case "delete":
-        sections.push(wholeFileSection(change.path, change.diff, change.kind.type));
+        sections.push(wholeFileSection(change.path, change.diff, change.kind.type, workspaceRoot));
         break;
       case "update": {
         const movedTo = change.kind.move_path ?? undefined;
         const hunks = change.diff.trim().length === 0 ? "" : hunksOf(change.diff);
         if (hunks === undefined) return undefined;
         if (hunks.length === 0 && movedTo === undefined) break;
-        sections.push(updateSection(movedTo ?? change.path, hunks, change.path));
+        sections.push(updateSection(movedTo ?? change.path, hunks, change.path, workspaceRoot));
         break;
       }
     }
@@ -145,17 +170,21 @@ function claudeHunk(hunk: unknown): string | undefined {
  * A Claude Code Edit, MultiEdit, or Write result. Its structuredPatch hunks carry real line
  * numbers; a created file carries its content instead. Staged writes changed nothing.
  */
-export function claudeFileChangePatch(path: string, result: unknown): string | undefined {
+export function claudeFileChangePatch(
+  path: string,
+  result: unknown,
+  workspaceRoot?: string | null,
+): string | undefined {
   if (!isRecord(result) || result.staged === true) return undefined;
   const filePath = typeof result.filePath === "string" && result.filePath ? result.filePath : path;
   const hunks = Array.isArray(result.structuredPatch) ? result.structuredPatch : undefined;
   if (hunks !== undefined && hunks.length > 0) {
     const rendered = hunks.map(claudeHunk);
     if (rendered.some((hunk) => hunk === undefined)) return undefined;
-    return `${updateSection(filePath, rendered.join("\n"))}\n`;
+    return `${updateSection(filePath, rendered.join("\n"), filePath, workspaceRoot)}\n`;
   }
   if (result.type === "create" && typeof result.content === "string") {
-    return `${wholeFileSection(filePath, result.content, "add")}\n`;
+    return `${wholeFileSection(filePath, result.content, "add", workspaceRoot)}\n`;
   }
   return undefined;
 }

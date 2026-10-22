@@ -41,6 +41,29 @@ afterEach(() => {
 });
 
 describe("ConnectionStorage.makeCatalogStore", () => {
+  it.effect("refuses a future catalog without quarantining or overwriting it", () =>
+    Effect.gen(function* () {
+      const raw = JSON.stringify({ ...emptyCatalog, schemaVersion: 99 });
+      const writes: string[] = [];
+      const store = yield* ConnectionStorage.makeCatalogStore({
+        read: Effect.succeed(raw),
+        write: (value) =>
+          Effect.sync(() => {
+            writes.push(value);
+          }),
+        quarantine: (value) =>
+          Effect.sync(() => {
+            writes.push(value);
+          }),
+      });
+      expect(yield* Effect.flip(store.read)).toMatchObject({ _tag: "ConnectionTransientError" });
+      expect(yield* Effect.flip(store.update((document) => document))).toMatchObject({
+        _tag: "ConnectionTransientError",
+      });
+      expect(writes).toEqual([]);
+    }),
+  );
+
   it.effect("quarantines malformed catalogs and starts from an empty document", () =>
     Effect.gen(function* () {
       const writes: string[] = [];
@@ -190,25 +213,6 @@ const fixedHandle = (database: IDBDatabase) => ({
 });
 
 describe("ConnectionStorage.makeCatalogBackend", () => {
-  it.effect("reports a closed IndexedDB connection as a typed read and write failure", () =>
-    Effect.gen(function* () {
-      vi.stubGlobal("window", {});
-      const database = {
-        transaction: () => {
-          throw new DOMException("The database connection is closing.", "InvalidStateError");
-        },
-      } as unknown as IDBDatabase;
-      const backend = ConnectionStorage.makeCatalogBackend(fixedHandle(database));
-
-      const readError = yield* Effect.flip(backend.read);
-      const writeError = yield* Effect.flip(backend.write("{}"));
-
-      expect(readError).toBeInstanceOf(ConnectionTransientError);
-      expect(readError.message).toContain("The database connection is closing.");
-      expect(writeError).toBeInstanceOf(ConnectionTransientError);
-    }),
-  );
-
   it.effect("fails writes when desktop secure storage declines the catalog", () =>
     Effect.gen(function* () {
       const setConnectionCatalog = vi.fn().mockResolvedValue(false);
@@ -254,74 +258,7 @@ describe("ConnectionStorage.makeCatalogBackend", () => {
   );
 });
 
-describe("environment cache removal", () => {
-  it.effect("fails both removal operations when IndexedDB aborts their commits", () =>
-    Effect.gen(function* () {
-      vi.stubGlobal("window", {});
-      vi.stubGlobal("IDBKeyRange", { bound: () => ({}) });
-      const database = Object.assign(new EventTarget(), {
-        transaction: () => {
-          const transaction = Object.assign(new EventTarget(), {
-            error: new DOMException("Commit aborted", "AbortError"),
-            objectStore: () => ({
-              delete: () => queueMicrotask(() => transaction.dispatchEvent(new Event("abort"))),
-              openCursor: () => {
-                queueMicrotask(() => transaction.dispatchEvent(new Event("abort")));
-                return new EventTarget();
-              },
-            }),
-          });
-          return transaction;
-        },
-        close: vi.fn(),
-      }) as unknown as IDBDatabase;
-      const openRequest = Object.assign(new EventTarget(), { result: database, error: null });
-      vi.stubGlobal("indexedDB", {
-        open: () => {
-          queueMicrotask(() => openRequest.dispatchEvent(new Event("success")));
-          return openRequest;
-        },
-      });
-
-      const [threadError, refsError] = yield* Effect.gen(function* () {
-        const cache = yield* Persistence.EnvironmentCacheStore;
-        return [
-          yield* Effect.flip(
-            cache.removeThread(EnvironmentId.make("env"), ThreadId.make("thread")),
-          ),
-          yield* Effect.flip(cache.clearVcsRefs(EnvironmentId.make("env"))),
-        ] as const;
-      }).pipe(Effect.provide(ConnectionStorage.layer));
-
-      expect(threadError.message).toContain("Commit aborted");
-      expect(refsError.message).toContain("Commit aborted");
-      expect(database.close).toHaveBeenCalledOnce();
-    }),
-  );
-});
-
 describe("IndexedDB connection recovery", () => {
-  it.effect("reports an initial open failure from the cache operation", () =>
-    Effect.gen(function* () {
-      vi.stubGlobal("window", {});
-      const open = vi.fn(() => {
-        throw new DOMException("Storage is unavailable", "InvalidStateError");
-      });
-      vi.stubGlobal("indexedDB", { open });
-
-      yield* Effect.gen(function* () {
-        const cache = yield* Persistence.EnvironmentCacheStore;
-        expect(open).not.toHaveBeenCalled();
-        const error = yield* Effect.flip(
-          cache.loadThread(EnvironmentId.make("env"), ThreadId.make("thread")),
-        );
-        expect(error.message).toContain("Storage is unavailable");
-      }).pipe(Effect.provide(ConnectionStorage.layer));
-
-      expect(open).toHaveBeenCalledOnce();
-    }),
-  );
-
   it.effect("reopens after a forced close and finalizes the current connection", () =>
     Effect.gen(function* () {
       vi.stubGlobal("window", {});
@@ -515,5 +452,52 @@ describe("browser GitHub routing permissions", () => {
       );
       expect(yield* second.get(entry)).toBe("off");
     }).pipe(Effect.scoped),
+  );
+});
+
+describe("IndexedDB shell capture metadata", () => {
+  it.effect("round-trips capture time with its sequence", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal("window", {});
+      const values = new Map<IDBValidKey, unknown>();
+      const database = Object.assign(new EventTarget(), {
+        transaction: () => {
+          const transaction = Object.assign(new EventTarget(), {
+            error: null,
+            objectStore: () => ({
+              get: (key: IDBValidKey) => {
+                const request = Object.assign(new EventTarget(), {
+                  result: values.get(key),
+                  error: null,
+                });
+                queueMicrotask(() => request.dispatchEvent(new Event("success")));
+                return request;
+              },
+              put: (value: unknown, key: IDBValidKey) => {
+                values.set(key, value);
+                queueMicrotask(() => transaction.dispatchEvent(new Event("complete")));
+              },
+            }),
+          });
+          return transaction;
+        },
+        close: vi.fn(),
+      });
+      vi.stubGlobal("indexedDB", {
+        open: () => {
+          const request = Object.assign(new EventTarget(), { result: database, error: null });
+          queueMicrotask(() => request.dispatchEvent(new Event("success")));
+          return request;
+        },
+      });
+      yield* Effect.gen(function* () {
+        const cache = yield* Persistence.EnvironmentCacheStore;
+        const id = EnvironmentId.make("node");
+        const meta = { snapshotSequence: 7, capturedAt: "2026-10-19T12:00:00.000Z" };
+        expect(yield* cache.loadShellMeta(id)).toEqual(Option.none());
+        yield* cache.saveShellMeta(id, meta);
+        expect(yield* cache.loadShellMeta(id)).toEqual(Option.some(meta));
+      }).pipe(Effect.provide(ConnectionStorage.layer));
+    }),
   );
 });

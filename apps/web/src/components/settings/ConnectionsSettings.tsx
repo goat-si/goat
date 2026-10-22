@@ -1,5 +1,7 @@
+import { connectReachabilityHelpUrl, formatConnectReachable } from "@goat/contracts";
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { ensureLocalApi } from "../../localApi";
+import { HubNodesSettings } from "./HubNodesSettings";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 import { SessionPermissions } from "./SessionPermissions";
@@ -8,7 +10,7 @@ import { HubDeviceCard } from "./HubDeviceCard";
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@goat/shared/authScopeOptions";
 import { ChevronRightIcon, EllipsisIcon, PlusIcon, QrCodeIcon } from "~/components/solar";
 import { useAtomValue } from "@effect/atom-react";
-import { type ReactNode, memo, useId, useState } from "react";
+import { type ReactNode, memo, useEffect, useEffectEvent, useId, useState } from "react";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -43,6 +45,7 @@ import {
   isQrShareableEndpoint,
   isWslSettingsRowVisible,
   missingTailscaleEndpointDescription,
+  resolveLocalVersionStatusLabel,
   selectQrEndpointOption,
   togglePairingScopeSelection,
 } from "./ConnectionsSettings.logic";
@@ -53,6 +56,10 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
+import {
+  WorktreeCheckoutHealthNotice,
+  worktreeCheckoutNeedsAttention,
+} from "./WorktreeCheckoutHealthNotice";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
@@ -126,6 +133,7 @@ import {
 import { CloudMachinesSettings } from "./CloudMachinesSettings";
 import { RemoteLaunchesSettings } from "./RemoteLaunchesSettings";
 import { desktopWslStateAtom, refreshDesktopWslState } from "~/state/desktopWslState";
+import { useDesktopUpdateState } from "~/state/desktopUpdate";
 import {
   useEnvironments,
   usePrimaryEnvironment,
@@ -1279,6 +1287,32 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
       ? "Your session does not have permission to manage T3 Connect access."
       : null;
   const isBusy = isUpdating || isUpdatingPreference;
+  const refreshLinkState = useEffectEvent(primaryCloudLinkState.refresh);
+  // The server rechecks reachability when the tunnel's 30 s readiness poll changes.
+  // Poll while mounted, so a failed read does not stop later ones.
+  useEffect(() => {
+    const interval = window.setInterval(() => refreshLinkState(), 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
+  const reachability = managedTunnelActive ? primaryCloudLinkState.data?.reachability : undefined;
+  const reachabilityStatus =
+    reachability?.status === "reachable" ? (
+      formatConnectReachable(reachability)
+    ) : reachability?.status === "unreachable" ? (
+      <span className="block text-destructive">
+        {[reachability.reason, reachability.hint, `Fix: ${reachability.fix}`]
+          .filter(Boolean)
+          .join(" ")}{" "}
+        <a
+          href={connectReachabilityHelpUrl(reachability.cause)}
+          target="_blank"
+          rel="noreferrer"
+          className="underline underline-offset-2"
+        >
+          More info
+        </a>
+      </span>
+    ) : null;
 
   const updateManagedTunnel = async (enabled: boolean) => {
     if (
@@ -1354,12 +1388,16 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
             linkRevoked
               ? "This environment was removed from T3 Connect. Turn it on to link it again."
               : managedTunnelActive
-                ? "This environment is available to your other devices through T3 Connect."
+                ? reachability?.status === "unreachable"
+                  ? "T3 Connect is on, but other devices cannot reach this environment."
+                  : reachability?.status === "reachable"
+                    ? "This environment is available to your other devices through T3 Connect."
+                    : "T3 Connect is on. Reachability has not been checked yet."
                 : managedTunnelOutOfSync
                   ? "T3 Connect is out of sync. This environment is linked only to publish agent activity, so other devices cannot connect. Turn T3 Connect on to repair it."
                   : "Make this environment available to your other devices through T3 Connect."
           }
-          status={operationError ?? primaryCloudLinkState.error}
+          status={operationError ?? primaryCloudLinkState.error ?? reachabilityStatus}
           control={
             <CloudLinkSwitch
               checked={managedTunnelActive}
@@ -1448,6 +1486,16 @@ const ADVANCED_CONNECTION_SETTING_IDS = [
   "github-routing",
 ] as const;
 
+// Subscribes on its own so desktop download progress does not re-render the page.
+function LocalVersionStatusLabel() {
+  const updateState = useDesktopUpdateState();
+  return (
+    <span className="text-xs text-muted-foreground">
+      {resolveLocalVersionStatusLabel(updateState)}
+    </span>
+  );
+}
+
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
   const { environments } = useEnvironments();
@@ -1489,7 +1537,6 @@ export function ConnectionsSettings() {
   >(null);
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
   const [isUpdatingDesktopServerExposure, setIsUpdatingDesktopServerExposure] = useState(false);
-  const [isDesktopServerExposureDialogOpen, setIsDesktopServerExposureDialogOpen] = useState(false);
   const [isUpdatingTailscaleServe, setIsUpdatingTailscaleServe] = useState(false);
   const [isUpdatingWslBackend, setIsUpdatingWslBackend] = useState(false);
   const [desktopWslMutationError, setDesktopWslMutationError] = useState<string | null>(null);
@@ -1609,11 +1656,11 @@ export function ConnectionsSettings() {
     try {
       await desktopBridge.setServerExposureMode(checked ? "network-accessible" : "local-only");
       refreshDesktopNetworkAccessState();
-      setIsDesktopServerExposureDialogOpen(false);
+      setPendingDesktopServerExposureMode(null);
       setIsUpdatingDesktopServerExposure(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to update network exposure.";
-      setIsDesktopServerExposureDialogOpen(false);
+      setPendingDesktopServerExposureMode(null);
       setDesktopServerExposureMutationError(message);
       toastManager.add(
         stackedThreadToast({
@@ -1824,7 +1871,6 @@ export function ConnectionsSettings() {
       disabled={!desktopServerExposureState || isUpdatingDesktopServerExposure}
       onCheckedChange={(checked) => {
         setPendingDesktopServerExposureMode(checked ? "network-accessible" : "local-only");
-        setIsDesktopServerExposureDialogOpen(true);
       }}
       aria-label="Enable network access"
     />
@@ -2300,8 +2346,19 @@ export function ConnectionsSettings() {
                       }
                     />
                   ) : primaryServerUpdateState.status === "idle" && primaryServerConfig ? (
-                    <span className="text-xs text-muted-foreground">Up to date</span>
+                    <LocalVersionStatusLabel />
                   ) : undefined
+                }
+              />
+            ) : null}
+            {worktreeCheckoutNeedsAttention(primaryServerConfig?.worktreeCheckoutHealth) ? (
+              <SettingsRow
+                title="Worktree checkouts"
+                status={
+                  <WorktreeCheckoutHealthNotice
+                    health={primaryServerConfig?.worktreeCheckoutHealth}
+                    hostLabel={primaryEnvironment?.label ?? "this computer"}
+                  />
                 }
               />
             ) : null}
@@ -2382,13 +2439,10 @@ export function ConnectionsSettings() {
             </FoldedSettingsSection>
           ) : null}
           <AlertDialog
-            open={isDesktopServerExposureDialogOpen && canManageLocalBackend}
+            open={pendingDesktopServerExposureMode !== null && canManageLocalBackend}
             onOpenChange={(open) => {
-              if (isUpdatingDesktopServerExposure) return;
-              setIsDesktopServerExposureDialogOpen(open);
-            }}
-            onOpenChangeComplete={(open) => {
-              if (!open) setPendingDesktopServerExposureMode(null);
+              if (!open && !isUpdatingDesktopServerExposure)
+                setPendingDesktopServerExposureMode(null);
             }}
           >
             <AlertDialogPopup>
@@ -2708,6 +2762,9 @@ export function ConnectionsSettings() {
         </SettingsSection>
       ) : null}
       <ConnectionEnvironmentsSection />
+      {primaryEnvironmentId !== null ? (
+        <HubNodesSettings environmentId={primaryEnvironmentId} />
+      ) : null}
       {primarySettings}
       <AdvancedSettingsDisclosure targetIds={ADVANCED_CONNECTION_SETTING_IDS}>
         {primaryEnvironmentId !== null ? (

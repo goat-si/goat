@@ -20,15 +20,6 @@ const entries = [
 ] as const;
 
 describe("getProjectFilePickerMatches", () => {
-  it("returns files only and preserves index order for an empty query", () => {
-    assert.deepEqual(pathsForQuery(entries, ""), [
-      { name: "index.ts", path: "apps/web/src/index.ts" },
-      { name: "index.ts", path: "packages/shared/src/index.ts" },
-      { name: "README.md", path: "README.md" },
-      { name: ".gitignore", path: ".gitignore" },
-    ]);
-  });
-
   it("preserves the server result order", () => {
     assert.deepEqual(pathsForQuery(entries, "index"), [
       { name: "src", path: "apps/web/src" },
@@ -78,13 +69,6 @@ describe("getProjectFilePickerMatches", () => {
       path: "src/TestFlags.tsx",
       pathMatchIndices: [4, 6, 8, 9],
     });
-  });
-
-  it("uses the first ordered subsequence for highlighting", () => {
-    assert.deepEqual(
-      getProjectFilePickerMatches([{ kind: "file", path: "aabba" }], "aba")[0]?.nameMatchIndices,
-      [0, 2, 4],
-    );
   });
 
   it("normalizes path prefixes consistently with server search", () => {

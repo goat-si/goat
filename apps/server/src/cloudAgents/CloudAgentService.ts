@@ -1,3 +1,4 @@
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CLOUD_AGENT_PROVIDERS,
   type CloudAgentProvider,
@@ -16,10 +17,11 @@ import {
   type OrchestrationV2CloudTask,
   type ProviderInteractionMode,
   ProviderDiagnoseResult,
+  ProviderHostMatrixResult,
+  type ProviderHostCloudReadiness,
   ProviderInstanceId,
   OrchestratorMcpFailure,
   type RuntimeMode,
-  type ServerProvider,
   ThreadId,
   isCloudAgentProvider,
   parseCloudRunReference,
@@ -47,33 +49,37 @@ import {
 } from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Project from "../project/ProjectService.ts";
-import * as Diagnosis from "../provider/ProviderDiagnosisService.ts";
+import * as HostSync from "../provider/ProviderHostSync.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as SshDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import {
   CAN_FOLLOW_REGISTERED,
   CLOUD_AGENT_LABELS,
   chooseHolder,
+  holderFromCloudCell,
   holderFromDiagnoses,
 } from "./cloudHolders.ts";
 
 /**
  * Routes cloud agent launches to an environment that holds the provider's login, and tracks
- * cloud runs other agents launched. Each holder checks itself with its own provider diagnosis;
- * nothing here reads, copies, or forwards a credential. See
- * docs/internals/cloud-credential-holders.md.
+ * cloud runs other agents launched. Holders come from the provider × host matrix cloud column,
+ * which is the same diagnosis goat_cloud_holders reduces. Nothing here reads, copies, or
+ * forwards a credential. See docs/internals/cloud-credential-holders.md.
  *
  * @module cloudAgents/CloudAgentService
  */
 
 /** A holder's answer is reused this long, so a launch does not re-run every sign-in probe. */
-export const HOLDER_CACHE_TTL_MS = 60_000;
+const HOLDER_CACHE_TTL_MS = 60_000;
 const HOST_DEADLINE_MS = 120_000;
 /** How long a registration waits to learn whether its holder can follow the run. */
-export const REGISTER_ATTACH_WAIT_MS = 20_000;
-const MISSING_TOOL = "does not have goat_cloud_holders";
+const REGISTER_ATTACH_WAIT_MS = 20_000;
+const MISSING_HOLDERS = "does not have goat_cloud_holders";
+const MISSING_MATRIX = "does not have goat_provider_host_matrix";
 
 const decodeHolders = Schema.decodeUnknownEffect(CloudHoldersResult);
+const decodeMatrix = Schema.decodeUnknownEffect(ProviderHostMatrixResult);
 const decodeDiagnosis = Schema.decodeUnknownEffect(ProviderDiagnoseResult);
 const decodeLaunch = Schema.decodeUnknownEffect(CloudLaunchResult);
 const decodeRegister = Schema.decodeUnknownEffect(CloudRunRegisterResult);
@@ -125,7 +131,7 @@ interface StoredRun {
 }
 
 /** A project whose repository identity names owner/name, compared without case. */
-export function projectMatchesRepository(
+function projectMatchesRepository(
   identity:
     | {
         readonly canonicalKey: string;
@@ -217,7 +223,9 @@ export const listCloudRuns = (input: CloudRunListInput) =>
   );
 
 const make = Effect.gen(function* () {
-  const diagnosis = yield* Diagnosis.ProviderDiagnosisService;
+  const permissions = yield* Profiles.PermissionProfiles;
+  const settings = yield* ServerSettings.ServerSettingsService;
+  const hostSync = yield* HostSync.ProviderHostSync;
   const registry = yield* ProviderRegistry.ProviderRegistry;
   const hosts = yield* HostThreads.HostThreadsMcpService;
   const dispatch = yield* SshDispatch.SshRemoteDispatch;
@@ -271,42 +279,49 @@ const make = Effect.gen(function* () {
       Effect.mapError(() => failure("orchestration_error", "Could not read registered runs.")),
     );
 
-  const accountLabel = (providers: ReadonlyArray<ServerProvider>) => (instanceId: string) => {
-    const auth = providers.find((provider) => provider.instanceId === instanceId)?.auth;
-    return auth?.label ?? auth?.email;
-  };
+  const holdersFromCloud = (
+    cloud: ProviderHostCloudReadiness,
+    host: string | null,
+    runtime: CloudHolder["runtime"],
+    provider: CloudAgentProvider | undefined,
+  ) =>
+    providersOf(provider).map((driver) =>
+      holderFromCloudCell({ provider: driver, host, runtime, cell: cloud[driver] }),
+    );
+
+  /** The hub keeps its claim when its matrix fails, so the launch cannot drift to another account. */
+  const notReadyLocal = (provider: CloudAgentProvider | undefined) =>
+    settings.getSettings.pipe(
+      Effect.map(({ hub }) => hub.enabled && hub.cloudHolder === "hub"),
+      Effect.orElseSucceed(() => false),
+      Effect.map((hub): ReadonlyArray<CloudHolder> =>
+        providersOf(provider).map((driver) => ({
+          provider: driver,
+          host: null,
+          ready: false,
+          runtime: "current" as const,
+          reason: "Could not read this environment's provider settings.",
+          ...(hub ? { hub: true } : {}),
+        })),
+      ),
+    );
 
   const localHolders = Effect.fn("CloudAgentService.localHolders")(function* (
+    scope: McpInvocationScope,
     provider: CloudAgentProvider | undefined,
   ) {
-    const snapshots = yield* registry.getProviders;
-    const active = yield* runs(200);
-    return yield* Effect.forEach(providersOf(provider), (driver) =>
-      diagnosis.diagnose({ driver: driver as never }).pipe(
-        Effect.map((result) =>
-          holderFromDiagnoses({
-            provider: driver,
-            host: null,
-            diagnoses: result.diagnoses,
-            runtime: "current",
-            accountLabel: accountLabel(snapshots),
-            activeRuns: active.filter(
-              (run) =>
-                run.summary.provider === driver &&
-                (run.summary.status === "running" || run.summary.status === "submitting") &&
-                run.summary.tracking !== "link-only",
-            ).length,
-          }),
-        ),
-        Effect.catch(() =>
-          Effect.succeed<CloudHolder>({
-            provider: driver,
-            host: null,
-            ready: false,
-            runtime: "current",
-            reason: "Could not read this environment's provider settings.",
-          }),
-        ),
+    return yield* hostSync.matrix({ localOnly: true, cloud: true }, { kind: "mcp", scope }).pipe(
+      Effect.map((result) => {
+        const row = result.rows.find((item) => item.host === null) ?? result.rows[0];
+        return row?.cloud === undefined
+          ? notReadyLocal(provider)
+          : Effect.succeed(holdersFromCloud(row.cloud, null, "current", provider));
+      }),
+      Effect.flatten,
+      Effect.catch((error) =>
+        error._tag === "EnvironmentAuthorizationError"
+          ? Effect.fail(failure("capability_denied", error.message))
+          : notReadyLocal(provider),
       ),
     );
   });
@@ -355,7 +370,8 @@ const make = Effect.gen(function* () {
         runtime: "unreachable" as const,
         reason: message.slice(0, 1000),
       }));
-    return yield* hosts
+    /** goat_cloud_holders, then diagnosis, for a matrix that has no cloud column. */
+    const olderRuntime = hosts
       .readOnHost(
         scope,
         {
@@ -374,7 +390,7 @@ const make = Effect.gen(function* () {
         Effect.catch((error) =>
           callerFailure(error)
             ? Effect.fail(error)
-            : error.message.includes(MISSING_TOOL)
+            : error.message.includes(MISSING_HOLDERS)
               ? legacyHolders(scope, host, provider).pipe(
                   Effect.catch((legacy) =>
                     callerFailure(legacy)
@@ -382,6 +398,35 @@ const make = Effect.gen(function* () {
                       : Effect.succeed(unreachable(legacy.message)),
                   ),
                 )
+              : Effect.succeed(unreachable(error.message)),
+        ),
+      );
+    const outdatedMatrix = (error: OrchestratorMcpFailure) =>
+      error.message.includes(MISSING_MATRIX);
+    return yield* hosts
+      .readOnHost(
+        scope,
+        {
+          host,
+          tool: "goat_provider_host_matrix",
+          arguments: { localOnly: true, cloud: true },
+          timeoutMs: HOST_DEADLINE_MS,
+          requireReady: true,
+        },
+        decodeMatrix,
+      )
+      .pipe(
+        Effect.flatMap((result) => {
+          const cloud = result.rows[0]?.cloud;
+          return cloud === undefined
+            ? olderRuntime
+            : Effect.succeed(holdersFromCloud(cloud, host, "current", provider));
+        }),
+        Effect.catch((error) =>
+          callerFailure(error)
+            ? Effect.fail(error)
+            : outdatedMatrix(error)
+              ? olderRuntime
               : Effect.succeed(unreachable(error.message)),
         ),
       );
@@ -411,7 +456,7 @@ const make = Effect.gen(function* () {
     function* (scope, input) {
       const refresh = input.refresh === true;
       const suffix = input.provider ?? "*";
-      const local = yield* cached(`local|${suffix}`, refresh, localHolders(input.provider));
+      const local = yield* cached(`local|${suffix}`, refresh, localHolders(scope, input.provider));
       if (input.local === true) return { holders: local };
       const aliases = [...(yield* dispatch.connectedHosts)].toSorted();
       // Hosts that dropped off are forgotten, so their cached answers cannot route a launch.
@@ -480,9 +525,17 @@ const make = Effect.gen(function* () {
 
   const launch: CloudAgentServiceShape["launch"] = Effect.fn("CloudAgentService.launch")(
     function* (scope, input, modes) {
+      const effective = yield* permissions.require(scope, "cloud.launch");
       const holder = yield* pick(scope, input.provider, input.holder);
+      if (holder.host !== null)
+        yield* permissions.require(scope, "cloud.launch", { host: holder.host });
       if (input.dryRun === true) return { holder, dryRun: true };
       if (holder.host !== null) {
+        if (effective.enabled)
+          return yield* failure(
+            "capability_denied",
+            "Remote cloud holders cannot yet preserve goatclaw lane accounting. Select a local holder, or launch a profiled thread on the holder with goat_ssh_thread_launch.",
+          );
         const result = yield* hosts.writeOnHost(
           scope,
           {
@@ -497,6 +550,11 @@ const make = Effect.gen(function* () {
       const project = yield* projectFor(input.repo);
       const instanceId = holder.instanceId ?? ProviderInstanceId.make(input.provider);
       const started = yield* modes;
+      const model = yield* modelFor(instanceId);
+      yield* permissions.requireCloudApproval(scope, effective, {
+        decisionId: input.decisionId,
+        target: `${input.provider}@local`,
+      });
       const launched = yield* launches
         .launch(
           scope,
@@ -504,7 +562,7 @@ const make = Effect.gen(function* () {
             projectId: project.id,
             title:
               input.title ?? `${CLOUD_AGENT_LABELS[input.provider]}: ${input.prompt.slice(0, 60)}`,
-            modelSelection: { instanceId, model: yield* modelFor(instanceId) },
+            modelSelection: { instanceId, model },
             workspaceStrategy: {
               type: "root",
               ...(input.branch === undefined ? {} : { branch: input.branch }),
@@ -514,6 +572,7 @@ const make = Effect.gen(function* () {
             ...(input.notifyWebhook === undefined ? {} : { notifyWebhook: input.notifyWebhook }),
           },
           started,
+          { approved: true },
         )
         .pipe(Effect.mapError(mapLaunchError));
       return {
@@ -721,4 +780,4 @@ const make = Effect.gen(function* () {
   return CloudAgentService.of({ holders, launch, register, list, forget });
 });
 
-export const layer = Layer.effect(CloudAgentService, make);
+export const layer = Layer.effect(CloudAgentService, make).pipe(Layer.provide(Profiles.layer));

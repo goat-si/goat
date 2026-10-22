@@ -142,6 +142,14 @@ on that machine. Existing threads stay where they started. If resource checks ar
 unavailable or all eligible machines are full, choose a machine manually to continue.
 Mobile keeps its manual environment selection.
 
+Agents spread their own work too. When more than one machine is connected, an
+agent checks each machine's load, providers, and sign-ins before starting
+parallel or heavy work, starts each piece on a machine with room for it, and
+keeps work that needs your browser or local files on the machine you are using.
+It skips machines that are unreachable, cordoned, or need an update, and never
+starts a Boat cloud machine unless you ask. Its final report says which machine
+ran what.
+
 ### Tailscale HTTPS
 
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale
@@ -180,9 +188,27 @@ On mobile, an IP address entered without a scheme uses HTTP, so include
 ## Desktop-managed SSH
 
 In the desktop app, open **Settings → Connections → Add device**, choose
-**SSH**, and enter a host or SSH alias such as `user@example.com`. GOAT starts
-or reuses a server there and opens the port forward for you. Projects, provider
-credentials, and agent work stay on the remote machine.
+**SSH**, and pick a host from your SSH config or type an address such as
+`user@example.com`. GOAT starts or reuses a server there and opens the port
+forward for you. Projects, provider credentials, and agent work stay on the
+remote machine.
+
+Before it installs anything, GOAT checks the host and shows one line per check:
+whether it answers (including Tailscale), its host key, sign-in with your SSH key,
+the operating system, free disk space, and whether a GOAT runtime is available for
+that platform. On a host that has never run GOAT, the runtime check also considers
+the newest compatible published release, using the same rule as installation.
+A check that fails says what to change, often with a command to copy, and
+**Check again** runs them again. **Connect** turns on once nothing is left to fix. A host GOAT has not seen before shows its fingerprint for you to
+approve first. If you approved a host but its checks still fail, **Forget host** in the
+same dialog removes the SSH entry and pinned key GOAT added. Agents run the same
+checks and get the same results.
+
+GOAT signs in only with SSH keys or your ssh-agent. If a host turns your key down
+and would ask for a password, the sign-in check says so and offers an
+`ssh-copy-id` command: run it once in a terminal on this computer, enter the
+password there, then choose **Check again**. For a host from your SSH config, the
+user, port and key come from that file; change them there.
 
 The remote host must be Linux, an Apple Silicon Mac, or a Windows machine set up
 as described below, with `tar`, `sha256sum` or `shasum`, and
@@ -205,13 +231,56 @@ bundled or cached archive when available. Otherwise it uses your configured
 release mirror, or downloads the matching published GOAT release and checks its
 checksums. If a public download fails, GOAT can try the GitHub CLI when signed in
 (`gh auth login`). It refuses a checksum mismatch and names the expected release
-when it cannot obtain an archive.
+when it cannot obtain an archive. Connections shows the current setup step. The first
+installation can take a few minutes; reconnecting while it runs joins that setup.
 
 When the host is asleep or off the network, its connection shows **Unreachable**
 and GOAT keeps retrying, sooner when this computer wakes or joins a network.
 Agent work on the host keeps running while you are away. A rejected SSH key, a
 changed host key, or a runtime that refuses this app stops retrying until you
 choose **Reconnect**; the connection's status says what to fix.
+
+### Recovering a watched thread while its host is offline
+
+Ask the launching agent to enable checkpoint copies for a remote watch with
+`goat_thread_watch {host, threadId, checkpointReplication: "on"}`. To set the policy for
+an entire host, use `goat_thread_replication_set {host, checkpointReplication: "on"}`.
+Turning the host setting `"off"` stops new copies for both channel tasks and ordinary
+watches. Existing channel tasks keep their previous default when the setting is omitted;
+ordinary watches require opt-in. Recovery is owned by the launching GOAT thread;
+launcherless webhook watches keep their existing reporting behavior. These operations
+require full access, and changing the
+host policy also requires permission to write settings. Checkpoint replication and recovery are unavailable while goatclaw permission profiles are enabled; profile ceilings and lane accounting are not yet supported by these operations. Remote capture and recovery use only
+an existing authorized connection; reconnect explicitly if its session is missing or expired.
+
+Copies are taken after completed checkpoints, not continuously. `goat_thread_watch_list`
+and `goat_thread_status` show the latest copy and any skipped capture. To recover, ask the
+launching agent to call `goat_thread_handoff_host` with `fromReplicatedCheckpoint: true`, the
+source `host` and `threadId`, the copy's run as `expectedRunId`, and a registered
+`destinationProjectId`. Add `destinationHost` for another machine; omit it to recover here.
+The destination must already be ready, identify the same repository, and use an enabled
+provider that runs in its local worktree; cloud providers are not recovery destinations. The destination must also have the shared base commits; if they are missing, fetch them
+there and request recovery again. Recovery does not fetch from or contact the source.
+Automatic moves remain off.
+
+Recovery starts a new thread in an isolated worktree with the copied unpushed commits and
+uncommitted file contents. Staging selections are not preserved. It carries bounded
+conversation context, not the provider's full session or attachments. Copies are limited to
+8 MiB; snapshots containing excluded or oversized new files are skipped. Turning copying off
+discards in-flight copies and keeps the last admitted copy. Recovery refuses copies older than
+seven days. Older checkpoints without completeness evidence, nested repositories and submodules
+are not eligible; complete another supported checkpoint before relying on recovery.
+
+A refused destination can be corrected and requested again. A known successful recovery is
+returned on retry even if that destination is now offline. Checkpoint contents expire
+independently of the small recovery records, so an existing launch can still be reconciled.
+
+The disconnected source may still perform external actions. GOAT fences its reports and
+tries to interrupt only its recorded old run after reconnecting; this does not guarantee
+that external side effects happened only once. Interruption waits while the launcher is in
+plan mode or its authorized connection is unavailable. If recovery reports `launch_unknown`, retry
+the same recovery to reconcile it rather than starting a separate launch. An empty destination
+thread is not proof that its recovery run started.
 
 On Linux and macOS hosts, provider CLIs must be on the `PATH` of a
 non-interactive login shell there; check with:
@@ -296,7 +365,8 @@ verified yet.
 Open **Settings → Connections → Add device → SSH**, or tell an agent to
 “connect a new SSH host” and give it the address and SSH user. Check the displayed
 host-key fingerprint against your server provider's record before approving.
-The first approval also lets GOAT add its Include line to your SSH config.
+The first approval also lets GOAT add its Include line to your SSH config. Approving
+only pins the key; the checks run again before GOAT installs anything.
 
 GOAT uses SSH keys or your ssh-agent. If it creates a key, register the displayed
 public key with your server provider or add it to the host. If the host only
@@ -324,6 +394,31 @@ SSH keys and the host's projects and files, and stops a runtime only when GOAT o
 it and no work is running.
 
 ### Start a worktree on a saved SSH host
+
+Before asking an agent to start work on another machine, it can check registered
+checkouts with `goat_host_status {host, repositories:true}`. The inventory includes
+local Git state; ahead/behind does not fetch from the remote, and unknown dependency
+freshness does not mean dependencies are installed. An agent can pass the inventory's
+origin key as `repository: {key, candidateHosts}` to `goat_ssh_thread_launch` to
+refuse an unverified checkout and report matching candidates. This check does not
+copy uncommitted work or prepare stopped hosts. Use the canonical checkout path from
+the inventory; diagnosis does not browse aliases or wake candidate hosts.
+
+To give a worker sibling source code without mounting the sibling checkout, add
+`references: [{mode:"snapshot", repositoryKey:"example.com/team/sibling", files:["src/api.ts"]}]`
+to `goat_thread_launch` or `goat_ssh_thread_launch`. The worker receives the requested
+committed text, including local unpushed commits; dirty files are excluded. Use `checkout`
+from the inventory when more than one checkout matches, and `revision` to pin a local
+commit. For an SSH launch, an omitted source `host` means the selected host; `host:null`
+means the caller's machine. The source must already be ready and support snapshots.
+
+`goat_repository_snapshot` previews the same read. Capturing source requires an existing
+file-read grant or full-access caller authority, checked again before returning content.
+Snapshots support up to eight files, 16 KiB per file, 32 KiB per repository and 64 KiB per
+brief. Secret paths and credential-like assignments (including prefixed keys such as
+`DB_PASSWORD` and `AWS_SECRET_ACCESS_KEY`, with quoted or unquoted values after `:` or `=`), symlinks, submodules, binary content
+and partial clones are refused. This copies data only: it grants no source filesystem or
+host credential, and does not restrict permissions a worker already had.
 
 In the desktop app, save the host in **Settings → Connections**, then open a new
 thread in a project on this device. In the workspace menu, choose **Worktree on SSH**
@@ -380,15 +475,21 @@ machine running an older GOAT
 only accepts approval-required threads in folders that are already projects
 there.
 
-An agent can also list, add, and remove the connections saved in
-**Settings → Connections**, so another machine's threads show up in the
-sidebar without a trip to Settings. This works while the desktop app is open on
-the machine the agent runs on; web and mobile clients keep their own saved
-connections. Adding uses only SSH keys or ssh-agent, never a password, and
-adding a host that is already saved returns the saved one. Adding and removing
-need a full-access thread or a full-access outside agent. Settings shows the
-change right away, and the agent's connection list shows which agent added each
-connection.
+An agent can also list, add, and remove the devices on this hub (see
+[Devices on this hub](#devices-on-this-hub)), including on a headless
+`goat serve` with no desktop app. Adding uses only SSH keys or ssh-agent, never a
+password, and needs a host where GOAT has run before; prepare a new host first.
+Adding a device that is already listed returns it. Adding and removing need a
+full-access thread or a full-access outside agent. While the desktop app runs on
+the same machine, the agent's change is also saved in its
+**Settings → Connections**, so the device's threads show up in the sidebar.
+
+Adding a host and saving its connection are one step for an agent: it runs the
+same checks as **Add device → SSH**, asks you to approve a new fingerprint, and
+saves the connection once the checks pass. A new fingerprint needs approval in a
+GOAT thread; an outside agent can save an already-trusted host. Without a desktop
+app on that machine, or from an agent without full access, it prepares the host
+and tells you the connection was not saved.
 
 The agent that started the thread can follow it from here: it waits for the
 thread to finish, reads its messages and the result its agent recorded (outcome,
@@ -436,6 +537,58 @@ A link lasts 30 days; link again with a new code to renew it. Removing a link
 forgets it here. To end it on the other machine at once, revoke **GOAT on …** in
 that machine's **Settings → Connections**. To watch its threads yourself, add
 the machine under **Settings → Connections** with a pairing URL from `goat pair`.
+
+### Devices on this hub
+
+The GOAT server your phone or browser pairs with keeps one list of the machines it
+reaches: SSH hosts you add, GOAT servers you link, and its cloud machines. Every
+client paired with that server sees the same list, and a device added on the
+desktop appears on the phone right away. It works the same on a headless
+`goat serve`.
+
+Find it under **Settings → Connections → Devices on this hub** on desktop and
+web, and under **Settings → Devices on this hub** in the mobile app. Add an SSH
+host by its alias from this machine's `~/.ssh/config`, or add another GOAT server
+with a pairing URL from `goat pair`. A machine reached two ways, for example
+over SSH and as a linked server, is one device with two routes.
+
+**Check** asks each route whether it answers. It never starts or extends a cloud
+machine: a stopped one shows as offline. Cloud machines are removed from
+**Cloud machines** below, not from this list. Removing a saved connection in the
+desktop sidebar does not remove the device from the hub.
+
+The first time the desktop app runs as a hub, it copies the SSH connections saved
+in its **Settings → Connections** into this list. If those saved connections
+can't be unlocked, nothing is copied and the list asks you to add your devices
+again; **Saved on this desktop** offers the desktop's SSH connections that are
+not on the hub yet.
+
+### Reach every machine through one hub
+
+Pair your phone, or any other client, with one GOAT server you keep running, such as a Mac
+mini or a small VPS. That server is the hub. Every machine the hub lists as a node then shows
+up on the phone with its own threads, and the phone reaches it through the hub. The phone never
+needs SSH, Tailscale access to the node, or a pairing of its own with that machine.
+
+1. On the hub, pair the phone with hub access: `goat pair --tailscale --hub-proxy`. A pairing
+   made without `--hub-proxy` reaches only the hub itself; pair again to add it.
+2. Add the machines to the hub's [device list](#devices-on-this-hub). An SSH host needs nothing
+   more. If GOAT never ran on it, choose **Set up** once, so the hub installs GOAT there and
+   learns which machine it is.
+3. For a machine linked over HTTPS, choose **Allow phone access** and paste a pairing link
+   created on that machine with `goat pair`. Links made for agents cannot open your threads.
+
+Through the hub you can open a node's threads, watch them live, send follow-ups with images or
+files, stop a running turn, answer approval requests, and start a new thread on any node in a
+folder you pick there. Archiving, deleting and other changes to a thread, editing project
+scripts, and creating a folder that does not exist yet stay with the machine's own GOAT. A
+thread started in a new worktree runs that machine's own setup script. A machine that is off or
+asleep stays in the list as **Unreachable**, with its threads as last seen and how old that copy
+is, for example "last state 5 min ago". It reconnects on its own when the machine comes back.
+Stopped cloud machines are never started by opening them.
+
+The hub holds the keys and sessions for every node, so keep its disk encrypted and its screen
+locked.
 
 ### Cloud machines
 

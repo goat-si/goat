@@ -1,5 +1,3 @@
-"use client";
-
 import { NumberField as NumberFieldPrimitive } from "@base-ui/react/number-field";
 import { MinusIcon, PlusIcon } from "~/components/solar";
 import * as React from "react";

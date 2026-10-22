@@ -48,7 +48,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import {
-  CLAUDE_CLOUD_FORBIDDEN_ENVIRONMENT,
+  forbiddenClaudeCloudVariables,
   resolveClaudeCloudSibling,
 } from "./Drivers/ClaudeCloudLogin.ts";
 import { resolveEntryEnabled } from "./ProviderInstanceRegistry.ts";
@@ -458,8 +458,7 @@ const withoutVariables = (environment: NodeJS.ProcessEnv, names: ReadonlyArray<s
   Object.fromEntries(Object.entries(environment).filter(([key]) => !names.includes(key)));
 
 const isForbiddenName = (name: string) =>
-  name.startsWith("GIT_") ||
-  (CLAUDE_CLOUD_FORBIDDEN_ENVIRONMENT as ReadonlyArray<string>).includes(name);
+  forbiddenClaudeCloudVariables({ [name]: "set" }).length > 0;
 
 const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function* (
   target: Target,

@@ -1181,40 +1181,37 @@ process.stdout.write("a".repeat(257));
     ),
   );
 
-  it.effect(
-    "Git timeout kills and waits for the owned process before cleanup",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fixture = yield* buildMemoryImportFixture("omo-memory-core-beta63");
-          const wrapper = NodePath.join(fixture.sandbox, "blocked-git");
-          NodeFS.writeFileSync(
-            wrapper,
-            `#!${process.execPath}
+  it.effect("Git timeout kills and waits for the owned process before cleanup", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* buildMemoryImportFixture("omo-memory-core-beta63");
+        const wrapper = NodePath.join(fixture.sandbox, "blocked-git");
+        NodeFS.writeFileSync(
+          wrapper,
+          `#!${process.execPath}
 process.stdin.resume(); setInterval(() => {}, 1000000);
 `,
-            { mode: 0o700 },
-          );
-          let pid = 0;
-          const reader = yield* Reader.acquireMemoryImportReader({
-            ...readerConfig(fixture),
-            gitExecutable: wrapper,
-            onProcessSpawn: (event) => {
-              if (event.operation === "git") pid = event.pid;
-            },
-          });
-          const before = captureMemoryImportInventory(fixture.sourceRoot);
-          assert.equal(
-            (yield* Effect.flip(reader.read({ slot: fixture.snapshot.slot }))).issue,
-            "source_unreadable",
-          );
-          assert.isAbove(pid, 0);
-          assert.throws(() => process.kill(pid, 0));
-          assert.deepEqual(captureMemoryImportInventory(fixture.sourceRoot), before);
-          assert.deepEqual(residue(fixture), []);
-        }),
-      ),
-    20000,
+          { mode: 0o700 },
+        );
+        let pid = 0;
+        const reader = yield* Reader.acquireMemoryImportReader({
+          ...readerConfig(fixture),
+          gitExecutable: wrapper,
+          onProcessSpawn: (event) => {
+            if (event.operation === "git") pid = event.pid;
+          },
+        });
+        const before = captureMemoryImportInventory(fixture.sourceRoot);
+        assert.equal(
+          (yield* Effect.flip(reader.read({ slot: fixture.snapshot.slot }))).issue,
+          "source_unreadable",
+        );
+        assert.isAbove(pid, 0);
+        assert.throws(() => process.kill(pid, 0));
+        assert.deepEqual(captureMemoryImportInventory(fixture.sourceRoot), before);
+        assert.deepEqual(residue(fixture), []);
+      }),
+    ),
   );
   it.effect("64 MiB copied/generated slot equality includes the minimal config", () =>
     Effect.scoped(

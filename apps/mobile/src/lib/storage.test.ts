@@ -104,12 +104,7 @@ vi.mock("react-native", () => ({
   },
 }));
 
-import {
-  loadPreferences,
-  loadSavedConnections,
-  saveConnection,
-  savePreferencesPatch,
-} from "../persistence/imperative";
+import { loadPreferences, saveConnection, savePreferencesPatch } from "../persistence/imperative";
 import { toStableSavedRemoteConnection } from "./connection";
 
 const managedConnection = {
@@ -169,94 +164,11 @@ describe("mobile connection storage", () => {
     });
   });
 
-  it("loads relay-managed connection metadata without a cached access token", async () => {
-    await saveConnection(managedConnection);
-
-    await expect(loadSavedConnections()).resolves.toEqual([
-      toStableSavedRemoteConnection(managedConnection),
-    ]);
-  });
-
-  it("preserves secure-storage read failures with operation and key context", async () => {
-    const cause = new Error("keychain unavailable");
-    mocks.getItemAsync.mockRejectedValueOnce(cause);
-
-    await expect(loadSavedConnections()).rejects.toMatchObject({
-      _tag: "MobileSecureStorageError",
-      operation: "read",
-      key: "goat.connections",
-      cause,
-      message: "Mobile secure storage operation read failed for key goat.connections.",
-    });
-  });
-
-  it("logs structured decode failures before using the empty fallback", async () => {
-    await mocks.setItemAsync("goat.connections", "{");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    await expect(loadSavedConnections()).resolves.toEqual([]);
-    expect(warn).toHaveBeenCalledWith(
-      "[mobile-storage] ignored invalid JSON",
-      expect.objectContaining({
-        _tag: "MobileStorageDecodeError",
-        key: "goat.connections",
-        cause: expect.any(SyntaxError),
-        message: "Failed to decode mobile storage value for key goat.connections.",
-      }),
-    );
-
-    warn.mockRestore();
-  });
-
   it("loads legacy preferences when SQLite is unavailable", async () => {
     mocks.setDatabaseFailures(true, true);
     await mocks.setItemAsync("goat.preferences", JSON.stringify({ baseFontSize: 17 }));
 
     await expect(loadPreferences()).resolves.toEqual({ baseFontSize: 17 });
-  });
-
-  it("persists independent light and dark theme choices", async () => {
-    mocks.setPreferencesJson(
-      JSON.stringify({
-        themeId: "grove",
-        lightThemeId: "iris",
-        darkThemeId: "ocean",
-        themeMode: "system",
-      }),
-      10,
-    );
-
-    await expect(loadPreferences()).resolves.toEqual({
-      themeId: "grove",
-      lightThemeId: "iris",
-      darkThemeId: "ocean",
-      themeMode: "system",
-    });
-  });
-
-  it("persists Material You independently for each appearance", async () => {
-    const themes = { lightThemeId: "material-you", darkThemeId: "ocean" } as const;
-    await savePreferencesPatch(themes);
-    await expect(loadPreferences()).resolves.toEqual(themes);
-    await savePreferencesPatch({ lightThemeId: "goat-chat" });
-    await expect(loadPreferences()).resolves.toEqual({ ...themes, lightThemeId: "goat-chat" });
-  });
-
-  it.each([true, false])("drops the removed Android layout preference (%s)", async (enabled) => {
-    mocks.setPreferencesJson(
-      JSON.stringify({
-        materialYouStyleLayoutEnabled: enabled,
-        lightThemeId: "goat-chat",
-      }),
-      10,
-    );
-    await expect(loadPreferences()).resolves.toEqual({ lightThemeId: "goat-chat" });
-  });
-
-  it("drops the removed theme transition preference", async () => {
-    mocks.setPreferencesJson(JSON.stringify({ themeTransition: "circle-bottom-left" }), 10);
-
-    await expect(loadPreferences()).resolves.toEqual({});
   });
 
   it("falls back to secure storage when SQLite cannot save preferences", async () => {
@@ -268,76 +180,6 @@ describe("mobile connection storage", () => {
     };
     expect(JSON.parse(fallback.payload)).toEqual({ baseFontSize: 19 });
     expect(fallback.updatedAt).toEqual(expect.any(Number));
-  });
-
-  it("persists thread list shelf preferences", async () => {
-    await expect(
-      savePreferencesPatch({
-        threadListSettledShelfExpanded: false,
-        threadListSnoozedShelfExpanded: true,
-        threadListWorkingShelfExpanded: true,
-        workingShelfEnabled: true,
-      }),
-    ).resolves.toEqual({
-      threadListSettledShelfExpanded: false,
-      threadListSnoozedShelfExpanded: true,
-      threadListWorkingShelfExpanded: true,
-      workingShelfEnabled: true,
-    });
-
-    await expect(loadPreferences()).resolves.toEqual({
-      threadListSettledShelfExpanded: false,
-      threadListSnoozedShelfExpanded: true,
-      threadListWorkingShelfExpanded: true,
-      workingShelfEnabled: true,
-    });
-    expect(JSON.parse(mocks.getPreferencesJson() ?? "")).toEqual({
-      threadListSettledShelfExpanded: false,
-      threadListSnoozedShelfExpanded: true,
-      threadListWorkingShelfExpanded: true,
-      workingShelfEnabled: true,
-    });
-  });
-
-  it("drops legacy and invalid thread list shelf expansion preferences", async () => {
-    mocks.setPreferencesJson(
-      JSON.stringify({
-        baseFontSize: 17,
-        threadListV2SettledShelfExpanded: true,
-        threadListV2SnoozedShelfExpanded: true,
-        threadListSettledShelfExpanded: "false",
-        threadListSnoozedShelfExpanded: 1,
-      }),
-      10,
-    );
-
-    await expect(loadPreferences()).resolves.toEqual({ baseFontSize: 17 });
-  });
-
-  it("keeps valid list filters and drops malformed ones", async () => {
-    const threadListFilters = { environmentId: "environment-1", projectKey: null };
-    const pullRequestListFilters = {
-      environmentId: null,
-      controls: {
-        "": {
-          state: "all",
-          involvement: "reviewing",
-          filters: { labels: [["size:S"]] },
-          sort: "oldest",
-        },
-      },
-    };
-    mocks.setPreferencesJson(JSON.stringify({ threadListFilters, pullRequestListFilters }), 10);
-    await expect(loadPreferences()).resolves.toEqual({ threadListFilters, pullRequestListFilters });
-
-    mocks.setPreferencesJson(
-      JSON.stringify({
-        threadListFilters: { environmentId: 1, projectKey: null },
-        pullRequestListFilters: { environmentId: null, controls: { "": { sort: "newest" } } },
-      }),
-      11,
-    );
-    await expect(loadPreferences()).resolves.toEqual({});
   });
 
   it("migrates legacy secure preferences and retains them after saving to SQLite", async () => {

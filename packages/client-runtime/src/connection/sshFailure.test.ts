@@ -69,7 +69,6 @@ describe("sshPreparationFailure", () => {
   it.each([
     "SSH authentication cancelled for jun@mbp.",
     "SSH authentication was cancelled because the app window closed.",
-    "SSH connection was cancelled.",
     "SSH authentication timed out for jun@mbp.",
     "SSH password prompt service stopped.",
     "SSH password prompt expired. Try connecting again.",
@@ -173,5 +172,53 @@ it.each([
   ).toMatchObject({
     _tag: "ConnectionTransientError",
     reason: "host-unreachable",
+  });
+});
+
+describe("neutral SSH ownership and preparation deadlines", () => {
+  it.each([
+    "SSH preparation superseded by a newer connection intent.",
+    "SSH connection was cancelled.",
+  ])("normalizes exact neutral messages through IPC: %s", (message) => {
+    for (const cause of [
+      message,
+      new Error(message),
+      { message },
+      new Error(`${IPC}SshEnsureSupersededError: ${message}`),
+    ]) {
+      expect(sshPreparationFailure(cause)).toMatchObject({
+        _tag: "ConnectionAttemptSuperseded",
+        reason: "superseded",
+        detail: message,
+      });
+    }
+  });
+  it("recognizes the native tag without classifying incidental shell output as neutral", () => {
+    expect(
+      sshPreparationFailure({
+        _tag: "SshEnsureSupersededError",
+        message: "Attachment invalidated.",
+      })._tag,
+    ).toBe("ConnectionAttemptSuperseded");
+    for (const message of [
+      "script: SSH connection was cancelled.",
+      "SSH connection was cancelled. stderr follows",
+      "command output: SSH preparation superseded by a newer connection intent.",
+    ]) {
+      expect(sshPreparationFailure(message)._tag).toBe("ConnectionTransientError");
+    }
+  });
+  it("identifies the native deadline independently of ordinary setup timeouts", () => {
+    expect(
+      sshPreparationFailure(
+        new Error(
+          `${IPC}SshPreparationTimeoutError: SSH runtime preparation exceeded its 15-minute limit.`,
+        ),
+      ),
+    ).toMatchObject({
+      _tag: "ConnectionTransientError",
+      reason: "timeout",
+      sshPreparationTimedOut: true,
+    });
   });
 });

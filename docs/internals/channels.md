@@ -66,10 +66,21 @@ the running turn and give the bot thread runs it was built never to have.
   the bot workspace's new-thread default, then the text generation model; a chosen model this
   machine no longer offers falls back with a warning, because the person asked a question, not
   for a model. Reception itself stays on the text generation model so the acknowledgement is fast.
-- **Ceiling.** A turn runs at the lowest of the requester's ceiling, the default runtime mode,
-  and `auto-accept-edits`: it reads and searches freely, while commands the provider gates still
-  ask for approval in the turn's thread. Subagents it starts with `delegate_task` cannot exceed it.
-  Work that changes a repository is a coding task, at the requester's full ceiling.
+- **Access.** A turn runs at the requester's ceiling, which is `full-access` for the owner. The
+  default runtime mode does not narrow it: that setting is for people's new threads, and a
+  sandbox below full access stalled the bot on approvals for ordinary reads outside its folder.
+  The bot thread itself is `full-access` too, and `ChannelBotRegistry.ensure` switches a bot made
+  under the old `approval-required` mode in place. Read-only is therefore a promise of the prompt
+  alone: `GOAT_BOT_READ_ONLY_RULE` in `ChannelDispatcher.ts` is the one place it is stated, and
+  nothing in the sandbox backs it. A requester linked below full access keeps their ceiling, so
+  the bot never gives a person more than they could run themselves. Work that changes things is
+  a coding task.
+- **Computer use.** Full access does not reach the screen. Bot turns, channel task workers (known
+  by their `channel-worker:` thread id, so before the ledger binds them) and every thread they
+  launch or message count as unattended (`apps/server/src/cua/ComputerUseOrigin.ts`),
+  so they get no `cua-driver` until a person approves a `computer_use.grant` handoff in a GOAT
+  client session holding `settings:write`. Channel text never answers it: handoffs resolve only
+  through authenticated client RPC. See ADR-0020.
 - **Answer.** The turn's final report is the bot's reply, delivered as written; it is not
   reworded by reception the way coding results are, because the turn already wrote it for the
   person on the chosen model.
@@ -91,8 +102,10 @@ A worker blocked on a person counts the same whether it or one of its subagents 
 reconciliation reads the pending requests of the live subagents a worker started, and of theirs,
 up to three levels and twenty threads, and adds them to the task's `observed.needsYou`, so the
 chip, the waiting count and "what's pending" show a subagent's approval as the work waiting on
-the person. Subagents with no GOAT child thread (cloud or other remote children) are not read;
-see issue #475.
+the person. A subagent running in GOAT on another machine has no thread here; reconciliation
+reads the needs-you list that machine last reported for the dispatch, without opening SSH, and
+the approval names that machine. Subagents on another service, with no GOAT child thread and no
+remote dispatch, are not read.
 
 A local approval also names its request and thread (`needsYou[].approval`), and the observation
 that first lists it narrates one approve/deny card to the work's origin conversation, keyed by the
@@ -108,21 +121,24 @@ code, and an old card's button, names one request for good; a hash would let a s
 collide with a newer request. A code whose request is no longer open says it was already
 answered. Open cards come from every running task in the conversation that needs a person, past
 the recent-task window reception otherwise reads. The answer is a
-`runtime-request.respond` with a command id derived from the input, so a reception rerun after a
-restart cannot answer twice, from a `client` responder naming the person and channel for the
-thread's audit. The person must pass `mayAnswerFor` against the work's requester as their link
-stands now. MCP requesters get no cards, since agents never answer approvals, and approvals on
-other machines are not carried in their reports yet (#475).
+`runtime-request.respond` on this machine, with a command id derived from the input so a reception
+rerun after a restart cannot answer twice, or `goat_pending_request_respond` on the machine the
+approval names. The remote request resolves once, so a repeated answer fails closed. Both name the
+person and channel for the thread's audit. The person must pass `mayAnswerFor` against the work's
+requester as their link stands now. The remote call uses that person's runtime-mode ceiling and
+asks for approvals; if that machine cannot grant them, the person is told and nothing is sent with
+fewer permissions. MCP requesters get no cards, since agents never answer approvals.
 
 A task is a work item: what a person asked for. Its worker runs are separate records, one per
 run of the task's worker thread, kept as `worker-run:<task>:<run>` rows in
 `channel_runtime_state` (a `ChannelWorkerRun`) rather than a new table, so no migration
 competes with other work for an id. Worker reconciliation writes a run's row when its state
-changes: running, waiting (on a person), finished, failed or stopped. A run finishing never
-finishes its item. The item's state comes from the task and from its newest outcome delivery to
-where the work came from (`channelWorkQueue.ts`): finished work stays open as "result not sent
-yet" or "result not delivered" until that delivery is recorded delivered. Workers on other
-machines report through their host, so their runs are not recorded here.
+changes: running, waiting (on a person), stalled (no progress for 20 minutes), finished, failed
+or stopped. A run finishing never finishes its item. The item's state comes from the task and
+from its newest outcome delivery to where the work came from (`channelWorkQueue.ts`): finished
+work stays open as "result not sent yet" or "result not delivered" until that delivery is
+recorded delivered. Workers on other machines report through their host, so their runs are not
+recorded here.
 
 - **What's pending.** A `pending` read lists the open items the requester may see, newest
   first, with their runs, open questions and age; every open task is read, however old,
@@ -147,9 +163,10 @@ machines report through their host, so their runs are not recorded here.
   when nothing is left running there. A launch in flight when the stop came lands on the thread id the task's
   generation derives, so the forward waits up to two minutes for that thread and stops it. Work
   never claimed for a launch is stopped by the ledger write alone. A worker on another machine is
-  interrupted there through `goat_thread_interrupt`, found through its report binding when its
-  launch was still in flight; its async subagents run on until they end,
-  since GOAT has no remote thread stop.
+  stopped there through `goat_thread_interrupt` with `stopCascade`, the same `thread.stop` plus
+  delegated-task walk, found through its report binding when its launch was still in flight. An
+  older remote refuses the undeclared `stopCascade` argument before anything runs, so the stop
+  retries once without it and only interrupts the turn there.
 
 An owner has one bot, in the Scratch project, and one bot conversation keyed by the owner rather
 than the thread. Where Scratch is off because the data directory is inside a Git work tree, the bot

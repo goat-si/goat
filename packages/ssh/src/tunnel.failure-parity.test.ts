@@ -2,6 +2,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
@@ -18,6 +22,7 @@ import {
   uploadTarget,
 } from "./tunnel.fixture.ts";
 import { SshEnvironmentManager } from "./tunnel.ts";
+import { makeEnsureFlightFixture } from "./tunnel.ensure-flight.fixture.ts";
 
 const closure = "\nConnection closed by UNKNOWN port 65535";
 const cases = [
@@ -54,6 +59,40 @@ const cases = [
 ] as const;
 
 describe("SSH preparation/runtime status parity", () => {
+  it.effect(
+    "owner invalidation is neutral and cannot publish an authentication/runtime failure",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* makeEnsureFlightFixture;
+        yield* Effect.gen(function* () {
+          const manager = yield* SshEnvironmentManager;
+          const superseded = yield* Deferred.make<void>();
+          const ensure = yield* Effect.result(
+            manager.ensureEnvironment(uploadTarget, {
+              onPreparationProgress: (progress) => {
+                if (progress.outcome === "superseded") Deferred.doneUnsafe(superseded, Exit.void);
+              },
+            }),
+          ).pipe(Effect.forkChild);
+          yield* Deferred.await(f.uploadEntered);
+          const disconnect = yield* manager
+            .disconnectEnvironment(uploadTarget)
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(superseded);
+          const result = yield* Fiber.join(ensure);
+          assert.isTrue(Result.isFailure(result));
+          if (Result.isFailure(result)) {
+            assert.equal(result.failure._tag, "SshEnsureSupersededError");
+            assert.equal(sshPreparationFailure(result.failure)._tag, "ConnectionAttemptSuperseded");
+          }
+          yield* Deferred.succeed(f.releaseUpload, undefined);
+          yield* Fiber.join(disconnect);
+          const status = yield* manager.status(uploadTarget);
+          assert.notEqual(status.status?.state, "auth_failed");
+          assert.notEqual(status.status?.state, "failed");
+        }).pipe(Effect.provide(f.layer), Effect.scoped);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
   it.effect.each(cases)("classifies real stderr consistently: %s", ([stderr, expected]) => {
     const spawner = ChildProcessSpawner.make((command) =>
       Effect.succeed(

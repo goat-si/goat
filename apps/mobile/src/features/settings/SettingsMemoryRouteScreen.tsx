@@ -29,6 +29,7 @@ import {
   memoryLocalSpace,
   presentMemoryReport,
   presentMemoryStorage,
+  memoryHoldRefreshDelayMs,
   presentMemoryProcessing,
   isMemoryReportRetryCandidate,
   presentMemoryReportReset,
@@ -36,6 +37,7 @@ import {
   MEMORY_FORGET_NOTICE,
 } from "@goat/client-runtime/memory-presentation";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import {
   memoryBrowseInput,
   memorySearchInput,
@@ -395,6 +397,32 @@ function MemoryConnected({
       };
     }, [load, readAllowed]),
   );
+  // Turning memory off or a new effective memory model clears a pause, so status is read again.
+  const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const memoryModel = config
+    ? JSON.stringify([
+        config.settings.memoryEnabled,
+        resolveMemoryModelSelection(config.settings, undefined),
+      ])
+    : null;
+  const seenModel = useRef(memoryModel);
+  useEffect(() => {
+    // The first value was already loaded on focus; only a change needs another read.
+    // Without read access the focus effect loads once access arrives.
+    if (seenModel.current === memoryModel || !readAllowed) return;
+    const timer = setTimeout(() => {
+      seenModel.current = memoryModel;
+      void load();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [memoryModel, load, readAllowed]);
+  const generationHold = status?.generationHold;
+  useEffect(() => {
+    const delay = memoryHoldRefreshDelayMs(generationHold, Date.now());
+    if (delay === null) return;
+    const timer = setTimeout(() => void load(), delay);
+    return () => clearTimeout(timer);
+  }, [generationHold, load]);
   const readySpace = memoryLocalSpace(status);
   if (readySpace && readySpace !== savedSpace) setSavedSpace(readySpace);
   const space = params.memorySpaceId ?? readySpace ?? savedSpace;
@@ -1709,7 +1737,7 @@ function MemoryEditor({
 }
 
 function MemoryStatusRows({ status }: { status: MemorySyncStatus }) {
-  const processing = presentMemoryProcessing(status.processing);
+  const processing = presentMemoryProcessing(status.processing, status.generationHold);
   const storage = presentMemoryStorage(status.storage);
   return (
     <SettingsSection title="Memory status">
@@ -1718,6 +1746,7 @@ function MemoryStatusRows({ status }: { status: MemorySyncStatus }) {
         storage.label,
         storage.searchLabel,
         ...storage.reasons,
+        processing.pausedLabel,
         processing.checkingLabel,
         processing.heldLabel,
         processing.waitingLabel,

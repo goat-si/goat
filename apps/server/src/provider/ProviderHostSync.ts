@@ -1,6 +1,9 @@
 import {
+  CLOUD_AGENT_PROVIDERS,
   EnvironmentAuthorizationError,
   type AuthSessionId,
+  type CloudAgentProvider,
+  type CloudHolder,
   type Handoff,
   HandoffError,
   type HandoffRespondInput,
@@ -23,6 +26,7 @@ import {
   type ProviderAuthState,
   type RuntimeMode,
   type ServerProvider,
+  isCloudAgentProvider,
 } from "@goat/contracts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -41,20 +45,28 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
+import { cloudReadinessFromHolders, holderFromDiagnoses } from "../cloudAgents/cloudHolders.ts";
+
 import packageJson from "../../package.json" with { type: "json" };
 import * as SessionStore from "../auth/SessionStore.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
-import { clientRuntimeModeCeiling } from "../mcp/McpInvocationContext.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { authorizeSshHost, type SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
+import {
+  authorizeApprovalRequest,
+  authorizeSshHost,
+  type SshHostCaller,
+} from "../sshRemote/SshHostAuthorization.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ProviderAuth from "./ProviderAuthService.ts";
+import * as Diagnosis from "./ProviderDiagnosisService.ts";
 import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydration.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -73,7 +85,10 @@ const MATRIX_TOOL = "goat_provider_host_matrix";
 const SYNC_TOOL = "goat_provider_sync";
 const STATUS_TOOL = "goat_provider_sync_status" as const;
 const CANCEL_TOOL = "goat_provider_sync_cancel";
+/** Shared with sync status polling and cancel. Cloud diagnosis uses its own deadline. */
 const MATRIX_DEADLINE_MS = 20_000;
+/** Holder diagnosis probes three CLIs, so only a cloud matrix row waits this long. */
+const CLOUD_MATRIX_DEADLINE_MS = 120_000;
 const CALL_DEADLINE_MS = 60_000;
 const INSTALL_DEADLINE = Duration.minutes(10);
 const LOGIN_DEADLINE = Duration.minutes(15);
@@ -177,10 +192,11 @@ export class ProviderHostSync extends Context.Service<
   }
 >()("goat/provider/ProviderHostSync") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sessions = yield* SessionStore.SessionStore;
   const dispatch = yield* Dispatch.SshRemoteDispatch;
   const providers = yield* ProviderRegistry.ProviderRegistry;
+  const diagnosis = yield* Diagnosis.ProviderDiagnosisService;
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const auth = yield* ProviderAuth.ProviderAuthService;
   const settings = yield* ServerSettings.ServerSettingsService;
@@ -194,6 +210,7 @@ export const make = Effect.gen(function* () {
   const hostname = yield* HostProcess.Hostname;
   const runtimePlatform = yield* HostProcess.Platform;
   const runtimeArch = yield* HostProcess.Architecture;
+  const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const platform = hostPlatform(runtimePlatform);
   const operations = new Map<string, SyncOperation>();
   const approvals = new Map<string, PendingApproval>();
@@ -206,36 +223,23 @@ export const make = Effect.gen(function* () {
     );
 
   /**
-   * Installing software on a machine is a full-access act. A person needs a
-   * live providers:manage grant; an outside MCP client needs that grant or a
-   * full-access ceiling, which is what another machine's approved sync sends.
-   * Thread agents never pass: they get an approval handoff instead.
+   * Installing software on a machine is a full-access act, so every caller
+   * needs a live providers:manage grant. Another machine's approved sync
+   * arrives as an outside client whose session carries that grant only
+   * because the person who approved it holds it there. Thread agents never
+   * pass: they get an approval handoff instead.
    */
   const writeCeiling = (caller: SshHostCaller): Effect.Effect<RuntimeMode, Failure> => {
-    if (caller.kind === "client")
-      return authorizeSshHost(sessions, caller, "providers:manage").pipe(
-        Effect.as("full-access" as RuntimeMode),
-      );
-    const { scope: mcp } = caller;
-    if (mcp.thread !== undefined || mcp.client === undefined)
+    if (caller.kind === "mcp" && (caller.scope.thread !== undefined || !caller.scope.client))
       return Effect.fail(
         new EnvironmentAuthorizationError({
           requiredScope: "providers:manage",
           message: "Installing a provider needs a person's approval.",
         }),
       );
-    const ceiling = clientRuntimeModeCeiling(mcp.client);
-    const grant = mcp.grantedScopes?.includes("providers:manage")
-      ? ("providers:manage" as const)
-      : ("orchestration:operate" as const);
-    if (grant === "orchestration:operate" && ceiling !== "full-access")
-      return Effect.fail(
-        new EnvironmentAuthorizationError({
-          requiredScope: "providers:manage",
-          message: "Installing a provider needs providers:manage or a full-access client.",
-        }),
-      );
-    return authorizeSshHost(sessions, caller, grant).pipe(Effect.as("full-access" as RuntimeMode));
+    return authorizeSshHost(sessions, caller, "providers:manage").pipe(
+      Effect.as("full-access" as RuntimeMode),
+    );
   };
 
   const ownerSession = (caller: SshHostCaller): string =>
@@ -297,16 +301,93 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const localRow = Effect.gen(function* () {
-    return {
-      host: null,
-      status: "ok",
-      platform: runtimePlatform,
-      arch: runtimeArch,
-      goatVersion: packageJson.version,
-      providers: yield* localProviders,
-    } satisfies ProviderHostRow;
+  /**
+   * Runs this machine is following. Routing prefers the least loaded holder.
+   * Missing the database answers zero rather than failing the matrix.
+   */
+  const activeCloudRuns = Effect.gen(function* () {
+    const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+    if (Option.isNone(sql)) return new Map<CloudAgentProvider, number>();
+    const rows = yield* sql.value<{ readonly driver: string; readonly runs: number }>`
+      SELECT p.driver AS driver, COUNT(*) AS runs
+      FROM orchestration_v2_projection_provider_threads AS p
+      JOIN orchestration_v2_projection_threads AS t ON t.thread_id = p.thread_id
+      WHERE p.driver IN ('claudeCloud', 'cursorCloud', 'devinCloud')
+        AND p.owner_node_id IS NULL
+        AND t.deleted_at IS NULL
+        AND json_type(p.payload_json, '$.cloudTask') = 'object'
+        AND json_extract(p.payload_json, '$.cloudTask.status') IN ('running', 'submitting')
+        AND IFNULL(json_extract(p.payload_json, '$.cloudTask.tracking'), '') != 'link-only'
+      GROUP BY p.driver
+    `.pipe(Effect.orElseSucceed(() => []));
+    const counts = new Map<CloudAgentProvider, number>();
+    for (const row of rows)
+      if (isCloudAgentProvider(row.driver)) counts.set(row.driver, Number(row.runs));
+    return counts;
   });
+
+  /** Same reduction goat_cloud_holders uses, so the matrix column and routing cannot drift. */
+  const localCloud = Effect.gen(function* () {
+    const snapshots = yield* providers.getProviders;
+    const counts = yield* activeCloudRuns;
+    const hub = yield* settings.getSettings.pipe(
+      Effect.map(({ hub }) => hub.enabled && hub.cloudHolder === "hub"),
+      Effect.orElseSucceed(() => false),
+    );
+    const label = (instanceId: string) => {
+      const auth = snapshots.find((provider) => provider.instanceId === instanceId)?.auth;
+      return auth?.label ?? auth?.email;
+    };
+    const holders = yield* Effect.forEach(
+      CLOUD_AGENT_PROVIDERS,
+      (provider) =>
+        diagnosis.diagnose({ driver: ProviderDriverKind.make(provider) }).pipe(
+          Effect.map((result) =>
+            holderFromDiagnoses({
+              provider,
+              host: null,
+              diagnoses: result.diagnoses,
+              runtime: "current",
+              accountLabel: label,
+              activeRuns: counts.get(provider) ?? 0,
+            }),
+          ),
+          Effect.catch((): Effect.Effect<CloudHolder> =>
+            Effect.succeed({
+              provider,
+              host: null,
+              ready: false,
+              runtime: "current",
+              reason: "Could not read this environment's provider settings.",
+            }),
+          ),
+        ),
+      { concurrency: 3 },
+    );
+    // A hub that cannot read a login still claims the launch: another holder is another account.
+    return cloudReadinessFromHolders(
+      hub ? holders.map((holder) => ({ ...holder, hub: true })) : holders,
+    );
+  });
+
+  const localRow = (includeCloud: boolean) =>
+    Effect.gen(function* () {
+      const row = {
+        host: null,
+        status: "ok" as const,
+        platform: runtimePlatform,
+        arch: runtimeArch,
+        goatVersion: packageJson.version,
+        ...(Option.isSome(cua) ? { computerUse: yield* cua.value.computerUse } : {}),
+      };
+      if (!includeCloud) {
+        return { ...row, providers: yield* localProviders } satisfies ProviderHostRow;
+      }
+      const [providerRows, cloud] = yield* Effect.all([localProviders, localCloud], {
+        concurrency: "unbounded",
+      });
+      return { ...row, providers: providerRows, cloud } satisfies ProviderHostRow;
+    });
 
   const callRemote = (
     caller: SshHostCaller,
@@ -329,19 +410,21 @@ export const make = Effect.gen(function* () {
           writes: call.writes,
           timeoutMs: call.timeoutMs,
           approvals: false,
+          // Only reached after writeCeiling, so the caller holds providers:manage here.
+          ...(call.writes || call.asOwner === true ? { providersManage: true } : {}),
           requireReady: true,
         },
         call.writes || call.asOwner === true ? writeCeiling(caller) : readCeiling(caller),
       )
       .pipe(Effect.mapError(classify));
 
-  const remoteRow = (caller: SshHostCaller, host: string) =>
+  const remoteRow = (caller: SshHostCaller, host: string, includeCloud: boolean) =>
     callRemote(caller, {
       host,
       tool: MATRIX_TOOL,
-      arguments: { localOnly: true },
+      arguments: includeCloud ? { localOnly: true, cloud: true } : { localOnly: true },
       writes: false,
-      timeoutMs: MATRIX_DEADLINE_MS,
+      timeoutMs: includeCloud ? CLOUD_MATRIX_DEADLINE_MS : MATRIX_DEADLINE_MS,
     }).pipe(
       Effect.flatMap((raw) =>
         decodeMatrix(raw).pipe(
@@ -385,7 +468,8 @@ export const make = Effect.gen(function* () {
     caller: SshHostCaller,
   ) {
     yield* readCeiling(caller);
-    const local = yield* localRow;
+    const includeCloud = input.cloud === true;
+    const local = yield* localRow(includeCloud);
     if (input.localOnly === true) return { rows: [local] };
     // Connected hosts plus aliases the user wrote in ssh config; known_hosts
     // entries are left out because they include every server ever reached.
@@ -398,9 +482,11 @@ export const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => []),
       )),
     ];
-    const rows = yield* Effect.forEach([...new Set(hosts)], (host) => remoteRow(caller, host), {
-      concurrency: 6,
-    });
+    const rows = yield* Effect.forEach(
+      [...new Set(hosts)],
+      (host) => remoteRow(caller, host, includeCloud),
+      { concurrency: 6 },
+    );
     return { rows: [local, ...rows] };
   });
 
@@ -872,7 +958,7 @@ export const make = Effect.gen(function* () {
       const environmentId = yield* environment.getEnvironmentId;
       if (caller.scope.environmentId !== environmentId)
         return yield* fail("invalid_request", "Ask again in a thread on this environment.");
-      yield* authorizeSshHost(sessions, caller, "orchestration:operate");
+      yield* authorizeApprovalRequest(caller.scope);
       const run = (yield* threads
         .getThreadSnapshot(thread.threadId)
         .pipe(
@@ -972,9 +1058,10 @@ export const make = Effect.gen(function* () {
   ) {
     const operation = yield* find(input.syncId);
     // An agent may stop a sync it asked for; anyone else needs to manage providers.
-    if (operation.owners.has(callerKey(caller)))
-      yield* authorizeSshHost(sessions, caller, "orchestration:operate");
-    else yield* writeCeiling(caller);
+    if (!operation.owners.has(callerKey(caller))) yield* writeCeiling(caller);
+    else if (caller.kind === "mcp" && caller.scope.thread !== undefined)
+      yield* authorizeApprovalRequest(caller.scope);
+    else yield* authorizeSshHost(sessions, caller, "orchestration:operate");
     yield* Effect.forEach(operation.fibers, Fiber.interrupt, { discard: true });
     yield* Effect.forEach(
       operation.hosts.filter((task) => !task.finished),
@@ -1045,7 +1132,7 @@ export const make = Effect.gen(function* () {
 });
 
 /** `codex-cli 0.42.0` and `0.42.0 (Claude Code)` both pin to 0.42.0. */
-export function versionCore(version: string): string | null {
+function versionCore(version: string): string | null {
   return (
     /\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20}){0,4})?/u.exec(
       version,

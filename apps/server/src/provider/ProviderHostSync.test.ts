@@ -2,10 +2,15 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   AuthSessionId,
+  DEFAULT_SERVER_SETTINGS,
+  EnvironmentAuthorizationError,
   type AuthEnvironmentScope,
   type AuthClientSession,
   EnvironmentId,
+  ProviderDriverKind,
+  ProviderHostMatrixResult,
   ProviderInstanceId,
+  type ProviderDiagnosisReason,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -13,6 +18,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
@@ -25,6 +31,7 @@ import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ProviderAuth from "./ProviderAuthService.ts";
+import * as Diagnosis from "./ProviderDiagnosisService.ts";
 import * as HostSync from "./ProviderHostSync.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -57,13 +64,44 @@ interface Harness {
   readonly calls: Array<{ readonly call: Call; readonly ceiling: string }>;
   readonly spawned: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }>;
   readonly handoffs: Array<unknown>;
+  readonly diagnoses: Array<string>;
 }
+
+const cloudDriver = (driver: string, ready: boolean, reason?: ProviderDiagnosisReason) => ({
+  checkedBy: "server" as const,
+  diagnoses: [
+    {
+      instanceId: ProviderInstanceId.make(driver),
+      driver: ProviderDriverKind.make(driver),
+      configured: true,
+      ready,
+      checks: ready
+        ? [{ id: "auth", status: "pass" as const, summary: "Ready." }]
+        : [
+            {
+              id: "auth",
+              status: "fail" as const,
+              summary: "Not ready.",
+              ...(reason === undefined ? {} : { reason }),
+            },
+          ],
+    },
+  ],
+});
 
 const harness = (options: {
   readonly answer?: (call: Call) => Effect.Effect<unknown, Dispatch.SshRemoteDispatchError>;
   readonly installer?: { readonly stdout: string; readonly stderr: string; readonly code: number };
+  readonly providers?: ReadonlyArray<unknown>;
+  readonly hub?: boolean;
+  readonly cloud?: Partial<
+    Record<
+      "claudeCloud" | "cursorCloud" | "devinCloud",
+      { readonly ready: boolean; readonly reason?: ProviderDiagnosisReason }
+    >
+  >;
 }) => {
-  const state: Harness = { calls: [], spawned: [], handoffs: [] };
+  const state: Harness = { calls: [], spawned: [], handoffs: [], diagnoses: [] };
   const spawner = Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
@@ -121,14 +159,29 @@ const harness = (options: {
             ) as never,
         }),
         Layer.mock(ProviderRegistry.ProviderRegistry)({
-          getProviders: Effect.succeed([]),
+          getProviders: Effect.succeed((options.providers ?? []) as never),
           refreshInstance: () => Effect.succeed([]) as never,
+        }),
+        Layer.mock(Diagnosis.ProviderDiagnosisService)({
+          diagnose: (input) => {
+            const driver = String(input.driver ?? "");
+            state.diagnoses.push(driver);
+            const cloud = options.cloud?.[driver as "claudeCloud"];
+            return Effect.succeed(
+              cloudDriver(driver, cloud?.ready === true, cloud?.reason ?? "not_signed_in"),
+            );
+          },
         }),
         Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
           listInstances: Effect.succeed([]),
         }),
         Layer.mock(ProviderAuth.ProviderAuthService)({}),
-        Layer.mock(ServerSettings.ServerSettingsService)({}),
+        Layer.mock(ServerSettings.ServerSettingsService)({
+          getSettings: Effect.succeed({
+            ...DEFAULT_SERVER_SETTINGS,
+            hub: { enabled: options.hub === true, cloudHolder: "hub", devices: {} },
+          }),
+        }),
         Layer.mock(Handoffs.Handoffs)({
           create: (input) =>
             Effect.sync(() => {
@@ -173,12 +226,12 @@ const threadScope: McpInvocationScope = {
     providerInstanceId: ProviderInstanceId.make("codex"),
   },
   client: undefined,
-  grantedScopes: ["orchestration:read", "orchestration:operate"],
+  grantedScopes: ["orchestration:read"],
   reauthorize: () => Effect.void,
 };
 
 it.effect("reports old, stopped, and mismatched hosts instead of failing the matrix", () => {
-  const { layer } = harness({
+  const { layer, state } = harness({
     answer: (call) =>
       call.host === "old"
         ? Effect.fail(
@@ -203,11 +256,100 @@ it.effect("reports old, stopped, and mismatched hosts instead of failing the mat
     const result = yield* sync.matrix({}, { kind: "client", sessionId: viewer });
     const byHost = Object.fromEntries(result.rows.map((row) => [row.host ?? "local", row]));
     expect(byHost.local?.status).toBe("ok");
+    expect(byHost.local).not.toHaveProperty("cloud");
+    expect(state.diagnoses).toEqual([]);
+    expect(
+      state.calls.map(({ call }) => ({ arguments: call.arguments, timeoutMs: call.timeoutMs })),
+    ).toEqual([
+      { arguments: { localOnly: true }, timeoutMs: 20_000 },
+      { arguments: { localOnly: true }, timeoutMs: 20_000 },
+      { arguments: { localOnly: true }, timeoutMs: 20_000 },
+    ]);
     expect(byHost.local?.providers.map((provider) => provider.driver)).toContain("codex");
     expect(byHost.old?.status).toBe("update_runtime");
     expect(byHost.stopped?.status).toBe("not_ready");
     expect(byHost.box).toMatchObject({ status: "ok", versionMismatch: true });
     expect(result.rows.map((row) => row.host)).toEqual([null, "old", "stopped", "box"]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reports cloud readiness from diagnosis, not from the CLI signed-in flag", () => {
+  const { layer, state } = harness({
+    providers: [
+      {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        displayName: "Claude",
+        installed: true,
+        version: "1.2.3",
+        auth: { status: "authenticated", label: "api-key", profileId: "sk-live-SECRETPROFILE" },
+        setup: { canAuthenticate: true },
+      },
+      {
+        instanceId: ProviderInstanceId.make("cursorCloud"),
+        driver: ProviderDriverKind.make("cursorCloud"),
+        executionLocation: "cloud",
+        auth: { status: "authenticated", label: "Jun", profileId: "sk-live-SECRETPROFILE" },
+      },
+    ],
+    cloud: {
+      cursorCloud: { ready: true },
+      claudeCloud: { ready: false, reason: "forbidden_environment" },
+      devinCloud: { ready: false, reason: "not_signed_in" },
+    },
+    answer: () => Effect.succeed({ rows: [{ host: null, status: "ok", providers: [] }] }),
+  });
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const result = yield* sync.matrix(
+      { localOnly: true, cloud: true },
+      {
+        kind: "client",
+        sessionId: viewer,
+      },
+    );
+    const decoded = yield* Schema.decodeUnknownEffect(ProviderHostMatrixResult)(result);
+    const row = decoded.rows[0];
+    expect(row?.providers.find((provider) => provider.driver === "claudeAgent")?.auth).toBe(
+      "signed_in",
+    );
+    expect(row?.cloud).toMatchObject({
+      claudeCloud: {
+        ready: false,
+        reason:
+          "The provider's environment overrides its sign-in (API key, proxy or Git variables).",
+      },
+      cursorCloud: { ready: true, instanceId: "cursorCloud", accountLabel: "Jun", activeRuns: 0 },
+      devinCloud: { ready: false, reason: "Not signed in.", command: "devin auth login" },
+    });
+    expect(row?.cloud?.claudeCloud).not.toHaveProperty("command");
+    expect(JSON.stringify(decoded)).not.toContain("SECRETPROFILE");
+    expect([...state.diagnoses].sort()).toEqual(["claudeCloud", "cursorCloud", "devinCloud"]);
+    yield* sync.matrix({ hosts: ["box"], cloud: true }, { kind: "client", sessionId: viewer });
+    expect(
+      state.calls.map(({ call }) => ({ arguments: call.arguments, timeoutMs: call.timeoutMs })),
+    ).toEqual([{ arguments: { localOnly: true, cloud: true }, timeoutMs: 120_000 }]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("marks every cloud cell on a hub that holds cloud launches, signed in or not", () => {
+  const { layer } = harness({
+    hub: true,
+    cloud: { cursorCloud: { ready: true } },
+    answer: () => Effect.succeed({ rows: [] }),
+  });
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const result = yield* sync.matrix(
+      { localOnly: true, cloud: true },
+      { kind: "client", sessionId: viewer },
+    );
+    const cloud = result.rows[0]?.cloud;
+    expect([cloud?.claudeCloud.hub, cloud?.cursorCloud.hub, cloud?.devinCloud.hub]).toEqual([
+      true,
+      true,
+      true,
+    ]);
   }).pipe(Effect.provide(layer));
 });
 
@@ -303,6 +445,7 @@ it.effect("asks a person before an agent's sync touches any host, then runs it a
         host: "box",
         tool: "goat_provider_sync",
         writes: true,
+        providersManage: true,
         arguments: { driver: "opencode", version: "1.2.3", login: true },
       },
     });
@@ -318,6 +461,143 @@ it.effect("asks a person before an agent's sync touches any host, then runs it a
       ),
     );
     expect(Exit.isFailure(replay)).toBe(true);
+  }).pipe(Effect.provide(layer));
+});
+
+const outsideClient = (
+  grantedScopes: ReadonlyArray<AuthEnvironmentScope>,
+  reauthorize: (
+    required: ReadonlyArray<AuthEnvironmentScope>,
+  ) => Effect.Effect<void, EnvironmentAuthorizationError> = () => Effect.void,
+): McpInvocationScope => ({
+  environmentId,
+  requestNamespace: "remote-sync",
+  capabilities: new Set(["orchestration"]),
+  issuedAt: 0,
+  thread: undefined,
+  client: { sessionId: "remote-origin", label: "Origin", access: "full-access" },
+  grantedScopes,
+  reauthorize,
+});
+
+const remoteSyncAnswer = (call: Call) =>
+  Effect.succeed(
+    call.tool === "goat_provider_sync"
+      ? {
+          kind: "started",
+          sync: {
+            syncId: "remote-sync",
+            driver: "opencode",
+            version: "1.2.3",
+            login: true,
+            startedAt: "2026-10-20T00:00:00.000Z",
+            done: true,
+            hosts: [{ host: null, phase: "installed", version: "1.2.3" }],
+          },
+        }
+      : {
+          rows: [{ host: null, status: "ok", goatVersion: "0.0.1", providers: [] }],
+        },
+  );
+
+it.effect("refuses a read-only thread before creating a sync approval", () => {
+  const { layer, state } = harness({});
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const error = yield* sync
+      .sync(
+        { driver: "opencode", hosts: ["box"] },
+        { kind: "mcp", scope: { ...threadScope, readOnly: true } },
+      )
+      .pipe(Effect.flip);
+    expect(error).toMatchObject({
+      _tag: "EnvironmentAuthorizationError",
+      requiredScope: "providers:manage",
+    });
+    expect(state.handoffs).toEqual([]);
+    expect(state.calls).toEqual([]);
+    expect(state.spawned).toEqual([]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("an outside full-access client installs only while providers:manage is live", () => {
+  const { layer, state } = harness({ answer: remoteSyncAnswer });
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const ceilingOnly = outsideClient(["orchestration:read", "orchestration:operate"]);
+    const refused = yield* sync
+      .sync(
+        { driver: "opencode", hosts: ["box"], version: "1.2.3" },
+        { kind: "mcp", scope: ceilingOnly },
+      )
+      .pipe(Effect.flip);
+    expect(refused).toMatchObject({
+      _tag: "EnvironmentAuthorizationError",
+      requiredScope: "providers:manage",
+    });
+    expect(state.calls).toEqual([]);
+    expect(state.spawned).toEqual([]);
+    expect(state.handoffs).toEqual([]);
+
+    const seen: Array<ReadonlyArray<string>> = [];
+    const managing = outsideClient(["providers:manage"], (required) =>
+      Effect.sync(() => void seen.push(required)),
+    );
+    const started = yield* sync.sync(
+      { driver: "opencode", hosts: ["box"], version: "1.2.3" },
+      { kind: "mcp", scope: managing },
+    );
+    expect(started.kind).toBe("started");
+    if (started.kind !== "started") return;
+    yield* sync.awaitDone(started.sync.syncId);
+    expect(state.spawned).toEqual([]);
+    expect(state.calls).toHaveLength(1);
+    expect(state.calls[0]).toMatchObject({
+      ceiling: "full-access",
+      call: {
+        host: "box",
+        tool: "goat_provider_sync",
+        writes: true,
+        providersManage: true,
+      },
+    });
+    expect(seen).toEqual([["providers:manage"], ["providers:manage"]]);
+
+    const revoked = yield* sync
+      .sync(
+        { driver: "opencode", hosts: ["box"] },
+        {
+          kind: "mcp",
+          scope: outsideClient(["providers:manage"], () =>
+            Effect.fail(
+              new EnvironmentAuthorizationError({
+                requiredScope: "providers:manage",
+                message: "The grant is no longer live.",
+              }),
+            ),
+          ),
+        },
+      )
+      .pipe(Effect.flip);
+    expect(revoked).toMatchObject({ message: "The grant is no longer live." });
+    expect(state.calls).toHaveLength(1);
+    expect(state.spawned).toEqual([]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("does not carry providers:manage on a read-only remote matrix call", () => {
+  const { layer, state } = harness({ answer: remoteSyncAnswer });
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const result = yield* sync.matrix(
+      { hosts: ["box"] },
+      { kind: "mcp", scope: outsideClient(["orchestration:read", "orchestration:operate"]) },
+    );
+    expect(result.rows.map((row) => row.host)).toEqual([null, "box"]);
+    expect(state.calls).toHaveLength(1);
+    expect(state.calls[0]?.call.writes).toBe(false);
+    expect(state.calls[0]?.call).not.toHaveProperty("providersManage");
+    expect(state.spawned).toEqual([]);
   }).pipe(Effect.provide(layer));
 });
 

@@ -81,6 +81,9 @@ list by environment or project. Each task runs on the environment you choose,
 using its project, model, and workspace settings. Fixed-time schedules use that
 environment's time zone, which may differ from your phone's.
 
+Deleting a thread also deletes tasks that post into that thread. Tasks that start
+a new thread on each run survive deletion of their previous threads.
+
 You can edit, pause, resume, run immediately, or delete a task from the list.
 Webhook tasks only run when their URL is called, so they can't be run
 immediately.
@@ -121,6 +124,29 @@ same secret in the repository's webhook settings with content type
 up on desktop or web; mobile keeps an existing signature check but can't turn
 one on.
 
+To run only for some requests, add **Filters**. Each one tests a value named
+like a placeholder, without the braces, such as `headers.x-github-event` equals
+`pull_request` or `body.action` is one of `opened, reopened`. A task runs only
+when every filter matches; other requests are answered normally, logged as
+**Filtered** with the first filter that failed, and start nothing. Values
+compare as text, and a value that is an object or a list only passes
+**exists**. Separate **is one of** values with commas; a value can't contain
+a comma or start or end with a space.
+
+To suppress repeated deliveries, set a **Replay key** template, such as
+`{{headers.delivery-id}}`. The same key is ignored for seven days per task.
+To combine a burst, set a **Coalesce key**, such as `{{body.id}}`, and a window
+of 10–3600 seconds (120 by default). One run uses the latest body, headers,
+and query when the window from the first delivery closes; later requests
+do not extend it. Pending windows survive a server restart. Keys must contain
+request placeholders; if any placeholder is missing, or the render is empty,
+that key's rule is skipped. Clear the templates to turn dedupe off.
+
+Duplicate and coalesced log entries share a limit of 10 per task per minute.
+Additional deliveries are accepted without a log entry, and coalesced deliveries
+always replace the persisted payload. Coalesced updates count toward a separate
+60-per-minute validation limit; exceeding it receives HTTP 429.
+
 On desktop and web, pick **Deliveries** from a task's menu to see recent
 requests and the prompt each one produced.
 
@@ -152,6 +178,11 @@ itself, or **Skip** to leave them for a setup script. It resolves in the same or
 workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
 applies when the project and environment are both on **Inherit**.
 
+A repository with large folders that agents only read, such as vendored reference code, can keep
+them out of new worktrees with `"worktreeSparseExclude": [".repos/"]` in `t3.json`. GOAT checks
+the worktree out with Git sparse checkout, so those folders are never written, which matters most
+on Windows. Run `git sparse-checkout disable` in a worktree to bring them back there.
+
 ## Check an agent's work when its run completes
 
 An agent's reported tests are only what it says it ran. To have GOAT run a check itself, turn on
@@ -175,6 +206,22 @@ are, and cleanup covers both the default folder and the custom one.
 If the custom folder can't be used when a thread starts, for example because its drive is
 unmounted, the worktree goes in the default folder instead. The thread's setup steps say so, and
 **Settings → Storage** shows a warning under **Worktree location** until the folder is back.
+
+### Slow worktrees on Windows
+
+On Windows, Microsoft Defender scans every file a new worktree writes, which can stretch a
+checkout to minutes. When Defender scans the worktree folder, **Settings → Connections** shows a
+warning for that machine with the command to exclude it, which you run in an administrator
+PowerShell on that machine. GOAT never changes Defender itself. A Dev Drive is the alternative
+Microsoft recommends: create one in Windows Settings and set **Worktree location** to a folder on
+it. GOAT also turns on Git's file system cache and long paths for the repository when they are
+unset.
+
+A checkout that is slow but still printing progress keeps going. GOAT stops Git only after two
+minutes without output, and says how long it ran and what it printed last. If the repository's
+post-checkout hook is what went quiet, the files are already in place, so GOAT keeps the worktree
+and notes it in the checkout step. On Windows the hook itself can keep running in the background,
+because Git Bash detaches it from Git.
 
 ## Storage cleanup
 
@@ -210,6 +257,18 @@ Results also list folders in the worktree folder that no thread uses, with their
 
 Browser captures and rotated logs have separate retention periods. Expired capture links stop
 working. Current logs, message attachments, and browser profiles are kept.
+
+Thread history has a size budget of 2 GiB per machine, set as `storageCleanup.historyBudgetBytes`
+in the server's `settings.json`. While history is larger, GOAT trims long command output, tool
+output, and reasoning in threads untouched for a week, oldest first. Each trimmed field keeps its
+start and end with an _output trimmed_ note. Messages are never trimmed.
+
+Threads untouched for 30 days move their tool calls, output, and reasoning to a compressed archive
+next to the database; messages stay. Opening the thread, or an agent reading it, restores
+everything first, usually in well under a second. Change the window with
+`storageCleanup.historyArchiveAfterDays`, or set it to `null` to keep every thread in the
+database. Archives are kept until you set `storageCleanup.historyArchiveDeleteAfterDays`; after
+that many days an archive is deleted for good. Copy the `thread-archive` folder to keep a backup.
 
 ## Project icons
 

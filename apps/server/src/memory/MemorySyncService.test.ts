@@ -1,4 +1,6 @@
 import { legacySyncStatusRpc } from "./MemorySyncStatusLegacy.testkit.ts";
+import * as Hold from "./MemoryGenerationHold.ts";
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as Rpc from "effect/rpc/Rpc";
 import * as Exit from "effect/Exit";
 import { McpServer } from "effect/ai";
@@ -38,15 +40,16 @@ import * as Secrets from "../auth/ServerSecretStore.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
-import migration from "../persistence/Migrations/073_Memory.ts";
-import lastReadyMigration from "../persistence/Migrations/083_MemoryLastReadySpace.ts";
-import hubMigration from "../persistence/Migrations/074_MemoryHubSync.ts";
-import searchMigration from "../persistence/Migrations/075_MemorySearchCounters.ts";
-import lineageMigration from "../persistence/Migrations/077_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/078_MemoryCheckpointAccounting.ts";
-import reportMigration from "../persistence/Migrations/079_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/080_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/081_MemoryRevertResults.ts";
+import migration from "../persistence/Migrations/076_Memory.ts";
+import lastReadyMigration from "../persistence/Migrations/086_MemoryLastReadySpace.ts";
+import hubMigration from "../persistence/Migrations/077_MemoryHubSync.ts";
+import searchMigration from "../persistence/Migrations/078_MemorySearchCounters.ts";
+import lineageMigration from "../persistence/Migrations/080_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Quota from "./MemoryQuotaService.ts";
@@ -90,6 +93,7 @@ const setup = Layer.effectDiscard(
     yield* hubMigration;
     yield* lineageMigration;
     yield* checkpointMigration;
+    yield* revisionSizeMigration;
     yield* reportMigration;
     yield* usageMigration;
     yield* revertMigration;
@@ -179,7 +183,15 @@ const runtimeBase = Layer.effect(
   }),
 );
 
-const peer = (overrides: Partial<Client.MemoryHubClient["Service"]> = {}) => {
+const peer = (
+  overrides: Partial<Client.MemoryHubClient["Service"]> = {},
+  // The Hub ends a lease on release, so a released attempt can no longer renew or release again.
+  {
+    releaseEndsLease = false,
+    lostReleaseResponses = 0,
+  }: { releaseEndsLease?: boolean; lostReleaseResponses?: number } = {},
+) => {
+  let lost = lostReleaseResponses;
   const issued = new Map<string, M.MemoryResolutionLease>();
   const defaultClaim: Client.MemoryHubClient["Service"]["claim"] = (
     _c,
@@ -212,7 +224,15 @@ const peer = (overrides: Partial<Client.MemoryHubClient["Service"]> = {}) => {
           outcome: "accepted" as const,
         })),
       }),
-    release: () => Effect.succeed({ released: true }),
+    release: (_c, i) =>
+      Effect.suspend(() => {
+        if (!releaseEndsLease) return Effect.succeed({ released: true });
+        if (!issued.delete(i.attemptId))
+          return Effect.fail(new M.MemoryHubError({ code: "fenced" }));
+        // The Hub committed the release, but its answer never arrived.
+        if (lost-- > 0) return Effect.fail(new M.MemoryHubError({ code: "unavailable" }));
+        return Effect.succeed({ released: true });
+      }),
     ...overrides,
     claim: (c, i) =>
       claim(c, i).pipe(
@@ -2101,7 +2121,11 @@ it.effect.each([
               Store.layer.pipe(
                 Layer.provideMerge(
                   Layer.effectDiscard(
-                    runMigrations({ toMigrationInclusive: through }).pipe(Effect.orDie),
+                    runMigrations({ toMigrationInclusive: through }).pipe(
+                      // The current store reads cached revision sizes on any schema.
+                      Effect.andThen(revisionSizeMigration),
+                      Effect.orDie,
+                    ),
                   ).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename }))),
                 ),
               ),
@@ -2147,12 +2171,19 @@ it.effect.each([
               yield* sql`SELECT name FROM sqlite_master WHERE name='memory_last_ready_space'`,
             );
             assert.deepStrictEqual(yield* runMigrations(), [
-              [83, "MemoryLastReadySpace"],
-              [84, "MemoryHubAdministered"],
-              [85, "MemoryCheckpointLifecycle"],
-              [86, "FleetGoals"],
-              [87, "FleetHealth"],
-              [88, "ThreadRunObservedChecks"],
+              [86, "MemoryLastReadySpace"],
+              [87, "MemoryHubAdministered"],
+              [88, "MemoryCheckpointLifecycle"],
+              [89, "FleetGoals"],
+              [90, "FleetHealth"],
+              [91, "ThreadRunObservedChecks"],
+              [92, "RemoteDispatchObservation"],
+              [93, "MemoryRevisionCheckpointSize"],
+              [94, "HubNodes"],
+              [95, "MemorySummaryWorkThreadIndex"],
+              [96, "ThreadHistoryArchives"],
+              [97, "PermissionProfiles"],
+              [98, "DecisionInbox"],
             ]);
             const adapter = yield* statusRuntime;
             const result = yield* Effect.scoped(
@@ -2169,7 +2200,7 @@ it.effect.each([
             );
             assert.strictEqual(result.state, "disabled");
             assert.strictEqual(result.retainedLocalSpaceId, space);
-          }).pipe(Effect.provide(fixture(peer(), undefined, true, false, local, database(82)))),
+          }).pipe(Effect.provide(fixture(peer(), undefined, true, false, local, database(85)))),
         );
         // Close the SQLite connection and rebuild the service, preserving only the upgraded file.
         yield* Effect.scoped(
@@ -2210,7 +2241,7 @@ it.effect.each([
             const item = listed.items[0];
             if (item?.status !== "active") throw new Error("retained memory missing");
             assert.strictEqual(item.payload.text, "synthetic fact 98010");
-          }).pipe(Effect.provide(fixture(peer(), undefined, true, false, local, database(83)))),
+          }).pipe(Effect.provide(fixture(peer(), undefined, true, false, local, database(86)))),
         );
       }).pipe(Effect.provide(NodeServices.layer)),
     ),
@@ -3877,6 +3908,269 @@ it.effect(
         }).pipe(Effect.provide(fixture(client))),
       );
     }),
+);
+
+const refusals = [
+  {
+    shape: "a typed runner refusal",
+    error: new M.TextGenerationError({
+      operation: "resolveMemoryConflict",
+      detail: "Grok did not disclose or support the selected memory model.",
+      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+    }),
+  },
+  {
+    shape: "a provider setup error under a generic detail",
+    error: new M.TextGenerationError({
+      operation: "resolveMemoryConflict",
+      detail: "Antigravity text generation failed.",
+      cause: new M.ProviderSetupError({
+        instanceId: M.ProviderInstanceId.make("antigravity"),
+        operation: "start",
+        detail: "Antigravity needs a Gemini API key or Google Cloud project.",
+      }),
+    }),
+  },
+];
+it.effect.each([
+  ...refusals.map((refusal) => ({ ...refusal, lostReleaseResponses: 0 })),
+  // The Hub ended the lease but its release answer was lost: the attempt still retires.
+  { ...refusals[0]!, shape: "a refusal whose release answer is lost", lostReleaseResponses: 1 },
+])(
+  "$shape retires the attempt unreported and claims the conflict again once the model is due",
+  ({ error, lostReleaseResponses }) =>
+    Effect.gen(function* () {
+      let calls = 0;
+      let claims = 0;
+      const model = realGeneration({
+        resolveMemoryConflict: () =>
+          Effect.suspend(() => {
+            calls++;
+            return Effect.fail(error);
+          }),
+      });
+      const client = peer(
+        {
+          claim: (_c, { protocolVersion: _protocol, ...claim }) =>
+            Effect.sync(() => {
+              claims++;
+              return {
+                ...claim,
+                fencingToken: claims,
+                claimedAtHubTime: timestamp,
+                expiresAtHubTime: "1970-01-01T00:02:00.000Z",
+                attemptDeadlineHubTime: "1970-01-01T00:10:00.000Z",
+              };
+            }),
+        },
+        { releaseEndsLease: true, lostReleaseResponses },
+      );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* ready;
+          yield* conflict();
+          const sync = yield* Sync.MemorySyncService;
+          const store = yield* Store.MemoryStore;
+          const attempt = Effect.gen(function* () {
+            yield* sync.syncOnce;
+            yield* sync.scheduleConflictResolution;
+          });
+          yield* attempt;
+          assert.deepStrictEqual([calls, claims], [1, 1]);
+          // Held: sweeps before the probe neither call the provider nor claim at the Hub.
+          for (let n = 0; n < 5; n++) {
+            yield* TestClock.adjust("5 seconds");
+            yield* attempt;
+          }
+          assert.deepStrictEqual([calls, claims], [1, 1]);
+          // A refusal is not a failed resolution.
+          assert.isFalse(
+            (yield* store.pendingReports(100)).some((report) => report.outcome === "failed"),
+          );
+          // Once the hold is due the conflict is claimed afresh, with a new lease.
+          yield* TestClock.adjust("1 minute");
+          yield* attempt;
+          if (lostReleaseResponses > 0) {
+            // Recovery first retires the stranded attempt (its lease is fenced), then the
+            // conflict waits its ordinary 30 seconds before the next claim.
+            assert.strictEqual(claims, 1);
+            yield* TestClock.adjust("35 seconds");
+            yield* attempt;
+          }
+          assert.deepStrictEqual([calls, claims], [2, 2]);
+          yield* sync.shutdown;
+        }).pipe(Effect.provide(fixture(client, model).pipe(Layer.provideMerge(Hold.layer)))),
+      );
+    }),
+);
+
+it.effect("a claim frozen to a healthy model is not blocked by a held default", () =>
+  Effect.gen(function* () {
+    let claims = 0;
+    const frozenModels: string[] = [];
+    const client = peer({
+      claim: (_c, { protocolVersion: _protocol, ...claim }) =>
+        Effect.suspend(() => {
+          claims++;
+          frozenModels.push(claim.frozenDefaultModelSelection.model);
+          // The Hub's answer to the first claim never arrives; the claim stays frozen.
+          if (claims === 1) return Effect.fail(new M.MemoryHubError({ code: "unavailable" }));
+          return Effect.succeed({
+            ...claim,
+            fencingToken: claims,
+            claimedAtHubTime: timestamp,
+            expiresAtHubTime: "1970-01-01T00:02:00.000Z",
+            attemptDeadlineHubTime: "1970-01-01T00:10:00.000Z",
+          });
+        }),
+    });
+    const model = realGeneration({ resolveMemoryConflict: () => Effect.never });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* ready;
+        yield* conflict();
+        const sync = yield* Sync.MemorySyncService;
+        const hold = yield* Hold.MemoryGenerationHold;
+        yield* sync.syncOnce;
+        yield* sync.scheduleConflictResolution;
+        assert.strictEqual(claims, 1);
+        // The default moves to a model the provider refuses.
+        const next = M.MemoryModelSelection.make({
+          instanceId: M.ProviderInstanceId.make("Q"),
+          model: "Q",
+        });
+        yield* (yield* Settings.ServerSettingsService).updateSettings({
+          memoryModelSelection: next,
+        });
+        yield* hold
+          .guard(
+            yield* hold.keyFor(next),
+            Effect.fail(
+              new M.TextGenerationError({
+                operation: "resolveMemoryConflict",
+                detail: 'Codex CLI command failed: {"code":"invalid_json_schema","status":400}',
+              }),
+            ),
+          )
+          .pipe(Effect.flip);
+        // Still inside the hold on the new default (its first probe is a minute away).
+        yield* TestClock.adjust("40 seconds");
+        yield* sync.syncOnce;
+        yield* sync.scheduleConflictResolution;
+        // The frozen claim retries with its own model while the new default is held.
+        assert.strictEqual(claims, 2);
+        assert.deepStrictEqual(frozenModels, [frozenModels[0], frozenModels[0]]);
+        assert.notStrictEqual(frozenModels[0], "Q");
+        yield* sync.shutdown;
+      }).pipe(Effect.provide(fixture(client, model).pipe(Layer.provideMerge(Hold.layer)))),
+    );
+  }),
+);
+
+it.effect(
+  "conflicts waiting on a held model do not crowd a healthy frozen claim off the page",
+  () =>
+    Effect.gen(function* () {
+      const frozenModels: string[] = [];
+      const client = peer({
+        claim: (_c, { protocolVersion: _protocol, ...claim }) =>
+          Effect.suspend(() => {
+            frozenModels.push(claim.frozenDefaultModelSelection.model);
+            // The Hub's answer to the first claim never arrives; that claim stays frozen to P.
+            if (frozenModels.length === 1)
+              return Effect.fail(new M.MemoryHubError({ code: "unavailable" }));
+            return Effect.succeed({
+              ...claim,
+              fencingToken: frozenModels.length,
+              claimedAtHubTime: timestamp,
+              expiresAtHubTime: "1970-01-01T00:02:00.000Z",
+              attemptDeadlineHubTime: "1970-01-01T00:10:00.000Z",
+            });
+          }),
+      });
+      const model = realGeneration({ resolveMemoryConflict: () => Effect.never });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* ready;
+          yield* conflict();
+          const sync = yield* Sync.MemorySyncService;
+          const hold = yield* Hold.MemoryGenerationHold;
+          yield* sync.syncOnce;
+          yield* sync.scheduleConflictResolution;
+          const next = M.MemoryModelSelection.make({
+            instanceId: M.ProviderInstanceId.make("Q"),
+            model: "Q",
+          });
+          yield* (yield* Settings.ServerSettingsService).updateSettings({
+            memoryModelSelection: next,
+          });
+          yield* hold
+            .guard(
+              yield* hold.keyFor(next),
+              Effect.fail(
+                new M.TextGenerationError({
+                  operation: "resolveMemoryConflict",
+                  detail: 'Codex CLI command failed: {"code":"invalid_json_schema","status":400}',
+                }),
+              ),
+            )
+            .pipe(Effect.flip);
+          // A full page of conflicts that would use the held default, all due before P's retry.
+          for (let n = 2; n <= 110; n++) yield* conflict(n);
+          // Candidate discovery is paged too; a few passes queue them all.
+          for (let n = 0; n < 3; n++) yield* sync.syncOnce;
+          // Still inside the hold on Q; P's frozen claim is due by now.
+          yield* TestClock.adjust("40 seconds");
+          for (let n = 0; n < 2; n++) {
+            yield* sync.syncOnce;
+            yield* sync.scheduleConflictResolution;
+          }
+          assert.deepStrictEqual(frozenModels, [frozenModels[0], frozenModels[0]]);
+          assert.notStrictEqual(frozenModels[0], "Q");
+          yield* sync.shutdown;
+        }).pipe(Effect.provide(fixture(client, model).pipe(Layer.provideMerge(Hold.layer)))),
+      );
+    }),
+);
+
+it.effect("a fenced release after the Hub binding changed keeps the attempt for recovery", () =>
+  Effect.gen(function* () {
+    const model = realGeneration({
+      resolveMemoryConflict: () =>
+        Effect.fail(
+          new M.TextGenerationError({
+            operation: "resolveMemoryConflict",
+            detail: "Grok did not disclose or support the selected memory model.",
+            cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+          }),
+        ),
+    });
+    const client = peer({
+      // Settings moved to another Hub binding, so the client fences locally: the old lease
+      // may still be live at the Hub, and the attempt must not be retired on that answer.
+      release: () =>
+        changeHub(1, { ...member, secretName: "rebound-fixture" }).pipe(
+          Effect.orDie,
+          Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "fenced" }))),
+        ),
+    });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* ready;
+        yield* conflict();
+        const sync = yield* Sync.MemorySyncService;
+        yield* sync.syncOnce;
+        yield* sync.scheduleConflictResolution;
+        const sql = yield* SqlClient.SqlClient;
+        const tickets = yield* sql<{
+          state: string;
+        }>`SELECT json_extract(ticket_json,'$.state') AS state FROM memory_outbox WHERE kind='resolve'`;
+        assert.strictEqual(tickets.length, 1);
+        assert.notStrictEqual(tickets[0]!.state, "terminal");
+        yield* sync.shutdown;
+      }).pipe(Effect.provide(fixture(client, model).pipe(Layer.provideMerge(Hold.layer)))),
+    );
+  }),
 );
 
 it.effect(
@@ -7248,6 +7542,48 @@ it.effect("legacy syncStatus request and response decode through the base JSON R
       Exit.succeed(response),
     );
   }).pipe(Effect.provide(fixture())),
+);
+
+const encodeStatusExit = Schema.encodeEffect(
+  Schema.toCodecJson(Rpc.exitSchema(M.WsMemorySyncStatusRpc)),
+);
+const decodeLegacyStatusExit = Schema.decodeUnknownEffect(
+  Schema.toCodecJson(Rpc.exitSchema(legacySyncStatusRpc)),
+);
+it.effect("reports a paused memory model only to a request that opts in", () =>
+  Effect.gen(function* () {
+    const sync = yield* Sync.MemorySyncService;
+    const hold = yield* Hold.MemoryGenerationHold;
+    const memoryModel = M.MemoryModelSelection.make({
+      instanceId: M.ProviderInstanceId.make("codex"),
+      model: "held",
+    });
+    yield* (yield* Settings.ServerSettingsService).updateSettings({
+      memoryModelSelection: memoryModel,
+    });
+    yield* hold
+      .guard(
+        yield* hold.keyFor(memoryModel),
+        Effect.fail(
+          new M.TextGenerationError({
+            operation: "generateMemorySummary",
+            detail: 'Codex CLI command failed: {"code":"invalid_json_schema","status":400}',
+          }),
+        ),
+      )
+      .pipe(Effect.flip);
+    const opted = yield* sync.syncStatus({ includeGenerationHold: true }, Effect.void);
+    assert.strictEqual(opted.generationHold?.reason, "schema_rejected");
+    // A client that did not opt in decodes strictly and must never see the field.
+    const legacy = yield* sync.syncStatus({}, Effect.void);
+    assert.notProperty(legacy, "generationHold");
+    const encoded = yield* encodeStatusExit(Exit.succeed(legacy));
+    assert.isTrue(
+      Exit.isSuccess(
+        yield* Effect.exit(decodeLegacyStatusExit(JSON.parse(JSON.stringify(encoded)))),
+      ),
+    );
+  }).pipe(Effect.provide(fixture().pipe(Layer.provideMerge(Hold.layer)))),
 );
 
 it.effect.each(["expiry", "permission", "epoch", "publication"] as const)(

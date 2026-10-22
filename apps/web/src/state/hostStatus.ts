@@ -8,11 +8,18 @@ export const HOST_STATUS_REFRESH_MS = 15_000;
 
 /**
  * An environment's host-status read: that machine plus every SSH host it holds
- * open. Settings' Hosts section, the Fleet graph, and the Fleet console all read
- * through this one atom per environment, so they share its answer and its refresh.
+ * open, or that machine alone when `local`. Settings' Hosts section, the Fleet
+ * graph, and the Fleet console all read through these atoms, so views asking the
+ * same question share one answer and its refresh.
  */
-export function hostStatusAtom(environmentId: EnvironmentId) {
-  return serverEnvironment.hostStatus({ environmentId, input: {} });
+export function hostStatusAtom(
+  environmentId: EnvironmentId,
+  options?: { readonly local?: boolean },
+) {
+  return serverEnvironment.hostStatus({
+    environmentId,
+    input: options?.local === true ? { local: true } : {},
+  });
 }
 
 const lastRefreshedAt = new WeakMap<Atom.Atom<unknown>, number>();

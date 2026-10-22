@@ -11,7 +11,6 @@ import {
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadDetailSnapshot,
   type ThreadPullRequestLink,
-  type VcsListRefsResult,
 } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -144,20 +143,6 @@ const THREAD_SNAPSHOT: OrchestrationV2ThreadDetailSnapshot = {
     updatedAt: NOW,
   },
 };
-const REFS: VcsListRefsResult = {
-  refs: [
-    {
-      name: "main",
-      current: true,
-      isDefault: true,
-      worktreePath: "/repo",
-    },
-  ],
-  isRepo: true,
-  hasPrimaryRemote: true,
-  nextCursor: null,
-  totalCount: 1,
-};
 
 function cacheId(
   environmentId: EnvironmentId,
@@ -172,6 +157,9 @@ function makeDatabase() {
   const schemaVersions = new Map<string, number>();
   const removed: Array<string> = [];
   const database = MobileDatabase.MobileDatabase.of({
+    loadNoteOutbox: Effect.succeed([]),
+    saveNoteOutbox: () => Effect.void,
+    removeNoteOutbox: () => Effect.void,
     loadCache: (environmentId, kind, cacheKey) =>
       Effect.succeed(Option.fromUndefinedOr(values.get(cacheId(environmentId, kind, cacheKey)))),
     listCache: (kind) =>
@@ -213,6 +201,21 @@ function makeDatabase() {
 }
 
 describe("mobile SQLite environment cache store", () => {
+  it.effect("persists shell age metadata independently and clears it with the environment", () =>
+    Effect.gen(function* () {
+      const memory = makeDatabase();
+      const store = yield* make().pipe(
+        Effect.provideService(MobileDatabase.MobileDatabase, memory.database),
+      );
+      const meta = { snapshotSequence: 3, capturedAt: "2026-10-19T12:00:00.000Z" };
+      expect(yield* store.loadShellMeta(ENVIRONMENT_ID)).toEqual(Option.none());
+      yield* store.saveShellMeta(ENVIRONMENT_ID, meta);
+      expect(yield* store.loadShellMeta(ENVIRONMENT_ID)).toEqual(Option.some(meta));
+      yield* store.clear(ENVIRONMENT_ID);
+      expect(yield* store.loadShellMeta(ENVIRONMENT_ID)).toEqual(Option.none());
+    }),
+  );
+
   it.effect("round-trips V2 shell and thread DateTime fields with the shared cache schema", () =>
     Effect.gen(function* () {
       const memory = makeDatabase();
@@ -321,19 +324,6 @@ describe("mobile SQLite environment cache store", () => {
     }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
   });
 
-  it.effect("round-trips schema-validated VCS refs", () =>
-    Effect.gen(function* () {
-      const memory = makeDatabase();
-      const store = yield* make().pipe(
-        Effect.provideService(MobileDatabase.MobileDatabase, memory.database),
-      );
-
-      yield* store.saveVcsRefs(ENVIRONMENT_ID, "/repo", REFS);
-
-      expect(yield* store.loadVcsRefs(ENVIRONMENT_ID, "/repo")).toEqual(Option.some(REFS));
-    }),
-  );
-
   it.effect("deletes a corrupt cache record and treats it as a miss", () =>
     Effect.gen(function* () {
       const memory = makeDatabase();
@@ -345,57 +335,6 @@ describe("mobile SQLite environment cache store", () => {
 
       expect(yield* store.loadVcsRefs(ENVIRONMENT_ID, "/repo")).toEqual(Option.none());
       expect(memory.removed).toEqual([id]);
-    }),
-  );
-
-  it.effect("removes one persisted VCS ref snapshot", () =>
-    Effect.gen(function* () {
-      const memory = makeDatabase();
-      const store = yield* make().pipe(
-        Effect.provideService(MobileDatabase.MobileDatabase, memory.database),
-      );
-      yield* store.saveVcsRefs(ENVIRONMENT_ID, "/repo", REFS);
-
-      yield* store.removeVcsRefs(ENVIRONMENT_ID, "/repo");
-
-      expect(yield* store.loadVcsRefs(ENVIRONMENT_ID, "/repo")).toEqual(Option.none());
-      expect(memory.removed).toContain(cacheId(ENVIRONMENT_ID, "vcs-refs", "/repo"));
-    }),
-  );
-
-  it.effect("clears every persisted VCS ref snapshot in one environment", () =>
-    Effect.gen(function* () {
-      const memory = makeDatabase();
-      const store = yield* make().pipe(
-        Effect.provideService(MobileDatabase.MobileDatabase, memory.database),
-      );
-      const otherEnvironmentId = EnvironmentId.make("environment-2");
-      yield* store.saveVcsRefs(ENVIRONMENT_ID, "/repo", REFS);
-      yield* store.saveVcsRefs(ENVIRONMENT_ID, "/repo-worktree", REFS);
-      yield* store.saveVcsRefs(otherEnvironmentId, "/repo", REFS);
-
-      yield* store.clearVcsRefs(ENVIRONMENT_ID);
-
-      expect(yield* store.loadVcsRefs(ENVIRONMENT_ID, "/repo")).toEqual(Option.none());
-      expect(yield* store.loadVcsRefs(ENVIRONMENT_ID, "/repo-worktree")).toEqual(Option.none());
-      expect(yield* store.loadVcsRefs(otherEnvironmentId, "/repo")).toEqual(Option.some(REFS));
-    }),
-  );
-
-  it.effect("clears one environment without touching another", () =>
-    Effect.gen(function* () {
-      const memory = makeDatabase();
-      const store = yield* make().pipe(
-        Effect.provideService(MobileDatabase.MobileDatabase, memory.database),
-      );
-      const otherEnvironmentId = EnvironmentId.make("environment-2");
-      yield* store.saveVcsRefs(ENVIRONMENT_ID, "/repo", REFS);
-      yield* store.saveVcsRefs(otherEnvironmentId, "/repo", REFS);
-
-      yield* store.clear(ENVIRONMENT_ID);
-
-      expect(yield* store.loadVcsRefs(ENVIRONMENT_ID, "/repo")).toEqual(Option.none());
-      expect(yield* store.loadVcsRefs(otherEnvironmentId, "/repo")).toEqual(Option.some(REFS));
     }),
   );
 });

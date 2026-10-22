@@ -1,0 +1,13 @@
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "iconPath": "assets/dev/blueprint-web-apple-touch-180.png",
+  "worktreeSparseExclude": [".repos/"],
+  "scripts": [
+    {
+      "name": "Setup Worktree",
+      "command": "node scripts/setup-worktree.ts",
+      "icon": "configure",
+      "runOnWorktreeCreate": true
+    }
+  ]
+}

@@ -1,5 +1,3 @@
-"use client";
-
 import type { DesktopPreviewColorScheme } from "@goat/contracts";
 import {
   MinusIcon as Minus,

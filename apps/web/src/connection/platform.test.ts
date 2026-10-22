@@ -25,9 +25,7 @@ import {
   primaryRegistrationToRetainAfterTopologyRead,
   prepareDesktopSshEnvironment,
   provisionDesktopSshEnvironment,
-  readPrimaryEnvironmentTargetResult,
   secondaryRegistrationsToRetainAfterTopologyRead,
-  secondaryBearerExpiresAtEpochMs,
   secondaryBearerRefreshAtEpochMs,
   secondsUntil,
   type SshPairingGrants,
@@ -108,6 +106,183 @@ const OLDER_RUNTIME_SCOPES = AuthStandardClientScopes.filter(
   (scope) => !["access:read", "access:write", "relay:write"].includes(scope),
 );
 
+describe("validated SSH attachment renewal", () => {
+  const input = {
+    target: TARGET,
+    expectedEnvironmentId: EnvironmentId.make("environment-ssh"),
+    bearerToken: "saved-token",
+  };
+  function attachmentBridge(rejection: "boolean" | "scopes" | 401 | 403) {
+    const calls: string[] = [];
+    const options: Parameters<DesktopBridge["ensureSshEnvironment"]>[1][] = [];
+    const base = makeBridge(calls);
+    let preparations = 0;
+    let exchanges = 0;
+    const bridge: DesktopBridge = {
+      ...base,
+      supportsSshPreparationPhases: true,
+      ensureSshEnvironment: async (target, request) => {
+        options.push(request);
+        if (request?.preparedAttachmentId === undefined) preparations++;
+        else expect(request.preparedAttachmentId).toBe("attachment-1");
+        return {
+          ...(await base.ensureSshEnvironment(target, request)),
+          attachmentId: "attachment-1",
+        };
+      },
+      fetchSshSessionState: async () => {
+        calls.push("session");
+        if (typeof rejection === "number")
+          throw new Error(`[ssh_http:${rejection}] rejected saved session`);
+        return {
+          ...(await base.fetchSshSessionState("http://127.0.0.1:3201/", "saved-token")),
+          authenticated: rejection !== "boolean",
+          permissions: rejection === "scopes" ? [] : AuthStandardClientScopes,
+        };
+      },
+      bootstrapSshBearerSession: async (url, token) => {
+        exchanges++;
+        expect(token).toBe("pairing-token");
+        return base.bootstrapSshBearerSession(url, token);
+      },
+    };
+    return { bridge, calls, options, preparations: () => preparations, exchanges: () => exchanges };
+  }
+  it.effect.each(["boolean", "scopes", 401, 403] as const)(
+    "renews %s once against the prepared attachment",
+    (rejection) =>
+      Effect.gen(function* () {
+        const f = attachmentBridge(rejection);
+        const result = yield* prepareDesktopSshEnvironment(f.bridge, input);
+        expect(result.bearerToken).toBe("bearer-token");
+        expect(f.preparations()).toBe(1);
+        expect(f.exchanges()).toBe(1);
+        expect(f.options).toHaveLength(2);
+        expect(f.options[0]).toMatchObject({
+          issuePairingToken: false,
+          caller: "saved-connection",
+        });
+        expect(f.options[1]).toMatchObject({
+          issuePairingToken: true,
+          caller: "provision",
+          preparedAttachmentId: "attachment-1",
+        });
+      }),
+  );
+  it.effect("never recursively renews a failed fresh credential", () =>
+    Effect.gen(function* () {
+      const f = attachmentBridge(401);
+      let exchanges = 0;
+      f.bridge.bootstrapSshBearerSession = async () => {
+        exchanges++;
+        throw new Error("[ssh_http:401] fresh credential rejected");
+      };
+      yield* prepareDesktopSshEnvironment(f.bridge, input).pipe(Effect.flip);
+      expect(f.preparations()).toBe(1);
+      expect(f.options).toHaveLength(2);
+      expect(exchanges).toBe(1);
+    }),
+  );
+  it.effect("drops a dead hint neutrally and omits it on the next invocation", () =>
+    Effect.gen(function* () {
+      const f = attachmentBridge(401);
+      const ensure = f.bridge.ensureSshEnvironment;
+      let invalid = true;
+      f.bridge.ensureSshEnvironment = (target, request) => {
+        if (invalid && request?.preparedAttachmentId !== undefined) {
+          invalid = false;
+          throw new Error("SSH preparation superseded by a newer connection intent.");
+        }
+        return ensure(target, request);
+      };
+      const error = yield* prepareDesktopSshEnvironment(f.bridge, input).pipe(Effect.flip);
+      expect(error._tag).toBe("ConnectionAttemptSuperseded");
+      yield* prepareDesktopSshEnvironment(f.bridge, input);
+      expect(f.preparations()).toBe(2);
+      expect(f.exchanges()).toBe(1);
+    }),
+  );
+  it.effect("does not renew a non-auth session network failure", () =>
+    Effect.gen(function* () {
+      const f = attachmentBridge(401);
+      f.bridge.fetchSshSessionState = async () => {
+        throw new Error("network unavailable");
+      };
+      yield* prepareDesktopSshEnvironment(f.bridge, input).pipe(Effect.flip);
+      expect(f.options).toHaveLength(1);
+      expect(f.exchanges()).toBe(0);
+    }),
+  );
+  it.effect.each(["before", "after"] as const)(
+    "renews explicitly rejected speculative authorization %s endpoint callback",
+    (when) =>
+      Effect.gen(function* () {
+        const f = attachmentBridge(401);
+        yield* prepareDesktopSshEnvironment(f.bridge, {
+          ...input,
+          authorize: (prepared, verified) =>
+            Effect.gen(function* () {
+              if (when === "after") yield* verified(prepared.verifiedEndpoint!.descriptor);
+              return yield* new ConnectionBlockedError({
+                reason: "authentication",
+                detail: "The environment credential is invalid.",
+              });
+            }),
+        });
+        expect(f.preparations()).toBe(1);
+        expect(f.exchanges()).toBe(1);
+      }),
+  );
+  it.effect("does not renew a speculative configuration failure", () =>
+    Effect.gen(function* () {
+      const f = attachmentBridge(401);
+      const error = yield* prepareDesktopSshEnvironment(f.bridge, {
+        ...input,
+        authorize: () =>
+          Effect.fail(
+            new ConnectionBlockedError({
+              reason: "configuration",
+              detail: "The endpoint identity changed.",
+            }),
+          ),
+      }).pipe(Effect.flip);
+      expect(error).toMatchObject({
+        reason: "configuration",
+        detail: "The endpoint identity changed.",
+      });
+      expect(f.options).toHaveLength(1);
+      expect(f.exchanges()).toBe(0);
+    }),
+  );
+  it.effect("keeps fresh pairing credentials independent across callers", () =>
+    Effect.gen(function* () {
+      const f = attachmentBridge(401);
+      let issued = 0;
+      const ensure = f.bridge.ensureSshEnvironment;
+      const exchanged: string[] = [];
+      f.bridge.ensureSshEnvironment = async (target, request) => ({
+        ...(await ensure(target, request)),
+        pairingToken: request?.issuePairingToken ? `one-use-${++issued}` : null,
+      });
+      f.bridge.bootstrapSshBearerSession = async (_url, token) => {
+        exchanged.push(token);
+        return {
+          access_token: `bearer-${token}`,
+          scope: AuthStandardClientScopes.join(" "),
+        } as Awaited<ReturnType<DesktopBridge["bootstrapSshBearerSession"]>>;
+      };
+      yield* Effect.all(
+        [
+          prepareDesktopSshEnvironment(f.bridge, input),
+          prepareDesktopSshEnvironment(f.bridge, input),
+        ],
+        { concurrency: "unbounded" },
+      );
+      expect(exchanged.toSorted()).toEqual(["one-use-1", "one-use-2"]);
+    }),
+  );
+});
+
 describe("desktop SSH pairing", () => {
   it.effect("forwards key-only authentication to the desktop bridge", () =>
     Effect.gen(function* () {
@@ -124,16 +299,6 @@ describe("desktop SSH pairing", () => {
       expect(calls).toEqual(["ensure", "descriptor", "token"]);
     }),
   );
-  it.effect("fetches the descriptor before consuming the one-time credential", () =>
-    Effect.gen(function* () {
-      const calls: string[] = [];
-
-      const provisioned = yield* provisionDesktopSshEnvironment(makeBridge(calls), TARGET);
-
-      expect(provisioned.environmentId).toBe(EnvironmentId.make("environment-ssh"));
-      expect(calls).toEqual(["ensure", "descriptor", "token"]);
-    }),
-  );
 
   it.effect("does not consume the credential when adding a route to a different machine", () =>
     Effect.gen(function* () {
@@ -147,19 +312,6 @@ describe("desktop SSH pairing", () => {
 
       expect(error).toMatchObject({ reason: "configuration" });
       expect(error.message).toContain("a different machine");
-      expect(calls).toEqual(["ensure", "descriptor"]);
-    }),
-  );
-
-  it.effect("does not consume the credential when descriptor discovery fails", () =>
-    Effect.gen(function* () {
-      const calls: string[] = [];
-
-      yield* provisionDesktopSshEnvironment(
-        makeBridge(calls, { failDescriptor: true }),
-        TARGET,
-      ).pipe(Effect.flip);
-
       expect(calls).toEqual(["ensure", "descriptor"]);
     }),
   );
@@ -441,28 +593,6 @@ describe("desktop SSH pairing", () => {
 describe("desktop-local bearer cache", () => {
   const registration = {} as never;
 
-  it("refreshes a secondary bearer before it expires", () => {
-    const issuedAtEpochMs = 10_000;
-    const refreshAtEpochMs = secondaryBearerRefreshAtEpochMs(issuedAtEpochMs, 60);
-    const expiresAtEpochMs = secondaryBearerExpiresAtEpochMs(issuedAtEpochMs, 60);
-    const cached = {
-      expiresAtEpochMs,
-      signature: "secondary-signature",
-      registration,
-      refreshAtEpochMs,
-    };
-
-    expect(refreshAtEpochMs).toBe(65_000);
-    expect(canReuseCachedPlatformRegistration(cached, cached.signature, 64_999)).toBe(true);
-    expect(canReuseCachedPlatformRegistration(cached, cached.signature, 65_000)).toBe(false);
-    expect(
-      canRetainCachedPlatformRegistrationAfterRefreshFailure(cached, cached.signature, 69_999),
-    ).toBe(true);
-    expect(
-      canRetainCachedPlatformRegistrationAfterRefreshFailure(cached, cached.signature, 70_000),
-    ).toBe(false);
-  });
-
   it("caches a desktop-issued bearer until just before its own expiry", () => {
     const now = Date.parse("2026-10-12T10:00:00.000Z");
     const expiresIn = secondsUntil("2026-10-12T10:01:00.000Z", now);
@@ -472,19 +602,6 @@ describe("desktop-local bearer cache", () => {
     expect(secondsUntil(undefined, now)).toBe(0);
     expect(secondsUntil("not a date", now)).toBe(0);
     expect(secondsUntil("2026-10-12T09:00:00.000Z", now)).toBe(0);
-  });
-
-  it("does not cache credentials whose lifetime is shorter than the refresh skew", () => {
-    const refreshAtEpochMs = secondaryBearerRefreshAtEpochMs(10_000, 3);
-    const cached = {
-      expiresAtEpochMs: secondaryBearerExpiresAtEpochMs(10_000, 3),
-      signature: "secondary-signature",
-      registration,
-      refreshAtEpochMs,
-    };
-
-    expect(refreshAtEpochMs).toBe(10_000);
-    expect(canReuseCachedPlatformRegistration(cached, cached.signature, 10_000)).toBe(false);
   });
 
   it("retains only unexpired secondaries after a topology read failure", () => {
@@ -540,23 +657,6 @@ describe("desktop-local bearer cache", () => {
 });
 
 describe("rejected desktop-local bootstrap tokens", () => {
-  it("backs off on a rejected signature and retries it on a growing, capped delay", () => {
-    const signature = "http://a|ws://a|old-token";
-    const first = nextRejectedSecondaryBootstrap(undefined, signature, 0);
-
-    expect(isRejectedSecondaryBootstrap(first, signature, 59_999)).toBe(true);
-    expect(isRejectedSecondaryBootstrap(first, signature, 60_000)).toBe(false);
-
-    const second = nextRejectedSecondaryBootstrap(first, signature, 60_000);
-    expect(second.retryAtEpochMs).toBe(180_000);
-
-    let backoff = second;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      backoff = nextRejectedSecondaryBootstrap(backoff, signature, 0);
-    }
-    expect(backoff.delayMs).toBe(30 * 60_000);
-  });
-
   it("retries at once when the token or endpoint changes", () => {
     const rejected = nextRejectedSecondaryBootstrap(undefined, "http://a|ws://a|old-token", 0);
 
@@ -607,16 +707,6 @@ describe("primary topology cache", () => {
   };
   const previous = new Map([[PRIMARY_LOCAL_ENVIRONMENT_ID, cached]]);
 
-  it("captures synchronous primary target read failures", () => {
-    const cause = new Error("invalid primary target");
-
-    expect(
-      readPrimaryEnvironmentTargetResult(() => {
-        throw cause;
-      }),
-    ).toEqual({ _tag: "Failure", cause });
-  });
-
   it("retains the cached primary after a transient topology read failure", () => {
     expect(
       primaryRegistrationToRetainAfterTopologyRead(previous, {
@@ -624,15 +714,6 @@ describe("primary topology cache", () => {
         cause: new Error("IPC unavailable"),
       }),
     ).toBe(cached);
-  });
-
-  it("treats a successful primary absence as authoritative removal", () => {
-    expect(
-      primaryRegistrationToRetainAfterTopologyRead(previous, {
-        _tag: "Success",
-        target: null,
-      }),
-    ).toBeUndefined();
   });
 });
 

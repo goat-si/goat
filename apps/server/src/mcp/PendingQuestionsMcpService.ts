@@ -1,4 +1,5 @@
 import {
+  CommandId,
   OrchestratorMcpFailure,
   OrchestratorMcpLaunchedQuestionsResult,
   OrchestratorMcpThreadPendingRequestsResult,
@@ -76,6 +77,7 @@ export class PendingQuestionsMcpService extends Context.Service<
     readonly respond: (
       scope: McpInvocationScope,
       input: OrchestratorMcpPendingRequestRespondInput,
+      commandId?: CommandId,
     ) => Effect.Effect<OrchestratorMcpPendingRequestRespondResult, OrchestratorMcpFailure>;
   }
 >()("goat/mcp/PendingQuestionsMcpService") {}
@@ -431,7 +433,7 @@ const make = Effect.gen(function* () {
           };
         }),
       ),
-    respond: (scope, input) =>
+    respond: (scope, input, commandId) =>
       inScope(
         scope,
         Effect.gen(function* () {
@@ -551,7 +553,7 @@ const make = Effect.gen(function* () {
           const result = yield* threads
             .dispatch({
               type: "runtime-request.respond",
-              commandId: yield* newCommandId(),
+              commandId: commandId ?? (yield* newCommandId()),
               threadId: projection.thread.id,
               requestId: input.requestId,
               ...(input.answers === undefined ? {} : { answers: input.answers }),

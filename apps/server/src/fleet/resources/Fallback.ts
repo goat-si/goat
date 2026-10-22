@@ -21,7 +21,12 @@ import {
   type ModelSelection,
   type ThreadId,
 } from "@goat/contracts";
-import { modelSelectionCommandType } from "@goat/shared/model";
+import { modelSelectionCommandType, modelSelectionsEqual } from "@goat/shared/model";
+import {
+  latestExecutedRun,
+  latestRootProviderFailure,
+  threadErrorSummary,
+} from "@goat/shared/orchestrationV2ThreadError";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -29,10 +34,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
 
 import { isExhausted } from "../../channels/channelPlacement.ts";
 import * as ProviderSwitch from "../../orchestration-v2/ProviderSwitchService.ts";
+import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
@@ -76,7 +81,7 @@ export interface FallbackShape {
   /** Whether any chain opted into ordinary threads, so the recovery sweep looks for them. */
   readonly coversThreads: Effect.Effect<boolean>;
   /**
-   * Moves an ordinary thread that failed with a usage limit to its chain's next model, with a
+   * Moves an ordinary thread with a configured failure trigger to its chain's next model, with a
    * notice and a continuation. True when it switched; false leaves the thread to the recovery
    * sweep's wait-for-reset.
    */
@@ -272,9 +277,6 @@ export const make = Effect.gen(function* () {
       const shell = yield* threads.getThreadShell(threadId);
       if (
         shell === null ||
-        shell.status !== "failed" ||
-        shell.lastErrorClass == null ||
-        shell.latestRunId === null ||
         shell.archivedAt !== null ||
         shell.deletedAt !== null ||
         shell.settledOverride === "settled" ||
@@ -282,13 +284,43 @@ export const make = Effect.gen(function* () {
         (yield* snoozed(shell))
       )
         return false;
-      const runId = shell.latestRunId;
-      const failure = shell.lastErrorClass;
       const { runs } = yield* threads.getThreadRecords(threadId, ["runs"]);
-      // The failed run's model, not the thread's: a restart after the selection command
-      // already moved the thread finds the same step and replays the same command ids.
-      const failedRun = runs.find((run) => run.id === runId);
-      if (failedRun === undefined) return false;
+      const failedRun = latestExecutedRun(runs);
+      if (failedRun?.status !== "failed") return false;
+      const runId = failedRun.id;
+      const continuation = "fleet-fallback:" + threadId + ":" + runId + ":continue";
+      // A completed hop owns this run even if the chain or selection changed since delivery.
+      if ((yield* threads.receiptStatus(CommandId.make(continuation))) === "accepted") return true;
+      if (runs.some((run) => run.status === "queued")) return false;
+      const { turnItems, providerSessions } = yield* threads.getThreadRecords(
+        threadId,
+        ["turnItems", "providerSessions"],
+        {
+          turnItemTypes: ["error", "run_interrupt_request"],
+          turnItemRunIds: [runId],
+        },
+      );
+      if (
+        turnItems.some((item) => item.type === "run_interrupt_request") ||
+        (shell.limitRecovery?.runId === runId &&
+          !shell.limitRecovery.autoResume &&
+          !shell.limitRecovery.snooze)
+      )
+        return false;
+      const session = providerSessions
+        .filter((entry) => entry.providerInstanceId === shell.providerInstanceId)
+        .toSorted(
+          (left, right) =>
+            DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt) ||
+            right.id.localeCompare(left.id),
+        )[0];
+      const summary = threadErrorSummary(
+        latestRootProviderFailure(failedRun, turnItems),
+        session?.lastError ?? null,
+      );
+      const failure = summary.lastErrorClass;
+      if (failure === null) return false;
+      // A restart after selection must resolve the original chain and replay that hop's receipts.
       const current = failedRun.modelSelection;
       const resolved = ordinaryThreadChain(settings, current);
       if (resolved === null) return false;
@@ -299,19 +331,21 @@ export const make = Effect.gen(function* () {
       /** Re-checks the thread, then the notice and the continuation, both fixed per run. */
       const announce = (target: ModelSelection, hop: number) =>
         Effect.gen(function* () {
-          // The user may have settled, snoozed, stopped, or redirected the thread meanwhile. A
-          // small window remains between this read and the dispatch; the orchestrator has no
-          // conditional continuation to close it (#538).
+          // The user may have settled, snoozed, stopped, or redirected the thread meanwhile.
+          // This read skips the notice; automatedContinuationOfRunId makes the orchestrator
+          // refuse a continuation that loses the race after it.
           const latest = yield* threads.getThreadShell(threadId);
+          const latestRuns = yield* threads.getThreadRecords(threadId, ["runs"]);
+          const latestExecuted = latestExecutedRun(latestRuns.runs);
           if (
             latest === null ||
-            latest.latestRunId !== runId ||
-            latest.status !== "failed" ||
+            latestExecuted?.id !== runId ||
+            latestExecuted.status !== "failed" ||
             latest.archivedAt !== null ||
             latest.settledOverride === "settled" ||
             latest.pendingRuntimeRequest != null ||
             (yield* snoozed(latest)) ||
-            stepKey(latest.modelSelection) !== stepKey(target)
+            !modelSelectionsEqual(latest.modelSelection, target)
           )
             return;
           yield* Effect.logInfo("fleet.fallback.hop", {
@@ -330,19 +364,20 @@ export const make = Effect.gen(function* () {
               failure +
               " on " +
               label(current) +
-              (shell.usageLimitResetAt == null
+              (summary.usageLimitResetAt == null
                 ? ""
-                : "; that limit resets at " + shell.usageLimitResetAt) +
+                : "; that limit resets at " + summary.usageLimitResetAt) +
               " (fallback chain " +
               resolved.id +
               ").",
           );
-          const continuation = "fleet-fallback:" + threadId + ":" + runId + ":continue";
           yield* threads.dispatch({
             type: "message.dispatch",
             commandId: CommandId.make(continuation),
             messageId: MessageId.make(continuation),
             threadId,
+            automatedContinuationOfRunId: runId,
+            modelSelection: target,
             text: "Continue where you left off.",
             attachments: [],
             dispatchMode: { type: "start_immediately" },
@@ -369,10 +404,11 @@ export const make = Effect.gen(function* () {
       // A restart after our selection landed: finish that hop instead of choosing again, even
       // if its account has since run out. Only our accepted receipt counts; a model the user
       // picked by hand goes to the recovery sweep as it would without a chain.
-      if (stepKey(shell.modelSelection) !== stepKey(current)) {
+      if (!modelSelectionsEqual(shell.modelSelection, current)) {
         const ours =
-          resolved.chain.steps.some((step) => stepKey(step) === stepKey(shell.modelSelection)) &&
-          (yield* attempts(shell.modelSelection))._tag === "Accepted";
+          resolved.chain.steps.some((step) =>
+            modelSelectionsEqual(toSelection(step), shell.modelSelection),
+          ) && (yield* attempts(shell.modelSelection))._tag === "Accepted";
         if (!ours) return false;
         yield* announce(shell.modelSelection, new Set(tried.map(stepKey)).size);
         return true;
@@ -419,6 +455,10 @@ export const make = Effect.gen(function* () {
               modelSelection: target,
             })
             .pipe(
+              Effect.provideService(Orchestrator.FallbackSelectionSource, {
+                runId,
+                modelSelection: current,
+              }),
               Effect.as(true),
               Effect.catchCause((cause) =>
                 Effect.logWarning("fleet.fallback.select-refused", { threadId, cause }).pipe(
@@ -457,22 +497,8 @@ export const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(Fallback, make);
 
-const MAX_CHAIN_WRITE_ATTEMPTS = 3;
-/** settingsPath of the commit-time error raised when the chains changed under an edit. */
-const CHAINS_CHANGED = "fleet:chains-changed";
-
-const ChainView = Schema.Struct({
-  fallbackChains: Schema.Record(Schema.String, FallbackChain),
-  defaultFallbackChain: Schema.NullOr(Schema.String),
-});
-const sameChains = Schema.toEquivalence(ChainView);
-const chainView = (fleet: FleetSettings): typeof ChainView.Type => ({
-  fallbackChains: fleet.fallbackChains ?? {},
-  defaultFallbackChain: fleet.defaultFallbackChain ?? null,
-});
-
 /** The fleet keys one goat_fallback_chain_set writes, computed from \`fleet\`. */
-export function chainPatch(fleet: FleetSettings, input: GoatFallbackChainSetInput) {
+function chainPatch(fleet: FleetSettings, input: GoatFallbackChainSetInput) {
   const chains = { ...fleet.fallbackChains };
   if (input.chain === null) delete chains[input.id];
   else chains[input.id] = input.chain;
@@ -515,8 +541,6 @@ export const layerChains = Layer.effect(
   Effect.gen(function* () {
     const settingsService = yield* ServerSettings.ServerSettingsService;
     const registry = yield* ProviderRegistry.ProviderRegistry;
-    // goat_fallback_chain_set calls are serialized so two edits cannot drop each other's chain.
-    const lock = yield* Semaphore.make(1);
     const read = settingsService.getSettings.pipe(
       Effect.map((settings) => settings.fleet),
       Effect.orElseSucceed((): FleetSettings => ({})),
@@ -528,75 +552,46 @@ export const layerChains = Layer.effect(
     return FallbackChains.of({
       get: Effect.map(read, view),
       set: (input, authorizeAtCommit) =>
-        lock.withPermits(1)(
-          Effect.gen(function* () {
-            const fleet = yield* read;
-            const warnings: Array<string> = [];
-            if (input.chain !== null) {
-              const providers = yield* registry.getProviders;
-              for (const step of input.chain.steps) {
-                const provider = providers.find((item) => item.instanceId === step.instanceId);
-                if (provider === undefined)
-                  return yield* new FallbackChainsError({
+        Effect.gen(function* () {
+          const fleet = yield* read;
+          const warnings: Array<string> = [];
+          if (input.chain !== null) {
+            const providers = yield* registry.getProviders;
+            for (const step of input.chain.steps) {
+              const provider = providers.find((item) => item.instanceId === step.instanceId);
+              if (provider === undefined)
+                return yield* new FallbackChainsError({
+                  message:
+                    "Provider instance " +
+                    step.instanceId +
+                    " is not configured here; orchestrator_capabilities lists the instances.",
+                });
+              if (
+                !provider.models.some(
+                  (model) => model.slug === step.model || model.aliases?.includes(step.model),
+                )
+              )
+                warnings.push(step.instanceId + " does not list model " + step.model + ".");
+            }
+          }
+          const saved = yield* settingsService
+            .updateSettingsWith(
+              (current) => Effect.succeed({ fleet: chainPatch(current.fleet, input) }),
+              authorizeAtCommit,
+            )
+            .pipe(
+              Effect.mapError(
+                (error) =>
+                  new FallbackChainsError({
                     message:
-                      "Provider instance " +
-                      step.instanceId +
-                      " is not configured here; orchestrator_capabilities lists the instances.",
-                  });
-                if (
-                  !provider.models.some(
-                    (model) => model.slug === step.model || model.aliases?.includes(step.model),
-                  )
-                )
-                  warnings.push(step.instanceId + " does not list model " + step.model + ".");
-              }
-            }
-            // Optimistic write: inside the settings write lock, the chains must still be the
-            // ones this edit was computed from, or it starts over from the newer ones. Any
-            // settings writer takes that lock, so a concurrent edit is never overwritten.
-            for (let attempt = 0; attempt < MAX_CHAIN_WRITE_ATTEMPTS; attempt++) {
-              const base = attempt === 0 ? fleet : yield* read;
-              const patch = chainPatch(base, input);
-              const unchanged = read.pipe(
-                Effect.flatMap((latest) =>
-                  sameChains(chainView(latest), chainView(base))
-                    ? Effect.void
-                    : Effect.fail(
-                        new ServerSettingsError({
-                          settingsPath: CHAINS_CHANGED,
-                          operation: "normalize",
-                        }),
-                      ),
-                ),
-              );
-              const saved = yield* settingsService
-                .updateSettings(
-                  { fleet: patch },
-                  (authorizeAtCommit ?? Effect.void).pipe(Effect.andThen(unchanged)),
-                )
-                .pipe(
-                  Effect.map((settings) => settings.fleet),
-                  Effect.catchIf(
-                    (error) => error.settingsPath === CHAINS_CHANGED,
-                    () => Effect.succeed(null),
-                  ),
-                  Effect.mapError(
-                    (error) =>
-                      new FallbackChainsError({
-                        message:
-                          error.settingsPath === CALLER_REVOKED
-                            ? "The caller lost full access before the chain was saved."
-                            : "Server settings could not be saved.",
-                      }),
-                  ),
-                );
-              if (saved !== null) return { ...view(saved), warnings };
-            }
-            return yield* new FallbackChainsError({
-              message: "Fallback chains kept changing while this edit was saved; try again.",
-            });
-          }),
-        ),
+                      error.settingsPath === CALLER_REVOKED
+                        ? "The caller lost full access before the chain was saved."
+                        : "Server settings could not be saved.",
+                  }),
+              ),
+            );
+          return { ...view(saved.fleet), warnings };
+        }),
     });
   }),
 );

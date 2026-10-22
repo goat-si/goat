@@ -1,8 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
 
 import { SnapShotSource } from "./chatAttachment.ts";
-import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { EnvironmentId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
   BrowserImportResult,
@@ -11,8 +12,14 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
-import { type SshHostResult, SshRuntimeUpdateMode } from "./sshHost.ts";
+import {
+  type SshHostResult,
+  SshHostStatus,
+  SshRuntimePhase,
+  SshRuntimeUpdateMode,
+} from "./sshHost.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import type { DesktopCuaVerification } from "./cua.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
@@ -474,6 +481,7 @@ export interface DesktopSshEnvironmentBootstrap {
   httpBaseUrl: string;
   wsBaseUrl: string;
   pairingToken: string | null;
+  attachmentId?: string;
   remotePort?: number;
   remoteServerKind?: "external" | "managed";
   /** GOAT version of the remote server, when the runtime reported one. Source runs omit it. */
@@ -501,6 +509,7 @@ export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
   httpBaseUrl: Schema.String,
   wsBaseUrl: Schema.String,
   pairingToken: Schema.NullOr(Schema.String),
+  attachmentId: Schema.optionalKey(TrimmedNonEmptyString),
   remotePort: Schema.optionalKey(Schema.Number),
   remoteServerKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
   remoteServerVersion: Schema.optionalKey(Schema.String),
@@ -532,7 +541,48 @@ export const DesktopSshPasswordPromptCancelledResultSchema = Schema.Struct({
   message: Schema.String,
 });
 
+const sshPreparationProgressFields = {
+  operationId: TrimmedNonEmptyString,
+  phase: Schema.NullOr(SshRuntimePhase),
+  hostAnswered: Schema.Boolean,
+  remainingMs: NonNegativeInt,
+  outcome: Schema.optionalKey(Schema.Literals(["ready", "pending", "failed", "superseded"])),
+  attachmentId: Schema.optionalKey(TrimmedNonEmptyString),
+  runtimeStatus: Schema.optionalKey(SshHostStatus),
+};
+const sshPreparationProgressShape = Schema.Struct(sshPreparationProgressFields);
+const validSshPreparationProgress = Schema.makeFilter(
+  (progress: typeof sshPreparationProgressShape.Type) =>
+    progress.phase !== null
+      ? progress.outcome === undefined &&
+        progress.attachmentId === undefined &&
+        progress.runtimeStatus === undefined
+      : progress.outcome === "ready"
+        ? progress.attachmentId !== undefined &&
+          progress.runtimeStatus !== undefined &&
+          (progress.runtimeStatus.state === "ready" ||
+            progress.runtimeStatus.state === "providers_not_ready")
+        : progress.outcome !== undefined &&
+          progress.attachmentId === undefined &&
+          progress.runtimeStatus === undefined,
+);
+export const DesktopSshPreparationProgressSchema = sshPreparationProgressShape.check(
+  validSshPreparationProgress,
+);
+export type DesktopSshPreparationProgress = typeof DesktopSshPreparationProgressSchema.Type;
+export const DesktopSshPreparationProgressEventSchema = Schema.Struct({
+  requestId: TrimmedNonEmptyString,
+  ...sshPreparationProgressFields,
+}).check(validSshPreparationProgress);
+export const DesktopSshAttemptContextSchema = Schema.Struct({
+  supervisorId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  attemptId: NonNegativeInt,
+  routeId: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
+});
+export type DesktopSshAttemptContext = typeof DesktopSshAttemptContextSchema.Type;
+
 export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
+  preparedAttachmentId: Schema.optionalKey(TrimmedNonEmptyString),
   issuePairingToken: Schema.optionalKey(Schema.Boolean),
   keyOnly: Schema.optionalKey(Schema.Boolean),
 });
@@ -541,6 +591,8 @@ export const DesktopSshEnvironmentEnsureInputSchema = Schema.Struct({
   requestId: Schema.optionalKey(Schema.String),
   target: DesktopSshEnvironmentTargetSchema,
   options: Schema.optionalKey(DesktopSshEnvironmentEnsureOptionsSchema),
+  caller: Schema.optionalKey(Schema.Literals(["saved-connection", "provision"])),
+  attemptContext: Schema.optionalKey(DesktopSshAttemptContextSchema),
 });
 
 export const DesktopSshEnvironmentEnsureResultSchema = Schema.Union([
@@ -1131,7 +1183,11 @@ export const DesktopPreviewRecordingSaveInputSchema = Schema.Struct({
   data: Schema.Uint8Array,
 });
 
-export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
+export const SystemSettingsPaneSchema = Schema.Literals([
+  "full-disk-access",
+  "accessibility",
+  "screen-recording",
+]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
 /**
@@ -1146,11 +1202,17 @@ export interface DesktopSystemWakeEvent {
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
+  getRelayTelemetryEnabled?: () => boolean;
   getPathForFile?: (file: File) => string;
   getClientPlatform?: () => string;
   setNotificationBadge?: (badge: { count: number; image: string | null }) => Promise<void>;
   onNotificationBadgeClear?: (listener: () => void) => () => void;
   onTrackpadScrollEnd?: (listener: () => void) => () => void;
+  /**
+   * Renderer `window.focus()` cannot raise an Electron window, and on Wayland
+   * only the main process can spend a notification click's activation token.
+   */
+  revealWindow?: () => Promise<void>;
   /**
    * The OS locale as a BCP-47 tag, which the renderer cannot read for itself:
    * the packaged app ships only the `en-US` Chromium locale pak, so
@@ -1195,9 +1257,18 @@ export interface DesktopBridge {
   dismissSnapShotAnimation?: (id: DesktopSnapShotId) => Promise<void>;
   acknowledgeSnapShot?: (id: string) => Promise<void>;
   supportsSshEnvironmentProgress?: true;
+  supportsSshPreparationPhases?: true;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
-    options?: { issuePairingToken?: boolean; keyOnly?: boolean; onHostAnswered?: () => void },
+    options?: {
+      issuePairingToken?: boolean;
+      keyOnly?: boolean;
+      preparedAttachmentId?: string;
+      onHostAnswered?: () => void;
+      onPreparationProgress?: (progress: DesktopSshPreparationProgress) => void;
+      caller?: "saved-connection" | "provision";
+      attemptContext?: DesktopSshAttemptContext;
+    },
   ) => Promise<DesktopSshEnvironmentReadyOrPending>;
   getSshHostStatus: (target: DesktopSshEnvironmentTarget) => Promise<SshHostResult>;
   updateSshRuntime: (
@@ -1242,6 +1313,9 @@ export interface DesktopBridge {
   openExternal: (url: string) => Promise<boolean>;
   openSystemSettings?: (pane: SystemSettingsPane) => Promise<boolean>;
   checkSystemPermission?: (pane: SystemSettingsPane) => Promise<boolean>;
+  restartCuaDriver?: () => Promise<void>;
+  /** Restarts the local driver and proves its macOS grants from inside the driver. */
+  verifyCuaDriver?: () => Promise<DesktopCuaVerification>;
   /**
    * Optional: older desktop builds lack it; callers fall back to VS Code only.
    */
@@ -1327,7 +1401,9 @@ export interface DesktopPreviewBridge {
    */
   pickElement: (tabId: string) => Promise<PreviewAnnotationSubmissionResult | null>;
   cancelPickElement: (tabId: string) => Promise<void>;
-  captureScreenshot: (tabId: string) => Promise<DesktopPreviewScreenshotArtifact>;
+  captureScreenshot: (
+    tabId: string,
+  ) => Promise<DesktopPreviewScreenshotArtifact | PreviewCaptureFailureEncoded>;
   revealArtifact: (path: string) => Promise<void>;
   copyArtifactToClipboard: (path: string) => Promise<void>;
   pictureInPicture: {
@@ -1336,7 +1412,7 @@ export interface DesktopPreviewBridge {
   };
   recording: {
     onInput: (listener: (event: DesktopPreviewRecordingInputEvent) => void) => () => void;
-    startScreencast: (tabId: string) => Promise<void>;
+    startScreencast: (tabId: string) => Promise<void | PreviewCaptureFailureEncoded>;
     stopScreencast: (tabId: string) => Promise<void>;
     save: (
       tabId: string,

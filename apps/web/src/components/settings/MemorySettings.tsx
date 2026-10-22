@@ -44,12 +44,15 @@ import {
   presentMemorySync,
   presentMemoryCoverage,
   presentMemoryStorage,
+  memoryHoldRefreshDelayMs,
   presentMemoryProcessing,
 } from "@goat/client-runtime/memory-presentation";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironment, useEnvironments } from "../../state/environments";
+import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import { useProjects } from "../../state/entities";
 import {
   readEnvironmentScope,
@@ -227,13 +230,25 @@ function MemoryDestinationContent({
     setSyncReload((value) => value + 1);
   };
 
-  const [syncRequest, setSyncRequest] = useState({ canSync, environmentId, syncReload });
+  // Turning memory off or a new effective memory model clears a pause, so status is read again.
+  // Resolved as the server does when it reports the pause; the string keeps re-renders to
+  // changes of these two values.
+  const memoryModel = useEnvironmentSettings(environmentId, (settings) =>
+    JSON.stringify([settings.memoryEnabled, resolveMemoryModelSelection(settings, undefined)]),
+  );
+  const [syncRequest, setSyncRequest] = useState({
+    canSync,
+    environmentId,
+    syncReload,
+    memoryModel,
+  });
   if (
     syncRequest.canSync !== canSync ||
     syncRequest.environmentId !== environmentId ||
-    syncRequest.syncReload !== syncReload
+    syncRequest.syncReload !== syncReload ||
+    syncRequest.memoryModel !== memoryModel
   ) {
-    setSyncRequest({ canSync, environmentId, syncReload });
+    setSyncRequest({ canSync, environmentId, syncReload, memoryModel });
     setSyncError(null);
     if (!canSync) setSync(null);
   }
@@ -249,6 +264,13 @@ function MemoryDestinationContent({
       current = false;
     };
   }, [getSync, syncRequest]);
+  const generationHold = sync?.generationHold;
+  useEffect(() => {
+    const delay = memoryHoldRefreshDelayMs(generationHold, Date.now());
+    if (delay === null) return;
+    const timer = setTimeout(() => setSyncReload((value) => value + 1), delay);
+    return () => clearTimeout(timer);
+  }, [generationHold]);
   const refreshBootstrap = () => setSyncReload((value) => value + 1);
   const readySpace = memoryLocalSpace(sync);
   const [savedSpace, setSavedSpace] = useState<MemorySpaceId | null>(null);
@@ -1644,8 +1666,9 @@ function MemorySourcePage({
 /** Producer helpers keep raw storage fields and timestamps out of Settings. */
 function MemoryStatusRows({ sync }: { sync: MemorySyncStatus }) {
   const storage = presentMemoryStorage(sync.storage);
-  const processing = presentMemoryProcessing(sync.processing);
+  const processing = presentMemoryProcessing(sync.processing, sync.generationHold);
   const labels = [
+    processing.pausedLabel,
     processing.checkingLabel,
     processing.heldLabel,
     processing.waitingLabel,

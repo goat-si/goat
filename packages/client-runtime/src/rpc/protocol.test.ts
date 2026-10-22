@@ -12,3 +12,15 @@ it("activates the 15 core, four administration and one import route", () => {
   expect(methods).toContain(WS_METHODS.memoryChanges);
   expect(methods).toContain(WS_METHODS.memoryImportProvider);
 });
+
+it("installs every hub node RPC for web, desktop and mobile clients", () => {
+  expect([...WsRpcGroup.requests.keys()].filter((tag) => tag.startsWith("hub.nodes."))).toEqual([
+    "hub.nodes.list",
+    "hub.nodes.subscribe",
+    "hub.nodes.add",
+    "hub.nodes.remove",
+    "hub.nodes.check",
+    "hub.nodes.import",
+    "hub.nodes.dismissNotice",
+  ]);
+});

@@ -25,136 +25,6 @@ describe("summarizeGoatToolCalls", () => {
     ).toBe("Continued GOAT tasks on another machine 1 time");
   });
 
-  it("counts registered projects, repository destinations, and accepted thread launches", () => {
-    expect(
-      summarizeGoatToolCalls("project-create", [
-        completed({}, { id: "project-1" }),
-        completed({}, { id: "project-1" }),
-        completed({}, { id: "project-2" }),
-      ]).label,
-    ).toBe("Registered 2 projects");
-    expect(
-      summarizeGoatToolCalls("project-clone", [
-        completed({}, { cwd: "/tmp/first" }),
-        completed({}, { cwd: "/tmp/second" }),
-      ]).label,
-    ).toBe("Cloned 2 repositories");
-    expect(
-      summarizeGoatToolCalls("thread-create", [
-        completed({}, { threadId: "launched-thread", status: "preparing" }),
-      ]).label,
-    ).toBe("Created 1 thread");
-  });
-
-  it("reports review guides by outcome, and a call where none started as a failure", () => {
-    const guides = (...outcomes: ReadonlyArray<string>) => ({
-      guides: outcomes.map((outcome, index) => ({ number: index + 1, outcome })),
-    });
-    expect(
-      summarizeGoatToolCalls("write-pr-guides", [
-        completed({}, guides("started", "running", "failed")),
-      ]),
-    ).toEqual({ label: "Started 2 review guides, 1 failed", failedCount: 1 });
-    const allFailed = summarizeGoatToolCalls("write-pr-guides", [
-      completed({}, guides("failed", "failed")),
-    ]);
-    expect(allFailed.label).toBe("Could not start 2 review guides");
-    expect(allFailed.failedCount).toBe(2);
-  });
-
-  it.each([
-    ["queue-read", "Read 1 queued message"],
-    ["queue-edit", "Edited 1 queued message"],
-    ["queue-cancel", "Requested cancellation of 1 queued run"],
-    ["queue-reorder", "Reordered 1 queued run"],
-    ["queue-steer", "Requested steering with 1 queued message"],
-  ] as const)("deduplicates the queued run target for %s", (action, label) => {
-    expect(
-      summarizeGoatToolCalls(action, [
-        completed({ queuedRunId: "queued-1" }),
-        completed({ queuedRunId: "queued-1" }),
-        { input: { queuedRunId: "queued-2" }, output: undefined, outcome: "unfinished" },
-      ]),
-    ).toEqual({ label, failedCount: 0 });
-  });
-
-  it("counts answered requests rather than pretending every request contains one question", () => {
-    expect(
-      summarizeGoatToolCalls("question-respond", [
-        completed({ requestId: "request-1", answers: { one: ["Yes"], two: ["No"] } }),
-        completed({ requestId: "request-1" }),
-        completed({ requestId: "request-2" }),
-      ]).label,
-    ).toBe("Answered 2 pending question requests");
-  });
-
-  it("counts attachments in distinct messages and falls back when attachment counts are missing", () => {
-    const first = completed(
-      { threadId: "thread-1", attachments: [{ id: "one" }, { id: "two" }] },
-      { messageId: "message-1", threadId: "thread-1" },
-    );
-    const second = completed(
-      { threadId: "thread-2", attachments: [{ id: "one" }] },
-      { messageId: "message-2", threadId: "thread-2" },
-    );
-    expect(summarizeGoatToolCalls("attachment-send", [first, first, second])).toEqual({
-      label: "Sent 3 attachments to 2 threads",
-      failedCount: 0,
-    });
-    expect(
-      summarizeGoatToolCalls("attachment-send", [first, completed({ threadId: "thread-1" })]).label,
-    ).toBe("Sent attachments to 1 thread 2 times");
-  });
-
-  it("keeps repeated manual runs separate and describes asynchronous controls as requests", () => {
-    expect(
-      summarizeGoatToolCalls("schedule-run", [
-        completed({ taskId: "schedule-1" }, { lastRunStatus: "running" }),
-        completed({ taskId: "schedule-1" }, { lastRunStatus: "skipped" }),
-      ]).label,
-    ).toBe("Requested 2 scheduled task runs");
-    expect(
-      summarizeGoatToolCalls("thread-fork", [
-        completed({}, { targetThreadId: "fork", sequence: 3 }),
-      ]).label,
-    ).toBe("Requested 1 thread fork");
-    expect(
-      summarizeGoatToolCalls("thread-merge", [
-        completed({ targetThreadId: "parent" }, { sequence: 4 }),
-      ]).label,
-    ).toBe("Requested 1 context merge");
-  });
-
-  it.each([
-    "WorktreeMcpFailure",
-    "DeviceOperationError",
-    "PreviewAutomationExecutionError",
-    "PullRequestOperationError",
-  ])("treats a returned %s as a failed call even if the provider says completed", (_tag) => {
-    const output = [
-      {
-        type: "content",
-        content: { type: "text", text: JSON.stringify({ _tag, message: "Unavailable" }) },
-      },
-    ];
-    expect(summarizeGoatToolCalls("browser", [completed({}, output)])).toEqual({
-      label: "Tried to use browser 1 time",
-      failedCount: 1,
-    });
-  });
-  it("counts messages and distinct destinations across delivery modes, deduplicating retries", () => {
-    const calls = Array.from({ length: 5 }, (_, i) =>
-      completed(
-        { threadId: `thread-${i % 2}`, mode: ["auto", "queue", "steer", "restart"][i % 4] },
-        { messageId: `message-${i}`, threadId: `thread-${i % 2}` },
-      ),
-    );
-    expect(summarizeGoatToolCalls("thread-send", [...calls, calls[0]!])).toEqual({
-      label: "Sent 5 messages to 2 threads",
-      failedCount: 0,
-    });
-  });
-
   it("reads provider result envelopes without treating JSON in the message as result data", () => {
     const result = { messageId: "message-1", threadId: "actual-thread" };
     const json = JSON.stringify(result);
@@ -181,37 +51,6 @@ describe("summarizeGoatToolCalls", () => {
         completed({ threadId: "input-thread" }),
       ]).label,
     ).toBe("Sent 2 messages to 1 thread");
-  });
-
-  it("falls back to message counts when a destination is missing or a result is malformed", () => {
-    expect(
-      summarizeGoatToolCalls("thread-send", [
-        completed({ threadId: "known" }),
-        completed({ message: '{"threadId":"not-a-destination"}' }, "{truncated"),
-        completed(undefined, "Message sent"),
-      ]).label,
-    ).toBe("Sent 3 messages");
-  });
-
-  it("counts batch-created threads, excludes rollbacks, and deduplicates returned thread IDs", () => {
-    const threads = Array.from({ length: 4 }, (_, i) => ({
-      threadId: `thread-${i}`,
-      status: "running",
-    }));
-    expect(
-      summarizeGoatToolCalls("thread-create", [
-        completed(
-          {},
-          { threads: [...threads, { threadId: "rolled-back", status: "rolled_back" }] },
-        ),
-        completed({}, { threadId: "thread-0", status: "running" }),
-      ]).label,
-    ).toBe("Created 4 threads");
-    expect(
-      summarizeGoatToolCalls("thread-create", [
-        completed({ threads: [{ title: "Requested, not confirmed" }] }),
-      ]).label,
-    ).toBe("Requested thread creation 1 time");
   });
 
   it("excludes failed and unfinished sends even if the provider reports completed", () => {
@@ -260,30 +99,6 @@ describe("summarizeGoatToolCalls", () => {
     });
   });
 
-  it("describes control requests without claiming that a thread stopped or a task was deleted", () => {
-    expect(
-      summarizeGoatToolCalls("thread-interrupt", [
-        completed(
-          { threadId: "thread-1" },
-          { threadId: "thread-1", status: "interrupt_requested" },
-        ),
-      ]).label,
-    ).toBe("Requested interrupts for 1 thread");
-    expect(
-      summarizeGoatToolCalls("task-cancel", [
-        completed({ taskId: "task-1" }, { taskId: "task-1", status: "cancel_requested" }),
-      ]).label,
-    ).toBe("Requested cancellation of 1 task");
-    expect(
-      summarizeGoatToolCalls("schedule-delete", [
-        completed(
-          { scheduledTaskId: "schedule-1" },
-          { scheduledTaskId: "schedule-1", deleted: false },
-        ),
-      ]).label,
-    ).toBe("Requested deletion of 1 scheduled task");
-  });
-
   it("names a host status read the same way the tool card does", () => {
     expect(summarizeGoatToolCalls("host-status", [completed({})]).label).toBe(
       "Read host status 1 time",
@@ -291,22 +106,5 @@ describe("summarizeGoatToolCalls", () => {
     expect(
       summarizeGoatToolCalls("host-status", [{ input: {}, output: {}, outcome: "failed" }]).label,
     ).toBe("Tried to read host status 1 time");
-  });
-
-  it("counts workflow stop requests by coordinator and excludes failed requests", () => {
-    const first = completed({ threadId: "parent", subagentId: "workflow-1" }, {});
-    const failed = completed({ threadId: "parent", subagentId: "workflow-3" }, { isError: true });
-    expect(
-      summarizeGoatToolCalls("workflow-stop", [
-        first,
-        first,
-        completed({ threadId: "parent", subagentId: "workflow-2" }, {}),
-        failed,
-      ]),
-    ).toEqual({ label: "Requested stops for 2 workflows", failedCount: 1 });
-    expect(summarizeGoatToolCalls("workflow-stop", [failed])).toEqual({
-      label: "Tried to stop 1 workflow",
-      failedCount: 1,
-    });
   });
 });

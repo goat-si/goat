@@ -3,7 +3,6 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import { fleetHostReportsAtom } from "~/state/fleetHostMetrics";
-import { hostStatusAtom } from "~/state/hostStatus";
 
 import {
   recordHostSamples,
@@ -21,6 +20,11 @@ export interface FleetConsoleTelemetry {
   readonly loading: boolean;
   /** Environments whose latest read failed. */
   readonly failed: ReadonlyArray<EnvironmentId>;
+  /**
+   * Environments whose read is still waiting for an answer, by when it started. A machine's own
+   * local read speaks for it; a fan-out read only when it has no local one.
+   */
+  readonly pendingSince: ReadonlyMap<EnvironmentId, number>;
   /** Newest sample time the hosts reported; 0 before the first answer. */
   readonly sampledAt: number;
   /** When this client last received an answer, for ages that must not trust host clocks. */
@@ -34,6 +38,11 @@ export interface FleetConsoleTelemetry {
  */
 let hostHistory: HostHistory = new Map();
 let hostLastSeen: HostLastSeen = new Map();
+/**
+ * When this client first saw each waiting result. A refresh replaces the result with a waiting
+ * one and this atom recomputes then, so first sight is when the read started.
+ */
+const firstSeenWaiting = new WeakMap<object, number>();
 
 /**
  * The console's view of the Fleet's shared host-status reads. It adds no read or
@@ -43,18 +52,26 @@ let hostLastSeen: HostLastSeen = new Map();
 export const fleetConsoleTelemetryAtom = Atom.make((get): FleetConsoleTelemetry => {
   const { reports, sources } = get(fleetHostReportsAtom);
   const failed: EnvironmentId[] = [];
+  const pendingSince = new Map<EnvironmentId, number>();
+  const hasLocal = new Set(sources.filter((source) => source.local).map((s) => s.environmentId));
   let loading = false;
-  for (const environmentId of sources) {
-    const result = get(hostStatusAtom(environmentId));
-    if (AsyncResult.isFailure(result)) failed.push(environmentId);
-    else if (AsyncResult.isInitial(result)) loading = true;
+  const now = Date.now();
+  for (const { environmentId, atom, local } of sources) {
+    const result = get(atom);
+    // The primary has two reads, its own and the fan-out; it is one unreadable environment.
+    if (AsyncResult.isFailure(result)) {
+      if (!failed.includes(environmentId)) failed.push(environmentId);
+    } else if (AsyncResult.isInitial(result)) loading = true;
+    if (result.waiting && (local || !hasLocal.has(environmentId))) {
+      if (!firstSeenWaiting.has(result)) firstSeenWaiting.set(result, now);
+      pendingSince.set(environmentId, firstSeenWaiting.get(result)!);
+    }
   }
   const reads: FleetHostRead[] = [...reports].map(([environmentId, hosts]) => ({
     environmentId,
     hosts,
   }));
   // The atom recomputes once per settled read, so now is when this client received it.
-  const now = Date.now();
   hostHistory = recordHostSamples(hostHistory, reads, now);
   hostLastSeen = recordLastSeen(hostLastSeen, reads, now);
   const previous = Option.getOrNull(get.self<FleetConsoleTelemetry>());
@@ -64,6 +81,10 @@ export const fleetConsoleTelemetryAtom = Atom.make((get): FleetConsoleTelemetry 
     previous.history === hostHistory &&
     previous.lastSeen === hostLastSeen &&
     previous.failed.join("\n") === failed.join("\n") &&
+    previous.pendingSince.size === pendingSince.size &&
+    [...pendingSince].every(
+      ([environmentId, at]) => previous.pendingSince.get(environmentId) === at,
+    ) &&
     previous.reports.size === reports.size &&
     [...reports].every(([environmentId, hosts]) => previous.reports.get(environmentId) === hosts)
   ) {
@@ -80,6 +101,7 @@ export const fleetConsoleTelemetryAtom = Atom.make((get): FleetConsoleTelemetry 
     lastSeen: hostLastSeen,
     loading,
     failed,
+    pendingSince,
     sampledAt,
     observedAt: now,
   };

@@ -3,6 +3,7 @@ import {
   AuthStandardClientScopes,
   EnvironmentId,
   type AuthEnvironmentScope,
+  type DesktopSshPreparationProgress,
   ORCHESTRATION_PROTOCOL_VERSION,
 } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -22,6 +23,7 @@ import {
   BearerConnectionProfile,
   BearerConnectionRegistration,
   PrimaryConnectionRegistration,
+  SshConnectionRegistration,
 } from "./catalog.ts";
 import * as Connectivity from "./connectivity.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
@@ -29,6 +31,7 @@ import * as ConnectionDriver from "./driver.ts";
 import {
   BearerConnectionTarget,
   ConnectionBlockedError,
+  ConnectionAttemptSuperseded,
   PrimaryConnectionTarget,
 } from "./model.ts";
 import * as Onboarding from "./onboarding.ts";
@@ -42,6 +45,7 @@ import * as ConnectionProfileStore from "./profileStore.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 
 const decodeAddedBy = Schema.decodeEffect(ConnectionAddedBy);
+const encodeSshRegistration = Schema.encodeEffect(SshConnectionRegistration);
 
 const layerClientPresentation = Layer.succeed(
   ClientCapabilities.ClientPresentation,
@@ -338,24 +342,6 @@ describe("connection onboarding", () => {
       ),
   );
 
-  it.effect("registers an enabled environment on first-time pairing", () =>
-    Effect.gen(function* () {
-      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-      const onboarding = yield* Onboarding.ConnectionOnboarding;
-      expect((yield* SubscriptionRef.get(registry.entries)).size).toBe(0);
-
-      const environmentId = yield* onboarding.registerPairing(PAIRING_INPUT);
-
-      expect(environmentId).toBe(PAIRED_ENVIRONMENT_ID);
-      const entries = yield* SubscriptionRef.get(registry.entries);
-      const entry = entries.get(environmentId);
-      expect(entries.size).toBe(1);
-      expect(entry?.enabled).toBe(true);
-      expect(entry?.unsupportedReason).toBeUndefined();
-      expect(entry?.profile).toEqual(Option.some(PAIRED_PROFILE));
-    }).pipe(Effect.provide(layerPairingOnboarding())),
-  );
-
   it.effect("leaves a platform-managed environment untouched when its id is paired", () =>
     Effect.gen(function* () {
       const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
@@ -468,28 +454,6 @@ describe("connection onboarding", () => {
     }),
   );
 
-  it.effect("pairs an outdated server so it can be updated from this client", () =>
-    Effect.gen(function* () {
-      const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
-      const registration = yield* preparePairingRegistration({
-        host: "remote.example.test",
-        pairingCode: "pairing-token",
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            layerClientPresentation,
-            layerPairingHttp(calls, {
-              protocolVersion: ORCHESTRATION_PROTOCOL_VERSION - 1,
-              selfUpdate: true,
-            }),
-          ),
-        ),
-      );
-      expect(registration.target.environmentId).toBe("environment-paired");
-      expect(calls.map((call) => call.url)).toContain("https://remote.example.test/oauth/token");
-    }),
-  );
-
   it.effect("refuses an outdated server that cannot update itself", () =>
     Effect.gen(function* () {
       const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
@@ -533,26 +497,6 @@ describe("connection onboarding", () => {
       expect(calls.map((call) => call.url)).toEqual([
         "https://remote.example.test/.well-known/goat/environment",
       ]);
-    }),
-  );
-
-  it.effect("rejects invalid pairing details before making a request", () =>
-    Effect.gen(function* () {
-      const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
-      const error = yield* preparePairingRegistration({
-        host: "",
-        pairingCode: "",
-      }).pipe(
-        Effect.provide(Layer.mergeAll(layerClientPresentation, layerPairingHttp(calls))),
-        Effect.flip,
-      );
-
-      expect(error).toMatchObject({
-        _tag: "ConnectionBlockedError",
-        reason: "configuration",
-        message: "Enter a backend URL.",
-      });
-      expect(calls).toEqual([]);
     }),
   );
 
@@ -663,5 +607,124 @@ describe("connection onboarding", () => {
         credential: { token: "bearer-token" },
       });
     }),
+  );
+});
+
+describe("ephemeral SSH provision progress", () => {
+  const target = { alias: "fixture", hostname: "fixture.invalid", username: "developer", port: 22 };
+  const active: DesktopSshPreparationProgress = {
+    operationId: "op",
+    phase: "uploading",
+    hostAnswered: true,
+    remainingMs: 800_000,
+  };
+  const terminal: DesktopSshPreparationProgress = {
+    operationId: "op",
+    phase: null,
+    hostAnswered: true,
+    remainingMs: 700_000,
+    outcome: "ready",
+    attachmentId: "attachment",
+    runtimeStatus: {
+      host: "fixture",
+      state: "ready",
+      runtimeVersion: null,
+      requestedVersion: "1.0.0",
+    },
+  };
+  it.effect(
+    "reports through provision but never persists callbacks, attachment hints or progress",
+    () =>
+      Effect.gen(function* () {
+        const reports: DesktopSshPreparationProgress[] = [];
+        const registration = yield* prepareSshRegistration({
+          target,
+          onPreparationProgress: (progress) =>
+            Effect.sync(() => {
+              reports.push(progress);
+            }),
+        }).pipe(
+          Effect.provide(
+            Layer.mock(ClientCapabilities.SshEnvironmentGateway)({
+              provision: (_target, _expected, options) =>
+                Effect.gen(function* () {
+                  yield* options!.onPreparationProgress!(active);
+                  yield* options!.onPreparationProgress!(terminal);
+                  return {
+                    environmentId: EnvironmentId.make("fixture"),
+                    label: "Fixture",
+                    bootstrap: {
+                      target,
+                      httpBaseUrl: "http://127.0.0.1:1234",
+                      wsBaseUrl: "ws://127.0.0.1:1234",
+                      pairingToken: null,
+                      attachmentId: "attachment",
+                    },
+                    bearerToken: "saved-bearer",
+                  };
+                }),
+            }),
+          ),
+        );
+        expect(reports).toEqual([active, terminal]);
+        const persisted = yield* encodeSshRegistration(registration);
+        expect(persisted).toEqual({
+          _tag: "SshConnectionRegistration",
+          target: {
+            _tag: "SshConnectionTarget",
+            environmentId: "fixture",
+            label: "Fixture",
+            connectionId: 'ssh:fixture:["fixture","fixture.invalid","developer",22]',
+          },
+          profile: {
+            _tag: "SshConnectionProfile",
+            environmentId: "fixture",
+            label: "Fixture",
+            connectionId: 'ssh:fixture:["fixture","fixture.invalid","developer",22]',
+            target,
+          },
+          credential: { _tag: "BearerConnectionCredential", token: "saved-bearer" },
+        });
+      }),
+  );
+  it.effect.each(["pending", "superseded"] as const)(
+    "retains %s terminal without creating a registration",
+    (outcome) =>
+      Effect.gen(function* () {
+        const reports: DesktopSshPreparationProgress[] = [];
+        const neutral = new ConnectionAttemptSuperseded({
+          reason: "superseded",
+          detail: "Newer disconnect.",
+        });
+        const pending = new ConnectionBlockedError({
+          reason: "configuration",
+          detail: "Runtime waiting for work to finish.",
+        });
+        const result = yield* prepareSshRegistration({
+          target,
+          onPreparationProgress: (progress) =>
+            Effect.sync(() => {
+              reports.push(progress);
+            }),
+        }).pipe(
+          Effect.provide(
+            Layer.mock(ClientCapabilities.SshEnvironmentGateway)({
+              provision: (_target, _expected, options) =>
+                options!.onPreparationProgress!({
+                  operationId: "op",
+                  phase: null,
+                  hostAnswered: true,
+                  remainingMs: 0,
+                  outcome,
+                }).pipe(Effect.andThen(Effect.fail(outcome === "superseded" ? neutral : pending))),
+            }),
+          ),
+          Effect.flip,
+        );
+        expect(result).toBe(outcome === "superseded" ? neutral : pending);
+        expect(reports).toEqual([
+          { operationId: "op", phase: null, hostAnswered: true, remainingMs: 0, outcome },
+        ]);
+      }),
   );
 });

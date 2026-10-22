@@ -23,6 +23,7 @@ import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import { authorizeApprovalRequest } from "../sshRemote/SshHostAuthorization.ts";
 import * as Routes from "./CodexRouteService.ts";
 import * as HomeRoute from "./OpenCodexRoute.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
@@ -77,13 +78,16 @@ const make = Effect.gen(function* () {
             instruction: "Open a thread or Settings on the target environment.",
           },
         };
-      if (!scope.reauthorize || !scope.grantedScopes?.includes("orchestration:operate"))
+      const allowed = yield* authorizeApprovalRequest(scope).pipe(
+        Effect.as(true),
+        Effect.catchTags({ EnvironmentAuthorizationError: () => Effect.succeed(false) }),
+      );
+      if (!allowed)
         return {
           kind: "error" as const,
           code: "capability_denied",
           message: "The requesting thread must have live authorization.",
         };
-      yield* scope.reauthorize(["orchestration:operate"]);
       const snapshot = yield* routes.capture(input.instanceId);
       const config = yield* decodeConfig(snapshot.instance.config ?? {});
       if (config.setupMode === "managed")

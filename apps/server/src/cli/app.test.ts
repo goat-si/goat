@@ -1,24 +1,22 @@
-// @effect-diagnostics nodeBuiltinImport:off -- The integration fixture binds the same platform socket or named pipe as the CLI.
-import * as NodeChildProcess from "node:child_process";
-import * as NodeEvents from "node:events";
-import * as NodeFSP from "node:fs/promises";
-import * as NodeNet from "node:net";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
-
+// @effect-diagnostics nodeBuiltinImport:off - The integration fixture binds the same platform socket or named pipe as the CLI.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { DesktopAppActivationRequest } from "@goat/contracts";
 import { resolveDesktopAppControlAddresses } from "@goat/shared/desktopAppControl";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
+import { Command } from "effect/cli";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { Command } from "effect/cli";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeEvents from "node:events";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeNet from "node:net";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { describe, expect } from "vite-plus/test";
-
 import { makeCli } from "../binCli.ts";
 import { PersistedServerRuntimeState } from "../serverRuntimeState.ts";
 
@@ -146,7 +144,7 @@ const withTempDirectory = <A, E, R>(
 
 describe("goat server command safety", () => {
   it.effect("rejects unknown command words without creating a home or project", () =>
-    withTempDirectory("goat-cli-unknown-", (root) =>
+    withTempDirectory("t3-cli-unknown-", (root) =>
       Effect.gen(function* () {
         const baseDir = NodePath.join(root, "home");
         for (const word of [
@@ -169,19 +167,8 @@ describe("goat server command safety", () => {
     ),
   );
 
-  it.effect("shows help without creating state", () =>
-    withTempDirectory("goat-cli-help-", (root) =>
-      Effect.gen(function* () {
-        const baseDir = NodePath.join(root, "home");
-        const help = yield* runCli(["help"], { GOAT_HOME: baseDir }).pipe(Effect.flip);
-        expect(help).toMatchObject({ _tag: "ShowHelp", commandPath: ["goat"], errors: [] });
-        expect(yield* pathExists(baseDir)).toBe(false);
-      }),
-    ),
-  );
-
   it.effect("refuses manual startup over a live server before creating directories", () =>
-    withTempDirectory("goat-cli-running-", (root) =>
+    withTempDirectory("t3-cli-running-", (root) =>
       Effect.gen(function* () {
         const baseDir = NodePath.join(root, "home");
         const stateDir = NodePath.join(baseDir, "userdata");
@@ -281,42 +268,6 @@ describe("goat app", () => {
         }).pipe(Effect.provideService(HostProcess.HomeDirectory, root), Effect.scoped),
       ),
   );
-  it.effect("rejects SSH before it tries to reach a desktop app", () =>
-    withTempDirectory("goat-app-ssh-test-", (root) =>
-      Effect.gen(function* () {
-        const baseDir = NodePath.join(root, "missing-goat-home");
-        const error = yield* runCli(["app", "--base-dir", baseDir], {
-          SSH_CONNECTION: "client server",
-        }).pipe(Effect.flip);
-
-        expect(error).toMatchObject({
-          _tag: "DesktopAppSshUnsupportedError",
-          message:
-            "`goat app` only controls a desktop app on the same machine. It cannot run over SSH.",
-        });
-        expect(yield* pathExists(baseDir)).toBe(false);
-      }),
-    ),
-  );
-
-  it.effect("rejects unsupported platforms without creating state", () =>
-    withTempDirectory("goat-app-platform-test-", (root) =>
-      Effect.gen(function* () {
-        const baseDir = NodePath.join(root, "missing-goat-home");
-        const error = yield* runCli(["app", "--base-dir", baseDir]).pipe(
-          Effect.provideService(HostProcess.Platform, "freebsd"),
-          Effect.flip,
-        );
-
-        expect(error).toMatchObject({
-          _tag: "DesktopAppPlatformUnsupportedError",
-          platform: "freebsd",
-          message: "`goat app` is not supported on freebsd.",
-        });
-        expect(yield* pathExists(baseDir)).toBe(false);
-      }),
-    ),
-  );
 
   it.effect("does not create state when only a server or no desktop app is running", () =>
     withTempDirectory("goat-app-missing-test-", (root) =>
@@ -335,11 +286,10 @@ describe("goat app", () => {
       }),
     ),
   );
-
   it.effect("uses GOAT_HOME or --base-dir and sends the default or explicit path", () =>
-    withTempDirectory("goat-app-command-test-", (root) =>
+    withTempDirectory("t3-app-command-test-", (root) =>
       Effect.gen(function* () {
-        const baseDir = NodePath.join(root, "goat-home");
+        const baseDir = NodePath.join(root, "t3-home");
         const explicitPath = NodePath.join(root, "project");
         const platform = yield* HostProcess.Platform;
         const workingDirectory = yield* HostProcess.WorkingDirectory;

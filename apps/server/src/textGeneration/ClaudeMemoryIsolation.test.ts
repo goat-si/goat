@@ -8,6 +8,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import { verifyClaudeMemoryHooks } from "./ClaudeMemoryIsolation.ts";
 
@@ -26,7 +27,7 @@ describe("Claude memory registry isolation", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const queries: string[] = [];
-      const spawner = ChildProcessSpawner.make((command) => {
+      const spawner = lazyChildProcessSpawner((command) => {
         if (command._tag !== "StandardCommand") return Effect.die("Unexpected pipeline");
         expect(command.command).toBe("reg.exe");
         const candidate = command.args[1]!;

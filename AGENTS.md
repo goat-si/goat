@@ -99,10 +99,35 @@ An empty database is a bad test. Seed your worktree's `.goat` with a copy of rea
 - Test meaningful logic or observable behavior. Do not render components to static markup to assert props or attributes, or add tests that merely assert callback wiring or mirror the implementation.
 - **Do not run repo-wide checks.** No `vp check`, no `vp run -r test`, no `vp run -r typecheck` unless I ask. CI owns the full suite.
 - Backend behavior changes ship with focused tests for that behavior.
-- The server is event-sourced, and side effects run after the command commits. In tests, drain the effect worker (`OrchestrationEffectWorkerV2.drain`) or await the specific persisted event or `Deferred` that marks the milestone. Never wait on sleeps or polling. A test that needs a timeout to pass is wrong.
-- User-visible frontend changes should get one integrated pass in a real client: `test-t3-app` for web, `test-t3-mobile` for mobile. The primary agent does this once after integrating. Subagents do not launch their own dev servers. Browsers and computer use are always allowed; do not ask permission first.
+- The server is event-sourced, and side effects run after the command commits. In tests, drain the effect worker (`OrchestrationEffectWorkerV2.drain`) or await the specific persisted event or `Deferred` that marks the milestone. Never wait on sleeps or polling. A test that needs a timeout to pass is wrong. Concretely:
+  - `it.effect` runs on a `TestClock`; `Effect.sleep` only advances through `TestClock.adjust`. `it.live` is wall-clock and only for subprocess or network fixtures.
+  - No `yieldNow` or `sleep` polling loops. Await the `Deferred`, take from the `Queue`, or drain the worker.
+  - No per-test timeout argument or `retry`. The project timeout is the ceiling, and flaky tests are fixed, not retried.
+  - No `performance.now()` or `Date.now()` deltas. Assert on events and counts, not elapsed time.
+  - Browser tests assert through `expect.element` or `vi.waitFor`, never `requestAnimationFrame` or `transitionend`.
+  - `vi.mock` factories must not spread a real module that pulls in Shiki or the diff workers.
+  - `it.skip` and friends need a tracking issue on the line above: `// quarantine: #1234 <why>`.
+  - Lint enforces this: `goat/no-test-timeout-or-unreasoned-skip`, `goat/no-frame-waits-in-browser-tests`, `goat/no-wall-clock-in-tests`, `goat/no-real-time-wait-in-tests`, `goat/no-polling-loop-in-tests`.
+- Web browser tests are `*.browser.test.tsx` or `*.browser.test.ts` and render with `await using screen = await render(...)` from `apps/web/test/render.tsx`. `goat/require-disposable-render` errors on the old patterns.
+  - Acquire what the test drives after mounting (fake timers it advances, spies it sets up after mounting) after the render, so it disposes before the unmount. Anything the first render reads comes before it.
+  - A helper that renders and then waits or clicks puts the screen in an `AsyncDisposableStack` and `move()`s it out only on success, so a failed wait still unmounts.
+  - `rerender` needs a fresh element on every call.
+  - No lifecycle hooks and no module-level mutable state. Shared mock state that `vi.mock` factories read is reset by a `setup()` call at the top of the test.
+  - `router` is on by default. Pass `router: false` only with a one-line comment saying why.
 
-For authorized mobile verification, a missing or outdated native client is a build step, not a blocker. Run `node scripts/mobile-native-client.ts ensure <ios|android> <device-id>` on the simulator host before starting Metro. It checks the local Expo fingerprint and builds/installs when needed. See `test-t3-mobile` for the full workflow.
+  ```tsx
+  it("saves on Enter", async () => {
+    const onSave = vi.fn();
+    using _now = vi.spyOn(Date, "now").mockReturnValue(0);
+    await using screen = await render(<TitleEditor onSave={onSave} />, { router: "/threads/1" });
+    await userEvent.type(screen.getByRole("textbox"), "Title{Enter}");
+    expect(onSave).toHaveBeenCalledWith("Title");
+  });
+  ```
+
+- User-visible frontend changes should get one integrated pass in a real client: `test-goat-app` for web, `test-goat-mobile` for mobile. The primary agent does this once after integrating. Subagents do not launch their own dev servers. Browsers and computer use are always allowed; do not ask permission first.
+
+For authorized mobile verification, a missing or outdated native client is a build step, not a blocker. Run `node scripts/mobile-native-client.ts ensure <ios|android> <device-id>` on the simulator host before starting Metro. It checks the local Expo fingerprint and builds/installs when needed. See `test-goat-mobile` for the full workflow.
 
 ## Pull requests
 
@@ -113,6 +138,13 @@ For authorized mobile verification, a missing or outdated native client is a bui
 - Attach images by dragging them into the description editor, or, from the command line, run `node scripts/pr-assets.ts upload <pr> <files...>`. It commits them to the orphan `pr-assets` branch as `<pr>/<name>` without touching your checkout, checks that each URL loads, and prints markdown that links them by commit SHA. Add `--patch-body` to repoint embeds already in the description, such as `![after](pr-assets/after.png)`. Relative paths and branch-name links never render, and the gate rejects them. Never commit screenshots or PR-only assets to the PR branch; the squash merge carries them into `dev`.
 - One request is one PR. Split it only when the maintainer asks. Outside contributions follow the stricter [one problem per PR](CONTRIBUTING.md#one-problem) rule.
 - When babysitting: poll checks and comments newer than the last push, verify each bot finding against the source, fix real ones, dismiss false positives with a written reason. Stay quiet when nothing is new. Stop when the bots are green on the latest commit.
+
+## Merging
+
+- Do not rebase or update-branch because `dev` moved. Rebase only on `CONFLICTING`, or when CI needs a fix that exists only on `dev`.
+- Squash-merge with `gh pr merge <pr> --admin --squash --match-head-commit <head-sha>` once `goat-ci-result` is `SUCCESS` on that exact head. `CLEAN` and `UNSTABLE` (behind `dev`) are both fine.
+- A failure that reproduces identically on `dev` does not block: note it in the PR and merge. Re-run flaky or cancelled jobs instead of rebasing.
+- Stacks, batch merging, and the `dev` full-run cadence: [Merging pull requests](docs/operations/merging.md).
 
 ## Documentation
 
@@ -146,7 +178,7 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
 - `packages/contracts` - Effect/Schema contracts plus small derived helpers. No heavy runtime logic.
 - `packages/shared` - shared runtime utils, subpath exports, no barrel.
 - `packages/client-runtime` - client code shared by web and mobile.
-- `.repos/` - vendored read-only references. Prefer their patterns over invented ones. Never edit or import from them. Sync with `vpr sync:repos` when bumping the matching dependency.
+- `.repos/` - vendored read-only references. Prefer their patterns over invented ones. Never edit or import from them. Sync with `vpr sync:repos` when bumping the matching dependency. Thread worktrees leave `.repos/` out (`worktreeSparseExclude` in `goat.json`), so read it from the main checkout, the first path in `git worktree list`, or run `git sparse-checkout disable` to bring it into this worktree.
 
 ## Taste
 
@@ -154,6 +186,12 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
 - Client mutations use `createEnvironmentRpcCommand`. Add protected methods to `CLIENT_GUARDED_RPC_SCOPES` in contracts and use the command's `permissionAtom` for UI availability. Grants are checked at execution against the destination environment; the server remains authoritative. Keep raw RPC clients inside `rpc/`, and extend the permission behavior tests when adding a protected method.
 - Server features are services; transports stay thin. A `ws.ts` RPC handler, HTTP route, or MCP tool decodes input, calls one service method, and maps errors. See [Effect services](docs/internals/effect-services.md).
 - `apps/web/src/components/ui` exports own their look. Pick a `variant` or `size`; do not restyle one with `className`. If none fits and the look is a generic concept, add a variant to the component; a look that belongs to one feature stays in that feature's own component, not in `components/ui`. Layout classes (width, flex, margin, position) belong on the parent. `shadcn/no-restyle` fails lint on violations. See [Web UI](docs/internals/web-ui.md).
+- Reusable Effect functions use `Effect.fn("Service.operation")` with a stable span name, not a
+  function wrapping `Effect.gen`. Keep `Effect.gen` for inline programs and layer construction.
+  Use `Effect.fnUntraced` only when spans would be too frequent (stream chunks, per-event
+  projection, tight loops) or duplicate an existing tracing boundary; explain that choice nearby.
+  Named `Effect.fn` creates a span; the unnamed form does not. Preserve existing span names and
+  options, and pass combinators as additional function-builder arguments.
 - Inferred types over annotations. `any` is the enemy.
 - Comments say why: a constraint, an external quirk, or an invariant the code can't show. Don't restate names or signatures, narrate steps, or record history. `goat/no-low-value-comments` catches the mechanical cases.
 - Our users drive agents all day and notice a dropped frame, a lying spinner, and a stale label. No continuously repainting animations; they peg the GPU on high-refresh displays.

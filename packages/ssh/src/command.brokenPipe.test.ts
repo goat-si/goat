@@ -47,6 +47,7 @@ const trackUncaught = Effect.acquireRelease(
 
 // A late EPIPE is emitted from a libuv write callback after the child is gone.
 // Let the event loop run those callbacks before checking for escapes.
+// oxlint-disable-next-line goat/no-real-time-wait-in-tests -- Real child pipe writes can emit a late libuv EPIPE after process exit; keep the uncaught-error observation window.
 const settleEventLoop = Effect.sleep("200 millis");
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("ssh stdin broken pipe", () => {

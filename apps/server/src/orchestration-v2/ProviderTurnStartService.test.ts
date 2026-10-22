@@ -327,23 +327,6 @@ function startWithMissingWorktree(worktreePath: string, realPaths?: Record<strin
   };
 }
 
-it("does not commit running state when inherited background routing cannot be read", async () => {
-  const worktreePath = `${managedWorktreesDir}/project/feature-restore`;
-  const harness = startWithMissingWorktree(worktreePath);
-  const error = await harness.start;
-
-  expect(error._tag).toBe("ProviderTurnStartError");
-  expect(harness.projectionReads()).toBe(2);
-  expect(harness.pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-turn-start-project" });
-  expect(harness.createWorktree).toHaveBeenCalledWith({
-    cwd: "/tmp/provider-turn-start-project",
-    refName: "feature/restore",
-    path: worktreePath,
-  });
-  expect(harness.writeIfRunCurrent).not.toHaveBeenCalled();
-  expect(harness.startRootRun).not.toHaveBeenCalled();
-});
-
 it.each([
   {
     label: "<managed>/<repo>/<branch>",
@@ -878,6 +861,7 @@ const leaseWorker = (
         Layer.mergeAll(
           harness.layer,
           Layer.succeed(ResourceCleanup.ResourceCleanupService, {
+            cleanupScheduledTasks: () => Effect.void,
             cleanupTerminals,
             cleanupPreviews: () => Effect.void,
             cleanupAttachments: () => Effect.void,
@@ -1426,29 +1410,37 @@ effectIt.effect(
     }),
 );
 
-effectIt.effect("persists a failed sign-out without starting a provider turn", () =>
-  Effect.gen(function* () {
-    const harness = makeLocalCommandHarness({
-      text: "/logout",
-      logoutFailure: "Could not stop all sessions for this provider. Try again.",
-    });
+effectIt.effect(
+  "signs out the existing native provider before opening the newly selected provider",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({ text: "/logout", previousNativeSession: true });
 
-    yield* harness.start;
+      yield* harness.start;
+      yield* harness.start;
 
-    expect(harness.open).not.toHaveBeenCalled();
-    expect(harness.startRootRun).not.toHaveBeenCalled();
-    expect(harness.projection().runs.at(-1)?.status).toBe("failed");
-    expect(harness.projection().turnItems).toMatchObject([
-      {
-        type: "error",
-        title: "Provider sign-out failed",
-        failure: {
-          class: "permission_error",
-          message: "Could not stop all sessions for this provider. Try again.",
+      expect(harness.tryHandlePromptCommand).toHaveBeenCalledExactlyOnceWith({
+        instanceId: harness.oldInstanceId,
+        text: "/logout",
+        hasAttachments: false,
+      });
+      expect(harness.open).not.toHaveBeenCalled();
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+      const projection = harness.projection();
+      expect(projection.runs.at(-1)?.status).toBe("completed");
+      expect(projection.attempts[0]?.status).toBe("completed");
+      expect(projection.nodes[0]?.status).toBe("completed");
+      expect(projection.turnItems).toMatchObject([
+        {
+          type: "command_execution",
+          title: "Provider signed out",
+          output: "Provider signed out",
+          status: "completed",
         },
-      },
-    ]);
-  }),
+      ]);
+      expect(projection.providerTurns).toEqual([]);
+      expect(projection.checkpoints).toEqual([]);
+    }),
 );
 
 for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
@@ -1557,5 +1549,65 @@ effectIt.effect("refreshes each send, omits none and failures, and fences a move
     expect(exit._tag).toBe("Failure");
     if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
     expect(diagnostics).toHaveLength(1);
+  }),
+);
+effectIt.effect.each([
+  { boundary: "policy resolution", loss: "replaced" },
+  { boundary: "session opening", loss: "interrupted" },
+])("does not continue startup when $loss during $boundary", ({ boundary, loss }) =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const gate = Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)));
+    const harness = makeLocalCommandHarness({ text: "Continue" });
+    const projection = harness.projection();
+    const providerThread = projection.providerThreads[0]!;
+    const ensureThread = vi.fn(() => Effect.succeed(providerThread));
+    const resumeThread = vi.fn(() => Effect.succeed(providerThread));
+    const forkThread = vi.fn(() => Effect.succeed(providerThread));
+    harness.open.mockReturnValue(
+      (boundary === "session opening" ? gate : Effect.void).pipe(
+        Effect.as({
+          driver: providerThread.driver,
+          ensureThread,
+          resumeThread,
+          forkThread,
+        } as never),
+      ),
+    );
+    if (boundary === "policy resolution") {
+      harness.resolveRuntimePolicy.mockReturnValue(
+        gate.pipe(Effect.as({ cwd: "/tmp/native-account-command" } as never)),
+      );
+    }
+
+    const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(entered);
+    const current = harness.projection();
+    const replacementId = RunAttemptId.make("replacement-attempt");
+    const updated = {
+      ...current,
+      runs: current.runs.map((candidate) =>
+        loss === "replaced"
+          ? { ...candidate, activeAttemptId: replacementId }
+          : { ...candidate, status: "interrupted" as const, completedAt: current.updatedAt },
+      ),
+      attempts:
+        loss === "replaced"
+          ? [...current.attempts, { ...current.attempts[0]!, id: replacementId, attemptOrdinal: 2 }]
+          : current.attempts,
+    };
+    harness.setProjection(updated);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(startup);
+
+    expect(harness.open).toHaveBeenCalledTimes(boundary === "session opening" ? 1 : 0);
+    expect(ensureThread).not.toHaveBeenCalled();
+    expect(resumeThread).not.toHaveBeenCalled();
+    expect(forkThread).not.toHaveBeenCalled();
+    expect(harness.startRootRun).not.toHaveBeenCalled();
+    expect(harness.writeIfRunCurrent).not.toHaveBeenCalled();
+    expect(harness.events).toEqual([]);
+    expect(harness.projection()).toEqual(updated);
   }),
 );

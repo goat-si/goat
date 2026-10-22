@@ -79,6 +79,12 @@ const actionPhrase = (kind: OrchestrationV2RuntimeRequest["kind"] | undefined): 
 
 const MAX_PROMPT_CHARS = 400;
 
+/** The two buttons on an approval card. A number or a Slack button sends one of these labels. */
+export const approvalChoiceLabels = (code: string): readonly [string, string] => [
+  "Approve " + code,
+  "Deny " + code,
+];
+
 /** The card's words and buttons; the buttons carry the card's code. */
 export const approvalCard = (input: {
   readonly card: OpenApprovalCard;
@@ -102,7 +108,7 @@ export const approvalCard = (input: {
       actionPhrase(input.kind) +
       "." +
       detail,
-    options: ["Approve " + input.code, "Deny " + input.code],
+    options: approvalChoiceLabels(input.code),
   };
 };
 

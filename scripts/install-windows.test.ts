@@ -21,6 +21,7 @@ const powershell = (command: string, env: NodeJS.ProcessEnv = process.env) =>
 describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")(
   "Windows archive installer",
   () => {
+    // oxlint-disable-next-line goat/no-test-timeout-or-unreasoned-skip -- Windows-only integration launches real PowerShell and native archive executables; its process watchdog is 90 seconds.
     it("repairs marker-only/broken entries, reuses a runnable cache and preserves upstream t3", async () => {
       const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-install-"));
       let server: NodeHttp.Server | undefined;

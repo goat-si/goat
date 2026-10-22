@@ -195,7 +195,8 @@ it.effect("leaves connected after a half-open carrier exceeds the RPC silence bu
     const failure = yield* Fiber.join(disconnected);
     expect(failure).toMatchObject({
       reason: "transport",
-      detail: "Stalled environment stopped responding.",
+      detail:
+        "Stalled environment stopped responding for 15s. It may be overloaded, asleep, or off the network.",
     });
     expect(yield* SubscriptionRef.get(supervisor.state)).toMatchObject({
       phase: "backoff",

@@ -1,5 +1,3 @@
-"use client";
-
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import { previewStreamDownloadUrl } from "@goat/client-runtime/preview/server-browser-stream";

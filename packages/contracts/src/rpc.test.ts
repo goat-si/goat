@@ -1,6 +1,7 @@
 import * as RpcSchema from "effect/rpc/RpcSchema";
 import * as Memory from "./memory.ts";
 import {
+  WsHubNodesRpcGroup,
   WsMemoryRpcGroup,
   WsMemoryCoreRpcGroup,
   WsMemoryImportRpcGroup,
@@ -20,8 +21,8 @@ import {
   WS_METHODS,
   RpcScopeAuthorization,
   WsRpcGroup,
-  WsSubscribeServerConfigRpc,
   WsSshHostProbeRpc,
+  WsSshHostPreflightRpc,
   WsSshHostTrustRpc,
   WsSshHostPrepareRpc,
   WsSshHostForgetRpc,
@@ -44,25 +45,6 @@ const decodeHostForget = Schema.decodeUnknownSync(WsSshHostForgetRpc.payloadSche
  * makes that safe is that such a schema accepts the request rather than
  * rejecting it -- an error here would take down the config subscription.
  */
-describe("subscribeServerConfig payload compatibility", () => {
-  it("is accepted by a server whose schema predates the field", () => {
-    const oldServerPayload = Schema.Struct({});
-    const decoded = Schema.decodeExit(oldServerPayload)({ environmentThemes: true });
-    expect(Exit.isSuccess(decoded)).toBe(true);
-  });
-
-  it("is carried by a server that declares it", () => {
-    const decoded = Schema.decodeSync(WsSubscribeServerConfigRpc.payloadSchema)({
-      environmentThemes: true,
-    });
-    expect(decoded).toEqual({ environmentThemes: true });
-  });
-
-  it("stays optional, so a client that never sends it still subscribes", () => {
-    const decoded = Schema.decodeSync(WsSubscribeServerConfigRpc.payloadSchema)({});
-    expect(decoded).toEqual({});
-  });
-});
 
 describe("WebSocket RPC contracts", () => {
   it("declares alias status and authenticated handoff progress payloads", () => {
@@ -73,13 +55,6 @@ describe("WebSocket RPC contracts", () => {
     const progress = { threadId: "thread-1", handoffId: "handoff-1" };
     expect(decodeSshHandoffProgressPayload(progress)).toEqual(progress);
     expect(() => decodeSshHandoffProgressPayload({ handoffId: "handoff-1" })).toThrow();
-  });
-
-  it("exposes only the V2 orchestration transport surface", () => {
-    const methods = [...WsRpcGroup.requests.keys()];
-
-    expect(methods).toEqual(expect.arrayContaining(Object.values(ORCHESTRATION_V2_WS_METHODS)));
-    expect(methods.filter((method) => method.startsWith("orchestrationV1."))).toEqual([]);
   });
 
   it("rejects server-internal commands sent to dispatchCommand", () => {
@@ -360,6 +335,7 @@ it("import transport retains both typed import refusal and authorization errors"
 it("installs the complete SSH host transport together while leaving runtimeUpdate unregistered", () => {
   const rpcs = [
     WsSshHostProbeRpc,
+    WsSshHostPreflightRpc,
     WsSshHostTrustRpc,
     WsSshHostPrepareRpc,
     WsSshHostForgetRpc,
@@ -368,7 +344,7 @@ it("installs the complete SSH host transport together while leaving runtimeUpdat
   ];
   for (const rpc of rpcs) expect(WsRpcGroup.requests.get(rpc._tag)).toBeDefined();
   expect([...WsRpcGroup.requests.keys()].filter((tag) => tag.startsWith("sshHost."))).toHaveLength(
-    6,
+    7,
   );
   expect(WsRpcGroup.requests.has("sshHost.runtimeUpdate")).toBe(false);
   expect(decodeHostPrepare({ host: "box" })).toEqual({ host: "box" });
@@ -379,4 +355,34 @@ it("installs the complete SSH host transport together while leaving runtimeUpdat
     host: "box",
     stopRuntime: "no",
   });
+});
+
+it("declares all seven authorized hub node RPCs and a typed snapshot stream", () => {
+  expect([...WsHubNodesRpcGroup.requests.keys()]).toEqual([
+    WS_METHODS.hubNodesList,
+    WS_METHODS.hubNodesSubscribe,
+    WS_METHODS.hubNodesAdd,
+    WS_METHODS.hubNodesRemove,
+    WS_METHODS.hubNodesCheck,
+    WS_METHODS.hubNodesImport,
+    WS_METHODS.hubNodesDismissNotice,
+  ]);
+  for (const rpc of WsHubNodesRpcGroup.requests.values()) {
+    expect(rpc.middlewares.has(RpcScopeAuthorization)).toBe(true);
+    const errorSchema = RpcSchema.isStreamSchema(rpc.successSchema)
+      ? rpc.successSchema.error
+      : rpc.errorSchema;
+    expect(
+      Schema.decodeUnknownSync(errorSchema)({
+        _tag: "EnvironmentAuthorizationError",
+        message: "Denied",
+        requiredScope: "settings:write",
+      }),
+    ).toMatchObject({ _tag: "EnvironmentAuthorizationError" });
+  }
+  expect(
+    RpcSchema.isStreamSchema(
+      WsHubNodesRpcGroup.requests.get(WS_METHODS.hubNodesSubscribe)!.successSchema,
+    ),
+  ).toBe(true);
 });

@@ -48,8 +48,9 @@ const SERVER_FULL_SHARE = 0.5;
 /**
  * Server tests that read the server's own source tree instead of importing it. Any change to
  * server source can break them, so they join every related run that a server source change starts.
+ * Upstream deleted the only one, V1ImportBoundary.test.ts (#22557, cycle 261021).
  */
-const SOURCE_SCANNING_TESTS = ["apps/server/src/orchestration-v2/V1ImportBoundary.test.ts"];
+const SOURCE_SCANNING_TESTS = [];
 /** Directories whose data files the server suite reads; an unplaceable one there runs the full suite. */
 const SERVER_DATA_ROOTS = ["apps/server/", "packages/"];
 /** Estimated seconds one related-test shard aims for. */
@@ -70,7 +71,7 @@ const TASKS = [
   "test-desktop",
   "test-contracts",
   "test-client-runtime",
-  "test-mobile-memory",
+  "test-mobile",
   "test-shared",
   "test-memory-growth",
   "build",
@@ -91,7 +92,7 @@ const TASK_ROOTS = {
   "test-desktop": ["apps/desktop"],
   "test-contracts": ["packages/contracts"],
   "test-client-runtime": ["packages/client-runtime"],
-  "test-mobile-memory": ["apps/mobile"],
+  "test-mobile": ["apps/mobile"],
   "test-shared": ["packages/shared"],
   "test-server": ["apps/server"],
   build: ["apps/desktop", "apps/server"],

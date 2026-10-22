@@ -1,5 +1,7 @@
 import {
   clientRpcRequiredScopes,
+  hubProxyHidesClientCall,
+  AuthHubProxyScope,
   sessionGrantsScope,
   authScopeRequiredResponse,
   EnvironmentAuthorizationError,
@@ -19,14 +21,20 @@ function makeCommandPermissions<R, E>(
 ) {
   const sessions = createEnvironmentSessionAtoms(runtime);
   const requiredScopes = (input?: unknown) => clientRpcRequiredScopes(method, input);
+  const hiddenThroughHub = (input?: unknown) =>
+    hubProxyHidesClientCall(method, input, requiredScopes(input));
   const atomsByEnvironment = Atom.family((environmentId: EnvironmentId | null) =>
     Atom.family((scopeKey: string) =>
       Atom.make((get) => {
         if (environmentId === null) return false;
-        const scopes = scopeKey.split(",").filter(Boolean) as AuthEnvironmentScope[];
-        if (scopes.length === 0) return true;
+        const [scopeList = "", hidden] = scopeKey.split("|");
+        const scopes = scopeList.split(",").filter(Boolean) as AuthEnvironmentScope[];
+        if (scopes.length === 0 && hidden !== "hidden") return true;
         const result = get(sessions.sessionStateAtom(environmentId));
         const session = Option.getOrNull(AsyncResult.value(result));
+        // A node reached through a hub: the hub forwards only some actions.
+        if (hidden === "hidden" && session?.proxiedByHub === true) return false;
+        if (scopes.length === 0) return true;
         return (
           result._tag !== "Failure" &&
           session !== null &&
@@ -36,7 +44,9 @@ function makeCommandPermissions<R, E>(
     ),
   );
   const permissionAtom = (environmentId: EnvironmentId | null, input?: unknown) =>
-    atomsByEnvironment(environmentId)(requiredScopes(input).join(","));
+    atomsByEnvironment(environmentId)(
+      `${requiredScopes(input).join(",")}|${hiddenThroughHub(input) ? "hidden" : ""}`,
+    );
   const authorize = (
     registry: AtomRegistry.AtomRegistry,
     environmentId: EnvironmentId,
@@ -44,7 +54,8 @@ function makeCommandPermissions<R, E>(
   ) =>
     Effect.suspend(() => {
       const scopes = requiredScopes(input);
-      if (scopes.length === 0) return Effect.void;
+      const hidden = hiddenThroughHub(input);
+      if (scopes.length === 0 && !hidden) return Effect.void;
       const atom = sessions.sessionStateAtom(environmentId);
       return Effect.scoped(
         Effect.gen(function* () {
@@ -55,6 +66,13 @@ function makeCommandPermissions<R, E>(
             Effect.timeoutOption(6_000),
             Effect.catch(() => Effect.succeed(Option.none<AuthSessionState>())),
           );
+          if (hidden && Option.isSome(session) && session.value.proxiedByHub === true)
+            return yield* Effect.fail(
+              new EnvironmentAuthorizationError({
+                ...authScopeRequiredResponse(AuthHubProxyScope),
+                message: "This action is not available through the hub.",
+              }),
+            );
           const missing = scopes.find(
             (scope) => Option.isNone(session) || !sessionGrantsScope(session.value, scope),
           );

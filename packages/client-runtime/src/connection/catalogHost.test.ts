@@ -167,13 +167,22 @@ function run(
           return entry.target.environmentId;
         }),
     });
-    const result = yield* handleConnectionCatalogOperation(operation, () =>
-      Effect.succeed(options?.resolved ?? target),
-    ).pipe(
-      Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
-      Effect.provideService(ConnectionOnboarding.ConnectionOnboarding, onboarding),
-    );
-    return { result, inputs, removed, entries: yield* SubscriptionRef.get(entries) };
+    const invoke = () =>
+      handleConnectionCatalogOperation(operation, () =>
+        Effect.succeed(options?.resolved ?? target),
+      ).pipe(
+        Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
+        Effect.provideService(ConnectionOnboarding.ConnectionOnboarding, onboarding),
+      );
+    const result = yield* invoke();
+    return {
+      result,
+      repeat: invoke,
+      readEntries: SubscriptionRef.get(entries),
+      inputs,
+      removed,
+      entries: yield* SubscriptionRef.get(entries),
+    };
   });
 }
 
@@ -375,3 +384,16 @@ describe("connection catalog host", () => {
     expect(Schema.decodeSync(schema)(encoded).profiles[0]).toMatchObject({ addedBy });
   });
 });
+
+it.effect("repeated SSH adds deduplicate against the saved catalog without registering again", () =>
+  Effect.gen(function* () {
+    const f = yield* run({ type: "add_ssh", host: "devbox", addedBy }, []);
+    expect(f.result).toMatchObject({ type: "add_ssh", created: true });
+    const repeated = yield* f.repeat();
+    expect(repeated).toMatchObject({ type: "add_ssh", created: false });
+    if (repeated.type === "add_ssh" && f.result.type === "add_ssh")
+      expect(repeated.connection).toEqual(f.result.connection);
+    expect(f.inputs).toHaveLength(1);
+    expect((yield* f.readEntries).size).toBe(1);
+  }),
+);

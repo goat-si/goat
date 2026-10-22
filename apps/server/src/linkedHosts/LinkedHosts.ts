@@ -16,6 +16,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -36,9 +38,9 @@ import { base64UrlEncode } from "../auth/utils.ts";
  */
 
 /** One secret holds every link, so a link and its token are written together. */
-export const LINKED_HOSTS_SECRET = "linked-hosts";
+const LINKED_HOSTS_SECRET = "linked-hosts";
 /** Never dialled: the code comes back in the decision response, not through a browser. */
-export const LINK_REDIRECT_URI = "http://127.0.0.1/goat-host-link";
+const LINK_REDIRECT_URI = "http://127.0.0.1/goat-host-link";
 const LINK_TIMEOUT = "20 seconds";
 const LINK_CLIENT_NAME_MAX = 100;
 /** Lowercase-led, ssh-alias-safe, and short enough to read in a tool result. */
@@ -144,6 +146,7 @@ export function parseLinkTarget(url: string, code: string | undefined): LinkTarg
 export class LinkedHosts extends Context.Service<
   LinkedHosts,
   {
+    readonly changes: Stream.Stream<void>;
     readonly list: Effect.Effect<ReadonlyArray<LinkedHost>, LinkedHostError>;
     /** The link and its token, or none when the name is not linked. */
     readonly find: (
@@ -155,27 +158,34 @@ export class LinkedHosts extends Context.Service<
      * Spends the code on the host and saves the link, replacing one with the same name.
      * beforeSave re-checks the caller right before the link is written.
      */
-    readonly link: <E, R>(input: {
+    readonly link: <E, R, E2 = never, R2 = never>(input: {
       readonly name: string;
       readonly url: string;
       readonly code?: string | undefined;
       readonly access: AuthMcpClientAccess;
       readonly clientName: string;
+      /** Shown instead of the host's own label. */
+      readonly label?: string | undefined;
       readonly beforeSave: Effect.Effect<void, E, R>;
+      /** Validates the exchanged identity under the write lock before replacing a link. */
+      readonly acceptDescriptor?: (
+        descriptor: ExecutionEnvironmentDescriptor,
+      ) => Effect.Effect<void, E2, R2>;
     }) => Effect.Effect<
       { readonly host: LinkedHost; readonly replaced: boolean },
-      LinkedHostError | E,
-      R
+      LinkedHostError | E | E2,
+      R | R2
     >;
     readonly unlink: (name: string) => Effect.Effect<Option.Option<LinkedHost>, LinkedHostError>;
   }
 >()("goat/linkedHosts/LinkedHosts") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const http = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;
   const lock = yield* Semaphore.make(1);
+  const signals = yield* PubSub.unbounded<void>();
 
   const read = secrets.get(LINKED_HOSTS_SECRET).pipe(
     Effect.flatMap(
@@ -344,13 +354,17 @@ export const make = Effect.gen(function* () {
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 
-  const link: LinkedHosts["Service"]["link"] = <E, R>(input: {
+  const link: LinkedHosts["Service"]["link"] = <E, R, E2 = never, R2 = never>(input: {
     readonly name: string;
     readonly url: string;
     readonly code?: string | undefined;
     readonly access: AuthMcpClientAccess;
     readonly clientName: string;
+    readonly label?: string | undefined;
     readonly beforeSave: Effect.Effect<void, E, R>;
+    readonly acceptDescriptor?: (
+      descriptor: ExecutionEnvironmentDescriptor,
+    ) => Effect.Effect<void, E2, R2>;
   }) =>
     Effect.gen(function* () {
       const name = input.name.trim();
@@ -367,7 +381,7 @@ export const make = Effect.gen(function* () {
         name,
         baseUrl: target.baseUrl,
         environmentId: descriptor.environmentId,
-        label: descriptor.label,
+        label: input.label?.trim() || descriptor.label,
         serverVersion: descriptor.serverVersion,
         access: input.access,
         token: token.access_token,
@@ -378,12 +392,14 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           // The exchange took several requests; the caller may have lost its authority.
           yield* input.beforeSave;
+          if (input.acceptDescriptor) yield* input.acceptDescriptor(descriptor);
           const catalog = yield* read;
           const replaced = catalog.links.some((existing) => existing.name === name);
           yield* write({
             version: 1,
             links: [...catalog.links.filter((existing) => existing.name !== name), stored],
           });
+          yield* PubSub.publish(signals, undefined);
           return { host: view(stored), replaced };
         }),
       );
@@ -399,11 +415,12 @@ export const make = Effect.gen(function* () {
           version: 1,
           links: catalog.links.filter((existing) => existing !== found),
         });
+        yield* PubSub.publish(signals, undefined);
         return Option.some(view(found));
       }),
     );
 
-  return LinkedHosts.of({ list, find, names, link, unlink });
+  return LinkedHosts.of({ changes: Stream.fromPubSub(signals), list, find, names, link, unlink });
 });
 
 export const layer = Layer.effect(LinkedHosts, make);

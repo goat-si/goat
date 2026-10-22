@@ -62,10 +62,13 @@ const result = { text: "Synthetic result", assertionKind: "inference" as const, 
 import {
   buildMemoryConflictPrompt,
   buildMemorySummaryPrompt,
-  MemorySummaryModelOutput,
+  memoryEvidenceSources,
+  memoryResultFromModelOutput,
   partitionMemorySummary,
   MEMORY_GENERATION_PROMPT_MAX_UTF8_BYTES,
 } from "./memoryGenerationPrompts.ts";
+import { strictOutputSchemaViolations } from "./strictOutputSchema.ts";
+import { toJsonSchemaObject } from "./textGenerationUtils.ts";
 describe("memory generation prompts", () => {
   it.effect("treats memory text as data and offers no tools", () =>
     Effect.gen(function* () {
@@ -81,6 +84,77 @@ describe("memory generation prompts", () => {
       );
     }),
   );
+  it.effect("offers only the evidence origins validation accepts", () =>
+    Effect.gen(function* () {
+      // A real Codex run cited the user's own message as origin "user"; validation only accepts
+      // "thread" for the supplied messages, so every summary failed.
+      const quoted = {
+        ...result,
+        assertionKind: "fact",
+        evidence: [
+          {
+            origin: "user",
+            sourceThread: summary.sourceThread,
+            watermark: summary.sourceWatermark,
+            messageIds: ["m1"],
+            importSourceId: null,
+          },
+        ],
+      };
+      const fresh = (yield* buildMemorySummaryPrompt(summary)).outputSchema;
+      expect(strictOutputSchemaViolations(toJsonSchemaObject(fresh))).toEqual([]);
+      expect(Schema.is(fresh)(quoted)).toBe(false);
+      expect(
+        Schema.is(fresh)({
+          ...quoted,
+          evidence: [{ ...quoted.evidence[0]!, origin: "thread" }],
+        }),
+      ).toBe(true);
+      expect(yield* buildMemorySummaryPrompt(summary)).toMatchObject({
+        prompt: expect.stringContaining("has origin thread"),
+      });
+      // Evidence already in the input may be copied with its own origin.
+      const carried = (yield* buildMemorySummaryPrompt({
+        ...summary,
+        previousSummary: {
+          ...payload,
+          evidence: [{ origin: "user", messageIds: [] }],
+        },
+      })).outputSchema;
+      expect(Schema.is(carried)(quoted)).toBe(true);
+      const resolution = (yield* buildMemoryConflictPrompt(conflict)).outputSchema;
+      expect(
+        Schema.is(resolution)({ ...result, judgment: "j", evidence: [quoted.evidence[0]] }),
+      ).toBe(false);
+      expect(strictOutputSchemaViolations(toJsonSchemaObject(resolution))).toEqual([]);
+    }),
+  );
+  it("takes references from the one source an entry cites, never from the model", () => {
+    // A real Codex run dropped a segment from a 290-character toEventId, so validation refused
+    // the whole summary.
+    const cited = {
+      origin: "thread" as const,
+      sourceThread: summary.sourceThread,
+      watermark: { ...summary.sourceWatermark, toEventId: "e2-miscopied" },
+      messageIds: ["m1"],
+      importSourceId: null,
+    };
+    const decide = (evidence: ReadonlyArray<typeof cited>) =>
+      Schema.decodeUnknownSync(M.GenerateMemorySummaryResult)(
+        memoryResultFromModelOutput(
+          { ...result, assertionKind: "fact", evidence },
+          memoryEvidenceSources(summary),
+        ),
+      );
+    const repaired = decide([cited]);
+    expect(repaired.evidence[0]?.watermark).toEqual(summary.sourceWatermark);
+    expect(M.validateMemoryGenerationResult(summary, repaired)).toBe(true);
+    // A message the input does not contain matches no source: the entry stays as written and
+    // validation refuses it.
+    const unknown = decide([{ ...cited, messageIds: ["m-unknown"] }]);
+    expect(unknown.evidence[0]?.watermark?.toEventId).toBe("e2-miscopied");
+    expect(M.validateMemoryGenerationResult(summary, unknown)).toBe(false);
+  });
   it.effect("rejects oversize input output and unknown evidence", () =>
     Effect.gen(function* () {
       const candidate = {
@@ -184,7 +258,10 @@ describe("memory generation prompts", () => {
       expect(chunks.flatMap((chunk) => chunk.input.messages)).toEqual(messages);
       for (const chunk of chunks) {
         const result = yield* buildMemorySummaryPrompt(chunk.input);
-        expect(result.outputSchema).toBe(MemorySummaryModelOutput);
+        // Chunks of one input offer the same evidence origins.
+        expect(toJsonSchemaObject(result.outputSchema)).toEqual(
+          toJsonSchemaObject((yield* buildMemorySummaryPrompt(empty)).outputSchema),
+        );
         expect(new TextEncoder().encode(result.prompt).length).toBeLessThanOrEqual(
           MEMORY_GENERATION_PROMPT_MAX_UTF8_BYTES,
         );

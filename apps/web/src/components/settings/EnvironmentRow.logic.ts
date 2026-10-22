@@ -1,6 +1,7 @@
 import {
   type ConnectionTarget,
   connectionRouteId,
+  connectionRouteKind,
   connectionRouteLabel,
   connectionRoutes,
   usableRoutes,
@@ -60,9 +61,14 @@ export function environmentTransportLabel(
           );
     return active === undefined
       ? connectionRouteLabel(routes[0]!)
-      : `via ${connectionRouteLabel(active)}`;
+      : connectionRouteKind(active) === "hub-proxy"
+        ? connectionRouteLabel(active)
+        : `via ${connectionRouteLabel(active)}`;
   }
   if (environment.relayManaged && isGoatConnectEnabled()) return "T3 Connect";
+  // Already reads "via <hub>".
+  if (entry.target._tag === "HubProxyConnectionTarget" && routes[0] !== undefined)
+    return connectionRouteLabel(routes[0]);
   if (isDesktopLocalConnectionTarget(entry.target))
     return isWslConnectionTarget(entry.target) ? "WSL" : "Local device";
   if (

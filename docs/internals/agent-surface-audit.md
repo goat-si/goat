@@ -8,120 +8,146 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 
 ## Snapshot
 
-| Measure                                    | Value           |
-| ------------------------------------------ | --------------- |
-| MCP tools mounted on /mcp                  | 106             |
-| Toolkits                                   | 16              |
-| Mutating tools, by enforced handler access | 68              |
-| Mutating tools that accept clientRequestId | 9               |
-| Input parameters with a description        | 83 of 399 (21%) |
-| Tool descriptions with an example          | 9 of 106        |
-| CLI commands, listed / unlisted            | 46 / 17         |
-| CLI commands with usage examples           | 0 of 63         |
-| Listed CLI leaf commands with --json       | 7 of 35         |
+| Measure                                    | Value            |
+| ------------------------------------------ | ---------------- |
+| MCP tools mounted on /mcp                  | 168              |
+| Toolkits                                   | 22               |
+| Mutating tools, by enforced handler access | 106              |
+| Mutating tools that accept clientRequestId | 11               |
+| Input parameters with a description        | 130 of 595 (22%) |
+| Tool descriptions with an example          | 12 of 168        |
+| CLI commands, listed / unlisted            | 48 / 19          |
+| CLI commands with usage examples           | 0 of 67          |
+| Listed CLI leaf commands with --json       | 7 of 36          |
 
-| Toolkit           | Tools | Mutating | clientRequestId | Paginated | failureMode   | Error tags | Source                                                |
-| ----------------- | ----- | -------- | --------------- | --------- | ------------- | ---------- | ----------------------------------------------------- |
-| `channel`         | 5     | 2        | 1               | 1         | return        | 1          | apps/server/src/mcp/toolkits/channel/tools.ts         |
-| `orchestrator`    | 21    | 14       | 8               | 2         | return        | 1          | apps/server/src/mcp/toolkits/orchestrator/tools.ts    |
-| `device`          | 4     | 2        | 0               | 0         | error         | 8          | apps/server/src/mcp/toolkits/device/tools.ts          |
-| `attachment`      | 3     | 3        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/attachment/tools.ts      |
-| `connection`      | 3     | 2        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/connection/tools.ts      |
-| `environment`     | 2     | 1        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/environment/tools.ts     |
-| `hostStatus`      | 1     | 0        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/hostStatus/tools.ts      |
-| `remoteReport`    | 2     | 1        | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/remoteReport/tools.ts    |
-| `thread`          | 18    | 11       | 0               | 2         | return        | 1          | apps/server/src/mcp/toolkits/thread/tools.ts          |
-| `previewControls` | 2     | 1        | 0               | 1         | return        | 2          | apps/server/src/mcp/toolkits/previewControls/tools.ts |
-| `project`         | 7     | 5        | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/project/tools.ts         |
-| `ssh`             | 4     | 2        | 0               | 2         | return        | 1          | apps/server/src/mcp/toolkits/ssh/tools.ts             |
-| `worktree`        | 6     | 3        | 0               | 1         | return        | 2          | apps/server/src/mcp/toolkits/worktree/tools.ts        |
-| `html`            | 2     | 0        | 0               | 0         | error, return | 1          | apps/server/src/mcp/toolkits/html/tools.ts            |
-| `pullRequests`    | 7     | 5        | 0               | 0         | error         | 15         | apps/server/src/mcp/toolkits/pullRequests/tools.ts    |
-| `preview`         | 19    | 16       | 0               | 0         | error         | 19         | apps/server/src/mcp/toolkits/preview/tools.ts         |
+| Toolkit                | Tools | Mutating | clientRequestId | Paginated | failureMode   | Error tags | Source                                                     |
+| ---------------------- | ----- | -------- | --------------- | --------- | ------------- | ---------- | ---------------------------------------------------------- |
+| `channel`              | 9     | 4        | 1               | 2         | return        | 1          | apps/server/src/mcp/toolkits/channel/tools.ts              |
+| `orchestrator`         | 23    | 15       | 9               | 3         | return        | 1          | apps/server/src/mcp/toolkits/orchestrator/tools.ts         |
+| `device`               | 4     | 2        | 0               | 0         | error         | 8          | apps/server/src/mcp/toolkits/device/tools.ts               |
+| `attachment`           | 3     | 3        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/attachment/tools.ts           |
+| `provider`             | 16    | 9        | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/provider/tools.ts             |
+| `ssh`                  | 17    | 12       | 0               | 2         | return        | 2          | apps/server/src/mcp/toolkits/ssh/tools.ts                  |
+| `computerUse`          | 1     | 1        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/computerUse/tools.ts          |
+| `connection`           | 3     | 2        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/connection/tools.ts           |
+| `environment`          | 2     | 1        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/environment/tools.ts          |
+| `fleet`                | 6     | 4        | 1               | 1         | return        | 1          | apps/server/src/mcp/toolkits/fleet/tools.ts                |
+| `hostStatus`           | 1     | 0        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/hostStatus/tools.ts           |
+| `note`                 | 4     | 2        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/note/tools.ts                 |
+| `remoteReport`         | 2     | 1        | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/remoteReport/tools.ts         |
+| `thread`               | 18    | 11       | 0               | 2         | return        | 1          | apps/server/src/mcp/toolkits/thread/tools.ts               |
+| `previewControls`      | 2     | 1        | 0               | 1         | return        | 19         | apps/server/src/mcp/toolkits/previewControls/tools.ts      |
+| `project`              | 7     | 5        | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/project/tools.ts              |
+| `worktree`             | 6     | 3        | 0               | 1         | return        | 2          | apps/server/src/mcp/toolkits/worktree/tools.ts             |
+| `html`                 | 2     | 1        | 0               | 0         | error, return | 1          | apps/server/src/mcp/toolkits/html/tools.ts                 |
+| `pullRequests`         | 7     | 5        | 0               | 0         | error         | 15         | apps/server/src/mcp/toolkits/pullRequests/tools.ts         |
+| `memory`               | 9     | 3        | 0               | 4         | return        | 1          | apps/server/src/mcp/toolkits/memory/tools.ts               |
+| `memoryAdministration` | 3     | 2        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/memoryAdministration/tools.ts |
+| `preview`              | 23    | 19       | 0               | 1         | error         | 19         | apps/server/src/mcp/toolkits/preview/tools.ts              |
 
 ## Naming
 
 Tool names follow three shapes, so an agent cannot guess a name from the resource and verb it wants:
 
-| Shape                | Count | Examples                                                                                                                                                                                     |
-| -------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resource_verb`      | 14    | `channel_ingest`, `channel_input_get`, `channel_task_get`, `channel_task_list`, `channel_task_report`, `device_close`, and 8 more                                                            |
-| `verb_resource`      | 34    | `create_threads`, `delegate_task`, `delete_scheduled_task`, `link_pull_request`, `list_scheduled_tasks`, `list_thread_pull_requests`, and 28 more                                            |
-| `goat_resource_verb` | 58    | `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_connection_add_ssh`, `goat_connection_list`, `goat_connection_remove`, `goat_environment_preferences_update`, and 52 more |
+| Shape                | Count | Examples                                                                                                                                                                    |
+| -------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resource_verb`      | 30    | `channel_bot_home`, `channel_bot_home_claim`, `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, and 24 more                                 |
+| `verb_resource`      | 38    | `create_threads`, `delegate_task`, `delete_scheduled_task`, `link_pull_request`, `list_scheduled_tasks`, `list_thread_pull_requests`, and 32 more                           |
+| `goat_resource_verb` | 100   | `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_cloud_holders`, `goat_cloud_launch`, `goat_cloud_machine_create`, `goat_cloud_machine_list`, and 94 more |
 
-The `goat_` prefix marks only some tools, and the catalog test pins exactly that set (apps/server/src/mcp/toolkits/core.test.ts:167). `create_threads`, `delegate_task`, `delete_scheduled_task`, `link_pull_request`, `list_scheduled_tasks`, `list_thread_pull_requests`, `preview_click`, `preview_dialog`, and 26 more put the verb first, and `channel_ingest`, `channel_input_get`, `channel_task_get`, `channel_task_list`, `channel_task_report`, `device_close`, `device_list`, `device_open`, and 6 more put an unprefixed resource first. Pull requests use `link_pull_request` and `watch_pull_request` where threads use `goat_thread_watch`; scheduled tasks are `schedule_task`, `list_scheduled_tasks`, and `run_scheduled_task_now`.
+The `goat_` prefix marks only some tools, and the catalog test pins exactly that set (apps/server/src/mcp/toolkits/core.test.ts:177). `create_threads`, `delegate_task`, `delete_scheduled_task`, `link_pull_request`, `list_scheduled_tasks`, `list_thread_pull_requests`, `preview_back`, `preview_click`, and 30 more put the verb first, and `channel_bot_home`, `channel_bot_home_claim`, `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, and 22 more put an unprefixed resource first. Pull requests use `link_pull_request` and `watch_pull_request` where threads use `goat_thread_watch`; scheduled tasks are `schedule_task`, `list_scheduled_tasks`, and `run_scheduled_task_now`.
 
 Toolkits do not match the resource in the name, which matters once docs or permissions are grouped by toolkit:
 
-| Tool                           | Lives in toolkit | Declared at                                            |
-| ------------------------------ | ---------------- | ------------------------------------------------------ |
-| `goat_origin_report`           | `remoteReport`   | apps/server/src/mcp/toolkits/remoteReport/tools.ts:22  |
-| `goat_origin_reports_wait`     | `remoteReport`   | apps/server/src/mcp/toolkits/remoteReport/tools.ts:29  |
-| `goat_pending_request_list`    | `thread`         | apps/server/src/mcp/toolkits/thread/tools.ts:147       |
-| `goat_pending_request_read`    | `thread`         | apps/server/src/mcp/toolkits/thread/tools.ts:156       |
-| `goat_pending_request_respond` | `thread`         | apps/server/src/mcp/toolkits/thread/tools.ts:165       |
-| `goat_queue_cancel`            | `thread`         | apps/server/src/mcp/toolkits/thread/tools.ts:120       |
-| `goat_queue_edit`              | `thread`         | apps/server/src/mcp/toolkits/thread/tools.ts:111       |
-| `goat_queue_list`              | `thread`         | apps/server/src/mcp/toolkits/thread/tools.ts:87        |
-| `goat_queue_promote_to_steer`  | `thread`         | apps/server/src/mcp/toolkits/thread/tools.ts:130       |
-| `goat_queue_read`              | `thread`         | apps/server/src/mcp/toolkits/thread/tools.ts:103       |
-| `goat_queue_reorder`           | `thread`         | apps/server/src/mcp/toolkits/thread/tools.ts:125       |
-| `goat_thread_interrupt`        | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:295 |
-| `goat_thread_launch`           | `project`        | apps/server/src/mcp/toolkits/project/tools.ts:201      |
-| `goat_thread_list`             | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:217 |
-| `goat_thread_read`             | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:233 |
-| `goat_thread_send`             | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:265 |
-| `goat_thread_send_attachments` | `attachment`     | apps/server/src/mcp/toolkits/attachment/tools.ts:47    |
-| `goat_thread_status`           | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:308 |
-| `goat_thread_unwatch`          | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:341 |
-| `goat_thread_update`           | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:252 |
-| `goat_thread_wait`             | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:280 |
-| `goat_thread_watch`            | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:326 |
-| `goat_thread_watch_list`       | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:354 |
-| `goat_workflow_stop`           | `orchestrator`   | apps/server/src/mcp/toolkits/orchestrator/tools.ts:129 |
+| Tool                           | Lives in toolkit | Declared at                                          |
+| ------------------------------ | ---------------- | ---------------------------------------------------- |
+| `goat_cloud_holders`           | `provider`       | packages/contracts/src/agentSurface/registry.ts:2956 |
+| `goat_cloud_launch`            | `provider`       | packages/contracts/src/agentSurface/registry.ts:2975 |
+| `goat_cloud_machine_create`    | `ssh`            | packages/contracts/src/agentSurface/registry.ts:2316 |
+| `goat_cloud_machine_list`      | `ssh`            | packages/contracts/src/agentSurface/registry.ts:2297 |
+| `goat_cloud_machine_resume`    | `ssh`            | packages/contracts/src/agentSurface/registry.ts:2354 |
+| `goat_cloud_machine_stop`      | `ssh`            | packages/contracts/src/agentSurface/registry.ts:2335 |
+| `goat_cloud_run_forget`        | `provider`       | packages/contracts/src/agentSurface/registry.ts:3020 |
+| `goat_cloud_run_list`          | `provider`       | packages/contracts/src/agentSurface/registry.ts:3005 |
+| `goat_cloud_run_register`      | `provider`       | packages/contracts/src/agentSurface/registry.ts:2990 |
+| `goat_goal_apply`              | `fleet`          | packages/contracts/src/agentSurface/registry.ts:463  |
+| `goat_goal_delete`             | `fleet`          | packages/contracts/src/agentSurface/registry.ts:538  |
+| `goat_goal_get`                | `fleet`          | packages/contracts/src/agentSurface/registry.ts:478  |
+| `goat_goal_list`               | `fleet`          | packages/contracts/src/agentSurface/registry.ts:493  |
+| `goat_goal_pause`              | `fleet`          | packages/contracts/src/agentSurface/registry.ts:508  |
+| `goat_goal_resume`             | `fleet`          | packages/contracts/src/agentSurface/registry.ts:523  |
+| `goat_host_link_create`        | `ssh`            | packages/contracts/src/agentSurface/registry.ts:2146 |
+| `goat_host_link_list`          | `ssh`            | packages/contracts/src/agentSurface/registry.ts:2165 |
+| `goat_host_link_remove`        | `ssh`            | packages/contracts/src/agentSurface/registry.ts:2184 |
+| `goat_origin_report`           | `remoteReport`   | packages/contracts/src/agentSurface/registry.ts:2026 |
+| `goat_origin_reports_wait`     | `remoteReport`   | packages/contracts/src/agentSurface/registry.ts:2045 |
+| `goat_pending_request_list`    | `thread`         | packages/contracts/src/agentSurface/registry.ts:2518 |
+| `goat_pending_request_read`    | `thread`         | packages/contracts/src/agentSurface/registry.ts:2536 |
+| `goat_pending_request_respond` | `thread`         | packages/contracts/src/agentSurface/registry.ts:2555 |
+| `goat_queue_cancel`            | `thread`         | packages/contracts/src/agentSurface/registry.ts:2646 |
+| `goat_queue_edit`              | `thread`         | packages/contracts/src/agentSurface/registry.ts:2628 |
+| `goat_queue_list`              | `thread`         | packages/contracts/src/agentSurface/registry.ts:2593 |
+| `goat_queue_promote_to_steer`  | `thread`         | packages/contracts/src/agentSurface/registry.ts:2681 |
+| `goat_queue_read`              | `thread`         | packages/contracts/src/agentSurface/registry.ts:2611 |
+| `goat_queue_reorder`           | `thread`         | packages/contracts/src/agentSurface/registry.ts:2663 |
+| `goat_review_findings_export`  | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1010 |
+| `goat_review_findings_record`  | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:995  |
+| `goat_thread_interrupt`        | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1291 |
+| `goat_thread_launch`           | `project`        | packages/contracts/src/agentSurface/registry.ts:1765 |
+| `goat_thread_list`             | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1177 |
+| `goat_thread_read`             | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1196 |
+| `goat_thread_send`             | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1234 |
+| `goat_thread_send_attachments` | `attachment`     | packages/contracts/src/agentSurface/registry.ts:87   |
+| `goat_thread_status`           | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1272 |
+| `goat_thread_unwatch`          | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1329 |
+| `goat_thread_update`           | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1215 |
+| `goat_thread_wait`             | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1253 |
+| `goat_thread_watch`            | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1310 |
+| `goat_thread_watch_list`       | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1348 |
+| `goat_workflow_stop`           | `orchestrator`   | packages/contracts/src/agentSurface/registry.ts:1044 |
 
 One intent is spelled several ways (tool counts in parentheses):
 
 | Intent         | Verbs in use                                                                                                                                  |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| read one thing | `read` (6), `get` (2), `status` (5), `configuration` (1)                                                                                      |
-| list things    | `list` (13), `inventory` (1), `transfers` (1), `reports` (2), `search` (1)                                                                    |
-| remove or stop | `delete` (2), `remove` (2), `discard` (1), `cancel` (2), `stop` (2), `close` (2), `unlink` (1), `unwatch` (2), `cleanup` (1), `interrupt` (1) |
-| change         | `update` (4), `configure` (1), `edit` (1), `organize` (1), `reorder` (1), `set_appearance` (1)                                                |
-| start work     | `launch` (2), `delegate` (1), `create` (2), `send` (2), `fork` (1), `schedule` (1), `run` (1), `clone` (1)                                    |
+| read one thing | `read` (9), `get` (4), `status` (9), `configuration` (1)                                                                                      |
+| list things    | `list` (20), `inventory` (1), `transfers` (1), `reports` (2), `search` (2)                                                                    |
+| remove or stop | `delete` (3), `remove` (3), `discard` (1), `cancel` (4), `stop` (3), `close` (2), `unlink` (1), `unwatch` (2), `cleanup` (1), `interrupt` (1) |
+| change         | `update` (6), `configure` (1), `edit` (1), `organize` (1), `reorder` (1), `set_appearance` (1)                                                |
+| start work     | `launch` (3), `delegate` (1), `create` (4), `send` (2), `fork` (1), `schedule` (1), `run` (4), `clone` (1)                                    |
 
 ## Schemas and envelopes
 
-- **Undeclared arguments.** 101 of 106 published input schemas say `"additionalProperties": true`, but every registration refuses undeclared arguments at call time (apps/server/src/mcp/McpHttpServer.ts:816). A client that validates against the schema cannot learn the real contract.
-- **Two failure modes.** Tools split 75 `return` and 31 `error`. Both reach the client as `isError` with JSON in a text block and no `structuredContent` (apps/server/src/mcp/toolkits/core.test.ts:88), so an agent parses text to branch on an error.
-- **6 error families.** 72 tools fail with `OrchestratorMcpFailure`; 4 tools fail with 8 tagged errors; 2 tools fail with `OrchestratorMcpFailure` or `PreviewAutomationUnavailableError`; 2 tools fail with `OrchestratorMcpFailure` or `WorktreeMcpFailure`; 7 tools fail with 15 tagged errors; 19 tools fail with 19 tagged errors. Only `OrchestratorMcpFailure` carries a machine `code` (packages/contracts/src/orchestratorMcp.ts:1093). Preview, device, worktree, and pull request failures are told apart by `_tag` alone, and every preview tool advertises all of its toolkit's tags whether or not it can raise them.
-- **Idempotency.** 9 tools accept `clientRequestId`: `channel_ingest`, `create_threads`, `delegate_task`, `goat_thread_interrupt`, `goat_thread_send`, `goat_thread_update`, `request_secret`, `schedule_task`, `task_cancel`. The other 59 mutating tools have no retry key, including the destructive `delete_scheduled_task`, `device_close`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_connection_remove`, `goat_environment_preferences_update`, `goat_pending_request_respond`, `goat_preview_close`, `goat_project_clone`, `goat_project_create`, and 29 more.
-- **Pagination.** 7 tools use `cursor/nextCursor` (`channel_task_list`, `goat_preview_list`, `goat_project_list`, `goat_queue_list`, and 3 more); 1 tool uses `afterSequence/hasMore` (`goat_origin_reports_wait`); 2 tools use `limit only` (`goat_ssh_browse`, `goat_ssh_reports`); 1 tool uses `limit/hasMore` (`goat_thread_read`). List tools with no page control: `device_list`, `goat_connection_list`, `goat_pending_request_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`.
-- **Hints that disagree with enforcement.** The handler's `McpToolAccess` declaration is what the server enforces; the MCP `readOnlyHint` is what clients see. They disagree for `goat_ssh_browse` (hint read-only, handler `writes` at apps/server/src/mcp/toolkits/ssh/handlers.ts:67), `goat_thread_read` (hint not read-only, handler `readsOrReachesHost` at apps/server/src/mcp/toolkits/orchestrator/handlers.ts:143), `preview_snapshot` (hint not read-only, handler `readsAsCaller` at apps/server/src/mcp/toolkits/preview/handlers.ts:211). Reads declared `actsAsCaller` without a read-only hint: `task_status`.
-- **Image results.** `preview_snapshot`, `device_screenshot`, and `html_preview` are registered by hand to return image content (apps/server/src/mcp/McpHttpServer.ts:885), outside the toolkit path every other tool uses.
+- **Undeclared arguments.** 148 of 168 published input schemas say `"additionalProperties": true`, but every registration refuses undeclared arguments at call time ((not found)). A client that validates against the schema cannot learn the real contract.
+- **Two failure modes.** Tools split 133 `return` and 35 `error`. Both reach the client as `isError` with JSON in a text block and no `structuredContent` (apps/server/src/mcp/toolkits/core.test.ts:102), so an agent parses text to branch on an error.
+- **6 error families.** 129 tools fail with `OrchestratorMcpFailure`; 4 tools fail with 8 tagged errors; 25 tools fail with 19 tagged errors; 1 tools fail with `OrchestratorMcpFailure` or `SshThreadHandoffFailure`; 2 tools fail with `OrchestratorMcpFailure` or `WorktreeMcpFailure`; 7 tools fail with 15 tagged errors. Only `OrchestratorMcpFailure` carries a machine `code` (packages/contracts/src/orchestratorMcp.ts:1171). Preview, device, worktree, and pull request failures are told apart by `_tag` alone, and every preview tool advertises all of its toolkit's tags whether or not it can raise them.
+- **Idempotency.** 11 tools accept `clientRequestId`: `channel_ingest`, `create_threads`, `delegate_task`, `goat_goal_apply`, `goat_review_findings_record`, `goat_thread_interrupt`, `goat_thread_send`, `goat_thread_update`, `request_secret`, `schedule_task`, and 1 more. The other 95 mutating tools have no retry key, including the destructive `delete_scheduled_task`, `device_close`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_cloud_run_forget`, `goat_connection_remove`, `goat_environment_preferences_update`, `goat_goal_delete`, `goat_host_link_remove`, `goat_pending_request_respond`, and 37 more.
+- **Pagination.** 10 tools use `cursor/nextCursor` (`channel_task_export`, `channel_task_list`, `goat_goal_list`, `goat_preview_list`, and 6 more); 8 tools use `limit only` (`goat_cloud_run_list`, `goat_ssh_browse`, `goat_ssh_reports`, `memory_history`, and 4 more); 1 tool uses `afterSequence/hasMore` (`goat_origin_reports_wait`); 1 tool uses `limit/hasMore` (`goat_thread_read`). List tools with no page control: `device_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`.
+- **Hints that disagree with enforcement.** The handler's `McpToolAccess` declaration is what the server enforces; the MCP `readOnlyHint` is what clients see. They disagree for no tools. Reads declared `actsAsCaller` without a read-only hint: `task_status`.
+- **Image results.** `preview_snapshot`, `device_screenshot`, and `html_preview` are registered by hand to return image content (apps/server/src/mcp/McpHttpServer.ts:1217), outside the toolkit path every other tool uses.
 
 ## Descriptions and examples
 
-Only 21% of input parameters carry a description. 72 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_get`, `channel_task_list`, `channel_task_report`, `create_threads`, `delete_scheduled_task`, `device_close`, `device_list`, `device_open`, and 62 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
+Only 22% of input parameters carry a description. 115 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `create_threads`, `delete_scheduled_task`, `device_close`, and 105 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
 
-9 of 106 tool descriptions include an example. 35 tools have no `Tool.Title`. Description length is uneven; the longest are:
+12 of 168 tool descriptions include an example. 72 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
-| Tool                     | Characters | Declared at                                            |
-| ------------------------ | ---------- | ------------------------------------------------------ |
-| `delegate_task`          | 3277       | apps/server/src/mcp/toolkits/orchestrator/tools.ts:90  |
-| `goat_thread_launch`     | 2817       | apps/server/src/mcp/toolkits/project/tools.ts:201      |
-| `html_render`            | 2737       | packages/shared/src/htmlRender.ts:17                   |
-| `goat_thread_send`       | 2289       | apps/server/src/mcp/toolkits/orchestrator/tools.ts:265 |
-| `goat_ssh_thread_launch` | 1800       | apps/server/src/mcp/toolkits/ssh/tools.ts:103          |
-| `schedule_task`          | 1684       | apps/server/src/mcp/toolkits/orchestrator/tools.ts:141 |
+| Tool                     | Characters | Declared at                                          |
+| ------------------------ | ---------- | ---------------------------------------------------- |
+| `delegate_task`          | 4550       | packages/contracts/src/agentSurface/registry.ts:957  |
+| `goat_thread_launch`     | 2845       | packages/contracts/src/agentSurface/registry.ts:1765 |
+| `html_render`            | 2799       | packages/contracts/src/agentSurface/registry.ts:717  |
+| `schedule_task`          | 2457       | packages/contracts/src/agentSurface/registry.ts:1063 |
+| `goat_thread_send`       | 2446       | packages/contracts/src/agentSurface/registry.ts:1234 |
+| `goat_ssh_thread_launch` | 2028       | packages/contracts/src/agentSurface/registry.ts:2241 |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
 ## Errors an agent cannot act on
 
-- `orchestration_error` is raised from 63 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:125, apps/server/src/mcp/HostThreadsMcpService.ts:101, apps/server/src/mcp/HostThreadsMcpService.ts:129, apps/server/src/mcp/HostThreadsMcpService.ts:351. The code does not say whether to retry, fix the input, or ask the user.
-- `invalid_request` is raised from 94 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:171, apps/server/src/mcp/HostStatusMcpService.ts:187, apps/server/src/mcp/HostThreadsMcpService.ts:242, apps/server/src/mcp/HostThreadsMcpService.ts:310. The code does not say whether to retry, fix the input, or ask the user.
-- `OrchestratorMcpFailure` has only `code` and `message` (packages/contracts/src/orchestratorMcp.ts:1116): no retry hint, offending field, or next action. Recovery advice, where it exists, lives in message text.
+- `orchestration_error` is raised from 82 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:142, apps/server/src/mcp/HostThreadsMcpService.ts:103, apps/server/src/mcp/HostThreadsMcpService.ts:131, apps/server/src/mcp/HostThreadsMcpService.ts:354. The code does not say whether to retry, fix the input, or ask the user.
+- `invalid_request` is raised from 120 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:189, apps/server/src/mcp/HostStatusMcpService.ts:205, apps/server/src/mcp/HostThreadsMcpService.ts:245, apps/server/src/mcp/HostThreadsMcpService.ts:313. The code does not say whether to retry, fix the input, or ask the user.
+- `OrchestratorMcpFailure` has only `code` and `message` (packages/contracts/src/orchestratorMcp.ts:1197): no retry hint, offending field, or next action. Recovery advice, where it exists, lives in message text.
 
 ## Where a human is required
 
@@ -129,57 +155,82 @@ These are the steps GOAT cannot finish without a person today, and how an agent 
 
 | Step                                          | How it surfaces to an agent                                                                                                                                                       | Evidence                                                                                                                 |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Enter a secret (webhook signing, credentials) | Agent calls `request_secret`; the user types the value in the app; the agent gets a `secretRef`. Only callable from inside a GOAT thread.                                         | apps/server/src/mcp/toolkits/orchestrator/tools.ts:192, apps/server/src/mcp/completionWebhook.ts:535                     |
-| Answer a provider question or approval        | The thread turns waiting; `goat_pending_request_list`, `goat_pending_request_read`, and `goat_pending_request_respond` let an agent answer, and escalation names the tool to use. | apps/server/src/orchestration-v2/QuestionEscalationService.ts:106, apps/server/src/mcp/PendingQuestionsMcpService.ts:449 |
-| Raise runtime or interaction mode             | The call fails with `runtime_mode_escalation_denied` or `interaction_mode_escalation_denied`. No tool requests approval, so the agent must stop and tell the user.                | packages/contracts/src/orchestratorMcp.ts:1098                                                                           |
-| Grant a capability or credential              | The call fails with `capability_denied` or `thread_credential_required`; the user resolves it in settings or by issuing a token.                                                  | packages/contracts/src/orchestratorMcp.ts:1108                                                                           |
-| T3 Connect sign-in (OAuth or device code)     | CLI only: `goat connect login`, or `--headless` for the device flow. No MCP tool starts it or reports its state.                                                                  | apps/server/src/cli/connect.ts:59                                                                                        |
-| Pair a client                                 | `goat pair` or `goat auth pairing create` on the host, or Settings → Connections. No MCP tool.                                                                                    | apps/server/src/cli/pair.ts:489                                                                                          |
-| Add an SSH host                               | `goat_connection_add_ssh` exists; host key trust, passphrases, and MFA prompts are not modelled as a handoff.                                                                     | apps/server/src/mcp/toolkits/connection/tools.ts:35                                                                      |
-| Put `goat` on PATH                            | A desktop install writes a launcher under the GOAT home, off PATH; adding it to PATH is an opt-in desktop action.                                                                 | apps/desktop/src/app/DesktopCliShim.ts:9, apps/desktop/src/app/DesktopCliCommand.ts:16                                   |
+| Enter a secret (webhook signing, credentials) | Agent calls `request_secret`; the user types the value in the app; the agent gets a `secretRef`. Only callable from inside a GOAT thread.                                         | packages/contracts/src/agentSurface/registry.ts:1139, apps/server/src/mcp/completionWebhook.ts:569                       |
+| Answer a provider question or approval        | The thread turns waiting; `goat_pending_request_list`, `goat_pending_request_read`, and `goat_pending_request_respond` let an agent answer, and escalation names the tool to use. | apps/server/src/orchestration-v2/QuestionEscalationService.ts:106, apps/server/src/mcp/PendingQuestionsMcpService.ts:454 |
+| Raise runtime or interaction mode             | The call fails with `runtime_mode_escalation_denied` or `interaction_mode_escalation_denied`. No tool requests approval, so the agent must stop and tell the user.                | packages/contracts/src/orchestratorMcp.ts:1176                                                                           |
+| Grant a capability or credential              | The call fails with `capability_denied` or `thread_credential_required`; the user resolves it in settings or by issuing a token.                                                  | packages/contracts/src/orchestratorMcp.ts:1186                                                                           |
+| T3 Connect sign-in (OAuth or device code)     | CLI only: `goat connect login`, or `--headless` for the device flow. No MCP tool starts it or reports its state.                                                                  | apps/server/src/cli/connect.ts:64                                                                                        |
+| Pair a client                                 | `goat pair` or `goat auth pairing create` on the host, or Settings → Connections. No MCP tool.                                                                                    | apps/server/src/cli/pair.ts:493                                                                                          |
+| Add an SSH host                               | `goat_connection_add_ssh` exists; host key trust, passphrases, and MFA prompts are not modelled as a handoff.                                                                     | packages/contracts/src/agentSurface/registry.ts:312                                                                      |
+| Put `goat` on PATH                            | A desktop install writes a launcher under the GOAT home, off PATH; adding it to PATH is an opt-in desktop action.                                                                 | (not found), (not found)                                                                                                 |
 
-Tools whose description or schema tells the agent to involve the user: `create_threads` (user approval), `delegate_task` (user approval), `goat_connection_add_ssh` (user chooses in UI), `goat_connection_remove` (pairing), `goat_pending_request_list` (user approval), `goat_pending_request_read` (user approval), `goat_pending_request_respond` (user approval), `goat_ssh_host_list` (sign-in), `goat_ssh_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_wait` (user answers a question), `preview_upload` (user answers a question), `request_secret` (secret entry, user approval), `schedule_task` (secret entry, user chooses in UI), `update_scheduled_task` (secret entry).
+Tools whose description or schema tells the agent to involve the user: `create_threads` (user approval), `delegate_task` (user approval, user answers a question), `goat_cloud_holders` (sign-in), `goat_cloud_launch` (sign-in), `goat_cloud_machine_list` (user chooses in UI), `goat_cloud_run_register` (sign-in), `goat_computer_use_request` (user approval), `goat_connection_add_ssh` (user approval), `goat_connection_remove` (user chooses in UI), `goat_goal_apply` (user approval), `goat_host_link_create` (user approval, pairing), `goat_host_link_remove` (user chooses in UI), `goat_origin_reports_wait` (user approval), `goat_pending_request_list` (user approval), `goat_pending_request_read` (user approval), `goat_pending_request_respond` (user approval), `goat_provider_addable_list` (sign-in, user chooses in UI), `goat_provider_diagnose` (user approval, sign-in), `goat_provider_home_request` (user approval), `goat_provider_host_matrix` (sign-in), `goat_provider_login_cancel` (sign-in), `goat_provider_login_start` (sign-in, user chooses in UI), `goat_provider_login_status` (sign-in), `goat_provider_setup_open` (sign-in), `goat_provider_sync` (sign-in), `goat_provider_sync_status` (user approval, sign-in), `goat_ssh_host_add` (user approval), `goat_ssh_host_list` (sign-in), `goat_ssh_runtime_update` (user approval), `goat_ssh_thread_handoff` (user approval), `goat_ssh_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_wait` (user answers a question), `preview_upload` (user answers a question), `request_secret` (secret entry, user approval), `schedule_task` (secret entry, user chooses in UI), `task_status` (user approval), `update_scheduled_task` (secret entry), `watch_pull_request` (user chooses in UI).
 
 There is no single handoff primitive. Each case has its own tool, error code, or CLI step, and none returns a resumable handle the agent can wait on.
 
 ## CLI
 
-The CLI operates a server; it is not an agent interface. Its 46 listed commands cover serving, auth tokens, pairing, the background service, updates, themes, traces, triage, and T3 Connect. Nothing lists, reads, or drives threads or tasks, and projects only have `goat project add`, `remove`, and `rename`. The one generic bridge, `goat acp-mcp-call`, is unlisted and its arguments are undescribed (apps/server/src/cli/acpMcpBridge.ts:25).
+The CLI operates a server; it is not an agent interface. Its 48 listed commands cover serving, auth tokens, pairing, the background service, updates, themes, traces, triage, and T3 Connect. Nothing lists, reads, or drives threads or tasks, and projects only have `goat project add`, `remove`, and `rename`. The one generic bridge, `goat acp-mcp-call`, is unlisted and its arguments are undescribed (apps/server/src/cli/acpMcpBridge.ts:15).
 
-- 0 of 63 commands define usage examples, so `--help` never shows a worked call.
-- 7 of 35 listed leaf commands offer `--json`: `goat auth pairing create`, `goat auth pairing list`, `goat auth session issue`, `goat auth session list`, `goat auth client create`, `goat auth client list`, `goat connect status`.
-- 14 commands have no description, all of them unlisted internals. Undescribed parameters: `goat acp-mcp-call tool`, `goat acp-mcp-call arguments-json`, `goat __claude-history method`, `goat __claude-history session-id`, `goat __claude-history options`, `goat __ssh-helper pick-port port-file`, and 43 more.
-- `goat auth client revoke` reuses the session revoke command under a second parent, so its help reads "Revoke an active session." (apps/server/src/cli/auth.ts:236).
+- 0 of 67 commands define usage examples, so `--help` never shows a worked call.
+- 7 of 36 listed leaf commands offer `--json`: `goat auth pairing create`, `goat auth pairing list`, `goat auth session issue`, `goat auth session list`, `goat auth client create`, `goat auth client list`, `goat provider diagnose`.
+- 20 commands have no description, all of them unlisted internals. Undescribed parameters: `goat acp-mcp-call tool`, `goat acp-mcp-call arguments-json`, `goat imessage enable --allow`, `goat imessage enable --own`, `goat imessage enable --full-access`, `goat imessage link-code --ttl`, and 49 more.
+- `goat auth client revoke` reuses the session revoke command under a second parent, so its help reads "Revoke an active session." (apps/server/src/cli/auth.ts:234).
 - Server flags such as `--dev-url` repeat on subcommands that start no server, such as `goat auth pairing create`.
 
 ## Drift between docs and the registry
 
-Scanned 130 Markdown files (docs, structure, skills, root guides) and 2 agent prompt sources in `packages/provider-core/src/server`.
+Scanned 150 Markdown files (docs, structure, skills, root guides) and 2 agent prompt sources in `packages/provider-core/src/server`.
 
-No doc or prompt names a tool that does not exist (111 tool-name mentions checked).
+Names that look like tools but are not in the registry:
 
-All 72 `goat ...` invocations in the docs resolve to a real command and its flags.
+| Name                             | Where                                                                   |
+| -------------------------------- | ----------------------------------------------------------------------- |
+| `goat_describe`                  | docs/internals/agent-surface.md:45, docs/internals/agent-surface.md:724 |
+| `goat_call`                      | docs/internals/agent-surface.md:45, docs/internals/agent-surface.md:726 |
+| `goat_eval`                      | docs/internals/agent-surface.md:45                                      |
+| `goat_thread_create_many`        | docs/internals/agent-surface.md:221                                     |
+| `goat_task_create`               | docs/internals/agent-surface.md:222                                     |
+| `goat_task_read`                 | docs/internals/agent-surface.md:222                                     |
+| `goat_task_cancel`               | docs/internals/agent-surface.md:222                                     |
+| `goat_provider_list`             | docs/internals/agent-surface.md:224                                     |
+| `goat_schedule_create`           | docs/internals/agent-surface.md:225                                     |
+| `goat_handoff_create`            | docs/internals/agent-surface.md:226                                     |
+| `goat_html_preview`              | docs/internals/agent-surface.md:241                                     |
+| `goat_html_render`               | docs/internals/agent-surface.md:241                                     |
+| `goat_pull_request_link`         | docs/internals/agent-surface.md:242                                     |
+| `goat_pull_request_guide_update` | docs/internals/agent-surface.md:243                                     |
+| `goat_host_cordon`               | docs/internals/agentic-k8s.md:941                                       |
+| `goat_thread_reschedule`         | docs/internals/agentic-k8s.md:941                                       |
+| `goat_scheduler_status`          | docs/internals/agentic-k8s.md:944                                       |
+| `goat_fallback_chain_get`        | docs/internals/agentic-k8s.md:944                                       |
 
-60 of 106 tools are never named in any Markdown doc, and 49 are named in neither docs nor agent prompts: `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_connection_add_ssh`, `goat_connection_list`, `goat_connection_remove`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_status`, `goat_preview_close`, `goat_preview_list`, `goat_project_clone`, `goat_project_create`, `goat_project_delete`, `goat_project_read`, `goat_project_update`, `goat_queue_cancel`, `goat_queue_edit`, `goat_queue_list`, `goat_queue_promote_to_steer`, `goat_queue_read`, `goat_queue_reorder`, `goat_thread_configuration`, `goat_thread_configure`, and 25 more. Agents learn these only from the MCP catalog.
+CLI invocations in the docs that do not resolve:
 
-Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat auth session issue`, `goat auth session list`, `goat auth session revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat theme set`, `goat theme clear`, `goat theme show`, `goat triage`, `goat connect publish`.
+| Text                              | Problem                                    | Where                              |
+| --------------------------------- | ------------------------------------------ | ---------------------------------- |
+| `goat service install --no-start` | `goat service install` has no `--no-start` | docs/user/background-service.md:14 |
+
+76 of 168 tools are never named in any Markdown doc, and 71 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_task_export`, `channel_task_move`, `goat_cloud_machine_create`, `goat_cloud_machine_list`, `goat_cloud_machine_resume`, `goat_cloud_machine_stop`, `goat_cloud_run_list`, `goat_computer_use_request`, `goat_connection_remove`, `goat_host_link_create`, `goat_host_link_list`, `goat_host_link_remove`, `goat_project_clone`, `goat_project_create`, `goat_project_delete`, `goat_project_read`, `goat_project_update`, `goat_provider_addable_list`, `goat_provider_home_request`, `goat_provider_login_cancel`, `goat_provider_login_start`, `goat_provider_login_status`, `goat_provider_setup_open`, and 47 more. Agents learn these only from the MCP catalog.
+
+Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat theme set`, `goat theme clear`, `goat theme show`, `goat triage`.
 
 Nothing generates reference docs from the registry today, so these lists can only grow.
 
 ## Fixes ranked by agent impact
 
-1. **One error envelope with a machine code and a next action.** 6 error families and two failure modes (75 `return`, 31 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
+1. **One error envelope with a machine code and a next action.** 6 error families and two failure modes (133 `return`, 35 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
-3. **Generate tool reference docs from the registry and check drift in CI.** 49 tools appear in no doc or prompt. Render reference pages from `inventory.ts` and fail CI when the committed output differs, as `icons:check` does for icons.
-4. **Describe every parameter.** 316 of 399 parameters have no description, and 72 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts:126 to fail on an undescribed field.
-5. **Publish the real argument contract.** 101 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
-6. **Retry keys on every mutating tool.** 59 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
-7. **One naming grammar.** Pick one shape for all 106 tools, keep old names as hidden aliases for a release, and drop the partial `goat_` prefix that the MCP server name already supplies.
-8. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 4 tools disagree or under-declare today, which misleads clients that auto-approve reads.
+3. **Generate tool reference docs from the registry and check drift in CI.** 71 tools appear in no doc or prompt. Render reference pages from `inventory.ts` and fail CI when the committed output differs, as `icons:check` does for icons.
+4. **Describe every parameter.** 465 of 595 parameters have no description, and 115 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts:134 to fail on an undescribed field.
+5. **Publish the real argument contract.** 148 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
+6. **Retry keys on every mutating tool.** 95 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
+7. **One naming grammar.** Pick one shape for all 168 tools, keep old names as hidden aliases for a release, and drop the partial `goat_` prefix that the MCP server name already supplies.
+8. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 9. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.
 10. **Give the CLI an agent face.** Add listed `goat tool list` and `goat tool call <name> --json` generated from the same registry, so shells and CI reach every MCP capability through one documented grammar. Today only the unlisted `acp-mcp-call` exists.
-11. **`--json` on every listed leaf command.** Only 7 of 35 offer it; agents parse human tables otherwise.
-12. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 9 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
-13. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_connection_list`, `goat_pending_request_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
-14. **Move routing policy out of tool descriptions.** The longest description is 3277 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
+11. **`--json` on every listed leaf command.** Only 7 of 36 offer it; agents parse human tables otherwise.
+12. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 12 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
+13. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
+14. **Move routing policy out of tool descriptions.** The longest description is 4550 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
 15. **Group tools by resource.** Move queue and pending request tools out of the thread toolkit and thread launch out of the project toolkit, and give scheduled tasks one toolkit, so permissions, docs, and discovery follow the resource an agent is working on.

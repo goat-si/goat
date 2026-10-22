@@ -80,7 +80,9 @@
         "packages/contracts/src/settings.ts",
         "packages/contracts/src/channelCommon.ts",
         "packages/contracts/src/channelGateway.ts",
-        "packages/contracts/src/ipc.ts"
+        "packages/contracts/src/ipc.ts",
+        "packages/contracts/src/hubProxy.ts",
+        "packages/contracts/src/quotaPool.ts"
       ]
     },
     {
@@ -96,7 +98,9 @@
         "packages/client-runtime/src/goatBot/home.ts",
         "packages/client-runtime/src/goatBot/index.ts",
         "apps/web/src/components/goatBot/",
-        "apps/mobile/src/features/goat-bot/"
+        "apps/mobile/src/features/goat-bot/",
+        "packages/client-runtime/src/connection/hubProxyAuthSource.ts",
+        "packages/client-runtime/src/connection/hubProxyDiscovery.ts"
       ]
     },
     {
@@ -112,8 +116,11 @@
         "packages/shared/src/goatConnect.ts",
         "packages/shared/src/mobileAppIdentity.ts",
         "packages/shared/src/sshRuntimeProtocol.ts",
+        "packages/shared/src/opencodexCompat.ts",
         "packages/shared/src/sshFailure.ts",
         "packages/shared/src/cliRelease.ts",
+        "packages/shared/src/cuaDriverRelease.ts",
+        "packages/shared/src/cuaDriverManifest.ts",
         "packages/shared/src/path.ts",
         "packages/shared/src/themePalettes.ts",
         "apps/server/src/orchestration-v2/ThreadCommandExecutor.ts"
@@ -151,6 +158,18 @@
         "apps/server/src/checkpointing/Utils.ts",
         "apps/server/src/vcs/GitVcsDriver.ts",
         "apps/server/src/provider/OpenCodexRoute.ts",
+        "apps/server/src/opencodex/OpenCodexInventory.ts",
+        "apps/server/src/hub/HubParity.ts",
+        "apps/server/src/hub/parity.ts",
+        "apps/server/src/hub/HubDown.ts",
+        "apps/server/src/hub/hubDownPolicy.ts",
+        "apps/server/src/hub/localRoutes.ts",
+        "apps/server/src/hub/HubMembership.ts",
+        "apps/server/src/hub/HubOcx.ts",
+        "apps/server/src/hub/OpenCodexManagedUpdate.ts",
+        "apps/server/src/hub/opencodexUpdatePlan.ts",
+        "packages/contracts/src/hubParity.ts",
+        "packages/contracts/src/hubDevice.ts",
         "apps/server/src/provider/builtInDrivers.ts",
         "apps/server/src/provider/Drivers/CodexDriver.ts",
         "apps/server/src/provider/Drivers/ClaudeDriver.ts",
@@ -185,7 +204,10 @@
         "packages/source-control-core",
         "packages/source-control-testing",
         "packages/contracts",
-        "packages/contracts/src/codexRoute.ts"
+        "packages/contracts/src/codexRoute.ts",
+        "apps/server/src/hubProxy",
+        "apps/server/src/cua/",
+        "packages/contracts/src/cua.ts"
       ]
     },
     {
@@ -214,7 +236,7 @@
       "path": "channels.md",
       "tier": 3,
       "title": "Channels and GOAT Bot",
-      "scope": "The channel ledger, Slack, MCP, and iMessage ingress, and the GOAT Bot thread clients render.",
+      "scope": "The channel ledger, worker verification evidence, channel ingress, and the GOAT Bot thread clients render.",
       "documents": [
         "packages/contracts/src/channelCommon.ts",
         "packages/contracts/src/settings.ts",
@@ -227,9 +249,11 @@
         "apps/server/src/channels/imessage/imessageChatDb.ts",
         "apps/server/src/channels/imessage/ImessageChannelSettings.ts",
         "apps/server/src/channels/imessage/imessageSender.ts",
-        "apps/server/src/persistence/Migrations/067_ChannelLedger.ts",
+        "apps/server/src/persistence/Migrations/071_ChannelLedger.ts",
         "apps/server/src/channels/ChannelReceptionService.ts",
         "apps/server/src/channels/ChannelDispatcher.ts",
+        "apps/server/src/channels/ChannelRemoteWorkers.ts",
+        "apps/server/src/channels/channelDispatchAuthority.ts",
         "apps/server/src/channels/ChannelBotRegistry.ts",
         "apps/server/src/channels/ChannelBotTimeline.ts",
         "packages/client-runtime/src/goatBot/",
@@ -255,24 +279,52 @@
       ]
     },
     {
+      "path": "notes.md",
+      "tier": 3,
+      "title": "Notes",
+      "scope": "Markdown notes on disk, revision conflicts, git commits, start-work and automatic done, and the clients that edit them.",
+      "documents": [
+        "packages/contracts/src/notes.ts",
+        "apps/server/src/notes/",
+        "apps/server/src/mcp/toolkits/note/",
+        "apps/server/src/config.ts",
+        "apps/server/src/ws.ts",
+        "apps/web/src/notes/",
+        "apps/mobile/src/features/notes/",
+        "apps/mobile/src/persistence/mobile-database.ts",
+        "packages/client-runtime/src/notes/"
+      ]
+    },
+    {
       "path": "ssh.md",
       "tier": 3,
       "title": "SSH",
-      "scope": "SSH host trust, runtime ownership, updates and deferred refresh, provider diagnosis routing, agent dispatch, and Boat managed aliases.",
+      "scope": "SSH host trust, runtime ownership, updates and deferred refresh, provider diagnosis routing, agent dispatch, Boat managed aliases, and the hub node list.",
       "documents": [
         "packages/ssh",
         "packages/ssh/package.json",
         "packages/ssh/src/config.ts",
         "packages/ssh/src/hostKey.ts",
+        "packages/ssh/src/preflight.ts",
+        "packages/ssh/src/runtimeAvailability.ts",
+        "packages/shared/src/sshDestination.ts",
         "packages/contracts/src/ipc.ts",
         "packages/contracts/src/sshHost.ts",
         "packages/ssh/src/command.ts",
         "packages/ssh/src/auth.ts",
         "packages/ssh/src/errors.ts",
+        "packages/ssh/src/ensureFlight.ts",
         "packages/ssh/src/tunnel.ts",
         "apps/desktop/src/ssh/DesktopSshEnvironment.ts",
         "apps/server/src/sshRemote/SshRemoteDispatch.ts",
+        "apps/server/src/project/RepositoryInventory.ts",
+        "apps/server/src/mcp/RepositoryLaunchMcpService.ts",
+        "packages/contracts/src/repositoryInventory.ts",
+        "packages/contracts/src/repositoryReference.ts",
+        "apps/server/src/project/RepositoryReferences.ts",
+        "apps/server/src/mcp/RepositoryReferenceMcpService.ts",
         "apps/server/src/sshRemote/SshHostSetup.ts",
+        "apps/server/src/sshRemote/SshDeviceAdd.ts",
         "apps/server/src/provider/ProviderDiagnosisRouting.ts",
         "apps/server/src/handoffs/Handoffs.ts",
         "apps/server/src/handoffs/HandoffExpiry.ts",
@@ -285,6 +337,10 @@
         "apps/server/src/cloudMachines/BoatClient.ts",
         "apps/server/src/cloudMachines/sshConfig.ts",
         "apps/server/src/linkedHosts/LinkedHosts.ts",
+        "apps/server/src/hubNodes/HubNodes.ts",
+        "apps/server/src/hubNodes/HubNodeRepository.ts",
+        "apps/server/src/hubNodes/merge.ts",
+        "packages/contracts/src/hubNodes.ts",
         "packages/contracts/src/cloudMachines.ts",
         "apps/server/src/cli/sshHelper.ts",
         "apps/server/src/runtimeAdmission.ts",
@@ -304,13 +360,23 @@
         "apps/server/src/mcp/toolkits/ssh/handlers.ts",
         "apps/server/src/mcp/HostThreadsMcpService.ts",
         "apps/server/src/remoteReports/RemoteDispatchCoordinator.ts",
-        "apps/server/src/persistence/Migrations/066_RemoteDispatches.ts",
-        "apps/server/src/persistence/Migrations/065_RemoteReports.ts",
-        "apps/server/src/persistence/Migrations/068_RemoteDispatchQuestions.ts",
-        "apps/server/src/persistence/Migrations/070_RemoteReportRelay.ts",
+        "apps/server/src/persistence/Migrations/070_RemoteDispatches.ts",
+        "apps/server/src/persistence/Migrations/069_RemoteReports.ts",
+        "apps/server/src/persistence/Migrations/072_RemoteDispatchQuestions.ts",
+        "apps/server/src/persistence/Migrations/074_RemoteReportRelay.ts",
         "apps/server/src/mcp/OrchestratorMcpService.ts",
         "apps/server/src/mcp/toolkits/remoteReport/tools.ts",
-        "packages/contracts/src/remoteReports.ts"
+        "packages/contracts/src/remoteReports.ts",
+        "apps/server/src/goatclaw/PermissionProfiles.ts",
+        "apps/server/src/persistence/Migrations/097_PermissionProfiles.ts",
+        "packages/contracts/src/permissionProfiles.ts",
+        "apps/server/src/fleet/pressure/HostPressureMonitor.ts",
+        "apps/server/src/fleet/pressure/PressureNudger.ts",
+        "packages/contracts/src/hostPressure.ts",
+        "apps/server/src/goatclaw/DecisionInbox.ts",
+        "apps/server/src/persistence/Migrations/098_DecisionInbox.ts",
+        "packages/contracts/src/decisions.ts",
+        "apps/server/src/goatclaw/RoleTemplates.ts"
       ]
     },
     {
@@ -357,7 +423,10 @@
         "apps/desktop/src/preload.ts",
         "apps/desktop/src/ssh/DesktopSshEnvironment.ts",
         "packages/ssh",
-        "apps/desktop/src/app/DesktopClerk.ts"
+        "apps/desktop/src/app/DesktopClerk.ts",
+        "apps/desktop/src/cua/",
+        "scripts/build-desktop-artifact.ts",
+        "patches/@ubjs__node@0.31.0-3.patch"
       ]
     },
     {
@@ -397,11 +466,11 @@
         "packages/ssh/src/tunnel.ts",
         "packages/shared/src/devHome.ts",
         "apps/server/src/persistence/initializeV2Database.ts",
-        "apps/server/src/persistence/Migrations/067_ChannelLedger.ts",
-        "apps/server/src/persistence/Migrations/066_RemoteDispatches.ts",
-        "apps/server/src/persistence/Migrations/065_RemoteReports.ts",
-        "apps/server/src/persistence/Migrations/068_RemoteDispatchQuestions.ts",
-        "apps/server/src/persistence/Migrations/070_RemoteReportRelay.ts"
+        "apps/server/src/persistence/Migrations/071_ChannelLedger.ts",
+        "apps/server/src/persistence/Migrations/070_RemoteDispatches.ts",
+        "apps/server/src/persistence/Migrations/069_RemoteReports.ts",
+        "apps/server/src/persistence/Migrations/072_RemoteDispatchQuestions.ts",
+        "apps/server/src/persistence/Migrations/074_RemoteReportRelay.ts"
       ]
     }
   ],

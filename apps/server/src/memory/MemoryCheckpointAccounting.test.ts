@@ -6,11 +6,12 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import migration from "../persistence/Migrations/073_Memory.ts";
-import hub from "../persistence/Migrations/074_MemoryHubSync.ts";
-import lineage from "../persistence/Migrations/077_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/078_MemoryCheckpointAccounting.ts";
-import lifecycleMigration from "../persistence/Migrations/085_MemoryCheckpointLifecycle.ts";
+import migration from "../persistence/Migrations/076_Memory.ts";
+import hub from "../persistence/Migrations/077_MemoryHubSync.ts";
+import lineage from "../persistence/Migrations/080_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
+import lifecycleMigration from "../persistence/Migrations/088_MemoryCheckpointLifecycle.ts";
+import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
 import {
   CheckpointAccountingError,
   refreshCheckpointAccounting,
@@ -35,7 +36,10 @@ import {
   ImportNoopResultCodec,
 } from "./MemoryStore.ts";
 
-const checkpoint = checkpointMigration.pipe(Effect.andThen(lifecycleMigration));
+const checkpoint = checkpointMigration.pipe(
+  Effect.andThen(lifecycleMigration),
+  Effect.andThen(revisionSizeMigration),
+);
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const space = M.MemorySpaceId.make(id(1));
@@ -171,7 +175,7 @@ it.effect(
       };
       yield* sql`INSERT INTO memory_payloads(space,payload_ref,memory_id,body_json,dependencies_json) VALUES (${space},${id(40)},${memoryId},${JSON.stringify(payload)},'[]')`;
       for (const n of [40, 41])
-        yield* sql`INSERT INTO memory_revisions VALUES (${space},${id(n)},${memoryId},${id(n + 100)},${JSON.stringify(n === 40 ? [] : [id(40)])},'{"kind":"user"}','inference',${JSON.stringify({ environmentId, importSource: { sourceId: id(80), format: "codex", parserVersion: "v1", sourceLocator: "synthetic.md", sourceItemKey: `key-${n}`, sourceFingerprint: "a".repeat(64), contentFingerprint: "b".repeat(64), sourceAliases: [], acceptedContentFingerprints: [] } })},${id(40)},0)`;
+        yield* sql`INSERT INTO memory_revisions(space,revision_id,memory_id,operation_id,parents_json,scope_json,assertion_kind,provenance_json,payload_ref,created_at) VALUES (${space},${id(n)},${memoryId},${id(n + 100)},${JSON.stringify(n === 40 ? [] : [id(40)])},'{"kind":"user"}','inference',${JSON.stringify({ environmentId, importSource: { sourceId: id(80), format: "codex", parserVersion: "v1", sourceLocator: "synthetic.md", sourceItemKey: `key-${n}`, sourceFingerprint: "a".repeat(64), contentFingerprint: "b".repeat(64), sourceAliases: [], acceptedContentFingerprints: [] } })},${id(40)},0)`;
       const item = {
         memorySpaceId: space,
         memoryId,
@@ -721,4 +725,82 @@ it.effect("retains the global codec initialization guard", () =>
       pending,
     );
   }).pipe(Effect.provide(old)),
+);
+
+it.effect.each([50, 500])(
+  "decodes only new and selected revisions per write with %s historical revisions",
+  (count) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* seed;
+      yield* checkpoint;
+      const payload = { text: "body", evidence: [], derivedFromMemoryRevisions: [] };
+      const revisionId = (n: number) => id(10000 + n);
+      const addRevision = (n: number) =>
+        sql`INSERT INTO memory_payloads(space,payload_ref,memory_id,body_json,dependencies_json) VALUES (${space},${revisionId(n)},${memoryId},${JSON.stringify(payload)},'[]')`.pipe(
+          Effect.andThen(
+            sql`INSERT INTO memory_revisions(space,revision_id,memory_id,operation_id,parents_json,scope_json,assertion_kind,provenance_json,payload_ref,created_at) VALUES (${space},${revisionId(n)},${memoryId},${id(20000 + n)},${JSON.stringify(n === 0 ? [] : [revisionId(n - 1)])},'{"kind":"user"}','inference',${JSON.stringify({ environmentId })},${revisionId(n)},0)`,
+          ),
+        );
+      const projection = {
+        memorySpaceId: space,
+        memoryId,
+        status: "blocked",
+        scope: { kind: "user" },
+        pendingSync: false,
+        failureCode: "missing_parent",
+        localAvailability: {
+          exposure: "held",
+          reasons: ["missing_parent"],
+          deferred: [],
+          cleanupPending: false,
+        },
+      };
+      for (let n = 0; n < count; n++) yield* addRevision(n);
+      yield* sql`INSERT INTO memory_items(space,memory_id,scope_json,scope_key,heads_json,status,projection_watermark,item_json,availability_json) VALUES (${space},${memoryId},'{"kind":"user"}','user',${JSON.stringify([revisionId(count - 1)])},'blocked',1,${JSON.stringify(projection)},${JSON.stringify(projection.localAvailability)})`;
+      const matchesFullRecompute = Effect.gen(function* () {
+        const full = checkpointInventorySize(yield* selectCheckpointMemory(space, memoryId, 0));
+        const reserve = futureForgetReserve(66560, 0);
+        assert.deepStrictEqual(yield* readSize, {
+          bytes: full.bytes + reserve.bytes,
+          rows: full.rows + reserve.rows,
+        });
+      });
+      yield* refreshCheckpointAccounting();
+      yield* matchesFullRecompute;
+
+      yield* addRevision(count);
+      yield* sql`UPDATE memory_items SET heads_json=${JSON.stringify([revisionId(count)])} WHERE space=${space}`;
+      const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+      const record: Statement.Transformer = (statement) =>
+        Effect.sync(() => {
+          queries.push(statement.compile());
+          return statement;
+        });
+      yield* refreshCheckpointAccounting().pipe(
+        Effect.provideService(Statement.CurrentTransformer, record),
+      );
+      yield* matchesFullRecompute;
+      const measured = queries.filter(([query]) =>
+        query.startsWith("UPDATE memory_revisions SET checkpoint_bytes"),
+      );
+      assert.lengthOf(measured, 1);
+      let selected = 0;
+      for (const [query, params] of queries.filter(
+        ([query]) =>
+          query.startsWith("SELECT r.space,r.revision_id") &&
+          query.includes("FROM memory_revisions r"),
+      ))
+        selected += (yield* sql.unsafe(query, params)).length;
+      assert.strictEqual(selected, 1);
+
+      // A rewritten revision is measured again instead of keeping a stale size.
+      yield* sql`UPDATE memory_revisions SET provenance_json=${JSON.stringify({ environmentId: "rewritten" })} WHERE space=${space} AND revision_id=${revisionId(0)}`;
+      assert.deepStrictEqual(
+        yield* sql`SELECT checkpoint_bytes FROM memory_revisions WHERE space=${space} AND revision_id=${revisionId(0)}`,
+        [{ checkpoint_bytes: null }],
+      );
+      yield* refreshCheckpointAccounting();
+      yield* matchesFullRecompute;
+    }).pipe(Effect.provide(old)),
 );

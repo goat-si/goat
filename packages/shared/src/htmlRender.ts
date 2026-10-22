@@ -1,4 +1,7 @@
-import { HTML_RENDER_COLUMN_WIDTH } from "@goat/contracts/agentSurface/html";
+import {
+  HTML_RENDER_COLUMN_WIDTH,
+  HTML_RENDER_MAX_FIT_HEIGHT,
+} from "@goat/contracts/agentSurface/html";
 import {
   GOAT_DARK_THEME_COLORS,
   GOAT_LIGHT_THEME_COLORS,
@@ -95,22 +98,30 @@ function measuredHeight(heights: NonNullable<HtmlRenderReference["heights"]>, wi
 
 /**
  * A page even a few pixels taller than its frame scrolls inside it and takes
- * the reader's scroll, so the frame fits the page.
+ * the reader's scroll, so the frame fits the page. A client that measured the
+ * live page passes `contentHeight`, which wins over the agent's height: client
+ * fonts often wrap the page taller than the server or agent measured it.
  */
 export function htmlRenderFrameHeight(
   reference: HtmlRenderReference,
   width: number,
   contentHeight?: number,
 ) {
+  if (contentHeight !== undefined) {
+    return Math.min(
+      HTML_RENDER_MAX_FIT_HEIGHT,
+      Math.max(HTML_RENDER_MIN_HEIGHT, Math.ceil(contentHeight)),
+    );
+  }
   const heights = reference.heights;
   if (heights === undefined || heights.length === 0) {
-    return clampHtmlRenderHeight(Math.min(reference.height, contentHeight ?? reference.height));
+    return clampHtmlRenderHeight(reference.height);
   }
   const cap =
     measuredHeight(heights, HTML_RENDER_COLUMN_WIDTH) > reference.height
       ? reference.height
       : HTML_RENDER_MAX_HEIGHT;
-  return clampHtmlRenderHeight(Math.min(cap, contentHeight ?? measuredHeight(heights, width)));
+  return clampHtmlRenderHeight(Math.min(cap, measuredHeight(heights, width)));
 }
 
 export function htmlRenderFileName(title: string) {

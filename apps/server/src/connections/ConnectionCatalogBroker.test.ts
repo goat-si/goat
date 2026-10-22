@@ -135,3 +135,24 @@ it.effect("does not deliver a queued request after it times out", () =>
     expect(yield* Fiber.join(next)).toEqual({ type: "list", connections: [] });
   }).pipe(Effect.provide(ConnectionCatalogBroker.layer)),
 );
+
+it.effect("tracks active attachments through detach", () =>
+  Effect.gen(function* () {
+    const broker = yield* ConnectionCatalogBroker.ConnectionCatalogBroker;
+    expect(yield* broker.hasHost).toBe(false);
+    const hostScope = yield* Scope.make();
+    const pull = yield* Stream.toPull(broker.attach("desktop")).pipe(
+      Effect.provideService(Scope.Scope, hostScope),
+    );
+    const invoke = yield* broker.invoke({ type: "list" }, 30_000).pipe(Effect.forkChild);
+    const [request] = yield* pull;
+    yield* broker.respond("desktop", {
+      requestId: request.requestId,
+      result: { type: "list", connections: [] },
+    });
+    yield* Fiber.join(invoke);
+    expect(yield* broker.hasHost).toBe(true);
+    yield* Scope.close(hostScope, Exit.void);
+    expect(yield* broker.hasHost).toBe(false);
+  }).pipe(Effect.provide(ConnectionCatalogBroker.layer)),
+);

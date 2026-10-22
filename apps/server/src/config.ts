@@ -27,6 +27,8 @@ export interface ServerDerivedPaths {
   readonly keybindingsConfigPath: string;
   readonly settingsPath: string;
   readonly environmentThemesDir: string;
+  /** Markdown notes; its own git repository. */
+  readonly notesDir: string;
   readonly providerStatusCacheDir: string;
   readonly worktreesDir: string;
   readonly attachmentsDir: string;
@@ -126,12 +128,15 @@ export const deriveServerPaths = Effect.fn(function* (
   const logsDir = join(stateDir, "logs");
   const providerLogsDir = join(logsDir, "provider");
   const providerStatusCacheDir = join(baseDir, "caches");
+  const devState = devUrl !== undefined && !options.baseDirIsExplicit;
   return {
     stateDir,
     dbPath,
     keybindingsConfigPath: join(stateDir, "keybindings.json"),
     settingsPath: join(stateDir, "settings.json"),
     environmentThemesDir: join(stateDir, "themes"),
+    // Beside userdata so people find it, except dev state, which must never reach their notes.
+    notesDir: devState ? join(stateDir, "notes") : join(baseDir, "notes"),
     providerStatusCacheDir,
     worktreesDir: join(baseDir, "worktrees"),
     attachmentsDir,

@@ -1,137 +1,15 @@
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  CloudMachineError,
-  type BoatSandboxId,
-  type CloudMachineAlias,
-  type CloudMachineErrorReason,
-  type CloudMachineState,
-} from "@goat/contracts";
+import { type CloudMachineState } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as ServerConfig from "../config.ts";
-import { BoatClient, type BoatSshEndpoint } from "./BoatClient.ts";
 import * as CloudMachineService from "./CloudMachineService.ts";
-import { CloudMachineSsh } from "./sshConfig.ts";
+import { ALIAS, ID, SECOND_ID, makeWorld, type World } from "./CloudMachineService.testkit.ts";
 
-const ID = "bx_23456789" as BoatSandboxId;
-const SECOND_ID = "bx_3456789a" as BoatSandboxId;
-const ALIAS = "boat-bx_23456789" as CloudMachineAlias;
-const HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOv8eZbJtFiAHk3Fp2Kq";
-
-/** A scripted Boat and SSH writer that record every call. */
-const makeWorld = () => {
-  const states = new Map<string, CloudMachineState>();
-  const calls: Array<string> = [];
-  const createKeys: Array<string> = [];
-  const failures = new Map<string, CloudMachineErrorReason>();
-  const missing = new Set<string>();
-  const ids: Array<BoatSandboxId> = [ID, SECOND_ID];
-  let endpoint: BoatSshEndpoint = {
-    host: "203.0.113.10",
-    port: 22,
-    user: "user",
-    hostKey: HOST_KEY,
-  };
-  let written: BoatSshEndpoint | null = null;
-  const removedHosts: Array<string> = [];
-  const invalidated: Array<string> = [];
-  const secrets = new Map<string, Uint8Array>();
-  const createdFor = new Map<string, BoatSandboxId>();
-
-  const call = (name: string) =>
-    Effect.suspend(() => {
-      calls.push(name);
-      const reason = failures.get(name);
-      if (reason === undefined) return Effect.void;
-      failures.delete(name);
-      return Effect.fail(new CloudMachineError({ reason }));
-    });
-  const sandbox = (id: BoatSandboxId) => ({ id, name: null, state: states.get(id)! });
-
-  const boat = BoatClient.of({
-    checkKey: () => call("checkKey"),
-    get: (_key, id) =>
-      call("get").pipe(
-        Effect.flatMap(() =>
-          missing.has(id)
-            ? Effect.fail(new CloudMachineError({ reason: "not_found" }))
-            : Effect.succeed(sandbox(id)),
-        ),
-      ),
-    // Like Boat, a repeated Idempotency-Key returns the machine the first request made.
-    create: (_key, _input, idempotencyKey) =>
-      Effect.sync(() => {
-        createKeys.push(idempotencyKey);
-        let id = createdFor.get(idempotencyKey);
-        if (id === undefined) {
-          id = ids.shift()!;
-          createdFor.set(idempotencyKey, id);
-          states.set(id, "provisioning");
-        }
-        return id;
-      }).pipe(Effect.flatMap((id) => call("create").pipe(Effect.as(sandbox(id))))),
-    update: (_key, _id, patch) => call(`update:${JSON.stringify(patch)}`),
-    stop: (_key, id) =>
-      call("stop").pipe(Effect.tap(() => Effect.sync(() => states.set(id, "archiving")))),
-    resume: (_key, id) =>
-      call("resume").pipe(Effect.tap(() => Effect.sync(() => states.set(id, "ready")))),
-    remove: () => call("remove"),
-    authorizeSshKey: () => call("sshkey").pipe(Effect.map(() => endpoint)),
-  });
-
-  const ssh = CloudMachineSsh.of({
-    installInclude: call("installInclude"),
-    ensureKey: Effect.succeed({
-      identityFile: "/home/.ssh/goat-cloud/id_ed25519",
-      publicKey: "ssh-ed25519 AAAA",
-    }),
-    writeHost: (_alias, next) =>
-      Effect.sync(() => {
-        const changed = written === null || JSON.stringify(written) !== JSON.stringify(next);
-        written = next;
-        return { changed };
-      }),
-    removeHost: (alias) => Effect.sync(() => void removedHosts.push(alias)),
-  });
-
-  const secretStore = {
-    get: (name: string) => Effect.sync(() => Option.fromNullishOr(secrets.get(name))),
-    set: (name: string, value: Uint8Array) => Effect.sync(() => void secrets.set(name, value)),
-    getOrCreateRandom: () => Effect.die("unused"),
-    remove: (name: string) => Effect.sync(() => void secrets.delete(name)),
-  } as unknown as ServerSecretStore.ServerSecretStore["Service"];
-
-  return {
-    states,
-    calls,
-    createKeys,
-    failures,
-    missing,
-    removedHosts,
-    invalidated,
-    secrets,
-    moveEndpoint: () => {
-      endpoint = { ...endpoint, host: "198.51.100.7" };
-    },
-    layer: CloudMachineService.layerWithoutDependencies.pipe(
-      Layer.provide(Layer.succeed(BoatClient, boat)),
-      Layer.provide(Layer.succeed(CloudMachineSsh, ssh)),
-      Layer.provide(Layer.succeed(ServerSecretStore.ServerSecretStore, secretStore)),
-      Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-cloud-machines-test-" })),
-      Layer.provide(NodeCrypto.layer),
-      Layer.provide(NodeServices.layer),
-    ),
-  };
-};
-
-type World = ReturnType<typeof makeWorld>;
 type Service = CloudMachineService.CloudMachineService["Service"];
 
 /** Runs against a fresh service with a stored key and, when given, one owned machine in that state. */
@@ -244,10 +122,18 @@ describe("CloudMachineService.ensureReady", () => {
           expect((yield* service.list()).machines[0]?.lastError).toBe(expired.message);
 
           world.states.set(ID, "provisioning");
+          const reading = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          // The deadline is captured before boat.get: hold that call while the clock passes it.
+          world.milestones.onGet = Deferred.succeed(reading, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+          );
           const waiting = yield* service
             .ensureReady(ALIAS, { wake: true })
             .pipe(Effect.flip, Effect.forkChild);
-          for (let second = 0; second < 200; second += 2) yield* TestClock.adjust("2 seconds");
+          yield* Deferred.await(reading);
+          yield* TestClock.adjust(Duration.millis(CloudMachineService.READY_DEADLINE_MS));
+          yield* Deferred.succeed(release, undefined);
           expect((yield* Fiber.join(waiting)).reason).toBe("readiness_timeout");
         }),
       );
@@ -430,3 +316,25 @@ describe("CloudMachineService lifecycle", () => {
     }),
   );
 });
+
+it.effect("reads a local catalog without Boat and signals catalog writes", () =>
+  Effect.gen(function* () {
+    const world = makeWorld();
+    yield* withService(world, {}, (service) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const changed = yield* service.changes.pipe(
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped({ startImmediately: true }),
+          );
+          yield* service.create({ label: "Build box", type: "small", ttlSeconds: 3600 });
+          yield* Fiber.join(changed);
+          world.calls.length = 0;
+          expect(yield* service.catalog).toEqual([{ alias: ALIAS, label: "Build box" }]);
+          expect(world.calls).toEqual([]);
+        }),
+      ),
+    );
+  }),
+);

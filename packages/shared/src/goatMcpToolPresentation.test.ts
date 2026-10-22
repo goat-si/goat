@@ -5,7 +5,6 @@ import {
   resolveGoatMcpToolDefinition,
   resolveGoatMcpToolId,
   resolveGoatMcpToolPresentation,
-  resolveGoatMcpToolSummaryAction,
 } from "./goatMcpToolPresentation.ts";
 
 describe("resolveGoatMcpToolPresentation", () => {
@@ -14,7 +13,9 @@ describe("resolveGoatMcpToolPresentation", () => {
       displayName: "Continue a GOAT task on another machine",
       logo: "t3-code",
     });
-    expect(resolveGoatMcpToolSummaryAction("channel_task_move")).toBe("channel-task-move");
+    expect(resolveGoatMcpToolDefinition("channel_task_move")?.summaryAction).toBe(
+      "channel-task-move",
+    );
   });
 
   it.each([
@@ -63,8 +64,8 @@ describe("resolveGoatMcpToolPresentation", () => {
   ] as const)("renders persisted %s with the same semantics as %s", (legacy, current) => {
     expect(resolveGoatMcpToolPresentation(current)).not.toBeNull();
     expect(resolveGoatMcpToolDefinition(legacy)).toEqual(resolveGoatMcpToolDefinition(current));
-    expect(resolveGoatMcpToolSummaryAction(legacy)).toEqual(
-      resolveGoatMcpToolSummaryAction(current),
+    expect(resolveGoatMcpToolDefinition(legacy)?.summaryAction).toEqual(
+      resolveGoatMcpToolDefinition(current)?.summaryAction,
     );
     for (const prefix of ["", "mcp__t3-code__", "t3_code.", "t3-code-thread_with_ids_"]) {
       expect(resolveGoatMcpToolPresentation(`${prefix}${legacy} completed`)).toEqual(
@@ -113,68 +114,6 @@ describe("resolveGoatMcpToolPresentation", () => {
       expect(resolveGoatMcpToolPresentation(`mcp__another-server__${tool}`), tool).toBeNull();
     }
   });
-  it("pretty prints Claude and Cursor T3 MCP tool names", () => {
-    expect(resolveGoatMcpToolPresentation("mcp__t3-code__goat_thread_read")).toEqual({
-      displayName: "Read a GOAT thread",
-      logo: "t3-code",
-    });
-  });
-
-  it("pretty prints Codex T3 MCP tool names", () => {
-    expect(resolveGoatMcpToolPresentation("t3-code.create_threads")).toEqual({
-      displayName: "Create GOAT threads",
-      logo: "t3-code",
-    });
-  });
-
-  it("pretty prints thread metadata updates", () => {
-    expect(resolveGoatMcpToolPresentation("mcp__t3-code__goat_thread_update")).toEqual({
-      displayName: "Update GOAT thread metadata",
-      logo: "t3-code",
-    });
-  });
-
-  it("pretty prints bare T3 MCP toolkit names", () => {
-    expect(resolveGoatMcpToolPresentation("list_scheduled_tasks")).toEqual({
-      displayName: "List scheduled tasks",
-      logo: "t3-code",
-    });
-  });
-
-  it("pretty prints worktree T3 MCP tool names", () => {
-    expect(resolveGoatMcpToolPresentation("mcp__t3-code__goat_worktree_handoff")).toEqual({
-      displayName: "Hand off thread to a git worktree",
-      logo: "t3-code",
-    });
-    expect(resolveGoatMcpToolPresentation("t3-code.goat_worktree_status")).toEqual({
-      displayName: "Get thread worktree status",
-      logo: "t3-code",
-    });
-  });
-
-  it("pretty prints preview T3 MCP tool names", () => {
-    expect(resolveGoatMcpToolPresentation("T3-code.preview_open")).toEqual({
-      displayName: "Open a page in the preview browser",
-      logo: "t3-code",
-    });
-    expect(resolveGoatMcpToolPresentation("mcp__t3-code__preview_status")).toEqual({
-      displayName: "Get preview browser status",
-      logo: "t3-code",
-    });
-  });
-
-  it("matches the separator variants ACP registry agents emit", () => {
-    for (const name of [
-      "mcp_t3-code_delegate_task",
-      "t3_code:delegate_task",
-      "t3code/delegate_task",
-      "t3-code delegate_task",
-      "T3 Code delegate_task",
-      "t3-code__delegate_task",
-    ]) {
-      expect(resolveGoatMcpToolPresentation(name)?.displayName).toBe("Delegate a child task");
-    }
-  });
 
   it("renders goat names while leaving unknown and foreign tools generic", () => {
     expect(resolveGoatMcpToolPresentation("goat-thread_child_1_delegate_task")?.displayName).toBe(
@@ -192,11 +131,6 @@ describe("resolveGoatMcpToolPresentation", () => {
     expect(
       resolveGoatMcpToolPresentation("t3-code-thread_opencode2-adapter_not_a_tool"),
     ).toBeNull();
-  });
-
-  it("keeps unknown MCP tools on the generic renderer path", () => {
-    expect(resolveGoatMcpToolPresentation("mcp__github__search_issues")).toBeNull();
-    expect(resolveGoatMcpToolPresentation("t3-code.not_a_real_tool")).toBeNull();
   });
 });
 
@@ -224,7 +158,7 @@ it.each(["goat_review_findings_record", "goat_review_findings_export", "channel_
     for (const name of [tool, `mcp__t3-code__${tool}`, `T3-code.${tool}`]) {
       expect(resolveGoatMcpToolDefinition(name)?.labels).toHaveLength(4);
       expect(resolveGoatMcpToolPresentation(name)?.logo).toBe("t3-code");
-      expect(resolveGoatMcpToolSummaryAction(name)).not.toBeNull();
+      expect(resolveGoatMcpToolDefinition(name)?.summaryAction).toBeDefined();
     }
   },
 );

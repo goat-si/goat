@@ -28,6 +28,7 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@goat/shared": "workspace:*",
     "@types/node": "catalog:",
     "effect-acp": "workspace:*",
     "vite-plus": "catalog:"

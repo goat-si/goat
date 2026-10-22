@@ -1,11 +1,19 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { FleetGoalId, OrchestratorMcpFailure, RunId, ThreadId } from "@goat/contracts";
+import {
+  FleetGoalId,
+  OrchestratorMcpFailure,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
+import { HubDown, type HubDownShape, type PausedGoalWork } from "../../hub/HubDown.ts";
+import { type HubWork, UNAFFECTED } from "../../hub/hubDownPolicy.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as FleetDefaults from "../defaults.ts";
@@ -200,9 +208,13 @@ const layerFor = (
     readonly enabled?: boolean;
     readonly path?: string;
     readonly placeRemote?: boolean;
+    readonly hubDown?: HubDownShape;
   } = {},
 ) =>
   controllerLayer.pipe(
+    Layer.provide(
+      options.hubDown === undefined ? Layer.empty : Layer.succeed(HubDown, options.hubDown),
+    ),
     Layer.provideMerge(goalStoreLayer),
     Layer.provideMerge(persistence(options.path)),
     Layer.provide(runtimeFor(fake)),
@@ -604,5 +616,81 @@ describe("GoalController", () => {
         },
       ]);
     }).pipe(Effect.provide(layerFor(fake)));
+  });
+
+  describe("while the hub is unreachable", () => {
+    const scriptedHub = (initial: HubWork) => {
+      const hub = {
+        work: initial,
+        settled: [] as Array<ReadonlyArray<PausedGoalWork>>,
+        notices: [] as Array<{ readonly threadId: string; readonly message: string }>,
+      };
+      const shape: HubDownShape = {
+        forWork: () => Effect.sync(() => hub.work),
+        notice: (threadId, _key, message) =>
+          Effect.sync(() => {
+            hub.notices.push({ threadId, message });
+          }),
+        settle: (paused) =>
+          Effect.sync(() => {
+            hub.settled.push(paused);
+          }),
+      };
+      return { hub, shape };
+    };
+
+    it.effect("pauses a launch without claiming it and launches once the hub answers", () => {
+      const fake = makeFake();
+      const { hub, shape } = scriptedHub({
+        _tag: "Paused",
+        message:
+          "The hub is unreachable and local fallback is off for this device in hub settings.",
+      });
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        yield* insert(withWorkers("goal_hub", 1));
+        yield* (yield* GoalController).runDue;
+        expect(fake.launches).toEqual([]);
+        // Unclaimed, so the same launch is taken later instead of spending an attempt.
+        expect(yield* store.launches(FleetGoalId.make("goal_hub"))).toEqual([]);
+        const paused = (yield* record("goal_hub")).goal.status;
+        expect(paused.phase).toBe("blocked");
+        expect(paused.conditions.find((c) => c.type === "Blocked")).toMatchObject({
+          status: "True",
+          reason: "HubUnreachable",
+        });
+        expect(hub.settled.map((batch) => batch.map((work) => work.goalId))).toEqual([
+          ["goal_hub"],
+        ]);
+
+        hub.work = UNAFFECTED;
+        yield* TestClock.adjust("10 minutes");
+        yield* (yield* GoalController).runDue;
+        expect(fake.launches.map((launch) => launch.actionId)).toEqual([
+          "goal:goal_hub:s0:a1:launch",
+        ]);
+        expect(
+          (yield* record("goal_hub")).goal.status.conditions.find((c) => c.type === "Blocked"),
+        ).toMatchObject({ status: "False" });
+        expect(hub.settled.at(-1)).toEqual([]);
+      }).pipe(Effect.provide(layerFor(fake, { hubDown: shape })));
+    });
+
+    it.effect(
+      "hops a launch to this device's own sign-in with a notice and keeps the goal's model",
+      () => {
+        const fake = makeFake();
+        const own = { instanceId: ProviderInstanceId.make("codex-own"), model: "gpt-6.1-sol" };
+        const { hub, shape } = scriptedHub({ _tag: "Hop", selection: own, notice: "moved" });
+        return Effect.gen(function* () {
+          yield* insert(withWorkers("goal_hop", 1));
+          yield* pass("goal_hop");
+          expect(fake.launches.map((launch) => launch.modelSelection)).toEqual([own]);
+          expect(hub.notices).toEqual([{ threadId: "thread:worker-1", message: "moved" }]);
+          // The next attempt starts from the goal's selection, back through the hub.
+          expect((yield* record("goal_hop")).workers[0]!.modelSelection.instanceId).toBe("codex");
+        }).pipe(Effect.provide(layerFor(fake, { hubDown: shape })));
+      },
+    );
   });
 });

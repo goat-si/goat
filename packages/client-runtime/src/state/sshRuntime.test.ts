@@ -9,6 +9,7 @@ import {
   sshRuntimeBuildOrder,
   sshRuntimeRecoveryText,
   sshRuntimeStatusText,
+  sshRuntimePhaseText,
 } from "./sshRuntime.ts";
 
 const target = { alias: "box", hostname: "box.test", username: "ops", port: 2222 };
@@ -85,6 +86,28 @@ describe("Desktop SSH runtime state", () => {
       "Checking GOAT runtime",
     );
   });
+  it.each([
+    [undefined, "Installing GOAT runtime — first setup can take a few minutes"],
+    [{ sentBytes: 0, totalBytes: 70 * 1024 * 1024 }, "Uploading GOAT runtime: 0 of 70 MB"],
+    [
+      { sentBytes: 23 * 1024 * 1024 + 512, totalBytes: 70 * 1024 * 1024 },
+      "Uploading GOAT runtime: 23 of 70 MB",
+    ],
+    [{ sentBytes: 1024, totalBytes: 1024 * 1024 + 1 }, "Uploading GOAT runtime: 0 of 2 MB"],
+    [{ sentBytes: 70 * 1024 * 1024, totalBytes: 70 * 1024 * 1024 }, "Installing GOAT runtime"],
+  ])("explains upload progress %j", (upload, text) => {
+    expect(
+      sshRuntimeStatusText({
+        host: "box",
+        runtimeVersion: null,
+        requestedVersion: "1.2.3",
+        state: "preparing",
+        phase: "uploading",
+        ...(upload === undefined ? {} : { upload }),
+      }),
+    ).toBe(text);
+  });
+
   it("compares runtime builds instead of guessing blocked state from detail", () => {
     const base = {
       host: "vps-1",
@@ -412,4 +435,38 @@ it.each(
   } as const;
   expect(sshRuntimeStatusText(exact)).toBe("Up to date · Runtime 0.4.3");
   expect(sshRuntimeRecoveryText(exact)).toBeNull();
+});
+
+it.each([
+  ["connecting", "Connecting to SSH host"],
+  ["checking", "Checking GOAT runtime"],
+  ["uploading", "Installing GOAT runtime — first setup can take a few minutes"],
+  ["starting", "Starting GOAT"],
+] as const)("uses honest source-neutral phase copy for %s", (phase, text) => {
+  expect(sshRuntimePhaseText(phase)).toBe(text);
+  const result = sshRuntimeStatusText({
+    host: "fixture",
+    state: "preparing",
+    phase,
+    runtimeVersion: null,
+    requestedVersion: "1.0.0",
+  });
+  expect(result).toBe(text);
+  expect(result).not.toMatch(/unknown|90 MB|70 MB|upload/i);
+});
+
+it.each([
+  ["ready", "Runtime ready"],
+  ["stopped", "Not running"],
+  ["update_waiting", "Update waits for running work"],
+  ["providers_not_ready", "Providers need attention"],
+] as const)("does not invent a runtime version for %s", (state, text) => {
+  expect(
+    sshRuntimeStatusText({
+      host: "fixture",
+      state,
+      runtimeVersion: null,
+      requestedVersion: "1.0.0",
+    }),
+  ).toBe(text);
 });

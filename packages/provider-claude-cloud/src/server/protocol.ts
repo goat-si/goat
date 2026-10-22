@@ -136,12 +136,19 @@ export function readSendReceipt(raw: string, expectedId: string, environment: No
   return link;
 }
 
-/** Reject routing overrides without changing the selected sibling's configuration. */
+export function prepareClaudeCloudEnvironment(environment: NodeJS.ProcessEnv) {
+  // An empty Git pager disables paging (including PAGER fallback) for unattended CLI calls.
+  // Keep the explicit empty value so a spawner cannot re-inherit the parent's pager command.
+  return environment.GIT_PAGER ? { ...environment, GIT_PAGER: "" } : environment;
+}
+
+/** Reject routing overrides and return the child environment without mutating the sibling. */
 export function validateLogin(login: {
   readonly binary: string;
   readonly binding: string;
   readonly environment: NodeJS.ProcessEnv;
 }) {
+  const environment = prepareClaudeCloudEnvironment(login.environment);
   const forbidden = [
     "CCR_FORCE_BUNDLE",
     "ANTHROPIC_API_KEY",
@@ -154,8 +161,8 @@ export function validateLogin(login: {
   if (
     !login.binary.trim() ||
     !login.binding.trim() ||
-    forbidden.some((key) => login.environment[key]?.trim()) ||
-    Object.entries(login.environment).some(([key, value]) => key.startsWith("GIT_") && value)
+    forbidden.some((key) => environment[key]?.trim()) ||
+    Object.entries(environment).some(([key, value]) => key.startsWith("GIT_") && value)
   ) {
     throw new ClaudeCloudError({
       outcome: "rejected",
@@ -163,4 +170,5 @@ export function validateLogin(login: {
         "Claude Cloud requires the selected native Claude binary and claude.ai login without bundle, API-key, Git or third-party routing overrides.",
     });
   }
+  return environment;
 }

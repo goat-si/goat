@@ -1,11 +1,13 @@
 import {
   type EnvironmentId,
+  type DecisionListInput,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
   type ServerLifecycleStreamReadyEvent,
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
+  shouldRecommendDatabaseCompaction,
   WS_METHODS,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -21,7 +23,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import {
   createAtomCommandScheduler,
@@ -386,7 +388,9 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     const persist = Effect.fn("EnvironmentServerConfigState.persist")(function* (
       config: ServerConfig,
     ) {
-      return yield* cache.saveServerConfig(environmentId, withoutEnvironmentThemes(config)).pipe(
+      // A cached stall would read as a fresh freeze on the next launch.
+      const { lastEventLoopStall: _stall, ...cacheable } = withoutEnvironmentThemes(config);
+      return yield* cache.saveServerConfig(environmentId, cacheable).pipe(
         Effect.as(true),
         Effect.catch((error) =>
           Effect.logWarning("Could not persist cached server configuration.").pipe(
@@ -901,6 +905,11 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:worktrees-directory-setting:${environmentId}`),
     ),
   );
+  const computerUseSettingAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => get(settingsValueAtom(environmentId))?.enableCua ?? false).pipe(
+      Atom.withLabel(`environment-data:server:computer-use-setting:${environmentId}`),
+    ),
+  );
   const usagePricesAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const overrides = get(settingsValueAtom(environmentId))?.usagePriceOverrides ?? {};
@@ -957,6 +966,34 @@ export function createServerEnvironmentAtoms<R, E>(
         : AsyncResult.success(result.value, result);
     }).pipe(Atom.withLabel(`environment-data:server:welcome:${environmentId}`)),
   );
+  const databaseStorage = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:server:database-storage",
+    tag: WS_METHODS.serverGetDatabaseStorage,
+    idleTtlMs: 0,
+  });
+  // Keyed by a JSON array of environment ids so one notice can list every machine.
+  const databaseCompactionRecommendations = Atom.family((environmentIdsKey: string) => {
+    const sources = (JSON.parse(environmentIdsKey) as EnvironmentId[]).map((environmentId) => ({
+      environmentId,
+      atom: databaseStorage({ environmentId, input: {} }),
+    }));
+    return Atom.make((get) =>
+      sources
+        .flatMap(({ environmentId, atom }) => {
+          const result = get(atom);
+          return result._tag === "Success" &&
+            result.value !== null &&
+            shouldRecommendDatabaseCompaction(result.value)
+            ? [{ environmentId, status: result.value }]
+            : [];
+        })
+        .sort((left, right) => right.status.reclaimableBytes - left.status.reclaimableBytes),
+    ).pipe(
+      Atom.withLabel(
+        `environment-data:server:database-compaction-recommendations:${environmentIdsKey}`,
+      ),
+    );
+  });
   const welcome = (target: {
     readonly environmentId: EnvironmentId;
     readonly input: EnvironmentRpcInput<typeof WS_METHODS.subscribeServerLifecycle>;
@@ -1014,6 +1051,26 @@ export function createServerEnvironmentAtoms<R, E>(
       onSuccess: refreshCloudMachines,
     });
 
+  const listDecisions = createEnvironmentRpcCommand(runtime, {
+    label: "environment-data:decision:list",
+    tag: WS_METHODS.decisionList,
+  });
+  const queryDecisions = Effect.fn("DecisionInbox.list")(function* (target: {
+    environmentId: EnvironmentId;
+    input: DecisionListInput;
+  }) {
+    const registry = yield* AtomRegistry.AtomRegistry;
+    const result = yield* Effect.promise(() => listDecisions.run(registry, target));
+    return result._tag === "Success" ? result.value : yield* Effect.failCause(result.cause);
+  });
+  const decisionItems = createEnvironmentQueryAtomFamily(runtime, {
+    label: "environment-data:decision:list:query",
+    idleTtlMs: 0,
+    execute: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
+      queryDecisions(target),
+    refreshTrigger: (target) => listDecisions.permissionAtom(target.environmentId),
+  });
+
   return {
     cloudMachines,
     cloudAgentRuns,
@@ -1034,11 +1091,20 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverRunStorageCleanup,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
-    databaseStorage: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
-      label: "environment-data:server:database-storage",
-      tag: WS_METHODS.serverGetDatabaseStorage,
-      idleTtlMs: 0,
+    /** Runs that machine's history compaction now; Fleet offers it when storage is over budget. */
+    compactStorage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:compact-storage",
+      tag: WS_METHODS.serverCompactStorage,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    /** Stops the stray GOAT servers that machine's host status lists. */
+    cleanUpStrayProcesses: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:clean-up-stray-processes",
+      tag: WS_METHODS.serverCleanUpStrayProcesses,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
+    databaseStorage,
+    databaseCompactionRecommendations,
     storageCleanupReport: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:storage-cleanup-report",
       tag: WS_METHODS.serverGetStorageCleanupReport,
@@ -1051,6 +1117,13 @@ export function createServerEnvironmentAtoms<R, E>(
       idleTtlMs: 0,
       staleTimeMs: 5_000,
       refreshTrigger: ({ environmentId }) => worktreesDirectorySettingAtom(environmentId),
+    }),
+    /** Driver readiness on the host; rechecked whenever computer use is turned on or off. */
+    computerUse: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:computer-use",
+      tag: WS_METHODS.serverCheckComputerUse,
+      idleTtlMs: 0,
+      refreshTrigger: ({ environmentId }) => computerUseSettingAtom(environmentId),
     }),
     updateStateAtom,
     settingsValueAtom,
@@ -1141,10 +1214,14 @@ export function createServerEnvironmentAtoms<R, E>(
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostResources>) =>
         request(WS_METHODS.serverGetHostResources, input).pipe(Effect.timeout("5 seconds")),
     }),
-    /** This machine and connected SSH hosts; each silent host is cut off at 10s on the server. */
+    /**
+     * This machine and connected SSH hosts; each silent host is cut off at 10s on the server.
+     * Views refresh it on their own 15s period. The idle TTL covers that period, so a view or
+     * derived atom that stops reading for a moment does not rebuild it and send an unplanned read.
+     */
     hostStatus: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:server:host-status",
-      idleTtlMs: 0,
+      idleTtlMs: 15_000,
       staleTimeMs: 5_000,
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostStatus>) =>
         request(WS_METHODS.serverGetHostStatus, input).pipe(Effect.timeout("30 seconds")),
@@ -1158,6 +1235,28 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.remoteLaunchesList,
       staleTimeMs: 5_000,
     }),
+    decisionItems: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
+      decisionItems({ environmentId: target.environmentId, input: target }),
+    answerDecision: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:decision:answer",
+      tag: WS_METHODS.decisionAnswer,
+    }),
+    verifyHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-verify",
+      tag: WS_METHODS.hubDeviceVerify,
+    }),
+    joinHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-join",
+      tag: WS_METHODS.hubDeviceJoin,
+    }),
+    leaveHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-leave",
+      tag: WS_METHODS.hubDeviceLeave,
+    }),
+    repairHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-repair",
+      tag: WS_METHODS.hubDeviceRepair,
+    }),
     scheduledTaskWebhookDeliveries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-deliveries",
       tag: WS_METHODS.scheduledTasksListWebhookDeliveries,
@@ -1165,6 +1264,10 @@ export function createServerEnvironmentAtoms<R, E>(
     scheduledTaskWebhookDelivery: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-delivery",
       tag: WS_METHODS.scheduledTasksGetWebhookDelivery,
+    }),
+    hubNodesLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:hub-nodes:live",
+      tag: WS_METHODS.hubNodesSubscribe,
     }),
     scheduledTasksLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:scheduled-tasks:live",
@@ -1373,6 +1476,26 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
     }),
+    addHubNode: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hub-nodes:add",
+      tag: WS_METHODS.hubNodesAdd,
+    }),
+    importHubNodes: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hub-nodes:import",
+      tag: WS_METHODS.hubNodesImport,
+    }),
+    removeHubNode: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hub-nodes:remove",
+      tag: WS_METHODS.hubNodesRemove,
+    }),
+    checkHubNodes: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hub-nodes:check",
+      tag: WS_METHODS.hubNodesCheck,
+    }),
+    dismissHubNodeNotice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hub-nodes:dismiss-notice",
+      tag: WS_METHODS.hubNodesDismissNotice,
+    }),
     upsertScheduledTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:upsert",
       tag: WS_METHODS.scheduledTasksUpsert,
@@ -1405,6 +1528,10 @@ export function createServerEnvironmentAtoms<R, E>(
       concurrency: configConcurrency,
     }),
     // Waiting on an SSH host must not occupy the settings config lane.
+    preflightSshHost: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:ssh:preflightSshHost",
+      tag: WS_METHODS.sshHostPreflight,
+    }),
     probeSshHost: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:ssh:probeSshHost",
       tag: WS_METHODS.sshHostProbe,

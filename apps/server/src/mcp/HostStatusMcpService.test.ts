@@ -1,3 +1,4 @@
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import { expect, it } from "@effect/vitest";
 import {
@@ -5,25 +6,34 @@ import {
   GoatHostStatusResult,
   ProviderDriverKind,
   ProviderInstanceId,
+  QuotaPool,
   ThreadId,
   type ServerProvider,
   type ServerProviderUsageLimits,
+  type OpenCodexInventorySnapshot,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as HubParity from "../hub/HubParity.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
+import * as RepositoryInventory from "../project/RepositoryInventory.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
+import payload from "../usage/fixtures/opencodex-quota-pool.json" with { type: "json" };
 import { HOST_STATUS_REMOTE_TIMEOUT_MS } from "./HostStatusMcpService.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
@@ -31,6 +41,7 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
+const pool = Schema.decodeUnknownSync(QuotaPool)(payload);
 const threadId = ThreadId.make("caller-thread");
 const providerInstanceId = ProviderInstanceId.make("codex");
 const now = Date.parse("2026-10-12T16:00:00.000Z");
@@ -64,15 +75,17 @@ const provider = (
   instanceId: string,
   usageLimits: ServerProviderUsageLimits | undefined,
   displayName?: string,
+  enabled = true,
 ): ServerProvider =>
   ({
     instanceId: ProviderInstanceId.make(instanceId),
     driver: ProviderDriverKind.make(instanceId),
     ...(displayName === undefined ? {} : { displayName }),
+    enabled,
     usageLimits,
   }) as ServerProvider;
 
-const remoteOk = (sampledAt: number) => ({
+const remoteOk = (sampledAt: number, opencodex?: OpenCodexInventorySnapshot) => ({
   hosts: [
     {
       host: null,
@@ -82,10 +95,38 @@ const remoteOk = (sampledAt: number) => ({
         sampledAt,
         threads: { running: 1, waiting: 0, queued: 0 },
         quotas: [],
+        ...(opencodex ? { opencodex } : {}),
       },
     },
   ],
 });
+
+it.effect("fan-out preserves a host's inventory and accepts older hosts that omit it", () =>
+  Effect.gen(function* () {
+    const inventory: OpenCodexInventorySnapshot = {
+      installed: true,
+      binaries: [{ path: "/fixture/ocx", version: "2.86.0" }],
+      ownership: "adopted",
+      service: { available: false },
+      runtime: { port: 10100, version: "2.86.0", role: "client", healthy: true, ready: true },
+      link: { role: "child", available: true, links: [], childSettingsApplied: true },
+    };
+    const { value } = yield* run(
+      {
+        hosts: ["child", "legacy"],
+        hostCall: (call) =>
+          Effect.succeed(remoteOk(9, call.host === "child" ? inventory : undefined)),
+      },
+      (service) => service.read(scope, {}),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    const hosts = decode(value.success).hosts;
+    expect(hosts.find((host) => host.host === "child")?.metrics?.opencodex).toEqual(inventory);
+    expect(hosts.find((host) => host.host === "legacy")?.metrics?.opencodex).toBeUndefined();
+    expect(hosts.find((host) => host.host === null)?.metrics?.opencodex?.ownership).toBe("none");
+  }),
+);
 
 const sshError = (reason: SshRemoteDispatch.SshRemoteDispatchError["reason"], message: string) =>
   new SshRemoteDispatch.SshRemoteDispatchError({ reason, message });
@@ -94,6 +135,7 @@ const run = <A, E>(
   options: {
     readonly hosts?: ReadonlyArray<string>;
     readonly providers?: ReadonlyArray<ServerProvider>;
+    readonly quotaPool?: QuotaPool;
     readonly refreshFails?: ReadonlySet<string>;
     readonly listFails?: boolean;
     readonly shell?: ReturnType<typeof liveThreadShell>;
@@ -107,8 +149,47 @@ const run = <A, E>(
   const refreshes: Array<string> = [];
   const queries: Array<{ projectId: unknown; includeSubagents: boolean }> = [];
   let connectedReads = 0;
+  let repositoryReads = 0;
+  let parityReads = 0;
+  const inventory = {
+    installed: false,
+    binaries: [],
+    ownership: "none" as const,
+    service: { available: false },
+    runtime: { port: 10100, healthy: false, ready: false },
+    link: { role: "none" as const, available: false, links: [], childSettingsApplied: false },
+  };
   const providers = { current: options.providers ?? [] };
   const layer = HostStatusMcpService.layer.pipe(
+    Layer.provide(
+      Layer.mock(HubParity.HubParity)({
+        latest: () => Effect.succeed(undefined),
+        readLocal: Effect.sync(() => {
+          parityReads += 1;
+          return inventory;
+        }),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(RepositoryInventory.RepositoryInventory, {
+        read: Effect.sync(() => {
+          repositoryReads += 1;
+          return { sampledAt: 0, entries: [], truncated: false };
+        }),
+        readFresh: Effect.succeed({ sampledAt: 0, entries: [], truncated: false }),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(OpenCodexInventory.OpenCodexInventory)({
+        read: Effect.succeed(inventory),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(UsageLimitSources.UsageLimitSources)({
+        quotaPool: Effect.succeed(options.quotaPool),
+        projectProviders: (providers) => Effect.succeed(providers),
+      }),
+    ),
     Layer.provide(HostThreadsMcpService.layer),
     Layer.provide(
       Layer.mock(ThreadResultService.ThreadResultService)({
@@ -180,15 +261,67 @@ const run = <A, E>(
     ),
     Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-    Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
+    Layer.provide(
+      Layer.mock(LaunchWatchService.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
+        Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
+      ),
+    ),
   );
   return Effect.gen(function* () {
     yield* TestClock.setTime(now);
     const service = yield* HostStatusMcpService.HostStatusMcpService;
     const value = yield* body(service).pipe(Effect.result);
-    return { value, calls, refreshes, queries, connectedReads: () => connectedReads };
+    return {
+      value,
+      calls,
+      refreshes,
+      queries,
+      connectedReads: () => connectedReads,
+      repositoryReads,
+      parityReads,
+    };
   }).pipe(Effect.provide(layer));
 };
+
+it.effect.each([
+  { repositories: false, parityEvidence: false },
+  { repositories: true, parityEvidence: false },
+  { repositories: false, parityEvidence: true },
+  { repositories: true, parityEvidence: true },
+])("keeps repository and parity collection independent: %j", (flags) =>
+  Effect.gen(function* () {
+    const result = yield* run({}, (service) => service.read(scope, { local: true, ...flags }));
+    expect(result.value._tag).toBe("Success");
+    expect(result.repositoryReads).toBe(Number(flags.repositories));
+    expect(result.parityReads).toBe(Number(flags.parityEvidence));
+    expect(result.calls).toHaveLength(0);
+    if (result.value._tag === "Success")
+      expect(result.value.success.hosts[0]?.repositories !== undefined).toBe(flags.repositories);
+  }),
+);
+
+it.effect("rejects remote parity evidence before collecting repository inventory", () =>
+  Effect.gen(function* () {
+    const result = yield* run({ hosts: ["box"] }, (service) =>
+      service.read(scope, { host: "box", repositories: true, parityEvidence: true }),
+    );
+    expect(result.value._tag).toBe("Failure");
+    expect(result.repositoryReads).toBe(0);
+    expect(result.parityReads).toBe(0);
+    expect(result.calls).toHaveLength(0);
+  }),
+);
+
+it.effect("includes this machine's OpenCodex pool in its decoded host metrics", () =>
+  Effect.gen(function* () {
+    const { value } = yield* run({ quotaPool: pool }, (service) =>
+      service.read(scope, { local: true }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(decode(value.success).hosts[0]?.metrics?.quotaPool).toEqual(pool);
+  }),
+);
 
 it.effect("fans out to this machine and each connected host, sorted", () =>
   Effect.gen(function* () {
@@ -228,6 +361,12 @@ it.effect("fans out to this machine and each connected host, sorted", () =>
         { instanceId: "api", displayName: "API", fromCache: true },
       ],
     });
+    // Quotas omit claude, which reports no usage limits. Providers lists every instance.
+    expect(decoded.hosts[0]?.metrics?.providers).toEqual([
+      { instanceId: "codex", driver: "codex", displayName: "Codex", enabled: true },
+      { instanceId: "claude", driver: "claude", enabled: true },
+      { instanceId: "api", driver: "api", displayName: "API", enabled: true },
+    ]);
     expect(decoded.hosts[1]).toMatchObject({ host: "box", metrics: { sampledAt: 9 } });
     expect(decoded.hosts[2]).toEqual({
       host: "zeta",
@@ -239,9 +378,45 @@ it.effect("fans out to this machine and each connected host, sorted", () =>
     expect(calls.every((call) => call.writes === false)).toBe(true);
     expect(calls.every((call) => call.timeoutMs === HOST_STATUS_REMOTE_TIMEOUT_MS)).toBe(true);
     expect(calls.every((call) => call.arguments.local === true)).toBe(true);
-    expect(queries).toEqual([{ projectId: undefined, includeSubagents: false }]);
+    expect(queries).toEqual([{ projectId: undefined, includeSubagents: true }]);
     expect(refreshes).toEqual(["codex"]);
   }),
+);
+
+it.effect(
+  "includes repository inventory only when requested and forwards that request to the selected host",
+  () =>
+    Effect.gen(function* () {
+      const { value, calls } = yield* run(
+        {
+          hostCall: () =>
+            Effect.succeed({
+              hosts: [
+                {
+                  host: null,
+                  reachability: "ok",
+                  repositories: { sampledAt: 123, entries: [], truncated: true },
+                },
+              ],
+            }),
+        },
+        (service) =>
+          Effect.gen(function* () {
+            expect(
+              (yield* service.read(scope, { local: true })).hosts[0]?.repositories,
+            ).toBeUndefined();
+            expect(
+              (yield* service.read(scope, { local: true, repositories: true })).hosts[0]
+                ?.repositories,
+            ).toEqual({ sampledAt: 0, entries: [], truncated: false });
+            return yield* service.read(scope, { host: "box", repositories: true });
+          }),
+      );
+      expect(value._tag).toBe("Success");
+      if (value._tag === "Success")
+        expect(value.success.hosts[0]?.repositories?.truncated).toBe(true);
+      expect(calls[0]?.arguments).toEqual({ local: true, repositories: true });
+    }),
 );
 
 it.effect("judges each host by the protocols it serves, not by its version string", () =>
@@ -322,6 +497,28 @@ it.effect("reads only this machine for a client session that may not reach hosts
       reachability: "ok",
       metrics: { platform: "win32", threads: { running: 1, waiting: 1, queued: 1 } },
     });
+  }),
+);
+
+it.effect("reads only this machine when a client that may reach hosts asks for local", () =>
+  Effect.gen(function* () {
+    const { value, calls, connectedReads } = yield* run(
+      { hosts: ["box"], hostCall: () => Effect.die("local read reached SSH") },
+      (service) =>
+        service.readForClient({
+          environmentId: EnvironmentId.make("host-status-test"),
+          sessionId: "web-session",
+          reachHosts: true,
+          local: true,
+        }),
+    );
+    expect(connectedReads()).toBe(0);
+    expect(calls).toEqual([]);
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.hosts.map((host) => [host.host, host.reachability])).toEqual([
+      [null, "ok"],
+    ]);
   }),
 );
 
@@ -449,6 +646,96 @@ it.effect("refuses host and local together, and an unknown named host", () =>
     expect(value.success.ghost._tag === "Failure" && value.success.ghost.failure.code).toBe(
       "invalid_request",
     );
+  }),
+);
+
+it.effect("keeps a fan-out going when one host never finishes connecting", () =>
+  Effect.gen(function* () {
+    const reached = yield* Deferred.make<void>();
+    const { value } = yield* run(
+      {
+        hosts: ["box", "stuck"],
+        // Connecting never finishes, so the call's own deadline never starts.
+        hostCall: (call) =>
+          call.host === "stuck"
+            ? Deferred.succeed(reached, undefined).pipe(Effect.andThen(Effect.never))
+            : Effect.succeed(remoteOk(5)),
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const read = yield* Effect.forkChild(service.read(scope, {}));
+          yield* Deferred.await(reached);
+          yield* TestClock.adjust(HOST_STATUS_REMOTE_TIMEOUT_MS);
+          return yield* Fiber.join(read);
+        }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.hosts.map((host) => [host.host, host.reachability])).toEqual([
+      [null, "ok"],
+      ["box", "ok"],
+      ["stuck", "unreachable"],
+    ]);
+    expect(value.success.hosts[1]?.metrics?.sampledAt).toBe(5);
+    expect(value.success.hosts[2]?.message).toBe("stuck did not answer within 10s.");
+  }),
+);
+
+it.effect("keeps a slow host's connection going across polls and keeps its late answer", () =>
+  Effect.gen(function* () {
+    const reached = yield* Deferred.make<void>();
+    const connected = yield* Deferred.make<void>();
+    let down = false;
+    let slowCalls = 0;
+    const { value, calls } = yield* run(
+      {
+        hosts: ["slow"],
+        hostCall: () => {
+          slowCalls += 1;
+          return down
+            ? Effect.fail(sshError("host_unavailable", "slow is unavailable: refused"))
+            : Deferred.succeed(reached, undefined).pipe(
+                Effect.andThen(Deferred.await(connected)),
+                Effect.as(remoteOk(7)),
+              );
+        },
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const firstRead = yield* Effect.forkChild(service.read(scope, {}));
+          yield* Deferred.await(reached);
+          yield* TestClock.adjust(HOST_STATUS_REMOTE_TIMEOUT_MS);
+          const first = yield* Fiber.join(firstRead);
+          const secondRead = yield* Effect.forkChild(service.read(scope, {}));
+          yield* TestClock.adjust(HOST_STATUS_REMOTE_TIMEOUT_MS);
+          const second = yield* Fiber.join(secondRead);
+          const callsWhileConnecting = slowCalls;
+          yield* Deferred.succeed(connected, undefined);
+          down = true;
+          const third = yield* service.read(scope, {});
+          return { first, second, third, callsWhileConnecting };
+        }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.first.hosts[1]).toMatchObject({
+      host: "slow",
+      reachability: "unreachable",
+    });
+    expect(value.success.second.hosts[1]).toMatchObject({
+      host: "slow",
+      reachability: "unreachable",
+    });
+    // The second poll waited on the connection already under way instead of starting another.
+    expect(value.success.callsWhileConnecting).toBe(1);
+    // The answer that arrived after both deadlines stands in once the host stops answering.
+    expect(value.success.third.hosts[1]).toMatchObject({
+      host: "slow",
+      reachability: "unreachable",
+      lastKnown: true,
+      metrics: { sampledAt: 7 },
+    });
+    expect(calls).toHaveLength(2);
   }),
 );
 

@@ -44,6 +44,7 @@ import {
 import { ensureLocalApi } from "~/localApi";
 import { readBrowserClientSettings } from "~/clientPersistenceStorage";
 import { resolveSidebarViewIsProjects } from "~/components/Sidebar.logic";
+import { foldLegacyFirstRunPrompt } from "~/components/desktop/firstRunPrompts.logic";
 import {
   modelPreferencesMigrationPatch,
   resolveModelPreferences,
@@ -215,7 +216,9 @@ async function hydrateClientSettings(): Promise<void> {
         return;
       }
       if (persistedSettings) {
-        replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings });
+        replaceClientSettingsSnapshot(
+          foldLegacyFirstRunPrompt({ ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings }),
+        );
       }
       writeSynchronousSidebarView(getClientSettingsSnapshot().legacySidebarEnabled);
       setClientSettingsHydrationStatus("ready");

@@ -1,6 +1,6 @@
 import type { AssetResource, ProjectReadFileError, ScopedThreadRef } from "@goat/contracts";
 import { mediaFileReference } from "@goat/client-runtime/media-reference";
-import { isAbsolutePath, workspaceRelativeFilePath } from "@goat/shared/path";
+import { isAbsolutePath, isHostPath, workspaceRelativeFilePath } from "@goat/shared/path";
 
 export function resolveFilePreviewPath(path: string | null, cwd: string): string | null {
   if (path === null) return null;
@@ -40,7 +40,7 @@ export function shouldShowFileExplorer(input: {
   readonly explorerOpen: boolean;
   readonly attachmentOpen: boolean;
 }): boolean {
-  if (input.attachmentOpen || (input.relativePath && isAbsolutePath(input.relativePath))) {
+  if (input.attachmentOpen || (input.relativePath && isHostPath(input.relativePath))) {
     return false;
   }
   return input.explorerOpen || input.relativePath === null;

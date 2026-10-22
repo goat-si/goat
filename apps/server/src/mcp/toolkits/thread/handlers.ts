@@ -1,22 +1,22 @@
 import {
-  type CommandId,
+  OrchestratorMcpFailure,
   ThreadId,
+  type CommandId,
+  type OrchestrationV2Command,
   type OrchestrationV2ThreadProjection,
   type RunId,
-  OrchestratorMcpFailure,
-  type OrchestrationV2Command,
 } from "@goat/contracts";
-import * as Effect from "effect/Effect";
 import { modelSelectionCommandType } from "@goat/shared/model";
+import * as Effect from "effect/Effect";
 
-import * as PendingQuestionsMcpService from "../../PendingQuestionsMcpService.ts";
+import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
+import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
+import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as PendingQuestionsMcpService from "../../PendingQuestionsMcpService.ts";
 import { dispatchFailure, newCommandId, readThread, unavailable } from "../../threadAccess.ts";
 import * as ThreadSearchMcpService from "../../ThreadSearchMcpService.ts";
-import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
-import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
-import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
 import { ThreadToolkit } from "./tools.ts";
 
 function queueEntry(

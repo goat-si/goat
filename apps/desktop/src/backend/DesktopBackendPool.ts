@@ -12,6 +12,8 @@ import * as FileSystem from "effect/FileSystem";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
+import { CLI_RELEASE_REPOSITORY } from "@goat/shared/cliRelease";
+
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
@@ -22,9 +24,12 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as ElectronShell from "../electron/ElectronShell.ts";
 
 const { logWarning: logBackendPoolWarning } =
   DesktopObservability.makeComponentLogger("desktop-backend-pool");
+
+const GOAT_DOWNLOAD_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 
 export type BackendInstanceId = DesktopBackendManager.BackendInstanceId;
 export const BackendInstanceId = DesktopBackendManager.BackendInstanceId;
@@ -105,6 +110,7 @@ export const layer = Layer.effect(
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
     const electronApp = yield* ElectronApp.ElectronApp;
+    const electronShell = yield* ElectronShell.ElectronShell;
     const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
     // Without this, instance scopes are orphaned: they only close via explicit unregister() calls,
     // so on app shutdown the WSL backend child process gets hard-killed by the OS instead of
@@ -180,9 +186,29 @@ export const layer = Layer.effect(
         electronDialog
           .showErrorBox(
             "This GOAT home is unavailable",
-            "Another GOAT server, such as the background service, is using this data directory. Stop that server and reopen GOAT, or set a separate GOAT_HOME and pair with the running server.",
+            "Another GOAT server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try `goat update`. If the older launcher cannot update, run `goat service uninstall` and optionally reinstall with `goat service install` from a current CLI. Use `npx goat@latest` if `goat` is missing or outdated, and pass `--base-dir` with the service's GOAT home to each command. Then reopen GOAT. You can also set a separate GOAT_HOME and pair with the running server.",
           )
           .pipe(Effect.andThen(electronApp.quit)),
+      onDatabaseAhead: () =>
+        electronDialog
+          .showMessageBox({
+            type: "error",
+            title: "This GOAT version is older than your data",
+            message: "This GOAT version is older than your data",
+            detail:
+              "A newer GOAT version upgraded this GOAT home's database, so this version cannot open it. Install the latest GOAT to keep using it. Your threads and settings are unchanged.",
+            buttons: ["Download GOAT", "Quit"],
+            cancelId: 1,
+          })
+          .pipe(
+            Effect.flatMap((choice) =>
+              choice.response === 0
+                ? electronShell.openExternal(GOAT_DOWNLOAD_URL)
+                : Effect.succeed(false),
+            ),
+            Effect.ignore,
+            Effect.andThen(electronApp.quit),
+          ),
     });
 
     const instancesRef = yield* SynchronizedRef.make<
@@ -249,61 +275,59 @@ export const layer = Layer.effect(
         ),
       );
 
-    const unregister: DesktopBackendPool["Service"]["unregister"] = (id) =>
-      Effect.gen(function* () {
-        if (id === DesktopBackendManager.PRIMARY_INSTANCE_ID) {
-          return yield* new DesktopBackendPoolCannotUnregisterPrimaryError();
-        }
-        const done = yield* Deferred.make<void>();
-        const action = yield* SynchronizedRef.modifyEffect(
-          instancesRef,
-          (
-            current,
-          ): Effect.Effect<
-            readonly [UnregisterAction, ReadonlyMap<BackendInstanceId, RegisteredInstance>]
-          > => {
-            const entry = current.get(id);
-            if (entry === undefined) {
-              return Effect.succeed([{ _tag: "Absent" } as const, current] as const);
-            }
-            if (entry._tag === "Closing") {
-              return Effect.succeed([
-                { _tag: "Wait", done: entry.done } as const,
-                current,
-              ] as const);
-            }
-            const next = new Map(current);
-            next.set(id, { _tag: "Closing", done });
-            return Effect.succeed([
-              { _tag: "Close", entry } as const,
-              next as ReadonlyMap<BackendInstanceId, RegisteredInstance>,
-            ] as const);
-          },
-        );
-
-        if (action._tag === "Absent") return;
-        if (action._tag === "Wait") {
-          yield* Deferred.await(action.done);
-          return;
-        }
-
-        const finish = SynchronizedRef.modifyEffect(instancesRef, (current) => {
-          const closing = current.get(id);
-          if (closing?._tag !== "Closing" || closing.done !== done) {
-            return Effect.succeed([undefined, current] as const);
+    const unregister: DesktopBackendPool["Service"]["unregister"] = Effect.fn(
+      "DesktopBackendPool.unregister",
+    )(function* (id) {
+      if (id === DesktopBackendManager.PRIMARY_INSTANCE_ID) {
+        return yield* new DesktopBackendPoolCannotUnregisterPrimaryError();
+      }
+      const done = yield* Deferred.make<void>();
+      const action = yield* SynchronizedRef.modifyEffect(
+        instancesRef,
+        (
+          current,
+        ): Effect.Effect<
+          readonly [UnregisterAction, ReadonlyMap<BackendInstanceId, RegisteredInstance>]
+        > => {
+          const entry = current.get(id);
+          if (entry === undefined) {
+            return Effect.succeed([{ _tag: "Absent" } as const, current] as const);
+          }
+          if (entry._tag === "Closing") {
+            return Effect.succeed([{ _tag: "Wait", done: entry.done } as const, current] as const);
           }
           const next = new Map(current);
-          next.delete(id);
+          next.set(id, { _tag: "Closing", done });
           return Effect.succeed([
-            undefined,
+            { _tag: "Close", entry } as const,
             next as ReadonlyMap<BackendInstanceId, RegisteredInstance>,
           ] as const);
-        }).pipe(Effect.andThen(Deferred.succeed(done, undefined)), Effect.asVoid);
-        yield* Option.match(action.entry.scope, {
-          onNone: () => Effect.void,
-          onSome: (scope) => Scope.close(scope, Exit.void).pipe(Effect.ignore),
-        }).pipe(Effect.ensuring(finish));
-      });
+        },
+      );
+
+      if (action._tag === "Absent") return;
+      if (action._tag === "Wait") {
+        yield* Deferred.await(action.done);
+        return;
+      }
+
+      const finish = SynchronizedRef.modifyEffect(instancesRef, (current) => {
+        const closing = current.get(id);
+        if (closing?._tag !== "Closing" || closing.done !== done) {
+          return Effect.succeed([undefined, current] as const);
+        }
+        const next = new Map(current);
+        next.delete(id);
+        return Effect.succeed([
+          undefined,
+          next as ReadonlyMap<BackendInstanceId, RegisteredInstance>,
+        ] as const);
+      }).pipe(Effect.andThen(Deferred.succeed(done, undefined)), Effect.asVoid);
+      yield* Option.match(action.entry.scope, {
+        onNone: () => Effect.void,
+        onSome: (scope) => Scope.close(scope, Exit.void).pipe(Effect.ignore),
+      }).pipe(Effect.ensuring(finish));
+    });
 
     return DesktopBackendPool.of({
       get: (id) =>

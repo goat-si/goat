@@ -1,4 +1,5 @@
 import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
@@ -50,6 +51,7 @@ import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
+import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -141,6 +143,7 @@ const layerCommandOutputHubProvided = CommandOutputHub.layer.pipe(
 
 const layerProviderSessionManagerProvided = ProviderSessionManager.layer.pipe(
   Layer.provide(AdapterInfrastructure.layerMemoryAdmission),
+  Layer.provide(PermissionProfiles.layer),
   Layer.provide(
     Layer.mergeAll(
       layerCommandOutputHubProvided,
@@ -401,9 +404,19 @@ export const layerProduction = Layer.mergeAll(
     Layer.provide(Fallback.layer),
     // Goal threads belong to the goal controller; the sweep and fallback leave them alone.
     Layer.provide(GoalThreadOwnership.layer),
-    Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerThreadManagementProvided)),
+    Layer.provide(
+      Layer.mergeAll(
+        ProjectionStore.layer,
+        layerThreadManagementProvided,
+        layerOrchestratorProvided,
+      ),
+    ),
   ),
   layerProviderContinuationWorkerProvided,
   layerAgentSessionImporterProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
-).pipe(Layer.provideMerge(Scheduler.layer), Layer.provideMerge(layerEventInfrastructure));
+).pipe(
+  Layer.provide(ResourceCleanupService.layer.pipe(Layer.provide(layerScheduledTaskProvided))),
+  Layer.provideMerge(Scheduler.layer),
+  Layer.provideMerge(layerEventInfrastructure),
+);

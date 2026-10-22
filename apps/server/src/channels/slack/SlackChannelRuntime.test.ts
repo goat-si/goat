@@ -75,14 +75,6 @@ const awaitStatus = (status: SlackChannelConnectionStatus, lastError?: string) =
     ),
   );
 
-/**
- * Lets callbacks that are already scheduled run. Used only before asserting that nothing
- * more happened; every positive wait uses a status or SDK-call milestone instead.
- */
-const flushScheduled = Effect.promise(
-  () => new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve))),
-);
-
 const statusOf = Effect.flatMap(SlackChannelRuntime.SlackChannelRuntime, (runtime) =>
   runtime.status(connectionId),
 );
@@ -208,7 +200,6 @@ describe("SlackChannelRuntime", () => {
         yield* apply(connection());
         yield* awaitStatus("reconnecting");
         yield* TestClock.adjust("4 seconds");
-        yield* flushScheduled;
         assert.equal(attempts, 1);
         yield* TestClock.adjust("1 second");
         yield* awaitStatus("connected");
@@ -226,7 +217,6 @@ describe("SlackChannelRuntime", () => {
         yield* apply(connection());
         yield* awaitStatus("error", "token_revoked");
         yield* TestClock.adjust("10 minutes");
-        yield* flushScheduled;
         assert.equal(h.sdk.calls.filter((call) => call === "authTest").length, 1);
 
         h.sdk.script.authTest = () =>
@@ -241,7 +231,6 @@ describe("SlackChannelRuntime", () => {
         assert(h.sdk.calls.includes(`disconnect:${index}`));
         assert.equal((yield* Effect.flip(send(h.registry))).deliveryErrorCode, "token_revoked");
         yield* TestClock.adjust("10 minutes");
-        yield* flushScheduled;
         assert.equal(h.sdk.sessions.length, index + 1);
       }),
     );
@@ -611,7 +600,6 @@ describe("Slack delivery status", () => {
           yield* TestClock.adjust("1 second");
           yield* awaitStatus("error", "invalid_token");
           yield* TestClock.adjust("10 minutes");
-          yield* flushScheduled;
           assert.equal(cleanup, 0);
           assert.equal(h.sdk.calls.filter((call) => call === "authTest").length, 0);
           assert.equal(h.sdk.sessions.length, 2);

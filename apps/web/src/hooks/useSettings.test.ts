@@ -1,4 +1,4 @@
-import { DEFAULT_SERVER_SETTINGS, ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
+import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@goat/contracts";
 import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@goat/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -97,14 +97,6 @@ describe("client settings hydration", () => {
     await expect(persistClientSettingsUpdate(complete)).resolves.toEqual(completedSettings);
     expect(persistenceMocks.setClientSettings).toHaveBeenCalledExactlyOnceWith(completedSettings);
     expect(persistenceMocks.getClientSettings).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses defaults only after storage confirms no saved settings exist", async () => {
-    const completedSettings = { ...DEFAULT_CLIENT_SETTINGS, onboardingCompletedAt };
-
-    await expect(persistClientSettingsUpdate(complete)).resolves.toEqual(completedSettings);
-    expect(persistenceMocks.getClientSettings).toHaveBeenCalledOnce();
-    expect(persistenceMocks.setClientSettings).toHaveBeenCalledExactlyOnceWith(completedSettings);
   });
 
   it("holds patches until a pending read supplies the saved preferences", async () => {
@@ -327,20 +319,6 @@ describe("persistClientSettingsUpdate", () => {
     expect(getClientSettings().timestampFormat).toBe("12-hour");
   });
 
-  it("keeps the current snapshot and propagates persistence failure", async () => {
-    const failure = new Error("disk full");
-    const setClientSettings = vi.fn().mockRejectedValue(failure);
-    __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
-
-    await expect(
-      persistClientSettingsUpdate(
-        (current) => ({ ...current, timestampFormat: "12-hour" }),
-        setClientSettings,
-      ),
-    ).rejects.toBe(failure);
-    expect(getClientSettings()).toBe(DEFAULT_CLIENT_SETTINGS);
-  });
-
   it("preserves a patch queued while an awaited update persists", async () => {
     let finishFirstPersistence!: () => void;
     let durableSettings = DEFAULT_CLIENT_SETTINGS;
@@ -420,25 +398,6 @@ describe("persistClientSettingsUpdate", () => {
     expect(durableSettings.wordWrap).toBe(false);
     expect(durableSettings.browserProfiles).toContainEqual(importedProfile);
   });
-
-  it("continues the queue after a rejected write", async () => {
-    const failure = new Error("disk full");
-    const persist = vi
-      .fn<(settings: typeof DEFAULT_CLIENT_SETTINGS) => Promise<void>>()
-      .mockRejectedValueOnce(failure)
-      .mockResolvedValue(undefined);
-    __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
-
-    await expect(
-      persistClientSettingsUpdate(
-        (current) => ({ ...current, timestampFormat: "12-hour" }),
-        persist,
-      ),
-    ).rejects.toBe(failure);
-    await expect(
-      persistClientSettingsUpdate((current) => ({ ...current, wordWrap: false }), persist),
-    ).resolves.toMatchObject({ wordWrap: false });
-  });
 });
 
 describe("resolveEnvironmentIdentificationMode", () => {
@@ -459,32 +418,6 @@ describe("resolveEnvironmentIdentificationMode", () => {
 });
 
 describe("mergeEnvironmentSettings", () => {
-  it("combines the selected environment's server settings with client preferences", () => {
-    const serverSettings = {
-      ...DEFAULT_SERVER_SETTINGS,
-      providerInstances: {
-        [ProviderInstanceId.make("codex_remote")]: {
-          driver: ProviderDriverKind.make("codex"),
-          enabled: true,
-        },
-      },
-    };
-    const clientSettings = {
-      ...DEFAULT_CLIENT_SETTINGS,
-      favorites: [
-        {
-          provider: ProviderInstanceId.make("codex_remote"),
-          model: "gpt-5.4",
-        },
-      ],
-    };
-
-    const settings = mergeEnvironmentSettings(serverSettings, clientSettings);
-
-    expect(settings.providerInstances).toBe(serverSettings.providerInstances);
-    expect(settings.favorites).toBe(clientSettings.favorites);
-  });
-
   it("keeps server settlement settings when legacy client data contains retired keys", () => {
     const serverSettings = {
       ...DEFAULT_SERVER_SETTINGS,

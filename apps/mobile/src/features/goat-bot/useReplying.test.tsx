@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -43,7 +42,7 @@ it("expires an active reply at its deadline and accepts a new reply", () => {
   expect(renders.at(-1)).toBe(true);
   act(() => vi.advanceTimersByTime(1));
   expect(renders.at(-1)).toBe(false);
-  render(new Date(Date.now()).toISOString());
+  render(new Date(now + 1_000).toISOString());
   expect(renders.at(-1)).toBe(true);
   expect(vi.getTimerCount()).toBe(1);
 });

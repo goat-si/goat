@@ -1,3 +1,7 @@
+import { EnvironmentId } from "@goat/contracts";
+import * as Invocation from "../mcp/McpInvocationContext.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
 import {
@@ -24,11 +28,16 @@ const FOREIGN = "boat-bx_3456789a";
  * machine is made ready before SSH touches it, and that polling paths never wake it.
  */
 const withDispatch = <A, E>(
-  options: { readonly ready?: CloudMachineErrorReason },
+  options: {
+    readonly ready?: CloudMachineErrorReason;
+    readonly stdout?: string;
+    readonly profile?: string;
+  },
   body: (dispatch: SshRemoteDispatch.SshRemoteDispatch["Service"]) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
     const events: Array<string> = [];
+    const scripts: Array<{ readonly script: string; readonly timeoutMs?: number }> = [];
     const listeners: Array<(alias: string) => Effect.Effect<void>> = [];
     const sshFailure = new SshCommandError({
       message: "stop here",
@@ -50,10 +59,18 @@ const withDispatch = <A, E>(
       disconnectEnvironment: (target) =>
         Effect.sync(() => void events.push(`disconnect:${target.alias}`)),
       revalidateTunnels: () => Effect.void,
+      issueClientSession: () => Effect.die("unused"),
       issueMcpClientSession: () => Effect.die("unused"),
-      runRemoteScript: (target) =>
-        Effect.sync(() => void events.push(`ssh:${target.alias}`)).pipe(
-          Effect.andThen(Effect.fail(sshFailure)),
+      runRemoteScript: (target, input) =>
+        Effect.sync(() => {
+          events.push(`ssh:${target.alias}`);
+          scripts.push(input);
+        }).pipe(
+          Effect.andThen(
+            options.stdout === undefined
+              ? Effect.fail(sshFailure)
+              : Effect.succeed({ stdout: options.stdout, stderr: "" }),
+          ),
         ),
     });
     const cloud = {
@@ -86,6 +103,15 @@ const withDispatch = <A, E>(
       }).pipe(
         Effect.provide(
           SshRemoteDispatch.layer.pipe(
+            Layer.provide(
+              ServerSettings.layerTest({
+                goatclaw: {
+                  enabled: options.profile !== undefined,
+                  defaultProfile: options.profile ?? "worker",
+                },
+              }),
+            ),
+            Layer.provide(Sqlite.layerMemory),
             Layer.provide(Layer.succeed(CloudMachineService.CloudMachineService, cloud)),
             Layer.provide(
               ServerConfig.layerTest("/fixture", { prefix: "goat-dispatch-cloud-test-" }),
@@ -95,7 +121,7 @@ const withDispatch = <A, E>(
           ),
         ),
       );
-      return { result, events, listeners };
+      return { result, events, listeners, scripts };
     } finally {
       managerLayer.mockRestore();
       discoverHosts.mockRestore();
@@ -152,3 +178,70 @@ describe("SshRemoteDispatch with cloud machines", () => {
     }),
   );
 });
+
+it.effect(
+  "identifies an owned target with a read-only script and quiet readiness, without ensuring a runtime",
+  () =>
+    Effect.gen(function* () {
+      const { result, events, scripts } = yield* withDispatch(
+        { stdout: "env-remote\n" },
+        (dispatch) =>
+          dispatch.identifyTarget({ alias: OWNED, hostname: OWNED, username: null, port: null }),
+      );
+      expect(result).toMatchObject({ _tag: "Success", success: "env-remote" });
+      expect(events).toEqual([`ready:${OWNED}:quiet`, `ssh:${OWNED}`]);
+      expect(scripts).toEqual([
+        {
+          script:
+            'if [ -f "$HOME/.goat/userdata/environment-id" ]; then cat "$HOME/.goat/userdata/environment-id"; fi',
+          timeoutMs: 15_000,
+        },
+      ]);
+      expect(scripts[0]!.script).not.toContain(".t3");
+    }),
+);
+
+it.effect("returns unknown identity when the read-only identity file is absent", () =>
+  Effect.gen(function* () {
+    const { result, events } = yield* withDispatch({ stdout: "" }, (dispatch) =>
+      dispatch.identifyTarget({ alias: FOREIGN, hostname: FOREIGN, username: null, port: null }),
+    );
+    expect(result).toMatchObject({ _tag: "Success", success: null });
+    expect(events).toEqual([`ssh:${FOREIGN}`]);
+  }),
+);
+
+it.effect("does not SSH to an owned target that quiet readiness refuses", () =>
+  Effect.gen(function* () {
+    const { result, events } = yield* withDispatch(
+      { ready: "stopped", stdout: "env-remote" },
+      (dispatch) =>
+        dispatch.identifyTarget({ alias: OWNED, hostname: OWNED, username: null, port: null }),
+    );
+    expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "host_unavailable" } });
+    expect(events).toEqual([`ready:${OWNED}:quiet`]);
+  }),
+);
+
+it.effect.each(["manager", "owner"])(
+  "implicit Boat wake enforces profile %s before paid effects",
+  (profile) =>
+    Effect.gen(function* () {
+      const { result, events } = yield* withDispatch({ profile }, (dispatch) =>
+        dispatch.browse({ host: OWNED }).pipe(
+          Effect.provideService(Invocation.McpInvocationContext, {
+            environmentId: EnvironmentId.make("test"),
+            requestNamespace: "test",
+            capabilities: new Set(["orchestration"] as const),
+            issuedAt: 0,
+            thread: undefined,
+            client: { sessionId: "test", label: "test", access: "full-access" },
+          }),
+        ),
+      );
+      if (profile === "manager") {
+        expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "remote_refused" } });
+        expect(events).toHaveLength(0);
+      } else expect(events[0]).toBe(`ready:${OWNED}:wake`);
+    }),
+);

@@ -1,6 +1,7 @@
 import {
   WsRpcGroup as WsBaseRpcGroup,
   WsMemoryCoreRpcGroup,
+  WsHubNodesRpcGroup,
   WsMemoryAdministrationRpcGroup,
   WsMemoryImportRpcGroup,
 } from "@goat/contracts";
@@ -15,7 +16,8 @@ import * as Socket from "effect/socket/Socket";
 
 export const WsRpcGroup = WsBaseRpcGroup.merge(WsMemoryCoreRpcGroup)
   .merge(WsMemoryAdministrationRpcGroup)
-  .merge(WsMemoryImportRpcGroup);
+  .merge(WsMemoryImportRpcGroup)
+  .merge(WsHubNodesRpcGroup);
 
 export const makeWsRpcProtocolClient = RpcClient.make(WsRpcGroup);
 type RpcClientFactory = typeof makeWsRpcProtocolClient;

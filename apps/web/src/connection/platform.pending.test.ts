@@ -6,6 +6,8 @@ import {
   type DesktopSshRuntimePendingResult,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import {
   prepareDesktopSshEnvironment,
   provisionDesktopSshEnvironment,
@@ -243,6 +245,112 @@ describe("Desktop SSH runtime gateway", () => {
         kind: "error",
         code: "operation_failed",
       });
+    }),
+  );
+});
+
+describe("scoped SSH preparation reporting", () => {
+  const uploading = {
+    operationId: "op-1",
+    phase: "uploading" as const,
+    hostAnswered: true,
+    remainingMs: 899_000,
+  };
+  const terminal = {
+    operationId: "op-1",
+    phase: null,
+    hostAnswered: true,
+    remainingMs: 898_000,
+    outcome: "pending" as const,
+  };
+  const pending: DesktopSshRuntimePendingResult = {
+    type: "ssh-runtime-pending",
+    target,
+    pending: {
+      reason: "busy",
+      replacement: "older",
+      liveVersion: "1.0.0",
+      requestedVersion: "2.0.0",
+    },
+  };
+
+  it.effect("drains sparse phase and terminal reports before settling pending", () =>
+    Effect.gen(function* () {
+      const received: unknown[] = [];
+      const reporterEntered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const bridge = {
+        supportsSshPreparationPhases: true,
+        ensureSshEnvironment: async (_target, options) => {
+          options?.onPreparationProgress?.(uploading);
+          options?.onPreparationProgress?.(terminal);
+          return pending;
+        },
+      } as DesktopBridge;
+      const fiber = yield* provisionDesktopSshEnvironment(bridge, target, undefined, {
+        onPreparationProgress: (progress) =>
+          Effect.gen(function* () {
+            received.push(progress);
+            if (progress.phase !== null) {
+              yield* Deferred.succeed(reporterEntered, undefined);
+              yield* Deferred.await(release);
+            }
+          }),
+      }).pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(reporterEntered);
+      expect(received).toEqual([uploading]);
+      yield* Deferred.succeed(release, undefined);
+      const result = yield* Fiber.join(fiber);
+      expect(result._tag).toBe("Failure");
+      expect(received).toEqual([uploading, terminal]);
+    }),
+  );
+
+  it.effect("stops local delivery after interruption while the native invocation can settle", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      let deliver: Parameters<DesktopBridge["ensureSshEnvironment"]>[1];
+      let finish!: () => void;
+      const received: unknown[] = [];
+      const bridge = {
+        supportsSshPreparationPhases: true,
+        ensureSshEnvironment: (_target, options) =>
+          new Promise((resolve) => {
+            deliver = options;
+            finish = () => resolve(pending);
+            Deferred.doneUnsafe(entered, Effect.void);
+          }),
+      } as DesktopBridge;
+      const fiber = yield* provisionDesktopSshEnvironment(bridge, target, undefined, {
+        onPreparationProgress: (progress) =>
+          Effect.sync(() => {
+            received.push(progress);
+          }),
+      }).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* Fiber.interrupt(fiber);
+      deliver?.onPreparationProgress?.(uploading);
+      deliver?.onPreparationProgress?.(terminal);
+      finish();
+      expect(received).toEqual([]);
+    }),
+  );
+
+  it.effect("never clones callback or attachment metadata into an older bridge", () =>
+    Effect.gen(function* () {
+      let options: unknown;
+      const bridge = {
+        ensureSshEnvironment: async (_target, request) => {
+          options = structuredClone(request);
+          return pending;
+        },
+      } as DesktopBridge;
+      yield* provisionDesktopSshEnvironment(bridge, target, undefined, {
+        onPreparationProgress: () => Effect.die("must not be delivered"),
+        preparedAttachmentId: "old-bridge-must-not-receive",
+        attemptContext: { supervisorId: "supervisor-1", attemptId: 1, routeId: "route-1" },
+      }).pipe(Effect.result);
+      expect(options).toEqual({ issuePairingToken: true });
     }),
   );
 });

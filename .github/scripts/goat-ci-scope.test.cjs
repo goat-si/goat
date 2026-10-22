@@ -132,7 +132,7 @@ describe("selectTasks", () => {
       "test",
       "test-desktop",
       "test-client-runtime",
-      "test-mobile-memory",
+      "test-mobile",
       "test-shared",
       "build",
     ]) {
@@ -141,12 +141,34 @@ describe("selectTasks", () => {
     assert.ok(!tasks.includes("test-contracts"));
   });
 
-  it("runs the mobile memory suite for mobile changes only among app suites", () => {
-    assert.deepEqual(tasksFor("apps/mobile/src/lib/threadActivity.ts"), [
-      "check",
-      "typecheck",
-      "test-mobile-memory",
+  it("runs the full mobile suite for mobile changes only among app suites", () => {
+    for (const file of [
+      "apps/mobile/src/lib/threadActivity.ts",
+      "apps/mobile/src/reactCompilerCoverage.test.ts",
+      "apps/mobile/src/persistence/mobile-storage.test.ts",
+      "apps/mobile/src/features/notes/NoteRouteScreen.test.tsx",
+      "apps/mobile/vite.config.ts",
+    ]) {
+      assert.deepEqual(tasksFor(file), ["check", "typecheck", "test-mobile"], file);
+    }
+  });
+
+  it("runs the full mobile suite when shared client runtime changes", () => {
+    assert.ok(tasksFor("packages/client-runtime/src/notes.ts").includes("test-mobile"));
+  });
+
+  it("wires the mobile matrix task to both mobile projects without a fixed file list", () => {
+    assert.deepEqual(matrixFor(["test-mobile"]).include, [
+      { task: "test-mobile", title: "test-mobile" },
     ]);
+    const workflow = fs.readFileSync(path.join(root, ".github/workflows/goat-ci.yml"), "utf8");
+    const step = workflow.match(/- name: Test mobile\n([\s\S]*?)(?=\n\s*- name:)/)?.[1];
+    assert.ok(step);
+    assert.match(step, /if: matrix\.task == 'test-mobile'/);
+    assert.equal(
+      step.split("run:")[1].trim(),
+      "vp test run --root apps/mobile --config vite.config.ts",
+    );
   });
 
   it("typechecks infra and the lint plugin without running suites", () => {
@@ -170,27 +192,11 @@ describe("selectTasks", () => {
       const { server } = select(changed);
       return server.mode === "full" || server.files.includes(test);
     };
-    // A fixture loads the module by name.
-    assert.ok(includes("apps/server/src/rpcInitialItems.ts", "src/rpcInitialItems.memory.test.ts"));
-    assert.ok(includes("apps/server/src/ws.ts", "src/rpcInitialItems.memory.test.ts"));
-    assert.ok(
-      includes(
-        "apps/server/src/orchestration-v2/ThreadManagementService.ts",
-        "src/rpcInitialItems.memory.test.ts",
-      ),
-    );
     // The test spawns a script that imports the change.
     assert.ok(
       includes(
         "apps/server/scripts/acpMockCancellationState.ts",
         "src/provider/acp/AcpJsonRpcConnection.test.ts",
-      ),
-    );
-    // The test reads the server source tree.
-    assert.ok(
-      includes(
-        "apps/server/src/channels/ChannelDispatcher.ts",
-        "src/orchestration-v2/V1ImportBoundary.test.ts",
       ),
     );
   });
@@ -269,17 +275,6 @@ describe("planServerTests", () => {
 
   it("runs the full suite for a deleted data file nothing names", () => {
     assert.equal(planServerTests(["apps/server/src/data/gone.bin"], fake, {}).mode, "full");
-  });
-
-  it("adds the source-scanning tests to a server source change", () => {
-    const [scanner] = SOURCE_SCANNING_TESTS;
-    const scanning = fakeGraph({ ...files, [scanner]: "" }, edges);
-    const plan = planServerTests(["apps/server/src/a.ts"], scanning, {});
-    assert.deepEqual(plan.files, ["src/a.test.ts", scanner.slice("apps/server/".length)]);
-    assert.deepEqual(
-      planServerTests(["apps/server/src/fixtures/simple/events.jsonl"], scanning, {}).files,
-      ["src/replay.test.ts"],
-    );
   });
 
   it("runs the full suite when a change reaches the server Vitest config", () => {

@@ -1,106 +1,151 @@
-import * as MemoryService from "./memory/MemoryService.ts";
-import { makeMemoryImportHandlers } from "./ws.ts";
-import * as Schema from "effect/Schema";
-import * as RpcTest from "effect/rpc/RpcTest";
-import {
-  WsRpcGroup,
-  WS_METHODS,
-  SshWorkspaceLaunchInput,
-  SshWorkspaceLaunchResult,
-  SshWorkspaceError,
-  AuthSourceControlWriteScope,
-  AuthOrchestrationOperateScope,
-  type SshWorkspaceFetchBackInput,
-} from "@goat/contracts";
-import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
-import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
+import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
+import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
+import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
+import * as ChannelGateway from "./channels/ChannelGateway.ts";
+import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
+import * as ChannelLedger from "./channels/ChannelLedger.ts";
+import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
+import * as CodexRouteService from "./provider/CodexRouteService.ts";
+import * as Handoffs from "./handoffs/Handoffs.ts";
+import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
+import * as HubParity from "./hub/HubParity.ts";
+import * as HubMembership from "./hub/HubMembership.ts";
+import * as HubNodes from "./hubNodes/HubNodes.ts";
+import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
+import * as MemorySyncService from "./memory/MemorySyncService.ts";
+import * as NoteWorkService from "./notes/NoteWorkService.ts";
+import * as NotesService from "./notes/NotesService.ts";
+import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
+import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
+import * as SlackChannelSettings from "./channels/SlackChannelSettings.ts";
+import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
-  ORCHESTRATION_PROTOCOL_VERSION,
+  AuthOrchestrationOperateScope,
+  AuthSessionId,
+  AuthSourceControlWriteScope,
+  EnvironmentId,
   ProjectId,
+  SshWorkspaceError,
+  SshWorkspaceLaunchInput,
+  SshWorkspaceLaunchResult,
   ThreadId,
-  type OrchestrationV2StoredEvent,
+  WS_METHODS,
+  WsRpcGroup,
+  WsSubscribeServerConfigRpc,
   type OrchestrationProjectShell,
+  type OrchestrationV2StoredEvent,
   type ServerConfig,
   type ServerConfigStreamEvent,
+  type SshWorkspaceFetchBackInput,
 } from "@goat/contracts";
-import * as HostProcess from "@goat/shared/HostProcess";
-import * as ConfigProvider from "effect/ConfigProvider";
+import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
+import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
+import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
+import * as RelayClient from "@goat/shared/relayClient";
 import * as Deferred from "effect/Deferred";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
-import { ChildProcessSpawner } from "effect/process";
+import { Headers } from "effect/http";
+import { RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
+import * as RpcTest from "effect/rpc/RpcTest";
 import * as SqlClient from "effect/sql/SqlClient";
-
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
+import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as SessionStore from "./auth/SessionStore.ts";
+import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as ServerConfigModule from "./config.ts";
+import * as DeviceService from "./device/DeviceService.ts";
+import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
+import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
+import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as EnvironmentTheme from "./environmentTheme.ts";
+import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import * as Keybindings from "./keybindings.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
+import * as MemoryService from "./memory/MemoryService.ts";
+import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
+import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as EventStore from "./orchestration-v2/EventStore.ts";
+import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
+import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
+import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
+import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
-import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
+import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
+import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
+import * as PreviewManager from "./preview/Manager.ts";
+import * as PortScanner from "./preview/PortScanner.ts";
+import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
+import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
+import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
+import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
+import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as ProjectEnrichment from "./project/ProjectEnrichmentService.ts";
+import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as ProjectService from "./project/ProjectService.ts";
+import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
+import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
+import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
+import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
+import * as CodexInstallation from "./provider/CodexInstallation.ts";
+import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
+import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
+import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
+import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
+import * as PullRequestService from "./pullRequest/PullRequestService.ts";
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as ReviewService from "./review/ReviewService.ts";
+import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as ServerSettings from "./serverSettings.ts";
+import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
+import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
+import * as StorageCleanup from "./storageCleanup.ts";
+import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
+import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
+import * as TerminalManager from "./terminal/Manager.ts";
+import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as UsageService from "./usage/UsageService.ts";
+import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
+import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import {
-  hasCompatibleOrchestrationProtocol,
-  resolveAvailableEditorsForConfig,
-  shouldUseBoundedThreadSnapshot,
+  layerWsRpc,
+  makeMemoryImportHandlers,
   subscribeOrchestrationV2Shell,
   subscribeOrchestrationV2Thread,
   withLateEditorConfig,
+  WS_RPC_SERVER_OPTIONS,
 } from "./ws.ts";
-
-it("accepts only the current orchestration protocol before websocket RPC setup", () => {
-  assert.isTrue(
-    hasCompatibleOrchestrationProtocol(
-      new URL(`https://host.test/ws?orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}`),
-    ),
-  );
-  assert.isFalse(hasCompatibleOrchestrationProtocol(new URL("https://host.test/ws")));
-  assert.isFalse(
-    hasCompatibleOrchestrationProtocol(
-      new URL(`https://host.test/ws?orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION - 1}`),
-    ),
-  );
-  for (const malformed of ["", "1001.0", "+1001", "01001", "1e3"])
-    assert.isFalse(
-      hasCompatibleOrchestrationProtocol(
-        new URL(`https://host.test/ws?orchestrationProtocol=${encodeURIComponent(malformed)}`),
-      ),
-    );
-});
-
-it("keeps full thread snapshot fallback unless the client opts into bounded history", () => {
-  assert.isFalse(shouldUseBoundedThreadSnapshot({}));
-  assert.isFalse(shouldUseBoundedThreadSnapshot({ acceptBoundedSnapshot: false }));
-  assert.isTrue(shouldUseBoundedThreadSnapshot({ acceptBoundedSnapshot: true }));
-});
-
-it.effect("does not block server config when editor discovery never resolves", () =>
-  Effect.gen(function* () {
-    const discoveryInterrupted = yield* Deferred.make<void>();
-    const responseFiber = yield* resolveAvailableEditorsForConfig(
-      Effect.never.pipe(
-        Effect.onInterrupt(() => Deferred.succeed(discoveryInterrupted, undefined)),
-      ),
-    ).pipe(Effect.forkChild);
-
-    yield* TestClock.adjust(Duration.seconds(5));
-
-    const availableEditors = yield* Fiber.join(responseFiber);
-    yield* Deferred.await(discoveryInterrupted);
-    assert.deepEqual(availableEditors, []);
-  }),
-);
 
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
@@ -141,21 +186,6 @@ it.effect("resends late editors without rolling back updates already sent", () =
   }),
 );
 
-it.effect("sends no late snapshot when the scan matches the snapshot", () =>
-  Effect.gen(function* () {
-    const events = yield* withLateEditorConfig(
-      snapshotConfig({ availableEditors: ["vscode"] }),
-      Stream.empty,
-      {
-        resolveAvailableEditors: () => Effect.succeed(["vscode"]),
-        resolveFileManagerRevealKind: () => Effect.succeed(undefined),
-      },
-    ).pipe(Stream.runCollect);
-
-    assert.equal(events.length, 0);
-  }),
-);
-
 it.effect("resends a file manager reveal kind that missed the snapshot", () =>
   Effect.gen(function* () {
     const events = yield* withLateEditorConfig(
@@ -176,97 +206,29 @@ it.effect("resends a file manager reveal kind that missed the snapshot", () =>
   }),
 );
 
-const makeParkedWindowsLauncher = Effect.gen(function* () {
-  const parkedProbes = yield* Queue.unbounded<void>();
-  const release = yield* Deferred.make<void>();
-  const launcher = yield* ExternalLauncher.make.pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        FileSystem.layerNoop({
-          stat: () =>
-            Queue.offer(parkedProbes, undefined).pipe(
-              Effect.andThen(Deferred.await(release)),
-              Effect.as({ type: "File" } as FileSystem.File.Info),
-            ),
-        }),
-        Path.layer,
-        Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() => Effect.die("unexpected spawn")),
-        ),
-      ),
-    ),
-  );
-  const onWindows = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.provideService(HostProcess.Platform, "win32"),
-      Effect.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { PATH: "C:\\t3-late-editors-test", PATHEXT: ".EXE" },
-          }),
-        ),
-      ),
-    );
-  return {
-    editors: {
-      resolveAvailableEditors: () => onWindows(launcher.resolveAvailableEditors()),
-      resolveFileManagerRevealKind: () => onWindows(launcher.resolveFileManagerRevealKind()),
-    },
-    probeParked: Queue.take(parkedProbes),
-    releaseProbes: Deferred.succeed(release, undefined),
-  };
-});
-
-it.effect("recovers editors after a real scan outlasts the config timeout", () =>
+it.effect("sends a Defender result that missed the snapshot, once", () =>
   Effect.gen(function* () {
-    const { editors, probeParked, releaseProbes } = yield* makeParkedWindowsLauncher;
-
-    const snapshotFiber = yield* resolveAvailableEditorsForConfig(
-      editors.resolveAvailableEditors(),
-    ).pipe(Effect.forkChild);
-    yield* probeParked;
-    yield* TestClock.adjust(Duration.seconds(5));
-    const snapshotEditors = yield* Fiber.join(snapshotFiber);
-    assert.deepEqual(snapshotEditors, []);
-
-    const lateFiber = yield* withLateEditorConfig(
-      snapshotConfig({ availableEditors: snapshotEditors }),
-      Stream.empty,
-      editors,
-    ).pipe(Stream.runCollect, Effect.forkChild);
-    yield* releaseProbes;
-
-    const [late] = Array.from(yield* Fiber.join(lateFiber));
-    assert.equal(late?.type, "snapshot");
-    if (late?.type === "snapshot") {
-      assert.equal(late.config.availableEditors.includes("vscode"), true);
-    }
-  }).pipe(Effect.scoped),
-);
-
-it.effect("recovers a reveal kind whose real probe outlasts the config timeout", () =>
-  Effect.gen(function* () {
-    const { editors, probeParked, releaseProbes } = yield* makeParkedWindowsLauncher;
-
-    const lateFiber = yield* withLateEditorConfig(
-      snapshotConfig({ availableEditors: ["file-manager"] }),
-      Stream.empty,
+    const health = {
+      worktreesDirectory: "C:\\Users\\super\\.goat\\worktrees",
+      defender: "scanning" as const,
+    };
+    const events = yield* withLateEditorConfig(
+      snapshotConfig({ settings: { enableProviderUpdateChecks: true } as never }),
+      Stream.make(settingsUpdated({ enableProviderUpdateChecks: false })),
       {
-        resolveAvailableEditors: () => Effect.succeed(["file-manager"]),
-        resolveFileManagerRevealKind: editors.resolveFileManagerRevealKind,
+        resolveAvailableEditors: () => Effect.succeed([]),
+        resolveFileManagerRevealKind: () => Effect.succeed(undefined as never),
       },
-    ).pipe(Stream.runCollect, Effect.forkChild);
-    yield* probeParked;
-    yield* TestClock.adjust(Duration.seconds(6));
-    yield* releaseProbes;
+      Stream.make(health, health),
+    ).pipe(Stream.runCollect);
 
-    const [late] = Array.from(yield* Fiber.join(lateFiber));
-    assert.equal(late?.type, "snapshot");
+    const snapshots = Array.from(events).filter((event) => event.type === "snapshot");
+    assert.equal(snapshots.length, 1);
+    const [late] = snapshots;
     if (late?.type === "snapshot") {
-      assert.equal(late.config.shellRevealInFileManagerKind, "file-explorer");
+      assert.deepEqual(late.config.worktreeCheckoutHealth, health);
     }
-  }).pipe(Effect.scoped),
+  }),
 );
 
 it.effect("SSH workspace handlers delegate once and preserve typed errors", () =>
@@ -513,6 +475,292 @@ it.effect("an unavailable import runtime rejects before invoking the service fac
     assert.equal(result._tag, "MemoryRpcError");
     if (result._tag === "MemoryRpcError") assert.equal(result.code, "unavailable");
   }),
+);
+
+// Build the production RPC layer; unrelated capabilities fail if this test calls them.
+const layerUnusedConfigRpcServices = Layer.mergeAll(
+  Layer.mock(MemoryService.MemoryService)({
+    importPorts: {} as MemoryService.MemoryService["Service"]["importPorts"],
+  }),
+  Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+  Layer.mock(ChannelBotDirectory.ChannelBotDirectory)({}),
+  Layer.mock(ChannelBotRegistry.ChannelBotRegistry)({}),
+  Layer.mock(ChannelGateway.ChannelGateway)({}),
+  Layer.mock(ChannelIdentityService.ChannelIdentityService)({}),
+  Layer.mock(ChannelLedger.ChannelLedger)({}),
+  Layer.mock(CloudMachineService.CloudMachineService)({}),
+  Layer.mock(CodexRouteService.CodexRouteService)({}),
+  Layer.mock(Handoffs.Handoffs)({}),
+  Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
+  Layer.mock(HubParity.HubParity)({}),
+  Layer.mock(HubMembership.HubMembership)({}),
+  Layer.mock(HubNodes.HubNodes)({}),
+  Layer.mock(HubProxySessions.HubProxySessions)({}),
+  Layer.mock(MemorySyncService.MemorySyncService)({}),
+  Layer.mock(NoteWorkService.NoteWorkService)({}),
+  Layer.mock(NotesService.NotesService)({}),
+  Layer.mock(ProviderHostSync.ProviderHostSync)({}),
+  Layer.mock(RemoteLaunchCatalog.RemoteLaunchCatalog)({}),
+  Layer.mock(SlackChannelSettings.SlackChannelSettings)({}),
+  Layer.mock(SshHostSetup.SshHostSetup)({}),
+  Layer.mock(ServerSecretStore.ServerSecretStore)({}),
+  Layer.mock(WorkspacePaths.WorkspacePaths)({}),
+  Layer.mock(TraceDiagnostics.TraceDiagnostics)({}),
+  Layer.mock(ProjectFaviconResolver.ProjectFaviconResolver)({}),
+  Layer.mock(ProjectEnrichment.ProjectEnrichmentService)({}),
+  Layer.mock(AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator)({}),
+  Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({}),
+  Layer.mock(AgentSessionImporter.AgentSessionImporter)({}),
+  Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
+  Layer.mock(AnalyticsService.AnalyticsService)({}),
+  Layer.mock(AntigravityInstallation.AntigravityInstallation)({ managedDirectory: "/unused" }),
+  Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
+  Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
+  Layer.mock(CommandOutputHub.CommandOutputHub)({}),
+  Layer.mock(CodexInstallation.CodexInstallation)({ managedDirectory: "/unused" }),
+  Layer.mock(DeviceService.DeviceService)({}),
+  Layer.mock(EnvironmentTheme.EnvironmentThemeService)({}),
+  Layer.mock(GitWorkflowService.GitWorkflowService)({}),
+  Layer.mock(HostResources.HostResources)({}),
+  Layer.mock(McpAppRequests.McpAppRequests)({}),
+  Layer.mock(ModelManifest.ModelManifest)({}),
+  Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({}),
+  Layer.mock(Orchestrator.OrchestratorV2)({}),
+  Layer.mock(OtlpEndpointCheck.OtlpEndpointCheck)({}),
+  Layer.mock(PairingGrantStore.PairingGrantStore)({}),
+  Layer.mock(PortScanner.PortDiscovery)({}),
+  Layer.mock(PreviewManager.PreviewManager)({}),
+  Layer.mock(ProcessDiagnostics.ProcessDiagnostics)({}),
+  Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({}),
+  Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({}),
+  Layer.mock(ProjectService.ProjectService)({}),
+  Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
+  Layer.mock(ProjectStore.ProjectStoreV2)({}),
+  Layer.mock(ProviderAuthService.ProviderAuthService)({}),
+  Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
+  Layer.mock(ProviderLatestVersions.ProviderLatestVersions)({}),
+  Layer.mock(ProviderMaintenanceRunner.ProviderMaintenanceRunner)({}),
+  Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
+  Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
+  Layer.mock(PullRequestService.PullRequestService)({}),
+  Layer.mock(PullRequestSyncReactor.PullRequestSyncReactor)({}),
+  Layer.mock(RelayClient.RelayClient)({}),
+  Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+  Layer.mock(ResourceTelemetry.ResourceTelemetry)({}),
+  Layer.mock(ReviewService.ReviewService)({}),
+  Layer.mock(ScheduledTasks.ScheduledTaskService)({}),
+  Layer.mock(SecretRequests.SecretRequests)({}),
+  Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({}),
+  Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({}),
+  Layer.mock(ServerSelfUpdate.ServerSelfUpdate)({ capability: null }),
+  Layer.mock(SessionStore.SessionStore)({ cookieName: "config-test", legacyCookieName: undefined }),
+  Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
+  Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
+  Layer.mock(StorageCleanup.StorageCleanup)({}),
+  Layer.mock(DecisionInbox.DecisionInbox)({}),
+  Layer.mock(DatabaseStorage.DatabaseStorage)({}),
+  Layer.mock(StrayProcesses.StrayProcesses)({}),
+  Layer.mock(WorktreeCheckoutHealth.WorktreeCheckoutHealth)({
+    current: Effect.succeed(null),
+    subscribeChanges: Effect.succeed(Stream.empty),
+  }),
+  Layer.mock(TerminalManager.TerminalManager)({}),
+  Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+  Layer.mock(ThreadManagement.ThreadManagementService)({}),
+  Layer.mock(ThreadSearch.ThreadSearch)({}),
+  Layer.mock(UsageService.UsageService)({}),
+  Layer.mock(VcsProvisioningService.VcsProvisioningService)({}),
+  Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({}),
+  Layer.mock(WorkspaceEntries.WorkspaceEntries)({}),
+  Layer.mock(WorkspaceFileSystem.WorkspaceFileSystem)({}),
+  Layer.mock(WorktreeSetupTracker.WorktreeSetupTracker)({}),
+);
+
+const layerConfigSources = Layer.mergeAll(
+  Keybindings.layer,
+  ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+).pipe(
+  Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
+  Layer.provideMerge(
+    Layer.fresh(
+      ServerConfigModule.layerTest(process.cwd(), { prefix: "goat-config-subscription-test-" }),
+    ),
+  ),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+it.effect(
+  "preserves settings during discovery and keybindings during snapshot ACK at the config RPC boundary",
+  () =>
+    Effect.gen(function* () {
+      const keybindings = yield* Keybindings.Keybindings;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const keybindingsSubscribed = yield* Deferred.make<void>();
+      const settingsSubscribed = yield* Deferred.make<void>();
+      const keybindingsChanges = keybindings.subscribeChanges.pipe(
+        Effect.tap(() => Deferred.succeed(keybindingsSubscribed, undefined)),
+      );
+      const settingsChanges = settings.subscribeChanges.pipe(
+        Effect.tap(() => Deferred.succeed(settingsSubscribed, undefined)),
+      );
+      const initialKeybindings = (yield* keybindings.getSnapshot).keybindings;
+      const discoveryStarted = yield* Deferred.make<void>();
+      const finishDiscovery = yield* Deferred.make<void>();
+      const responses = yield* Queue.unbounded<ServerConfigStreamEvent>();
+      const configRpcServices = Layer.mergeAll(
+        layerUnusedConfigRpcServices,
+        Layer.mock(ExternalLauncher.ExternalLauncher)({
+          resolveAvailableEditors: () =>
+            Deferred.succeed(discoveryStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(finishDiscovery)),
+              Effect.as([]),
+            ),
+          resolveFileManagerRevealKind: () => Effect.succeed(undefined),
+        }),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed([]),
+          streamChanges: Stream.never,
+        }),
+        Layer.mock(UsageLimitSources.UsageLimitSources)({
+          streamChanges: Stream.make([]),
+          projectProviders: (providers) => Effect.succeed(providers),
+        }),
+        Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
+          resolveTargets: () => Effect.succeed([]),
+        }),
+        Layer.mock(DirectEndpoints.DirectEndpoints)({ resolve: () => Effect.succeed([]) }),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          scratchRoot: Effect.succeedNone,
+          namedProjectsRoot: process.cwd(),
+        }),
+        Layer.mock(ServerEnvironment.ServerEnvironment)({
+          getEnvironmentId: Effect.succeed(EnvironmentId.make("config-test")),
+          getDescriptor: Effect.succeed({
+            environmentId: EnvironmentId.make("config-test"),
+            label: "Config test",
+            platform: { os: "linux", arch: "x64" },
+            serverVersion: "0.0.0",
+            capabilities: { repositoryIdentity: false },
+          }),
+        }),
+        Layer.mock(EnvironmentAuth.EnvironmentAuth)({
+          getDescriptor: () =>
+            Effect.succeed({
+              policy: "loopback-browser",
+              bootstrapMethods: [],
+              sessionMethods: ["browser-session-cookie"],
+              sessionCookieName: "config-test-session",
+            }),
+        }),
+        // Signal subscription on either accessor so the test also fails, rather
+        // than hangs, against a handler that subscribes after the snapshot.
+        Layer.succeed(Keybindings.Keybindings, {
+          ...keybindings,
+          streamChanges: Stream.unwrap(keybindingsChanges),
+          subscribeChanges: keybindingsChanges,
+        }),
+        Layer.succeed(ServerSettings.ServerSettingsService, {
+          ...settings,
+          streamChanges: Stream.unwrap(settingsChanges),
+          subscribeChanges: settingsChanges,
+        }),
+      );
+      const server = yield* RpcServer.makeNoSerialization(
+        RpcGroup.make(WsSubscribeServerConfigRpc),
+        {
+          ...WS_RPC_SERVER_OPTIONS,
+          onFromServer: (response) =>
+            response._tag === "Chunk"
+              ? Effect.forEach(response.values, (event) => Queue.offer(responses, event), {
+                  discard: true,
+                })
+              : Effect.void,
+        },
+      ).pipe(
+        Effect.provide(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("config-test"),
+              subject: "config-test",
+              method: "browser-session-cookie",
+              scopes: [],
+            },
+            {
+              hasHost: Effect.succeed(false),
+              attach: () => Stream.die("unused connection catalog"),
+              respond: () => Effect.die("unused connection catalog"),
+              invoke: () => Effect.die("unused connection catalog"),
+            },
+            { surface: "web" },
+            {},
+            yield* PreviewAutomationBroker.PreviewAutomationBroker,
+            yield* ServerBrowser.ServerBrowser,
+          ).pipe(Layer.provide(configRpcServices)),
+        ),
+      );
+      const requestId = RpcMessage.RequestId("config");
+      const acknowledge = server.write(0, { _tag: "Ack", requestId });
+      yield* server.write(0, {
+        _tag: "Request",
+        id: requestId,
+        tag: WS_METHODS.subscribeServerConfig,
+        payload: {},
+        headers: Headers.empty,
+      });
+      yield* Deferred.await(discoveryStarted);
+
+      const duringDiscovery = yield* settings.updateSettings({ defaultAutoPull: true });
+      yield* Deferred.succeed(finishDiscovery, undefined);
+      const snapshot = yield* Queue.take(responses);
+      assert.equal(snapshot.type, "snapshot");
+      if (snapshot.type !== "snapshot") return yield* Effect.die("Missing initial snapshot");
+      assert.isFalse(snapshot.config.settings.defaultAutoPull);
+      assert.deepEqual(snapshot.config.keybindings, initialKeybindings);
+      const duringAck = yield* keybindings.upsertKeybindingRule({
+        key: "mod+alt+y",
+        command: "terminal.toggle",
+      });
+      yield* acknowledge;
+      yield* Deferred.await(keybindingsSubscribed);
+      yield* Deferred.await(settingsSubscribed);
+
+      // Later updates expose a dropped buffered event as a value mismatch, not a timeout.
+      const latestSettings = yield* settings.updateSettings({ enableProviderUpdateChecks: false });
+      const latestKeybindings = yield* keybindings.upsertKeybindingRule({
+        key: "mod+alt+z",
+        command: "terminal.split",
+      });
+      const expectedSettings = [duringDiscovery, latestSettings].map(
+        ServerSettings.redactServerSettingsForClient,
+      );
+      const expectedKeybindings = [duringAck, latestKeybindings];
+      // The two sources can interleave, but each must retain its own publication order.
+      for (let i = 0; i < 4; i++) {
+        const event = yield* Queue.take(responses);
+        if (event.type === "settingsUpdated") {
+          assert.deepEqual(event.payload.settings, expectedSettings.shift());
+        } else {
+          assert.equal(event.type, "keybindingsUpdated");
+          if (event.type !== "keybindingsUpdated")
+            return yield* Effect.die("Unexpected config event");
+          assert.deepEqual(event.payload.keybindings, expectedKeybindings.shift());
+          assert.deepEqual(event.payload.issues, []);
+        }
+        yield* acknowledge;
+      }
+      assert.isEmpty(expectedSettings);
+      assert.isEmpty(expectedKeybindings);
+      yield* server.write(0, { _tag: "Interrupt", requestId, interruptors: [] });
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.fresh(layerConfigSources),
+          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+          Layer.mock(ServerBrowser.ServerBrowser)({}),
+        ),
+      ),
+      Effect.scoped,
+    ),
 );
 
 // Compaction keeps the oldest and newest event per message, so a cursor older

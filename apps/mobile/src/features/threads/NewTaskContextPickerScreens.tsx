@@ -268,6 +268,7 @@ export function NewTaskBranchPickerRouteScreen() {
     AuthSourceControlWriteScope,
   );
   const navigation = useNavigation();
+  const readRefs = useAtomCommand(vcsEnvironment.readRefs, { reportFailure: false });
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const [switchingBranchName, setSwitchingBranchName] = useState<string | null>(null);
   const selectingBranchNameRef = useRef<string | null>(null);
@@ -314,6 +315,7 @@ export function NewTaskBranchPickerRouteScreen() {
       branch,
       project,
       workspaceMode: flow.workspaceMode,
+      readRefs,
       switchRef,
     });
     if (mountedRef.current) setSwitchingBranchName(null);
@@ -438,7 +440,7 @@ export function BranchPickerScreen(props: {
     >
       <ToggleRow
         onValueChange={props.worktree.onChangeStartFromOrigin}
-        title="Start from origin"
+        title="Start from remote"
         value={props.worktree.startFromOrigin}
       />
     </View>

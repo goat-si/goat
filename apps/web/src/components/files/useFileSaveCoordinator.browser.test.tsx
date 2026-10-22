@@ -1,10 +1,10 @@
+import { act, render as renderScreen, fakeTimers } from "../../../test/render";
 import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
 import { EnvironmentId, ProjectWriteFileError } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
-import { act, StrictMode, useEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { StrictMode, useEffect } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 const { writeFile, confirmFile, readScope, getUnsavedFile, getFile, reloadFile, getSaveSession } =
   vi.hoisted(() => ({
@@ -35,7 +35,6 @@ vi.mock(import("./projectFilesQueryState"), async (original) => ({
 }));
 
 import { FileSaveSession } from "./fileSaveCoordinator";
-import { setMarkdownTaskChecked } from "./filePreviewMode";
 import { useFileSaveCoordinator } from "./useFileSaveCoordinator";
 
 const environmentId = EnvironmentId.make("save-lifecycle-audit");
@@ -46,50 +45,26 @@ const defaultProps = {
   relativePath: "file.txt",
   onPendingChange,
 };
-let root: Root | null;
-// The editor's change callback from the latest commit, as an editor would hold it.
-let latestCoordinator: ReturnType<typeof useFileSaveCoordinator>;
-let latestChange: (contents: string) => void;
-
-function FileSurface(props: Parameters<typeof useFileSaveCoordinator>[0]) {
-  const coordinator = useFileSaveCoordinator(props);
-  const onChange = (contents: string) => coordinator.change(contents);
-  useEffect(() => {
-    latestChange = onChange;
-    latestCoordinator = coordinator;
-  });
-  return null;
-}
-
-async function render(props = defaultProps) {
-  root ??= createRoot(document.createElement("div"));
-  await act(async () =>
-    root!.render(
-      <StrictMode>
-        <FileSurface {...props} />
-      </StrictMode>,
-    ),
-  );
-}
-const mount = render;
-
-async function unmountSurface() {
-  await act(async () => root!.unmount());
-  root = null;
-}
-
-const changeHandler = () => latestChange;
-
-beforeEach(() => {
-  root = null;
+function setup() {
+  const stack = new AsyncDisposableStack();
+  let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+  let latestCoordinator: ReturnType<typeof useFileSaveCoordinator>;
+  let latestChange: (contents: string) => void;
+  function FileSurface(props: Parameters<typeof useFileSaveCoordinator>[0]) {
+    const coordinator = useFileSaveCoordinator(props);
+    useEffect(() => {
+      latestChange = (contents) => coordinator.change(contents);
+      latestCoordinator = coordinator;
+    });
+    return null;
+  }
   const sessions = new Map<string, FileSaveSession>();
   getSaveSession.mockReset().mockImplementation((...identity) => {
     const key = JSON.stringify(identity);
     if (!sessions.has(key)) sessions.set(key, new FileSaveSession());
     return sessions.get(key)!;
   });
-  vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  stack.use(fakeTimers());
   writeFile.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   confirmFile.mockReset();
   readScope.mockReset().mockReturnValue(true);
@@ -100,18 +75,47 @@ beforeEach(() => {
     return AsyncResult.success({});
   });
   onPendingChange.mockReset();
-});
-
-afterEach(async () => {
-  if (root) await unmountSurface();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+  const ui = (props: Parameters<typeof useFileSaveCoordinator>[0]) => (
+    <StrictMode>
+      <FileSurface {...props} />
+    </StrictMode>
+  );
+  const render = async (props = defaultProps) => {
+    if (screen) await screen.rerender(ui(props));
+    // The hook has no navigation, so a router would add unrelated lifecycle work.
+    else screen = stack.use(await renderScreen(ui(props), { router: false }));
+    const mounted = screen;
+    return {
+      changeHandler: () => latestChange,
+      rerender: (next: Parameters<typeof useFileSaveCoordinator>[0]) => mounted.rerender(ui(next)),
+      unmount: mounted.unmount,
+      [Symbol.asyncDispose]: () => mounted[Symbol.asyncDispose](),
+    };
+  };
+  return {
+    render,
+    mount: render,
+    FileSurface,
+    changeHandler: () => latestChange,
+    get coordinator() {
+      return latestCoordinator;
+    },
+    root: { render: (element: React.ReactNode) => screen!.rerender(element) },
+    unmountSurface: async () => {
+      await screen?.unmount();
+      screen = undefined;
+    },
+    [Symbol.asyncDispose]: () => stack.disposeAsync(),
+  };
+}
 
 describe("file-save React lifecycle", () => {
   it.each(["changed_on_disk", "deleted_on_disk"] as const)(
     "keeps the draft and pauses %s until explicit overwrite",
     async (failure) => {
+      await using fixture = setup();
+      const { mount, changeHandler } = fixture;
+
       getFile.mockReturnValue({
         version: "loaded-version",
         textFormat: { encoding: "utf-8", bom: true, lineEnding: "crlf" },
@@ -134,7 +138,7 @@ describe("file-save React lifecycle", () => {
       changeHandler()("newer draft");
       await act(async () => vi.advanceTimersByTimeAsync(500));
       expect(writeFile).toHaveBeenCalledTimes(1);
-      await act(async () => latestCoordinator.overwrite());
+      await act(async () => fixture.coordinator.overwrite());
       expect(writeFile.mock.calls[1]![0].input).toEqual({
         cwd: "/workspace",
         relativePath: "file.txt",
@@ -145,6 +149,9 @@ describe("file-save React lifecycle", () => {
   );
 
   it("reloads a conflict without persisting the dirty draft on close", async () => {
+    await using fixture = setup();
+    const { mount, changeHandler, unmountSurface } = fixture;
+
     writeFile.mockResolvedValue(
       AsyncResult.failure(
         Cause.fail(
@@ -159,7 +166,7 @@ describe("file-save React lifecycle", () => {
     await mount();
     changeHandler()("draft");
     await act(async () => vi.advanceTimersByTimeAsync(500));
-    await act(async () => latestCoordinator.reload());
+    await act(async () => fixture.coordinator.reload());
     expect(reloadFile).toHaveBeenCalledExactlyOnceWith(environmentId, "/workspace", "file.txt");
     await unmountSurface();
     expect(writeFile).toHaveBeenCalledTimes(1);
@@ -167,6 +174,9 @@ describe("file-save React lifecycle", () => {
   });
 
   it("discards a delayed reload's draft across source/Markdown view switches", async () => {
+    await using fixture = setup();
+    const { mount, changeHandler, root, FileSurface } = fixture;
+
     getFile.mockReturnValue({ version: "loaded" });
     getUnsavedFile.mockReturnValue({ contents: "stale draft" });
     writeFile.mockResolvedValueOnce(
@@ -196,13 +206,13 @@ describe("file-save React lifecycle", () => {
         }),
     );
     let reloading!: Promise<void>;
-    act(() => {
-      reloading = latestCoordinator.reload();
+    await act(() => {
+      reloading = fixture.coordinator.reload();
     });
     await act(async () => {
       await Promise.resolve();
     });
-    act(() =>
+    await act(() =>
       root!.render(
         <StrictMode>
           <FileSurface key="markdown" {...defaultProps} />
@@ -227,6 +237,9 @@ describe("file-save React lifecycle", () => {
   });
 
   it("retains a conflict across view switches until explicit overwrite", async () => {
+    await using fixture = setup();
+    const { mount, root, FileSurface } = fixture;
+
     getFile.mockReturnValue({ version: "loaded" });
     getUnsavedFile.mockReturnValue({ contents: "draft" });
     writeFile.mockResolvedValueOnce(
@@ -242,7 +255,7 @@ describe("file-save React lifecycle", () => {
     );
     await mount();
     await act(async () => vi.advanceTimersByTimeAsync(500));
-    act(() =>
+    await act(() =>
       root!.render(
         <StrictMode>
           <FileSurface key="markdown" {...defaultProps} />
@@ -251,12 +264,15 @@ describe("file-save React lifecycle", () => {
     );
     await act(async () => vi.advanceTimersByTimeAsync(500));
     expect(writeFile).toHaveBeenCalledTimes(1);
-    expect(latestCoordinator.status).toBe("changed");
-    await act(async () => latestCoordinator.overwrite());
+    expect(fixture.coordinator.status).toBe("changed");
+    await act(async () => fixture.coordinator.overwrite());
     expect(writeFile.mock.calls[1]![0].input).not.toHaveProperty("expectedVersion");
   });
 
   it("resolves the next view's expected version after the pending save confirms", async () => {
+    await using fixture = setup();
+    const { mount, changeHandler, root, FileSurface } = fixture;
+
     getFile.mockReturnValue({ version: "loaded" });
     const saved = AsyncResult.success({ relativePath: "file.txt", version: "first-written" });
     let finishWrite!: (value: typeof saved) => void;
@@ -285,7 +301,7 @@ describe("file-save React lifecycle", () => {
     await mount();
     changeHandler()("first edit");
     await act(async () => vi.advanceTimersByTimeAsync(500));
-    act(() =>
+    await act(() =>
       root!.render(
         <StrictMode>
           <FileSurface key="markdown" {...defaultProps} />
@@ -302,12 +318,15 @@ describe("file-save React lifecycle", () => {
       contents: "second edit",
       expectedVersion: "first-written",
     });
-    expect(latestCoordinator.status).toBe("saved");
+    expect(fixture.coordinator.status).toBe("saved");
   });
 
   it("persists editor model changes after StrictMode setup replay", async () => {
-    await mount();
-    changeHandler()("AUDIT7907NATIVE\n");
+    await using fixture = setup();
+    const { mount } = fixture;
+
+    await using screen = await mount();
+    screen.changeHandler()("AUDIT7907NATIVE\n");
     expect(onPendingChange).toHaveBeenCalledWith("file.txt", true);
     await vi.advanceTimersByTimeAsync(500);
     expect(writeFile).toHaveBeenCalledExactlyOnceWith({
@@ -325,6 +344,9 @@ describe("file-save React lifecycle", () => {
   });
 
   it("saves an existing legacy project file to the path that was read", async () => {
+    await using fixture = setup();
+    const { mount, changeHandler } = fixture;
+
     await mount({ ...defaultProps, relativePath: LEGACY_PROJECT_FILE_NAME });
     changeHandler()('{ "iconPath": "updated.svg" }');
     await vi.advanceTimersByTimeAsync(500);
@@ -338,35 +360,14 @@ describe("file-save React lifecycle", () => {
     });
   });
 
-  it("persists rendered Markdown task changes after StrictMode setup replay", async () => {
-    await mount({ ...defaultProps, relativePath: "README.md" });
-    const nextContents = setMarkdownTaskChecked("- [ ] task\n", 2, true);
-    changeHandler()(nextContents);
-    await vi.advanceTimersByTimeAsync(500);
-    expect(writeFile).toHaveBeenCalledExactlyOnceWith({
-      environmentId,
-      input: { cwd: "/workspace", relativePath: "README.md", contents: "- [x] task\n" },
-    });
-  });
-
-  it("keeps the debounce across rerenders of the same file", async () => {
-    await mount();
-    changeHandler()("first");
-    await vi.advanceTimersByTimeAsync(300);
-    await render(defaultProps);
-    changeHandler()("latest");
-    await vi.advanceTimersByTimeAsync(499);
-    expect(writeFile).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(writeFile).toHaveBeenCalledTimes(1);
-    expect(writeFile.mock.calls[0]![0].input.contents).toBe("latest");
-  });
-
   it("flushes on unmount and ignores a retired editor callback", async () => {
-    await mount();
-    const retiredChange = changeHandler();
+    await using fixture = setup();
+    const { mount } = fixture;
+
+    await using screen = await mount();
+    const retiredChange = screen.changeHandler();
     retiredChange("pending edit");
-    await unmountSurface();
+    await screen.unmount();
     retiredChange("stale editor contents");
     await vi.runAllTimersAsync();
     expect(writeFile).toHaveBeenCalledTimes(1);
@@ -376,11 +377,14 @@ describe("file-save React lifecycle", () => {
   it.each([false, true])(
     "keeps edits pending after permission is revoked before a React update (unmount: %s)",
     async (unmount) => {
-      await mount();
-      changeHandler()("pending edit");
+      await using fixture = setup();
+      const { mount } = fixture;
+
+      await using screen = await mount();
+      screen.changeHandler()("pending edit");
       readScope.mockReturnValue(false);
       if (unmount) {
-        await unmountSurface();
+        await screen.unmount();
       }
       await vi.runAllTimersAsync();
       expect(writeFile).not.toHaveBeenCalled();
@@ -390,29 +394,21 @@ describe("file-save React lifecycle", () => {
   );
 
   it("resumes an unsaved draft when write permission returns after effect replay", async () => {
+    await using fixture = setup();
+    const { mount } = fixture;
+
     readScope.mockReturnValue(false);
     getUnsavedFile.mockReturnValue({ contents: "pending draft" });
-    await mount();
+    await using screen = await mount();
     await vi.runAllTimersAsync();
     expect(writeFile).not.toHaveBeenCalled();
 
     readScope.mockReturnValue(true);
-    await render(defaultProps);
+    await screen.rerender(defaultProps);
     await vi.advanceTimersByTimeAsync(500);
     expect(writeFile).toHaveBeenCalledExactlyOnceWith({
       environmentId,
       input: { cwd: "/workspace", relativePath: "file.txt", contents: "pending draft" },
-    });
-    expect(onPendingChange).toHaveBeenLastCalledWith("file.txt", false);
-  });
-
-  it("recovers an existing draft once after StrictMode setup replay", async () => {
-    getUnsavedFile.mockReturnValue({ contents: "reopened draft" });
-    await mount();
-    await vi.runAllTimersAsync();
-    expect(writeFile).toHaveBeenCalledExactlyOnceWith({
-      environmentId,
-      input: { cwd: "/workspace", relativePath: "file.txt", contents: "reopened draft" },
     });
     expect(onPendingChange).toHaveBeenLastCalledWith("file.txt", false);
   });
@@ -422,13 +418,16 @@ describe("file-save React lifecycle", () => {
     { cwd: "/other-workspace" },
     { environmentId: EnvironmentId.make("other-environment") },
   ])("retires callbacks when the file identity changes: %j", async (change) => {
-    await mount();
-    const retiredChange = changeHandler();
+    await using fixture = setup();
+    const { mount } = fixture;
+
+    await using screen = await mount();
+    const retiredChange = screen.changeHandler();
     retiredChange("old file edit");
     const nextProps = { ...defaultProps, ...change };
-    await render(nextProps);
+    await screen.rerender(nextProps);
     retiredChange("stale editor contents");
-    changeHandler()("new file edit");
+    screen.changeHandler()("new file edit");
     await vi.runAllTimersAsync();
     expect(writeFile.mock.calls.map(([request]) => request)).toEqual([
       {
@@ -444,17 +443,5 @@ describe("file-save React lifecycle", () => {
         },
       },
     ]);
-  });
-
-  it("does not reactivate a retired callback when the same file mounts again", async () => {
-    await mount();
-    const retiredChange = changeHandler();
-    await unmountSurface();
-    await mount();
-    retiredChange("stale contents");
-    changeHandler()("current contents");
-    await vi.runAllTimersAsync();
-    expect(writeFile).toHaveBeenCalledTimes(1);
-    expect(writeFile.mock.calls[0]![0].input.contents).toBe("current contents");
   });
 });

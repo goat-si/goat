@@ -1,5 +1,3 @@
-"use client";
-
 import { PlusIcon, XIcon } from "~/components/solar";
 import { useEffect, useRef, useState } from "react";
 

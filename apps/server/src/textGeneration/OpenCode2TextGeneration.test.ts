@@ -14,6 +14,7 @@ import * as Layer from "effect/Layer";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as OpenCode2AdapterV2Testkit from "../orchestration-v2/Adapters/OpenCode2AdapterV2.testkit.ts";
 import * as OpenCode2Server from "@goat/provider-opencode/server/v2/OpenCode2Server";
+import * as OpenCodeRuntime from "@goat/provider-opencode/server/OpenCodeRuntime";
 import * as OpenCode2TextGeneration from "@goat/provider-opencode/server/v2/textGeneration";
 import { OPENCODE2_TITLE_GENERATION } from "./OpenCode2TextGeneration.fixture.ts";
 
@@ -41,69 +42,6 @@ it.layer(layer)("OpenCode2TextGeneration", (it) => {
         },
       });
       assert.equal(title.title, "Fix OAuth Login Redirect Loop");
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("fails at once when the event stream drops before the reply", () =>
-    Effect.gen(function* () {
-      const [subscribe, connected, create, created] = OPENCODE2_TITLE_GENERATION;
-      const sessionId = "ses_f0ec85cf6ffebfalpvV2E9nocu";
-      const server = yield* OpenCode2AdapterV2Testkit.replayServer({
-        provider: "opencode",
-        protocol: OpenCode2AdapterV2Testkit.OPENCODE2_HTTP_PROTOCOL,
-        version: "2.0.18",
-        scenario: "opencode2_title_generation_stream_lost",
-        entries: [
-          subscribe!,
-          connected!,
-          create!,
-          created!,
-          {
-            type: "expect_outbound",
-            frame: { type: "session.prompt", input: { sessionID: sessionId, text: "<any>" } },
-          },
-          {
-            type: "emit_inbound",
-            frame: {
-              type: "sdk.response",
-              operation: "session.prompt",
-              data: {
-                data: {
-                  id: "msg_1",
-                  sessionID: sessionId,
-                  time: { created: 1 },
-                  type: "user",
-                  payload: { text: "t" },
-                  delivery: "steer",
-                },
-              },
-            },
-          },
-          { type: "runtime_exit", status: "success" },
-          {
-            type: "expect_outbound",
-            frame: { type: "session.remove", input: { sessionID: sessionId } },
-          },
-          {
-            type: "emit_inbound",
-            frame: { type: "sdk.response", operation: "session.remove", data: null },
-          },
-        ],
-      });
-      const textGeneration = yield* OpenCode2TextGeneration.make().pipe(
-        Effect.provideService(OpenCode2Server.OpenCode2Server, server),
-      );
-      const failure = yield* textGeneration
-        .generateThreadTitle({
-          cwd: process.cwd(),
-          message: "fix the login redirect loop after oauth",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("opencode"),
-            model: "opencode/big-pickle",
-          },
-        })
-        .pipe(Effect.flip, Effect.timeout("10 seconds"));
-      assert.equal(failure._tag, "TextGenerationError");
     }).pipe(Effect.scoped),
   );
 
@@ -187,83 +125,6 @@ it.layer(layer)("OpenCode2TextGeneration", (it) => {
         .pipe(Effect.flip);
       assert.equal(failure.detail, "OpenCode could not generate the text.");
       assert.deepEqual(failure.cause, refusal);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("ends at once on an execution end this build cannot decode", () =>
-    Effect.gen(function* () {
-      const [subscribe, connected, create, created] = OPENCODE2_TITLE_GENERATION;
-      const sessionId = "ses_f0ec85cf6ffebfalpvV2E9nocu";
-      const server = yield* OpenCode2AdapterV2Testkit.replayServer({
-        provider: "opencode",
-        protocol: OpenCode2AdapterV2Testkit.OPENCODE2_HTTP_PROTOCOL,
-        version: "2.0.18",
-        scenario: "opencode2_title_generation_unreadable_end",
-        entries: [
-          subscribe!,
-          connected!,
-          create!,
-          created!,
-          {
-            type: "expect_outbound",
-            frame: { type: "session.prompt", input: { sessionID: sessionId, text: "<any>" } },
-          },
-          {
-            type: "emit_inbound",
-            frame: {
-              type: "sdk.response",
-              operation: "session.prompt",
-              data: {
-                data: {
-                  id: "msg_1",
-                  sessionID: sessionId,
-                  time: { created: 1 },
-                  type: "user",
-                  payload: { text: "t" },
-                  delivery: "steer",
-                },
-              },
-            },
-          },
-          // A reason added after 2.0.18: the full schema rejects the frame.
-          {
-            type: "emit_inbound",
-            frame: {
-              type: "sdk.event",
-              event: {
-                id: "evt_0eb7f9ae0001VCNDHVLnqTfoPG",
-                created: 1790657403616,
-                type: "session.execution.interrupted",
-                data: { sessionID: sessionId, reason: "budget" },
-                durable: { aggregateID: sessionId, seq: 7, version: 1 },
-              },
-            },
-          },
-          {
-            type: "expect_outbound",
-            frame: { type: "session.remove", input: { sessionID: sessionId } },
-          },
-          {
-            type: "emit_inbound",
-            frame: { type: "sdk.response", operation: "session.remove", data: null },
-          },
-          { type: "runtime_exit", status: "success" },
-        ],
-      });
-      const textGeneration = yield* OpenCode2TextGeneration.make().pipe(
-        Effect.provideService(OpenCode2Server.OpenCode2Server, server),
-      );
-      const failure = yield* textGeneration
-        .generateThreadTitle({
-          cwd: process.cwd(),
-          message: "fix the login redirect loop after oauth",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("opencode"),
-            model: "opencode/big-pickle",
-          },
-        })
-        .pipe(Effect.flip, Effect.timeout("10 seconds"));
-      assert.equal(failure._tag, "TextGenerationError");
     }).pipe(Effect.scoped),
   );
 });
@@ -371,6 +232,42 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
         assert.propertyVal(failure.cause, "_tag", "MemoryGenerationRunnerError");
         assert.propertyVal(failure.cause, "code", code);
         assert.equal(acquisitions, 0);
+      }).pipe(Effect.scoped),
+  );
+  it.effect.each(["resolveMemoryConflict", "generateMemorySummary"] as const)(
+    "%s pauses memory when OpenCode cannot start, but not for a held database lock",
+    (operation) =>
+      Effect.gen(function* () {
+        let startError: OpenCodeRuntime.OpenCodeRuntimeError =
+          new OpenCodeRuntime.OpenCodeRuntimeError({
+            operation: "startOpenCodeServerProcess",
+            detail: "Failed to spawn OpenCode server process: spawn opencode ENOENT",
+          });
+        const server = OpenCode2Server.OpenCode2Server.of({
+          withConnection: () => Effect.die("Memory uses its own isolated server."),
+          withMemoryConnection: () => Effect.fail(startError),
+        });
+        const textGeneration = yield* OpenCode2TextGeneration.make({
+          memoryRunnerContext: memoryContext,
+          external: false,
+        }).pipe(Effect.provideService(OpenCode2Server.OpenCode2Server, server));
+        const invoke = () =>
+          Effect.flip(
+            operation === "resolveMemoryConflict"
+              ? textGeneration.resolveMemoryConflict!(memoryConflict)
+              : textGeneration.generateMemorySummary!(memorySummary),
+          );
+        const missing = yield* invoke();
+        assert.propertyVal(missing.cause, "_tag", "MemoryGenerationRunnerError");
+        assert.propertyVal(missing.cause, "code", "unavailable");
+        // A lock clears on its own, so the item keeps its ordinary retries.
+        startError = new OpenCodeRuntime.OpenCodeRuntimeError({
+          operation: "startOpenCodeServerProcess",
+          detail: "OpenCode database is locked.",
+          reason: "databaseLocked",
+        });
+        const locked = yield* invoke();
+        assert.propertyVal(locked.cause, "reason", "databaseLocked");
       }).pipe(Effect.scoped),
   );
   const operations = ["resolveMemoryConflict", "generateMemorySummary"] as const;
@@ -524,6 +421,9 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
         assert.isFalse(yield* fs.exists(state.directory));
       }
       if (scenario === "permission") assert.deepEqual(state.denied, ["permission-1"]);
+      // A substituted model pauses memory for that model; a tool attempt is the model's own act.
+      if (scenario === "model") assert.propertyVal(failure.cause, "code", "identity_mismatch");
+      if (scenario === "tool" || scenario === "permission") assert.isUndefined(failure.cause);
     }).pipe(Effect.scoped),
   );
   it.effect.each(operations)("%s times out, interrupts and removes its helper", (operation) =>

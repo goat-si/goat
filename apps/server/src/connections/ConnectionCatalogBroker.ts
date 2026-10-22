@@ -49,6 +49,7 @@ type BrokerError =
 export class ConnectionCatalogBroker extends Context.Service<
   ConnectionCatalogBroker,
   {
+    readonly hasHost: Effect.Effect<boolean>;
     readonly attach: (connectionId: string) => Stream.Stream<ConnectionCatalogHostRequest>;
     readonly respond: (
       connectionId: string,
@@ -142,7 +143,12 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  return ConnectionCatalogBroker.of({ attach, respond, invoke });
+  return ConnectionCatalogBroker.of({
+    hasHost: Effect.sync(() => hosts.size > 0).pipe(lock.withPermit),
+    attach,
+    respond,
+    invoke,
+  });
 });
 
 export const layer = Layer.effect(ConnectionCatalogBroker, make);

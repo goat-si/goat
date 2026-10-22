@@ -9,6 +9,7 @@ import {
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
   ForwardCompatibleArray,
+  ForwardCompatibleOptional,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -23,7 +24,7 @@ import {
   ResolvedKeybindingsConfig,
 } from "./keybindings.ts";
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
-import { ModelCapabilities } from "./model.ts";
+import { ModelCapabilities, ProviderOptionDescriptor } from "./model.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { CodexRouteStatus } from "./codexRoute.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
@@ -48,6 +49,35 @@ export const ServerConfigIssue = Schema.Union([
 export type ServerConfigIssue = typeof ServerConfigIssue.Type;
 
 const ServerConfigIssues = ForwardCompatibleArray(ServerConfigIssue);
+
+/**
+ * How Microsoft Defender treats the folder GOAT creates thread worktrees in. Real-time
+ * scanning of every new file is what makes Windows checkouts slow. `unverified` means
+ * scanning is on and this process cannot read the exclusion list (that needs an
+ * administrator); `off` includes another antivirus being in charge; `unknown` covers
+ * an unreadable Defender and ReFS volumes, which may be Dev Drives Defender scans after
+ * the write.
+ */
+export const ServerWorktreeScanStatus = Schema.Literals([
+  "scanning",
+  "unverified",
+  "excluded",
+  "off",
+  "unknown",
+]);
+export type ServerWorktreeScanStatus = typeof ServerWorktreeScanStatus.Type;
+
+/** Only Windows servers send it. GOAT reads Defender's state and never changes it. */
+export const ServerWorktreeCheckoutHealth = Schema.Struct({
+  worktreesDirectory: TrimmedNonEmptyString,
+  defender: ServerWorktreeScanStatus,
+});
+export type ServerWorktreeCheckoutHealth = typeof ServerWorktreeCheckoutHealth.Type;
+
+/** The elevated PowerShell command that excludes the worktree folder from Defender scans. */
+export function defenderExclusionCommand(directory: string): string {
+  return `Add-MpPreference -ExclusionPath '${directory.replaceAll("'", "''")}'`;
+}
 
 export const ServerProviderState = Schema.Literals(["ready", "warning", "error", "disabled"]);
 export type ServerProviderState = typeof ServerProviderState.Type;
@@ -135,6 +165,7 @@ export const ServerProviderWorkspaceSnapshot = Schema.Struct({
   slashCommands: Schema.Array(ServerProviderSlashCommand),
   slashCommandsPending: Schema.optional(Schema.Boolean),
   skills: Schema.Array(ServerProviderSkill),
+  optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
 });
 export type ServerProviderWorkspaceSnapshot = typeof ServerProviderWorkspaceSnapshot.Type;
 
@@ -259,6 +290,9 @@ export const ServerProvider = Schema.Struct({
   enabled: Schema.Boolean,
   installed: Schema.Boolean,
   version: Schema.NullOr(TrimmedNonEmptyString),
+  // Version reported by the installed CLI for a local provider with a separate
+  // server. Null means unknown; absence keeps legacy snapshots on `version`.
+  installedVersion: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   status: ServerProviderState,
   auth: ServerProviderAuth,
   checkedAt: IsoDateTime,
@@ -586,6 +620,19 @@ export const ServerDirectEndpoint = Schema.Struct({
 });
 export type ServerDirectEndpoint = typeof ServerDirectEndpoint.Type;
 
+/**
+ * A stretch where the server's event loop could not run, so it answered
+ * nothing and clients may have dropped the connection.
+ */
+export const ServerEventLoopStall = Schema.Struct({
+  detectedAt: IsoDateTime,
+  durationMs: NonNegativeInt,
+  /** One-minute load average when the stall was seen. Absent on Windows, which has none. */
+  loadAverage: Schema.optionalKey(Schema.Number),
+  cpuCount: PositiveInt,
+});
+export type ServerEventLoopStall = typeof ServerEventLoopStall.Type;
+
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
@@ -616,6 +663,16 @@ export const ServerConfig = Schema.Struct({
   threadFindProgressive: Schema.optionalKey(Schema.Boolean),
   scratchWorkspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
   newProjectsRoot: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * The latest stall long enough to notice, sent only for a few minutes after
+   * it. A client that reconnects reads it to say why the host stopped
+   * answering. Clients do not cache it, since it describes the host at connect.
+   */
+  lastEventLoopStall: Schema.optionalKey(ServerEventLoopStall),
+  /**
+   * Windows only, and only once the server has checked; absent means nothing to report.
+   */
+  worktreeCheckoutHealth: ForwardCompatibleOptional(ServerWorktreeCheckoutHealth),
   /**
    * Never sent in a config snapshot: the theme stream emits the current set
    * before any change, so a snapshot carrying it too would hand every

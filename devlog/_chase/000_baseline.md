@@ -11,7 +11,7 @@
 | reviewed-through (merge-base) | `02b794c78` 2026-10-20 fix(client-runtime): incompatible hosts no longer switch environments off (#15052) |
 | 스캔한 GOAT dev               | `876c09947` feat(server): GOAT Bot shows what's pending, stops work on request (#483)                     |
 | GOAT 고유 커밋                | 1557                                                                                                      |
-| upstream 앞섬                 | 47 (2026-10-20 09:30 KST, upstream `94ec6097c`. 사이클 261020은 231개 모두 머지)                          |
+| upstream 앞섬                 | 522 (2026-10-21 KST, upstream `4f651cb10`. 사이클 261021이 모두 머지, 랜딩 대기)                          |
 | trial merge 충돌              | 204 파일, pre-rename 3-way 94 파일 ([10.008](./_fin/10/10.008_t3_chase_cycle_261020.md))                  |
 
 `de49d637d`(2026-10-10)가 GOAT가 갈라진 fork point다. upstream 머지가 dev에 들어갈 때마다 merge-base가 그 머지의
@@ -29,3 +29,4 @@ upstream은 하루에 약 50-100커밋씩 움직인다. 사이클이 길어질�
 | 261014 | 2026-10-14 | `7b6d90757..bf8ffe81a`                         | 153  | 120  | 머지, PR #191 → dev `a492a4f4b` | 10.006     |
 | 261019 | 2026-10-19 | `bf8ffe81a..952921f39`                         | 836  | 933  | 머지, PR #368 → dev `ec6c0b69b` | 10.007     |
 | 261020 | 2026-10-20 | `952921f39..02b794c78`                         | 231  | 94   | 머지, PR #562 → dev `018943c61` | 10.008     |
+| 261021 | 2026-10-21 | `02b794c78..4f651cb10`                         | 522  | 541  | 머지, PR 열림 (랜딩 대기)       | 10.009     |

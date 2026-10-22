@@ -1,14 +1,13 @@
-import { sessionGrantsScope } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   McpCapabilityUnavailableError,
   PreviewAutomationUnavailableError,
   ProviderInstanceId,
+  sessionGrantsScope,
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 it.effect("reports the scoped credential context when preview capability is unavailable", () => {

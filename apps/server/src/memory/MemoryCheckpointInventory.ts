@@ -74,6 +74,69 @@ export const checkpointInventorySize = (inventory: CheckpointInventory) => {
   return { bytes, rows };
 };
 
+type RevisionRow = {
+  revision_id: string;
+  operation_id: string;
+  parents_json: string;
+  scope_json: string;
+  assertion_kind: string;
+  provenance_json: string;
+  payload_ref: string | null;
+  created_at: number;
+};
+const revisionRecord = Effect.fnUntraced(function* (
+  space: M.MemorySpaceId,
+  id: M.MemoryId,
+  r: RevisionRow,
+  body: string | null,
+) {
+  return {
+    revision: yield* decodeRevision({
+      memorySpaceId: space,
+      memoryId: id,
+      revisionId: r.revision_id,
+      operationId: r.operation_id,
+      parents: yield* decodeHeads(r.parents_json),
+      scope: yield* decodeScope(r.scope_json),
+      assertionKind: r.assertion_kind,
+      provenance: yield* decodeProvenance(r.provenance_json),
+      payloadRef: r.payload_ref ?? r.revision_id,
+      createdAtUtc: timestamp(r.created_at),
+    }),
+    payload: body ? yield* decodePayload(body) : null,
+  };
+});
+
+/**
+ * Admission size of this memory's body-free revision records outside `selected`.
+ * Those records never change, so each row is decoded, validated and measured once
+ * into `memory_revisions.checkpoint_bytes`; later writes only sum the cached sizes.
+ * Equals what `selectCheckpointMemory` without `publishedLineage` would add for them.
+ */
+export const measureCheckpointRevisionHistory = Effect.fnUntraced(function* (
+  space: M.MemorySpaceId,
+  id: M.MemoryId,
+  selected: ReadonlyArray<M.MemoryRevisionId>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const unmeasured =
+    yield* sql<RevisionRow>`SELECT revision_id,operation_id,parents_json,scope_json,assertion_kind,provenance_json,payload_ref,created_at FROM memory_revisions WHERE space=${space} AND memory_id=${id} AND checkpoint_bytes IS NULL`;
+  for (const r of unmeasured) {
+    const record = yield* revisionRecord(space, id, r, null);
+    yield* validateCheckpointInventory(space, {
+      ...emptyCheckpointInventory(),
+      revisions: [record],
+    });
+    yield* sql`UPDATE memory_revisions SET checkpoint_bytes=${checkpointInventorySize({ ...emptyCheckpointInventory(), revisions: [record] }).bytes} WHERE space=${space} AND revision_id=${r.revision_id}`;
+  }
+  const outside = selected.length ? sql`revision_id NOT IN ${sql.in(selected)}` : sql`1=1`;
+  const [total] = yield* sql<{
+    rows: number;
+    bytes: number;
+  }>`SELECT count(*) AS rows,coalesce(sum(checkpoint_bytes),0) AS bytes FROM memory_revisions WHERE space=${space} AND memory_id=${id} AND ${outside}`;
+  return { bytes: total?.bytes ?? 0, rows: total?.rows ?? 0 };
+});
+
 /** Shared by admission, migration and publication. Only this memory's selected pairs are loaded. */
 export const selectCheckpointMemory = Effect.fnUntraced(function* (
   space: M.MemorySpaceId,
@@ -191,37 +254,21 @@ export const selectCheckpointMemory = Effect.fnUntraced(function* (
       : selected.length
         ? sql`r.revision_id IN ${sql.in(selected)}`
         : sql`0=1`;
-  // A shared payload is deliberately joined once per selected revision.
-  const revisions = yield* sql<{
-    revision_id: string;
-    operation_id: string;
-    parents_json: string;
-    scope_json: string;
-    assertion_kind: string;
-    provenance_json: string;
-    payload_ref: string | null;
-    created_at: number;
-    body_json: string | null;
-  }>`SELECT r.*,p.body_json FROM memory_revisions r LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref WHERE r.space=${space} AND r.memory_id=${id} AND ${selection} ORDER BY r.revision_id`;
+  // A shared payload is deliberately joined once per selected revision. Columns
+  // are named: a statement cached before migration 090 added checkpoint_bytes
+  // would map `r.*` onto stale column names and read body_json as NULL.
+  const revisions = yield* sql<
+    RevisionRow & { body_json: string | null }
+  >`SELECT r.space,r.revision_id,r.memory_id,r.operation_id,r.parents_json,r.scope_json,r.assertion_kind,r.provenance_json,r.payload_ref,r.created_at,p.body_json FROM memory_revisions r LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref WHERE r.space=${space} AND r.memory_id=${id} AND ${selection} ORDER BY r.revision_id`;
   for (const r of revisions)
-    all.revisions.push({
-      revision: yield* decodeRevision({
-        memorySpaceId: space,
-        memoryId: id,
-        revisionId: r.revision_id,
-        operationId: r.operation_id,
-        parents: yield* decodeHeads(r.parents_json),
-        scope: yield* decodeScope(r.scope_json),
-        assertionKind: r.assertion_kind,
-        provenance: yield* decodeProvenance(r.provenance_json),
-        payloadRef: r.payload_ref ?? r.revision_id,
-        createdAtUtc: timestamp(r.created_at),
-      }),
-      payload:
-        needed.has(M.MemoryRevisionId.make(r.revision_id)) && r.body_json
-          ? yield* decodePayload(r.body_json)
-          : null,
-    });
+    all.revisions.push(
+      yield* revisionRecord(
+        space,
+        id,
+        r,
+        needed.has(M.MemoryRevisionId.make(r.revision_id)) ? r.body_json : null,
+      ),
+    );
   const conflicts = yield* sql<{
     conflict_id: string;
     heads_json: string;

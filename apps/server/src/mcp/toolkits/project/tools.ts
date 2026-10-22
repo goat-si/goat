@@ -1,39 +1,46 @@
-import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { agentSurfaceAnnotations } from "../../agentSurface.ts";
-import { McpAttachmentInput } from "../attachment/input.ts";
-import { NotifyTargetInput } from "../../completionWebhook.ts";
 import {
+  GoatclawRole,
+  HostPressureAdvice,
   MemoryTaskGrantCeiling,
-  NonNegativeInt,
+  PermissionProfile,
   ModelSelection,
-  TrimmedNonEmptyString,
-  ThreadId,
-  RunId,
+  NonNegativeInt,
   OrchestrationV2RunStatus,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
   OrchestrationV2ThreadLauncher,
-  RuntimeMode,
-  ProviderInteractionMode,
-  Project,
-  ProjectCreatePayload,
-  ProjectUpdatePayload,
-  ProjectId,
   OrchestratorMcpFailure,
   OrchestratorMcpHost,
+  Project,
+  ProjectCreatePayload,
+  ProjectId,
+  ProjectUpdatePayload,
+  ProviderInteractionMode,
   RemoteReportBindingInput,
+  RunId,
+  RuntimeMode,
+  RepositoryReferenceRequest,
+  RepositoryReferenceSnapshot,
+  RepositoryReferences,
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
+  ThreadId,
+  TrimmedNonEmptyString,
 } from "@goat/contracts";
-import * as ThreadLaunchMcpService from "../../ThreadLaunchMcpService.ts";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
-import * as ProjectService from "../../../project/ProjectService.ts";
-import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as ThreadLaunchMcpService from "../../ThreadLaunchMcpService.ts";
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
+import { agentSurfaceAnnotations } from "../../agentSurface.ts";
+import { NotifyTargetInput } from "../../completionWebhook.ts";
+import { McpAttachmentInput } from "../attachment/input.ts";
 
 const shared = {
   success: Project,
@@ -108,6 +115,7 @@ const ProjectCloneTool = Tool.make(agentSurfaceRegistry["project.clone"].name, {
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["project.clone"]));
 export const ThreadLaunchParameters = Schema.Struct({
+  references: Schema.optional(RepositoryReferences),
   projectId: Schema.optional(ProjectId),
   scratch: Schema.optional(
     Schema.Boolean.annotate({
@@ -118,6 +126,13 @@ export const ThreadLaunchParameters = Schema.Struct({
   title: TrimmedNonEmptyString,
   modelSelection: Schema.optional(ModelSelection),
   memoryGrantCeiling: Schema.optional(MemoryTaskGrantCeiling),
+  permissionProfileCeiling: Schema.optional(PermissionProfile),
+  goatclawRole: Schema.optional(
+    GoatclawRole.annotate({
+      description:
+        "Only while goatclaw is on: launch as a goatclaw role. The thread runs under that role's permission profile, narrowed by yours, and its message is preceded by the role's instructions and report protocol. supervisor reads, plans and asks; domain-manager owns one goal; merge-manager lands green pull requests one at a time; issue-sweeper triages and fixes small issues. Needs message.",
+    }),
+  ),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
   workspaceStrategy: Schema.optional(
@@ -184,6 +199,8 @@ export const ThreadLaunchSuccess = Schema.Struct({
   report: Schema.optional(
     Schema.Struct({ correlationId: RemoteReportBindingInput.fields.correlationId }),
   ),
+  /** Set when this machine is under resource pressure; see goat_host_status placement. */
+  pressure: Schema.optional(HostPressureAdvice),
 });
 
 const ThreadLaunchTool = Tool.make(agentSurfaceRegistry["thread.launch"].name, {
@@ -194,11 +211,26 @@ const ThreadLaunchTool = Tool.make(agentSurfaceRegistry["thread.launch"].name, {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadLaunchMcpService.ThreadLaunchMcpService,
+    RepositoryReferenceMcpService.RepositoryReferenceMcpService,
     ThreadManagementService.ThreadManagementService,
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.launch"]));
 
+const RepositorySnapshotTool = Tool.make(agentSurfaceRegistry["repository.snapshot"].name, {
+  description: agentSurfaceRegistry["repository.snapshot"].description,
+  parameters: RepositoryReferenceRequest,
+  success: RepositoryReferenceSnapshot,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    RepositoryReferenceMcpService.RepositoryReferenceMcpService,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["repository.snapshot"]));
+
 export const ProjectToolkit = Toolkit.make(
+  RepositorySnapshotTool,
   ThreadLaunchTool,
   ProjectListTool,
   ProjectReadTool,

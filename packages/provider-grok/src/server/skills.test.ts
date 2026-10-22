@@ -4,6 +4,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import type * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import { discoverGrokSkills } from "./skills.ts";
 
@@ -14,7 +15,7 @@ const makeInspectSpawner = (
   exitCode = 0,
   spawnOptions?: Array<ChildProcess.CommandOptions | undefined>,
 ) =>
-  ChildProcessSpawner.make((command) => {
+  lazyChildProcessSpawner((command) => {
     spawnOptions?.push(command._tag === "StandardCommand" ? command.options : undefined);
     return Effect.succeed(
       ChildProcessSpawner.makeHandle({

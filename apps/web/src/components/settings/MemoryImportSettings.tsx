@@ -11,6 +11,7 @@ import {
 } from "@goat/contracts";
 import { useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { readEnvironmentScope, readPreparedConnection } from "../../state/session";
+import { memoryImportRequestFailureMessage } from "@goat/client-runtime/memory-import-workflow";
 import { memoryEnvironment } from "../../state/memory";
 import {
   registerMemoryImportDestination,
@@ -76,9 +77,12 @@ export function MemoryImportSettings({
     setError(null);
     try {
       await action();
-    } catch {
+    } catch (error) {
       if (mounted.current && token === generation.current)
-        setError("Import request failed. Check the result before previewing again.");
+        setError(
+          memoryImportRequestFailureMessage(error) ??
+            "Import request failed. Check the result before previewing again.",
+        );
     }
     if (mounted.current && token === generation.current) {
       setBusy(false);
@@ -270,6 +274,9 @@ export function MemoryImportSettings({
                   <span>
                     {item.title ?? `Memory ${index + 1}`}
                     {item.issue !== undefined ? " · Unavailable for import" : ""}
+                    {item.tooLargeForTurnStart
+                      ? " · Stored, but too large to add to new turns automatically"
+                      : ""}
                   </span>
                 </label>
               ))}

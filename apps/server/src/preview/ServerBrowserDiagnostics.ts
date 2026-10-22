@@ -31,6 +31,7 @@ import type {
   PreviewAutomationPageError,
 } from "@goat/contracts";
 import type { ConsoleMessage, Page, Request, Response } from "playwright-core";
+import { consoleText } from "./ServerBrowserPage.ts";
 
 const BUFFER_LIMIT = 200;
 const ENTRY_BUDGET_BYTES = 24_000;
@@ -171,7 +172,7 @@ export class ServerBrowserDiagnostics {
   private readonly onConsole = (message: ConsoleMessage) => {
     this.push("console", this.consoleEntries, {
       level: message.type().slice(0, 32),
-      text: redactText(message.text(), TEXT_LIMIT),
+      text: redactText(consoleText(message), TEXT_LIMIT),
       timestamp: new Date().toISOString(),
     });
   };

@@ -12,6 +12,8 @@ import {
 import {
   createMemoryImportWorkflow,
   memoryImportChunks,
+  memoryImportIssueReason,
+  memoryImportRequestFailureMessage,
   sameMemoryImportFence,
   reduceMemoryImportProgress,
   initialMemoryImportWorkflowState,
@@ -876,5 +878,27 @@ describe("import subscription isolation and admission", () => {
     await Promise.resolve();
     expect(removedBeforeFlush).not.toHaveBeenCalled();
     expect(snapshots.at(-1)).toBe(f.workflow.getSnapshot());
+  });
+});
+
+describe("memoryImportIssueReason", () => {
+  it("names the refusals a person can act on", () => {
+    expect(memoryImportIssueReason("limit_exceeded")).toBe("This folder has more than 128 items.");
+    expect(memoryImportIssueReason("scope_unmapped")).toBe(
+      "Items in projects/ need a project scope.",
+    );
+    expect(memoryImportIssueReason("source_missing")).toBe(
+      "That memory store or profile is not on this device.",
+    );
+  });
+
+  it("shows a typed refusal and leaves other failures unnamed", () => {
+    expect(
+      memoryImportRequestFailureMessage(new M.MemoryImportRpcError({ issue: "limit_exceeded" })),
+    ).toBe(memoryImportIssueReason("limit_exceeded"));
+    expect(memoryImportRequestFailureMessage(new Error("network"))).toBeNull();
+    expect(memoryImportRequestFailureMessage({ _tag: "MemoryRpcError", code: "unavailable" })).toBe(
+      null,
+    );
   });
 });

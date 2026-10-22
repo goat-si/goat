@@ -27,6 +27,8 @@ import {
   SshHostState,
   SshHostStatus,
   SshHostStatusInput,
+  SshPreflightReport,
+  SSH_PREFLIGHT_STEP_ORDER,
   SshRuntimePhase,
   SshRuntimeUpdateInput,
   validateSshHostStatus,
@@ -297,6 +299,17 @@ describe("SSH key-auth instructions", () => {
     expect(result.command).toBe(
       "ssh-copy-id -i '/home/runner/.ssh/goat-hosts/id_ed25519.pub' -p '2222' 'root@vps-1'",
     );
+  });
+
+  it("uses the alias for routing and trust while naming the readable host", () => {
+    const result = buildSshKeyAuthInstructions({
+      ...context,
+      host: "private.example",
+      alias: "private'alias",
+      publicKeyPath: "/keys/id_ed25519.pub",
+    });
+    expect(result.instruction).toContain("private.example refused the SSH key");
+    expect(result.command).toBe("ssh-copy-id -i '/keys/id_ed25519.pub' 'private'\\''alias'");
   });
 
   it("quotes each argument including apostrophes and shell metacharacters", () => {
@@ -733,5 +746,70 @@ it("af65f23e5 desktop clients decode new pending and bootstrap metadata", () => 
   expect(decodePreviousBootstrap(bootstrap)).toEqual({
     ...bootstrap,
     pendingReplacement: previousPending,
+  });
+});
+
+describe("SshPreflightReport", () => {
+  const destination = { hostname: "box.example", user: "jun", port: 22 };
+  const steps = (state: "passed" | "failed") =>
+    SSH_PREFLIGHT_STEP_ORDER.map((id) => ({ id, state, summary: id + " " + state }));
+  const decode = Schema.decodeUnknownExit(SshPreflightReport);
+
+  it("is ready only when no step failed or waits for review", () => {
+    expect(decode({ host: "box", destination, steps: steps("passed"), ready: true })._tag).toBe(
+      "Success",
+    );
+    expect(decode({ host: "box", destination, steps: steps("failed"), ready: true })._tag).toBe(
+      "Failure",
+    );
+    const review = steps("passed").map((step) =>
+      step.id === "host_key" ? { ...step, state: "needs_review" } : step,
+    );
+    expect(decode({ host: "box", destination, steps: review, ready: false })._tag).toBe("Success");
+    expect(decode({ host: "box", destination, steps: review, ready: true })._tag).toBe("Failure");
+  });
+
+  it("keeps every step once, in display order", () => {
+    const shuffled = [...steps("passed")].reverse();
+    expect(decode({ host: "box", destination, steps: shuffled, ready: true })._tag).toBe("Failure");
+    expect(
+      decode({ host: "box", destination, steps: steps("passed").slice(1), ready: true })._tag,
+    ).toBe("Failure");
+  });
+});
+
+describe("SshHostStatus upload counters", () => {
+  const preparing = {
+    host: "box",
+    state: "preparing",
+    runtimeVersion: null,
+    requestedVersion: "1.0.0",
+  } as const;
+  const decode = Schema.decodeUnknownExit(SshHostStatus);
+
+  it("appear only while uploading", () => {
+    const upload = { sentBytes: 5, totalBytes: 10 };
+    expect(decode({ ...preparing, phase: "uploading", upload })._tag).toBe("Success");
+    expect(decode({ ...preparing, phase: "starting", upload })._tag).toBe("Failure");
+    expect(
+      decode({ ...preparing, phase: "uploading", upload: { sentBytes: 11, totalBytes: 10 } })._tag,
+    ).toBe("Failure");
+  });
+});
+
+describe("SshPreflightReport destination", () => {
+  it("accepts a person's own long ~/.ssh/config alias", () => {
+    const alias = "a".repeat(66);
+    const report = {
+      host: alias,
+      destination: { alias, hostname: "box.example", user: "jun", port: 22 },
+      steps: SSH_PREFLIGHT_STEP_ORDER.map((id) => ({
+        id,
+        state: "passed" as const,
+        summary: "ok",
+      })),
+      ready: true,
+    } as const;
+    expect(Schema.encodeSync(SshPreflightReport)(report).destination.alias).toBe(alias);
   });
 });

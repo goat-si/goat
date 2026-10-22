@@ -1,3 +1,4 @@
+import { ThreadUndoNotice } from "./ThreadUndoNotice";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { use } from "react";
 import {
@@ -185,6 +186,11 @@ export function HomeRouteScreen() {
         />
         {Platform.OS === "ios" ? (
           <Toolbar placement="left">
+            <Toolbar.Button
+              accessibilityLabel="Open notes"
+              icon="doc.text"
+              onPress={() => navigation.navigate("Notes")}
+            />
             {botHome.known ? (
               <Toolbar.Button
                 accessibilityLabel={botHome.mode === "bot" ? "Show threads" : "Show GOAT Bot"}
@@ -367,6 +373,7 @@ export function HomeRouteScreen() {
           selectedProjectKey={selectedProjectKey}
           threads={threads}
         />
+        <ThreadUndoNotice visible={visible} />
       </>
     </AndroidHomeFabLayout>
   );
