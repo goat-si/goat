@@ -835,6 +835,22 @@ export function updateClientSettings(patch: ClientSettingsPatch): Promise<boolea
   );
 }
 
+/**
+ * For edits derived from the saved value: the update runs against the hydrated snapshot, so
+ * a change made before settings load cannot replace what was saved with defaults.
+ */
+export function updateClientSettingsWith(
+  update: (current: ClientSettings) => ClientSettings,
+): Promise<boolean> {
+  return persistClientSettingsUpdate(update).then(
+    () => true,
+    () => {
+      reportClientSettingsFailure();
+      return false;
+    },
+  );
+}
+
 export function __resetClientSettingsPersistenceForTests(): void {
   clientSettingsHydrationGeneration += 1;
   clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;

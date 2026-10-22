@@ -54,6 +54,22 @@ acts on the render it started in. A function that a child calls during render, o
 `await`, comes from a module-level factory memoized on its inputs, so its closure keeps only
 those inputs.
 
+## Destination rail
+
+The rail mixes two kinds of choice, and they must not blur. Context defaults
+([`destinationRail.logic.ts`](../../apps/web/src/components/sidebar/destinationRail.logic.ts))
+decide only for items the person has never touched; turning an item on or off stores an explicit
+choice, even when it matches today's default, so a host disconnecting or a provider becoming
+ready never hides what someone turned on. Capability gates (pull requests, memory, provider
+permission) can still make an item unavailable; the choice is kept for when it returns.
+
+The `destinationRail` client setting stores ids as plain strings so a client never fails to
+decode ids another app version added, and every edit goes through `updateClientSettingsWith`,
+which applies the change to the hydrated value instead of overwriting it with render-time
+defaults. Saved preferences apply only after hydration so hidden items never flash in. The rail
+is always mounted, so it subscribes to derived primitives (`providerReadyAtom`), never to raw
+provider arrays whose timestamps change on every status push.
+
 ## React Compiler
 
 The compiler memoizes a component or hook only when it can prove the code follows React's rules.

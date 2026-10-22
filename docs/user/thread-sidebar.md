@@ -164,7 +164,9 @@ questions can still be answered in their asking thread.
 ### See everything running
 
 On web and desktop, **Fleet** in the rail beside the thread sidebar shows how many threads are
-running or need you across every connected machine; hover it for a count per machine. Open it,
+running or need you across every connected machine; hover it for a count per machine. The rail
+shows Fleet once you have more than one machine; add it sooner from **+** at the bottom of the
+rail. Open it,
 or search for it in the command palette, for a graph of your machines and the agents working on
 each, and a list of those threads grouped by machine; select a machine to show only its threads.
 The list keeps threads in the order they started, so rows stay put while they work. A thread
@@ -205,6 +207,16 @@ there are more than three alerts, **+N more** opens the rest with their actions.
 Below the list, **Connections** shows your saved machines with the same controls as
 **Settings → Connections**: switch one off, check its routes and permissions, remove it, or pair
 another with **Add device**.
+
+### Choose what the rail shows
+
+On web and desktop, select **+** at the bottom of the rail to show or hide its items and move
+them up or down. Home and Settings always stay. Until you choose, the rail adjusts to your setup:
+Fleet appears once you have more than one machine, Hub on a machine that is a hub, and
+**Add provider** while your main machine has no working provider. **Notes** starts hidden. An
+item you turn on stays on whatever changes later, and **Reset to defaults** returns to the
+automatic choice. **Add provider** opens the same setup as **Settings → Providers**. Hidden pages
+stay reachable from the command palette or Settings.
 
 ### Fold working threads on mobile
 

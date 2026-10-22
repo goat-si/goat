@@ -346,6 +346,18 @@ export const FirstRunPrompts = Schema.Struct({
 export type FirstRunPrompts = typeof FirstRunPrompts.Type;
 export type FirstRunPromptId = keyof FirstRunPrompts;
 
+/**
+ * Which destination-rail items a person showed, hid, or reordered. Ids are plain strings,
+ * not a literal union, so a client never fails to decode ids added by another app version.
+ * An id in neither list follows the client's context default.
+ */
+export const DestinationRailPreferences = Schema.Struct({
+  order: Schema.Array(TrimmedNonEmptyString).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  shown: Schema.Array(TrimmedNonEmptyString).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  hidden: Schema.Array(TrimmedNonEmptyString).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type DestinationRailPreferences = typeof DestinationRailPreferences.Type;
+
 export const ClientSettingsSchema = Schema.Struct({
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
@@ -518,6 +530,7 @@ export const ClientSettingsSchema = Schema.Struct({
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   firstRunPrompts: FirstRunPrompts.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  destinationRail: DestinationRailPreferences.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   /** Before firstRunPrompts; hydration folds it into firstRunPrompts.computerUse. */
   computerUsePrompt: Schema.optionalKey(Schema.Literals(["pending", "enabled", "later"])),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -2233,6 +2246,7 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
   firstRunPrompts: Schema.optionalKey(FirstRunPrompts),
+  destinationRail: Schema.optionalKey(DestinationRailPreferences),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
 });

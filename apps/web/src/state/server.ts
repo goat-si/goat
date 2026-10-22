@@ -210,3 +210,15 @@ export const providersIgnoringCheckedAtAtom = Atom.family((environmentId: Enviro
     ),
   ).pipe(Atom.withLabel(`web-providers-ignoring-checked-at:${environmentId}`)),
 );
+
+/**
+ * Whether an enabled provider on the environment is ready; null until its providers load. A
+ * primitive, so always-mounted chrome does not re-render on every provider status push.
+ */
+export const providerReadyAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get): boolean | null => {
+    const providers = get(serverEnvironment.providersValueAtom(environmentId));
+    if (providers === null) return null;
+    return providers.some((provider) => provider.enabled && provider.status === "ready");
+  }).pipe(Atom.withLabel(`web-provider-ready:${environmentId}`)),
+);

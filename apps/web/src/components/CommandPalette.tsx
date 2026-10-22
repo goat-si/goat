@@ -51,6 +51,7 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ActivityIcon,
+  BotIcon,
   CloudDownloadIcon,
   BellIcon,
   ArrowLeftIcon,
@@ -1605,6 +1606,17 @@ function OpenCommandPaletteDialog(props: {
     icon: <ActivityIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/fleet" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:goat-bot",
+    searchTerms: ["goat bot", "bot", "assistant", "helper"],
+    title: "Open GOAT Bot",
+    icon: <BotIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/bot" });
     },
   });
 
