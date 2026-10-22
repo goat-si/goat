@@ -368,6 +368,7 @@
         "apps/server/src/mcp/toolkits/remoteReport/tools.ts",
         "packages/contracts/src/remoteReports.ts",
         "apps/server/src/goatclaw/PermissionProfiles.ts",
+        "apps/server/src/goatclaw/FleetSync.ts",
         "apps/server/src/persistence/Migrations/097_PermissionProfiles.ts",
         "packages/contracts/src/permissionProfiles.ts",
         "apps/server/src/fleet/pressure/HostPressureMonitor.ts",

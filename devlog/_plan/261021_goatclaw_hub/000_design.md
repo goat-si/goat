@@ -559,6 +559,21 @@ a green `goat-ci-result`, that are not `CONFLICTING` (behind `dev` is fine, see
 `cloud.launch` and `boat.start` are only in `owner`. Checked at
 claim time and again on every action, as ADR-0016 does.
 
+**goatclaw is on or off for the whole fleet (DH6).** Switching it on or off on one machine does the same on
+every host connected to it: SSH hosts, linked hosts and hub devices. Each GOAT exchanges its policy (`enabled`,
+`defaultProfile`, `profiles`) with the hosts it reaches through `goat_goatclaw_sync`, over a dispatch session that
+carries `settings:write`, on connect, after every local change and every ten minutes. A person's change carries
+its time, and every machine keeps the newest one, so a change made on any connected machine spreads both ways and
+onward through hosts that are themselves connected. A policy nobody set carries no time and never overrides one
+somebody did. A launch or follow-up send to a host first brings that host up to date.
+
+Remote follow-up sends (`goat_thread_send` with `host`) carry the caller's ceiling like a remote launch. The
+destination enforces it against the target thread's own profile, and the sender takes a lane that rides the
+thread's dispatch, so steering a lane it already holds costs no second slot. The sender refuses only when the
+destination has not shown that it enforces ceilings: a GOAT without `goat_goatclaw_sync` is outdated, and one
+that did not answer is unconfirmed. A destination whose goatclaw is still off refuses a forwarded ceiling, as
+before. Settings → Hub shows each host as applied, waiting or needing an update, two at a time with +N.
+
 ### 8.2 Decision inbox
 
 A durable table on the hub, `decision_items`: `id`, `from` (thread, host), `title`, `context`, `options` (id,
@@ -678,6 +693,7 @@ publish through the nightly channel.
 | DH3 | Default when the hub is down | **Approved:** pause plus decision item; local fallback opt-in per device                                                                                                                               |
 | DH4 | D14                          | Its documents no longer exist; ADR-0021 supersedes it                                                                                                                                                  |
 | DH5 | MacBook Pro ssh config       | Recorded in §1.2                                                                                                                                                                                       |
+| DH6 | Where goatclaw is switched   | **User decided (2026-10-22):** fleet-wide. On or off on one machine applies to every connected host; the newest change wins (§8.1)                                                                     |
 
 ## 12. Rollout
 

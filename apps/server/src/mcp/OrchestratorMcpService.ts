@@ -1,3 +1,4 @@
+import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CommandId,
@@ -214,6 +215,21 @@ export interface OrchestratorMcpServiceShape {
   readonly permissionProfile: (
     scope: McpInvocationScope,
   ) => Effect.Effect<import("@goat/contracts").PermissionProfileView, OrchestratorMcpFailure>;
+  /**
+   * goatclaw admission for a follow-up send to a thread on another host: the caller needs
+   * `threads.remote` for it and a lane. `ceiling` is what the destination must enforce; undefined
+   * while goatclaw is off. `settle` keeps the lane on that thread's dispatch, or frees it.
+   */
+  readonly admitRemoteSend: (
+    scope: McpInvocationScope,
+    input: { readonly host: string; readonly threadId: string; readonly clientRequestId?: string },
+  ) => Effect.Effect<
+    {
+      readonly ceiling: import("@goat/contracts").PermissionProfile | undefined;
+      readonly settle: (sent: boolean) => Effect.Effect<void, OrchestratorMcpFailure>;
+    },
+    OrchestratorMcpFailure
+  >;
   readonly capabilities: (
     scope: McpInvocationScope,
   ) => Effect.Effect<OrchestratorMcpCapabilitiesResult, OrchestratorMcpFailure>;
@@ -1145,6 +1161,7 @@ function timelineItem(input: {
 
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
+  const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
   const crypto = yield* Crypto.Crypto;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const remoteDispatch = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
@@ -2328,6 +2345,31 @@ const make = Effect.gen(function* () {
 
   return OrchestratorMcpService.of({
     permissionProfile: (scope) => permissions.resolve(scope),
+    admitRemoteSend: Effect.fn("OrchestratorMcpService.admitRemoteSend")(function* (scope, input) {
+      const effective = yield* permissions.resolve(scope);
+      if (!effective.enabled) return { ceiling: undefined, settle: () => Effect.void };
+      const context = { host: input.host, runtimeMode: effective.runtimeMode };
+      yield* permissions.require(scope, "threads.launch", context);
+      yield* permissions.require(scope, "threads.remote", context);
+      const id = stableCommandId({
+        scope,
+        requestKey: yield* requestKey(input.clientRequestId),
+        operation: `remote-send:${input.host}:${input.threadId}`,
+      });
+      const admitted = yield* permissions.claim(scope, {
+        id,
+        host: input.host,
+        runtimeMode: effective.runtimeMode,
+        remoteThreadId: input.threadId,
+      });
+      return {
+        ceiling: admitted.enabled ? admitted.profile : undefined,
+        settle: (sent: boolean) =>
+          sent
+            ? permissions.completeRemote(id, input.host, input.threadId)
+            : permissions.release(id),
+      };
+    }),
     scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
       const { parent, limits } = yield* loadCaller(scope);
       const projectId = yield* resolveProjectTarget(parent, input.projectId);
@@ -2745,6 +2787,8 @@ const make = Effect.gen(function* () {
           host,
           worktree: remote.workspace?.type === "worktree",
         });
+        // The destination must enforce this ceiling; goatclaw's fleet policy reaches it first.
+        if (admitted.enabled && Option.isSome(fleet)) yield* fleet.value.ensure(host);
         runtimeMode = admitted.runtimeMode;
         const register = Effect.gen(function* () {
           yield* permissions.recheck(scope, admitted, { host });
@@ -3861,9 +3905,14 @@ const make = Effect.gen(function* () {
         requestKey: key,
         operation: "thread-send",
       });
+      // Another GOAT forwarding a profiled caller's send: this machine enforces that ceiling too.
+      const forwarded = input.permissionProfileCeiling;
       if (scope.thread?.threadId !== input.threadId)
-        yield* permissions.require(scope, "threads.launch", { runtimeMode: limits.runtimeMode });
-      const effective = yield* permissions.resolve(scope, limits.runtimeMode);
+        yield* permissions.require(scope, "threads.launch", {
+          runtimeMode: limits.runtimeMode,
+          forwarded,
+        });
+      const effective = yield* permissions.resolve(scope, limits.runtimeMode, forwarded);
       if (effective.enabled && scope.thread?.threadId !== input.threadId) {
         yield* resolveRuntimeMode(effective.runtimeMode, target.thread.runtimeMode);
         yield* permissions.assertTarget(
@@ -3871,6 +3920,7 @@ const make = Effect.gen(function* () {
           input.threadId,
           limits.runtimeMode,
           target.thread.runtimeMode,
+          forwarded,
         );
       }
       const admissionId = stableCommandId({ scope, requestKey: key, operation: "thread-send" });
@@ -3882,6 +3932,7 @@ const make = Effect.gen(function* () {
               id: admissionId,
               childThreadId: input.threadId,
               runtimeMode: target.thread.runtimeMode,
+              forwarded,
             });
       const result = yield* threadManagement
         .sendToThread({

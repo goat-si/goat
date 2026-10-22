@@ -24,6 +24,7 @@ import * as Schema from "effect/Schema";
 import packageJson from "../../package.json" with { type: "json" };
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as StrayProcesses from "../diagnostics/StrayProcesses.ts";
+import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
@@ -121,6 +122,14 @@ const make = Effect.gen(function* () {
   const storage = yield* Effect.serviceOption(DatabaseStorage.DatabaseStorage);
   const strays = yield* Effect.serviceOption(StrayProcesses.StrayProcesses);
   const pressureMonitor = yield* Effect.serviceOption(HostPressureMonitor.HostPressureMonitor);
+  const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
+  /** This machine's view of whether its goatclaw policy reached the host. */
+  const withGoatclaw = (entry: HostStatusEntry) =>
+    Option.isNone(fleet) || entry.host === null
+      ? Effect.succeed(entry)
+      : fleet.value
+          .hostState(entry.host)
+          .pipe(Effect.map((goatclaw): HostStatusEntry => ({ ...entry, goatclaw })));
   const clock = yield* Clock.Clock;
   // Optional so tests and builds without the driver keep reporting the rest.
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
@@ -312,15 +321,17 @@ const make = Effect.gen(function* () {
       if (input.host !== undefined)
         return {
           hosts: [
-            markHostCompatibility(
-              yield* readRemote(
-                scope,
-                input.host,
-                true,
-                input.repositories === true,
-                options?.requireReady === true,
+            yield* withGoatclaw(
+              markHostCompatibility(
+                yield* readRemote(
+                  scope,
+                  input.host,
+                  true,
+                  input.repositories === true,
+                  options?.requireReady === true,
+                ),
+                LOCAL_COMPATIBILITY,
               ),
-              LOCAL_COMPATIBILITY,
             ),
           ],
         };
@@ -344,7 +355,12 @@ const make = Effect.gen(function* () {
         { concurrency: "unbounded" },
       );
       return {
-        hosts: [local, ...remote.map((entry) => markHostCompatibility(entry, LOCAL_COMPATIBILITY))],
+        hosts: [
+          local,
+          ...(yield* Effect.forEach(remote, (entry) =>
+            withGoatclaw(markHostCompatibility(entry, LOCAL_COMPATIBILITY)),
+          )),
+        ],
       };
     },
   );

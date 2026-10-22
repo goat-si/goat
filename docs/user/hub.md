@@ -55,6 +55,12 @@ threads, merge pull requests or change settings only as far as its profile
 allows, and an agent without its own profile gets **Default profile**. Turn it on
 in **Settings → Hub**.
 
+The switch covers your whole fleet. Turning it on or off on one machine does the
+same on every host connected to it, and the most recent change wins wherever you
+made it. The row lists each host as **applied**, **waiting** (not reached yet) or
+**needs a GOAT update**; a host on an older GOAT cannot take the setting, and
+agents cannot launch or send follow-ups to it while profiles are on.
+
 ## Read a device
 
 Each device shows how it joined (Remote Link Child, Hub client, or standalone),

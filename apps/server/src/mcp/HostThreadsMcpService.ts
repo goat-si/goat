@@ -1,3 +1,4 @@
+import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import {
@@ -269,6 +270,7 @@ const make = Effect.gen(function* () {
   const coordinator = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
   // Only words an error better, so a layer without report bindings goes without.
   const reports = yield* Effect.serviceOption(RemoteReportService.RemoteReportService);
+  const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const launchWatches = yield* LaunchWatchService.LaunchWatchService;
   const replicas = yield* ThreadReplicaService.ThreadReplicaService;
@@ -771,11 +773,6 @@ const make = Effect.gen(function* () {
     sendToThread: (scope, input) =>
       Effect.gen(function* () {
         const host = input.host;
-        if (host !== undefined && (yield* local.permissionProfile(scope)).enabled)
-          return yield* failure(
-            "capability_denied",
-            "Remote follow-up sends cannot yet preserve goatclaw permission ceilings and lane accounting. Use goat_ssh_thread_launch for a new profiled lane.",
-          );
         const requestKey =
           host === undefined || input.clientRequestId === undefined
             ? undefined
@@ -816,6 +813,32 @@ const make = Effect.gen(function* () {
             return result;
           }
         }
+        // With goatclaw on, the send takes a lane here and carries the caller's ceiling, which the
+        // destination enforces. A destination that cannot is refused before anything is sent.
+        const admission =
+          host === undefined
+            ? undefined
+            : yield* local.admitRemoteSend(scope, {
+                host,
+                threadId: input.threadId,
+                ...(input.clientRequestId === undefined
+                  ? {}
+                  : { clientRequestId: input.clientRequestId }),
+              });
+        const ceiling = admission?.ceiling;
+        if (host !== undefined && admission !== undefined && ceiling !== undefined) {
+          const reach = Option.isNone(fleet) ? undefined : yield* fleet.value.ensure(host);
+          if (reach?.enforcesCeilings !== true) {
+            yield* admission.settle(false);
+            return yield* failure(
+              "capability_denied",
+              reach?.sync.state === "outdated"
+                ? `GOAT on ${host} is too old to enforce goatclaw permission ceilings, so this send was not delivered. Update GOAT on ${host}.`
+                : `Could not confirm that GOAT on ${host} enforces goatclaw permission ceilings, so this send was not delivered${reach?.sync.message === undefined ? "." : `: ${reach.sync.message}`}`,
+            );
+          }
+        }
+        const forwarded = ceiling === undefined ? {} : { permissionProfileCeiling: ceiling };
         const result = yield* (
           host === undefined
             ? local
@@ -853,16 +876,24 @@ const make = Effect.gen(function* () {
                       arguments:
                         scope.thread !== undefined &&
                         (input.mode === "queue" || input.mode === "steer")
-                          ? { ...withoutHost(input), mode: "auto" }
-                          : withoutHost(input),
+                          ? { ...withoutHost(input), ...forwarded, mode: "auto" }
+                          : { ...withoutHost(input), ...forwarded },
                       writes: true,
-                      relay: relaySend(scope, { ...input, host }),
+                      // A relayed send arrives as the origin's launcher thread, without this ceiling.
+                      ...(ceiling === undefined
+                        ? { relay: relaySend(scope, { ...input, host }) }
+                        : {}),
                     },
                     decodeSend,
                   ),
                 ),
               )
         ).pipe(
+          Effect.onExit((exit) =>
+            admission === undefined
+              ? Effect.void
+              : admission.settle(exit._tag === "Success").pipe(Effect.ignore),
+          ),
           Effect.tap((result) => rearmAfterSend(scope, input, result)),
           // A send to a remote thread this one launched follows its reports again.
           Effect.tap((result) =>

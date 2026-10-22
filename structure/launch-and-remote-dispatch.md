@@ -140,9 +140,14 @@ existing paths.
 reservations outside the orchestration event log. Admission commits before launch; pending and
 uncertain reservations retain capacity across restart. Local run projections and durable remote
 dispatches determine completion, so removing a launch watch grants no capacity. SSH requires
-a destination that accepts and enforces the inherited ceiling. Bulk creation, remote follow-up
-sends, and remote cloud-holder forwarding refuse while enabled until they preserve the same
-policy and accounting. Provider-native limits are outside this admission service.
+a destination that accepts and enforces the inherited ceiling. goatclaw is on or off fleet-wide:
+`apps/server/src/goatclaw/FleetSync.ts` exchanges the policy with every connected host through
+`goat_goatclaw_sync` and keeps the newest change, and launches and follow-up sends sync their
+destination first. A remote follow-up send forwards the caller's ceiling and takes a lane that
+rides the target thread's dispatch; it is refused only when the destination has not shown it
+enforces ceilings. Bulk creation and remote cloud-holder forwarding refuse while enabled until
+they preserve the same policy and accounting. Provider-native limits are outside this admission
+service.
 
 Role templates (`apps/server/src/goatclaw/RoleTemplates.ts`) are launch presets over these
 profiles: `goatclawRole` on `goat_thread_launch` and `goat_ssh_thread_launch` puts the role's

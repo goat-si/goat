@@ -63,6 +63,7 @@ import {
   ProviderOptionSelectionValue,
 } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { PermissionProfile } from "./permissionProfiles.ts";
 
 const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)).annotate({
   description: "Complete task or message text for the target agent.",
@@ -793,6 +794,8 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+  /** Set by the GOAT that forwards a send from a goatclaw-profiled caller; outside dispatch only. */
+  permissionProfileCeiling: Schema.optional(PermissionProfile),
 });
 export type OrchestratorMcpThreadSendInput = typeof OrchestratorMcpThreadSendInput.Type;
 

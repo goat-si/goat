@@ -63,6 +63,12 @@ export const GoatclawSettings = Schema.Struct({
   profiles: Schema.Record(TrimmedNonEmptyString, PermissionProfile).pipe(
     Schema.withDecodingDefault(Effect.succeed(BUILTIN_PERMISSION_PROFILES)),
   ),
+  /**
+   * When a person last changed this policy, on whichever connected machine they changed it. The
+   * policy applies fleet-wide, so the newest stamp wins on every host it syncs to. Absent means
+   * the policy was never deliberately set here.
+   */
+  updatedAt: Schema.optionalKey(Schema.String),
 }).check(
   Schema.makeFilter((settings) => {
     // The settings file stores only what differs from the defaults, and encoding checks that
@@ -81,7 +87,58 @@ export const GoatclawSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   defaultProfile: Schema.optionalKey(TrimmedNonEmptyString),
   profiles: Schema.optionalKey(Schema.Record(TrimmedNonEmptyString, PermissionProfile)),
+  updatedAt: Schema.optionalKey(Schema.String),
 });
+
+/** One machine's goatclaw policy as `goat_goatclaw_sync` exchanges it between connected hosts. */
+export const GoatclawFleetPolicy = Schema.Struct({
+  enabled: Schema.Boolean,
+  defaultProfile: TrimmedNonEmptyString,
+  profiles: Schema.Record(TrimmedNonEmptyString, PermissionProfile),
+  updatedAt: Schema.optionalKey(Schema.String),
+});
+export type GoatclawFleetPolicy = typeof GoatclawFleetPolicy.Type;
+
+const canonical = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(canonical)
+    : value !== null && typeof value === "object"
+      ? Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map((key) => [key, canonical((value as Record<string, unknown>)[key])]),
+        )
+      : value;
+
+/** What a goatclaw policy enforces, ignoring its stamp and key order; equal on every host that applied it. */
+export const goatclawPolicyContent = (
+  policy: Pick<GoatclawFleetPolicy, "enabled" | "defaultProfile" | "profiles">,
+): string =>
+  JSON.stringify(
+    canonical({
+      enabled: policy.enabled,
+      defaultProfile: policy.defaultProfile,
+      profiles: policy.profiles,
+    }),
+  );
+
+export const GoatGoatclawSyncInput = Schema.Struct({ policy: GoatclawFleetPolicy });
+export type GoatGoatclawSyncInput = typeof GoatGoatclawSyncInput.Type;
+/** The receiver's policy after the exchange, so the sender can adopt a newer one. */
+export const GoatGoatclawSyncResult = Schema.Struct({ policy: GoatclawFleetPolicy });
+export type GoatGoatclawSyncResult = typeof GoatGoatclawSyncResult.Type;
+
+/**
+ * Whether a connected host runs the launcher's goatclaw policy: `applied` once it holds the same
+ * policy, `pending` while it has not answered, `outdated` when its GOAT predates fleet sync.
+ */
+export const GoatclawHostSyncState = Schema.Literals(["applied", "pending", "outdated"]);
+export type GoatclawHostSyncState = typeof GoatclawHostSyncState.Type;
+export const GoatclawHostSync = Schema.Struct({
+  state: GoatclawHostSyncState,
+  message: Schema.optional(Schema.String),
+});
+export type GoatclawHostSync = typeof GoatclawHostSync.Type;
 
 export const PermissionProfileView = Schema.Struct({
   enabled: Schema.Boolean,

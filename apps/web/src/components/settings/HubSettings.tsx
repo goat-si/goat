@@ -14,6 +14,7 @@ import {
   FLEET_LOCAL_HOST_KEY,
   type EnvironmentId,
   type GoatclawSettings,
+  type GoatclawHostSyncState,
   type HostStatusEntry,
   HubCloudHolder,
   type HubSettings as HubSettingsValue,
@@ -36,6 +37,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   AddHubDevice,
   HubActionResult,
@@ -60,6 +62,41 @@ const VERDICT_BADGE = {
 } as const;
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+const GOATCLAW_HOST_STATE: Record<GoatclawHostSyncState, string> = {
+  applied: "applied",
+  pending: "waiting",
+  outdated: "needs a GOAT update",
+};
+const GOATCLAW_HOST_ORDER: ReadonlyArray<GoatclawHostSyncState> = [
+  "outdated",
+  "pending",
+  "applied",
+];
+const GOATCLAW_HOSTS_SHOWN = 2;
+
+/** Where the policy has not landed comes first; the rest folds into +N, the full list into the tooltip. */
+function goatclawFleetStatus(hosts: ReadonlyArray<HostStatusEntry>) {
+  const rows = hosts
+    .flatMap((entry) =>
+      entry.host === null || entry.goatclaw === undefined
+        ? []
+        : [{ host: entry.host, state: entry.goatclaw.state }],
+    )
+    .toSorted(
+      (left, right) =>
+        GOATCLAW_HOST_ORDER.indexOf(left.state) - GOATCLAW_HOST_ORDER.indexOf(right.state),
+    )
+    .map((row) => `${row.host} ${GOATCLAW_HOST_STATE[row.state]}`);
+  if (rows.length === 0) return null;
+  const rest = rows.length - GOATCLAW_HOSTS_SHOWN;
+  return {
+    summary: [...rows.slice(0, GOATCLAW_HOSTS_SHOWN), ...(rest > 0 ? [`+${rest}`] : [])].join(
+      " · ",
+    ),
+    full: rows.join("\n"),
+  };
+}
 
 function homeStatusText(
   reading: boolean,
@@ -165,6 +202,7 @@ function HubControls({
   );
   const home = hosts.find((entry) => entry.host === null)?.metrics?.opencodex;
   const homeStatus = homeStatusText(result._tag === "Initial", snapshot, home);
+  const fleetGoatclaw = goatclawFleetStatus(hosts);
   const dashboard =
     local && home?.installed && (isElectron || LOOPBACK.has(window.location.hostname))
       ? `http://127.0.0.1:${home.runtime.port}/`
@@ -228,7 +266,19 @@ function HubControls({
           {...searchableSetting("hub-permission-profiles")}
           serverScoped
           settingKeys={["goatclaw"]}
-          description="Agents can launch, merge or change settings only as far as their profile allows. Agents without one get the default profile."
+          description="Agents can launch, merge or change settings only as far as their profile allows. Agents without one get the default profile. Applies to every connected host: switching it here switches it there too."
+          status={
+            fleetGoatclaw === null ? undefined : (
+              <Tooltip>
+                <TooltipTrigger payload={fleetGoatclaw.full} render={<span role="status" />}>
+                  {fleetGoatclaw.summary}
+                </TooltipTrigger>
+                <TooltipPopup side="top" className="whitespace-pre-wrap">
+                  {fleetGoatclaw.full}
+                </TooltipPopup>
+              </Tooltip>
+            )
+          }
           control={
             <Switch
               aria-label="Permission profiles"

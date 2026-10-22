@@ -122,6 +122,21 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { idempotentHint: true, openWorldHint: false },
   }),
+  "permission_profile.sync": entry({
+    resource: "permission_profile",
+    verb: "sync",
+    name: "goat_goatclaw_sync",
+    toolkit: "fleet",
+    summary: "Exchange goatclaw policy with a connected GOAT.",
+    description:
+      "Used by a connected GOAT, not by agents: goatclaw is on or off for the whole fleet, so a machine sends its policy and this one keeps whichever was changed last, returning the result. Needs an outside client with settings:write.",
+    effect: "write",
+    hostRoutable: false,
+    requires: "client",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "attachment.prepare_upload": entry({
     resource: "attachment",
     verb: "prepare_upload",

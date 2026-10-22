@@ -1390,7 +1390,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const next = yield* serverSettings.updateSettings({ goatclaw: { enabled: true } });
       assert.isTrue(next.goatclaw.enabled);
       const persisted = JSON.parse(yield* fileSystem.readFileString(serverConfig.settingsPath));
-      assert.deepEqual(persisted.goatclaw, { enabled: true });
+      // Stored whole, with when it changed: the newest change wins across connected hosts.
+      assert.deepEqual(persisted.goatclaw, { enabled: true, updatedAt: next.goatclaw.updatedAt });
+      assert.isString(next.goatclaw.updatedAt);
 
       const reverted = yield* serverSettings.updateSettings({ goatclaw: { enabled: false } });
       assert.isFalse(reverted.goatclaw.enabled);

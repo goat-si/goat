@@ -1698,6 +1698,7 @@ it.effect.each([
         recheck: unused,
         requireCloudApproval: unused,
         claim: unused,
+        completeRemote: unused,
         complete: unused,
         release: unused,
         bind: unused,

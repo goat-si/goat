@@ -753,6 +753,8 @@ export interface RemoteMcpClientSessionOptions {
   readonly approvals?: boolean;
   /** Also grant `providers:manage`, only for a caller that holds it live on this machine. */
   readonly providersManage?: boolean;
+  /** Also grant `settings:write`, for this machine's own fleet settings sync. */
+  readonly settingsWrite?: boolean;
   /** Explicit task memory grants; an older CLI must refuse rather than omit them. */
   readonly memoryScopes?: ReadonlyArray<"memory:read" | "memory:write">;
 }
@@ -2961,6 +2963,7 @@ export function buildRemoteMcpSessionScript(
     GOAT_EXTRA_SCOPES:
       (options.approvals === true ? "--scope orchestration:approve " : "") +
       (options.providersManage === true ? "--scope providers:manage " : "") +
+      (options.settingsWrite === true ? "--scope settings:write " : "") +
       (options.memoryScopes ?? []).map((scope) => `--scope ${shellSingleQuote(scope)} `).join(""),
     GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
       ...selection,

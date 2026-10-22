@@ -19,6 +19,7 @@ import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 import { RepositoryInventorySnapshot } from "./repositoryInventory.ts";
 import { OpenCodexInventorySnapshot, OpenCodexUpdateStatus } from "./opencodex.ts";
 import { HubParityResult } from "./hubParity.ts";
+import { GoatclawHostSync } from "./permissionProfiles.ts";
 
 /**
  * Wire shape for `goat_host_status`. A later GUI reads this schema; add fields
@@ -238,6 +239,8 @@ export const HostStatusEntry = Schema.Struct({
   opencodexUpdate: ForwardCompatibleOptional(OpenCodexUpdateStatus),
   /** Resource pressure that machine reports for itself. Older hosts omit it. */
   pressure: Schema.optional(HostPressure),
+  /** Whether this machine's goatclaw policy has reached the host. Set by the machine that fanned out. */
+  goatclaw: ForwardCompatibleOptional(GoatclawHostSync),
 });
 export type HostStatusEntry = typeof HostStatusEntry.Type;
 

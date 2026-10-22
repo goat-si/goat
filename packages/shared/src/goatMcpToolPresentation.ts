@@ -443,6 +443,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Read", "Reading", "Read", "a permission profile"],
     "environment-read",
   ),
+  goat_goatclaw_sync: tool(["Sync", "Syncing", "Synced", "goatclaw policy"], "environment-update"),
   goat_goal_get: tool(["Read", "Reading", "Read", "a fleet goal"], "host-status"),
   goat_goal_list: tool(["List", "Listing", "Listed", "fleet goals"], "host-status"),
   goat_goal_delete: tool(["Delete", "Deleting", "Deleted", "a fleet goal"], "environment-update"),

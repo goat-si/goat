@@ -264,7 +264,7 @@ it.effect("rejects forged forwarded ceilings and disabled destinations", () =>
       (yield* profiles
         .resolve(outside, "full-access", BUILTIN_PERMISSION_PROFILES.worker)
         .pipe(Effect.flip)).message,
-    ).toContain("disabled");
+    ).toContain("goatclaw is off on this destination");
   }).pipe(Effect.provide(fixture("worker", false))),
 );
 
@@ -370,6 +370,40 @@ it.effect("retains lost remote lanes until durable terminal evidence", () =>
   }).pipe(Effect.provide(fixture("manager"))),
 );
 
+it.effect("a follow-up send rides the remote lane it targets and frees an untracked one", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    const sql = yield* SqlClient.SqlClient;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const policy = (yield* settings.getSettings).goatclaw;
+    yield* settings.updateSettings({
+      goatclaw: {
+        ...policy,
+        profiles: { ...policy.profiles, manager: { ...policy.profiles.manager!, maxLanes: 1 } },
+      },
+    });
+    yield* profiles.claim(outside, { id: "launch", host: "box", runtimeMode: "full-access" });
+    yield* sql`INSERT INTO remote_dispatches (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state, created_at, updated_at)
+    VALUES ('rr-send', 'thread', 'caller', 'box', 'child', 'test', 'wake', 'running', '2026-10-21', '2026-10-21')`;
+    yield* profiles.complete("launch", "child", "rr-send");
+    const send = (id: string, remoteThreadId: string) =>
+      profiles.claim(outside, { id, host: "box", runtimeMode: "full-access", remoteThreadId });
+
+    // The only lane is that thread, so steering it takes no second slot.
+    yield* send("send-1", "child");
+    yield* profiles.completeRemote("send-1", "box", "child");
+    expect((yield* send("send-2", "other").pipe(Effect.flip)).code).toBe("capability_denied");
+
+    yield* sql`UPDATE remote_dispatches SET state = 'settled' WHERE correlation_id = 'rr-send'`;
+    yield* send("send-3", "other");
+    // No dispatch here follows that thread, so nothing would ever end this reservation.
+    yield* profiles.completeRemote("send-3", "box", "other");
+    const left = yield* sql<{ id: string; correlation_id: string | null }>`
+      SELECT id, correlation_id FROM goatclaw_lane_reservations WHERE id LIKE 'send-%' ORDER BY id`;
+    expect(left).toEqual([{ id: "send-1", correlation_id: "rr-send" }]);
+  }).pipe(Effect.provide(fixture("manager"))),
+);
+
 it.effect(
   "toggling goatclaw preserves named profiles and profiles patches replace removed entries",
   () =>
@@ -382,7 +416,13 @@ it.effect(
       });
       yield* settings.updateSettings({ goatclaw: { enabled: false } });
       const updated = (yield* settings.getSettings).goatclaw;
-      expect(updated).toEqual({ enabled: false, defaultProfile: "manager", profiles: { manager } });
+      // A person's change carries its time; fleet sync spreads the newest one.
+      expect(updated).toEqual({
+        enabled: false,
+        defaultProfile: "manager",
+        profiles: { manager },
+        updatedAt: expect.any(String),
+      });
     }).pipe(Effect.provide(fixture("manager"))),
 );
 

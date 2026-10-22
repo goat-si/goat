@@ -3,6 +3,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  BUILTIN_PERMISSION_PROFILES,
   CommandId,
   EnvironmentId,
   MessageId,
@@ -1144,6 +1145,91 @@ describe("OrchestratorMcpService provider resolution", () => {
           assert.equal(error.code, "runtime_mode_escalation_denied");
           assert.equal(sends, 0);
           assert.deepEqual(yield* sql`SELECT * FROM goatclaw_lane_reservations`, []);
+        }).pipe(
+          Effect.provide(
+            layerOrchestratorService.pipe(
+              Layer.provide(deps),
+              Layer.provideMerge(SqlitePersistence.layerMemory),
+            ),
+          ),
+        );
+      }),
+  );
+
+  it.effect.each([
+    // The thread was launched under that ceiling, as a forwarded launch binds it.
+    { enabled: true, forwarded: "manager", bound: true, outcome: "sent" },
+    // A thread running with more than the sender may grant cannot be steered by it.
+    { enabled: true, forwarded: "manager", bound: false, outcome: "capability_denied" },
+    { enabled: true, forwarded: "worker", bound: true, outcome: "runtime_mode_escalation_denied" },
+    { enabled: false, forwarded: "manager", bound: false, outcome: "capability_denied" },
+  ] as const)(
+    "a send forwarded from another GOAT enforces its ceiling: $forwarded, bound $bound, goatclaw $enabled",
+    ({ enabled, forwarded, bound, outcome }) =>
+      Effect.gen(function* () {
+        let sends = 0;
+        const outside: McpInvocationScope = {
+          ...scope,
+          requestNamespace: "client-session:launcher",
+          thread: undefined,
+          client: { sessionId: "launcher", label: "GOAT SSH dispatch", access: "full-access" },
+        };
+        const target = idleThreadProjection(liveThreadShell(childThreadId, { activeRunId: null }));
+        const deps = Layer.mergeAll(
+          NodeServices.layer,
+          ServerSettings.layerTest({ goatclaw: { enabled, defaultProfile: "owner" } }),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadShell: () => Effect.succeed(liveThreadShell(childThreadId)),
+            getThreadRecords: () => Effect.succeed({ ...target, runs: [] }),
+            getProjectThreadRecords: () => Effect.succeed(target),
+            sendToThread: () =>
+              Effect.sync(() => {
+                sends += 1;
+                return {
+                  run: { id: RunId.make("run:forwarded"), status: "running" },
+                  delivery: "started",
+                } as never;
+              }),
+          }),
+          providerRegistryLayer([]),
+          adapterRegistryLayer([]),
+          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
+          Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
+        );
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES (${childThreadId}, ${projectId}, 'Target', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`;
+          if (bound)
+            yield* sql`INSERT INTO goatclaw_thread_profiles (thread_id, profile_id, ceiling_json, owner_key)
+            VALUES (${childThreadId}, 'owner', ${JSON.stringify(BUILTIN_PERMISSION_PROFILES.manager)}, 'client:launcher')`;
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const result = yield* service
+            .sendToThread(outside, {
+              threadId: childThreadId,
+              message: "Continue",
+              permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES[forwarded]!,
+            })
+            .pipe(Effect.result);
+          if (outcome === "sent") {
+            assert.equal(result._tag, "Success");
+            assert.equal(sends, 1);
+            // The thread now runs under the forwarded ceiling, whatever this machine's default.
+            const [binding] = yield* sql<{ ceiling_json: string }>`
+              SELECT ceiling_json FROM goatclaw_thread_profiles WHERE thread_id = ${childThreadId}`;
+            assert.deepEqual(
+              JSON.parse(binding!.ceiling_json).capabilities,
+              BUILTIN_PERMISSION_PROFILES.manager!.capabilities,
+            );
+          } else {
+            assert.equal(result._tag, "Failure");
+            if (result._tag === "Failure") assert.equal(result.failure.code, outcome);
+            assert.equal(sends, 0);
+            assert.deepEqual(yield* sql`SELECT * FROM goatclaw_lane_reservations`, []);
+          }
         }).pipe(
           Effect.provide(
             layerOrchestratorService.pipe(

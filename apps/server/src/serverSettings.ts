@@ -3,6 +3,7 @@ import {
   ServerSettings as ClientServerSettings,
   defaultInstanceIdForDriver,
   type EnvironmentId,
+  goatclawPolicyContent,
   isProviderDriverKind,
   matchesMemorySourceReadRevokeAck,
   MEMORY_HUB_MAX_MEMBERS,
@@ -48,6 +49,7 @@ import { normalizeThemePreference } from "@goat/shared/themePalettes";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -1070,7 +1072,9 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       updateTestSettings((currentSettings) =>
         (authorizeAtCommit ?? Effect.void).pipe(
           Effect.andThen(rejectMemoryHubSettingsPatch(patch, "test settings")),
-          Effect.map(() => applyServerSettingsPatch(currentSettings, patch)),
+          Effect.flatMap(() =>
+            stampGoatclaw(currentSettings, applyServerSettingsPatch(currentSettings, patch)),
+          ),
         ),
       ),
     updateSettingsWith: (patchFor, authorizeAtCommit) =>
@@ -1079,7 +1083,10 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
           if (authorizeAtCommit) yield* authorizeAtCommit;
           const patch = yield* patchFor(currentSettings);
           yield* rejectMemoryHubSettingsPatch(patch, "test settings");
-          return applyServerSettingsPatch(currentSettings, patch);
+          return yield* stampGoatclaw(
+            currentSettings,
+            applyServerSettingsPatch(currentSettings, patch),
+          );
         }),
       ),
     updateProviderInstance: (mutation, patch = {}) =>
@@ -1346,6 +1353,21 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   // goatclaw's permission profiles: a partial record would lose the profile defaultProfile names.
   "profiles",
 ]);
+
+/**
+ * goatclaw applies fleet-wide and the newest change wins on every host (goatclaw/FleetSync), so a
+ * change made here carries its time. A synced policy brings its own stamp and keeps it.
+ */
+const stampGoatclaw = (current: ServerSettings, next: ServerSettings) =>
+  next.goatclaw.updatedAt !== current.goatclaw.updatedAt ||
+  goatclawPolicyContent(next.goatclaw) === goatclawPolicyContent(current.goatclaw)
+    ? Effect.succeed(next)
+    : DateTime.now.pipe(
+        Effect.map((now): ServerSettings => ({
+          ...next,
+          goatclaw: { ...next.goatclaw, updatedAt: DateTime.formatIso(now) },
+        })),
+      );
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
   if (Array.isArray(current) || Array.isArray(defaults)) {
@@ -2333,7 +2355,7 @@ const make = Effect.gen(function* () {
         (current) =>
           (authorizeAtCommit ?? Effect.void).pipe(
             Effect.andThen(rejectMemoryHubSettingsPatch(patch, settingsPath)),
-            Effect.map(() => applyServerSettingsPatch(current, patch)),
+            Effect.flatMap(() => stampGoatclaw(current, applyServerSettingsPatch(current, patch))),
           ),
         Object.keys(patch.providerInstances ?? {}).map((id) => id as ProviderInstanceId),
       ),
@@ -2343,7 +2365,7 @@ const make = Effect.gen(function* () {
           if (authorizeAtCommit) yield* authorizeAtCommit;
           const patch = yield* patchFor(current);
           yield* rejectMemoryHubSettingsPatch(patch, settingsPath);
-          return applyServerSettingsPatch(current, patch);
+          return yield* stampGoatclaw(current, applyServerSettingsPatch(current, patch));
         }),
       ),
     updateProviderInstance: (mutation, patch = {}, approval, authorizeAtCommit) =>
