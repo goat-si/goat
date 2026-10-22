@@ -4,15 +4,10 @@ import type * as CodexClient from "effect-codex-app-server/client";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 
-export type CodexSessionEventQueue = Queue.Queue<
+type CodexSessionEventQueue = Queue.Queue<
   ProviderAdapter.ProviderAdapterV2Event,
   ProviderAdapter.ProviderAdapterEventStreamError
 >;
-
-export const makeCodexSessionEventQueue: Effect.Effect<CodexSessionEventQueue> = Queue.unbounded<
-  ProviderAdapter.ProviderAdapterV2Event,
-  ProviderAdapter.ProviderAdapterEventStreamError
->();
 
 /**
  * The app-server can exit without GOAT asking, for example when `ocx sync --restart-codex` stops
@@ -20,7 +15,21 @@ export const makeCodexSessionEventQueue: Effect.Effect<CodexSessionEventQueue> =
  * Failing the event queue reports the exit to ProviderSessionManager, which releases the session;
  * the next open spawns a fresh app-server. Events queued before the exit still drain first.
  */
-export const failEventsOnAppServerExit = (
+export const makeCodexSessionEvents = Effect.fn("CodexAppServerExit.makeCodexSessionEvents")(
+  function* (
+    client: CodexClient.CodexAppServerClient["Service"],
+    providerSessionId: ProviderSessionId,
+  ) {
+    const events: CodexSessionEventQueue = yield* Queue.unbounded<
+      ProviderAdapter.ProviderAdapterV2Event,
+      ProviderAdapter.ProviderAdapterEventStreamError
+    >();
+    yield* failEventsOnAppServerExit(client, events, providerSessionId);
+    return events;
+  },
+);
+
+const failEventsOnAppServerExit = (
   client: CodexClient.CodexAppServerClient["Service"],
   events: CodexSessionEventQueue,
   providerSessionId: ProviderSessionId,
