@@ -983,13 +983,15 @@ const layerMemoryAdministrationToolkit = McpHttpServer.toolkitRegistration(
             );
           }).pipe(Effect.mapError(memoryError)),
         ),
-        memory_hub_disable: McpToolAccess.writesWithCapability((input) =>
-          Effect.gen(function* () {
-            return yield* service.disableHub(
-              yield* decodeMemoryHubDisable(input),
-              yield* invocationPermit("settings"),
-            );
-          }).pipe(Effect.mapError(memoryError)),
+        memory_hub_disable: McpToolAccess.destructive(
+          McpToolAccess.writesWithCapability((input) =>
+            Effect.gen(function* () {
+              return yield* service.disableHub(
+                yield* decodeMemoryHubDisable(input),
+                yield* invocationPermit("settings"),
+              );
+            }).pipe(Effect.mapError(memoryError)),
+          ),
         ),
       };
     }),
