@@ -102,6 +102,7 @@ export class PermissionProfiles extends Context.Service<
       threadId: ThreadId,
       callerMode: RuntimeMode,
       targetMode: RuntimeMode,
+      forwarded?: PermissionProfile,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
     readonly recheck: (
       scope: McpInvocationScope,
@@ -290,8 +291,9 @@ export const layer = Layer.effect(
       threadId: ThreadId,
       callerMode: RuntimeMode,
       targetMode: RuntimeMode,
+      forwarded?: PermissionProfile,
     ) {
-      const caller = yield* resolve(scope, callerMode);
+      const caller = yield* resolve(scope, callerMode, forwarded);
       if (!caller.enabled) return;
       const target = yield* resolve(scope, targetMode, undefined, threadId);
       if (

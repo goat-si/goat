@@ -174,6 +174,7 @@ class RemoteMachine {
   knownHostsOnly: ReadonlyArray<string> = [];
   /** The next launch starts the thread but its answer never arrives. */
   loseNextLaunchAnswer = false;
+  loseNextSendAnswer = false;
   readonly launchAnswerLost = Deferred.makeUnsafe<void>();
   /** The worker's old run files a question right after an answer is sent (a late report). */
   staleQuestionOnSend = false;
@@ -193,6 +194,8 @@ class RemoteMachine {
   /** goat_thread_send fails with this remote code. */
   refuseSendWith: string | undefined;
   /** The models orchestrator_capabilities lists; unset, the tool is refused (an older GOAT). */
+  threadMode = "auto-accept-edits";
+  profileFencedThreadSend = true;
   reviewerRuntimeModes: ReadonlyArray<string> | undefined;
   offeredModels: ReadonlyArray<{ readonly instance: string; readonly model: string }> | undefined;
   /** orchestrator_capabilities alone cannot be reached (the call times out). */
@@ -528,7 +531,13 @@ class RemoteMachine {
                   return yield* machine.unreachable("worker identity unavailable");
                 const runs = machine.threads.get(String(call.arguments.threadId));
                 if (runs === undefined) return yield* machine.refused("thread_not_found");
-                return { thread: { worktreePath: null, latestRunId: runs.at(-1)?.runId ?? null } };
+                return {
+                  thread: {
+                    worktreePath: null,
+                    latestRunId: runs.at(-1)?.runId ?? null,
+                    runtimeMode: machine.threadMode,
+                  },
+                };
               }
               case "goat_project_list":
                 yield* machine.onProjectList;
@@ -540,7 +549,10 @@ class RemoteMachine {
                 if (machine.capabilitiesUnreachable) return yield* machine.unreachable("timed out");
                 if (machine.offeredModels === undefined) break;
                 return {
-                  features: { runFencedThreadSend: machine.runFencedThreadSend },
+                  features: {
+                    runFencedThreadSend: machine.runFencedThreadSend,
+                    profileFencedThreadSend: machine.profileFencedThreadSend,
+                  },
                   providers: [...new Set(machine.offeredModels.map((entry) => entry.instance))].map(
                     (instance) => ({
                       providerInstanceId: instance,
@@ -657,6 +669,10 @@ class RemoteMachine {
                 }
                 const runId = machine.startRun(correlationId);
                 machine.sendReceipts.set(key, { runId, messageId: "remote-message" });
+                if (machine.loseNextSendAnswer) {
+                  machine.loseNextSendAnswer = false;
+                  return yield* machine.unreachable("send reply lost after admission");
+                }
                 if (machine.staleQuestionOnSend) {
                   machine.report(correlationId, "needs_input", "Stale question?", previous);
                 }
@@ -4697,6 +4713,183 @@ describe("independent remote channel review", () => {
           ]
         : [],
     });
+
+  it.effect.each([false, true])(
+    "retains one remote correction lane across accepted replay, lost reply=%s",
+    (lostReply) => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task, writes, correlation } = yield* startReview(machine);
+        yield* Fiber.await(machine.observerFiber!);
+        yield* runtime.drain;
+        machine.threadMode = "approval-required";
+        yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+          goatclaw: { enabled: true, defaultProfile: "manager" },
+        });
+        const reviewCorrelation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(reviewCorrelation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(true),
+        });
+        const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+        yield* reviews.reconcile(runtime.ownerToken);
+        yield* reviews.reconcile(runtime.ownerToken);
+        const [pending] = yield* (yield* ChannelLedger.ChannelLedger).listPendingForwards(50);
+        const replayed = yield* Deferred.make<void>();
+        let sendCalls = 0;
+        machine.beforeHostCall = (call) =>
+          Effect.gen(function* () {
+            if (call.tool === "goat_thread_send" && ++sendCalls === 2)
+              yield* Deferred.succeed(replayed, undefined);
+          });
+        machine.loseNextSendAnswer = lostReply;
+        yield* runtime.drain;
+        yield* writes.waitFor((next) => next.worker?.runId !== task.worker!.runId);
+        const sql = yield* SqlClient.SqlClient;
+        const lanes = () =>
+          sql<{ count: number }>`SELECT COUNT(*) AS count FROM goatclaw_lane_reservations`;
+        assert.deepStrictEqual(yield* lanes(), [{ count: 1 }]);
+        assert.lengthOf(machine.runs(correlation), 2);
+        assert.lengthOf(machine.sends, 1);
+        const profile = machine.sends[0]!.permissionProfileCeiling as {
+          runtimeModeCeiling: string;
+        };
+        assert.strictEqual(profile.runtimeModeCeiling, "approval-required");
+        if (lostReply) {
+          const restored = yield* Layer.build(Layer.fresh(remoteWorkersLayer)).pipe(
+            Effect.provide(machine.layer),
+          );
+          const restarted = Context.get(restored, ChannelRemoteWorkers);
+          yield* restarted.forward(pending!, runtime.ownerToken);
+          yield* Deferred.await(replayed);
+        } else {
+          yield* (yield* ChannelRemoteWorkers).forward(pending!, runtime.ownerToken);
+          yield* writes.waitForForward(pending!.sequence);
+        }
+        assert.lengthOf(machine.runs(correlation), 2);
+        assert.deepStrictEqual(yield* lanes(), [{ count: 1 }]);
+        machine.finishRun(correlation, "completed", null, {
+          outcome: "succeeded",
+          summary: "Corrected.",
+        });
+        yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS);
+        const restartedCleanup = yield* ChannelReviewCleanup.ChannelReviewCleanup.pipe(
+          Effect.provide(ChannelReviewCleanup.layer.pipe(Layer.provide(machine.layer))),
+        );
+        yield* restartedCleanup.reconcile(runtime.ownerToken);
+        assert.deepStrictEqual(yield* lanes(), [{ count: 0 }]);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect.each([
+    "observer",
+    "host",
+    "capacity",
+    "during-call",
+    "old-host",
+    "target-mode",
+  ] as const)("refuses remote corrections when the origin policy changes: %s", (scenario) => {
+    const { machine, harness } = reviewHarness();
+    return Effect.gen(function* () {
+      const { runtime, task, writes } = yield* startReview(machine);
+      yield* Fiber.await(machine.observerFiber!);
+      yield* runtime.drain;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const policy = (yield* settings.getSettings).goatclaw;
+      const deny = settings.updateSettings({
+        goatclaw: {
+          ...policy,
+          enabled: true,
+          defaultProfile:
+            scenario === "observer" || scenario === "during-call" ? "observer" : "manager",
+          profiles: {
+            ...policy.profiles,
+            manager: {
+              ...policy.profiles.manager!,
+              ...(scenario === "host" ? { hosts: [] } : {}),
+              ...(scenario === "capacity" ? { maxLanes: 0 } : {}),
+            },
+          },
+        },
+      });
+      machine.threadMode = "approval-required";
+      if (scenario === "old-host") machine.profileFencedThreadSend = false;
+      if (scenario === "target-mode") machine.threadMode = "full-access";
+      if (scenario === "during-call") {
+        yield* settings.updateSettings({ goatclaw: { enabled: true, defaultProfile: "manager" } });
+        machine.beforeHostCall = (call) =>
+          call.tool === "goat_thread_send" ? deny.pipe(Effect.asVoid, Effect.orDie) : Effect.void;
+      } else yield* deny;
+      const correlation = reviewLaunchIdsFor(
+        task.taskId,
+        task.generation,
+        task.worker!.runId!,
+      ).correlationId;
+      machine.finishRun(correlation, "completed", null, {
+        outcome: "succeeded",
+        summary: verdict(true),
+      });
+      yield* runtime.drain;
+      const refused = yield* writes.waitFor(
+        (next) => next.status === "waiting_input" || next.worker?.runId !== task.worker!.runId,
+      );
+      assert.strictEqual(refused.status, "waiting_input");
+      assert.include(refused.openQuestions[0]?.text ?? "", "permission");
+      assert.lengthOf(machine.sends, 0);
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepStrictEqual(
+        yield* sql<{ count: number }>`SELECT COUNT(*) AS count FROM goatclaw_lane_reservations`,
+        [{ count: 0 }],
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "keeps both automatic correction identity reads on the claimed ready-only connection",
+    () => {
+      const { machine, harness } = reviewHarness(true);
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* startReview(machine, true);
+        yield* Fiber.await(machine.observerFiber!);
+        yield* runtime.drain;
+        const correlation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(correlation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(true),
+        });
+        const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+        yield* reviews.reconcile(runtime.ownerToken);
+        yield* reviews.reconcile(runtime.ownerToken);
+        const readTwice = yield* Deferred.make<void>();
+        const identityCalls: SshRemoteDispatch.SshHostToolCall[] = [];
+        machine.beforeHostCall = (call) =>
+          Effect.gen(function* () {
+            if (call.tool !== "goat_thread_read") return;
+            identityCalls.push(call);
+            if (identityCalls.length === 2) yield* Deferred.succeed(readTwice, undefined);
+          });
+        machine.refuseSendWith = "orchestration_error";
+        const [pending] = yield* (yield* ChannelLedger.ChannelLedger).listPendingForwards(50);
+        yield* (yield* ChannelRemoteWorkers).forward(pending!, runtime.ownerToken);
+        yield* Deferred.await(readTwice);
+        assert.lengthOf(identityCalls, 2);
+        for (const call of identityCalls) {
+          assert.isTrue(call.requireReady);
+          assert.isUndefined(call.existingSessionOnly);
+          assert.strictEqual(call.memoryGrantCeiling, task.target!.memoryGrantCeiling);
+        }
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect(
     "keeps automatic review reads, launch and retired cleanup on ready existing sessions",

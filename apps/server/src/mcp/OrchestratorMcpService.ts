@@ -2687,6 +2687,7 @@ const make = Effect.gen(function* () {
         features: {
           appOwnedSubagents: true,
           runFencedThreadSend: true,
+          profileFencedThreadSend: true,
           asyncPolling: true,
           cancellation: true,
           batchThreadCreation: true,
@@ -3863,8 +3864,15 @@ const make = Effect.gen(function* () {
         operation: "thread-send",
       });
       if (scope.thread?.threadId !== input.threadId)
-        yield* permissions.require(scope, "threads.launch", { runtimeMode: limits.runtimeMode });
-      const effective = yield* permissions.resolve(scope, limits.runtimeMode);
+        yield* permissions.require(scope, "threads.launch", {
+          runtimeMode: limits.runtimeMode,
+          forwarded: input.permissionProfileCeiling,
+        });
+      const effective = yield* permissions.resolve(
+        scope,
+        limits.runtimeMode,
+        input.permissionProfileCeiling,
+      );
       if (effective.enabled && scope.thread?.threadId !== input.threadId) {
         yield* resolveRuntimeMode(effective.runtimeMode, target.thread.runtimeMode);
         yield* permissions.assertTarget(
@@ -3872,6 +3880,7 @@ const make = Effect.gen(function* () {
           input.threadId,
           limits.runtimeMode,
           target.thread.runtimeMode,
+          input.permissionProfileCeiling,
         );
       }
       const admissionId = stableCommandId({ scope, requestKey: key, operation: "thread-send" });
@@ -3883,6 +3892,7 @@ const make = Effect.gen(function* () {
               id: admissionId,
               childThreadId: input.threadId,
               runtimeMode: target.thread.runtimeMode,
+              forwarded: input.permissionProfileCeiling,
             });
       const result = yield* threadManagement
         .sendToThread({

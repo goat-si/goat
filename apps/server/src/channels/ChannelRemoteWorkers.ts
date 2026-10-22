@@ -36,6 +36,7 @@ import {
   EnvironmentId,
   type MemoryTaskGrantCeiling,
   type ModelSelection,
+  type PermissionProfileView,
   ModelSelection as ModelSelectionSchema,
   PositiveInt,
   ProjectId,
@@ -65,6 +66,9 @@ import type * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import * as ChannelReviewCleanup from "./ChannelReviewCleanup.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { REPORTING_NOTE } from "../remoteReports/reportFrame.ts";
@@ -596,6 +600,8 @@ export class ChannelTaskMoveError extends Data.TaggedError("ChannelTaskMoveError
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+  const permissions = yield* Profiles.PermissionProfiles;
+  const cleanup = yield* ChannelReviewCleanup.ChannelReviewCleanup;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const settings = yield* ServerSettings.ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -933,7 +939,7 @@ const make = Effect.gen(function* () {
       readonly requireReady?: true;
       readonly memoryGrantCeiling?: MemoryTaskGrantCeiling;
     },
-    authorize: Effect.Effect<RuntimeMode, Superseded>,
+    authorize: Effect.Effect<RuntimeMode, Superseded | SshRemoteDispatch.SshRemoteDispatchError>,
   ) => ssh.callHostTool(input, authorize);
 
   const listRemoteProjects = (
@@ -2686,6 +2692,7 @@ const make = Effect.gen(function* () {
         callHost(
           {
             host: state.host,
+            ...connectionFor(state),
             tool: "goat_thread_read",
             arguments: { threadId: worker.threadId, limit: 1 },
             writes: false,
@@ -2695,7 +2702,12 @@ const make = Effect.gen(function* () {
         ).pipe(
           Effect.flatMap(
             Schema.decodeUnknownEffect(
-              Schema.Struct({ thread: Schema.Struct({ latestRunId: Schema.NullOr(RunId) }) }),
+              Schema.Struct({
+                thread: Schema.Struct({
+                  latestRunId: Schema.NullOr(RunId),
+                  runtimeMode: Schema.optional(RuntimeMode),
+                }),
+              }),
             ),
           ),
           Effect.option,
@@ -2720,6 +2732,20 @@ const make = Effect.gen(function* () {
         }
         yield* ledger.completeForward({ owner, sequence: pending.sequence });
       });
+      let origin: { scope: McpInvocationScope; effective: PermissionProfileView } | undefined;
+      let correctionCleanup: { readonly key: ThreadId; readonly inserted: boolean } | undefined;
+      const refuseCorrection = Effect.fn("ChannelRemoteWorkers.refuseCorrection")(function* () {
+        // A previous ambiguous send may already have started work. Its independent
+        // owner remains until observation proves that run settled.
+        if (correctionCleanup?.inserted) yield* cleanup.notStarted(correctionCleanup.key, owner);
+        yield* askAgain(
+          owner,
+          stored,
+          "Current permission, host policy or lane capacity does not permit this independent-review correction. Continue the worker manually in GOAT.",
+          { clearPendingAnswer: true },
+        );
+        yield* ledger.completeForward({ owner, sequence: pending.sequence });
+      });
       if (expected !== undefined) {
         const capabilities = yield* callHost(
           {
@@ -2736,7 +2762,10 @@ const make = Effect.gen(function* () {
             Schema.decodeUnknownEffect(
               Schema.Struct({
                 features: Schema.optional(
-                  Schema.Struct({ runFencedThreadSend: Schema.optional(Schema.Boolean) }),
+                  Schema.Struct({
+                    runFencedThreadSend: Schema.optional(Schema.Boolean),
+                    profileFencedThreadSend: Schema.optional(Schema.Boolean),
+                  }),
                 ),
               }),
             ),
@@ -2761,6 +2790,73 @@ const make = Effect.gen(function* () {
         ) {
           return yield* discardCorrection(current.value.thread.latestRunId);
         }
+        const admission = yield* Effect.gen(function* () {
+          const ceiling = yield* authorityFor(
+            stored.task.taskId,
+            stored.task.generation,
+            owner,
+            false,
+            false,
+            state,
+          );
+          const bot = yield* ledger.getBot(stored.ownerId);
+          if (bot === undefined) return undefined;
+          const scope: McpInvocationScope = {
+            environmentId: bot.bot.environmentId,
+            capabilities: new Set(["orchestration"]),
+            issuedAt: DateTime.toEpochMillis(yield* DateTime.now),
+            requestNamespace: ids.commandId,
+            thread: {
+              threadId: bot.bot.threadId,
+              providerSessionId: "channel-correction:" + stored.task.taskId,
+              providerInstanceId: stored.task.target!.modelSelection.instanceId,
+            },
+            client: undefined,
+          };
+          const effective = yield* permissions.require(scope, "threads.launch", {
+            runtimeMode: ceiling,
+          });
+          yield* permissions.require(scope, "threads.remote", {
+            host: state.host,
+            runtimeMode: ceiling,
+          });
+          if (
+            effective.enabled &&
+            (capabilities.value.features?.profileFencedThreadSend !== true ||
+              current.value.thread.runtimeMode === undefined ||
+              lowerRuntimeMode(current.value.thread.runtimeMode, effective.runtimeMode) !==
+                current.value.thread.runtimeMode)
+          )
+            return undefined;
+          return { scope, effective, ceiling };
+        }).pipe(Effect.option);
+        if (Option.isNone(admission) || admission.value === undefined)
+          return yield* refuseCorrection();
+        origin = admission.value;
+        if (origin.effective.enabled) {
+          correctionCleanup = yield* cleanup.trackCorrection({
+            task: stored.task,
+            owner,
+            commandId: ids.commandId,
+            correlationId: state.correlationId,
+            readKey: state.readKey,
+            runtimeMode: admission.value.ceiling,
+            memoryGrantCeiling:
+              state.connection?.memoryGrantCeiling ??
+              stored.task.target?.memoryGrantCeiling ??
+              "none",
+          });
+          if (yield* cleanup.retired(correctionCleanup.key)) return yield* refuseCorrection();
+          const claimed = yield* permissions
+            .claim(origin.scope, {
+              id: ids.commandId,
+              host: state.host,
+              runtimeMode: origin.effective.runtimeMode,
+            })
+            .pipe(Effect.option);
+          if (Option.isNone(claimed)) return yield* refuseCorrection();
+          origin = { scope: origin.scope, effective: claimed.value };
+        }
         yield* writeState(owner, stored.task.taskId, state.generation, (value) => ({
           ...value,
           correctionAttempts: [
@@ -2783,20 +2879,67 @@ const make = Effect.gen(function* () {
             mode: "queue",
             clientRequestId: ids.commandId,
             ...(expected === undefined ? {} : { expectedLatestRunId: expected }),
+            ...(origin?.effective.enabled
+              ? { permissionProfileCeiling: origin.effective.profile }
+              : {}),
           },
           writes: true,
           timeoutMs: SEND_TIMEOUT_MS,
         },
-        authorityFor(stored.task.taskId, stored.task.generation, owner, false, false, state),
+        Effect.gen(function* () {
+          const ceiling = yield* authorityFor(
+            stored.task.taskId,
+            stored.task.generation,
+            owner,
+            false,
+            false,
+            state,
+          );
+          if (origin !== undefined) {
+            const admitted = origin;
+            yield* Effect.gen(function* () {
+              const current = yield* permissions.resolve(admitted.scope, ceiling);
+              if (!admitted.effective.enabled && current.enabled)
+                return yield* new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "caller_changed",
+                  remoteCode: "channel_correction_permission_denied",
+                  launchMayHaveStarted: false,
+                  message: "Correction permission policy changed.",
+                });
+              yield* permissions.recheck(admitted.scope, admitted.effective, {
+                host: state.host,
+                runtimeMode: ceiling,
+              });
+            }).pipe(
+              Effect.mapError(
+                () =>
+                  new SshRemoteDispatch.SshRemoteDispatchError({
+                    reason: "caller_changed",
+                    remoteCode: "channel_correction_permission_denied",
+                    launchMayHaveStarted: false,
+                    message: "Correction permission policy changed.",
+                  }),
+              ),
+            );
+          }
+          return ceiling;
+        }),
       ).pipe(Effect.flatMap(decodeSent), Effect.result);
       if (sent._tag === "Failure") {
         const code = remoteCode(sent.failure);
+        if (
+          expected !== undefined &&
+          (code === "channel_correction_permission_denied" || code === "capability_denied")
+        )
+          return yield* refuseCorrection();
         if (expected !== undefined) {
           const current = yield* readWorkerIdentity();
           if (current._tag === "None" || current.value.thread.latestRunId === null) return;
           if (current.value.thread.latestRunId !== expected)
             return yield* discardCorrection(current.value.thread.latestRunId);
           if (code === "invalid_request") {
+            if (correctionCleanup?.inserted)
+              yield* cleanup.notStarted(correctionCleanup.key, owner);
             yield* askAgain(
               owner,
               stored,
@@ -2810,6 +2953,7 @@ const make = Effect.gen(function* () {
           code === "runtime_mode_escalation_denied" ||
           code === "interaction_mode_escalation_denied"
         ) {
+          if (correctionCleanup?.inserted) yield* cleanup.notStarted(correctionCleanup.key, owner);
           // The remote thread's modes went above the requester's ceiling: keep the answer's intent.
           yield* askAgain(owner, stored, REMOTE_COPY.answerRefused(state.host, answer), {
             clearPendingAnswer: true,
@@ -3260,4 +3404,4 @@ const dropOldest = (reports: ReadonlyArray<RemoteReport>, count: number) => {
   return reports.filter((report) => !dropped.has(report.sequence));
 };
 
-export const layer = Layer.effect(ChannelRemoteWorkers, make);
+export const layer = Layer.effect(ChannelRemoteWorkers, make).pipe(Layer.provide(Profiles.layer));

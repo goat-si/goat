@@ -32,6 +32,7 @@ import {
   UserInputRespondedBy,
   ProviderApprovalDecision,
 } from "./providerPolicy.ts";
+import { PermissionProfile } from "./permissionProfiles.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
 import { PullRequestState } from "./pullRequest.ts";
@@ -793,6 +794,7 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+  permissionProfileCeiling: Schema.optional(PermissionProfile),
   expectedLatestRunId: Schema.optional(
     RunId.annotate({
       description:
@@ -801,10 +803,12 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   ),
 }).check(
   Schema.makeFilter(
-    (input) => input.expectedLatestRunId === undefined || input.host === undefined,
+    (input) =>
+      (input.expectedLatestRunId === undefined && input.permissionProfileCeiling === undefined) ||
+      input.host === undefined,
     {
       message:
-        "A run-fenced send must call the destination directly; host/relay sends do not preserve the fence.",
+        "A run or profile-fenced send must call the destination directly; host/relay sends do not preserve the ceiling.",
     },
   ),
 );
@@ -1054,6 +1058,7 @@ export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
   features: Schema.Struct({
     appOwnedSubagents: Schema.Boolean,
     runFencedThreadSend: Schema.optional(Schema.Boolean),
+    profileFencedThreadSend: Schema.optional(Schema.Boolean),
     asyncPolling: Schema.Boolean,
     cancellation: Schema.Boolean,
     batchThreadCreation: Schema.Boolean,

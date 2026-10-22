@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { BUILTIN_PERMISSION_PROFILES } from "./permissionProfiles.ts";
 import * as Schema from "effect/Schema";
 
 import {
@@ -439,4 +440,15 @@ it("capability snapshots remain compatible when run-fenced send support is absen
     decode({ ...old, features: { ...old.features, runFencedThreadSend: true } }).features
       .runFencedThreadSend,
   ).toBe(true);
+});
+
+it("profile-fenced sends are destination-only and retain their exact ceiling", () => {
+  const decode = Schema.decodeUnknownSync(OrchestratorMcpThreadSendInput);
+  const input = {
+    threadId: "worker",
+    message: "correct",
+    permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.manager!,
+  };
+  expect(decode(input).permissionProfileCeiling).toEqual(input.permissionProfileCeiling);
+  expect(() => decode({ ...input, host: "relay" })).toThrow();
 });

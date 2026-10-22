@@ -1,5 +1,6 @@
 import {
   ChannelTaskId,
+  MemoryTaskGrantCeiling,
   type ChannelTask,
   CommandId,
   PositiveInt,
@@ -29,6 +30,13 @@ const Cleanup = Schema.Struct({
   threadId: ThreadId,
   host: Schema.optional(Schema.String),
   requireReady: Schema.optional(Schema.Boolean),
+  correction: Schema.optional(
+    Schema.Struct({
+      commandId: CommandId,
+      correlationId: Schema.String,
+      memoryGrantCeiling: MemoryTaskGrantCeiling,
+    }),
+  ),
   runtimeMode: RuntimeMode,
   createdAt: Schema.String,
   nextAttemptAt: Schema.String,
@@ -58,6 +66,18 @@ export class ChannelReviewCleanup extends Context.Service<
       task: ChannelTask,
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
+    readonly trackCorrection: (input: {
+      readonly task: ChannelTask;
+      readonly owner: string;
+      readonly commandId: CommandId;
+      readonly correlationId: string;
+      readonly readKey: string;
+      readonly runtimeMode: RuntimeMode;
+      readonly memoryGrantCeiling: MemoryTaskGrantCeiling;
+    }) => Effect.Effect<
+      { readonly key: ThreadId; readonly inserted: boolean },
+      ChannelLedger.ChannelLedgerError
+    >;
     readonly reserveRemote: (
       task: ChannelTask,
       owner: string,
@@ -112,6 +132,37 @@ const make = Effect.gen(function* () {
       value: entryFor(task, now),
     });
   });
+  const trackCorrection = Effect.fn("ChannelReviewCleanup.trackCorrection")(function* (
+    input: Parameters<ChannelReviewCleanup["Service"]["trackCorrection"]>[0],
+  ) {
+    const { task, owner, commandId, correlationId, readKey, runtimeMode, memoryGrantCeiling } =
+      input;
+    const key = ThreadId.make("channel-correction:" + commandId);
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const inserted = yield* ledger.reserveReviewDispatch({
+      owner,
+      key: "cleanup:" + key,
+      now,
+      value: encode({
+        taskId: task.taskId,
+        generation: task.generation,
+        workerRunId: task.review!.workerRunId,
+        projectId: task.target!.projectId,
+        threadId: key,
+        host: task.worker!.host!,
+        remoteThreadId: task.worker!.threadId,
+        runtimeMode,
+        readKey,
+        correction: { commandId, correlationId, memoryGrantCeiling },
+        requireReady: true,
+        createdAt: now,
+        nextAttemptAt: now,
+        attempts: 0,
+        done: false,
+      }),
+    });
+    return { key, inserted };
+  });
   const reserveRemote = Effect.fn("ChannelReviewCleanup.reserveRemote")(function* (
     task: ChannelTask,
     owner: string,
@@ -152,9 +203,9 @@ const make = Effect.gen(function* () {
     const value = yield* ledger.getReviewDispatch("cleanup:" + reviewThreadId);
     if (value === undefined) return;
     const entry = decode(value);
-    if (entry.remoteThreadId !== undefined) return;
+    if (entry.remoteThreadId !== undefined && entry.correction === undefined) return;
     const ids = reviewLaunchIdsFor(entry.taskId, entry.generation, entry.workerRunId);
-    yield* permissions.release(ids.commandId).pipe(
+    yield* permissions.release(entry.correction?.commandId ?? ids.commandId).pipe(
       Effect.mapError(
         (cause) =>
           new ChannelLedger.ChannelLedgerError({
@@ -193,7 +244,7 @@ const make = Effect.gen(function* () {
             ...(entry.requireReady === true
               ? { requireReady: true as const, existingSessionOnly: true as const }
               : {}),
-            memoryGrantCeiling: "none",
+            memoryGrantCeiling: entry.correction?.memoryGrantCeiling ?? "none",
             tool,
             arguments: args,
             writes,
@@ -204,7 +255,7 @@ const make = Effect.gen(function* () {
       const probe = yield* call(
         "goat_origin_reports_wait",
         {
-          correlationId: ids.correlationId,
+          correlationId: entry.correction?.correlationId ?? ids.correlationId,
           readKey,
           afterSequence: 0,
           knownRun: null,
@@ -221,6 +272,22 @@ const make = Effect.gen(function* () {
       if (entry.remoteThreadId === undefined)
         yield* bindRemote(entry.threadId, remoteThreadId, owner);
       const run = probe._tag === "Success" ? probe.success.observedRun : null;
+      // A correction never owns the worker itself. Keep its lane across an ambiguous
+      // response until a later run settles; the old reviewed run proves no delivery.
+      if (entry.correction !== undefined) {
+        if (probe._tag === "Failure")
+          return (
+            probe.failure instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+            probe.failure.remoteCode === "thread_not_found"
+          );
+        return (
+          run !== null &&
+          run.runId !== entry.workerRunId &&
+          terminal.has(run.status) &&
+          (run.holds?.backgroundTasks ?? 0) === 0 &&
+          run.holds?.continuationPending !== true
+        );
+      }
       if (
         run !== null &&
         terminal.has(run.status) &&
@@ -300,7 +367,7 @@ const make = Effect.gen(function* () {
       const done = yield* stop(entry, owner);
       if (done) {
         const ids = reviewLaunchIdsFor(entry.taskId, entry.generation, entry.workerRunId);
-        yield* permissions.release(ids.commandId).pipe(
+        yield* permissions.release(entry.correction?.commandId ?? ids.commandId).pipe(
           Effect.mapError(
             (cause) =>
               new ChannelLedger.ChannelLedgerError({
@@ -339,6 +406,7 @@ const make = Effect.gen(function* () {
   });
   return ChannelReviewCleanup.of({
     track,
+    trackCorrection,
     reserveRemote,
     bindRemote,
     notStarted,

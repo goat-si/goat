@@ -138,8 +138,9 @@ model under that connection's **Slack review** section. It is off by default.
 
 Successful work waits for a separate reviewer before GOAT reports it done. A passing review names
 the reviewer model alongside the worker's summary. Blockers go back to the worker once; if the
-next review still finds blockers, GOAT asks you how to continue. An unavailable, failed, or timed-out
-review is reported explicitly and does not count as a pass. Turn review off in the same settings.
+next review still finds blockers, GOAT asks you how to continue. It also asks when your current
+permissions do not allow an automatic correction. An unavailable, failed, or timed-out review is
+reported explicitly and does not count as a pass. Turn review off in the same settings.
 
 ## iMessage (Mac)
 

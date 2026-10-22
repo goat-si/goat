@@ -1,5 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
+  BUILTIN_PERMISSION_PROFILES,
   EnvironmentId,
   NodeId,
   type OrchestrationV2ThreadProjection,
@@ -11,6 +12,8 @@ import {
   ScheduledTaskId,
   ThreadId,
 } from "@goat/contracts";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -375,6 +378,7 @@ it("readThread and sendToThread reach threads in other projects", async () => {
       updatedAt: now,
     }) as unknown as OrchestrationV2ThreadProjection;
 
+  const settingsLayer = ServerSettings.layerTest();
   const layer = layerOrchestratorService.pipe(
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
     Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
@@ -417,7 +421,7 @@ it("readThread and sendToThread reach threads in other projects", async () => {
             } as unknown as ThreadManagementService.ThreadManagementSendResult);
           },
         } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
-        ServerSettings.layerTest(),
+        settingsLayer,
         Layer.mock(ProviderRegistry.ProviderRegistry)({
           getProviders: Effect.succeed([]),
         } satisfies Partial<ProviderRegistry.ProviderRegistry["Service"]>),
@@ -555,5 +559,52 @@ it("readThread and sendToThread reach threads in other projects", async () => {
       .sendToThread(makeScope(), { threadId: foreignThreadId, message: "after stop" })
       .pipe(Effect.flip);
     expect(stopped.code).toBe("parent_not_active");
-  }).pipe(Effect.provide(layer), Effect.runPromise);
+
+    const outside = {
+      ...makeScope(),
+      thread: undefined,
+      client: {
+        sessionId: "remote-origin",
+        label: "remote-origin",
+        access: "full-access" as const,
+      },
+    };
+    const withCeiling = {
+      ...fencedInput,
+      permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.owner!,
+    };
+    const beforeRejected = sendInputs.length;
+    const disabled = yield* service.sendToThread(outside, withCeiling).pipe(Effect.flip);
+    expect(disabled.code).toBe("capability_denied");
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({ goatclaw: { enabled: true, defaultProfile: "owner" } });
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES (${foreignThreadId}, ${foreignProjectId}, 'Target', 'codex', 'full-access', 'default', '2026-10-22', '2026-10-22', '{}')`;
+    const narrower = yield* service
+      .sendToThread(outside, {
+        ...withCeiling,
+        permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.manager!,
+      })
+      .pipe(Effect.flip);
+    expect(narrower.code).toBe("capability_denied");
+    expect(sendInputs).toHaveLength(beforeRejected);
+    const accepted = yield* service.sendToThread(outside, withCeiling);
+    const acceptedReplay = yield* service.sendToThread(outside, withCeiling);
+    expect(acceptedReplay.messageId).toBe(accepted.messageId);
+    const revokedReplay = yield* service
+      .sendToThread(outside, {
+        ...withCeiling,
+        permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.observer!,
+      })
+      .pipe(Effect.flip);
+    expect(revokedReplay.code).toBe("capability_denied");
+    expect(sendInputs).toHaveLength(beforeRejected + 2);
+  }).pipe(
+    Effect.provide(
+      layer.pipe(Layer.provideMerge(settingsLayer), Layer.provideMerge(Sqlite.layerMemory)),
+    ),
+    Effect.runPromise,
+  );
 });

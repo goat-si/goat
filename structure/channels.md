@@ -80,7 +80,12 @@ never blindly repeated, because a lost response does not prove the launch failed
 is retained separately from task snapshots and dispatch payloads, with capped retry backoff; a new
 worker generation cannot erase an older reviewer's identity. Automatic corrections carry the
 reviewed run through ordinary message admission, which compares it under serialization before
-enqueue. Older remotes must advertise this support; human follow-ups do not need that fence.
+enqueue. With goatclaw enabled, correction delivery also rechecks the originating bot's current
+profile, host and lane ceiling; the destination independently enforces the forwarded profile.
+Older remotes must advertise both fences before receiving a constrained correction. Ambiguous
+correction delivery keeps a separate lane owner until the worker's later run is observed settled;
+cleanup cannot cancel the worker or mistake the already-finished reviewed run for that proof.
+Ordinary human follow-ups do not need these review fences.
 
 MCP agents use the same ledger through the `channel_*` tools in [`mcp-toolkits.md`](mcp-toolkits.md).
 `CHANNEL_MCP_TOOL_NAMES` has no tool that sends to an arbitrary channel.
