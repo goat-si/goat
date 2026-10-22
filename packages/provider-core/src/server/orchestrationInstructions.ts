@@ -1,5 +1,6 @@
 import { GOAT_THREAD_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import type { ProviderInteractionMode } from "@goat/contracts";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "./developmentInstructions.ts";
 
 /**
  * Authored as self-contained sections so a provider that limits the size of
@@ -106,6 +107,7 @@ export interface GoatAcpInstructionState {
 /**
  * ACP has no system/developer prompt field, so send T3-owned context in the
  * first user prompt and whenever the available tools or interaction mode change.
+ * The development discipline goes with it whether or not GOAT MCP is attached.
  */
 export function goatAcpPromptWithInstructions(input: {
   readonly prompt: string;
@@ -124,6 +126,7 @@ export function goatAcpPromptWithInstructions(input: {
     input.state.interactionMode === "plan"
       ? GOAT_ACP_PLAN_MODE_INSTRUCTIONS
       : GOAT_ACP_DEFAULT_MODE_INSTRUCTIONS,
+    GOAT_DEVELOPMENT_INSTRUCTIONS,
     ...(input.state.hasGoatMcp
       ? [GOAT_BROWSER_TOOL_INSTRUCTIONS.trim(), GOAT_ORCHESTRATION_INSTRUCTIONS.trim()]
       : []),
@@ -131,11 +134,18 @@ export function goatAcpPromptWithInstructions(input: {
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
 
+/** The development discipline always; orchestration only when GOAT MCP can carry it out. */
+function goatInstructionsText(hasGoatMcp: boolean): string {
+  return hasGoatMcp
+    ? `${GOAT_DEVELOPMENT_INSTRUCTIONS}\n\n${GOAT_ORCHESTRATION_INSTRUCTIONS.trim()}`
+    : GOAT_DEVELOPMENT_INSTRUCTIONS;
+}
+
 /**
  * Keep the wrapper explicit so it cannot be mistaken for text authored by the user.
  */
-function prependGoatOrchestrationInstructions(prompt: string): string {
-  return `<t3_code_orchestration_instructions>${GOAT_ORCHESTRATION_INSTRUCTIONS.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
+function prependGoatInstructions(prompt: string, hasGoatMcp: boolean): string {
+  return `<t3_code_orchestration_instructions>${goatInstructionsText(hasGoatMcp)}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
 }
 
 export function goatOrchestrationPromptForFirstRun(input: {
@@ -143,11 +153,11 @@ export function goatOrchestrationPromptForFirstRun(input: {
   readonly runOrdinal: number;
   readonly hasGoatMcp: boolean;
 }): string {
-  return input.runOrdinal === 1 && input.hasGoatMcp
-    ? prependGoatOrchestrationInstructions(input.prompt)
+  return input.runOrdinal === 1
+    ? prependGoatInstructions(input.prompt, input.hasGoatMcp)
     : input.prompt;
 }
 
-export function goatOrchestrationSystemPrompt(hasGoatMcp: boolean): string | undefined {
-  return hasGoatMcp ? GOAT_ORCHESTRATION_INSTRUCTIONS : undefined;
+export function goatOrchestrationSystemPrompt(hasGoatMcp: boolean): string {
+  return goatInstructionsText(hasGoatMcp);
 }

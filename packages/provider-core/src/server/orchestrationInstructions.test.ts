@@ -1,8 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 import { LaneKind } from "@goat/contracts";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "./developmentInstructions.ts";
 import {
   GOAT_ORCHESTRATION_INSTRUCTIONS,
   GOAT_ORCHESTRATION_SECTIONS,
+  goatAcpPromptWithInstructions,
+  goatOrchestrationPromptForFirstRun,
+  goatOrchestrationSystemPrompt,
 } from "./orchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
@@ -51,9 +55,33 @@ describe("T3 orchestration provider instructions", () => {
   });
 
   it("keeps every section under Codex's per-entry limit", () => {
-    for (const section of GOAT_ORCHESTRATION_SECTIONS) {
+    for (const section of [...GOAT_ORCHESTRATION_SECTIONS, GOAT_DEVELOPMENT_INSTRUCTIONS]) {
       assert.isBelow(new TextEncoder().encode(section).length, 4000);
     }
+  });
+
+  it("gives every agent the development discipline and only GOAT MCP agents the orchestration", () => {
+    const orchestration = GOAT_ORCHESTRATION_INSTRUCTIONS.trim();
+    const prompts = (hasGoatMcp: boolean) => [
+      goatOrchestrationSystemPrompt(hasGoatMcp),
+      goatOrchestrationPromptForFirstRun({ prompt: "Fix it.", runOrdinal: 1, hasGoatMcp }),
+      goatAcpPromptWithInstructions({
+        prompt: "Fix it.",
+        state: { interactionMode: "default", hasGoatMcp },
+      }),
+    ];
+    for (const prompt of prompts(false)) {
+      assert.include(prompt, GOAT_DEVELOPMENT_INSTRUCTIONS);
+      assert.notInclude(prompt, orchestration);
+    }
+    for (const prompt of prompts(true)) {
+      assert.include(prompt, GOAT_DEVELOPMENT_INSTRUCTIONS);
+      assert.include(prompt, orchestration);
+    }
+    assert.equal(
+      goatOrchestrationPromptForFirstRun({ prompt: "Fix it.", runOrdinal: 2, hasGoatMcp: false }),
+      "Fix it.",
+    );
   });
 });
 

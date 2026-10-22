@@ -33,6 +33,15 @@ export const GOATCLAW_REPORT_PROTOCOL = [
   "Every summary is short and factual: the exact head and base commits, each check with its command and totals, and a last line NOT RUN: naming each check you did not run (NOT RUN: none when you ran them all). Queued, cancelled, or older-head CI is not a pass. Report only what you checked.",
 ].join("\n");
 
+/** What every lane brief carries; the development discipline itself reaches each agent through its provider instructions. */
+export const GOATCLAW_LANE_DEFAULTS = [
+  "Lane defaults (put them in every brief you write, and follow them yourself):",
+  "- Brief: the problem, the base branch, the class (C0-C5) with its verification floor, and acceptance criteria with the commands that prove them.",
+  "- Research: look up current practice with a research tool such as Aside when one is available, otherwise web search, and cite the sources.",
+  "- Subagents: native subagents (gpt-6.1-sol, for example) may research and review; they count against the same maxLanes as dispatched lanes.",
+  "- Finish line: an implementation lane is done when its pull request has merged, or goat-ci-result is SUCCESS on its exact head, under docs/operations/merging.md; a codexclaw loop records it with cxc loop pr-record --session <id> --pr <url>. Check a lane's claim against its diff and a fresh run, not its report.",
+].join("\n");
+
 /** docs/operations/merging.md, stated for an agent that merges. */
 const MERGE_POLICY =
   "Merge policy (docs/operations/merging.md): squash-merge as soon as goat-ci-result is SUCCESS on the exact head commit, with gh pr merge <pr> --admin --squash --match-head-commit <head-sha>. Read goat-ci-result only. mergeStateStatus CLEAN or UNSTABLE (behind dev) is fine. Do not rebase or update the branch because dev moved; rebase only when GitHub reports CONFLICTING, or when CI can pass only with a fix that exists only on dev. A failure that also happens identically on dev does not block: note it in the pull request with a link to the matching dev run, then merge. Re-run flaky or cancelled jobs (gh run rerun <run-id> --failed) instead of rebasing. Upstream chase merges are the exception and are not yours to squash.";
@@ -46,7 +55,7 @@ const READ_ONLY =
 
 /** Shared by the supervisor role and GOAT Bot's supervisor mode. */
 export const GOATCLAW_SUPERVISOR_DELEGATION =
-  "Launch each manager with goat_thread_launch, or goat_ssh_thread_launch on another machine, passing goatclawRole: domain-manager to own one goal, merge-manager to land green pull requests one at a time, issue-sweeper for triage and small fixes. A manager's authority is its role's profile narrowed by yours; never promise it more in the brief. Put the full task, the base branch, and the expected report in each brief.";
+  "Launch each manager with goat_thread_launch, or goat_ssh_thread_launch on another machine, passing goatclawRole: domain-manager to own one goal, merge-manager to land green pull requests one at a time, issue-sweeper for triage and small fixes. A manager's authority is its role's profile narrowed by yours; never promise it more in the brief. Put the full task, the base branch, the class and acceptance criteria, and the expected report in each brief; the role adds the lane defaults.";
 export const GOATCLAW_SUPERVISOR_ASKS =
   "Ask the person through the decision inbox (goat_decision_request) for anything nobody authorized: pushing outside the task, deploying, paid machines, settings changes, or new work beyond the request.";
 
@@ -113,4 +122,10 @@ export const roleRefusal = (role: GoatclawRole, missing: ReadonlyArray<Permissio
 
 /** The text a role's thread receives in front of its task. */
 export const goatclawRoleBrief = (role: GoatclawRole, task: string): string =>
-  [goatclawRoleTemplate(role).preamble, GOATCLAW_REPORT_PROTOCOL, "Task:", task].join("\n\n");
+  [
+    goatclawRoleTemplate(role).preamble,
+    GOATCLAW_LANE_DEFAULTS,
+    GOATCLAW_REPORT_PROTOCOL,
+    "Task:",
+    task,
+  ].join("\n\n");
