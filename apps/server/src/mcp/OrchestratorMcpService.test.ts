@@ -3974,6 +3974,114 @@ describe("OrchestratorMcpService thread interrupt", () => {
       }),
     ),
   );
+
+  describe("goat_thread_retry", () => {
+    const failedRunId = RunId.make("run:mcp-retry-failed");
+    const runRetry = <E>(
+      run: Record<string, unknown>,
+      effect: (input: {
+        readonly service: OrchestratorMcpService.OrchestratorMcpService["Service"];
+        readonly retries: Array<ThreadLaunchService.ThreadLaunchPreparationInput>;
+      }) => Effect.Effect<void, E>,
+    ) =>
+      Effect.gen(function* () {
+        const caller = projectionsFor(true).parent;
+        // The caller's own run is live, as it is while an agent calls a tool.
+        const parent = {
+          ...caller,
+          thread: { ...caller.thread, archivedAt: null },
+          runs: caller.runs.map((candidate) => ({
+            ...candidate,
+            providerInstanceId: scope.thread?.providerInstanceId,
+          })),
+        } as unknown as OrchestrationV2ThreadProjection;
+        const child = {
+          ...projectionsFor(true).child,
+          runs: [{ ordinal: 1, ...run }],
+        } as unknown as OrchestrationV2ThreadProjection;
+        const retries: Array<ThreadLaunchService.ThreadLaunchPreparationInput> = [];
+        const layer = OrchestratorMcpService.layer.pipe(
+          Layer.provide(
+            Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+              retryPreparation: (input) =>
+                Effect.sync(() => {
+                  retries.push(input);
+                  return {} as never;
+                }),
+            }),
+          ),
+          Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+          Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
+          Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
+          Layer.provide(
+            Layer.mergeAll(
+              NodeServices.layer,
+              Layer.mock(ThreadManagementService.ThreadManagementService)({
+                getThreadRecords: (threadId) =>
+                  Effect.succeed(threadId === childThreadId ? child : parent),
+                getProjectThreadRecords: (input) =>
+                  Effect.succeed(input.threadId === childThreadId ? child : parent),
+                getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId)),
+              }),
+              ServerSettings.layerTest(),
+              Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+              Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+                list: () => Effect.succeed([]),
+              }),
+              Layer.mock(ProjectService.ProjectService)({}),
+              Layer.mock(SecretRequests.SecretRequests)({}),
+              Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+            ),
+          ),
+        );
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          yield* effect({ service, retries });
+        }).pipe(Effect.provide(layer));
+      });
+
+    it.effect("runs a failed workspace preparation again under a stable command id", () =>
+      runRetry(
+        {
+          id: failedRunId,
+          status: "failed",
+          workspacePreparation: { type: "worktree", baseRef: "dev" },
+        },
+        ({ service, retries }) =>
+          Effect.gen(function* () {
+            const result = yield* service.retryThread(scope, {
+              threadId: childThreadId,
+              clientRequestId: "retry-1",
+            });
+            assert.deepEqual(result, {
+              threadId: childThreadId,
+              runId: failedRunId,
+              status: "preparing",
+            });
+            assert.deepEqual(retries, [
+              {
+                commandId: commandIdFor("thread-retry", "retry-1"),
+                threadId: childThreadId,
+                runId: failedRunId,
+              },
+            ]);
+          }),
+      ),
+    );
+
+    it.effect("refuses a run that failed after its workspace was ready", () =>
+      runRetry({ id: failedRunId, status: "failed" }, ({ service, retries }) =>
+        Effect.gen(function* () {
+          const error = yield* service
+            .retryThread(scope, { threadId: childThreadId })
+            .pipe(Effect.flip);
+          assert.equal(error.code, "invalid_request");
+          assert.include(error.message, "goat_thread_send");
+          assert.equal(retries.length, 0);
+        }),
+      ),
+    );
+  });
 });
 
 describe("OrchestratorMcpService thread lookup", () => {

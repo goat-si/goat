@@ -1519,6 +1519,8 @@ const OrchestrationV2ProviderFailureMessage = TrimmedNonEmptyString.check(
   Schema.isMaxLength(4_096),
 );
 const OrchestrationV2ProviderFailureCode = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+/** Room for the last lines of a preparation step's output, such as a Git fetch or setup script. */
+export const ORCHESTRATION_V2_PROVIDER_FAILURE_LOG_MAX_CHARS = 6_000;
 
 /**
  * Producers must redact credentials before constructing this value.
@@ -1529,6 +1531,10 @@ export const OrchestrationV2ProviderFailure = Schema.Struct({
   code: Schema.NullOr(OrchestrationV2ProviderFailureCode),
   retryable: Schema.NullOr(Schema.Boolean),
   resetAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** The redacted end of the log of the step that failed, when the failure has one. */
+  log: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(ORCHESTRATION_V2_PROVIDER_FAILURE_LOG_MAX_CHARS)),
+  ),
 });
 export type OrchestrationV2ProviderFailure = typeof OrchestrationV2ProviderFailure.Type;
 

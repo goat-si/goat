@@ -9946,7 +9946,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...state.preparationItem,
         status: "failed",
         title: "Workspace preparation failed",
-        output: command.failure.message,
+        output:
+          command.failure.log === undefined
+            ? command.failure.message
+            : `${command.failure.message}\n\n${command.failure.log}`,
         exitCode: 1,
         completedAt: now,
         updatedAt: now,
