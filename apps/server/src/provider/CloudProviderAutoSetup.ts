@@ -112,7 +112,14 @@ const cloudAutoSetupWrites = (
             driver: ACP_REGISTRY,
             displayName: "Devin",
             enabled: true,
-            config: { source: "registry", agentId: "devin", commandPath: step.command },
+            // A local command needs no ACP Registry index, which a fresh install has not fetched.
+            // `acp` is the registry's own launch argument for Devin on every platform.
+            config: {
+              source: "local",
+              commandPath: step.command,
+              commandArgs: ["acp"],
+              registryIconUrl: "https://cdn.agentclientprotocol.com/registry/v1/latest/devin.svg",
+            },
           },
         },
         {

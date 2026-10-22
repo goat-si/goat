@@ -156,7 +156,7 @@ export const DevinCloudDriver: ProviderDriver<DevinCloudSettings, DevinCloudDriv
           status: "authenticated" as const,
           ...(result.success.email ? { email: result.success.email } : {}),
         },
-        message: "Uses your Devin sign-in. Repository access and quota are checked per task.",
+        message: "Repository access and quota are checked per task.",
       };
     });
     const snapshot = yield* makeManagedServerProvider({

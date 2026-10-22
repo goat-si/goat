@@ -135,11 +135,13 @@ for those actions.
 
 ## Devin Cloud
 
-Devin Cloud appears automatically in **Settings → Providers** and turns on when a Devin ACP
-provider is enabled. Sign in from the Devin Cloud card or its Devin ACP provider card. It uses that provider's
-executable and account; Devin 3000.11.1 or newer is required. If more than one Devin ACP provider
-is enabled, choose one in Devin Cloud settings. You can also add a custom Devin Cloud instance.
-Turn Devin Cloud off with its toggle; reset the cloud card to follow the Devin provider again.
+When the Devin CLI is installed, GOAT sets up Devin Cloud by itself: it adds a Devin provider
+that runs your `devin`, links it, and turns Devin Cloud on. This happens when GOAT starts and
+when providers refresh, on every connected machine that runs this version. Devin Cloud uses your
+Devin sign-in; if you are signed out, sign in from the Devin Cloud card. Devin 3000.11.1 or newer
+is required. To use a different Devin provider, open **Advanced** on the Devin Cloud card. Turn
+Devin Cloud off with its toggle; GOAT does not turn it back on. Reset the cloud card to have GOAT
+set it up again.
 The project folder must already be trusted by Devin, and your Devin organization must have access
 to the repository.
 

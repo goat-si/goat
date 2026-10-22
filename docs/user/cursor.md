@@ -30,8 +30,9 @@ the generated key before it expires, remove it from your Cursor dashboard's API 
 
 ## Cursor Cloud
 
-Cursor Cloud appears automatically in **Settings > Providers** and becomes available when you
-sign in to Cursor. You can start sign-in from the Cursor Cloud card; it uses the Cursor account.
+When the Cursor CLI (`cursor-agent`) is installed, GOAT turns on the Cursor provider and Cursor
+Cloud by itself. Cursor Cloud becomes available when you sign in to Cursor from the Cursor Cloud
+card; it uses the Cursor account.
 Turn Cursor Cloud off with its toggle. To follow Cursor's enabled state again, reset the cloud
 card. For another account, add a custom Cursor Cloud instance and choose its Cursor source.
 On mobile, manage the account under **Settings > Provider accounts**. Cursor Cloud uses only
