@@ -493,18 +493,39 @@ const callers = {
 type Caller = keyof typeof callers;
 const TARGET_THREAD = "thread:conformance-target";
 
-/** reached: the access layer let the call into its handler, which then met inert services. */
-type Outcome = "thread_required" | "read_only" | "denied" | "reached";
-const classify = (result: McpSchema.CallToolResult): Outcome => {
+/**
+ * reached: the access layer let the call into its handler, which then met inert services.
+ * unexpected and defect never match an expectation, so a wrong argument or a crash before the
+ * handler cannot pass as access granted.
+ */
+type Outcome = "thread_required" | "read_only" | "denied" | "reached" | "unexpected" | "defect";
+const INERT_SERVICE_DEFECT = "inert service";
+// The tool-level wrapper's text when a handler dies on an inert service.
+const HANDLER_DIED = "Tool execution failed due to an internal server error.";
+// Refusals a handler makes after access passed, from its own domain checks.
+const HANDLER_CODES = new Set(["target_required", "orchestration_error"]);
+// invalid_request from a rule the handler checks after access, on these sampled inputs.
+const HANDLER_VALIDATION: Readonly<Record<string, string>> = {
+  "attachment.discard": "Only the caller that prepared an upload may discard it.",
+  "thread.reschedule": "A caller outside a thread must pass a model to resume with.",
+  "project.create": "A project made from a title takes no other settings.",
+};
+const IMAGE_TOOL_FAILURE = /^(Preview snapshot|Device screenshot) failed/;
+const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
   const content = result.content[0];
   const text = content?.type === "text" ? content.text : "";
   if (!result.isError) return "reached";
+  if (text === INERT_SERVICE_DEFECT || text === HANDLER_DIED) return "reached";
+  if (text.startsWith("defect:")) return "defect";
   if (/thread_credential_required|acts as the calling GOAT thread/.test(text))
     return "thread_required";
   // Some toolkits (pull requests, images) return the refusal message without its code.
   if (/approved for read-only access/.test(text)) return "read_only";
   if (/"code":"capability_denied"/.test(text)) return "denied";
-  return "reached";
+  if (IMAGE_TOOL_FAILURE.test(text)) return "reached";
+  const code = /"code":"([a-z_]+)"/.exec(text)?.[1];
+  if (code === "invalid_request" && path in HANDLER_VALIDATION) return "reached";
+  return code !== undefined && HANDLER_CODES.has(code) ? "reached" : "unexpected";
 };
 
 // Inputs the schema sampler cannot satisfy, and reads that reach other machines with this
@@ -605,13 +626,15 @@ const argumentsFor = Effect.fn(function* (entry: Entry) {
   const sampled = yield* Schema.encodeUnknownEffect(codec)(sample);
   const encoded: Record<string, unknown> = isObject(sampled) ? sampled : {};
   // Routing to another host has its own tests; this matrix asks about the local call.
-  const required = (Tool.getJsonSchema(tool) as JsonSchema)["required"];
+  const schema = Tool.getJsonSchema(tool) as JsonSchema;
+  const required = schema["required"];
   const hostRequired = Array.isArray(required) && required.includes("host");
+  const takesThread = isObject(schema["properties"]) && "threadId" in schema["properties"];
   return {
     ...encoded,
     ...(entry.hostRoutable && "host" in encoded && !hostRequired ? { host: null } : {}),
     // Outside clients name their target thread; without one they stop at target resolution.
-    ...("threadId" in encoded && encoded["threadId"] === null ? { threadId: TARGET_THREAD } : {}),
+    ...(takesThread && (encoded["threadId"] ?? null) === null ? { threadId: TARGET_THREAD } : {}),
   };
 });
 
@@ -635,12 +658,24 @@ describe("agent surface access", () => {
             const result = yield* call(entry.name, args).pipe(
               Effect.provideService(McpInvocationContext, callers[caller]),
               Effect.provideService(McpSchema.McpServerClient, client),
-              // An inert service dies; the access layer already ran.
-              Effect.catchDefect(() =>
-                Effect.succeed(new McpSchema.CallToolResult({ isError: true, content: [] })),
+              // An inert service dies after the access layer ran; any other defect fails the case.
+              Effect.catchDefect((defect) =>
+                Effect.succeed(
+                  new McpSchema.CallToolResult({
+                    isError: true,
+                    content: [
+                      {
+                        type: "text",
+                        text: String(defect).includes("UnimplementedError")
+                          ? INERT_SERVICE_DEFECT
+                          : `defect: ${String(defect)}`,
+                      },
+                    ],
+                  }),
+                ),
               ),
             );
-            const outcome = classify(result);
+            const outcome = classify(entry.path, result);
             const expected = expectedOutcome(entry, caller);
             if (outcome !== expected) {
               const content = result.content[0];
@@ -663,6 +698,10 @@ describe("agent surface access", () => {
       );
       expect(REASONS[exception.reason], path).toBeDefined();
     }
+    for (const path of Object.keys(HANDLER_VALIDATION))
+      expect(registeredNames, path).toContain(
+        agentSurfaceRegistry[path as keyof typeof agentSurfaceRegistry]?.name,
+      );
   });
 
   // quarantine: #778 goat_call is not on dev yet; add it to via when rollout step 5 lands.
