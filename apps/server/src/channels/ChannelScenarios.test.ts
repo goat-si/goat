@@ -645,35 +645,43 @@ describe("GOAT bot boundary (scenario 6)", () => {
 });
 
 describe("concurrent input (scenario 1)", () => {
-  it.effect("answers other inputs while one reception's model call is held", () => {
+  const claim = Effect.gen(function* () {
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    yield* ledger.claimOwnership({
+      token: runtime.ownerToken,
+      now: "2026-10-12T00:00:00.000Z",
+      staleBefore: "2026-10-11T00:00:00.000Z",
+    });
+    return runtime;
+  });
+
+  it.effect("reads one conversation in order while other conversations proceed", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       yield* setupBot;
       yield* linkSlackUser();
       const gate = yield* Deferred.make<void>();
-      harness.script.current = (input) =>
-        input.inputText === "slow one"
-          ? Deferred.await(gate).pipe(
-              Effect.as({ replyText: "Slow answer.", action: { type: "report_only" } }),
-            )
-          : defaultScript(input);
+      const tasksSeenBySecond: Array<number> = [];
+      harness.script.current = (input) => {
+        if (input.inputText === "do: slow job") {
+          return Deferred.await(gate).pipe(Effect.andThen(defaultScript(input)));
+        }
+        if (input.inputText === "and add tests") tasksSeenBySecond.push(input.tasks.length);
+        return defaultScript(input);
+      };
       const gateway = yield* ChannelGateway.ChannelGateway;
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
       const ledger = yield* ChannelLedger.ChannelLedger;
-      const slow = yield* gateway.ingest(goatInput("slow one", "client-a"), rpcContext);
-      const second = yield* gateway.ingest(goatInput("do: second job", "client-b"), rpcContext);
+      const slow = yield* gateway.ingest(goatInput("do: slow job", "client-a"), rpcContext);
+      const second = yield* gateway.ingest(goatInput("and add tests", "client-b"), rpcContext);
       const slack = yield* gateway.ingest(
         slackInput("do: slack job", "Ev1", "1760000000.000500"),
         slackContext,
       );
-      yield* ledger.claimOwnership({
-        token: runtime.ownerToken,
-        now: "2026-10-12T00:00:00.000Z",
-        staleBefore: "2026-10-11T00:00:00.000Z",
-      });
+      const runtime = yield* claim;
       yield* runtime.runPass;
-      yield* runtime.settle([second.inputId, slack.inputId]);
-      // Deliver what those two committed while the first is still waiting on its model.
+      yield* runtime.settle([slack.inputId]);
+      // Deliver what the Slack thread committed while the bot conversation waits on its model.
       yield* runtime.runPass;
       yield* runtime.runPass;
 
@@ -681,35 +689,87 @@ describe("concurrent input (scenario 1)", () => {
         (send) => send.message.inReplyToInputId === slack.inputId,
       );
       assert.strictEqual(slackReply?.message.text, "On it.");
-      assert.strictEqual(slackReply?.message.mentionActorId, "U1");
-      const records = yield* botMessages;
-      const replies = records.messages.filter((message) => message.role === "assistant");
-      assert.deepStrictEqual(
-        replies.map((message) => message.channel?.inReplyToInputId),
-        [second.inputId],
-      );
-      const held = yield* ledger.getInput(slow.inputId);
-      assert.strictEqual(held?.snapshot.state, "processing");
-      // Two tasks, one per request, each with its own worker thread.
-      const tasks = yield* ledger.listTasks({ ownerId, limit: 10 });
-      assert.strictEqual(tasks.tasks.length, 2);
-      assert.strictEqual(new Set(tasks.tasks.map((task) => task.worker?.threadId)).size, 2);
+      assert.strictEqual((yield* ledger.getInput(slow.inputId))?.snapshot.state, "processing");
+      // The later message in the same conversation has not been read yet.
+      assert.strictEqual((yield* ledger.getInput(second.inputId))?.snapshot.state, "accepted");
+      assert.deepStrictEqual(tasksSeenBySecond, []);
 
       yield* Deferred.succeed(gate, undefined);
       yield* runtime.drain;
       const after = yield* botMessages;
-      const afterReplies = after.messages.filter((message) => message.role === "assistant");
+      const replies = after.messages.filter((message) => message.role === "assistant");
       assert.deepStrictEqual(
-        afterReplies.map((message) => message.channel?.inReplyToInputId).toSorted(),
-        [second.inputId, slow.inputId].toSorted(),
+        replies.map((message) => message.channel?.inReplyToInputId),
+        [slow.inputId, second.inputId],
       );
-      assert.notStrictEqual(
-        (yield* ledger.getInput(slow.inputId))?.snapshot.receptionId,
-        (yield* ledger.getInput(second.inputId))?.snapshot.receptionId,
-      );
-      // Slack input never shows up in the bot as a message; its task appears as a chip.
-      assert.isFalse(after.messages.some((message) => message.text === "do: slack job"));
+      // The follow-up was read after the task its previous message created.
+      assert.deepStrictEqual(tasksSeenBySecond, [1]);
       assert.deepStrictEqual(after.runs, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("answers each sender in their own Slack thread when messages arrive together", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser("U1");
+      yield* linkSlackUser("U2");
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const sent = [
+        { text: "first in A", key: "EvA1", rootTs: "1760000000.000100", user: "U1" },
+        { text: "first in B", key: "EvB1", rootTs: "1760000000.000200", user: "U2" },
+        { text: "second in A", key: "EvA2", rootTs: "1760000000.000100", user: "U2" },
+        { text: "second in B", key: "EvB2", rootTs: "1760000000.000200", user: "U1" },
+      ];
+      const inputs = [];
+      for (const message of sent) {
+        const receipt = yield* gateway.ingest(
+          slackInput(message.text, message.key, message.rootTs, message.user),
+          slackContext,
+        );
+        inputs.push({ ...message, inputId: receipt.inputId });
+      }
+      // A Slack retry of one of them is the same input, not a fifth.
+      const retried = yield* gateway.ingest(
+        slackInput("first in B", "EvB1", "1760000000.000200", "U2"),
+        slackContext,
+      );
+      assert.strictEqual(retried.inputId, inputs[1]!.inputId);
+
+      const runtime = yield* claim;
+      yield* runtime.drain;
+
+      for (const input of inputs) {
+        const replies = harness.slackSent.filter(
+          (send) => send.message.inReplyToInputId === input.inputId,
+        );
+        assert.strictEqual(replies.length, 1, input.text);
+        const reply = replies[0]!.message;
+        assert.deepStrictEqual(
+          reply.destination,
+          {
+            kind: "slack",
+            connectionId: "slack-1",
+            teamId: "T1",
+            channelId: "C1",
+            rootTs: input.rootTs,
+          },
+          input.text,
+        );
+        assert.strictEqual(reply.mentionActorId, input.user, input.text);
+      }
+      // Within a thread, replies go out in the order the messages arrived.
+      const order = (rootTs: string) =>
+        harness.slackSent
+          .filter(
+            (send) =>
+              send.message.destination.kind === "slack" &&
+              send.message.destination.rootTs === rootTs &&
+              send.message.inReplyToInputId !== undefined,
+          )
+          .map((send) => send.message.inReplyToInputId);
+      assert.deepStrictEqual(order("1760000000.000100"), [inputs[0]!.inputId, inputs[2]!.inputId]);
+      assert.deepStrictEqual(order("1760000000.000200"), [inputs[1]!.inputId, inputs[3]!.inputId]);
     }).pipe(Effect.provide(harness.layer));
   });
 });

@@ -160,6 +160,14 @@ export class ChannelLedger extends Context.Service<
     readonly listPendingInputs: (
       limit: number,
     ) => Effect.Effect<ReadonlyArray<ChannelInputId>, ChannelLedgerError>;
+    /**
+     * The oldest unfinished input of each conversation, oldest first. A conversation's next
+     * input becomes receivable only after the one before it is answered, so replies keep the
+     * order people wrote in and a follow-up sees the task its previous message created.
+     */
+    readonly listReceivableInputs: (
+      limit: number,
+    ) => Effect.Effect<ReadonlyArray<ChannelInputId>, ChannelLedgerError>;
     /** Marks an input as being read. Returns nothing when it already finished. */
     readonly beginReception: (input: {
       readonly owner: string;
@@ -948,10 +956,27 @@ const make = Effect.gen(function* () {
     listPendingInputs: (limit) =>
       sql<{ readonly input_id: ChannelInputId }>`
         SELECT input_id FROM channel_inbox WHERE state IN ('accepted', 'processing')
-        ORDER BY accepted_at LIMIT ${limit}
+        ORDER BY accepted_at, rowid LIMIT ${limit}
       `.pipe(
         Effect.map((rows) => rows.map((row) => row.input_id)),
         Effect.mapError(toLedgerError("listPendingInputs")),
+      ),
+
+    // rowid breaks ties in arrival order: inputs accepted in the same millisecond keep the order
+    // they were stored in.
+    listReceivableInputs: (limit) =>
+      sql<{ readonly input_id: ChannelInputId }>`
+        SELECT input_id FROM (
+          SELECT input_id, accepted_at, rowid AS arrival, ROW_NUMBER() OVER (
+            PARTITION BY conversation_id ORDER BY accepted_at, rowid
+          ) AS position
+          FROM channel_inbox WHERE state IN ('accepted', 'processing')
+        )
+        WHERE position = 1
+        ORDER BY accepted_at, arrival LIMIT ${limit}
+      `.pipe(
+        Effect.map((rows) => rows.map((row) => row.input_id)),
+        Effect.mapError(toLedgerError("listReceivableInputs")),
       ),
 
     beginReception: (input) =>

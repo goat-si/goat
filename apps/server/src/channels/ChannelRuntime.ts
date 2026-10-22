@@ -2,8 +2,9 @@
  * ChannelRuntime - runs the channel workers in the one process that owns them.
  *
  * The owner holds the ledger's worker row (refreshed every few seconds) and runs one pass of
- * work whenever a writer signals or a short interval passes: answer new inputs (up to four at
- * once, each on its own fiber), dispatch received tasks, forward answers, word task updates,
+ * work whenever a writer signals or a short interval passes: answer new inputs (one at a time
+ * per conversation, in arrival order, and up to four conversations at once, each on its own
+ * fiber), dispatch received tasks, forward answers, word task updates,
  * bring running tasks in line with their worker threads, and deliver due outbox rows. Run
  * events from worker threads only wake the loop; every pass decides from the ledger and the
  * thread projections, so restarts and missed signals change only timing.
@@ -116,7 +117,9 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.as(0)),
       ),
     );
-    for (const inputId of yield* ledger.listPendingInputs(100)) {
+    // Only each conversation's oldest input is offered, so a conversation is read in order while
+    // others proceed; at most one fiber per conversation waits for a reception slot.
+    for (const inputId of yield* ledger.listReceivableInputs(100)) {
       if (yield* startReception(inputId)) started += 1;
     }
     // Oldest request first, so work held back by the per-person cap starts in arrival order.

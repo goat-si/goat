@@ -234,6 +234,11 @@ compare-and-set on a stale heartbeat, and every worker write re-checks the token
 transaction, so a process that paused past the heartbeat cannot commit a claim. Any process can
 accept input; the owner picks it up on its next pass.
 
+Reception reads one input per conversation at a time, in the order the inputs were stored, and
+up to four conversations at once. Reading two messages of one Slack thread side by side let the
+second miss the task the first was creating and could post the replies in reverse; a reception
+is bounded by its model timeout, so a later message waits seconds, never behind a worker's turn.
+
 ## iMessage on a local Mac
 
 The opt-in `imessage-channel-settings.json` in the server state directory holds a stable connection
