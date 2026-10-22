@@ -52,7 +52,7 @@ const scope: McpInvocationScope = {
   client: { sessionId: "origin", label: "origin", access: "full-access" },
 };
 
-function fixture(response: { lost: boolean }) {
+function fixture(response: { lost: boolean; beforeCommit: boolean }) {
   const database = Sqlite.layerMemory;
   const runtime = ProviderReplayHarness.layerWithRegistry(
     { name: "correction-destination" },
@@ -74,7 +74,15 @@ function fixture(response: { lost: boolean }) {
       return ThreadManagement.ThreadManagementService.of({
         ...actual,
         sendToThread: (input) =>
-          actual.sendToThread(input).pipe(
+          (response.beforeCommit
+            ? Effect.fail(
+                new Orchestrator.OrchestratorDispatchError({
+                  commandId: input.commandId,
+                  commandType: "message.dispatch",
+                }),
+              )
+            : actual.sendToThread(input)
+          ).pipe(
             Effect.flatMap((result) =>
               response.lost
                 ? Effect.fail(
@@ -111,10 +119,12 @@ function fixture(response: { lost: boolean }) {
   );
 }
 
-it.effect.each([false, true])(
-  "settles destination fence rejection but retains an ambiguous accepted send, lost=%s",
-  (lost) => {
-    const response = { lost };
+it.effect.each(["rejected", "accepted-lost", "precommit-lost"] as const)(
+  "settles destination fence rejection but retains ambiguous delivery, boundary=%s",
+  (boundary) => {
+    const lost = boundary === "accepted-lost";
+    const beforeCommit = boundary === "precommit-lost";
+    const response = { lost, beforeCommit };
     return Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const events = yield* EventSink.EventSinkV2;
@@ -169,7 +179,8 @@ it.effect.each([false, true])(
         threadId,
         message: "Correct",
         clientRequestId: "correction",
-        expectedLatestRunId: lost ? latest : reviewed,
+        expectedLatestRunId: lost || beforeCommit ? latest : reviewed,
+        ...(beforeCommit ? { mode: "queue" as const } : {}),
       };
       const result = yield* service.sendToThread(scope, input).pipe(Effect.result);
       assert.strictEqual(result._tag, "Failure");
@@ -178,13 +189,60 @@ it.effect.each([false, true])(
         sql<{
           count: number;
         }>`SELECT COUNT(*) AS count FROM goatclaw_lane_reservations WHERE pending = 1`;
-      assert.deepStrictEqual(yield* slots(), [{ count: lost ? 1 : 0 }]);
+      assert.deepStrictEqual(yield* slots(), [{ count: lost || beforeCommit ? 1 : 0 }]);
       assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, lost ? 3 : 2);
       response.lost = false;
+      response.beforeCommit = false;
+      if (beforeCommit) {
+        yield* service.sendToThread(scope, {
+          threadId,
+          message: "Unrelated run",
+          clientRequestId: "unrelated-active",
+        });
+        assert.deepStrictEqual(yield* slots(), [{ count: 1 }]);
+      }
+      const reservationsBeforeRetry = yield* sql<{
+        id: string;
+        pending: number;
+      }>`SELECT id, pending FROM goatclaw_lane_reservations ORDER BY id`;
+      const targetBeforeRetry = yield* orchestrator.getThreadProjection(threadId);
       const replay = yield* service.sendToThread(scope, input).pipe(Effect.result);
       assert.strictEqual(replay._tag, lost ? "Success" : "Failure");
       assert.deepStrictEqual(yield* slots(), [{ count: 0 }]);
-      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, lost ? 3 : 2);
+      assert.lengthOf(
+        (yield* orchestrator.getThreadProjection(threadId)).runs,
+        lost || beforeCommit ? 3 : 2,
+      );
+      if (beforeCommit) {
+        assert.deepStrictEqual(
+          yield* sql<{
+            id: string;
+            pending: number;
+          }>`SELECT id, pending FROM goatclaw_lane_reservations ORDER BY id`,
+          reservationsBeforeRetry.filter((reservation) => reservation.pending === 0),
+        );
+        const targetAfterRetry = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepStrictEqual(targetAfterRetry.runs, targetBeforeRetry.runs);
+        assert.deepStrictEqual(targetAfterRetry.messages, targetBeforeRetry.messages);
+        const active = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+        const now = yield* DateTime.now;
+        yield* events.write({
+          commandId: CommandId.make("unrelated-finish"),
+          events: [
+            {
+              id: EventId.make("unrelated-finished"),
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: { ...active, status: "failed", completedAt: now },
+            },
+          ],
+        });
+        const rejectedReplay = yield* service.sendToThread(scope, input).pipe(Effect.result);
+        assert.strictEqual(rejectedReplay._tag, "Failure");
+        assert.deepStrictEqual(yield* slots(), [{ count: 0 }]);
+        assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 3);
+      }
     }).pipe(Effect.provide(fixture(response)));
   },
 );

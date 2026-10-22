@@ -3917,7 +3917,6 @@ const make = Effect.gen(function* () {
         .pipe(
           Effect.tapError((error) =>
             input.expectedLatestRunId !== undefined &&
-            admitted?.enabled &&
             (error._tag === "OrchestratorCommandRejectedError" ||
               error._tag === "OrchestratorCommandPreviouslyRejectedError")
               ? permissions.release(admissionId)
