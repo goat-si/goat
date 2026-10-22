@@ -1,22 +1,11 @@
-import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { deriveGoatBotModelState } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
 import { createModelSelection } from "@goat/shared/model";
-import { useContext, useState } from "react";
 
-import { useEnvironmentSettings } from "../../hooks/useSettings";
-import { getCustomModelOptionsByInstance, selectsPlanAgent } from "../../modelSelection";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
-} from "../../providerInstances";
-import { useEnvironmentProviders } from "../../state/environments";
-import { serverEnvironment } from "../../state/server";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { selectsPlanAgent } from "../../modelSelection";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { useGoatBotHomeSettings } from "../goatBot/useGoatBotHome";
+import { useGoatBotModel } from "../goatBot/useGoatBotModel";
 import { Switch } from "../ui/switch";
 import { SETTINGS_PICKER_TRIGGER_CLASSNAME, SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -29,35 +18,19 @@ export function GoatBotModelSettings() {
 }
 
 function GoatBotModelRow({ environmentId }: { environmentId: EnvironmentId }) {
-  const registry = useContext(RegistryContext);
-  const settings = useEnvironmentSettings(environmentId);
-  const providers = useEnvironmentProviders().get(environmentId) ?? [];
-  const canUpdate = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
-  const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const entries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, null),
-  );
-  const { activeEntry, automaticLabel, initialSelection, selection, separate } =
-    deriveGoatBotModelState({ settings, entries });
-  const options = getCustomModelOptionsByInstance(
+  const {
+    activeEntry,
+    automaticLabel,
+    initialSelection,
+    selection,
+    separate,
     settings,
-    providers,
-    selection.instanceId,
-    selection.model,
-  );
-  const allowed = canUpdate && !busy;
-  function save(patch: Parameters<typeof update>[0]["input"]["patch"]) {
-    if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId)) || busy)
-      return;
-    setBusy(true);
-    setMessage(null);
-    void update({ environmentId, input: { patch } }).then((result) => {
-      setMessage(result._tag === "Success" ? null : "Could not update GOAT Bot settings.");
-      setBusy(false);
-    });
-  }
+    entries,
+    options,
+    allowed,
+    message,
+    save,
+  } = useGoatBotModel(environmentId);
   return (
     <>
       <SettingsRow
