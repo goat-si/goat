@@ -180,7 +180,8 @@ function taskMessage(task: OrchestrationV2CloudTask): string | null {
     case "cancelled":
       return task.error ?? task.summary?.trim() ?? null;
     default:
-      return null;
+      // A running task can carry why GOAT cannot follow it, such as a link-only registration.
+      return task.error ?? null;
   }
 }
 
@@ -224,9 +225,10 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
     if (task?.status === "succeeded") return "succeeded";
     if (task?.status === "failed") return "failed";
     if (task?.status === "cancelled") return "cancelled";
-    // A rejected follow-up fails the run while the accepted task keeps running.
     if (!runEnded) return "running";
-    if (run.status === "completed") return "succeeded";
+    // An accepted follow-up completes the app run while the cloud task keeps working;
+    // a rejected one fails the run while the task keeps running.
+    if (run.status === "completed") return task === undefined ? "succeeded" : "running";
     if (run.status === "failed") return "failed";
     return "cancelled";
   })();
@@ -301,16 +303,18 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
   ];
 
   const message =
-    phase === "running" || phase === "succeeded"
+    phase === "succeeded"
       ? null
-      : ((task ? taskMessage(task) : null) ??
-        // The run's own failure, such as a rejected follow-up to a task that keeps running.
-        (rootError?.failure.message.trim() || null) ??
-        (started
-          ? null
-          : phase === "cancelled"
-            ? "Stopped before it was sent."
-            : "The cloud run could not start."));
+      : phase === "running"
+        ? (task?.error ?? null)
+        : ((task ? taskMessage(task) : null) ??
+          // The run's own failure, such as a rejected follow-up to a task that keeps running.
+          (rootError?.failure.message.trim() || null) ??
+          (started
+            ? null
+            : phase === "cancelled"
+              ? "Stopped before it was sent."
+              : "The cloud run could not start."));
 
   const hiddenItemIds = new Set<string>();
   const hiddenMessageIds = new Set<string>();

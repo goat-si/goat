@@ -497,6 +497,38 @@ describe("presentCloudRun", () => {
     expect(cloudRetryAllowed(card, full, [provider("other")])).toBe(false);
   });
 
+  it("keeps the card running after a follow-up is accepted", () => {
+    const card = presentCloudRun(
+      cloudProjection({
+        driver: "claudeCloud",
+        task: {
+          ...failedTask,
+          status: "running",
+          progress: "Follow-up accepted",
+          error: undefined,
+        },
+        run: { status: "completed" },
+      }),
+    )!;
+    expect(card.phase).toBe("running");
+    expect(card.title).toBe("Claude Cloud is working");
+  });
+
+  it("says why a registered link-only task is not tracked", () => {
+    const projection = cloudProjection({
+      task: {
+        ...failedTask,
+        status: "running",
+        tracking: "link-only",
+        error: "GOAT cannot follow this task; open it to see progress.",
+      },
+    }) as unknown as { runs: unknown[] };
+    projection.runs = [];
+    expect(
+      presentCloudRun(projection as unknown as Parameters<typeof presentCloudRun>[0])?.message,
+    ).toBe("GOAT cannot follow this task; open it to see progress.");
+  });
+
   it("leaves local runs alone", () => {
     expect(presentCloudRun(cloudProjection({ driver: "codex" }))).toBeNull();
   });
