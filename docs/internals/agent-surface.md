@@ -377,7 +377,8 @@ request. It is built only if measurement shows it pays: on a fixed set of
 multi-step tasks (wait for a project's running threads, sync a provider to every
 host, fan a review out to three models), agents on providers without code
 execution must spend at least a third fewer model turns with it than with
-`goat_call` alone, with no rise in failed runs. Agents whose harness runs code,
+`goat_call` alone, with no rise in failed runs. The task set and runner are in
+[Measuring `goat_eval`](../operations/agent-surface-eval.md). Agents whose harness runs code,
 such as Codex code mode or a shell with `goat call`, already compose calls in a
 language they write well, which is the finding behind Cloudflare's
 [Code Mode](https://blog.cloudflare.com/code-mode/) and Anthropic's code-execution
