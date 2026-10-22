@@ -89,8 +89,9 @@ const readUpdateBlockers = Effect.fn("SshToolkit.readUpdateBlockers")(
     const statusService = yield* Effect.serviceOption(HostStatusMcpService.HostStatusMcpService);
     if (statusService._tag === "None") return [];
     const scope = yield* McpInvocationContext.McpInvocationContext;
-    // Only a runtime that is already up answers; explaining a wait must not reconnect or start one.
-    const result = yield* statusService.value.read(scope, { host }, { requireReady: true });
+    // Ready-only reads refuse update_waiting, the one state this explains. This reads like
+    // goat_host_status for the host: busy waiting keeps the old runtime attached, so it answers there.
+    const result = yield* statusService.value.read(scope, { host });
     const entry = result.hosts.find((candidate) => candidate.host === host);
     return entry?.reachability === "ok" ? (entry.metrics?.threads.blockers ?? []) : [];
   },
