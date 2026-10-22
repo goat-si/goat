@@ -3,7 +3,8 @@ import type {
   CloudRunStage,
 } from "@goat/client-runtime/state/cloud-task";
 import { formatDuration } from "@goat/shared/orchestrationTiming";
-import { ExternalLinkIcon, GitPullRequestArrowIcon, RotateCcwIcon } from "~/components/solar";
+import { ExternalLinkIcon, RotateCcwIcon } from "~/components/solar";
+import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
 import { useState } from "react";
 
@@ -190,7 +191,7 @@ export function CloudRunCard({
           </Button>
         ) : null}
         {card.prUrl ? (
-          <LinkButton href={card.prUrl} icon={<GitPullRequestArrowIcon aria-hidden />}>
+          <LinkButton href={card.prUrl} icon={<PullRequestGlyph.pullRequest aria-hidden />}>
             Open pull request
           </LinkButton>
         ) : null}
