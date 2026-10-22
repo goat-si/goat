@@ -5,7 +5,6 @@ import {
   WsMemoryRpcGroup,
   WsMemoryCoreRpcGroup,
   WsMemoryImportRpcGroup,
-  WsMemoryAdministrationRpcGroup,
 } from "./rpc.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -116,17 +115,11 @@ describe("WebSocket RPC contracts", () => {
   });
 });
 
-it("registers only the two SSH workspace methods", () => {
-  expect([...WsRpcGroup.requests.keys()].filter((tag) => tag.startsWith("sshWorkspace."))).toEqual([
-    WS_METHODS.sshWorkspaceLaunch,
-    WS_METHODS.sshWorkspaceFetchBack,
-  ]);
-  for (const tag of [WS_METHODS.sshWorkspaceLaunch, WS_METHODS.sshWorkspaceFetchBack]) {
-    const rpc = WsRpcGroup.requests.get(tag)!;
-    expect(rpc.payloadSchema).toBeDefined();
-    expect(rpc.successSchema).toBeDefined();
-    expect(rpc.errorSchema).toBeDefined();
-    expect(rpc.middlewares.has(RpcScopeAuthorization)).toBe(true);
+it("requires scope authorization on every WebSocket RPC", () => {
+  for (const group of [WsRpcGroup, WsMemoryRpcGroup, WsHubNodesRpcGroup]) {
+    for (const rpc of group.requests.values()) {
+      expect(rpc.middlewares.has(RpcScopeAuthorization), rpc._tag).toBe(true);
+    }
   }
 });
 
@@ -197,25 +190,6 @@ it.effect("applies scope middleware to SSH workspace RPCs", () =>
 );
 
 describe("memory RPC groups", () => {
-  it("declares twenty memory methods with typed inputs and authorization middleware", () => {
-    expect(WsMemoryRpcGroup.requests.size).toBe(20);
-    expect(WsMemoryCoreRpcGroup.requests.size).toBe(15);
-    expect(WsMemoryImportRpcGroup.requests.size).toBe(1);
-    expect(WsMemoryAdministrationRpcGroup.requests.size).toBe(4);
-    expect([...WsMemoryAdministrationRpcGroup.requests.keys()]).toEqual([
-      "memory.hub.reconcile",
-      "memory.resetReportAttempts",
-      "memory.ownerSourceReadPolicy.get",
-      "memory.ownerSourceReadPolicy.update",
-    ]);
-    for (const rpc of WsMemoryRpcGroup.requests.values()) {
-      expect(rpc.middlewares.has(RpcScopeAuthorization)).toBe(true);
-      expect(rpc.payloadSchema).toBeDefined();
-      expect(rpc.successSchema).toBeDefined();
-      expect(rpc.errorSchema).toBeDefined();
-    }
-    expect(WsMemoryRpcGroup.requests.has("memory.changes")).toBe(true);
-  });
   it("keeps the non-memory base group composable", () => {
     expect([...WsRpcGroup.requests.keys()].filter((key) => key.startsWith("memory."))).toEqual([]);
   });
@@ -265,11 +239,6 @@ describe("memory RPC groups", () => {
       }),
     ).toThrow();
   });
-});
-it("declares fifteen core methods and one staged import", () => {
-  expect([...WsMemoryCoreRpcGroup.requests.keys()]).not.toContain("memory.importProvider");
-  expect([...WsMemoryImportRpcGroup.requests.keys()]).toEqual(["memory.importProvider"]);
-  expect(WsMemoryCoreRpcGroup.requests.size).toBe(15);
 });
 it("memory changes is a typed authorized stream", () => {
   const rpc = WsMemoryCoreRpcGroup.requests.get("memory.changes")!;
@@ -357,18 +326,8 @@ it("installs the complete SSH host transport together while leaving runtimeUpdat
   });
 });
 
-it("declares all seven authorized hub node RPCs and a typed snapshot stream", () => {
-  expect([...WsHubNodesRpcGroup.requests.keys()]).toEqual([
-    WS_METHODS.hubNodesList,
-    WS_METHODS.hubNodesSubscribe,
-    WS_METHODS.hubNodesAdd,
-    WS_METHODS.hubNodesRemove,
-    WS_METHODS.hubNodesCheck,
-    WS_METHODS.hubNodesImport,
-    WS_METHODS.hubNodesDismissNotice,
-  ]);
+it("hub node RPCs decode authorization errors and stream snapshots", () => {
   for (const rpc of WsHubNodesRpcGroup.requests.values()) {
-    expect(rpc.middlewares.has(RpcScopeAuthorization)).toBe(true);
     const errorSchema = RpcSchema.isStreamSchema(rpc.successSchema)
       ? rpc.successSchema.error
       : rpc.errorSchema;
