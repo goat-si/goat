@@ -14,6 +14,7 @@ export const PermissionCapability = Schema.Literals([
   "boat.start",
   "settings.write",
   "goals.apply",
+  "providers.manage",
 ]);
 export type PermissionCapability = typeof PermissionCapability.Type;
 

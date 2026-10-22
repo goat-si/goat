@@ -71,6 +71,7 @@ export const isHandoffPending = (state: HandoffState) => state === "pending" || 
 const PROVIDER_SETTINGS_HANDOFF_PATHS: ReadonlySet<string> = new Set([
   "provider.home_request",
   "provider.host_sync",
+  "provider.settings",
   "provider.setup",
 ]);
 /**

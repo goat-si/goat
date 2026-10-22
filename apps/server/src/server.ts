@@ -13,6 +13,7 @@ import * as CodexRoutes from "./provider/CodexRouteService.ts";
 import * as HomeRoute from "./provider/OpenCodexRoute.ts";
 import * as ProviderOnboarding from "./provider/ProviderOnboarding.ts";
 import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
+import * as ProviderSettings from "./provider/ProviderSettings.ts";
 import * as SshDeviceAdd from "./sshRemote/SshDeviceAdd.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as Clock from "effect/Clock";
@@ -1445,6 +1446,7 @@ const layerMakeRoutes = Layer.mergeAll(
     Layer.mergeAll(
       HomeRequests.layer.pipe(Layer.provideMerge(CodexRoutes.layer)),
       ProviderOnboarding.layer,
+      ProviderSettings.layer.pipe(Layer.provide(PermissionProfiles.layer)),
     ),
   ),
   Layer.provide(

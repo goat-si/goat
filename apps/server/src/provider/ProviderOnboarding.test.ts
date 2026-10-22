@@ -36,6 +36,7 @@ import * as Routing from "./ProviderDiagnosisRouting.ts";
 import * as ProviderAuthService from "./ProviderAuthService.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as Onboarding from "./ProviderOnboarding.ts";
+import * as ProviderSettingsService from "./ProviderSettings.ts";
 
 const SECRET = "sk-ant-SECRET-9f8e7d";
 const environmentId = EnvironmentId.make("env-local");
@@ -215,6 +216,11 @@ const harness = Effect.gen(function* () {
   const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
+    Layer.provide(
+      Layer.mock(ProviderSettingsService.ProviderSettings)({
+        presentDiagnosis: (result) => Effect.succeed(result),
+      }),
+    ),
     Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),
     Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
     Layer.provide(Layer.mock(CloudAgents.CloudAgentService)({})),

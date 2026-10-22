@@ -507,6 +507,13 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Cancel", "Cancelling", "Cancelled", "a provider sign-in"],
     "provider-diagnose",
   ),
+  goat_provider_update: tool(["Update", "Updating", "Updated", "a provider"], "provider-diagnose"),
+  goat_provider_add: tool(["Add", "Adding", "Added", "a provider"], "provider-diagnose"),
+  goat_provider_link: tool(
+    ["Link", "Linking", "Linked", "a cloud provider's login"],
+    "provider-diagnose",
+  ),
+  goat_provider_remove: tool(["Remove", "Removing", "Removed", "a provider"], "provider-diagnose"),
   goat_thread_launch: tool(
     ["Launch", "Launching", "Launched", "a project thread"],
     "thread-create",

@@ -530,7 +530,13 @@ it.effect("Devin Cloud names an old CLI, a signed-out CLI, and a disabled siblin
     );
     expect(checkOf(only(disabled.result.diagnoses), "sibling")).toMatchObject({
       reason: "sibling_invalid",
-      fix: { instruction: expect.stringContaining("Enable ACP instance devin-acp") },
+      fix: {
+        instruction: expect.stringContaining("Enable ACP instance devin-acp"),
+        call: {
+          tool: "goat_provider_update",
+          arguments: { instanceId: "devin-acp", enabled: true },
+        },
+      },
     });
   }),
 );

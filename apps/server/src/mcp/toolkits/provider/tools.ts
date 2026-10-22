@@ -30,6 +30,11 @@ import {
   ProviderLoginStartInput,
   ProviderSetupOpenInput,
   ProviderSetupOpenResultJson,
+  ProviderAddInput,
+  ProviderLinkInput,
+  ProviderManageResultJson,
+  ProviderRemoveInput,
+  ProviderUpdateInput,
 } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 
@@ -38,6 +43,7 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as ProviderDiagnosisRouting from "../../../provider/ProviderDiagnosisRouting.ts";
 import * as ProviderHostSync from "../../../provider/ProviderHostSync.ts";
 import * as ProviderOnboarding from "../../../provider/ProviderOnboarding.ts";
+import * as ProviderSettings from "../../../provider/ProviderSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const ProviderDiagnoseTool = Tool.make(agentSurfaceRegistry["provider.diagnose"].name, {
@@ -50,6 +56,7 @@ const ProviderDiagnoseTool = Tool.make(agentSurfaceRegistry["provider.diagnose"]
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     ProviderDiagnosisRouting.ProviderDiagnosisRouting,
+    ProviderSettings.ProviderSettings,
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.diagnose"]));
 
@@ -149,6 +156,36 @@ const ProviderLoginCancelTool = Tool.make(agentSurfaceRegistry["provider.login_c
   failureMode: "return" as const,
   dependencies: onboardingDependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.login_cancel"]));
+const settingsTool = {
+  success: ProviderManageResultJson,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    ProviderSettings.ProviderSettings,
+  ],
+};
+const ProviderUpdateTool = Tool.make(agentSurfaceRegistry["provider.update"].name, {
+  ...settingsTool,
+  description: agentSurfaceRegistry["provider.update"].description,
+  parameters: ProviderUpdateInput,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.update"]));
+const ProviderAddTool = Tool.make(agentSurfaceRegistry["provider.add"].name, {
+  ...settingsTool,
+  description: agentSurfaceRegistry["provider.add"].description,
+  parameters: ProviderAddInput,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.add"]));
+const ProviderLinkTool = Tool.make(agentSurfaceRegistry["provider.link"].name, {
+  ...settingsTool,
+  description: agentSurfaceRegistry["provider.link"].description,
+  parameters: ProviderLinkInput,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.link"]));
+const ProviderRemoveTool = Tool.make(agentSurfaceRegistry["provider.remove"].name, {
+  ...settingsTool,
+  description: agentSurfaceRegistry["provider.remove"].description,
+  parameters: ProviderRemoveInput,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.remove"]));
 const cloudTool = {
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
@@ -206,6 +243,10 @@ export const ProviderToolkit = Toolkit.make(
   ProviderLoginStartTool,
   ProviderLoginStatusTool,
   ProviderLoginCancelTool,
+  ProviderUpdateTool,
+  ProviderAddTool,
+  ProviderLinkTool,
+  ProviderRemoveTool,
   CloudHoldersTool,
   CloudLaunchTool,
   CloudRunRegisterTool,
