@@ -10,7 +10,18 @@ import { DraftId } from "../composerDraftStore";
 const twMerge = extendTailwindMerge({
   extend: {
     theme: {
-      text: ["2xs", "3xs", "4xs", "5xs", "composer-control", "composer-control-sm", "work-log"],
+      text: [
+        "2xs",
+        "3xs",
+        "4xs",
+        "5xs",
+        "composer-control",
+        "composer-control-sm",
+        "work-log",
+        "pixel-label",
+        "pixel-title",
+        "pixel-display",
+      ],
     },
   },
 });

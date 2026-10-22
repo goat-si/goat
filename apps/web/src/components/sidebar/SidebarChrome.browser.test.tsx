@@ -82,11 +82,10 @@ async function renderBrand(visible: boolean) {
   });
 }
 
-it("renders the brand text as uppercase GOAT in the brand font", async () => {
+it("renders the GOAT wordmark as plain text named GOAT for assistive technology", async () => {
   await renderBrand(false);
-  const text = container.querySelector(".font-brand");
-  expect(text?.textContent?.trim()).toBe("GOAT");
-  expect(text?.classList.contains("font-bold")).toBe(true);
+  const logotype = container.querySelector('[role="img"][aria-label="GOAT"]');
+  expect(logotype?.textContent?.trim()).toBe("GOAT");
 });
 
 it("renders a non-interactive measurement copy while the sidebar is expanded", async () => {
@@ -192,7 +191,7 @@ it.each([
     const expectedLabel =
       placement.getAttribute("data-placement") === "expanded-probe" ? null : label;
     expect(pill?.textContent ?? null).toBe(expectedLabel);
-    expect(placement.querySelector(".font-brand")?.textContent?.trim()).toBe("GOAT");
+    expect(placement.querySelector('[aria-label="GOAT"]')?.textContent?.trim()).toBe("GOAT");
   }
   for (const placement of Array.from(placements).slice(0, 2)) {
     const pill = placement.querySelector('[data-environment-identification="pill"]');
