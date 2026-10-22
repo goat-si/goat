@@ -11,13 +11,19 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as Projection from "../../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
-import { makeClaudeCloudFolderTrust, trustedInClaudeConfig } from "./ClaudeCloudFolderTrust.ts";
+import {
+  MainCheckoutUnknownError,
+  makeClaudeCloudFolderTrust,
+  trustedInClaudeConfig,
+} from "./ClaudeCloudFolderTrust.ts";
 
 const ROOT = "/fixture/goat";
 const WORKTREE = "/fixture/worktrees/goat/feature";
 // Registered as projects, but inside a repository whose main checkout is not.
 const STRAY_WORKTREE = "/fixture/worktrees/stray/feature";
 const SUBFOLDER = "/fixture/unregistered/apps/server";
+// Registered, but Git could not say where its checkout is.
+const UNRESOLVED = "/fixture/unresolved";
 const live = ProjectId.make("project:goat");
 const deleted = ProjectId.make("project:gone");
 
@@ -58,7 +64,7 @@ const harness = (
     const projects = ProjectStore.ProjectStoreV2.of({
       findActiveByWorkspaceRoot: (root: string) =>
         Effect.succeed(
-          root === ROOT || root === STRAY_WORKTREE || root === SUBFOLDER
+          root === ROOT || root === STRAY_WORKTREE || root === SUBFOLDER || root === UNRESOLVED
             ? Option.some({ projectId: live } as never)
             : Option.none(),
         ),
@@ -107,15 +113,17 @@ const harness = (
       cli,
       // GOAT worktrees of the fixture project share its main checkout.
       mainCheckout: (cwd) =>
-        Effect.succeed(
-          cwd === WORKTREE
-            ? ROOT
-            : cwd === STRAY_WORKTREE
-              ? "/fixture/stray"
-              : cwd === SUBFOLDER
-                ? "/fixture/unregistered"
-                : null,
-        ),
+        cwd === UNRESOLVED
+          ? Effect.fail(new MainCheckoutUnknownError({}))
+          : Effect.succeed(
+              cwd === WORKTREE
+                ? ROOT
+                : cwd === STRAY_WORKTREE
+                  ? "/fixture/stray"
+                  : cwd === SUBFOLDER
+                    ? "/fixture/unregistered"
+                    : null,
+            ),
     });
     return { trust, accepted, sql };
   });
@@ -127,11 +135,19 @@ it.effect("trusts only live project folders and their GOAT worktrees", () =>
     const { trust } = yield* harness();
     assert.deepEqual(
       yield* Effect.forEach(
-        [ROOT, WORKTREE, "/fixture/worktrees/gone", "/tmp/elsewhere", STRAY_WORKTREE, SUBFOLDER],
+        [
+          ROOT,
+          WORKTREE,
+          "/fixture/worktrees/gone",
+          "/tmp/elsewhere",
+          STRAY_WORKTREE,
+          SUBFOLDER,
+          UNRESOLVED,
+        ],
         trust.policy.allowed,
       ),
-      // Claude would record the last two at their unregistered main checkouts.
-      [true, true, false, false, false, false],
+      // Claude would record the next two at unregistered checkouts; the last root is unknown.
+      [true, true, false, false, false, false, false],
     );
   }).pipe(Effect.provide(layer), Effect.scoped),
 );

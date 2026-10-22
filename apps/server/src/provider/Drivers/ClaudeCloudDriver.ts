@@ -30,7 +30,7 @@ import { resolveClaudeCloudLogin } from "./ClaudeCloudLogin.ts";
 import * as PullRequests from "../../pullRequest/PullRequestService.ts";
 import * as Projection from "../../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
-import { makeClaudeCloudFolderTrust } from "./ClaudeCloudFolderTrust.ts";
+import { MainCheckoutUnknownError, makeClaudeCloudFolderTrust } from "./ClaudeCloudFolderTrust.ts";
 
 const DRIVER = ProviderDriverKind.make("claudeCloud");
 const decodeSettings = Schema.decodeSync(ClaudeCloudSettings);
@@ -168,6 +168,8 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
             }),
         ),
       );
+      // Null only when Git says the folder is outside any repository; anything else fails, so an
+      // unknown trust root never authorizes an answer.
       const mainCheckout = (cwd: string) =>
         Effect.scoped(
           Effect.gen(function* () {
@@ -175,25 +177,26 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
               ChildProcess.make(
                 "git",
                 ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-                {
-                  cwd,
-                  shell: false,
-                  stdin: "ignore",
-                },
+                { cwd, shell: false, stdin: "ignore" },
               ),
             );
-            const [code, output] = yield* Effect.all(
-              [child.exitCode, collectUint8StreamText({ stream: child.stdout, maxBytes: 4096 })],
+            const [code, output, errors] = yield* Effect.all(
+              [
+                child.exitCode,
+                collectUint8StreamText({ stream: child.stdout, maxBytes: 4096 }),
+                collectUint8StreamText({ stream: child.stderr, maxBytes: 4096 }),
+              ],
               { concurrency: "unbounded" },
             );
             const commonDir = output.text.trim();
-            return Number(code) === 0 && path.basename(commonDir) === ".git"
-              ? path.dirname(commonDir)
-              : null;
+            if (Number(code) === 0 && path.basename(commonDir) === ".git")
+              return path.dirname(commonDir);
+            if (Number(code) === 128 && /not a git repository/i.test(errors.text)) return null;
+            return yield* new MainCheckoutUnknownError({});
           }),
         ).pipe(
           Effect.timeout("5 seconds"),
-          Effect.orElseSucceed(() => null),
+          Effect.mapError((cause) => new MainCheckoutUnknownError({ cause })),
         );
       const folderTrust = makeClaudeCloudFolderTrust({
         instanceId,

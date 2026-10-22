@@ -6,12 +6,19 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type * as Path from "effect/Path";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type * as Projection from "../../orchestration-v2/ProjectionStore.ts";
 import type * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
 
 const ACTION = "claudeCloud.folderTrust.accept";
+
+/** Git could not say which checkout holds a folder, so Claude's trust root is unknown. */
+export class MainCheckoutUnknownError extends Schema.TaggedError<MainCheckoutUnknownError>()(
+  "MainCheckoutUnknownError",
+  { cause: Schema.optional(Schema.Defect()) },
+) {}
 
 /**
  * Claude Code keeps trust per folder in its global config, and a trusted folder covers the
@@ -57,7 +64,7 @@ export const makeClaudeCloudFolderTrust = (input: {
    * The main checkout of a Git worktree. Claude keeps a worktree's trust under that root, so a
    * worktree never appears under its own path.
    */
-  readonly mainCheckout: (cwd: string) => Effect.Effect<string | null>;
+  readonly mainCheckout: (cwd: string) => Effect.Effect<string | null, MainCheckoutUnknownError>;
 }) => {
   const { sql, path } = input;
   const isLiveRoot = (folder: string) =>
@@ -142,8 +149,9 @@ export const makeClaudeCloudFolderTrust = (input: {
     if (raw === null) return null;
     const own = trustedInClaudeConfig(raw, path.resolve(cwd), path);
     if (own !== false) return own;
-    const root = yield* input.mainCheckout(cwd);
-    return root === null ? false : trustedInClaudeConfig(raw, root, path);
+    const root = yield* input.mainCheckout(cwd).pipe(Effect.result);
+    if (root._tag === "Failure") return null;
+    return root.success === null ? false : trustedInClaudeConfig(raw, root.success, path);
   });
   const trusted = (cwd: string) => readConfig.pipe(Effect.flatMap((raw) => trustedIn(raw, cwd)));
   const states = Effect.fn("ClaudeCloudFolderTrust.states")(function* (

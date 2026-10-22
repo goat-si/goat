@@ -1006,21 +1006,46 @@ it.effect("a key Claude dropped is sent again; Enter waits until the marker is o
       h.fake.emit(NATIVE_TRUST_DIALOG);
       yield* TestClock.adjust("500 millis");
       expect(h.fake.writes).toEqual([DOWN]);
-      // Unrelated output with a marker glyph proves nothing about the selection.
-      h.fake.emit("❯ loading\r\n");
-      yield* TestClock.adjust("500 millis");
-      expect(h.fake.writes).toEqual([DOWN]);
-      // A full repaint still on "No, exit": the key was dropped.
+      // A full repaint still on "No, exit": the key was dropped, so it goes again.
       h.fake.emit(NATIVE_TRUST_DIALOG);
       yield* TestClock.adjust("500 millis");
       expect(h.fake.writes).toEqual([DOWN, DOWN]);
+      // Silence: still dropped, so after two quiet seconds it goes once more.
+      yield* TestClock.adjust("2 seconds");
+      expect(h.fake.writes).toEqual([DOWN, DOWN, DOWN]);
       h.fake.emit(NATIVE_TRUST_MOVED);
       yield* TestClock.adjust("500 millis");
-      expect(h.fake.writes).toEqual([DOWN, DOWN, "\r"]);
+      expect(h.fake.writes).toEqual([DOWN, DOWN, DOWN, "\r"]);
       h.fake.emit(RECEIPT);
       expect((yield* Fiber.join(fiber)).receipt.taskId).toBe("session_ABC123");
     }),
   ),
+);
+
+it.effect.each([{ chunks: ["❯ loading\r\n"] }, { chunks: ["❯", " loading\r\n"] }])(
+  "unrelated output after a key is never taken for a move (%#)",
+  ({ chunks }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeCliHarness();
+        const fiber = yield* h.service
+          .start(LOGIN, "/fixture/project", "task", trustPolicy().trust)
+          .pipe(Effect.forkChild);
+        yield* h.fake.ready;
+        h.fake.emit(NATIVE_TRUST_DIALOG);
+        yield* TestClock.adjust("500 millis");
+        expect(h.fake.writes).toEqual([DOWN]);
+        for (const chunk of chunks) h.fake.emit(chunk);
+        yield* TestClock.adjust("5 seconds");
+        h.fake.emit(NATIVE_TRUST_MOVED);
+        yield* TestClock.adjust("5 seconds");
+        // Without a conclusive redraw GOAT sends nothing more, and the launch starts nothing.
+        expect(h.fake.writes).toEqual([DOWN]);
+        yield* TestClock.adjust("60 seconds");
+        const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+        expect(error.outcome).toBe("rejected");
+      }),
+    ),
 );
 
 it.effect("a refusing process that keeps running is uncertain and never retried", () =>
