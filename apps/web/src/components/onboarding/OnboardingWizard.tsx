@@ -54,7 +54,7 @@ export function WizardHeader({
   }
   return (
     <div className="flex flex-col px-6 pt-6 pb-5 pe-14">
-      <DialogPrimitive.Title className="goat-arrive font-brand text-xl leading-7 font-semibold text-balance text-foreground [word-break:keep-all]">
+      <DialogPrimitive.Title className="goat-arrive font-brand text-xl leading-7 font-semibold text-balance wrap-anywhere text-foreground [word-break:keep-all]">
         {title}
       </DialogPrimitive.Title>
       {description ? (

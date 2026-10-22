@@ -26,7 +26,7 @@ export function OnboardingLink({ nodes }: { readonly nodes: readonly OnboardingN
         <Fragment key={node.id}>
           {index > 0 ? <Connector later={node.later === true} delayMs={index * 90} /> : null}
           <div
-            className="goat-arrive flex w-[5.5rem] shrink-0 flex-col items-center text-center"
+            className="goat-arrive flex w-[5.5rem] min-w-0 flex-col items-center text-center"
             style={{ animationDelay: `${index * 60}ms` }}
           >
             <span
@@ -63,7 +63,7 @@ function Connector({ later, delayMs }: { readonly later: boolean; readonly delay
   return (
     <span
       className={cn(
-        "relative mt-[1.375rem] h-0 min-w-5 flex-1 border-t",
+        "relative mt-[1.375rem] h-0 min-w-3 flex-1 border-t",
         later ? "border-dashed border-border" : "border-foreground/20",
       )}
     >

@@ -48,7 +48,7 @@ export function OnboardingHeader({
       </div>
       {art ? <div className="mt-4">{art}</div> : null}
       <DialogPrimitive.Title
-        className="goat-arrive mt-5 font-brand text-xl leading-7 font-semibold text-balance text-foreground [word-break:keep-all]"
+        className="goat-arrive mt-5 font-brand text-xl leading-7 font-semibold text-balance wrap-anywhere text-foreground [word-break:keep-all]"
         style={arrive(40)}
       >
         {title}
