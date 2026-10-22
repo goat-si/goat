@@ -60,32 +60,49 @@ export const makeClaudeCloudFolderTrust = (input: {
   readonly mainCheckout: (cwd: string) => Effect.Effect<string | null>;
 }) => {
   const { sql, path } = input;
-  /** Only a live project's folder, or a GOAT worktree of one, is GOAT's to trust. */
+  const isLiveRoot = (folder: string) =>
+    input.projects.findActiveByWorkspaceRoot(folder).pipe(Effect.map(Option.isSome));
+  const isGoatWorktree = Effect.fn("ClaudeCloudFolderTrust.isGoatWorktree")(function* (
+    folder: string,
+  ) {
+    const live = new Set(
+      (yield* input.projects.list())
+        .filter((row) => row.deletedAt === null)
+        .map((row) => row.projectId),
+    );
+    const shell = yield* input.projection.getShellSnapshot();
+    return [...shell.threads, ...shell.archivedThreads].some(
+      (thread) =>
+        thread.worktreePath !== null &&
+        live.has(thread.projectId) &&
+        path.resolve(thread.worktreePath) === folder,
+    );
+  });
+  /**
+   * Claude records trust for a Git folder at its main checkout, which then covers every folder
+   * and worktree of that repository. So GOAT answers only when that checkout is itself a live
+   * project, and the folder is that project or a GOAT worktree of one. A registered subfolder or
+   * worktree of an unregistered repository would trust the whole unregistered checkout.
+   */
   const allowed = Effect.fn("ClaudeCloudFolderTrust.allowed")(
     function* (cwd: string) {
       const folder = path.resolve(cwd);
-      if (Option.isSome(yield* input.projects.findActiveByWorkspaceRoot(folder))) return true;
-      const live = new Set(
-        (yield* input.projects.list())
-          .filter((row) => row.deletedAt === null)
-          .map((row) => row.projectId),
-      );
-      const shell = yield* input.projection.getShellSnapshot();
-      return [...shell.threads, ...shell.archivedThreads].some(
-        (thread) =>
-          thread.worktreePath !== null &&
-          live.has(thread.projectId) &&
-          path.resolve(thread.worktreePath) === folder,
-      );
+      const real = yield* input.fileSystem
+        .realPath(folder)
+        .pipe(Effect.orElseSucceed(() => folder));
+      const root = (yield* input.mainCheckout(folder)) ?? real;
+      const registered = (yield* isLiveRoot(folder)) || (yield* isGoatWorktree(folder));
+      if (!registered) return false;
+      if (root === real || root === folder) return true;
+      return yield* isLiveRoot(root);
     },
     Effect.orElseSucceed(() => false),
   );
-  const audit = (cwd: string, actor: string) =>
-    Effect.gen(function* () {
-      const time = DateTime.formatIso(yield* DateTime.now);
-      yield* sql`INSERT INTO audit_events (time, actor, profile, action, target, outcome, decision_id)
+  const audit = Effect.fn("ClaudeCloudFolderTrust.audit")(function* (cwd: string, actor: string) {
+    const time = DateTime.formatIso(yield* DateTime.now);
+    yield* sql`INSERT INTO audit_events (time, actor, profile, action, target, outcome, decision_id)
         VALUES (${time}, ${actor}, 'system', ${ACTION}, ${path.resolve(cwd)}, 'accepted', NULL)`;
-    });
+  });
   const record = Effect.fn("ClaudeCloudFolderTrust.record")(
     function* (event: {
       readonly cwd: string;
@@ -118,14 +135,16 @@ export const makeClaudeCloudFolderTrust = (input: {
     if (!home) return null;
     return yield* input.fileSystem.readFileString(path.join(home, ".claude.json"));
   }).pipe(Effect.orElseSucceed(() => null));
-  const trustedIn = (raw: string | null, cwd: string) =>
-    Effect.gen(function* () {
-      if (raw === null) return null;
-      const own = trustedInClaudeConfig(raw, path.resolve(cwd), path);
-      if (own !== false) return own;
-      const root = yield* input.mainCheckout(cwd);
-      return root === null ? false : trustedInClaudeConfig(raw, root, path);
-    });
+  const trustedIn = Effect.fn("ClaudeCloudFolderTrust.trustedIn")(function* (
+    raw: string | null,
+    cwd: string,
+  ) {
+    if (raw === null) return null;
+    const own = trustedInClaudeConfig(raw, path.resolve(cwd), path);
+    if (own !== false) return own;
+    const root = yield* input.mainCheckout(cwd);
+    return root === null ? false : trustedInClaudeConfig(raw, root, path);
+  });
   const trusted = (cwd: string) => readConfig.pipe(Effect.flatMap((raw) => trustedIn(raw, cwd)));
   const states = Effect.fn("ClaudeCloudFolderTrust.states")(function* (
     cwds: ReadonlyArray<string>,

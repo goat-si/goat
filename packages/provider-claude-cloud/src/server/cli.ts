@@ -218,32 +218,47 @@ const trustFailure = (
 const UP = "\u001b[A";
 const DOWN = "\u001b[B";
 
+/** Text a redraw leaves on screen, without cursor movement or erasing spaces. */
+const visible = (raw: string) =>
+  // eslint-disable-next-line no-control-regex -- Strip the native PTY's control sequences.
+  raw.replace(/\u001b\[[0-9;?>]*[A-Za-z]|\u001b\][^\u0007]*\u0007/g, "").replace(/\s+/g, "");
+
 /**
  * Walks Claude's trust dialog onto "Yes, I trust this folder" and confirms it. Claude drops keys
- * sent while it is still setting up its terminal, and redraws only the moved marker, so each key
- * waits for the screen to settle, and every key after the first also for its predecessor's redraw.
- * Returns true once Enter is sent on "Yes".
+ * sent while it is still setting up its terminal, so a key goes out only on a settled screen, and
+ * a move counts only once the screen shows it: a full redraw places the marker, and a marker-only
+ * redraw (what Claude paints for an arrow key) moves it one option. Enter is sent only while the
+ * marker is known to be on "Yes". Returns true once it is.
  */
 const makeTrustAnswer = () => {
-  let owed: number | undefined;
-  let key = DOWN;
+  let dialog: { readonly yes: number; marked: number } | undefined;
   let sentAt = 0;
+  let pending: 1 | -1 | undefined;
   return (raw: string, from: number, settled: boolean, write: (keys: string) => void) => {
+    if (dialog === undefined) {
+      const found = trustDialog(raw.slice(from));
+      if (!found) return false;
+      dialog = { ...found };
+      sentAt = raw.length;
+    } else if (pending !== undefined) {
+      const redraw = raw.slice(sentAt);
+      const repainted = trustDialog(redraw);
+      if (repainted) dialog.marked = repainted.marked;
+      else if (visible(redraw) === "❯") dialog.marked += pending;
+      // Nothing confirms the key yet; wait for the screen to say where the marker is.
+      else return false;
+      pending = undefined;
+      sentAt = raw.length;
+    }
     if (!settled) return false;
-    if (owed === undefined) {
-      const dialog = trustDialog(raw.slice(from));
-      if (!dialog) return false;
-      owed = Math.abs(dialog.yes - dialog.marked);
-      key = dialog.yes > dialog.marked ? DOWN : UP;
-    } else if (!/[❯>]/.test(raw.slice(sentAt))) return false;
-    sentAt = raw.length;
-    if (owed === 0) {
-      owed = undefined;
+    if (dialog.marked === dialog.yes) {
+      dialog = undefined;
       write("\r");
       return true;
     }
-    owed -= 1;
-    write(key);
+    pending = dialog.yes > dialog.marked ? 1 : -1;
+    sentAt = raw.length;
+    write(pending === 1 ? DOWN : UP);
     return false;
   };
 };
@@ -491,6 +506,9 @@ const make = Effect.gen(function* () {
         failure = receipt
           ? trustFailure(cwd, "uncertain")
           : trustFailure(cwd, "rejected", "folder_untrusted");
+      // A receipt after a refusal is no refusal: the session may exist, so nothing is retried.
+      if (receipt && failure?.reason === "folder_untrusted")
+        failure = trustFailure(cwd, "uncertain");
       // With a trust policy, a prompt still rendering its options is answered on a later chunk.
       if (!failure && trustPrompt(pending) && (!trust || receipt))
         failure = trustFailure(cwd, receipt ? "uncertain" : "rejected");
@@ -553,15 +571,20 @@ const make = Effect.gen(function* () {
         Effect.mapError((cause) =>
           isClaudeCloudError(cause)
             ? cause
-            : (failure ??
-              // A trust dialog that never finished rendering sent nothing.
-              (!receipt && trustPrompt(raw.slice(trustFrom))
-                ? trustFailure(cwd, "rejected")
-                : unknownSubmission(cause))),
+            : trust && failure?.reason === "folder_untrusted" && !exit
+              ? // Still running after refusing: its outcome is unknown, so no retry.
+                unknownSubmission(cause)
+              : (failure ??
+                // A trust dialog that never finished rendering sent nothing.
+                (!receipt && trustPrompt(raw.slice(trustFrom))
+                  ? trustFailure(cwd, "rejected")
+                  : unknownSubmission(cause))),
         ),
       );
     const observed = yield* wait(() => {
       if (receipt) return Effect.succeed(receipt);
+      // A refusal is final only once this process has really exited with nothing more to say.
+      if (trust && failure?.reason === "folder_untrusted" && !exit) return undefined;
       if (failure) return Effect.fail(failure);
       if (exit) return Effect.fail(unknownSubmission());
       return undefined;

@@ -15,6 +15,9 @@ import { makeClaudeCloudFolderTrust, trustedInClaudeConfig } from "./ClaudeCloud
 
 const ROOT = "/fixture/goat";
 const WORKTREE = "/fixture/worktrees/goat/feature";
+// Registered as projects, but inside a repository whose main checkout is not.
+const STRAY_WORKTREE = "/fixture/worktrees/stray/feature";
+const SUBFOLDER = "/fixture/unregistered/apps/server";
 const live = ProjectId.make("project:goat");
 const deleted = ProjectId.make("project:gone");
 
@@ -54,7 +57,11 @@ const harness = (
     const accepted: string[] = [];
     const projects = ProjectStore.ProjectStoreV2.of({
       findActiveByWorkspaceRoot: (root: string) =>
-        Effect.succeed(root === ROOT ? Option.some({ projectId: live } as never) : Option.none()),
+        Effect.succeed(
+          root === ROOT || root === STRAY_WORKTREE || root === SUBFOLDER
+            ? Option.some({ projectId: live } as never)
+            : Option.none(),
+        ),
       list: () =>
         Effect.succeed([
           { projectId: live, deletedAt: null },
@@ -99,7 +106,16 @@ const harness = (
       }),
       cli,
       // GOAT worktrees of the fixture project share its main checkout.
-      mainCheckout: (cwd) => Effect.succeed(cwd === WORKTREE ? ROOT : null),
+      mainCheckout: (cwd) =>
+        Effect.succeed(
+          cwd === WORKTREE
+            ? ROOT
+            : cwd === STRAY_WORKTREE
+              ? "/fixture/stray"
+              : cwd === SUBFOLDER
+                ? "/fixture/unregistered"
+                : null,
+        ),
     });
     return { trust, accepted, sql };
   });
@@ -111,10 +127,11 @@ it.effect("trusts only live project folders and their GOAT worktrees", () =>
     const { trust } = yield* harness();
     assert.deepEqual(
       yield* Effect.forEach(
-        [ROOT, WORKTREE, "/fixture/worktrees/gone", "/tmp/elsewhere"],
+        [ROOT, WORKTREE, "/fixture/worktrees/gone", "/tmp/elsewhere", STRAY_WORKTREE, SUBFOLDER],
         trust.policy.allowed,
       ),
-      [true, true, false, false],
+      // Claude would record the last two at their unregistered main checkouts.
+      [true, true, false, false, false, false],
     );
   }).pipe(Effect.provide(layer), Effect.scoped),
 );

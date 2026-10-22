@@ -994,3 +994,67 @@ it.effect("accepting trust fails plainly when Claude never shows the prompt", ()
     expect(h.fake.writes).toEqual([]);
   }),
 );
+
+it.effect("a key Claude dropped is sent again; Enter waits until the marker is on Yes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task", trustPolicy().trust)
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(NATIVE_TRUST_DIALOG);
+      yield* TestClock.adjust("500 millis");
+      expect(h.fake.writes).toEqual([DOWN]);
+      // Unrelated output with a marker glyph proves nothing about the selection.
+      h.fake.emit("❯ loading\r\n");
+      yield* TestClock.adjust("500 millis");
+      expect(h.fake.writes).toEqual([DOWN]);
+      // A full repaint still on "No, exit": the key was dropped.
+      h.fake.emit(NATIVE_TRUST_DIALOG);
+      yield* TestClock.adjust("500 millis");
+      expect(h.fake.writes).toEqual([DOWN, DOWN]);
+      h.fake.emit(NATIVE_TRUST_MOVED);
+      yield* TestClock.adjust("500 millis");
+      expect(h.fake.writes).toEqual([DOWN, DOWN, "\r"]);
+      h.fake.emit(RECEIPT);
+      expect((yield* Fiber.join(fiber)).receipt.taskId).toBe("session_ABC123");
+    }),
+  ),
+);
+
+it.effect("a refusing process that keeps running is uncertain and never retried", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task", trustPolicy().trust)
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(SYNTHETIC_FOLDER_TRUST_REFUSALS[0]);
+      yield* TestClock.adjust("60 seconds");
+      const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+      expect(error.outcome).toBe("uncertain");
+      expect(h.starts).toHaveLength(1);
+    }),
+  ),
+);
+
+it.effect("a receipt after refusal text keeps the session and blocks the retry", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task", trustPolicy().trust)
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(SYNTHETIC_FOLDER_TRUST_REFUSALS[0]);
+      h.fake.emit(RECEIPT);
+      const handle = yield* Fiber.join(fiber);
+      expect(handle.receipt.taskId).toBe("session_ABC123");
+      h.fake.finish(0);
+      expect((yield* handle.exited.pipe(Effect.flip)).outcome).toBe("uncertain");
+      expect(h.starts).toHaveLength(1);
+    }),
+  ),
+);
