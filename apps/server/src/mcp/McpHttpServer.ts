@@ -8,6 +8,7 @@ import {
   type RunId,
   ThreadId,
 } from "@goat/contracts";
+import { type LlmsTxtCaller, renderLlmsTxt } from "@goat/contracts/agentSurface/llms";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -342,6 +343,44 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
 const layerMcpAuthMiddleware = HttpRouter.middleware<{
   provides: McpInvocationContext.McpInvocationContext;
 }>()(makeMcpAuthMiddleware).layer;
+
+const llmsTxtCaller = (scope: McpInvocationContext.McpInvocationScope): LlmsTxtCaller =>
+  scope.client === undefined
+    ? { kind: "thread" }
+    : { kind: "client", readOnly: scope.client.access === "read-only" };
+
+const llmsTxtResponse = (caller: LlmsTxtCaller) =>
+  HttpServerResponse.text(renderLlmsTxt(caller), {
+    contentType: "text/plain; charset=utf-8",
+    // The body depends on the credential, so no shared cache may keep it.
+    headers: { "cache-control": "no-store", vary: "authorization" },
+  });
+
+/**
+ * The registry index for agents. Without a credential it lists every path; a
+ * credential that /mcp would accept filters it, and one /mcp would refuse gets
+ * the same 401.
+ */
+export const layerLlmsTxtRoute = Layer.unwrap(
+  makeMcpAuthMiddleware.pipe(
+    Effect.map((authenticate) =>
+      HttpRouter.add(
+        "GET",
+        "/llms.txt",
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          if (request.headers.authorization === undefined)
+            return llmsTxtResponse({ kind: "anonymous" });
+          return yield* authenticate(
+            McpInvocationContext.McpInvocationContext.pipe(
+              Effect.map((scope) => llmsTxtResponse(llmsTxtCaller(scope))),
+            ),
+          );
+        }),
+      ),
+    ),
+  ),
+);
 
 /**
  * Claude Code moves an MCP result above its output limit to a file and hands
@@ -1469,6 +1508,7 @@ export const layer = Layer.mergeAll(
   layerSshToolkitRegistration,
   layerConnectionToolkit,
   layerRemoteReportRegistration,
+  layerLlmsTxtRoute,
 ).pipe(
   // LaunchWatchService and RemoteDispatchCoordinator are left to the caller:
   // the server provides one of each for these tools and the remote-launch

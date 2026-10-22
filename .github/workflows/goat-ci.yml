@@ -179,6 +179,13 @@ jobs:
         if: matrix.task == 'check'
         run: vp check
 
+      # Every pull request selects check, so a change that moves the agent surface registries or a
+      # line the audit page cites fails here until `pnpm agent-surface:audit` rewrites the page.
+      # It reads source text and loads the registries, a few seconds.
+      - name: Check agent surface audit
+        if: matrix.task == 'check'
+        run: vp run agent-surface:check
+
       - name: Typecheck
         if: matrix.task == 'typecheck'
         run: vpr typecheck

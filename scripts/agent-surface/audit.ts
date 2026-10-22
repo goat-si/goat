@@ -917,7 +917,9 @@ function render(inventory: Inventory): string {
         : "none") +
       ".",
     "",
-    "Nothing generates reference docs from the registry today, so these lists can only grow.",
+    "The server's " +
+      code("/llms.txt") +
+      " lists every registry path with its summary, but arguments and examples are still served only by the MCP catalog.",
     "",
     "## Fixes ranked by agent impact",
     "",
@@ -967,14 +969,14 @@ function rankedFixes(
       body: 'Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.',
     },
     {
-      title: "Generate tool reference docs from the registry and check drift in CI.",
+      title: "Serve the full tool reference from the registry.",
       body:
         a.unprompted.length +
-        " tools appear in no doc or prompt. Render reference pages from " +
-        code("inventory.ts") +
-        " and fail CI when the committed output differs, as " +
-        code("icons:check") +
-        " does for icons.",
+        " tools appear in no doc or prompt. " +
+        code("/llms.txt") +
+        " now lists every path for the calling credential; " +
+        code("goat_describe") +
+        " should serve arguments and examples from the same registry, with no committed reference pages (decision D14 in agent-surface.md).",
     },
     {
       title: "Describe every parameter.",
