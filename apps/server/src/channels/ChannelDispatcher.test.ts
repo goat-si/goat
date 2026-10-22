@@ -1,9 +1,12 @@
 import { assert, it } from "@effect/vitest";
+import { ProviderInstanceId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
@@ -13,6 +16,7 @@ import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import {
   goatInput,
   makeHarness,
+  modelSelection,
   onlyTask,
   rpcContext,
   setupBot,
@@ -112,5 +116,119 @@ it.effect("uses a ready sibling when the configured instance could not initializ
     assert.strictEqual((yield* onlyTask).status, "running");
     assert.strictEqual(harness.world.launches[0]?.modelSelection.instanceId, "codex-work");
     assert.strictEqual(harness.world.launches[0]?.modelSelection.model, "gpt-6.1-sol");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+const lunaSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-6-luna",
+} as const;
+const astraSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-6-astra",
+} as const;
+
+/** One "do:" task through reception and dispatch; the launch is read from harness.world. */
+const dispatchOne = (harness: ReturnType<typeof makeHarness>, key: string) =>
+  Effect.gen(function* () {
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const reception = yield* ChannelReceptionService.ChannelReceptionService;
+    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    yield* ledger.claimOwnership({ token: key + "-owner", now, staleBefore: now });
+    const input = yield* gateway.ingest(goatInput("do: inspect the build", key), rpcContext);
+    yield* reception.receive(input.inputId, key + "-owner");
+    const task = yield* onlyTask;
+    yield* dispatcher.dispatch(task.taskId, key + "-owner");
+  });
+
+it.effect(
+  "dispatches coding work on the configured GOAT Bot model when nothing else sets one",
+  () => {
+    const harness = makeHarness({
+      shellDefaultModel: null,
+      settingsLayer: ServerSettings.layerTest({
+        textGenerationModelSelection: lunaSelection,
+        goatBotModelSelection: modelSelection,
+        defaultRuntimeMode: "full-access",
+      }).pipe(Layer.orDie),
+    });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* dispatchOne(harness, "bot-model");
+      assert.strictEqual(harness.world.launches[0]?.modelSelection.model, "gpt-6.1-sol");
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect("a project default still wins over the configured GOAT Bot model", () => {
+  const harness = makeHarness({
+    shellDefaultModel: astraSelection,
+    settingsLayer: ServerSettings.layerTest({
+      textGenerationModelSelection: lunaSelection,
+      goatBotModelSelection: modelSelection,
+      defaultRuntimeMode: "full-access",
+    }).pipe(Layer.orDie),
+  });
+  return Effect.gen(function* () {
+    yield* setupBot;
+    yield* dispatchOne(harness, "project-wins");
+    assert.strictEqual(harness.world.launches[0]?.modelSelection.model, "gpt-6-astra");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("the server default still wins over the configured GOAT Bot model", () => {
+  const harness = makeHarness({
+    shellDefaultModel: null,
+    settingsLayer: ServerSettings.layerTest({
+      textGenerationModelSelection: lunaSelection,
+      defaultModelSelection: astraSelection,
+      goatBotModelSelection: modelSelection,
+      defaultRuntimeMode: "full-access",
+    }).pipe(Layer.orDie),
+  });
+  return Effect.gen(function* () {
+    yield* setupBot;
+    yield* dispatchOne(harness, "server-wins");
+    assert.strictEqual(harness.world.launches[0]?.modelSelection.model, "gpt-6-astra");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect(
+  "a configured GOAT Bot model this machine does not offer falls back to the text generation model",
+  () => {
+    const harness = makeHarness({
+      shellDefaultModel: null,
+      providerInstances: [{ instanceId: "codex", models: ["gpt-6-luna"] }],
+      settingsLayer: ServerSettings.layerTest({
+        textGenerationModelSelection: lunaSelection,
+        goatBotModelSelection: modelSelection,
+        defaultRuntimeMode: "full-access",
+        providerInstances: {
+          [ProviderInstanceId.make("codex")]: { driver: "codex", config: {}, enabled: true },
+        },
+      }).pipe(Layer.orDie),
+    });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* dispatchOne(harness, "bot-not-offered");
+      assert.strictEqual(harness.world.launches[0]?.modelSelection.model, "gpt-6-luna");
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect("keeps the text generation model when nothing is configured anywhere", () => {
+  const harness = makeHarness({
+    shellDefaultModel: null,
+    settingsLayer: ServerSettings.layerTest({
+      textGenerationModelSelection: lunaSelection,
+      defaultRuntimeMode: "full-access",
+    }).pipe(Layer.orDie),
+  });
+  return Effect.gen(function* () {
+    yield* setupBot;
+    yield* dispatchOne(harness, "nothing-configured");
+    assert.strictEqual(harness.world.launches[0]?.modelSelection.model, "gpt-6-luna");
   }).pipe(Effect.provide(harness.layer));
 });

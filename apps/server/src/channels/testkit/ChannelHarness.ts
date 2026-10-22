@@ -16,6 +16,7 @@ import {
   CommandId,
   EnvironmentId,
   MessageId,
+  type ModelSelection,
   type OrchestrationV2Run,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
@@ -236,6 +237,8 @@ const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
 export interface FakeProviderInstance {
   readonly instanceId: string;
   readonly displayName?: string;
+  /** Advertised model slugs; absent lists none, so any model counts as offered. */
+  readonly models?: ReadonlyArray<string>;
   /** The weekly window's use; absent when the account reports no quota. */
   readonly weeklyUsedPercent?: number;
   readonly resetsAt?: string;
@@ -255,8 +258,8 @@ const fakeInstance = (instance: FakeProviderInstance) =>
         installed: true,
         status: instance.ready === false ? "error" : "ready",
         auth: { status: instance.ready === false ? "unauthenticated" : "authenticated" },
-        // No models listed, so any model counts as offered.
-        models: [],
+        // Absent means no models listed, so any model counts as offered.
+        models: (instance.models ?? []).map((slug) => ({ slug })),
         ...(instance.weeklyUsedPercent === undefined
           ? {}
           : {
@@ -288,6 +291,11 @@ export function makeHarness(
     readonly providerInstances?: ReadonlyArray<FakeProviderInstance>;
     /** List the bot's own workspace among the projects, as a real server does. */
     readonly botWorkspace?: boolean;
+    /**
+     * Every project shell's default model: undefined keeps the shared modelSelection, a value
+     * sets it, and null sets no default so resolution falls through to the server settings.
+     */
+    readonly shellDefaultModel?: ModelSelection | null;
     /** Settings overrides, including a publisher for live home changes. */
     readonly settingsLayer?: Layer.Layer<ServerSettings.ServerSettingsService>;
     /** The channel services under test; defaults to the assembled core without background loops. */
@@ -572,12 +580,14 @@ export function makeHarness(
       }),
   });
 
+  const shellDefault =
+    options.shellDefaultModel === undefined ? modelSelection : options.shellDefaultModel;
   const shells = [
     ...Array.from({ length: options.projects ?? 1 }, (_, index) => ({
       id: index === 0 ? projectId : ProjectId.make("project:channel-work-" + index),
       title: index === 0 ? "Channel work" : "Other work " + index,
       workspaceRoot: "/nonexistent/channel-work-" + index,
-      defaultModelSelection: modelSelection,
+      defaultModelSelection: shellDefault,
       scripts: [],
       createdAt: "2026-10-12T00:00:00.000Z",
       updatedAt: "2026-10-12T00:00:00.000Z",
@@ -588,7 +598,7 @@ export function makeHarness(
             id: scratchProjectId,
             title: "Scratch",
             workspaceRoot: "/nonexistent/scratch",
-            defaultModelSelection: modelSelection,
+            defaultModelSelection: shellDefault,
             scripts: [],
             createdAt: "2026-10-12T00:00:00.000Z",
             updatedAt: "2026-10-12T00:00:00.000Z",
