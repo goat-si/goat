@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -76,6 +77,7 @@ const isJson = Schema.is(Schema.Json);
 const decodeTarget = Schema.decodeUnknownEffect(OrchestratorMcpTarget);
 
 const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
+  Layer.provide(layerNoFleetSync),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
 );

@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as HubParity from "../hub/HubParity.ts";
@@ -195,7 +196,7 @@ it.effect(
       );
       const layer = Launch.layer.pipe(
         Layer.provideMerge(HostStatus.layer),
-        Layer.provide(HostThreads.layer),
+        Layer.provide(HostThreads.layer.pipe(Layer.provide(layerNoFleetSync))),
         Layer.provide(dependencies),
         Layer.provide(NodeServices.layer),
       );

@@ -1260,7 +1260,7 @@ function timelineItem(input: {
 
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
-  const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
+  const fleet = yield* FleetSync.GoatclawFleetSync;
   const crypto = yield* Crypto.Crypto;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const remoteDispatch = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
@@ -2903,7 +2903,7 @@ const make = Effect.gen(function* () {
           worktree: remote.workspace?.type === "worktree",
         });
         // The destination must enforce this ceiling; goatclaw's fleet policy reaches it first.
-        if (admitted.enabled && Option.isSome(fleet)) yield* fleet.value.ensure(host);
+        if (admitted.enabled) yield* fleet.ensure(host);
         runtimeMode = admitted.runtimeMode;
         const register = Effect.gen(function* () {
           yield* permissions.recheck(scope, admitted, { host });
@@ -4238,6 +4238,7 @@ export const layer: Layer.Layer<
   | ProjectService.ProjectService
   | SecretRequests.SecretRequests
   | RemoteDispatchCoordinator.RemoteDispatchCoordinator
+  | FleetSync.GoatclawFleetSync
   | SshRemoteDispatch.SshRemoteDispatch
   | ServerSettings.ServerSettingsService
 > = Layer.effect(OrchestratorMcpService, make).pipe(Layer.provide(Profiles.layer));

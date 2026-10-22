@@ -705,7 +705,7 @@ export const agentSurfaceRegistry = {
     name: "goat_host_status",
     toolkit: "hostStatus",
     summary:
-      "Read host status for this machine and every SSH host this process is connected to and every linked host: GOAT version, CPU, memory, load average, disk free space, running/waiting/queued thread counts, every configured provider instance (providers), and cached provider quota for those that report it (quotas).",
+      "Read version, load, memory, disk, thread counts, providers and quota for this machine and every connected or linked host.",
     description:
       "Read host status for this machine and every SSH host this process is connected to and every linked host: GOAT version, CPU, memory, load average, disk free space, running/waiting/queued thread counts, every configured provider instance (providers), cached provider quota for those that report it (quotas), and the resource pressure each machine reports for itself (pressure: ok, elevated or critical, with reasons). Pass placement ({} or the providerInstanceId, driver or platform a new lane needs) to rank the reported hosts for that lane: placement.candidates lists eligible hosts best first, then skipped ones with why. Pass host (an SSH alias from goat_ssh_host_list or a linked host from goat_host_link_list) for one other machine. Pass local:true for this machine only. Reaching another machine needs a caller allowed to use this machine's SSH keys. An unreachable host keeps its last successful sample. A remote GOAT that does not offer this tool is reported as unsupported. compatibility says whether a reachable host works with this machine, from the protocols it serves: compatible (different GOAT versions are fine), incompatible (its message names which machine to update), or degraded (the host is too old to report its protocols; update it). versionMismatch:true only marks a different GOAT build.",
     effect: "read",
@@ -2360,7 +2360,7 @@ export const agentSurfaceRegistry = {
     toolkit: "ssh",
     summary: "Read SSH runtime status",
     description:
-      "Read the runtime state on an existing SSH host using this machine's SSH configuration. This does not install or start GOAT. Returns the same state names as Settings → Connections.",
+      "Read the runtime state on an existing SSH host using this machine's SSH configuration. This does not install or start GOAT. Returns the same state names as Settings → Connections. When an update waits because the host is busy, blockers names the threads holding it (id, title, reason, since) when the host reports them.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

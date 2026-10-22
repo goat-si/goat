@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -241,6 +242,7 @@ const runService = <A, E>(
       }),
   });
   const hostLayer = HostThreads.layer.pipe(
+    Layer.provide(layerNoFleetSync),
     Layer.provide(Layer.mock(ThreadResults.ThreadResultService)({})),
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
     Layer.provide(

@@ -531,7 +531,7 @@ function itemIsProminent(item: OrchestrationV2TurnItem): boolean {
   return (
     item.type === "fork" ||
     item.type === "thread_created" ||
-    item.type === "system_notice" ||
+    (item.type === "system_notice" && item.severity !== "info") ||
     item.type === "human_handoff" ||
     item.type === "proposed_plan" ||
     item.type === "secret_request"
@@ -585,6 +585,7 @@ function itemWorkLogTone(item: OrchestrationV2TurnItem): WorkLogPresentationEntr
 }
 
 function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
+  if (item.type === "system_notice" && item.severity === "info") return "eye";
   if (item.type === "notification") {
     const source = item.source;
     switch (source.kind) {
@@ -681,7 +682,7 @@ function itemSummary(
   toolPresentation: GoatMcpToolPresentation | null = null,
 ): string {
   if (item.type === "notification") return item.summary;
-  if (item.type === "system_notice") return item.message;
+  if (item.type === "system_notice") return item.message.split("\n")[0] ?? "";
   if (item.type === "compaction") return contextCompactionLabel(item);
   const title =
     (item.type === "dynamic_tool"
@@ -773,8 +774,9 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
         : `${item.files.length} changed files`;
     case "run_interrupt_request":
     case "run_interrupt_result":
-    case "system_notice":
       return item.message || null;
+    case "system_notice":
+      return item.message.split("\n").slice(1).join("\n").trim() || null;
     case "error":
       return item.failure.message;
     case "compaction":

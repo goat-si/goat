@@ -202,11 +202,13 @@ placement decisions.
 ## Machines under heavy load
 
 Each machine watches its own load, CPU, memory, disk space, and whether GOAT itself stalls. A
-machine that stays busy for two minutes is under heavy load; very high load or a GOAT stall of
-five seconds makes it overloaded. Fleet telemetry shows an alert for it. Agents that started work
-there get a notice naming the busy work and the machines with room, and an overloaded machine
-wakes them so they stop adding work to it. An agent launching onto a busy machine is told where
-else to go, and goals do not place work on an overloaded one.
+machine that stays busy for three minutes is under heavy load, and it counts as normal again only
+after five quiet minutes. A single GOAT stall while a build or test runs is recorded but changes
+nothing; three stalls of 2.5 seconds within ten minutes mean heavy load, and two of five seconds,
+or one of fifteen, mean overloaded. Fleet telemetry shows an alert for it. Agents that started work
+there see one status line per machine in their thread, updated in place as the level changes, and
+an overloaded machine wakes them so they stop adding work to it. An agent launching onto a busy
+machine is told where else to go, and goals do not place work on an overloaded one.
 
 Thresholds and behavior live under `fleet.pressure`; these are the defaults:
 
@@ -218,8 +220,9 @@ Thresholds and behavior live under `fleet.pressure`; these are the defaults:
       "criticalLoadPerCore": 3,
       "elevatedCpuPercent": 90,
       "criticalEventLoopDelayMs": 5000,
-      "sustainMs": 120000,
-      "notifyCooldownMs": 900000,
+      "sustainMs": 180000,
+      "recoverMs": 300000,
+      "notifyCooldownMs": 2700000,
       "elevatedDelivery": "notice",
       "criticalDelivery": "wake",
       "admission": "warn"

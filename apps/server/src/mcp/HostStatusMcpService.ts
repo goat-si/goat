@@ -27,6 +27,7 @@ import * as StrayProcesses from "../diagnostics/StrayProcesses.ts";
 import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
@@ -110,6 +111,8 @@ const make = Effect.gen(function* () {
   const registry = yield* ProviderRegistry.ProviderRegistry;
   const usageSources = yield* UsageLimitSources.UsageLimitSources;
   const threads = yield* ThreadManagementService.ThreadManagementService;
+  // Runtime updates wait on this predicate, so host status reports the same answer.
+  const projections = yield* Effect.serviceOption(ProjectionStore.ProjectionStoreV2);
   const hosts = yield* HostThreadsMcpService.HostThreadsMcpService;
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const opencodex = yield* OpenCodexInventory.OpenCodexInventory;
@@ -194,6 +197,9 @@ const make = Effect.gen(function* () {
     const strayScan = Option.isSome(strays) ? yield* strays.value.latest : null;
     const pressure =
       pressureMonitor._tag === "Some" ? yield* pressureMonitor.value.current : undefined;
+    const blockers = Option.isSome(projections)
+      ? yield* projections.value.getServerActivityBlockers(5).pipe(Effect.option)
+      : Option.none();
     const updateStatus =
       opencodexUpdate._tag === "Some" ? yield* opencodexUpdate.value.status : undefined;
     const entry = {
@@ -206,7 +212,16 @@ const make = Effect.gen(function* () {
         ...snapshot,
         platform,
         // Display counts still leave subagents out; the OpenCodex idle check needs them.
-        threads: { ...countHostThreads(shells), subagentsRunning: runningSubagents(shells) },
+        threads: {
+          ...countHostThreads(shells),
+          subagentsRunning: runningSubagents(shells),
+          ...(Option.isSome(blockers)
+            ? {
+                activity: blockers.value.length > 0 ? ("busy" as const) : ("idle" as const),
+                blockers: blockers.value,
+              }
+            : {}),
+        },
         ...(yield* readQuotas()),
         ...(cua._tag === "Some" ? { computerUse: yield* cua.value.computerUse } : {}),
         opencodex: yield* parityEvidence ? parity.readLocal : opencodex.read,

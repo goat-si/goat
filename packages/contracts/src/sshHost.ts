@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { IsoDateTime, PortSchema, SshHostAlias, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HandoffHuman, HandoffReadInput, HandoffSummary } from "./handoff.ts";
+import { ServerActivityBlocker } from "./serverActivity.ts";
 import { ProviderDiagnosisFix } from "./providerDiagnosis.ts";
 
 export { SshHostAlias } from "./baseSchemas.ts";
@@ -120,6 +121,8 @@ const SshHostStatusShape = Schema.Struct({
     ),
   ),
   waitingReason: Schema.optionalKey(Schema.Literals(["busy", "unknown", "contended"])),
+  /** With waitingReason "busy": the threads the host reports as running work, oldest first. */
+  blockers: Schema.optionalKey(Schema.Array(ServerActivityBlocker)),
   detail: Schema.optionalKey(Schema.String),
   failure: Schema.optionalKey(SshHostFailure),
   refreshDeferred: Schema.optionalKey(SshRefreshDeferred),

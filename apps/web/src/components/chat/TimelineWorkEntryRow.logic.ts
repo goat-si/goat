@@ -171,6 +171,8 @@ export function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconNa
   if (workEntry.itemType === "user_input_request" || workEntry.itemType === "approval_request") {
     return "message-circle";
   }
+  // A server status line, such as a host's resource pressure, reads as monitoring.
+  if (workEntry.itemType === "system_notice") return "eye";
   if (workEntry.toolSurface) return workEntry.toolSurface;
   if (
     workEntry.structuredPayload?.type === "dynamic_tool" &&

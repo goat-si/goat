@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import { BUILTIN_PERMISSION_PROFILES } from "@goat/contracts";
 import * as FleetSync from "../goatclaw/FleetSync.ts";
@@ -211,7 +212,7 @@ const runService = <A, E>(
     ),
     Layer.provide(
       options.fleetReach === undefined
-        ? Layer.empty
+        ? layerNoFleetSync
         : Layer.mock(FleetSync.GoatclawFleetSync)({
             ensure: () => Effect.succeed(options.fleetReach!),
           }),

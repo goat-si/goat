@@ -41,6 +41,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   SshWorkspaceError,
+  type ServerActivityBlocker,
   SshHostResult,
   ThreadId,
   type ChatFileAttachment,
@@ -63,6 +64,7 @@ import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import { newLaunchWatch } from "../../launchWatch.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as SshHandlers from "./handlers.ts";
 import { SshToolkit } from "./tools.ts";
 
@@ -1323,8 +1325,10 @@ const runtimeFixture = (
   result = runtimeStatus,
   remote?: Pick<SshRemoteDispatch.SshRemoteDispatch["Service"], "runtimeStatus" | "runtimeUpdate">,
   preflightReady = true,
+  hostBlockers?: ReadonlyArray<ServerActivityBlocker>,
 ) => {
   const updates: { host: string; confirmReplacement: boolean }[] = [];
+  const blockerReads: string[] = [];
   const catalogWrites: string[] = [];
   const preflight: SshPreflightReport = {
     host: "box",
@@ -1408,6 +1412,26 @@ const runtimeFixture = (
     Layer.mock(CloudMachineService.CloudMachineService)({}),
     Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
     Layer.mock(LaunchWatchService.LaunchWatchService)({}),
+    hostBlockers === undefined
+      ? Layer.empty
+      : Layer.mock(HostStatusMcpService.HostStatusMcpService)({
+          read: (_scope, input) =>
+            Effect.sync(() => {
+              blockerReads.push(input.host ?? "");
+              // Only the fields the busy-status enrichment reads.
+              return {
+                hosts: [
+                  {
+                    host: input.host ?? null,
+                    reachability: "ok",
+                    metrics: {
+                      threads: { running: 1, waiting: 0, queued: 0, blockers: hostBlockers },
+                    },
+                  },
+                ],
+              } as never;
+            }),
+        }),
   );
   const registered = McpHttpServer.toolkitRegistration(SshToolkit, SshHandlers.layer).pipe(
     Layer.provide(
@@ -1530,6 +1554,7 @@ const runtimeFixture = (
     preflight,
     catalogWrites,
     statusReads: () => statusReads,
+    blockerReads,
   };
 };
 
@@ -1555,6 +1580,42 @@ it.effect("discovers both runtime tools", () =>
     expect(yield* decodeSshHostResult(response.structuredContent)).toEqual(runtimeStatus);
     expect(f.statusReads()).toBe(1);
     expect(f.updates).toEqual([]);
+  }),
+);
+
+it.effect("names a busy host's blockers only for callers that may reach that host", () =>
+  Effect.gen(function* () {
+    const blockers = [
+      {
+        threadId: "thread-1",
+        title: "Nightly build",
+        reason: "running" as const,
+        since: "2026-10-23T03:00:00.000Z",
+      },
+    ];
+    const waiting: SshHostResult = {
+      kind: "ok",
+      status: {
+        host: "box",
+        state: "update_waiting",
+        runtimeVersion: "0.4.2",
+        requestedVersion: "0.4.3",
+        waitingReason: "busy",
+        detail: "Update to 0.4.3 waits for running work",
+      },
+    };
+    const f = runtimeFixture(waiting, undefined, true, blockers);
+    const named = yield* decodeSshHostResult(
+      (yield* f.call("goat_ssh_host_status", { host: "box" }, runtimeScope)).structuredContent,
+    );
+    expect(named.kind === "ok" && named.status.blockers).toEqual(blockers);
+    expect(named.kind === "ok" && named.status.detail).toContain('"Nightly build" (thread-1)');
+    const plain = yield* decodeSshHostResult(
+      (yield* f.call("goat_ssh_host_status", { host: "box" }, clientScope("read-only")))
+        .structuredContent,
+    );
+    expect(plain).toEqual(waiting);
+    expect(f.blockerReads).toEqual(["box"]);
   }),
 );
 

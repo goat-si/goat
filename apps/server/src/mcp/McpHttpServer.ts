@@ -40,6 +40,7 @@ import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as HubParity from "../hub/HubParity.ts";
@@ -1399,6 +1400,8 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   Layer.provide(ThreadResultService.layer),
   // Its own pressure rides on this machine's entry; the nudger reads the same monitor.
   Layer.provideMerge(HostPressureMonitor.layer),
+  // Host status reports the activity predicate runtime updates wait on.
+  Layer.provide(ProjectionStore.layer),
 );
 
 /** Reads HostStatusMcpService from the server's context; see `layerHostStatusService`. */
