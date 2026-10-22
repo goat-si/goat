@@ -31,6 +31,8 @@ import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  CloudMachineError,
+  type CloudMachineErrorReason,
   OrchestratorMcpFailure,
   type RepositoryLaunchSelection,
   SSH_PREFLIGHT_STEP_ORDER,
@@ -112,6 +114,9 @@ type LaunchOptions = {
   readonly registerInterrupted?: boolean;
   readonly goatclawRole?: "issue-sweeper";
   readonly references?: boolean;
+  readonly launchError?:
+    | SshRemoteDispatch.SshRemoteDispatchError
+    | RemoteDispatchCoordinator.RemoteDispatchError;
 };
 
 /** Calls goat_ssh_thread_launch over mocks; returns its last response and what it asked for. */
@@ -206,7 +211,9 @@ const launchRaw = (options: LaunchOptions = {}) =>
         validateLaunchAttachments: (requested) => Effect.succeed(requested),
         launchThread: (input, beforeLaunch) => {
           launchInputs.push(input);
-          return beforeLaunch.pipe(Effect.as(remoteResult));
+          return beforeLaunch.pipe(
+            Effect.andThen(options.launchError ?? Effect.succeed(remoteResult)),
+          ) as never;
         },
       }),
       // A calling thread launches through the report coordinator, which wraps the SSH launch.
@@ -217,7 +224,14 @@ const launchRaw = (options: LaunchOptions = {}) =>
             launchInputs.push(input.launch);
           }).pipe(
             Effect.andThen(beforeLaunch),
-            Effect.as({ correlationId: "rr-test", launch: remoteResult, reportsSupported: true }),
+            Effect.andThen(
+              options.launchError ??
+                Effect.succeed({
+                  correlationId: "rr-test",
+                  launch: remoteResult,
+                  reportsSupported: true,
+                }),
+            ),
           ),
       }),
       Layer.mock(LaunchWatchService.LaunchWatchService)({
@@ -327,6 +341,49 @@ it.effect("includes repository warnings in a successful SSH launch", () =>
     const result = yield* launchFromThread({ repository: { key: "github.com/owner/repo" } });
     expect(result.result.notes).toContain("Repository verified; dependency freshness unknown.");
     expect(result.launchInputs).toHaveLength(1);
+  }),
+);
+
+it.effect("keeps the dispatch reason and whether the launch may have started", () =>
+  Effect.gen(function* () {
+    const uncertain = new SshRemoteDispatch.SshRemoteDispatchError({
+      reason: "ssh_failed",
+      message: "Calling goat_thread_launch on box failed: connection reset",
+      launchMayHaveStarted: true,
+    });
+    // A calling thread launches through the report coordinator; an outside client directly.
+    for (const outsideClient of [false, true]) {
+      const { response } = yield* launchRaw({ launchError: uncertain, outsideClient });
+      expect(response, `outsideClient=${outsideClient}`).toMatchObject({
+        code: "orchestration_error",
+        message: uncertain.message,
+        reason: "ssh_failed",
+        mayHaveStarted: true,
+      });
+    }
+
+    const refused = yield* launchRaw({
+      launchError: new SshRemoteDispatch.SshRemoteDispatchError({
+        reason: "remote_refused",
+        message: "box refused: this credential cannot launch threads.",
+        remoteCode: "capability_denied",
+      }),
+    });
+    expect(refused.response).toMatchObject({
+      reason: "remote_refused",
+      remoteCode: "capability_denied",
+    });
+    expect(refused.response).not.toHaveProperty("mayHaveStarted");
+
+    // Recording the dispatch can fail after the remote accepted the launch.
+    const unrecorded = yield* launchRaw({
+      launchError: new RemoteDispatchCoordinator.RemoteDispatchError({ stage: "storage" }),
+    });
+    expect(unrecorded.response).toMatchObject({
+      code: "orchestration_error",
+      message: "SSH report coordination failed.",
+      mayHaveStarted: true,
+    });
   }),
 );
 
@@ -1210,6 +1267,7 @@ const createCloudMachine = (grant: {
   readonly readOnly?: boolean;
   readonly grantedScopes?: ReadonlyArray<"settings:write" | "orchestration:read">;
   readonly reauthorize?: "ok" | "fail";
+  readonly failure?: CloudMachineErrorReason;
 }) =>
   Effect.gen(function* () {
     const created: Array<unknown> = [];
@@ -1261,7 +1319,13 @@ const createCloudMachine = (grant: {
       Layer.mock(LaunchWatchService.LaunchWatchService)({}),
       Layer.mock(CloudMachineService.CloudMachineService)({
         create: (input) =>
-          Effect.sync(() => void created.push(input)).pipe(Effect.as(cloudMachineView)),
+          Effect.sync(() => void created.push(input)).pipe(
+            Effect.andThen(
+              grant.failure === undefined
+                ? Effect.succeed(cloudMachineView)
+                : Effect.fail(new CloudMachineError({ reason: grant.failure })),
+            ),
+          ),
         resume: (alias) =>
           Effect.sync(() => void created.push(alias)).pipe(Effect.as(cloudMachineView)),
       }),
@@ -1302,6 +1366,21 @@ it.effect("creates a cloud machine only for a caller whose settings grant is rec
       expect(denied.response, JSON.stringify(grant)).toMatchObject({ code: "capability_denied" });
       expect(denied.created).toEqual([]);
     }
+  }),
+);
+
+it.effect("keeps Boat's reason on a cloud machine failure beside its legacy code", () =>
+  Effect.gen(function* () {
+    const refused = yield* createCloudMachine({
+      grantedScopes: ["settings:write"],
+      reauthorize: "ok",
+      failure: "billing_required",
+    });
+    expect(refused.response).toMatchObject({
+      code: "orchestration_error",
+      message: "Boat needs an active plan or payment for this.",
+      reason: "billing_required",
+    });
   }),
 );
 
