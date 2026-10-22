@@ -1092,9 +1092,10 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
           );
         }),
       ),
-    updateProviderInstance: (mutation, patch = {}) =>
+    updateProviderInstance: (mutation, patch = {}, _approval, authorizeAtCommit) =>
       updateTestSettings((currentSettings) =>
         Effect.gen(function* () {
+          if (authorizeAtCommit) yield* authorizeAtCommit;
           yield* rejectMemoryHubSettingsPatch(patch, "test settings");
           yield* ensureProviderInstanceMutationAllowed(currentSettings, mutation, "test settings");
           const patched = applyServerSettingsPatch(currentSettings, patch);

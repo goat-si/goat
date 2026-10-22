@@ -198,3 +198,90 @@ it.effect(
       });
     }),
 );
+
+const settingsServer = (manage: ProviderSettingsService.ProviderSettings["Service"]["manage"]) =>
+  McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provide(liveThreadsLayer),
+    Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),
+    Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
+    Layer.provide(Layer.mock(Onboarding.ProviderOnboarding)({})),
+    Layer.provide(Layer.mock(ProviderSettingsService.ProviderSettings)({ manage })),
+    Layer.provide(Layer.mock(CloudAgents.CloudAgentService)({})),
+    Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
+  );
+
+it.effect("refuses provider settings writes from a read-only client before the service runs", () =>
+  Effect.gen(function* () {
+    const calls: unknown[] = [];
+    const result = yield* McpServer.McpServer.pipe(
+      Effect.flatMap((server) =>
+        server.callTool({
+          name: "goat_provider_update",
+          arguments: { instanceId: "cursorCloud", enabled: true },
+        }),
+      ),
+      Effect.provideService(Invocation.McpInvocationContext, scope),
+      Effect.provideService(McpSchema.McpServerClient, client),
+      Effect.provide(
+        settingsServer((request) =>
+          Effect.sync(() => {
+            calls.push(request);
+            return {
+              kind: "applied",
+              action: "update",
+              instance: null,
+              next: { call: "goat_provider_diagnose" },
+            };
+          }),
+        ),
+      ),
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("read-only");
+    expect(calls).toEqual([]);
+  }),
+);
+
+it.effect.each([
+  ["goat_provider_update", "update", { instanceId: "cursorCloud", enabled: true, host: "box" }],
+  ["goat_provider_add", "add", { acpAgentId: "devin", linkTo: "devinCloud" }],
+  ["goat_provider_link", "link", { instanceId: "devinCloud", siblingInstanceId: "devin" }],
+  ["goat_provider_remove", "remove", { instanceId: "devin" }],
+] as const)("%s hands its input to the provider settings service", ([name, action, args]) =>
+  Effect.gen(function* () {
+    const calls: unknown[] = [];
+    const writer: Invocation.McpInvocationScope = {
+      ...scope,
+      client: { sessionId: "writer", label: "test", access: "full-access" },
+    };
+    const result = yield* McpServer.McpServer.pipe(
+      Effect.flatMap((server) =>
+        Effect.gen(function* () {
+          const advertised = server.tools.find(({ tool }) => tool.name === name);
+          expect(advertised?.tool.inputSchema.properties).toHaveProperty("host");
+          expect(advertised?.tool.annotations?.destructiveHint).toBe(action === "remove");
+          return yield* server.callTool({ name, arguments: args });
+        }),
+      ),
+      Effect.provideService(Invocation.McpInvocationContext, writer),
+      Effect.provideService(McpSchema.McpServerClient, client),
+      Effect.provide(
+        settingsServer((request, caller) =>
+          Effect.sync(() => {
+            calls.push({ request, caller });
+            return {
+              kind: "applied",
+              action,
+              instance: null,
+              next: { call: "goat_provider_diagnose" },
+            };
+          }),
+        ),
+      ),
+    );
+    expect(result.isError).toBe(false);
+    expect(calls).toEqual([{ request: { action, input: args }, caller: writer }]);
+    expect(result.structuredContent).toMatchObject({ kind: "applied", action });
+  }),
+);
