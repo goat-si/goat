@@ -11,7 +11,8 @@ import * as Effect from "effect/Effect";
 import { ChildProcessSpawner } from "effect/process";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
-import { REMOTE_RUNTIME_CLEANUP_SCRIPT, launchOrReuseRemoteServer } from "./tunnel.ts";
+import { REMOTE_RUNTIME_CLEANUP_SCRIPT } from "./runtimeMaintenanceScripts.ts";
+import { launchOrReuseRemoteServer } from "./tunnel.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 import { remoteShell, uploadTarget } from "./tunnel.fixture.ts";
 

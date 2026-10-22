@@ -27,10 +27,10 @@ import {
 import {
   buildRemoteHostDownloadScript,
   buildRemoteRuntimeProbeScript,
-  REMOTE_HOST_PROCESS_SCRIPT,
   remoteUploadCommand,
   SshEnvironmentManager,
 } from "./tunnel.ts";
+import { REMOTE_HOST_PROCESS_SCRIPT } from "./runtimeOwnershipScripts.ts";
 
 // Stand-ins for the Git Bash host: uname reports MINGW, PowerShell answers for two
 // processes in its CRLF output, cygpath maps C:\ paths, and tasklist knows one PID.
