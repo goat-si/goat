@@ -377,8 +377,7 @@ request. It is built only if measurement shows it pays: on a fixed set of
 multi-step tasks (wait for a project's running threads, sync a provider to every
 host, fan a review out to three models), agents on providers without code
 execution must spend at least a third fewer model turns with it than with
-`goat_call` alone, with no rise in failed runs. The task set and runner are in
-[Measuring `goat_eval`](../operations/agent-surface-eval.md). Agents whose harness runs code,
+`goat_call` alone, with no rise in failed runs. Agents whose harness runs code,
 such as Codex code mode or a shell with `goat call`, already compose calls in a
 language they write well, which is the finding behind Cloudflare's
 [Code Mode](https://blog.cloudflare.com/code-mode/) and Anthropic's code-execution
@@ -427,7 +426,9 @@ work. If it is built, these rules hold.
 aside-codemode wrote its [protocol](https://github.com/lidge-jun/aside-codemode/blob/b395d89/evidence/bench-260918/PROTOCOL.md) and runner
 ([paired-run.mjs](https://github.com/lidge-jun/aside-codemode/blob/b395d89/eval/paired-run.mjs)) after a first pass measured the wrong transport
 and the wrong unit of work. `goat_eval` stays unbuilt until this protocol runs against a
-prototype on a branch and passes.
+prototype on a branch and passes. The task set, runner, and report are in
+[scripts/agent-surface/eval](../../scripts/agent-surface/eval/), and
+[Measuring `goat_eval`](../operations/agent-surface-eval.md) explains how to run them.
 
 - **Claims first, including losers.** Each workload states its claim and what falsifies it. A
   single-call control is included and is expected to show no gain, because one call is one turn
@@ -442,21 +443,27 @@ prototype on a branch and passes.
   (Codex code mode, or a shell with `goat call`) runs as a reference arm and is not part of the
   pass criterion.
 - **Pairs.** Arms alternate ABBA with a schedule derived from the pair index, and the report says
-  how often each arm went first. Each run is a fresh thread launched on a remote host with the
-  same seed state. At least 10 pairs per workload and provider, with raw rows kept and a separate
-  report step, so a disputed figure can be re-derived.
-- **Metrics.** Primary: model turns and tool calls per run, from the run's items. Secondary:
-  bytes of tool results that enter the transcript, failed runs, and wall time. Timing alone never
-  passes the gate. aside-codemode's agent-level pairs moved wall time only 5–45% (ratio 0.553 to
+  how often each arm went first. Each run is a fresh thread on a dev server with seeded data, and
+  its fixture is created for that run. At least 10 clean runs per arm and workload, with raw rows
+  kept and a separate report step, so a disputed figure can be re-derived.
+- **Metrics.** Primary: model turns per run. GOAT records no model request count, and calls made
+  in one response arrive as consecutive items, so turns are a range from the run's items: tool
+  rounds + 1 to tool calls + 1. Secondary: tool calls, bytes of tool results that enter the
+  transcript, failed runs, and wall time. Timing alone never passes the gate.
+  aside-codemode's agent-level pairs moved wall time only 5–45% (ratio 0.553 to
   0.952 against a target under 0.5), because about 8 s of fixed cost per model turn hid the
   primitive's speedup ([summary.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/evidence/summary.md)). Its gains were fewer calls and
   fewer bytes in context: one round trip instead of 24, and 356 bytes instead of 116,234 for eight
   pages ([BENCHMARKS.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/BENCHMARKS.md)).
-- **Contamination.** A run with a failed tool call, a mismatched oracle, or a different result
-  count from its pair is reported and excluded from the ratio, never quietly averaged in.
-- **Pass.** As stated above: at least a third fewer model turns on the multi-step workloads, with
-  no rise in failed runs and every oracle met. Anything else is "not built", and the result is
-  recorded either way.
+- **Contamination.** A run that used a tool or capability its arm does not have, or that the
+  harness could not finish, is reported and excluded from every figure. A failed tool call or a
+  mismatched oracle is the arm's own cost, so that run stays in the failure rate and only leaves
+  the turn medians. Excluding it would hide the first-call mistakes a new syntax adds:
+  aside-codemode counted 47 failed results in 371 runs, and the four most common were wrong
+  names and argument shapes ([ADR-0011](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0011-the-block-carries-what-an-error-cannot-say.md)).
+- **Pass.** At least a third fewer model turns at both ends of the range on each multi-step
+  workload, with no rise in failed runs and every oracle met. Anything else is "not built", and
+  the result is recorded either way.
 
 ## Human steps
 

@@ -4,10 +4,10 @@
 providers without code execution need at least a third fewer model turns with it than with
 `goat_call` alone, with no rise in failed runs. This page explains how to run that
 measurement. The task set, runner, and report live in
-[scripts/agent-surface/eval](../../scripts/agent-surface/eval/). The method is adapted from
-aside-codemode's paired runs
-([paired-run.mjs](https://github.com/lidge-jun/aside-codemode/blob/b395d89/eval/paired-run.mjs),
-[PROTOCOL.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/evidence/bench-260918/PROTOCOL.md)).
+[scripts/agent-surface/eval](../../scripts/agent-surface/eval/). The reasons behind the method
+are in the [measurement protocol](../internals/agent-surface.md#measurement-protocol-draft), which
+follows aside-codemode's
+[paired runs](https://github.com/lidge-jun/aside-codemode/blob/b395d89/eval/paired-run.mjs).
 No campaign has run yet, so this page states no results.
 
 ## The task set
@@ -59,11 +59,8 @@ one `EVAL_JSON` line with the task's keys, or when a check disagrees with the se
 runs stay in the failure rate. Medians come from successful runs, because a run that gave up
 early would look cheap. Each task needs at least ten clean runs per arm.
 
-Tool calls, tool output size, and wall time are recorded but never decide the gate. In
-aside-codemode's agent runs, roughly 8 s of fixed cost per model turn hid primitives that were
-seconds faster: wall-time ratios ranged from 0.553 to 0.952 against a target below 0.5, while
-call counts and bytes in context fell sharply
-([summary.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/evidence/summary.md)).
+Tool calls, tool output size, and wall time are recorded but never decide the gate; the
+[protocol](../internals/agent-surface.md#measurement-protocol-draft) explains why.
 
 ## Running a campaign
 
