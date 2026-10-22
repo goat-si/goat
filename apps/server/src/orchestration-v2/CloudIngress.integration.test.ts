@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as ThreadReplicaService from "../mcp/ThreadReplicaService.ts";
 import { assert, it } from "@effect/vitest";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
@@ -1989,6 +1990,7 @@ it.effect.each([
         ),
       });
       const mcp = McpHttpServer.layerOrchestratorToolkit.pipe(
+        Layer.provide(layerNoFleetSync),
         Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
         Layer.provideMerge(McpServer.McpServer.layer),
@@ -2893,6 +2895,7 @@ it.effect.each([
         },
       );
       const mcp = McpHttpServer.layerOrchestratorToolkit.pipe(
+        Layer.provide(layerNoFleetSync),
         Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
         Layer.provideMerge(McpServer.McpServer.layer),

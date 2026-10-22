@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as Stream from "effect/Stream";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -344,6 +345,7 @@ const fixture = Effect.gen(function* () {
     Layer.mock(LaunchWatchService.LaunchWatchService)({}),
   );
   const layer = OrchestratorMcpService.layer.pipe(
+    Layer.provide(layerNoFleetSync),
     Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
     Layer.provideMerge(RemoteDispatchCoordinator.layer),

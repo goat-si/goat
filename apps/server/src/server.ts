@@ -1224,6 +1224,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       ),
       Layer.provide(RemoteDispatchCoordinator.layer),
       Layer.provide(layerLaunchWatches),
+      // The first build of the thread services, which layer memoization shares with every
+      // later caller and the MCP tools, so goatclaw fleet sync must be here, not further up.
+      Layer.provideMerge(GoatclawFleetSync.layer),
       Layer.provide(SshRemoteDispatch.layer),
       Layer.provideMerge(layerOrchestrationApplication),
     ),
@@ -1470,8 +1473,7 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
   Layer.provide(layerLaunchWatches),
-  // One fleet goatclaw sync for the tools, host status and its scheduled reconcile.
-  Layer.provide(GoatclawFleetSync.layer.pipe(Layer.provideMerge(SshRemoteDispatch.layer))),
+  Layer.provide(SshRemoteDispatch.layer),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),

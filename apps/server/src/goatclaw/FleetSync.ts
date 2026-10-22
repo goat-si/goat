@@ -87,7 +87,7 @@ interface HostRecord extends HostReach {
 
 export const make = Effect.gen(function* () {
   const settings = yield* ServerSettingsService;
-  const dispatch = yield* Effect.serviceOption(SshRemoteDispatch.SshRemoteDispatch);
+  const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const records = new Map<string, HostRecord>();
   const gates = new Map<string, Semaphore.Semaphore>();
   const gate = (host: string) => {
@@ -170,10 +170,9 @@ export const make = Effect.gen(function* () {
 
   const syncHost = Effect.fn("GoatclawFleetSync.syncHost")(function* (host: string) {
     const checkedAt = yield* Clock.currentTimeMillis;
-    if (Option.isNone(dispatch)) return { sync: pending(), enforcesCeilings: false };
     const outcome = yield* local.pipe(
       Effect.flatMap((mine) =>
-        dispatch.value
+        dispatch
           .callHostTool(
             {
               host,
@@ -242,8 +241,7 @@ export const make = Effect.gen(function* () {
   };
 
   const reconcile = Effect.gen(function* () {
-    if (Option.isNone(dispatch)) return;
-    const hosts = yield* dispatch.value.connectedHosts;
+    const hosts = yield* dispatch.connectedHosts;
     if (hosts.length === 0) return;
     const mine = yield* local.pipe(Effect.option);
     const version = Option.isSome(mine) ? versionOf(mine.value) : "";

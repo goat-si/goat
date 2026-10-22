@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
@@ -81,6 +82,7 @@ function unsupported(driver: ProviderDriverKind, detail: string) {
 }
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
+  Layer.provide(layerNoFleetSync),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
 );
@@ -1381,7 +1383,10 @@ it.live("delegate_task wait returns before a child question is answered", () =>
           ),
         ),
       );
-      const layer = Layer.merge(layerOrchestratorToolkit, McpHttpServer.layerThreadToolkit).pipe(
+      const layer = Layer.merge(
+        layerOrchestratorToolkit,
+        McpHttpServer.layerThreadToolkit.pipe(Layer.provide(layerNoFleetSync)),
+      ).pipe(
         Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
         Layer.provide(ThreadResultService.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),

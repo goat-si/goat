@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
@@ -201,6 +202,13 @@ it.effect.each([false, true])(
           modelSelection: childModel,
           parentModelSelection: parentModel,
         });
-      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
+      }).pipe(
+        Effect.provide(
+          OrchestratorMcpService.layer.pipe(
+            Layer.provide(layerNoFleetSync),
+            Layer.provide(dependencies),
+          ),
+        ),
+      );
     }).pipe(Effect.provide(layerTest)),
 );

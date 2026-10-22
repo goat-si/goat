@@ -27,12 +27,11 @@ const machine = (
     Effect.provide(
       Layer.mergeAll(
         ServerSettingsService.layerTest({ goatclaw }),
-        reach === undefined
-          ? Layer.empty
-          : Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
-              connectedHosts: Effect.succeed(["box"]),
-              callHostTool: (call) => reach(call),
-            }),
+        Layer.mock(SshRemoteDispatch.SshRemoteDispatch)(
+          reach === undefined
+            ? { connectedHosts: Effect.succeed([]) }
+            : { connectedHosts: Effect.succeed(["box"]), callHostTool: (call) => reach(call) },
+        ),
       ),
     ),
   );
