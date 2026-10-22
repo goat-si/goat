@@ -325,6 +325,12 @@ thread or browser, a person who completes the step, or another grant such as
 `memory:write`. The type refuses a write without one. Tools whose thread callers
 only ask a person, such as provider sign-in and sync, declare `none` so a profile
 never preempts the person's decision.
+No tool opens or merges a pull request, so `pr.open` gates only GOAT's pull
+request tracking, and `pr.merge` gates nothing here: agents run `gh` in their own
+terminal, which a profile bounds only through its runtime-mode ceiling. A goatclaw
+role launch is refused when the narrowed profile lacks a capability the role's work
+uses ([RoleTemplates.ts](../../apps/server/src/goatclaw/RoleTemplates.ts)), so a
+merge manager is never started without `pr.merge`.
 With goatclaw on, the served handle refuses a GOAT thread whose effective profile
 lacks the declared capability, before arguments decode, so `goat_call` and anything
 else that calls through the server inherit the check

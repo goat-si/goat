@@ -50,10 +50,13 @@ to change this hub's settings.
 
 ## Permission profiles
 
-**Permission profiles** is off by default. With it on, an agent can launch
-threads, merge pull requests or change settings only as far as its profile
-allows, and an agent without its own profile gets **Default profile**. Turn it on
-in **Settings → Hub**.
+**Permission profiles** is off by default. With it on, GOAT refuses an agent's
+request to launch or steer threads, work on other machines, manage the fleet or
+change settings when its profile does not allow it. An agent without its own
+profile gets **Default profile**. Pull requests are opened and merged from the
+agent's own terminal, which profiles do not control; GOAT only refuses to start a
+merge manager for an agent whose profile cannot merge. Turn it on in
+**Settings → Hub**.
 
 The switch covers your whole fleet. Turning it on or off on one machine does the
 same on every host connected to it, and the most recent change wins wherever you
