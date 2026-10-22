@@ -35,8 +35,12 @@ import {
 } from "./DesktopUpdateStatusIcon";
 import { SidebarUpdateReleaseNotes } from "./SidebarUpdateReleaseNotes";
 import { SidebarUpdateCapsule } from "./SidebarUpdateCapsule";
-import { UpdateEverythingDialog } from "./UpdateEverythingDialog";
-import type { UpdateEverythingRun, UpdateRunLocalState } from "./updateEverything.logic";
+import { type UpdateDialogSelection, UpdateEverythingDialog } from "./UpdateEverythingDialog";
+import {
+  describeUpdateTabs,
+  type UpdateEverythingRun,
+  type UpdateRunLocalState,
+} from "./updateEverything.logic";
 import {
   clearSavedUpdateEverythingResult,
   saveUpdateEverythingResult,
@@ -138,7 +142,7 @@ export function resolveSidebarUpdateHeading({
     if (run.localVersion !== null) return "Updating everything";
     return `Updating ${joinRemoteKinds(
       run.machines.some((machine) => machine.updatesProviders),
-      run.machines.some((machine) => machine.server !== null),
+      run.machines.some((machine) => machine.server !== null || machine.sshRuntime !== null),
       "providers",
       "servers",
     )}`;
@@ -269,7 +273,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
   const isDownloading = state?.status === "downloading";
   const localUpdateVersion =
     state && action !== "none" ? getDesktopUpdateDownloadedVersion(state) : null;
-  const everything = useUpdateEverything(localUpdateVersion);
+  const everything = useUpdateEverything(localUpdateVersion, state?.channel ?? null);
   const runsEverything = everything.hasUpdates && !isDownloading;
   const run = useUpdateEverythingRun();
   const isRunningEverything = run !== null;
@@ -298,7 +302,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       checking: showCheckIcon,
     });
   const detail = runsEverything
-    ? everything.summary
+    ? describeUpdateTabs(everything.counts)
     : showUpdateDetails
       ? state
         ? getDesktopUpdateButtonTooltip(state)
@@ -414,22 +418,24 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       .finally(() => setIsActionPending(false));
   };
 
-  const runEverything = async () => {
+  const runEverything = async ({ tab, rows }: UpdateDialogSelection) => {
     const bridge = window.desktopBridge;
     setIsConfirmingEverything(false);
     setIsActionPending(true);
     const result = await settlePromise(() =>
-      everything.run({
-        ...(bridge && action === "download"
-          ? {
-              downloadLocal: (reportError) =>
-                downloadLocalUpdate(bridge, { notifyDownloaded: false, reportError }),
-            }
-          : {}),
-        ...(bridge && action !== "none"
-          ? { installLocal: (reportError) => installLocalUpdate(bridge, reportError) }
-          : {}),
-      }),
+      tab === "runtimes"
+        ? everything.runRuntimes(rows, everything.localEnvironmentId)
+        : everything.runApp(rows, {
+            ...(bridge && action === "download"
+              ? {
+                  downloadLocal: (reportError) =>
+                    downloadLocalUpdate(bridge, { notifyDownloaded: false, reportError }),
+                }
+              : {}),
+            ...(bridge && action !== "none"
+              ? { installLocal: (reportError) => installLocalUpdate(bridge, reportError) }
+              : {}),
+          }),
     );
     if (result._tag === "Failure") {
       const error = squashAtomCommandFailure(result);
@@ -471,11 +477,8 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     <UpdateEverythingDialog
       open={isConfirmingEverything}
       onOpenChange={setIsConfirmingEverything}
-      summary={everything.summary}
-      lines={everything.lines}
-      restarts={everything.restarts}
-      skipped={everything.skipped}
-      onConfirm={() => void runEverything()}
+      everything={everything}
+      onConfirm={(selection) => void runEverything(selection)}
     />
   );
 

@@ -12,6 +12,7 @@ import {
   formatUpdateElapsed,
   RUN_STATUS_LABELS,
   resolveUpdateRunMachineStatus,
+  type UpdateCapsuleView,
   type UpdateEverythingRun,
   type UpdateRunLocalState,
   type UpdateRunMachineView,
@@ -19,8 +20,19 @@ import {
 import {
   dismissSettledUpdateRunMachines,
   postponeUpdateRestart,
+  restartUpdateNow,
   retryFailedUpdateRunServers,
+  stopWaitingUpdateRunMachines,
 } from "./updateEverythingRun";
+import { updateSshRuntimeWhenIdle } from "./useUpdateEverything";
+
+const ACTION_LABELS: Record<NonNullable<UpdateCapsuleView["action"]>, string> = {
+  later: "Later",
+  retry: "Retry",
+  dismiss: "Dismiss",
+  "restart-now": "Restart now",
+  "stop-waiting": "Stop waiting",
+};
 
 function useNow(intervalMs: number | null): number {
   const step = intervalMs ?? 60_000;
@@ -49,6 +61,10 @@ function localStatusLabel(run: UpdateEverythingRun, local: UpdateRunLocalState, 
     return `restarts in ${Math.max(0, Math.ceil((run.restartAt - now) / 1000))}s`;
   }
   if (run.phase === "installing") return "restarting";
+  if (run.phase === "local-idle") {
+    const count = run.localRunningThreads ?? 0;
+    return `waits for ${count} running ${count === 1 ? "thread" : "threads"}`;
+  }
   if (local?.status === "downloading") {
     return `downloading${local.percent === null ? "" : ` ${Math.floor(local.percent)}%`}`;
   }
@@ -68,7 +84,8 @@ export function SidebarUpdateCapsule({
 }) {
   const machines = useUpdateRunMachineViews(run);
   const hasActiveMachine = machines.some(
-    ({ status }) => status !== "done" && status !== "failed" && status !== "waiting",
+    ({ status }) =>
+      status !== "done" && status !== "failed" && status !== "waiting" && status !== "idle-wait",
   );
   const now = useNow(run.phase === "countdown" ? 1_000 : hasActiveMachine ? 30_000 : null);
   const view = describeUpdateCapsule(run, machines, local, now);
@@ -76,11 +93,13 @@ export function SidebarUpdateCapsule({
   const failed = machines.some(({ status }) => status === "failed");
   const settled = !hasActiveMachine && run.localVersion === null;
 
-  const actionLabel =
-    view.action === "later" ? "Later" : view.action === "retry" ? "Retry" : "Dismiss";
+  const actionLabel = ACTION_LABELS[view.action ?? "dismiss"];
   const runAction = () => {
     if (view.action === "later") postponeUpdateRestart();
-    else if (view.action === "retry") retryFailedUpdateRunServers(updateServer);
+    else if (view.action === "retry")
+      retryFailedUpdateRunServers(updateServer, (runtime) => updateSshRuntimeWhenIdle(runtime));
+    else if (view.action === "restart-now") restartUpdateNow();
+    else if (view.action === "stop-waiting") stopWaitingUpdateRunMachines();
     else dismissSettledUpdateRunMachines();
   };
 
@@ -152,7 +171,10 @@ export function SidebarUpdateCapsule({
                   )}
                 >
                   {RUN_STATUS_LABELS[status]}
-                  {status !== "done" && status !== "failed" && status !== "waiting"
+                  {status !== "done" &&
+                  status !== "failed" &&
+                  status !== "waiting" &&
+                  status !== "idle-wait"
                     ? ` ${formatUpdateElapsed(now - machine.startedAt)}`
                     : ""}
                 </span>

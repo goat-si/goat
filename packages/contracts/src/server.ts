@@ -942,6 +942,10 @@ export const ServerSelfUpdateInput = Schema.Struct({
 });
 export type ServerSelfUpdateInput = typeof ServerSelfUpdateInput.Type;
 
+/** A self-update without `confirmReplacement` refuses with this reason while turns run. */
+export const SERVER_UPDATE_BUSY_REASON =
+  "GOAT is running threads on this server, so the update waits. Try again when they finish, or update from a GOAT app that can confirm interrupting them.";
+
 export const ServerSelfUpdateResult = Schema.Struct({
   targetVersion: TrimmedNonEmptyString,
   method: ServerSelfUpdateMethod,

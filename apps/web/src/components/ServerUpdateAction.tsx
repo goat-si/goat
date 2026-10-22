@@ -66,12 +66,18 @@ export type ServerUpdateOutcome =
   | { readonly status: "updated" | "skipped" }
   | { readonly status: "failed"; readonly message: string };
 
-/** Toasts its success or failure unless `quiet`; never rejects. */
+/**
+ * Toasts its success or failure unless `quiet`; never rejects. `whenIdle` lets the server refuse
+ * while turns run instead of replacing them; the update dialog then waits and tries again.
+ */
 export function useServerUpdate() {
   const updateServer = useAtomCommand(serverEnvironment.updateServer, { reportFailure: false });
   return async (
     target: ServerUpdateTarget,
-    { quiet = false }: { readonly quiet?: boolean } = {},
+    {
+      quiet = false,
+      whenIdle = false,
+    }: { readonly quiet?: boolean; readonly whenIdle?: boolean } = {},
   ): Promise<ServerUpdateOutcome> => {
     const { environmentId, serverLabel, selfUpdate, targetVersion } = target;
     if (
@@ -84,8 +90,8 @@ export function useServerUpdate() {
       environmentId,
       input: {
         targetVersion,
-        // A person pressed Update, so running work may be replaced; omitting this waits for idle.
-        confirmReplacement: true,
+        // A person pressed Update on this server, so running work may be replaced.
+        ...(whenIdle ? {} : { confirmReplacement: true }),
         ...(target.threadContinuation && target.continueThreadsAfterServerUpdate
           ? { continueRunningThreads: true }
           : {}),
