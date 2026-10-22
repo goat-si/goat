@@ -1323,16 +1323,16 @@ describe("sidebar view hydration", () => {
     ).toBe(value);
   });
 
-  it("uses the hydrated choice, and Projects when hydration fails with nothing saved", () => {
+  it("uses the hydrated choice, and Activity when hydration fails with nothing saved", () => {
     expect(
       resolveSidebarViewIsProjects({ status: "ready", value: false, synchronousValue: true }),
     ).toBe(false);
     expect(
-      resolveSidebarViewIsProjects({ status: "failed", value: false, synchronousValue: null }),
-    ).toBe(true);
-    expect(
-      resolveSidebarViewIsProjects({ status: "failed", value: true, synchronousValue: false }),
+      resolveSidebarViewIsProjects({ status: "failed", value: true, synchronousValue: null }),
     ).toBe(false);
+    expect(
+      resolveSidebarViewIsProjects({ status: "failed", value: false, synchronousValue: true }),
+    ).toBe(true);
   });
 });
 

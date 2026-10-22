@@ -123,7 +123,9 @@ open.
 
 ### Follow Priority in Activity
 
-On web and desktop, switch to **Activity** to see **Priority** at the top. It holds threads
+On web and desktop, the sidebar opens in **Activity**, with **Priority** at the top. Choose
+the bell to switch between Activity and **Projects**; the sidebar remembers your choice on that
+device. Priority holds threads
 with work in progress, pending approvals or answers, unread completions, or an unacknowledged
 return from snooze. A delegated task needing approval or an answer brings its parent here too,
 and the parent row shows **Approval** or **Input**.

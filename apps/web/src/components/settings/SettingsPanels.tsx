@@ -946,15 +946,17 @@ export function GeneralSettingsPanel() {
           description="Choose Projects view for per-project thread trees or Activity view for thread activity."
           control={
             <Select
-              value={settings.legacySidebarEnabled ? "projects" : "activity"}
+              value={settings.projectsSidebarEnabled ? "projects" : "activity"}
               onValueChange={(value) => {
                 if (value === "projects" || value === "activity") {
-                  updateSettings({ legacySidebarEnabled: value === "projects" });
+                  updateSettings({ projectsSidebarEnabled: value === "projects" });
                 }
               }}
             >
               <SelectTrigger aria-label="Sidebar view">
-                <SelectValue>{settings.legacySidebarEnabled ? "Projects" : "Activity"}</SelectValue>
+                <SelectValue>
+                  {settings.projectsSidebarEnabled ? "Projects" : "Activity"}
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup>
                 <SelectItem value="projects">Projects</SelectItem>
