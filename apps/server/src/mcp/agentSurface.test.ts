@@ -251,7 +251,7 @@ const client = McpSchema.McpServerClient.of({
 });
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(196); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes, hub, permission profile and goatclaw sync, computer use, decision, lane, and preparation retry tools.
+  expect(entries).toHaveLength(197); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, and preparation retry tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
@@ -538,6 +538,7 @@ const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
 const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
   "note.read": { path: "inbox/note.md" },
   "note.write": { path: "inbox/note.md", body: "- [ ] item", status: null, baseRevision: null },
+  "note.update": { path: "inbox/note.md", pinned: true },
   "note.move": { from: "inbox/note.md", to: "done/note.md", baseRevision: "0".repeat(64) },
   "channel.task_export": { from: "2026-01-01T00:00:00.000Z", to: "2026-01-02T00:00:00.000Z" },
   "scheduler.status": { local: false },

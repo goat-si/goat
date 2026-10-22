@@ -423,7 +423,7 @@ work. If it is built, these rules hold.
   `map` index) and a digest of its resolved arguments. On resume, completed read
   results, branch choices, and `map` bindings are fixed: they come from the
   journal and are never re-read. Write keys come from `(evalRunId, structural
-id)`, never from a call counter.
+  id)`, never from a call counter.
 - **Suspension.** A step that returns `needs_human` ends the run with that status
   and its `evalRunId`, and its journal entry holds the handoff. On
   `goat_eval { resume: evalRunId }` the evaluator reads that handoff instead of

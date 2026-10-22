@@ -145,8 +145,8 @@ function EnvironmentNotes({ environmentId }: { readonly environmentId: Environme
       ) : null}
       {rows.map((row, index) => (
         <View key={row.path} className="gap-2">
-          {index === 0 || rows[index - 1]?.folder !== row.folder ? (
-            <Text className="font-goat-bold text-lg text-foreground">{row.folder ?? "Notes"}</Text>
+          {index === 0 || rows[index - 1]?.group !== row.group ? (
+            <Text className="font-goat-bold text-lg text-foreground">{row.group}</Text>
           ) : null}
           <Pressable
             accessibilityRole="button"
@@ -154,6 +154,11 @@ function EnvironmentNotes({ environmentId }: { readonly environmentId: Environme
             className="gap-1 rounded-xl border border-border bg-card p-4"
           >
             <Text className="font-goat-bold text-foreground">{row.title}</Text>
+            {row.preview ? (
+              <Text className="text-sm text-foreground-muted" numberOfLines={2}>
+                {row.preview}
+              </Text>
+            ) : null}
             <Text className="text-sm text-foreground-muted">
               {row.status} · {row.path}
             </Text>

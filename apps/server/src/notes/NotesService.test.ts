@@ -23,7 +23,7 @@ import { parseNote, serializeNote } from "./frontmatter.ts";
 
 const isSummary = Schema.is(NoteSummary);
 const linked = { threadId: ThreadId.make("thread-1"), host: null, lastResult: null };
-import { notesLayer as layer } from "./NotesTestkit.ts";
+import { notesLayer as layer, racing } from "./NotesTestkit.ts";
 
 it("round trips unknown frontmatter keys, comments, remote links, and body", () => {
   const source =
@@ -758,25 +758,6 @@ it.effect.each([
 );
 
 // An external writer acting while a note write prepares its temp file, after the revision check.
-const racing = () => {
-  let race: Effect.Effect<void> | undefined;
-  return {
-    arm: (effect: Effect.Effect<void>) => {
-      race = effect;
-    },
-    layer: layer(undefined, undefined, (fs) => ({
-      ...fs,
-      makeTempDirectoryScoped: (options) =>
-        Effect.gen(function* () {
-          const pending = options?.prefix === ".note-" ? race : undefined;
-          race = undefined;
-          if (pending) yield* pending;
-          return yield* fs.makeTempDirectoryScoped(options);
-        }),
-    })),
-  };
-};
-
 it.effect("an external edit after the revision check is refused, not overwritten", () => {
   const external = racing();
   return Effect.gen(function* () {
