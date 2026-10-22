@@ -7,7 +7,12 @@ import {
   type OrchestrationV2CloudTask,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
-import { deriveCloudTaskState, presentCloudRun, presentCloudTask } from "./cloudTask.ts";
+import {
+  cloudRetryAllowed,
+  deriveCloudTaskState,
+  presentCloudRun,
+  presentCloudTask,
+} from "./cloudTask.ts";
 
 const instanceId = ProviderInstanceId.make("fakeCloud");
 const task: OrchestrationV2CloudTask = {
@@ -421,6 +426,75 @@ describe("presentCloudRun", () => {
       ["result", "failed"],
     ]);
     expect(card.message).toBe("Claude Code hasn't trusted this folder yet.");
+  });
+
+  it("keeps a rejected follow-up's own error when the task keeps running", () => {
+    const projection = cloudProjection({
+      driver: "claudeCloud",
+      task: { ...failedTask, status: "running", error: undefined, summary: undefined },
+    }) as unknown as { turnItems: Array<Record<string, unknown>> };
+    projection.turnItems = projection.turnItems.map((item) =>
+      item.type === "error"
+        ? {
+            ...item,
+            failure: {
+              class: "provider_error",
+              message: "Claude Cloud did not accept the follow-up.",
+              code: "cloud_delivery_rejected",
+            },
+          }
+        : item,
+    );
+    const card = presentCloudRun(projection as unknown as Parameters<typeof presentCloudRun>[0])!;
+    expect(card.phase).toBe("failed");
+    expect(card.message).toBe("Claude Cloud did not accept the follow-up.");
+  });
+
+  it("keeps errors visible while the run is still going", () => {
+    const card = presentCloudRun(
+      cloudProjection({
+        task: { ...failedTask, status: "running", error: undefined },
+        run: { status: "running", completedAt: null },
+      }),
+    )!;
+    expect(card.hiddenItemIds.has("turn-item:error")).toBe(false);
+  });
+
+  it("shows a registered task that has no app run", () => {
+    const projection = cloudProjection({
+      task: { ...failedTask, status: "running", tracking: "link-only", error: undefined },
+    }) as unknown as { runs: unknown[] };
+    projection.runs = [];
+    const card = presentCloudRun(projection as unknown as Parameters<typeof presentCloudRun>[0])!;
+    expect(card).toMatchObject({
+      runId: null,
+      phase: "running",
+      taskUrl: "https://cursor.com/agents/bc-1",
+      retry: null,
+    });
+  });
+
+  it("allows Retry only through the failed run's own usable provider", () => {
+    const projection = cloudProjection({ task: failedTask });
+    const card = presentCloudRun(projection)!;
+    const provider = (instanceId: string, availability?: "unavailable") =>
+      ({
+        instanceId,
+        driver: "cursorCloud",
+        enabled: true,
+        executionLocation: "cloud",
+        ...(availability ? { availability } : {}),
+      }) as unknown as Parameters<typeof cloudRetryAllowed>[2][number];
+    const full = {
+      ...projection,
+      thread: { providerInstanceId: "cursorCloud", activeProviderThreadId: "pt:1" },
+      providerSessions: [],
+    } as unknown as Parameters<typeof cloudRetryAllowed>[1];
+    expect(cloudRetryAllowed(card, full, [provider("cursorCloud")])).toBe(true);
+    expect(
+      cloudRetryAllowed(card, full, [provider("cursorCloud", "unavailable"), provider("other")]),
+    ).toBe(false);
+    expect(cloudRetryAllowed(card, full, [provider("other")])).toBe(false);
   });
 
   it("leaves local runs alone", () => {

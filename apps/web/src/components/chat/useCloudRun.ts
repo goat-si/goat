@@ -1,4 +1,8 @@
-import { presentCloudRun, type CloudRunCard } from "@goat/client-runtime/state/cloud-task";
+import {
+  cloudRetryAllowed,
+  presentCloudRun,
+  type CloudRunCard,
+} from "@goat/client-runtime/state/cloud-task";
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
@@ -9,6 +13,7 @@ import type {
   ProviderInteractionMode,
   RunId,
   RuntimeMode,
+  ServerProvider,
   ThreadId,
 } from "@goat/contracts";
 import { useState } from "react";
@@ -40,8 +45,9 @@ export function useCloudRun(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId | null;
   readonly projection: ThreadStructure | null;
-  // The composer's own gates: operate scope, a follow-up the provider accepts, no send in flight.
-  readonly canRetry: boolean;
+  // Operate scope and no send in flight; the provider checks use the run's own provider.
+  readonly canOperate: boolean;
+  readonly providers: ReadonlyArray<ServerProvider>;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
   readonly setThreadError: ReturnType<typeof makeThreadErrorSetter>;
@@ -88,5 +94,6 @@ export function useCloudRun(input: {
     }
   });
 
-  return { cloudRun: card, onRetryCloudRun: input.canRetry ? retry : null };
+  const canRetry = input.canOperate && cloudRetryAllowed(card, input.projection, input.providers);
+  return { cloudRun: card, onRetryCloudRun: canRetry ? retry : null };
 }

@@ -198,7 +198,8 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
       latest === undefined || candidate.ordinal > latest.ordinal ? candidate : latest,
     undefined,
   );
-  if (!run || run.providerThreadId === null) return null;
+  if (!run) return presentRegisteredCloudTask(projection);
+  if (run.providerThreadId === null) return null;
   const providerThread = projection.providerThreads.find(
     (candidate) => candidate.id === run.providerThreadId,
   );
@@ -223,6 +224,7 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
     if (task?.status === "succeeded") return "succeeded";
     if (task?.status === "failed") return "failed";
     if (task?.status === "cancelled") return "cancelled";
+    // A rejected follow-up fails the run while the accepted task keeps running.
     if (!runEnded) return "running";
     if (run.status === "completed") return "succeeded";
     if (run.status === "failed") return "failed";
@@ -302,6 +304,7 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
     phase === "running" || phase === "succeeded"
       ? null
       : ((task ? taskMessage(task) : null) ??
+        // The run's own failure, such as a rejected follow-up to a task that keeps running.
         (rootError?.failure.message.trim() || null) ??
         (started
           ? null
@@ -313,6 +316,7 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
   const hiddenMessageIds = new Set<string>();
   for (const item of runItems) {
     if (
+      phase !== "running" &&
       item.type === "error" &&
       item.parentItemId === null &&
       item.failure.code !== ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE
@@ -351,7 +355,7 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
 
   const view = task ? presentCloudTask(task) : null;
   return {
-    runId: run.id,
+    runId: run.id as typeof run.id | null,
     provider,
     phase,
     title: headline(provider, phase),
@@ -366,9 +370,79 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
     localChangesNotice: view?.localChangesNotice ?? null,
     hiddenItemIds: hiddenItemIds as ReadonlySet<string>,
     hiddenMessageIds: hiddenMessageIds as ReadonlySet<string>,
-    resultMessageId,
+    resultMessageId: resultMessageId as string | null,
     retry,
   };
 }
 
 export type CloudRunCard = NonNullable<ReturnType<typeof presentCloudRun>>;
+
+/** A task registered from outside GOAT has no app run: show its status and links alone. */
+function presentRegisteredCloudTask(projection: CloudRunProjection) {
+  const providerThread = projection.providerThreads.findLast(
+    (candidate) => candidate.ownerNodeId === null && candidate.cloudTask !== undefined,
+  );
+  const task = providerThread?.cloudTask;
+  if (!providerThread || !task) return null;
+  const provider = CLOUD_PROVIDER_LABELS[providerThread.driver] ?? "Cloud agent";
+  const phase: CloudRunPhase =
+    task.status === "submitting" || task.status === "running"
+      ? "running"
+      : task.status === "succeeded"
+        ? "succeeded"
+        : task.status;
+  const view = presentCloudTask(task);
+  const stage: CloudRunStage = {
+    id: "run",
+    label: "Run in the cloud",
+    status:
+      phase === "running"
+        ? "running"
+        : phase === "succeeded"
+          ? "done"
+          : phase === "cancelled"
+            ? "skipped"
+            : "failed",
+    startedAt: null,
+    endedAt: null,
+    detail: phase === "running" ? task.progress?.trim() || null : null,
+  };
+  return {
+    runId: null,
+    provider,
+    phase,
+    title: headline(provider, phase),
+    message: taskMessage(task) ?? (phase === "succeeded" ? task.summary?.trim() || null : null),
+    stages: [stage],
+    startedAt: null,
+    endedAt: null,
+    taskUrl: view.taskUrl,
+    prUrl: view.prUrl,
+    branch: task.branch ?? null,
+    source: task.source,
+    localChangesNotice: view.localChangesNotice,
+    hiddenItemIds: new Set<string>() as ReadonlySet<string>,
+    hiddenMessageIds: new Set<string>() as ReadonlySet<string>,
+    resultMessageId: null,
+    retry: null,
+  };
+}
+
+/**
+ * Retry resends with the failed run's own provider, so that provider's availability and
+ * follow-up rules decide, not whichever provider the composer currently selects.
+ */
+export function cloudRetryAllowed(
+  card: CloudRunCard | null,
+  projection: Parameters<typeof deriveCloudTaskState>[0],
+  providers: ReadonlyArray<ServerProvider>,
+) {
+  const instanceId = card?.retry?.modelSelection.instanceId;
+  const provider = providers.find((candidate) => candidate.instanceId === instanceId);
+  return (
+    provider !== undefined &&
+    provider.enabled &&
+    provider.availability !== "unavailable" &&
+    deriveCloudTaskState(projection, provider).composerBlockReason === null
+  );
+}

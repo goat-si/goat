@@ -816,12 +816,9 @@ function ThreadRouteContent(
   const retryCloudRunCommand = useAtomCommand(threadEnvironment.startTurn, "retry the cloud run");
   const retryingCloudRun = useRef(false);
   const cloudRetry = composer.cloudRun?.retry ?? null;
-  // Same gates as sending a follow-up: operate scope and a follow-up the provider accepts.
+  // Operate scope here; the run's own provider must be usable and accept a follow-up.
   const handleRetryCloudRun =
-    selectedThread &&
-    cloudRetry &&
-    canOperateThread &&
-    composer.cloudState.composerBlockReason === null
+    selectedThread && cloudRetry && canOperateThread && composer.cloudRunRetryAllowed
       ? async () => {
           if (retryingCloudRun.current) return;
           retryingCloudRun.current = true;

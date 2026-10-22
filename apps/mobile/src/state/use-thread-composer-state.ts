@@ -1,4 +1,8 @@
-import { deriveCloudTaskState, presentCloudRun } from "@goat/client-runtime/state/cloud-task";
+import {
+  cloudRetryAllowed,
+  deriveCloudTaskState,
+  presentCloudRun,
+} from "@goat/client-runtime/state/cloud-task";
 import { useComposerAttachmentActions } from "./use-composer-attachment-actions";
 import * as Dialog from "../components/ui/Dialog";
 import { AuthOrchestrationOperateScope } from "@goat/contracts";
@@ -324,6 +328,11 @@ export function useThreadComposerState() {
     (provider) => provider.instanceId === modelSelection?.instanceId,
   );
   const cloudState = deriveCloudTaskState(selectedThreadProjection?.projection, selectedProvider);
+  const cloudRunRetryAllowed = cloudRetryAllowed(
+    cloudRun,
+    selectedThreadProjection?.projection,
+    serverConfig?.providers ?? [],
+  );
   const interactionMode = selectedThread
     ? resolveProviderInteractionMode(
         selectedProvider,
@@ -888,6 +897,7 @@ export function useThreadComposerState() {
   return {
     cloudState,
     cloudRun,
+    cloudRunRetryAllowed,
     feedbackSubmissions,
     dismissFeedback,
     selectedThreadFeed,

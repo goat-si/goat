@@ -1525,12 +1525,8 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     threadId: activeThread?.id ?? null,
     projection: serverProjection,
-    // The composer's send gates: a usable provider, a follow-up it accepts, no send in flight.
-    canRetry:
-      canOperateThread &&
-      selectedProviderEntry !== undefined &&
-      cloudState.composerBlockReason === null &&
-      !isSendBusy,
+    canOperate: canOperateThread && !isSendBusy,
+    providers: providerStatuses,
     runtimeMode,
     interactionMode,
     setThreadError,
