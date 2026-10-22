@@ -197,30 +197,19 @@ Scanned 155 Markdown files (docs, structure, skills, root guides) and 2 agent pr
 
 Names that look like tools but are not in the registry:
 
-| Name                             | Where                                                                                                                    |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `update_runtime`                 | packages/provider-core/src/server/orchestrationInstructions.ts:44                                                        |
-| `goat_describe`                  | docs/internals/agent-surface.md:45, docs/internals/agent-surface.md:745                                                  |
-| `goat_call`                      | docs/internals/agent-surface.md:45, docs/internals/agent-surface.md:747                                                  |
-| `goat_eval`                      | docs/internals/agent-surface.md:45                                                                                       |
-| `goat_thread_create_many`        | docs/internals/agent-surface.md:221                                                                                      |
-| `goat_task_create`               | docs/internals/agent-surface.md:222                                                                                      |
-| `goat_task_read`                 | docs/internals/agent-surface.md:222                                                                                      |
-| `goat_task_cancel`               | docs/internals/agent-surface.md:222                                                                                      |
-| `goat_provider_list`             | docs/internals/agent-surface.md:224                                                                                      |
-| `goat_schedule_create`           | docs/internals/agent-surface.md:225                                                                                      |
-| `goat_handoff_create`            | docs/internals/agent-surface.md:226                                                                                      |
-| `goat_html_preview`              | docs/internals/agent-surface.md:241                                                                                      |
-| `goat_html_render`               | docs/internals/agent-surface.md:241                                                                                      |
-| `goat_pull_request_link`         | docs/internals/agent-surface.md:242                                                                                      |
-| `goat_pull_request_guide_update` | docs/internals/agent-surface.md:243                                                                                      |
-| `goat_host_cordon`               | docs/internals/agentic-k8s.md:955                                                                                        |
-| `goat_thread_reschedule`         | docs/internals/agentic-k8s.md:955                                                                                        |
-| `goat_scheduler_status`          | docs/internals/agentic-k8s.md:958                                                                                        |
-| `goat_fallback_chain_get`        | docs/internals/agentic-k8s.md:958                                                                                        |
-| `run_steps`                      | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144 |
-| `run_script`                     | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145 |
-| `list_apps`                      | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                              |
+| Name                      | Where                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `update_runtime`          | packages/provider-core/src/server/orchestrationInstructions.ts:44                                                        |
+| `goat_call`               | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:43, docs/internals/agent-surface.md:353 (+2)          |
+| `goat_eval`               | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:375, docs/internals/agent-surface.md:691 (+1)         |
+| `goat_describe`           | docs/internals/agent-surface.md:43                                                                                       |
+| `goat_host_cordon`        | docs/internals/agentic-k8s.md:955                                                                                        |
+| `goat_thread_reschedule`  | docs/internals/agentic-k8s.md:955                                                                                        |
+| `goat_scheduler_status`   | docs/internals/agentic-k8s.md:958                                                                                        |
+| `goat_fallback_chain_get` | docs/internals/agentic-k8s.md:958                                                                                        |
+| `run_steps`               | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144 |
+| `run_script`              | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145 |
+| `list_apps`               | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                              |
 
 CLI invocations in the docs that do not resolve:
 
@@ -228,7 +217,7 @@ CLI invocations in the docs that do not resolve:
 | --------------------------------- | ------------------------------------------ | ---------------------------------- |
 | `goat service install --no-start` | `goat service install` has no `--no-start` | docs/user/background-service.md:14 |
 
-91 of 188 tools are never named in any Markdown doc, and 82 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_task_export`, `channel_task_move`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_machine_stop`, `goat_cloud_run_list`, `goat_connection_remove`, `goat_decision_answer`, `goat_decision_get`, `goat_decision_list`, `goat_host_link_create`, `goat_host_link_remove`, `goat_hub_device_join`, `goat_hub_device_leave`, `goat_hub_device_repair`, `goat_hub_device_verify`, `goat_permission_profile_get`, `goat_project_clone`, `goat_project_create`, `goat_project_delete`, `goat_project_read`, `goat_project_update`, `goat_provider_add`, and 58 more. Agents learn these only from the MCP catalog.
+115 of 188 tools are never named in any Markdown doc, and 102 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_answer`, `goat_decision_get`, `goat_decision_list`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_link_create`, `goat_host_link_remove`, `goat_hub_device_join`, `goat_hub_device_leave`, and 78 more. Agents learn these only from the MCP catalog.
 
 Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`, `goat theme set`, `goat theme clear`, `goat theme show`, `goat triage`.
 
@@ -238,7 +227,7 @@ Nothing generates reference docs from the registry today, so these lists can onl
 
 1. **One error envelope with a machine code and a next action.** 6 error families and two failure modes (153 `return`, 35 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
-3. **Generate tool reference docs from the registry and check drift in CI.** 82 tools appear in no doc or prompt. Render reference pages from `inventory.ts` and fail CI when the committed output differs, as `icons:check` does for icons.
+3. **Generate tool reference docs from the registry and check drift in CI.** 102 tools appear in no doc or prompt. Render reference pages from `inventory.ts` and fail CI when the committed output differs, as `icons:check` does for icons.
 4. **Describe every parameter.** 527 of 681 parameters have no description, and 129 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts:143 to fail on an undescribed field.
 5. **Publish the real argument contract.** 168 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
 6. **Retry keys on every mutating tool.** 110 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
