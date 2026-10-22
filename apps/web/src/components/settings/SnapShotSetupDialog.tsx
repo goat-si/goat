@@ -10,7 +10,13 @@ import { MacAccessibilityIcon, MacScreenRecordingIcon } from "../Icons";
 import { CaptureShortcutConfig } from "./CaptureShortcutConfig";
 import { Button } from "../ui/button";
 import { Dialog, DialogDescription } from "../ui/dialog";
-import { WizardSteps, WizardPopup, WizardHeader, WizardPanel, WizardFooter } from "../ui/wizard";
+import {
+  WizardSteps,
+  WizardPopup,
+  WizardHeader,
+  WizardPanel,
+  WizardFooter,
+} from "../onboarding/OnboardingWizard";
 import {
   captureSetupAccessReady,
   captureSetupBackend,
