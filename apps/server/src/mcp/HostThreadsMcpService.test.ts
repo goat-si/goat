@@ -21,6 +21,11 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+
+import * as Server from "../server.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -115,6 +120,7 @@ const runService = <A, E>(
     readonly goatclawEnabled?: boolean;
     /** What goatclaw fleet sync reports for the destination; absent leaves the service out. */
     readonly fleetReach?: FleetSync.HostReach;
+    readonly sharedFleet?: boolean;
     readonly onSettle?: (sent: boolean) => void;
     readonly taskThread?: boolean;
     readonly reviewFinished?: boolean | (() => boolean);
@@ -138,12 +144,34 @@ const runService = <A, E>(
       call: SshRemoteDispatch.SshHostToolCall,
     ) => Effect.Effect<unknown, SshRemoteDispatch.SshRemoteDispatchError>;
   },
-  body: (service: HostThreadsMcpService.HostThreadsMcpServiceShape) => Effect.Effect<A, E>,
+  body: (
+    service: HostThreadsMcpService.HostThreadsMcpServiceShape,
+    fleet: Option.Option<FleetSync.GoatclawFleetSync["Service"]>,
+  ) => Effect.Effect<A, E>,
 ) => {
   const calls: Array<SshRemoteDispatch.SshHostToolCall> = [];
   const relays: Array<unknown> = [];
   const rearms: Array<Parameters<LaunchWatchService.LaunchWatchServiceShape["rearm"]>[0]> = [];
-  const layer = HostThreadsMcpService.layer.pipe(
+  const dispatch = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+    connectedHosts: Effect.succeed(options.hosts ?? []),
+    callHostTool: (call, authorize) => {
+      calls.push(call);
+      return authorize.pipe(Effect.andThen(options.hostCall(call)));
+    },
+  });
+  const fleetDependencies = Layer.mergeAll(
+    dispatch,
+    Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
+    ServerSettingsService.layerTest({ goatclaw: { enabled: true } }),
+  );
+  const fleet = FleetSync.layer.pipe(Layer.provide(fleetDependencies));
+  // The fallback keeps the pre-fix composition runnable for the red regression run.
+  const hostThreads = options.sharedFleet
+    ? (Server.layerHostThreadsMcp ?? HostThreadsMcpService.layer).pipe(
+        Layer.provide(fleetDependencies),
+      )
+    : HostThreadsMcpService.layer;
+  const layer = hostThreads.pipe(
     Layer.provide(
       Layer.mock(ThreadResultService.ThreadResultService)({
         forRun: (id, runId) =>
@@ -210,21 +238,13 @@ const runService = <A, E>(
       }),
     ),
     Layer.provide(
-      options.fleetReach === undefined
+      options.sharedFleet || options.fleetReach === undefined
         ? Layer.empty
         : Layer.mock(FleetSync.GoatclawFleetSync)({
             ensure: () => Effect.succeed(options.fleetReach!),
           }),
     ),
-    Layer.provide(
-      Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
-        connectedHosts: Effect.succeed(options.hosts ?? []),
-        callHostTool: (call, authorize) => {
-          calls.push(call);
-          return authorize.pipe(Effect.andThen(options.hostCall(call)));
-        },
-      }),
-    ),
+    Layer.provide(dispatch),
     Layer.provide(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         assertReviewTaskSendAllowed: (input) => {
@@ -256,9 +276,24 @@ const runService = <A, E>(
   );
   return Effect.gen(function* () {
     const service = yield* HostThreadsMcpService.HostThreadsMcpService;
-    const result = yield* body(service).pipe(Effect.result);
+    const sync = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
+    const result = yield* body(service, sync).pipe(Effect.result);
     return { result, calls, rearms, relays };
-  }).pipe(Effect.provide(layer));
+  }).pipe(
+    Effect.provide(
+      options.sharedFleet
+        ? layer.pipe(
+            Layer.provideMerge(fleet),
+            // DecisionInbox builds this same service before the routes supply fleet sync.
+            Layer.provide(
+              Layer.effectDiscard(HostThreadsMcpService.HostThreadsMcpService).pipe(
+                Layer.provide(layer),
+              ),
+            ),
+          )
+        : layer,
+    ),
+  );
 };
 
 const unknownHost = new SshRemoteDispatch.SshRemoteDispatchError({
@@ -1103,6 +1138,56 @@ it.effect("forwards ready-only reads without changing ordinary host bootstrap po
     ),
     Effect.asVoid,
   ),
+);
+
+it.effect("a service built before the routes sends using the shared applied fleet record", () =>
+  Effect.gen(function* () {
+    const settled: boolean[] = [];
+    const { result, calls } = yield* runService(
+      {
+        interactionMode: "default",
+        goatclawEnabled: true,
+        sharedFleet: true,
+        onSettle: (sent) => settled.push(sent),
+        hostCall: (call) =>
+          Effect.succeed(
+            call.tool === FleetSync.SYNC_TOOL
+              ? { policy: call.arguments.policy }
+              : {
+                  threadId: "remote",
+                  messageId: "message-1",
+                  runId: "run-1",
+                  status: "running",
+                  delivery: "steered",
+                },
+          ),
+      },
+      (service, fleet) =>
+        Effect.gen(function* () {
+          expect(Option.isSome(fleet)).toBe(true);
+          if (Option.isNone(fleet)) return yield* Effect.die("Missing route fleet sync");
+          expect(yield* fleet.value.ensure("box")).toEqual({
+            sync: { state: "applied" },
+            enforcesCeilings: true,
+          });
+          expect(yield* fleet.value.hostState("box")).toEqual({ state: "applied" });
+          return yield* service.sendToThread(scope, {
+            host: "box",
+            threadId: ThreadId.make("remote"),
+            message: "Continue",
+          });
+        }),
+    );
+    expect(result).toMatchObject({
+      _tag: "Success",
+      success: { host: "box", delivery: "steered" },
+    });
+    expect(calls.map((call) => call.tool)).toEqual([FleetSync.SYNC_TOOL, "goat_thread_send"]);
+    expect(calls[1]?.arguments.permissionProfileCeiling).toEqual(
+      BUILTIN_PERMISSION_PROFILES.worker,
+    );
+    expect(settled).toEqual([true]);
+  }),
 );
 
 it.effect("forwards the caller's goatclaw ceiling with a remote send and keeps its lane", () =>

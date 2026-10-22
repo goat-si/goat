@@ -357,6 +357,11 @@ const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
 );
 
+// Early consumers share this layer with the routes, so they must capture fleet sync too.
+export const layerHostThreadsMcp = HostThreadsMcpService.layer.pipe(
+  Layer.provide(GoatclawFleetSync.layer),
+);
+
 // One self-healing instance for the fleet tools and the goal controller: one host monitor and one
 // move lock. It gets the power monitor background policy uses, so suspend and resume reach it.
 const layerFleetHealth = FleetHealth.layer.pipe(Layer.provide(layerHostPowerMonitor));
@@ -1213,7 +1218,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       Layer.provide(PermissionProfiles.layer),
       Layer.provide(
         PendingQuestionsMcpService.layer.pipe(
-          Layer.provide(HostThreadsMcpService.layer),
+          Layer.provide(layerHostThreadsMcp),
           Layer.provide(
             OrchestratorMcpService.layer.pipe(
               Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
@@ -1342,7 +1347,7 @@ const layerSshWorkspace = SshWorkspaceSync.layer.pipe(
 const layerNotes = NotesLayers.layer.pipe(
   Layer.provide(RuntimeLayer.layerEventSink),
   Layer.provide(
-    HostThreadsMcpService.layer.pipe(
+    layerHostThreadsMcp.pipe(
       Layer.provide(
         OrchestratorMcpService.layer.pipe(
           Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
@@ -1457,7 +1462,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ).pipe(
       Layer.provide(ProviderDiagnosisService.layer.pipe(Layer.provide(ProviderHostLive.layer))),
       Layer.provide(
-        HostThreadsMcpService.layer.pipe(
+        layerHostThreadsMcp.pipe(
           Layer.provide(
             OrchestratorMcpService.layer.pipe(
               Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
