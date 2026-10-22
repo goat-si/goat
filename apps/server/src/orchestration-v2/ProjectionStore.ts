@@ -165,7 +165,12 @@ export class ServerActivityReadError extends Schema.TaggedError<ServerActivityRe
   }
 }
 
-/** How long background work may go without a sign of life before it stops holding updates. */
+/**
+ * How long background work may go without a sign of life before it stops holding updates. Output
+ * from a background command is not a projection update, so a process left running after its turn,
+ * such as a dev server, holds updates for this long and then yields; status names it meanwhile and
+ * "Update now" stops it.
+ */
 export const STALE_BACKGROUND_WORK_MS = 6 * 60 * 60 * 1000;
 
 /** A thread with execution records still open under a turn that ended; they never hold updates. */
@@ -2111,9 +2116,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           JOIN orchestration_v2_projection_nodes AS node ON node.node_id = work.node_id
           WHERE work.status = 'pending' AND node.run_id IS NULL AND work.created_at >= ${cutoff}
           UNION ALL
-          SELECT COALESCE(thread_id, provider_thread_id), 'background', updated_at
+          SELECT thread_id, 'background', updated_at
           FROM orchestration_v2_projection_provider_threads
           WHERE has_pending_background_work = 1 AND updated_at >= ${cutoff}
+            AND thread_id IS NOT NULL
         )
         SELECT blockers.thread_id, blockers.reason, MIN(blockers.since) AS since, thread.title
         FROM blockers

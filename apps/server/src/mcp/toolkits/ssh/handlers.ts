@@ -89,7 +89,8 @@ const readUpdateBlockers = Effect.fn("SshToolkit.readUpdateBlockers")(
     const statusService = yield* Effect.serviceOption(HostStatusMcpService.HostStatusMcpService);
     if (statusService._tag === "None") return [];
     const scope = yield* McpInvocationContext.McpInvocationContext;
-    const result = yield* statusService.value.read(scope, { host });
+    // Only a runtime that is already up answers; explaining a wait must not reconnect or start one.
+    const result = yield* statusService.value.read(scope, { host }, { requireReady: true });
     const entry = result.hosts.find((candidate) => candidate.host === host);
     return entry?.reachability === "ok" ? (entry.metrics?.threads.blockers ?? []) : [];
   },
