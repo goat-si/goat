@@ -1,5 +1,5 @@
 import { HandoffError, isHandoffPending } from "@goat/contracts";
-import { itemHandoff, transitionHandoff } from "./handoffState.ts";
+import { itemHandoff } from "./handoffState.ts";
 import { makeRemoteDelegatedTasks } from "./goat/RemoteDelegatedTasks.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
 import type {
@@ -144,6 +144,7 @@ import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { makeHumanHandoffs } from "./goat/HumanHandoffs.ts";
 import {
   endOrphanedNativeSubagent,
   endRunlessRootTurns,
@@ -159,6 +160,7 @@ import {
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import { makeThreadPromotion } from "./goat/ThreadPromotion.ts";
+import { canonicalUserInputAnswers, userInputAnswerText } from "./userInputAnswers.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeTimelineRecords, OrchestratorChannelBotThreadError } from "./goat/TimelineRecords.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -312,12 +314,12 @@ export class OrchestratorQuestionAlreadyAnsweredError extends Schema.TaggedError
 ) {
   override get message(): string {
     const description = describeUserInputResponder(this);
-    const outcome =
-      this.decision === "cancel" || this.status === "expired" || this.status === "cancelled"
-        ? description
-        : `answered by ${description}`;
     const time = this.resolvedAt === null ? "an unknown time" : DateTime.formatIso(this.resolvedAt);
-    return `This question was already ${outcome} at ${time}.`;
+    if (this.status === "expired")
+      return `This question expired at ${time}, so it can no longer be answered.`;
+    if (this.decision === "cancel" || this.status === "cancelled")
+      return `This question was ${description} at ${time}, so it can no longer be answered.`;
+    return `This question was already answered by ${description} at ${time}.`;
   }
 }
 
@@ -8009,137 +8011,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
-  const dispatchHandoff = Effect.fn("orchestrationV2.dispatch.handoff")(function* (
-    command: Extract<
-      OrchestrationV2InternalCommand,
-      { readonly type: "handoff.create" | "handoff.transition" }
-    >,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-  ) {
-    const projection = yield* Effect.gen(function* () {
-      if (command.type === "handoff.create")
-        return yield* projectionStore.getThreadRecords(command.threadId, ["runs", "turnItems"], {
-          turnItemTypes: ["human_handoff", "secret_request"],
-          messageRoles: [],
-        });
-      const item = yield* projectionStore.getTurnItem({
-        threadId: command.threadId,
-        itemId: command.handoffId,
-      });
-      const records = yield* projectionStore.getThreadRecords(command.threadId, ["runs"], {
-        runIds: item?.runId == null ? [] : [item.runId],
-      });
-      return { ...records, turnItems: item === null ? [] : [item] };
-    }).pipe(
-      Effect.mapError(
-        (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-      ),
-    );
-    const now = yield* DateTime.now;
-    const decide = Effect.gen(function* () {
-      if (command.type === "handoff.create") {
-        const existing = projection.turnItems.find((item) => item.id === command.handoff.handoffId);
-        if (existing) return existing;
-        const run = projection.runs.find((run) => run.id === command.runId);
-        if (
-          !run ||
-          run.rootNodeId !== command.nodeId ||
-          command.handoff.requestedBy.threadId !== command.threadId ||
-          run.providerInstanceId !== command.handoff.requestedBy.providerInstanceId ||
-          command.handoff.state !== "pending"
-        )
-          return yield* new HandoffError({ reason: "invalid_request" });
-        const pending = projection.turnItems.flatMap((item) => {
-          const handoff = itemHandoff(item);
-          return handoff && isHandoffPending(handoff.state) ? [handoff] : [];
-        });
-        if (
-          pending.some(
-            (handoff) =>
-              handoff.kind === command.handoff.kind &&
-              handoff.target.environmentId === command.handoff.target.environmentId &&
-              handoff.target.path === command.handoff.target.path &&
-              handoff.dedupeKey === command.handoff.dedupeKey,
-          )
-        )
-          return yield* new HandoffError({ reason: "conflict" });
-        if (pending.length >= 3) return yield* new HandoffError({ reason: "limit_reached" });
-        return {
-          id: command.handoff.handoffId,
-          threadId: command.threadId,
-          runId: run.id,
-          nodeId: command.nodeId,
-          providerThreadId: run.providerThreadId,
-          providerTurnId: null,
-          nativeItemRef: null,
-          parentItemId: null,
-          ordinal: yield* nextTurnItemOrdinal(projection),
-          status: "waiting" as const,
-          title: command.handoff.title,
-          startedAt: now,
-          completedAt: null,
-          updatedAt: now,
-          type: "human_handoff" as const,
-          handoff: command.handoff,
-        };
-      }
-      const existing = projection.turnItems.find((item) => item.id === command.handoffId);
-      const record = existing && itemHandoff(existing);
-      if (!existing || !record) return yield* new HandoffError({ reason: "not_found" });
-      const run = projection.runs.find((run) => run.id === existing.runId);
-      const ended =
-        run === undefined ||
-        ["completed", "failed", "cancelled", "interrupted"].includes(run.status);
-      const handoff = yield* transitionHandoff(record, command.state, command.actor, now, ended);
-      // Secret completion is only recorded after SecretRequests stores the value.
-      if (existing.type === "secret_request" && handoff.state === "completed")
-        return yield* new HandoffError({ reason: "conflict" });
-      const pending = isHandoffPending(handoff.state);
-      return {
-        ...existing,
-        handoff,
-        status: pending
-          ? ("waiting" as const)
-          : handoff.state === "completed"
-            ? ("completed" as const)
-            : ("cancelled" as const),
-        completedAt: pending ? null : now,
-        updatedAt: now,
-        ...(existing.type === "secret_request"
-          ? {
-              secretStatus: pending
-                ? ("pending" as const)
-                : handoff.state === "declined"
-                  ? ("declined" as const)
-                  : ("cancelled" as const),
-            }
-          : {}),
-      };
-    });
-    const item = yield* decide.pipe(
-      Effect.mapError(
-        (cause) =>
-          new OrchestratorDispatchError({
-            commandId: command.commandId,
-            commandType: command.type,
-            cause,
-          }),
-      ),
-    );
-    const existing = projection.turnItems.find((candidate) => candidate.id === item.id);
-    if (existing && itemHandoff(existing)?.state === itemHandoff(item)?.state) return;
-    yield* emit(
-      events,
-      command,
-    )({
-      type: "turn-item.updated",
-      threadId: command.threadId,
-      ...(item.runId === null ? {} : { runId: item.runId }),
-      ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
-      providerInstanceId: itemHandoff(item)!.requestedBy.providerInstanceId,
-      occurredAt: now,
-      payload: item,
-    });
+  const { dispatchHandoff } = makeHumanHandoffs({
+    projectionStore,
+    emit,
+    nextTurnItemOrdinal,
+    OrchestratorDispatchError,
+    OrchestratorProjectionError,
   });
 
   const dispatchSecretRequestRecord = Effect.fn("orchestrationV2.dispatch.secretRequestRecord")(
@@ -8380,12 +8257,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       let answers = command.answers;
       if (runtimeRequest.kind === "user_input" && answers !== undefined) {
         const decoded = yield* decodeUserInputAnswers(answers).pipe(mapDispatchError(command));
-        answers = Object.fromEntries(
+        const flattened = Object.fromEntries(
           Object.entries(decoded).map(([questionId, answer]) => [
             questionId,
             typeof answer === "object" && "answers" in answer ? answer.answers : answer,
           ]),
         );
+        // Every answer path lands here, so a label, a differently cased pick, or a relayed
+        // answer resolves to the option value the provider offered.
+        answers =
+          context.item?.type === "user_input_request"
+            ? canonicalUserInputAnswers(context.item.questions, flattened)
+            : flattened;
       }
 
       const now = yield* DateTime.now;
@@ -8496,8 +8379,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
         const replies: string[] = [];
         for (const question of approvalTurnItem.questions) {
-          const answer = answers?.[question.id];
-          if (typeof answer !== "string" || answer.trim().length === 0) {
+          const raw = answers?.[question.id];
+          const answer = userInputAnswerText(
+            question,
+            typeof raw === "string" || Array.isArray(raw) ? raw : undefined,
+          );
+          if (answer.length === 0) {
             if (question.required === false) continue;
             return yield* new OrchestratorDispatchError({
               commandId: command.commandId,
@@ -8505,7 +8392,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               cause: "Answer each question before sending.",
             });
           }
-          replies.push(`${question.question}\n${answer.trim()}`);
+          replies.push(`${question.question}\n${answer}`);
         }
         if (replies.length === 0) {
           return yield* new OrchestratorDispatchError({

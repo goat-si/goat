@@ -110,6 +110,28 @@ export function useSelectedThreadRequests() {
   const activePendingUserInputs = pendingRequests?.userInputs ?? EMPTY_PENDING_REQUESTS.userInputs;
   const activePendingUserInput = activePendingUserInputs[0] ?? null;
   useEffect(() => {
+    // Answers held until the projection resolved their question are released here. A leftover
+    // responding id is harmless: it is only compared with a question still pending.
+    if (!selectedThreadShell || !pendingRequests) return;
+    const prefix = questionAttachmentDraftPrefix(
+      selectedThreadShell.environmentId,
+      selectedThreadShell.id,
+    );
+    const held = new Set(
+      pendingRequests.userInputs.map((request) =>
+        questionAttachmentDraftKey(
+          selectedThreadShell.environmentId,
+          selectedThreadShell.id,
+          request.requestId,
+          "",
+        ),
+      ),
+    );
+    for (const key of userInputResponsesInFlight.current) {
+      if (key.startsWith(prefix) && !held.has(key)) userInputResponsesInFlight.current.delete(key);
+    }
+  }, [pendingRequests, selectedThreadShell]);
+  useEffect(() => {
     if (!activePendingUserInput || !selectedThreadShell) return;
     const requestKey = scopedRequestKey(
       selectedThreadShell.environmentId,
@@ -334,10 +356,14 @@ export function useSelectedThreadRequests() {
           : {}),
       },
     });
-    userInputResponsesInFlight.current.delete(responseKey);
-    setRespondingUserInputId((current) =>
-      current === activePendingUserInput.requestId ? null : current,
-    );
+    // An accepted answer keeps the question locked until the projection drops it. Unlocking on
+    // the receipt let a second option pick send another answer that failed as already answered.
+    if (result._tag === "Failure") {
+      userInputResponsesInFlight.current.delete(responseKey);
+      setRespondingUserInputId((current) =>
+        current === activePendingUserInput.requestId ? null : current,
+      );
+    }
     return result;
   }, [
     activePendingUserInput,

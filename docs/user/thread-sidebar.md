@@ -215,7 +215,7 @@ another with **Add device**.
 On web and desktop, select **+** at the bottom of the rail to show or hide its items and move
 them up or down. Home and Settings always stay. Until you choose, the rail adjusts to your setup:
 Fleet appears once you have more than one machine, Hub on a machine that is a hub, and
-**Add provider** while your main machine has no working provider. **Notes** starts hidden. An
+**Add provider** while your main machine has no working provider. An
 item you turn on stays on whatever changes later, and **Reset to defaults** returns to the
 automatic choice. **Add provider** opens the same setup as **Settings → Providers**. Hidden pages
 stay reachable from the command palette or Settings.

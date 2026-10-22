@@ -55,6 +55,7 @@ import * as Broker from "../connections/ConnectionCatalogBroker.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
 
 const target = { alias: "box", hostname: "box", username: null, port: null };
+const encodeSshPreflightReport = Schema.encodeEffect(SshPreflightReport);
 const stopped: SshHostStatus = {
   host: "box",
   state: "stopped",
@@ -138,14 +139,6 @@ const fixture = Effect.gen(function* () {
   };
   return { setup, scope, events, updates, journal: `${config.stateDir}/maintenance-audit.jsonl` };
 });
-
-it.effect("uses the dispatch owner version", () =>
-  Effect.gen(function* () {
-    const f = yield* fixture;
-    expect(yield* f.setup.status({ host: "box" })).toEqual({ kind: "ok", status: stopped });
-    expect(f.updates).toEqual([]);
-  }),
-);
 
 it.effect.each([undefined, "when_idle"] as const)(
   "defaults to when_idle after live authorization (mode=%s)",
@@ -367,7 +360,6 @@ it.effect("shares the dispatch manager", () =>
   Effect.gen(function* () {
     let snapshot: SshHostResult = { kind: "ok", status: stopped };
     let ensures = 0;
-    let statusReads = 0;
     const manager = SshTunnel.SshEnvironmentManager.of({
       readyEnvironment: () => Effect.die("Unexpected ready environment"),
       beginSetupOperation: () =>
@@ -379,11 +371,7 @@ it.effect("shares the dispatch manager", () =>
       publishSetupOutcome: () => Effect.succeed(true),
       publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
       forgetEnvironment: () => Effect.die("Unexpected forget"),
-      status: () =>
-        Effect.sync(() => {
-          statusReads++;
-          return snapshot;
-        }),
+      status: () => Effect.sync(() => snapshot),
       ensureEnvironment: (received, options) =>
         Effect.gen(function* () {
           ensures++;
@@ -445,7 +433,6 @@ it.effect("shares the dispatch manager", () =>
         expect(yield* dispatch.runtimeStatus("box")).toEqual(result);
         expect(yield* setup.status({ host: "box" })).toEqual(result);
         expect(ensures).toBe(1);
-        expect(statusReads).toBe(7);
         expect(
           yield* setup.update({ host: "unknown" }, { kind: "mcp", scope: invocation }),
         ).toMatchObject({ kind: "error", code: "host_unknown" });
@@ -2007,9 +1994,7 @@ it.effect("preflight marks GOAT's managed aliases and keeps long personal aliase
       expect(managed.destination).toMatchObject({ alias: "goat-box", managed: true });
       const personal = yield* setup.preflight({ host: longAlias }, caller);
       expect(personal.destination.managed).toBeUndefined();
-      expect((yield* Schema.encodeEffect(SshPreflightReport)(personal)).destination.alias).toBe(
-        longAlias,
-      );
+      expect((yield* encodeSshPreflightReport(personal)).destination.alias).toBe(longAlias);
     }).pipe(Effect.ensuring(Effect.sync(() => discover.mockRestore())));
   }).pipe(Effect.provide(NodeServices.layer)),
 );

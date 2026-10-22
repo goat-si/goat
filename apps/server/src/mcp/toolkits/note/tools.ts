@@ -4,6 +4,7 @@ import {
   NotesListResult,
   NotesReadInput,
   NotesWriteInput,
+  NotesUpdateInput,
   NotesMoveInput,
   NoteDocument,
   OrchestratorMcpFailure,
@@ -41,10 +42,16 @@ const write = Tool.make(agentSurfaceRegistry["note.write"].name, {
   success: NoteDocument,
   description: agentSurfaceRegistry["note.write"].description,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["note.write"]));
+const update = Tool.make(agentSurfaceRegistry["note.update"].name, {
+  ...shared,
+  parameters: NotesUpdateInput,
+  success: NoteDocument,
+  description: agentSurfaceRegistry["note.update"].description,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["note.update"]));
 const move = Tool.make(agentSurfaceRegistry["note.move"].name, {
   ...shared,
   parameters: NotesMoveInput,
   success: NoteDocument,
   description: agentSurfaceRegistry["note.move"].description,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["note.move"]));
-export const NoteToolkit = Toolkit.make(list, read, write, move);
+export const NoteToolkit = Toolkit.make(list, read, write, update, move);

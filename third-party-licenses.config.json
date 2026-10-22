@@ -23,6 +23,13 @@
     },
     {
       "bundles": ["desktop", "web"],
+      "license": "OFL-1.1",
+      "name": "Departure Mono",
+      "sourceUrl": "https://github.com/rektdeckard/departure-mono",
+      "noticeFiles": ["apps/web/src/assets/fonts/DepartureMono-LICENSE.txt"]
+    },
+    {
+      "bundles": ["desktop", "web"],
       "license": "CC-BY-4.0",
       "name": "Solar Icon Set by 480 Design",
       "sourceUrl": "https://www.figma.com/community/file/1166831539721848736",

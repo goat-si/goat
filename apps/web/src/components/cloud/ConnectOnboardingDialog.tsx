@@ -25,7 +25,13 @@ import { Checkbox } from "../ui/checkbox";
 import { Dialog } from "../ui/dialog";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
-import { WizardSteps, WizardPopup, WizardHeader, WizardPanel, WizardFooter } from "../ui/wizard";
+import {
+  WizardSteps,
+  WizardPopup,
+  WizardHeader,
+  WizardPanel,
+  WizardFooter,
+} from "../onboarding/OnboardingWizard";
 
 export function ConnectOnboardingDialog() {
   if (!hasCloudPublicConfig()) return null;

@@ -58,6 +58,8 @@ export async function loadMcpBridge(
     /** The per-turn computer use gate file the adapter writes. */
     readonly cuaGate?: string;
     readonly inputSchema?: Record<string, unknown>;
+    /** False starts the extension without GOAT MCP credentials, as a thread without GOAT MCP does. */
+    readonly goatMcp?: boolean;
   } = {},
 ) {
   const handlers = new Map<string, AgentStartHook>();
@@ -112,8 +114,12 @@ export async function loadMcpBridge(
     {
       process: {
         env: {
-          GOAT_MCP_URL: "http://fixture.invalid/mcp",
-          GOAT_MCP_BEARER_TOKEN: "fixture-token",
+          ...(options.goatMcp === false
+            ? {}
+            : {
+                GOAT_MCP_URL: "http://fixture.invalid/mcp",
+                GOAT_MCP_BEARER_TOKEN: "fixture-token",
+              }),
           GOAT_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
           GOAT_PI_RUNTIME_MODE: options.runtimeMode,
           ...(options.cua === undefined

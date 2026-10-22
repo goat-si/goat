@@ -157,15 +157,18 @@ const make = Effect.gen(function* () {
   /**
    * Refuses a provider instance this environment does not have, or a requested
    * model its provider does not list, before any thread exists. An SSH launch
-   * forwards the caller's model as requested, so the remote checks it here.
+   * forwards the caller's model as requested, so the remote checks it here. The
+   * cached model list goes stale when the provider's own catalog changes (for
+   * example `ocx sync` on a remote host), so a miss refreshes the instance once.
    */
   const checkModelSelection = Effect.fn("ThreadLaunchMcpService.checkModelSelection")(function* (
     selection: { readonly instanceId: string; readonly model: string },
     requested: boolean,
   ) {
     if (Option.isNone(providerRegistry)) return;
-    const providers = yield* providerRegistry.value.getProviders;
-    const provider = providers.find((entry) => entry.instanceId === selection.instanceId);
+    const registry = providerRegistry.value;
+    const providers = yield* registry.getProviders;
+    let provider = providers.find((entry) => entry.instanceId === selection.instanceId);
     if (provider === undefined)
       return yield* new OrchestratorMcpFailure({
         code: "invalid_request",
@@ -173,14 +176,18 @@ const make = Effect.gen(function* () {
           providers.map((entry) => entry.instanceId).join(", ") || "none"
         }. orchestrator_capabilities lists providers and models.`,
       });
-    if (
+    const misses = (candidate: typeof provider) =>
       requested &&
-      provider.models.length > 0 &&
-      !provider.models.some((model) => model.slug === selection.model)
-    )
+      candidate !== undefined &&
+      candidate.models.length > 0 &&
+      !candidate.models.some((model) => model.slug === selection.model);
+    if (!misses(provider)) return;
+    const refreshed = yield* registry.refreshInstance(provider.instanceId);
+    provider = refreshed.find((entry) => entry.instanceId === selection.instanceId) ?? provider;
+    if (misses(provider))
       return yield* new OrchestratorMcpFailure({
         code: "invalid_request",
-        message: `Provider ${selection.instanceId} here does not offer model ${selection.model}. Pick one orchestrator_capabilities lists for it.`,
+        message: `Provider ${selection.instanceId} here does not offer model ${selection.model}, even after refreshing its model list. Pick one orchestrator_capabilities lists for it, or fix the provider's catalog and check it with goat_provider_diagnose {instanceId:"${selection.instanceId}"}.`,
       });
   });
   return ThreadLaunchMcpService.of({

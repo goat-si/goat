@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodeModule from "node:module";
 import * as NodeVM from "node:vm";
 import { assert, describe, it } from "@effect/vitest";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
 
@@ -56,8 +57,28 @@ describe("Pi orchestration prompt section", () => {
     );
     assert.isUndefined(result);
     assert.equal(sections.existing, "keep");
+    assert.equal(sections.goat_code_development, GOAT_DEVELOPMENT_INSTRUCTIONS);
     assert.include(sections.goat_code_orchestration!, "orchestrator_capabilities");
     assert.isFalse(Object.hasOwn(sections, "t3_code_orchestration"));
+  });
+
+  it("gives the development discipline to a thread without GOAT MCP", async () => {
+    const bridge = await loadMcpBridge({ goatMcp: false });
+    const hook = bridge.handlers.get("before_agent_start")!;
+    const context = { ui: { notify: assert.fail } };
+    const sections: Record<string, string> = {};
+    assert.isUndefined(
+      await hook({ systemPrompt: "base", systemPromptOptions: { sections } }, context),
+    );
+    assert.deepEqual(sections, { goat_code_development: GOAT_DEVELOPMENT_INSTRUCTIONS });
+    const forced = await hook(
+      {
+        systemPrompt: "forced",
+        systemPromptOptions: { sections: {}, forceSystemPrompt: "forced" },
+      },
+      context,
+    );
+    assert.equal(forced?.systemPrompt, `forced\n\n${GOAT_DEVELOPMENT_INSTRUCTIONS}`);
   });
 
   it.each([
@@ -85,6 +106,7 @@ describe("Pi orchestration prompt section", () => {
       const result = await hook(event, { ui: { notify: assert.fail } });
       assert.isDefined(result);
       assert.isTrue(result!.systemPrompt.startsWith(`${event.systemPrompt}\n\n`));
+      assert.include(result!.systemPrompt, GOAT_DEVELOPMENT_INSTRUCTIONS);
       assert.include(result!.systemPrompt, "orchestrator_capabilities");
     }
   });

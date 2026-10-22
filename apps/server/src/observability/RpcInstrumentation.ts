@@ -31,6 +31,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.notesList]: "notes",
   [WS_METHODS.notesRead]: "notes",
   [WS_METHODS.notesWrite]: "notes",
+  [WS_METHODS.notesUpdate]: "notes",
   [WS_METHODS.notesMove]: "notes",
   [WS_METHODS.notesDelete]: "notes",
   [WS_METHODS.notesSubscribe]: "notes",

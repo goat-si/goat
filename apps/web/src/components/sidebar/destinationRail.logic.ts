@@ -107,8 +107,6 @@ function isShownByDefault(id: RailItemId, context: RailContext): boolean {
       return context.environmentCount > 1;
     case "hub":
       return context.hubEnabled;
-    case "notes":
-      return false;
     case "addProvider":
       // Unknown readiness stays hidden so the item does not flash in while providers load.
       return context.primaryProviderReady === false;

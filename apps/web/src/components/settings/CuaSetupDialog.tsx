@@ -5,16 +5,14 @@ import { CircleAlertIcon, CircleCheckIcon } from "~/components/solar";
 import { MacAccessibilityIcon, MacScreenRecordingIcon } from "../Icons";
 import { PermissionChecklist, PermissionContinueButton } from "../permissions/PermissionChecklist";
 import { usePermissionStatus } from "../permissions/usePermissionStatus";
-import { Button } from "../ui/button";
 import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../ui/dialog";
+  OnboardingBody,
+  OnboardingFooter,
+  OnboardingHeader,
+  OnboardingPopup,
+} from "../onboarding/OnboardingDialog";
+import { Button } from "../ui/button";
+import { Dialog } from "../ui/dialog";
 import {
   CUA_PERMISSIONS,
   CUA_WAYLAND_NOTE,
@@ -121,19 +119,18 @@ export function CuaSetupDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && close()}>
-      <DialogPopup showCloseButton={busy === null}>
-        <DialogHeader>
-          <DialogTitle>
-            {verified ? "Computer use is ready" : `Let agents use ${hostLabel}`}
-          </DialogTitle>
-          <DialogDescription>
-            {verified
+      <OnboardingPopup showCloseButton={busy === null}>
+        <OnboardingHeader
+          host={hostLabel}
+          title={verified ? "Computer use is ready" : `Let agents use ${hostLabel}`}
+          description={
+            verified
               ? "From their next turn, agents can see and use apps on this Mac."
-              : `Agents can see and use apps on ${hostLabel} in the background, without taking over your cursor. They get the computer use tools from their next turn.`}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          <div className="space-y-3 text-sm">
+              : `Agents see and use apps on ${hostLabel} in the background, without taking over your cursor.`
+          }
+        />
+        <OnboardingBody>
+          <div className="space-y-3">
             {localMac && !verified ? (
               <PermissionChecklist
                 busy={busy !== null}
@@ -231,8 +228,8 @@ export function CuaSetupDialog({
               </p>
             ) : null}
           </div>
-        </DialogPanel>
-        <DialogFooter>
+        </OnboardingBody>
+        <OnboardingFooter hint="Turn it off any time in Settings → Integrations.">
           {verified ? (
             <Button onClick={close}>Done</Button>
           ) : (
@@ -257,8 +254,8 @@ export function CuaSetupDialog({
               </PermissionContinueButton>
             </>
           )}
-        </DialogFooter>
-      </DialogPopup>
+        </OnboardingFooter>
+      </OnboardingPopup>
     </Dialog>
   );
 }

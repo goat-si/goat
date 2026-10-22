@@ -297,6 +297,8 @@ const registry = Layer.mock(ProviderRegistry.ProviderRegistry)({
   getProviders: Effect.succeed([
     { instanceId, models: [{ slug: "fake" }] },
   ] as unknown as ReadonlyArray<never>),
+  refreshInstance: () =>
+    Effect.succeed([{ instanceId, models: [{ slug: "fake" }] }] as unknown as ReadonlyArray<never>),
 });
 
 it.effect(
@@ -315,7 +317,10 @@ it.effect(
           .pipe(Effect.flip);
       const model = yield* launch({ instanceId, model: "nonexistent" });
       expect(model.code).toBe("invalid_request");
-      expect(model.message).toContain("does not offer model nonexistent");
+      expect(model.message).toContain(
+        "does not offer model nonexistent, even after refreshing its model list",
+      );
+      expect(model.message).toContain('goat_provider_diagnose {instanceId:"fakeCloud"}');
       const provider = yield* launch({
         instanceId: ProviderInstanceId.make("gone"),
         model: "fake",
@@ -326,6 +331,37 @@ it.effect(
     }).pipe(Effect.provide(f.layer));
   },
 );
+
+it.effect("a model the provider gained since the last probe is accepted after one refresh", () => {
+  // The cached catalog predates the provider's own catalog change, as after `ocx sync`.
+  let catalog = [{ instanceId, models: [{ slug: "fake" }] }];
+  const refreshes: string[] = [];
+  const stale = Layer.mock(ProviderRegistry.ProviderRegistry)({
+    getProviders: Effect.sync(() => catalog as unknown as ReadonlyArray<never>),
+    refreshInstance: (id) =>
+      Effect.sync(() => {
+        refreshes.push(id);
+        catalog = [{ instanceId, models: [{ slug: "fake" }, { slug: "added" }] }];
+        return catalog as unknown as ReadonlyArray<never>;
+      }),
+  });
+  const f = fixture(false, "published-ref", stale);
+  return Effect.gen(function* () {
+    const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+    const launch = (model: string) =>
+      service.launch(
+        scope,
+        { title: "Probe", message: "Hi", modelSelection: { instanceId, model } },
+        { runtimeMode: "full-access", interactionMode: "default" },
+      );
+    yield* launch("added");
+    expect(refreshes).toEqual([instanceId]);
+    expect(f.launched.map((input) => input.modelSelection.model)).toEqual(["added"]);
+    // A model the cache already lists launches without another probe.
+    yield* launch("fake");
+    expect(refreshes).toHaveLength(1);
+  }).pipe(Effect.provide(f.layer));
+});
 
 it.effect.each(["worker", "owner"])(
   "thread launch cannot bypass the cloud capability through profile %s",

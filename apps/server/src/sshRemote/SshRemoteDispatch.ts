@@ -65,6 +65,7 @@ import * as ServerConfig from "../config.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import { AcpMcpBridgeError, callAcpMcpTool, listAcpMcpTools } from "../mcp/AcpMcpStdioBridge.ts";
 import { remoteDeadlineMessage, remoteUnavailableMessage } from "./remoteFailureCopy.ts";
+import { remoteModelOffer } from "./remoteModelOffer.ts";
 import {
   buildRemoteBrowseScript,
   parseRemoteBrowseOutput,
@@ -1487,43 +1488,41 @@ const make = Effect.gen(function* () {
     const session = yield* sessionFor(input.target, input.runtimeMode);
     if (!session.ceilingApplied)
       return yield* failure("remote_refused", "Update the remote GOAT before sending a workspace.");
-    const identity = yield* callRemote({
-      target: input.target,
-      httpBaseUrl: bootstrap.httpBaseUrl,
-      ceiling: input.runtimeMode,
-      token: session.token,
-      tool: "goat_environment_read",
-      arguments: {},
-    });
+    const call = (tool: string, args: Readonly<Record<string, unknown>> = {}) =>
+      callRemote({
+        target: input.target,
+        httpBaseUrl: bootstrap.httpBaseUrl,
+        ceiling: input.runtimeMode,
+        token: session.token,
+        tool,
+        arguments: args,
+      });
+    const identity = yield* call("goat_environment_read");
     const environment = yield* decodeRemoteIdentity(identity).pipe(
       Effect.mapError(() =>
         failure("remote_refused", "The remote returned no valid environment identity."),
       ),
     );
-    const rawCapabilities = yield* callRemote({
-      target: input.target,
-      httpBaseUrl: bootstrap.httpBaseUrl,
-      ceiling: input.runtimeMode,
-      token: session.token,
-      tool: "orchestrator_capabilities",
-      arguments: {},
-    });
-    const capabilities = yield* decodeRemoteCapabilities(rawCapabilities).pipe(
-      Effect.mapError(() =>
-        failure("remote_refused", "The remote cannot report model capabilities."),
+    const offer = yield* remoteModelOffer({
+      selection: input.modelSelection,
+      capabilities: call("orchestrator_capabilities").pipe(
+        Effect.flatMap(decodeRemoteCapabilities),
+        Effect.mapError((error) =>
+          error instanceof SshRemoteDispatchError
+            ? error
+            : failure("remote_refused", "The remote cannot report model capabilities."),
+        ),
       ),
-    );
-    const provider = capabilities.providers.find(
-      (entry) => entry.providerInstanceId === input.modelSelection.instanceId,
-    );
-    if (
-      provider === undefined ||
-      !provider.models.some((model) => model.id === input.modelSelection.model)
-    )
+      refresh: call("goat_provider_diagnose", { instanceId: input.modelSelection.instanceId }),
+    });
+    if (offer !== "offered")
       return yield* new SshRemoteDispatchError({
         reason: "remote_refused",
         remoteCode: "model_unavailable",
-        message: "The selected provider instance or model is unavailable on the remote GOAT.",
+        message:
+          offer === "missing"
+            ? `${input.modelSelection.instanceId} on ${input.target.alias} does not offer ${input.modelSelection.model}, even after refreshing its model list.`
+            : "The selected provider instance or model is unavailable on the remote GOAT.",
       });
     return environment;
   });

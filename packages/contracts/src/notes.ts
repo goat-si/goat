@@ -19,6 +19,7 @@ export const NOTE_PATH_MAX_LENGTH = 300;
 export const NOTE_FOLDER_MAX_LENGTH = 120;
 /** Display titles travel in every summary, so a long first heading is cut to this many UTF-16 units. */
 export const NOTE_TITLE_MAX_LENGTH = 200;
+export const NOTE_PREVIEW_MAX_LENGTH = 140;
 /** Bodies are documents a person edits, not attachments; the cap keeps a write one frame. */
 export const NOTE_BODY_MAX_BYTES = 1024 * 1024;
 
@@ -69,6 +70,12 @@ export type NoteStatus = typeof NoteStatus.Type;
 export const NoteAuthor = Schema.Literals(["user", "agent"]);
 export type NoteAuthor = typeof NoteAuthor.Type;
 
+export const NoteThreadRef = Schema.Struct({
+  threadId: ThreadId,
+  host: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type NoteThreadRef = typeof NoteThreadRef.Type;
+
 /** A thread started from the note. host is null for this environment. */
 export const NoteThreadLink = Schema.Struct({
   threadId: ThreadId,
@@ -81,9 +88,14 @@ export type NoteThreadLink = typeof NoteThreadLink.Type;
 export const NoteSummary = Schema.Struct({
   path: NotePath,
   folder: Schema.NullOr(NoteFolder),
-  /** The first heading, else the file name without .md, cut to NOTE_TITLE_MAX_LENGTH. */
+  /** The first heading, else the first body line or file name, cut to NOTE_TITLE_MAX_LENGTH. */
   title: Schema.String.check(Schema.isMaxLength(NOTE_TITLE_MAX_LENGTH)),
   status: NoteStatus,
+  /** A hub that supports notes.update always sends this; clients use its absence to detect older hubs. */
+  pinned: Schema.optional(Schema.Boolean),
+  preview: Schema.optional(Schema.String.check(Schema.isMaxLength(NOTE_PREVIEW_MAX_LENGTH))),
+  /** Threads linked for reference; unlike threads, these never drive status. */
+  related: Schema.optional(Schema.Array(NoteThreadRef)),
   threads: Schema.Array(NoteThreadLink),
   updatedBy: Schema.NullOr(NoteAuthor),
   revision: NoteRevision,
@@ -123,6 +135,14 @@ export const NotesWriteInput = Schema.Struct({
   baseRevision: Schema.NullOr(NoteRevision),
 });
 export type NotesWriteInput = typeof NotesWriteInput.Type;
+
+export const NotesUpdateInput = Schema.Struct({
+  path: NotePath,
+  pinned: Schema.optional(Schema.Boolean),
+  relate: Schema.optional(NoteThreadRef),
+  unrelate: Schema.optional(NoteThreadRef),
+});
+export type NotesUpdateInput = typeof NotesUpdateInput.Type;
 
 export const NotesMoveInput = Schema.Struct({
   from: NotePath,

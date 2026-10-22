@@ -25,6 +25,7 @@ import * as Schema from "effect/Schema";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { exceededDispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
+import { matchUserInputOption } from "../orchestration-v2/userInputAnswers.ts";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import { withHostFanOutDeadline } from "./hostFanOutDeadline.ts";
@@ -535,14 +536,12 @@ const make = Effect.gen(function* () {
                 (question.multiSelect !== true && values.length !== 1) ||
                 values.some(
                   (value) =>
-                    !question.options.some(
-                      (option) =>
-                        value === (option.value ?? option.label) || value === option.label,
-                    ),
+                    typeof value !== "string" ||
+                    matchUserInputOption(question, value) === undefined,
                 )
               )
                 return yield* invalid(
-                  `Send answers["${question.id}"] as ${question.multiSelect === true ? "an array of allowed option strings" : "one allowed option string"}. Allowed options: ${question.options.map((option) => `"${option.value ?? option.label}"`).join(", ")}.`,
+                  `Send answers["${question.id}"] as ${question.multiSelect === true ? "an array of allowed option strings" : "one allowed option string"}, using an option's value or label. Allowed options: ${question.options.map((option) => (option.value === undefined || option.value === option.label ? `"${option.label}"` : `"${option.value}" (${option.label})`)).join(", ")}.`,
                 );
             }
           } else if (input.decision === undefined) {

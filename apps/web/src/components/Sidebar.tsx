@@ -222,7 +222,6 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { GoatBotSidebarRow } from "./goatBot/GoatBotSidebarRow";
-import { NotesSidebarRow } from "../notes/NotesSidebarRow";
 import { DecisionInboxSidebarRow } from "./decisions/DecisionInboxSidebarRow";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { subscribeSidebarSearchFocus } from "./sidebar/sidebarSearchFocus";
@@ -3069,7 +3068,6 @@ export default function Sidebar() {
                 timeout={400}
               >
                 <ul role="presentation">
-                  <NotesSidebarRow />
                   <DecisionInboxSidebarRow />
                 </ul>
                 <ul
@@ -3142,7 +3140,6 @@ export default function Sidebar() {
             ) : (
               <>
                 <ul role="presentation">
-                  <NotesSidebarRow />
                   <DecisionInboxSidebarRow />
                 </ul>
                 <p
@@ -3328,10 +3325,7 @@ export default function Sidebar() {
                           onDraftContextMenu={handleDraftContextMenu}
                         />
                       );
-                      const items: ReactNode[] = [
-                        <NotesSidebarRow key="notes" />,
-                        <DecisionInboxSidebarRow key="decision-inbox" />,
-                      ];
+                      const items: ReactNode[] = [<DecisionInboxSidebarRow key="decision-inbox" />];
                       if (sidebarListItems.length === 0) items.push(draftBlock);
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {

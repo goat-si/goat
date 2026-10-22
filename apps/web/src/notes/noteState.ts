@@ -1,14 +1,72 @@
 import {
   NoteConflictError,
+  NotePath,
   type NoteDocument,
   type NotesEvent,
   type NotesListResult,
   type NoteStatus,
+  type NoteSummary,
   type NotesWriteInput,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 const isConflict = Schema.is(NoteConflictError);
+const isNotePath = Schema.is(NotePath);
+
+/** Hubs that accept notes.update always send pinned; older hubs omit it. */
+export function supportsNoteUpdate(notes: ReadonlyArray<NoteSummary>): boolean {
+  return notes.some((note) => note.pinned !== undefined);
+}
+
+const byRecent = (left: NoteSummary, right: NoteSummary) =>
+  right.updatedAt.localeCompare(left.updatedAt) || left.path.localeCompare(right.path);
+
+/** Pinned notes first, each group most recently updated first. */
+export function orderNotes(notes: ReadonlyArray<NoteSummary>): {
+  pinned: NoteSummary[];
+  rest: NoteSummary[];
+} {
+  return {
+    pinned: notes.filter((note) => note.pinned === true).toSorted(byRecent),
+    rest: notes.filter((note) => note.pinned !== true).toSorted(byRecent),
+  };
+}
+
+const searchable = (value: string) => value.normalize("NFC").toLocaleLowerCase();
+
+/** Every whitespace-separated term must appear in the title, preview, or path. */
+export function filterNotes(
+  notes: ReadonlyArray<NoteSummary>,
+  query: string,
+): ReadonlyArray<NoteSummary> {
+  const terms = searchable(query).split(/\s+/u).filter(Boolean);
+  if (terms.length === 0) return notes;
+  return notes.filter((note) => {
+    const haystack = searchable(`${note.title}\n${note.preview ?? ""}\n${note.path}`);
+    return terms.every((term) => haystack.includes(term));
+  });
+}
+
+/** A query that names a note the list does not hold, such as one past a truncated list. */
+export function openablePath(notes: ReadonlyArray<NoteSummary>, query: string): string | null {
+  const path = query.trim().normalize("NFC");
+  return isNotePath(path) && !notes.some((note) => note.path === path) ? path : null;
+}
+
+/** Untitled.md, Untitled 2.md, ...; skip lets a retry step past a name taken since the list loaded. */
+export function untitledNotePath(
+  taken: ReadonlySet<string>,
+  folder: string | null,
+  skip = 0,
+): string {
+  const prefix = folder ? `${folder}/` : "";
+  let skipped = 0;
+  for (let index = 1; ; index++) {
+    const path = `${prefix}Untitled${index === 1 ? "" : ` ${index}`}.md`;
+    if (taken.has(path)) continue;
+    if (skipped++ === skip) return path;
+  }
+}
 
 export const emptyNotes: NotesListResult = { notes: [], folders: [], truncated: false };
 export function reduceNotes(state: NotesListResult, event: NotesEvent): NotesListResult {
@@ -63,6 +121,11 @@ export function isNoteDirty(state: NoteEditState): boolean {
   return state.body !== state.document.body || state.status !== state.document.status;
 }
 
+/** Pinning and linking rewrite only the header, so the draft can move onto the new revision. */
+function isHeaderOnlyChange(next: NoteDocument, base: NoteDocument): boolean {
+  return next.body === base.body && next.status === base.status;
+}
+
 // Save acknowledgements advance the base, never replace edits typed while the request was in flight.
 export class NoteSession {
   private state: NoteEditState;
@@ -71,6 +134,7 @@ export class NoteSession {
   constructor(
     document: NoteDocument,
     private write: (input: NotesWriteInput) => Promise<NoteReply<NoteDocument>>,
+    private read?: () => Promise<NoteReply<NoteDocument>>,
   ) {
     this.state = {
       document,
@@ -102,7 +166,11 @@ export class NoteSession {
     const state = this.state;
     if (document.revision === state.document.revision) {
       this.update({ ...state, document, refreshError: null });
-    } else if (isNoteDirty(state) || state.saving) {
+    } else if (state.saving) {
+      this.update({ ...state, incoming: document });
+    } else if (isHeaderOnlyChange(document, state.document)) {
+      this.update({ ...state, document, incoming: null, refreshError: null });
+    } else if (isNoteDirty(state)) {
       this.update({ ...state, incoming: document });
     } else {
       this.update({
@@ -116,7 +184,8 @@ export class NoteSession {
       });
     }
   }
-  async refresh(read: () => Promise<NoteReply<NoteDocument>>) {
+  async refresh(read: (() => Promise<NoteReply<NoteDocument>>) | undefined = this.read) {
+    if (!read) return;
     const sequence = ++this.readSequence;
     const baseRevision = this.state.document.revision;
     this.update({ ...this.state, refreshing: true, refreshError: null });
@@ -157,7 +226,7 @@ export class NoteSession {
     this.update({ ...this.state, document: this.state.incoming, incoming: null, error: null });
     await this.save();
   }
-  async save(expected?: Pick<NoteEditState, "body" | "status">) {
+  async save(expected?: Pick<NoteEditState, "body" | "status">, retried = false) {
     const before = this.state;
     if (
       before.saving ||
@@ -179,12 +248,32 @@ export class NoteSession {
     }));
     const latest = this.state;
     if (result.ok) {
+      // Revisions are hashes with no order, so an event that arrived mid-save is settled by a reread.
+      const crossed =
+        latest.incoming !== null && latest.incoming.revision !== result.value.revision;
       this.update({
         ...latest,
         document: result.value,
         saving: false,
-        incoming: latest.incoming?.revision === result.value.revision ? null : latest.incoming,
+        incoming: null,
       });
+      if (crossed) {
+        if (this.read) await this.refresh();
+        else this.update({ ...this.state, incoming: latest.incoming });
+      }
+    } else if (
+      !retried &&
+      isConflict(result.error) &&
+      isHeaderOnlyChange(result.error.current, before.document)
+    ) {
+      this.update({
+        ...latest,
+        document: result.error.current,
+        incoming: null,
+        saving: false,
+        error: null,
+      });
+      await this.save(undefined, true);
     } else {
       this.update({
         ...latest,

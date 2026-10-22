@@ -98,7 +98,7 @@ export function togglePendingUserInputOptionSelection(
 }
 
 export function buildPendingUserInputAnswers(
-  questions: ReadonlyArray<UserInputQuestion>,
+  questions: ReadonlyArray<UserInputQuestion & { readonly required?: boolean | undefined }>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): Record<string, string | string[]> | null {
   const answers: Record<string, string | string[]> = {};
@@ -106,6 +106,8 @@ export function buildPendingUserInputAnswers(
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
     if (answer === null) {
+      // An optional question left blank is omitted; it must not hold back the required ones.
+      if (question.required === false) continue;
       return null;
     }
     answers[question.id] = answer;

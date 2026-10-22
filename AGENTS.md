@@ -75,6 +75,16 @@ The most common defect in this repo is a change that works on the path you teste
 - **Connection modes.** Local, remote/relay, and tunnel behave differently. Multi-device and multi-environment cases are real.
 - **Docs.** Check whether the change makes existing guidance inaccurate. Apply the [documentation rules](#documentation) before adding anything.
 
+## Development discipline
+
+Classify a change before choosing how much process it gets, and reclassify it when it grows: C0 text, C1 local to one file, C2 a conventional slice, C3 across module boundaries, C5 still ambiguous. Security, auth, data deletion or migration, public contracts, release, permissions, and new dependencies are C4 however small they look. Each class has a verification floor.
+
+- Do not claim that tests pass, a bug is fixed, or work is done without a fresh command and its output. A child's report is not proof. Name each check you did not run on a `NOT RUN:` line.
+- No placeholders, TODO-only changes, or fallbacks that hide a failure. Findings and plans cite `path:line`.
+- Search consumers before removing an export. Get approval before destroying anything. Commit each working step. Pass generated text through files or `--body-file`.
+
+The full rules and the lane brief checklist are in [Development discipline](docs/operations/discipline.md). Load the `goat-dev` skill for implementation work in this repository.
+
 ## Dev servers
 
 - `vp i` installs. New worktrees get this from a `post-checkout` hook that runs `scripts/setup-worktree.ts`; if module resolution looks broken, it probably did not run, so run `node scripts/setup-worktree.ts`.

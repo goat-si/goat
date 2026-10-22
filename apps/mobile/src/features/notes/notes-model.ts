@@ -31,6 +31,9 @@ export function noteListRows(
         title: note.title,
         folder: note.folder,
         status: note.status,
+        pinned: note.pinned === true,
+        preview: note.preview ?? "",
+        updatedAt: note.updatedAt,
         sync: noteSyncState(),
       },
     ]),
@@ -45,12 +48,22 @@ export function noteListRows(
         row.path.split("/").at(-1)!.slice(0, -3),
       folder: row.path.includes("/") ? row.path.split("/")[0]! : null,
       status: row.status ?? previous?.status ?? "idea",
+      pinned: previous?.pinned ?? false,
+      preview: previous?.preview ?? "",
+      updatedAt: previous?.updatedAt ?? "",
       sync: noteSyncState(row),
     });
   }
-  return [...rows.values()].sort(
-    (a, b) => (a.folder ?? "").localeCompare(b.folder ?? "") || a.title.localeCompare(b.title),
-  );
+  // Same order as web: pinned first, then each folder most recently updated first.
+  return [...rows.values()]
+    .sort(
+      (a, b) =>
+        Number(b.pinned) - Number(a.pinned) ||
+        (a.pinned ? 0 : (a.folder ?? "").localeCompare(b.folder ?? "")) ||
+        b.updatedAt.localeCompare(a.updatedAt) ||
+        a.title.localeCompare(b.title),
+    )
+    .map((row) => ({ ...row, group: row.pinned ? "Pinned" : (row.folder ?? "Notes") }));
 }
 export interface NoteWorkAttempt {
   readonly requestId: string;
