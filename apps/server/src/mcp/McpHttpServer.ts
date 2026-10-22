@@ -2,9 +2,11 @@ import { DecisionToolkit } from "./toolkits/decision/tools.ts";
 import * as DecisionHandlers from "./toolkits/decision/handlers.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
+  McpCapabilityUnavailableError,
   OrchestratorMcpFailure,
   PreviewAutomationError,
   type PreviewAutomationSnapshot,
+  PreviewAutomationUnavailableError,
   type RunId,
   ThreadId,
 } from "@goat/contracts";
@@ -774,7 +776,8 @@ interface ImageToolResult {
 /**
  * Failures surface only their tag unless the tool describes them: the remote
  * message may carry renderer or device output the agent should not see, and the
- * tag is what it can act on.
+ * tag is what it can act on. Refusals written for the agent, such as a missing
+ * thread credential, keep their code and message so it can tell them apart.
  */
 const imageToolFailure =
   <E>(toolName: string, operation: string, failureText: string | ((error: E) => string)) =>
@@ -791,10 +794,12 @@ const imageToolFailure =
       typeof firstFailure._tag === "string"
         ? firstFailure._tag
         : `${toolName}Error`;
+    const refusal = failures[0] === undefined ? undefined : refusalFields(failures[0].error);
     const message =
-      typeof failureText === "string" || failures[0] === undefined
+      refusal?.message ??
+      (typeof failureText === "string" || failures[0] === undefined
         ? undefined
-        : failureText(failures[0].error);
+        : failureText(failures[0].error));
     const result = new McpSchema.CallToolResult({
       isError: true,
       structuredContent: {
@@ -802,6 +807,7 @@ const imageToolFailure =
           _tag: errorTag,
           operation,
           failureCount: failures.length,
+          ...refusal,
           ...(message === undefined ? {} : { message }),
         },
       },
@@ -809,7 +815,9 @@ const imageToolFailure =
       content: [
         {
           type: "text",
-          text: typeof failureText === "string" ? failureText : (message ?? `${toolName} failed.`),
+          text:
+            refusal?.message ??
+            (typeof failureText === "string" ? failureText : (message ?? `${toolName} failed.`)),
         },
       ],
     });
@@ -928,6 +936,18 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
 });
 
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
+const isCapabilityError = Schema.is(
+  Schema.Union([McpCapabilityUnavailableError, PreviewAutomationUnavailableError]),
+);
+
+function refusalFields(
+  error: unknown,
+): (Readonly<Record<string, unknown>> & { readonly message: string }) | undefined {
+  if (isOrchestratorMcpFailure(error)) return encodeOrchestratorMcpFailure(error);
+  if (isCapabilityError(error))
+    return { _tag: error._tag, capability: error.capability, message: error.message };
+  return undefined;
+}
 
 const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(function* () {
   const htmlRender = yield* HtmlRender.HtmlRender;

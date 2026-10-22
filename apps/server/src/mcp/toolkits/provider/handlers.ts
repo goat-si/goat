@@ -1,36 +1,44 @@
 import * as HomeRequests from "../../../provider/CodexHomeRequests.ts";
-import { OrchestratorMcpFailure } from "@goat/contracts";
+import {
+  type EnvironmentAuthorizationError,
+  OrchestratorMcpFailure,
+  type ProviderHostSyncError,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as CloudAgents from "../../../cloudAgents/CloudAgentService.ts";
 import * as Routing from "../../../provider/ProviderDiagnosisRouting.ts";
 import * as HostSync from "../../../provider/ProviderHostSync.ts";
 import * as Onboarding from "../../../provider/ProviderOnboarding.ts";
 import * as ProviderSettings from "../../../provider/ProviderSettings.ts";
+import { dispatchFacts } from "../../hostFailure.ts";
 import * as McpInvocation from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { ProviderToolkit } from "./tools.ts";
 
-const toMcpFailure = (error: {
-  readonly _tag: string;
-  readonly message: string;
-  readonly code?: string;
-}) =>
-  new OrchestratorMcpFailure({
-    code:
-      error._tag === "EnvironmentAuthorizationError"
-        ? "capability_denied"
-        : error._tag === "ProviderHostSyncError" &&
-            (error.code === "not_found" || error.code === "invalid_request")
-          ? "invalid_request"
-          : "orchestration_error",
-    message: error.message,
-  });
+const LEGACY_SYNC_CODES: Partial<
+  Record<ProviderHostSyncError["code"], OrchestratorMcpFailure["code"]>
+> = {
+  not_found: "invalid_request",
+  invalid_request: "invalid_request",
+  declined: "conflict",
+  expired: "conflict",
+  cancelled: "conflict",
+};
 
-const withHostSync = <A, E extends { readonly _tag: string; readonly message: string }>(
+const toMcpFailure = (error: ProviderHostSyncError | EnvironmentAuthorizationError) =>
+  error._tag === "EnvironmentAuthorizationError"
+    ? new OrchestratorMcpFailure({ code: "capability_denied", message: error.message })
+    : new OrchestratorMcpFailure({
+        code: LEGACY_SYNC_CODES[error.code] ?? "orchestration_error",
+        message: error.message,
+        reason: error.code,
+      });
+
+const withHostSync = <A>(
   run: (
     service: HostSync.ProviderHostSync["Service"],
     caller: { readonly kind: "mcp"; readonly scope: McpInvocation.McpInvocationScope },
-  ) => Effect.Effect<A, E>,
+  ) => Effect.Effect<A, ProviderHostSyncError | EnvironmentAuthorizationError>,
 ) =>
   Effect.gen(function* () {
     const scope = yield* McpInvocation.McpInvocationContext;
@@ -151,17 +159,16 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
       const routing = yield* Routing.ProviderDiagnosisRouting;
       const settings = yield* ProviderSettings.ProviderSettings;
       const result = yield* routing.diagnose(input, { kind: "mcp", scope }).pipe(
-        Effect.mapError(
-          (error) =>
-            new OrchestratorMcpFailure({
-              code:
-                error._tag === "EnvironmentAuthorizationError"
-                  ? "capability_denied"
-                  : error._tag === "OrchestratorMcpFailure"
-                    ? error.code
-                    : "orchestration_error",
-              message: error.message,
-            }),
+        Effect.mapError((error) =>
+          error._tag === "OrchestratorMcpFailure"
+            ? error
+            : error._tag === "EnvironmentAuthorizationError"
+              ? new OrchestratorMcpFailure({ code: "capability_denied", message: error.message })
+              : new OrchestratorMcpFailure({
+                  code: "orchestration_error",
+                  message: error.message,
+                  ...dispatchFacts(error),
+                }),
         ),
       );
       return yield* settings.presentDiagnosis(result, scope);

@@ -4,6 +4,7 @@ import {
   AuthMcpRegisteredClient,
   AuthMcpTokenResult,
   ExecutionEnvironmentDescriptor,
+  type LinkedHostFailureReason,
   type RuntimeMode,
 } from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
@@ -53,7 +54,7 @@ export class LinkedHostError extends Data.TaggedError("LinkedHostError")<{
    * host_unavailable: the host could not be reached or answered nonsense.
    * storage_failed: this machine could not read or write its links.
    */
-  readonly reason: "invalid_request" | "link_refused" | "host_unavailable" | "storage_failed";
+  readonly reason: LinkedHostFailureReason;
   readonly message: string;
 }> {}
 

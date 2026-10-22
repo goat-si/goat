@@ -126,6 +126,35 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   orchestration_error: c("internal"),
   // The MCP layer refused the arguments before the tool ran.
   invalid_params: before("invalid_request"),
+  // SSH dispatch (OrchestratorMcpFailure reason)
+  ssh_failed: c("unavailable"),
+  // Classified by remoteCode when the remote sent a known one.
+  remote_refused: c("failed_precondition"),
+  caller_changed: before("conflict"),
+  duplicate_task: before("conflict"),
+  // Linked hosts (OrchestratorMcpFailure reason)
+  link_refused: before("permission_denied"),
+  // Cloud machines (CloudMachineErrorReason)
+  not_configured: before("failed_precondition"),
+  invalid_key: before("unauthenticated"),
+  scope_denied: before("permission_denied"),
+  billing_required: before("failed_precondition"),
+  limit_reached: before("resource_exhausted"),
+  snapshot_expired: before("expired"),
+  stopped: before("failed_precondition"),
+  not_ready: before("failed_precondition"),
+  readiness_timeout: c("timeout"),
+  ssh_config_failed: c("internal"),
+  ssh_config_overridden: c("failed_precondition"),
+  forget_refused: before("failed_precondition"),
+  protocol_error: c("internal"),
+  transport_error: c("unavailable"),
+  storage_failed: c("internal"),
+  // Handoffs (HandoffErrorReason) and provider host sync (ProviderHostSyncErrorCode)
+  expired: before("expired"),
+  unavailable: c("unavailable"),
+  denied: before("permission_denied"),
+  start_failed: c("internal"),
   // SecretRequestError
   load_failed: c("internal"),
   already_answered: before("conflict"),
@@ -295,15 +324,24 @@ const OMITTED_DETAILS: ReadonlySet<string> = new Set([
 
 /**
  * Classifies a failure from its encoded fields: a domain code, reason, or error tag. A server
- * holding the original error passes its computed message as `message`.
+ * holding the original error passes its computed message as `message`. A wrapper such as
+ * OrchestratorMcpFailure keeps a legacy `code` and names the wrapped literal in `reason`, so a
+ * declared reason wins; prose in a `reason` field has no row and falls back to the code.
  */
 export const fromFailure = (fields: Fields, context: CallContext): AgentSurfaceResult => {
   const tag = stringOf(fields, "_tag");
+  const declared = stringOf(fields, "reason");
   const reason =
+    (declared !== undefined && FAILURE_CLASSES[declared] !== undefined ? declared : undefined) ??
     REASON_KEYS.map((key) => stringOf(fields, key)).find((value) => value !== undefined) ??
     tag ??
     "unknown";
-  const failure = classifyFailure(reason, tag);
+  const remoteCode = stringOf(fields, "remoteCode");
+  const failure =
+    fields.mayHaveStarted === true
+      ? c("unknown_outcome")
+      : ((remoteCode === undefined ? undefined : FAILURE_CLASSES[remoteCode]) ??
+        classifyFailure(reason, tag));
   // Tagged errors often compute their message, so the encoded form may carry none.
   const message =
     stringOf(fields, "message") ?? stringOf(fields, "detail") ?? `The call failed: ${reason}.`;

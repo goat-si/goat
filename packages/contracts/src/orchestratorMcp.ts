@@ -33,6 +33,9 @@ import {
   ProviderApprovalDecision,
 } from "./providerPolicy.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { CloudMachineErrorReason } from "./cloudMachines.ts";
+import { HandoffErrorReason } from "./handoff.ts";
+import { ProviderHostSyncErrorCode } from "./providerHostSync.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import {
@@ -1289,10 +1292,60 @@ export const OrchestratorMcpFailureCode = Schema.Literals([
 ]);
 export type OrchestratorMcpFailureCode = typeof OrchestratorMcpFailureCode.Type;
 
+/**
+ * host_unavailable: SSH, the tunnel, or the remote server did not answer. ssh_failed: the SSH
+ * call itself failed. remote_refused: the remote answered and refused, with its code in
+ * remoteCode when it sent one. caller_changed: the caller's modes changed mid-call.
+ */
+export const SshDispatchFailureReason = Schema.Literals([
+  "invalid_request",
+  "host_unknown",
+  "ssh_failed",
+  "host_unavailable",
+  "remote_refused",
+  "caller_changed",
+]);
+export type SshDispatchFailureReason = typeof SshDispatchFailureReason.Type;
+
+/**
+ * link_refused: the host answered and refused (a spent or expired code, too little scope).
+ * host_unavailable: it could not be reached or answered nonsense. storage_failed: this machine
+ * could not read or write its links.
+ */
+export const LinkedHostFailureReason = Schema.Literals([
+  "invalid_request",
+  "link_refused",
+  "host_unavailable",
+  "storage_failed",
+]);
+export type LinkedHostFailureReason = typeof LinkedHostFailureReason.Type;
+
+/** The literal of the domain failure an OrchestratorMcpFailure wraps. */
+export const OrchestratorMcpFailureReason = Schema.Union([
+  SshDispatchFailureReason,
+  LinkedHostFailureReason,
+  CloudMachineErrorReason,
+  HandoffErrorReason,
+  ProviderHostSyncErrorCode,
+  // A remote task with this id is already launching or launched.
+  Schema.Literal("duplicate_task"),
+]);
+export type OrchestratorMcpFailureReason = typeof OrchestratorMcpFailureReason.Type;
+
+/**
+ * `code` keeps the value existing callers match on. A handler that wraps another failure family
+ * also keeps that family's literal in `reason`, and says when the work may already have run, so
+ * the agent surface can classify it (docs/internals/agent-surface.md, "Result envelope").
+ */
 export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFailure>()(
   "OrchestratorMcpFailure",
   {
     code: OrchestratorMcpFailureCode,
     message: Schema.String,
+    reason: Schema.optionalKey(OrchestratorMcpFailureReason),
+    /** A write may have reached its target before the failure, so repeating it may run twice. */
+    mayHaveStarted: Schema.optionalKey(Schema.Boolean),
+    /** The failure code a remote GOAT answered with, unchanged. */
+    remoteCode: Schema.optionalKey(Schema.String),
   },
 ) {}

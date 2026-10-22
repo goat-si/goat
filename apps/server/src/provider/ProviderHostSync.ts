@@ -26,11 +26,13 @@ import {
   type ProviderAuthState,
   type RuntimeMode,
   type ServerProvider,
+  TurnItemId,
   isCloudAgentProvider,
 } from "@goat/contracts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveCommandPath, resolveSpawnCommand } from "@goat/shared/shell";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -215,6 +217,8 @@ const make = Effect.gen(function* () {
   const operations = new Map<string, SyncOperation>();
   const approvals = new Map<string, PendingApproval>();
   const approvedSyncs = new Map<string, string>();
+  // Why an approved sync never started, so status can say so instead of "not started yet".
+  const failedStarts = new Map<string, string>();
   const installers = yield* Semaphore.make(MAX_CONCURRENT_INSTALLERS);
 
   const readCeiling = (caller: SshHostCaller) =>
@@ -1027,6 +1031,53 @@ const make = Effect.gen(function* () {
         : Effect.succeed(operation);
     });
 
+  /** Why a handoff has no sync: read from the persisted handoff in the asking thread. */
+  const unstarted = (handoffId: string, caller: SshHostCaller) =>
+    Effect.gen(function* () {
+      const failure = failedStarts.get(handoffId);
+      if (failure !== undefined)
+        return yield* fail(
+          "start_failed",
+          `The person approved this sync, but it did not start: ${failure}`,
+        );
+      const thread = caller.kind === "mcp" ? caller.scope.thread : undefined;
+      const handoff =
+        thread === undefined
+          ? undefined
+          : yield* handoffs
+              .read({ threadId: thread.threadId, handoffId: TurnItemId.make(handoffId) })
+              .pipe(
+                Effect.catchTag("HandoffError", (error) =>
+                  error.reason === "not_found"
+                    ? Effect.succeed(undefined)
+                    : Effect.fail(fail("unavailable", "Could not read the approval. Try again.")),
+                ),
+              );
+      switch (handoff?.state) {
+        case "declined":
+          return yield* fail("declined", "The person declined this sync, so it will not run.");
+        case "expired":
+          return yield* fail(
+            "expired",
+            "This approval expired before anyone answered it. Call goat_provider_sync to ask again.",
+          );
+        case "cancelled":
+          return yield* fail("cancelled", "This approval was cancelled, so the sync will not run.");
+        case "failed":
+          return yield* fail("start_failed", "This approval failed, so the sync did not start.");
+        case "completed":
+          return yield* fail(
+            "not_found",
+            "This approval's sync is no longer tracked: it finished more than two hours ago or this server restarted. Call goat_provider_host_matrix to see each host.",
+          );
+        default:
+          return yield* fail(
+            "not_found",
+            "That approval has not started a sync yet. Ask the person to approve it.",
+          );
+      }
+    });
+
   const status = Effect.fn("ProviderHostSync.status")(function* (
     input: ProviderSyncStatusInput,
     caller: SshHostCaller,
@@ -1036,12 +1087,9 @@ const make = Effect.gen(function* () {
       input.syncId ??
       (input.handoffId === undefined ? undefined : approvedSyncs.get(input.handoffId));
     if (syncId === undefined)
-      return yield* fail(
-        input.handoffId === undefined ? "invalid_request" : "not_found",
-        input.handoffId === undefined
-          ? "Pass syncId or handoffId."
-          : "That approval has not started a sync yet. Ask the person to approve it.",
-      );
+      return yield* input.handoffId === undefined
+        ? fail("invalid_request", "Pass syncId or handoffId.")
+        : unstarted(input.handoffId, caller);
     const operation = yield* find(syncId);
     const state = view(operation);
     if (operation.owners.has(callerKey(caller)) || (yield* canManage(caller))) return state;
@@ -1106,7 +1154,16 @@ const make = Effect.gen(function* () {
         Effect.tap((started) =>
           Effect.sync(() => approvedSyncs.set(input.handoffId, started.sync.syncId)),
         ),
-        Effect.catchCause(() => Effect.logWarning("Approved provider sync did not start.")),
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            // Typed failures carry text safe to show; anything else stays generic.
+            const error = Cause.findErrorOption(cause);
+            failedStarts.set(
+              input.handoffId,
+              Option.isSome(error) ? error.value.message : "an unexpected error stopped it.",
+            );
+          }).pipe(Effect.andThen(Effect.logWarning("Approved provider sync did not start."))),
+        ),
       );
     return handoff;
   });

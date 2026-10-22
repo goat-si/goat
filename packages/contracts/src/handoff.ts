@@ -133,15 +133,18 @@ export const HandoffOpenResult = Schema.Struct({
   human: Schema.NullOr(HandoffHuman),
 });
 
+export const HandoffErrorReason = Schema.Literals([
+  "not_found",
+  "expired",
+  "conflict",
+  "unavailable",
+  "limit_reached",
+  "invalid_request",
+]);
+export type HandoffErrorReason = typeof HandoffErrorReason.Type;
+
 export class HandoffError extends Schema.TaggedError<HandoffError>()("HandoffError", {
-  reason: Schema.Literals([
-    "not_found",
-    "expired",
-    "conflict",
-    "unavailable",
-    "limit_reached",
-    "invalid_request",
-  ]),
+  reason: HandoffErrorReason,
   cause: Schema.optionalKey(Schema.Defect()),
 }) {
   override get message() {
