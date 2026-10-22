@@ -1521,6 +1521,27 @@ export default function ChatView(props: ChatViewProps) {
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError,
   });
+  const { cloudRun, onRetryCloudRun } = useCloudRun({
+    environmentId,
+    threadId: activeThread?.id ?? null,
+    projection: serverProjection,
+    // The composer's send gates: a usable provider, a follow-up it accepts, no send in flight.
+    canRetry:
+      canOperateThread &&
+      selectedProviderEntry !== undefined &&
+      cloudState.composerBlockReason === null &&
+      !isSendBusy,
+    runtimeMode,
+    interactionMode,
+    setThreadError,
+  });
+  // A finished cloud run's card already states its failure; the runtime error banner repeats it.
+  const cloudRunShowsThreadError =
+    cloudRun !== null &&
+    cloudRun.phase !== "running" &&
+    threadErrorIsServerRuntimeError &&
+    timelineThreadError !== null;
+  const timelineBannerError = cloudRunShowsThreadError ? null : timelineThreadError;
   const optimisticCompactionMessage = optimisticUserMessages.at(-1);
   const latestServerUserItem = serverVisibleTurnItems.findLast(
     (row) => row.item.type === "user_message",
@@ -1807,7 +1828,7 @@ export default function ChatView(props: ChatViewProps) {
   )
     ? activeProviderStatus
     : null;
-  const hasTimelineTopBanner = Boolean(timelineThreadError) || visibleProviderStatus !== null;
+  const hasTimelineTopBanner = Boolean(timelineBannerError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -3113,15 +3134,6 @@ export default function ChatView(props: ChatViewProps) {
     });
     scheduleComposerFocus();
   };
-  const { cloudRun, onRetryCloudRun } = useCloudRun({
-    environmentId,
-    threadId: activeThread?.id ?? null,
-    projection: serverProjection,
-    canRetry: canOperateThread && cloudState.composerBlockReason === null && !isSendBusy,
-    runtimeMode,
-    interactionMode,
-    setThreadError,
-  });
   const { onResume, isResuming } = useComposerResume({
     environmentId,
     routeThreadKey,
@@ -3586,7 +3598,7 @@ export default function ChatView(props: ChatViewProps) {
               setDismissedProviderStatusBannerKey={setDismissedProviderStatusBannerKey}
               onOpenProviderSetup={openProviderSetupStable}
               threadId={activeThread.id}
-              threadError={timelineThreadError}
+              threadError={timelineBannerError}
               threadErrorClass={
                 threadErrorIsServerRuntimeError ? (serverRuntime?.lastErrorClass ?? null) : null
               }

@@ -401,6 +401,28 @@ describe("presentCloudRun", () => {
     expect(card.stages.at(-1)).toMatchObject({ label: "Pull request ready", status: "done" });
   });
 
+  it("blames the submission when the provider never accepted the task", () => {
+    const card = presentCloudRun(
+      cloudProjection({
+        driver: "claudeCloud",
+        task: {
+          ...failedTask,
+          taskId: runId,
+          acceptedAppRunId: undefined,
+          url: undefined,
+          error: "Claude Code hasn't trusted this folder yet.",
+        },
+      }),
+    )!;
+    expect(card.stages.map((stage) => [stage.id, stage.status])).toEqual([
+      ["prepare", "done"],
+      ["submit", "failed"],
+      ["run", "skipped"],
+      ["result", "failed"],
+    ]);
+    expect(card.message).toBe("Claude Code hasn't trusted this folder yet.");
+  });
+
   it("leaves local runs alone", () => {
     expect(presentCloudRun(cloudProjection({ driver: "codex" }))).toBeNull();
   });

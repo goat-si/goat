@@ -1025,7 +1025,7 @@ describe("Cursor Cloud adapter", () => {
       if (status === "error") {
         expect(output).toMatchObject({
           status: "failed",
-          error: "Cursor reported a terminal cloud error.",
+          error: "Cursor's agent hit an unexpected error before it finished.",
         });
       } else {
         expect(output.status).toBe(status === "finished" ? "succeeded" : "cancelled");

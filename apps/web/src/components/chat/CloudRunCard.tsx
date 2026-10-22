@@ -172,9 +172,12 @@ export function CloudRunCard({
             </div>
           ) : null}
           <div className={running ? undefined : "pt-1.5"}>
-            {card.stages.map((stage) => (
-              <StageRow key={stage.id} stage={stage} nowMs={nowMs} />
-            ))}
+            {card.stages
+              // Once finished, the header states the result.
+              .filter((stage) => running || stage.id !== "result")
+              .map((stage) => (
+                <StageRow key={stage.id} stage={stage} nowMs={nowMs} />
+              ))}
           </div>
         </>
       )}

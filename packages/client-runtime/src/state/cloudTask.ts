@@ -234,6 +234,11 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
   const completedAt = iso(run.completedAt);
   const endedAt = phase === "running" ? null : completedAt;
   const submitting = task?.status === "submitting";
+  // A provider marks acceptance with acceptedAppRunId (Cursor) or by replacing the app run id
+  // with its own task id (Claude, Devin). A task still named after this run was never accepted.
+  const neverAccepted =
+    task !== undefined && task.acceptedAppRunId !== run.id && task.taskId === run.id;
+  const notSent = submitting || (neverAccepted && phase !== "running");
   const stages: CloudRunStage[] = [
     {
       id: "prepare",
@@ -246,7 +251,13 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
     {
       id: "submit",
       label: "Submit to " + provider,
-      status: !started ? "pending" : submitting ? (runEnded ? "failed" : "running") : "done",
+      status: !started
+        ? "pending"
+        : notSent
+          ? runEnded || phase !== "running"
+            ? "failed"
+            : "running"
+          : "done",
       startedAt: null,
       endedAt: null,
       detail: null,
@@ -255,7 +266,7 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
       id: "run",
       label: "Run in the cloud",
       status:
-        !started || submitting
+        !started || notSent
           ? runEnded && started
             ? "skipped"
             : "pending"
@@ -266,8 +277,8 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
               : phase === "cancelled"
                 ? "skipped"
                 : "failed",
-      startedAt: started && !submitting ? startedAt : null,
-      endedAt: started && !submitting ? endedAt : null,
+      startedAt: started && !notSent ? startedAt : null,
+      endedAt: started && !notSent ? endedAt : null,
       detail: phase === "running" ? task?.progress?.trim() || null : null,
     },
     {

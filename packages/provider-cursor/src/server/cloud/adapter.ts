@@ -153,7 +153,9 @@ export function resultTask(task: Task, result: RunResult): Task {
           : "Cursor Cloud failed. Open the agent for details."),
     ...(output?.branch ? { branch: output.branch } : {}),
     ...(prUrl ? { prUrl } : {}),
-    ...(result.status === "error" ? { error: "Cursor reported a terminal cloud error." } : {}),
+    ...(result.status === "error"
+      ? { error: "Cursor's agent hit an unexpected error before it finished." }
+      : {}),
   };
 }
 
