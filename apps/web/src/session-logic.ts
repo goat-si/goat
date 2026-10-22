@@ -553,12 +553,17 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         changedFiles: item.files.map((file) => file.path),
         toolData: item,
       };
-    case "system_notice":
+    case "system_notice": {
+      // The first line is the row; the rest opens with it, so a long notice stays one line.
+      const [headline = "", ...rest] = item.message.split("\n");
+      const detail = rest.join("\n").trim();
       return {
         ...common,
-        label: item.message,
-        sourceActivityKind: "runtime.warning",
+        label: headline,
+        ...(detail.length > 0 ? { detail } : {}),
+        ...(item.severity === "info" ? {} : { sourceActivityKind: "runtime.warning" }),
       };
+    }
     case "error": {
       const presentation = providerErrorPresentation(item);
       return {

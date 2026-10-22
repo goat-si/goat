@@ -1547,6 +1547,10 @@ export const OrchestrationV2UserMessageInputIntent = Schema.Literals([
 export type OrchestrationV2UserMessageInputIntent =
   typeof OrchestrationV2UserMessageInputIntent.Type;
 
+/** How a server notice draws in the timeline. Absent means warning, the original look. */
+export const OrchestrationV2NoticeSeverity = Schema.Literals(["info", "warning"]);
+export type OrchestrationV2NoticeSeverity = typeof OrchestrationV2NoticeSeverity.Type;
+
 const OrchestrationV2TurnItemBaseFields = {
   toolNonExecutionKind: Schema.optional(Schema.String),
   toolSurface: Schema.optional(ToolActivitySurface),
@@ -1732,6 +1736,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("system_notice"),
     message: Schema.String,
+    severity: Schema.optional(OrchestrationV2NoticeSeverity),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2531,6 +2536,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("system_notice"),
     message: Schema.String,
+    severity: Schema.optional(OrchestrationV2NoticeSeverity),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -3502,6 +3508,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     recordKey: TrimmedNonEmptyString,
     message: TrimmedNonEmptyString,
+    severity: Schema.optional(OrchestrationV2NoticeSeverity),
   }),
   /**
    * Writes one GOAT bot message or task chip without a provider run. Internal so no client

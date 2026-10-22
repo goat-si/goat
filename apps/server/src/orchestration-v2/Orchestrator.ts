@@ -8764,6 +8764,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           updatedAt: now,
           type: "system_notice",
           message: command.message,
+          ...(command.severity === undefined ? {} : { severity: command.severity }),
         },
       });
     },

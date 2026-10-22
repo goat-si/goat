@@ -30,7 +30,7 @@ export const HostPressure = Schema.Struct({
   reasons: Schema.Array(HostPressureReason),
   /** One-minute load average divided by logical cores; null where the OS has none (Windows). */
   loadPerCore: Schema.NullOr(Schema.Number),
-  /** The longest event-loop stall of this GOAT server in the sustain window, in ms. */
+  /** The longest event-loop stall of this GOAT server in the last ten minutes, in ms, at any level. */
   eventLoopDelayMs: Schema.NullOr(NonNegativeInt),
 });
 export type HostPressure = typeof HostPressure.Type;
@@ -51,15 +51,24 @@ export const HostPressureSettings = Schema.Struct({
   elevatedCpuPercent: Schema.optional(
     Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100)),
   ),
-  /** A GOAT server event-loop stall at least this long is critical at once; half of it is elevated. */
+  /**
+   * GOAT server event-loop stalls are counted over ten minutes, never one alone: three of at least
+   * half this are elevated, two of at least this are critical. One stall of three times this is
+   * critical at once.
+   */
   criticalEventLoopDelayMs: Schema.optional(PositiveInt),
   elevatedMemoryFreePercent: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
   criticalMemoryFreePercent: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
   elevatedDiskFreeGiB: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
   criticalDiskFreeGiB: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
-  /** How long a reading must hold before the level rises, and stay clear before it falls. */
+  /** How long a load, CPU, memory or disk reading must hold before the level rises. */
   sustainMs: Schema.optional(PositiveInt),
-  /** The same host and level is announced at most once in this window. */
+  /** How long every reading must stay clear before the level falls. */
+  recoverMs: Schema.optional(PositiveInt),
+  /**
+   * A host gets at most one new timeline notice per thread in this window; later changes update
+   * that notice in place. A rise to a wake level wakes threads at most once per level in it.
+   */
   notifyCooldownMs: Schema.optional(PositiveInt),
   /** How orchestrating threads hear about each level. */
   elevatedDelivery: Schema.optional(HostPressureDelivery),
@@ -79,8 +88,9 @@ export const DEFAULT_HOST_PRESSURE_SETTINGS = {
   criticalMemoryFreePercent: 5,
   elevatedDiskFreeGiB: 10,
   criticalDiskFreeGiB: 2,
-  sustainMs: 120_000,
-  notifyCooldownMs: 15 * 60_000,
+  sustainMs: 3 * 60_000,
+  recoverMs: 5 * 60_000,
+  notifyCooldownMs: 45 * 60_000,
   elevatedDelivery: "notice",
   criticalDelivery: "wake",
   admission: "warn",
