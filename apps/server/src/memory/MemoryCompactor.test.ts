@@ -945,6 +945,7 @@ it.effect(
     }).pipe(
       Effect.provide(
         McpHttpServer.layerMemoryToolkit.pipe(
+          Layer.provide(McpAccess.layerPermissionProfilesOff),
           Layer.provideMerge(live),
           Layer.provide(Layer.mock(Sync.MemorySyncService)({})),
           Layer.provideMerge(McpServer.McpServer.layer),

@@ -26,7 +26,11 @@ import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
-import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
+import {
+  idleThreadProjection,
+  liveThreadShell,
+  layerPermissionProfilesOff,
+} from "../mcp/McpToolAccess.testkit.ts";
 import * as Handlers from "../mcp/toolkits/provider/handlers.ts";
 import { ProviderToolkit } from "../mcp/toolkits/provider/tools.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -214,6 +218,7 @@ const harness = Effect.gen(function* () {
     }),
   );
   const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+    Layer.provide(layerPermissionProfilesOff),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
     Layer.provide(

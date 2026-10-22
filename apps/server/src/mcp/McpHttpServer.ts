@@ -917,6 +917,12 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
 const encodeOrchestratorMcpFailure = Schema.encodeSync(OrchestratorMcpFailure);
 const encodeReferenceRefusal = Schema.encodeSync(Schema.fromJsonString(OrchestratorMcpFailure));
 
+const refusalResult = (failure: OrchestratorMcpFailure) =>
+  new McpSchema.CallToolResult({
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify(encodeOrchestratorMcpFailure(failure)) }],
+  });
+
 const undeclaredArgumentsResult = (
   tool: string,
   undeclared: ReadonlyArray<string>,
@@ -954,6 +960,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const effects = yield* McpToolAccess.ToolEffects;
+    const permissions = yield* Profiles.PermissionProfiles;
     return yield* register.pipe(
       Effect.provideService(
         McpServer.McpServer,
@@ -981,10 +988,23 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                 Context.add(Tool.Destructive, effect === "destructive"),
               ),
             };
+            // Arguments never decode for a caller whose goatclaw profile refuses the tool.
+            const gated = (payload: unknown) =>
+              McpToolAccess.requireDeclaredCapability(
+                permissions,
+                registration.tool.name,
+                effect,
+                payload,
+              ).pipe(
+                Effect.matchEffect({
+                  onFailure: (failure) => Effect.succeed(refusalResult(failure)),
+                  onSuccess: () => registration.handle(payload),
+                }),
+              );
             const inputSchema = registration.tool.inputSchema;
             // A parameter schema with an index signature declares its own extra keys.
             if (typeof inputSchema.additionalProperties === "object")
-              return server.addTool(registration);
+              return server.addTool({ ...registration, handle: gated });
             const properties = inputSchema.properties ?? {};
             return server.addTool({
               ...registration,
@@ -999,7 +1019,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                 return undeclared.length === 0
                   ? validateRepositoryReferenceArguments(registration.tool.name, payload).pipe(
                       Effect.matchEffect({
-                        onSuccess: () => registration.handle(payload),
+                        onSuccess: () => gated(payload),
                         onFailure: () =>
                           Effect.succeed(
                             new McpSchema.CallToolResult({
@@ -1458,6 +1478,8 @@ export const layer = Layer.mergeAll(
   Layer.provide(RemoteReportService.layer),
   // Run results for the report tool and the thread read and wait tools.
   Layer.provide(ThreadResultService.layer),
+  // Every registration's goatclaw capability gate, and the handlers that check profiles.
+  Layer.provide(Profiles.layer),
   Layer.provideMerge(layerMcpTransport),
 );
 

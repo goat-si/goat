@@ -325,6 +325,14 @@ thread or browser, a person who completes the step, or another grant such as
 `memory:write`. The type refuses a write without one. Tools whose thread callers
 only ask a person, such as provider sign-in and sync, declare `none` so a profile
 never preempts the person's decision.
+With goatclaw on, the served handle refuses a GOAT thread whose effective profile
+lacks the declared capability, before arguments decode, so `goat_call` and anything
+else that calls through the server inherit the check
+([McpToolAccess.ts](../../apps/server/src/mcp/McpToolAccess.ts)
+`requireDeclaredCapability`). Outside MCP clients are not gated per tool: other GOAT
+hosts call writes on each other as outside clients, so their approved access level
+and scopes bound them, and the launch, goal and hub handlers still apply the default
+profile to them.
 
 **Proposed.** Add the `idempotency`, `pagination`, and `operation` fields, and run
 each entry's examples as tests.
@@ -548,6 +556,14 @@ and the origin refuses a destination that has not shown it enforces ceilings
 instead of falling back to the relay, which would deliver without one. Remote
 servers answer only to the tool names they shipped with
 ([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)).
+The origin checks the calling thread's capability before forwarding, plus
+`threads.remote` and the profile's host allowlist for a host-routable write that
+names `host`.
+A thread launched or sent with a forwarded ceiling is bound to it on the
+destination, so its own calls there are checked against it. Other host-routed writes
+arrive as the origin's dispatch session, and the destination relies on the origin's
+check. Writes that name their target machine in another argument (`targetHost`,
+`destinationHost`, an alias) get the capability check but not the host allowlist.
 
 **Proposed.**
 

@@ -221,6 +221,7 @@ it.effect(
         }),
       ).pipe(Layer.provideMerge(Fixture.core));
       const toolkit = McpHttpServer.layerMemoryToolkit.pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(observed),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),

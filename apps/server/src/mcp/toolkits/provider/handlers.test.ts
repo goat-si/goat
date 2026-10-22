@@ -13,7 +13,7 @@ import * as Invocation from "../../McpInvocationContext.ts";
 import * as Routing from "../../../provider/ProviderDiagnosisRouting.ts";
 import * as HostSync from "../../../provider/ProviderHostSync.ts";
 import * as CloudAgents from "../../../cloudAgents/CloudAgentService.ts";
-import { liveThreadsLayer } from "../../McpToolAccess.testkit.ts";
+import { liveThreadsLayer, layerPermissionProfilesOff } from "../../McpToolAccess.testkit.ts";
 import { ProviderToolkit } from "./tools.ts";
 import * as Handlers from "./handlers.ts";
 const client = McpSchema.McpServerClient.of({
@@ -40,6 +40,7 @@ it.effect.each([undefined, "box"])("uses one routing entry point for host=%s", (
   Effect.gen(function* () {
     const calls: unknown[] = [];
     const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+      Layer.provide(layerPermissionProfilesOff),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(liveThreadsLayer),
       Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
@@ -85,6 +86,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+        Layer.provide(layerPermissionProfilesOff),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(liveThreadsLayer),
         Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
@@ -145,6 +147,7 @@ it.effect(
       };
       let requests = 0;
       const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+        Layer.provide(layerPermissionProfilesOff),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(liveThreadsLayer),
         Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),

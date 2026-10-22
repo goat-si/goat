@@ -71,6 +71,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { layerPermissionProfilesOff } from "./McpToolAccess.testkit.ts";
 
 interface CapturedTurn {
   readonly instanceId: ProviderInstanceId;
@@ -82,6 +83,7 @@ function unsupported(driver: ProviderDriverKind, detail: string) {
 }
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
+  Layer.provide(layerPermissionProfilesOff),
   Layer.provide(layerNoFleetSync),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
@@ -1385,7 +1387,10 @@ it.live("delegate_task wait returns before a child question is answered", () =>
       );
       const layer = Layer.merge(
         layerOrchestratorToolkit,
-        McpHttpServer.layerThreadToolkit.pipe(Layer.provide(layerNoFleetSync)),
+        McpHttpServer.layerThreadToolkit.pipe(
+          Layer.provide(layerPermissionProfilesOff),
+          Layer.provide(layerNoFleetSync),
+        ),
       ).pipe(
         Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
