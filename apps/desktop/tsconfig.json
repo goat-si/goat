@@ -30,6 +30,7 @@
     "../../packages/ssh/src/runtimeProvisioning.ts",
     "../../packages/ssh/src/runtimePublished.ts",
     "../../packages/ssh/src/sshFailureDiagnostics.ts",
+    "../../packages/ssh/src/targetAdmission.ts",
     "../../packages/ssh/src/tunnel.ensure-flight.fixture.ts",
     "../../packages/ssh/src/tunnel.fixture.ts",
     "../../packages/ssh/src/tunnel.ts",
