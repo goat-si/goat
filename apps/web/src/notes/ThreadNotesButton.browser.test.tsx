@@ -141,6 +141,22 @@ it("keeps the new note and says so when linking it fails", async () => {
   expect(state.navigate).not.toHaveBeenCalled();
 });
 
+it("says so instead of leaving a silent unlinked note on an empty older hub", async () => {
+  await using screen = await setup([]);
+  const legacy = note("goat/Untitled.md", "Untitled");
+  delete (legacy as { pinned?: boolean }).pinned;
+  state.write.mockResolvedValue({ ok: true, value: legacy });
+  await userEvent.click(screen.getByRole("button", { name: "Notes for this thread" }));
+  await userEvent.click(page.getByRole("button", { name: "New note for this thread" }));
+  await expect
+    .element(page.getByRole("alert"))
+    .toHaveTextContent(
+      "Created goat/Untitled.md. This hub is too old to link notes to threads; update it to link them.",
+    );
+  expect(state.update).not.toHaveBeenCalled();
+  expect(state.navigate).not.toHaveBeenCalled();
+});
+
 it("stays out of threads on machines other than the notes hub", async () => {
   await using screen = await setup([note("plan.md", "Rail plan")], "other-hub");
   expect(screen.container.querySelector("button")).toBeNull();

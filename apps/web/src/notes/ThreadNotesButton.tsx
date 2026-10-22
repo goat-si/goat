@@ -92,7 +92,13 @@ function ThreadNotes(props: {
       return;
     }
     // Support is read from the new note itself: the list may have been empty a moment ago.
-    if (canUpdate && created.value.pinned !== undefined) {
+    if (created.value.pinned === undefined) {
+      setError(
+        `Created ${created.value.path}. This hub is too old to link notes to threads; update it to link them.`,
+      );
+      return;
+    }
+    if (canUpdate) {
       const failure = await relate(created.value.path, "relate");
       // The note exists either way; it stays in the list below so linking can be retried.
       if (failure) {
