@@ -1,9 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "./registry.ts";
 
-const entries: ReadonlyArray<
-  AgentSurfaceEntry & { readonly path: string; readonly legacyNames: ReadonlyArray<string> }
-> = Object.values(agentSurfaceRegistry);
+type Entry = (typeof agentSurfaceRegistry)[keyof typeof agentSurfaceRegistry];
+const entries: ReadonlyArray<Entry> = Object.values(agentSurfaceRegistry);
 
 // The three projections in docs/internals/agent-surface.md#paths. Resource and verb are stored
 // separately because names such as goat_preview_recording_start cannot be split reliably.
