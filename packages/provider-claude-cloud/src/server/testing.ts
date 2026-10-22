@@ -82,6 +82,15 @@ export const RECEIPT =
   "Created cloud session: Test task\r\nView: https://claude.ai/code/session_ABC123?from=cli&m=0\r\nResume with: claude --teleport session_ABC123\r\n";
 // Native folder prompt observed in the Claude 2.1.296 probe; no trust input was sent by GOAT.
 export const FOLDER_TRUST_PROMPT = "Do you trust the files in this folder?\r\n";
+// Claude 2.1.306's dialog, captured natively: "No, exit" is highlighted first, so Enter declines.
+export const NATIVE_TRUST_DIALOG =
+  "\u001b[2GQuick\u001b[8Gsafety\u001b[15Gcheck:\u001b[22GIs\u001b[25Gthis\u001b[30Ga\u001b[32Gproject\u001b[40Gyou\u001b[44Gcreated\u001b[52Gor\u001b[55Gone\u001b[59Gyou\u001b[63Gtrust?\r\r\n\r\r\n" +
+  "\u001b[2G❯\u001b[4GNo,\u001b[8Gexit\r\r\n\u001b[4GYes,\u001b[9GI\u001b[11Gtrust\u001b[17Gthis\u001b[22Gfolder\r\r\n\r\r\n" +
+  "\u001b[2GEnter\u001b[8Gto\u001b[11Gconfirm\u001b[19G·\u001b[21GEsc\u001b[25Gto\u001b[28Gcancel\r\r\n";
+// Claude's redraw after one Down arrow: it moves only the marker.
+export const NATIVE_TRUST_MOVED =
+  "\u001b[1D\u001b[4B\r\u001b[1C\u001b[4A \r\u001b[1C\u001b[1B❯\r\r\n\r\n\r\n\u001b[1C\u001b[3A";
+export const DOWN = "\u001b[B";
 // Representative synthetic refusals, not captured native output or exhaustive vendor wording.
 export const SYNTHETIC_FOLDER_TRUST_REFUSALS = [
   "Error: This folder is not trusted.\r\n",

@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
-import { ClaudeCloudCli } from "@goat/provider-claude-cloud/server";
+import { ClaudeCloudCli, type ClaudeCloudLogin } from "@goat/provider-claude-cloud/server";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -41,7 +41,9 @@ it.effect("reads trust from Claude's config for the folder or a folder above it"
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-const harness = (options: { readonly configJson?: string } = {}) =>
+const harness = (
+  options: { readonly configJson?: string; readonly claudeRecords?: boolean } = {},
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const path = yield* Path.Path;
@@ -70,9 +72,17 @@ const harness = (options: { readonly configJson?: string } = {}) =>
         } as never),
     } as never);
     const cli = ClaudeCloudCli.ClaudeCloudCli.of({
-      acceptTrust: (_login, cwd) =>
-        Effect.sync(() => {
+      // Like Claude: choosing Yes writes the folder's trust into its own config.
+      acceptTrust: (_login: ClaudeCloudLogin, cwd: string) =>
+        Effect.gen(function* () {
           accepted.push(cwd);
+          if (options.claudeRecords === false) return;
+          yield* fileSystem
+            .writeFileString(
+              path.join(home, ".claude.json"),
+              JSON.stringify({ projects: { [cwd]: { hasTrustDialogAccepted: true } } }),
+            )
+            .pipe(Effect.orDie);
         }),
     } as never);
     const trust = makeClaudeCloudFolderTrust({
@@ -88,6 +98,8 @@ const harness = (options: { readonly configJson?: string } = {}) =>
         environment: { HOME: "/fixture/home", CLAUDE_CONFIG_DIR: home },
       }),
       cli,
+      // GOAT worktrees of the fixture project share its main checkout.
+      mainCheckout: (cwd) => Effect.succeed(cwd === WORKTREE ? ROOT : null),
     });
     return { trust, accepted, sql };
   });
@@ -135,7 +147,17 @@ it.effect("Trust now answers the prompt once, skips trusted folders and refuses 
     yield* untrusted.trust.capability.accept(ROOT);
     assert.deepEqual(untrusted.accepted, [ROOT]);
     const [state] = yield* untrusted.trust.capability.states([ROOT]);
+    assert.equal(state?.trusted, true);
     assert.isString(state?.acceptedByGoatAt);
+    const unrecorded = yield* harness({ configJson: "{}", claudeRecords: false });
+    const declined = yield* unrecorded.trust.capability.accept(ROOT).pipe(Effect.flip);
+    assert.match(declined.detail, /did not record trust/u);
+    const [after] = yield* unrecorded.trust.capability.states([ROOT]);
+    assert.equal(after?.trusted, false);
+    // Only the first, recorded acceptance reached the audit log.
+    const rows = yield* unrecorded.sql<{ readonly count: number }>`
+      SELECT COUNT(*) AS count FROM audit_events WHERE target = ${ROOT}`;
+    assert.equal(rows[0]?.count, 1);
     const refused = yield* untrusted.trust.capability.accept("/tmp/elsewhere").pipe(Effect.flip);
     assert.match(refused.detail, /only its own project folders/u);
     const trusted = yield* harness({
@@ -143,6 +165,18 @@ it.effect("Trust now answers the prompt once, skips trusted folders and refuses 
     });
     yield* trusted.trust.capability.accept(ROOT);
     assert.deepEqual(trusted.accepted, []);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.effect("a worktree is trusted when Claude trusts its main checkout", () =>
+  Effect.gen(function* () {
+    const { trust } = yield* harness({
+      configJson: JSON.stringify({ projects: { [ROOT]: { hasTrustDialogAccepted: true } } }),
+    });
+    assert.deepEqual(
+      (yield* trust.capability.states([WORKTREE, "/tmp/elsewhere"])).map((state) => state.trusted),
+      [true, false],
+    );
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 

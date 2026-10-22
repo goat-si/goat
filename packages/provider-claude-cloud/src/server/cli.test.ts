@@ -10,6 +10,10 @@ import {
   RECEIPT,
   FOLDER_TRUST_PROMPT,
   SYNTHETIC_FOLDER_TRUST_REFUSALS,
+  NATIVE_TRUST_DIALOG,
+  NATIVE_TRUST_MOVED,
+  DOWN,
+  type FakePty,
 } from "./testing.ts";
 
 // Minimal option line from the plain native node-pty capture; no cwd/account data or trust input.
@@ -758,17 +762,35 @@ it.effect.each([
 );
 
 // Folder trust with a trust policy: GOAT answers Claude's own dialog in its PTY.
-const TRUST_DIALOG = `${FOLDER_TRUST_PROMPT}${NATIVE_FOLDER_TRUST_OPTION}  2. No, exit\r\n`;
+// An older layout highlights "Yes" first, so Enter alone accepts.
+const PRESELECTED_DIALOG = `${FOLDER_TRUST_PROMPT}${NATIVE_FOLDER_TRUST_OPTION}  2. No, exit\r\n`;
 const trustPolicy = () => {
   const accepted: number[] = [];
   return { accepted, trust: { onAccepted: () => accepted.push(accepted.length + 1) } };
 };
+type Fake = FakePty;
+/** Claude 2.1.306: move from "No, exit" to "Yes", wait for the redraw, then confirm. */
+const answerNative = (fake: Fake) =>
+  Effect.gen(function* () {
+    const before = fake.writes.length;
+    fake.emit(NATIVE_TRUST_DIALOG);
+    // Claude drops keys until its screen settles: nothing is sent while output still arrives.
+    expect(fake.writes.slice(before)).toEqual([]);
+    yield* TestClock.adjust("500 millis");
+    expect(fake.writes.slice(before)).toEqual([DOWN]);
+    // Enter waits for the redraw of the moved marker and for the screen to settle again.
+    yield* TestClock.adjust("500 millis");
+    expect(fake.writes.slice(before)).toEqual([DOWN]);
+    fake.emit(NATIVE_TRUST_MOVED);
+    yield* TestClock.adjust("500 millis");
+    expect(fake.writes.slice(before)).toEqual([DOWN, "\r"]);
+  });
 
 it.effect.each([
   { name: "at start", before: "", dialogs: 1 },
   { name: "mid-stream", before: "Preparing cloud session…\r\n", dialogs: 1 },
   { name: "twice", before: "", dialogs: 2 },
-])("answers the folder trust prompt $name and keeps the receipt", ({ before, dialogs }) =>
+])("moves to Yes on Claude's trust dialog $name and keeps the receipt", ({ before, dialogs }) =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeCliHarness();
@@ -778,14 +800,7 @@ it.effect.each([
         .pipe(Effect.forkChild);
       yield* h.fake.ready;
       h.fake.emit(before);
-      for (let dialog = 0; dialog < dialogs; dialog++) {
-        // The question renders before its options; only the rendered option is answered.
-        h.fake.emit(FOLDER_TRUST_PROMPT);
-        expect(h.fake.writes).toHaveLength(dialog);
-        for (const character of NATIVE_FOLDER_TRUST_OPTION) h.fake.emit(character);
-        h.fake.emit("  2. No, exit\r\n");
-      }
-      expect(h.fake.writes).toEqual(Array.from({ length: dialogs }, () => "\r"));
+      for (let dialog = 0; dialog < dialogs; dialog++) yield* answerNative(h.fake);
       h.fake.emit(RECEIPT);
       const handle = yield* Fiber.join(fiber);
       expect(handle.receipt.taskId).toBe("session_ABC123");
@@ -797,7 +812,7 @@ it.effect.each([
   ),
 );
 
-it.effect("stops answering after three trust prompts and sends nothing more", () =>
+it.effect("confirms at once when the dialog already highlights Yes", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeCliHarness();
@@ -806,13 +821,35 @@ it.effect("stops answering after three trust prompts and sends nothing more", ()
         .start(LOGIN, "/fixture/project", "task", policy.trust)
         .pipe(Effect.forkChild);
       yield* h.fake.ready;
-      for (let dialog = 0; dialog < 4; dialog++) h.fake.emit(TRUST_DIALOG);
+      // The question renders before its options; only a rendered option is answered.
+      h.fake.emit(FOLDER_TRUST_PROMPT);
+      expect(h.fake.writes).toEqual([]);
+      for (const character of NATIVE_FOLDER_TRUST_OPTION) h.fake.emit(character);
+      yield* TestClock.adjust("500 millis");
+      expect(h.fake.writes).toEqual(["\r"]);
+      h.fake.emit(RECEIPT);
+      expect((yield* Fiber.join(fiber)).receipt.taskId).toBe("session_ABC123");
+      expect(policy.accepted).toHaveLength(1);
+    }),
+  ),
+);
+
+it.effect("stops answering after three trust prompts and sends nothing more", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task", trustPolicy().trust)
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      for (let dialog = 0; dialog < 3; dialog++) yield* answerNative(h.fake);
+      h.fake.emit(NATIVE_TRUST_DIALOG);
       const error = yield* Fiber.join(fiber).pipe(Effect.flip);
       expect(error.outcome).toBe("rejected");
       expect(error.detail).toBe(
         "Claude Code kept asking to trust /fixture/project after GOAT accepted it 3 times. No prompt was sent.",
       );
-      expect(h.fake.writes).toEqual(["\r", "\r", "\r"]);
+      expect(h.fake.writes).toHaveLength(6);
     }),
   ),
 );
@@ -826,7 +863,7 @@ it.effect("a trust prompt after the receipt stays uncertain and is never answere
         .start(LOGIN, "/fixture/project", "task", policy.trust)
         .pipe(Effect.forkChild);
       yield* h.fake.ready;
-      h.fake.emit(RECEIPT + TRUST_DIALOG);
+      h.fake.emit(RECEIPT + NATIVE_TRUST_DIALOG);
       const handle = yield* Fiber.join(fiber);
       const failure = yield* handle.exited.pipe(Effect.flip);
       expect(failure.outcome).toBe("uncertain");
@@ -853,6 +890,15 @@ it.effect("a trust dialog that never renders its options rejects after the start
   ),
 );
 
+/** Interactive Claude shows the dialog, GOAT moves to Yes and confirms, Claude stays open. */
+const trustInteractively = (fake: Fake) =>
+  Effect.gen(function* () {
+    yield* fake.ready;
+    yield* answerNative(fake);
+    fake.emit("Welcome to Claude Code\r\n");
+    yield* TestClock.adjust("3 seconds");
+  });
+
 it.effect.each(SYNTHETIC_FOLDER_TRUST_REFUSALS)(
   "after a refusal, trusts the folder in interactive Claude and starts once more (%#)",
   (refusal) =>
@@ -867,9 +913,7 @@ it.effect.each(SYNTHETIC_FOLDER_TRUST_REFUSALS)(
         h.fake.emit(refusal);
         h.fake.finish(1);
         const interactive = h.fakes[1]!;
-        yield* interactive.ready;
-        interactive.emit(TRUST_DIALOG);
-        interactive.emit("Welcome to Claude Code\r\n");
+        yield* trustInteractively(interactive);
         const retried = h.fakes[2]!;
         yield* retried.ready;
         retried.emit(RECEIPT);
@@ -880,7 +924,7 @@ it.effect.each(SYNTHETIC_FOLDER_TRUST_REFUSALS)(
           [[], "/fixture/project"],
           [["--cloud=task"], "/fixture/project"],
         ]);
-        expect([h.fake.writes, interactive.writes, retried.writes]).toEqual([[], ["\r"], []]);
+        expect([h.fake.writes, interactive.writes, retried.writes]).toEqual([[], [DOWN, "\r"], []]);
         expect(interactive.kills).toBe(1);
         expect(policy.accepted).toHaveLength(1);
         retried.finish(0);
@@ -899,9 +943,7 @@ it.effect("a second refusal after accepting trust is reported and not retried ag
       yield* h.fake.ready;
       h.fake.emit(SYNTHETIC_FOLDER_TRUST_REFUSALS[0]);
       h.fake.finish(1);
-      yield* h.fakes[1]!.ready;
-      h.fakes[1]!.emit(TRUST_DIALOG);
-      h.fakes[1]!.emit("Welcome\r\n");
+      yield* trustInteractively(h.fakes[1]!);
       yield* h.fakes[2]!.ready;
       h.fakes[2]!.emit(SYNTHETIC_FOLDER_TRUST_REFUSALS[0]);
       h.fakes[2]!.finish(1);
@@ -916,18 +958,29 @@ it.effect("a second refusal after accepting trust is reported and not retried ag
   ),
 );
 
-it.effect("accepting trust alone answers the prompt and closes interactive Claude", () =>
+it.effect("accepting trust alone moves to Yes, confirms, and closes interactive Claude", () =>
+  Effect.gen(function* () {
+    const h = yield* makeCliHarness();
+    const fiber = yield* h.service.acceptTrust(LOGIN, "/fixture/project").pipe(Effect.forkChild);
+    yield* trustInteractively(h.fake);
+    yield* Fiber.join(fiber);
+    expect(h.fake.writes).toEqual([DOWN, "\r"]);
+    expect(h.starts[0]).toMatchObject({ shell: LOGIN.binary, args: [], cwd: "/fixture/project" });
+    expect(h.fake.kills).toBe(1);
+    expect(h.fake.listeners).toBe(0);
+  }),
+);
+
+it.effect("accepting trust fails when Claude closes, which is what declining does", () =>
   Effect.gen(function* () {
     const h = yield* makeCliHarness();
     const fiber = yield* h.service.acceptTrust(LOGIN, "/fixture/project").pipe(Effect.forkChild);
     yield* h.fake.ready;
-    h.fake.emit(TRUST_DIALOG);
-    expect(h.fake.writes).toEqual(["\r"]);
-    h.fake.emit("Welcome to Claude Code\r\n");
-    yield* Fiber.join(fiber);
-    expect(h.starts[0]).toMatchObject({ shell: LOGIN.binary, args: [], cwd: "/fixture/project" });
-    expect(h.fake.kills).toBe(1);
-    expect(h.fake.listeners).toBe(0);
+    yield* answerNative(h.fake);
+    h.fake.finish(0);
+    const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+    expect(error).toMatchObject({ outcome: "rejected", reason: "folder_untrusted" });
+    expect(error.detail).toContain("closed instead of trusting");
   }),
 );
 

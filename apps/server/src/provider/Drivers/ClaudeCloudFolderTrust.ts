@@ -53,6 +53,11 @@ export const makeClaudeCloudFolderTrust = (input: {
   readonly path: Path.Path;
   readonly resolveLogin: Effect.Effect<ClaudeCloudLogin, ClaudeCloudError>;
   readonly cli: ClaudeCloudCli.ClaudeCloudCli["Service"];
+  /**
+   * The main checkout of a Git worktree. Claude keeps a worktree's trust under that root, so a
+   * worktree never appears under its own path.
+   */
+  readonly mainCheckout: (cwd: string) => Effect.Effect<string | null>;
 }) => {
   const { sql, path } = input;
   /** Only a live project's folder, or a GOAT worktree of one, is GOAT's to trust. */
@@ -113,22 +118,22 @@ export const makeClaudeCloudFolderTrust = (input: {
     if (!home) return null;
     return yield* input.fileSystem.readFileString(path.join(home, ".claude.json"));
   }).pipe(Effect.orElseSucceed(() => null));
-  const trusted = (cwd: string) =>
-    readConfig.pipe(
-      Effect.map((raw) =>
-        raw === null ? null : trustedInClaudeConfig(raw, path.resolve(cwd), path),
-      ),
-    );
+  const trustedIn = (raw: string | null, cwd: string) =>
+    Effect.gen(function* () {
+      if (raw === null) return null;
+      const own = trustedInClaudeConfig(raw, path.resolve(cwd), path);
+      if (own !== false) return own;
+      const root = yield* input.mainCheckout(cwd);
+      return root === null ? false : trustedInClaudeConfig(raw, root, path);
+    });
+  const trusted = (cwd: string) => readConfig.pipe(Effect.flatMap((raw) => trustedIn(raw, cwd)));
   const states = Effect.fn("ClaudeCloudFolderTrust.states")(function* (
     cwds: ReadonlyArray<string>,
   ) {
     const raw = yield* readConfig;
     return yield* Effect.forEach(cwds, (cwd) =>
-      acceptedByGoatAt(cwd).pipe(
-        Effect.map((at) => ({
-          trusted: raw === null ? null : trustedInClaudeConfig(raw, path.resolve(cwd), path),
-          acceptedByGoatAt: at,
-        })),
+      Effect.all([trustedIn(raw, cwd), acceptedByGoatAt(cwd)]).pipe(
+        Effect.map(([isTrusted, at]) => ({ trusted: isTrusted, acceptedByGoatAt: at })),
       ),
     );
   });
@@ -149,6 +154,11 @@ export const makeClaudeCloudFolderTrust = (input: {
     yield* input.cli
       .acceptTrust(login, cwd)
       .pipe(Effect.mapError((cause) => failure(cause.detail, cause)));
+    // Claude's own config is the proof; an unreadable config leaves the answer standing.
+    if ((yield* trusted(cwd)) === false)
+      return yield* failure(
+        "Claude Code did not record trust for this folder. Open it once with claude and choose Yes, I trust this folder.",
+      );
     yield* audit(cwd, "settings").pipe(
       Effect.mapError((cause) => failure("Trusted the folder, but could not record it.", cause)),
     );

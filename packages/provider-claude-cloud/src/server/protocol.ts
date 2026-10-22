@@ -119,6 +119,26 @@ export function trustRefusal(raw: string) {
   return FOLDER_REFUSAL.test(trustText(raw));
 }
 
+const DIALOG_OPTION =
+  /^\s*([❯>]\s*)?(?:\d+\.\s*)?(Yes, I trust this folder|Yes, proceed|No, exit|No)\b/;
+
+/**
+ * The trust dialog's options in screen order and which one is highlighted. Claude 2.1.306
+ * highlights "No, exit" first, so Enter alone would decline.
+ */
+export function trustDialog(raw: string) {
+  if (!trustOption(raw)) return undefined;
+  const options: Array<{ readonly yes: boolean; readonly marked: boolean }> = [];
+  for (const line of trustText(raw).split("\n")) {
+    const match = DIALOG_OPTION.exec(line);
+    if (match) options.push({ yes: match[2]!.startsWith("Yes"), marked: match[1] !== undefined });
+  }
+  const yes = options.findIndex((option) => option.yes);
+  const marked = options.findIndex((option) => option.marked);
+  // Without a marker, Claude's first option is the highlighted one.
+  return yes < 0 ? undefined : { yes, marked: marked < 0 ? 0 : marked };
+}
+
 export function trustRequired(raw: string) {
   return trustPrompt(raw) || trustRefusal(raw);
 }

@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -13,6 +14,7 @@ import {
   parseAuthEffect,
   readStartReceipt,
   readSendReceipt,
+  trustDialog,
   trustOption,
   trustPrompt,
   trustRefusal,
@@ -213,6 +215,42 @@ const trustFailure = (
     ...(reason === undefined ? {} : { reason }),
   });
 
+const UP = "\u001b[A";
+const DOWN = "\u001b[B";
+
+/**
+ * Walks Claude's trust dialog onto "Yes, I trust this folder" and confirms it. Claude drops keys
+ * sent while it is still setting up its terminal, and redraws only the moved marker, so each key
+ * waits for the screen to settle, and every key after the first also for its predecessor's redraw.
+ * Returns true once Enter is sent on "Yes".
+ */
+const makeTrustAnswer = () => {
+  let owed: number | undefined;
+  let key = DOWN;
+  let sentAt = 0;
+  return (raw: string, from: number, settled: boolean, write: (keys: string) => void) => {
+    if (!settled) return false;
+    if (owed === undefined) {
+      const dialog = trustDialog(raw.slice(from));
+      if (!dialog) return false;
+      owed = Math.abs(dialog.yes - dialog.marked);
+      key = dialog.yes > dialog.marked ? DOWN : UP;
+    } else if (!/[❯>]/.test(raw.slice(sentAt))) return false;
+    sentAt = raw.length;
+    if (owed === 0) {
+      owed = undefined;
+      write("\r");
+      return true;
+    }
+    owed -= 1;
+    write(key);
+    return false;
+  };
+};
+
+/** Output that stopped changing for one tick is a settled screen. */
+const SETTLE = "250 millis";
+
 /**
  * One owned PTY. Release kills it and waits for its real exit, escalating to SIGKILL, before
  * dropping listeners, so interruption and timeouts never orphan the process.
@@ -304,12 +342,28 @@ const make = Effect.gen(function* () {
   ) {
     const environment = yield* checkLogin(login);
     let raw = "";
-    let answeredAt: number | undefined;
+    let confirmed = false;
     let exit: PtyAdapter.PtyExitEvent | undefined;
+    let pty_: PtyAdapter.PtyProcess | undefined;
+    let seen = 0;
+    const answer = makeTrustAnswer();
     const listeners = new Set<() => void>();
     const notify = () => {
       for (const listener of listeners) listener();
     };
+    const refused = (detail: string) =>
+      new ClaudeCloudError({ detail, outcome: "rejected", reason: "folder_untrusted" });
+    const until = (done: () => boolean) =>
+      Effect.callback<void>((resume) => {
+        const listener = () => {
+          if (done()) resume(Effect.void);
+        };
+        listeners.add(listener);
+        listener();
+        return Effect.sync(() => {
+          listeners.delete(listener);
+        });
+      });
     yield* Effect.scoped(
       Effect.gen(function* () {
         yield* ownPty(
@@ -318,10 +372,7 @@ const make = Effect.gen(function* () {
           {
             data: (chunk, process) => {
               if (raw.length <= LIMIT) raw = (raw + chunk).slice(0, LIMIT + 1);
-              if (answeredAt === undefined && trustOption(raw)) {
-                answeredAt = raw.length;
-                process.write("\r");
-              }
+              pty_ = process;
               notify();
             },
             exit: (event) => {
@@ -332,43 +383,38 @@ const make = Effect.gen(function* () {
             listeners,
           },
         );
-        // Claude records trust when the choice is made; the next frame shows it moved on.
-        yield* Effect.callback<void, ClaudeCloudError>((resume) => {
-          const listener = () => {
-            if (answeredAt !== undefined && (raw.length > answeredAt || exit)) resume(Effect.void);
-            else if (exit)
-              resume(
-                Effect.fail(
-                  new ClaudeCloudError({
-                    detail:
-                      "Claude Code exited before showing its folder trust prompt. Open the folder once with claude to finish its setup.",
-                    outcome: "rejected",
-                    reason: "folder_untrusted",
-                  }),
-                ),
-              );
-          };
-          listeners.add(listener);
-          listener();
-          return Effect.sync(() => {
-            listeners.delete(listener);
-          });
-        }).pipe(
+        yield* Effect.sync(() => {
+          const settled = raw.length === seen;
+          seen = raw.length;
+          if (!confirmed && pty_ && !exit)
+            confirmed = answer(raw, 0, settled, (keys) => pty_!.write(keys));
+          notify();
+        }).pipe(Effect.repeat(Schedule.spaced(SETTLE)), Effect.forkScoped);
+        yield* until(() => confirmed || exit !== undefined).pipe(
           Effect.timeout("30 seconds"),
           Effect.catchTags({
             TimeoutError: () =>
-              answeredAt === undefined
-                ? Effect.fail(
-                    new ClaudeCloudError({
-                      detail:
-                        "Claude Code did not show its folder trust prompt. Open the folder once with claude to finish its setup.",
-                      outcome: "rejected",
-                      reason: "folder_untrusted",
-                    }),
-                  )
-                : Effect.void,
+              Effect.fail(
+                refused(
+                  "Claude Code did not show its folder trust prompt. Open the folder once with claude to finish its setup.",
+                ),
+              ),
           }),
         );
+        if (!confirmed)
+          return yield* refused(
+            "Claude Code exited before showing its folder trust prompt. Open the folder once with claude to finish its setup.",
+          );
+        // Declining closes Claude at once; trusting keeps it open on its prompt.
+        const closed = yield* until(() => exit !== undefined).pipe(
+          Effect.timeout("3 seconds"),
+          Effect.as(true),
+          Effect.catchTags({ TimeoutError: () => Effect.succeed(false) }),
+        );
+        if (closed)
+          return yield* refused(
+            "Claude Code closed instead of trusting the folder. Open it once with claude and choose Yes, I trust this folder.",
+          );
       }),
     );
   });
@@ -388,26 +434,31 @@ const make = Effect.gen(function* () {
     // Output before this offset belongs to trust prompts GOAT already answered.
     let trustFrom = 0;
     let answers = 0;
+    let answer = makeTrustAnswer();
     const listeners = new Set<() => void>();
     const notify = () => {
       for (const listener of listeners) listener();
     };
-    const answerTrust = (bounded: string, process: PtyAdapter.PtyProcess | undefined) => {
-      if (!trust || receipt || failure || !process || !trustOption(bounded.slice(trustFrom)))
-        return;
+    let seen = 0;
+    let current: PtyAdapter.PtyProcess | undefined;
+    const answerTrust = (bounded: string, settled: boolean) => {
+      const process = current;
+      if (!trust || receipt || failure || !process) return;
       if (answers >= MAX_TRUST_ANSWERS) {
-        failure = new ClaudeCloudError({
-          detail: `Claude Code kept asking to trust ${cwd} after GOAT accepted it ${MAX_TRUST_ANSWERS} times. No prompt was sent.`,
-          outcome: "rejected",
-        });
+        if (trustOption(bounded.slice(trustFrom)))
+          failure = new ClaudeCloudError({
+            detail: `Claude Code kept asking to trust ${cwd} after GOAT accepted it ${MAX_TRUST_ANSWERS} times. No prompt was sent.`,
+            outcome: "rejected",
+          });
         return;
       }
+      if (!answer(bounded, trustFrom, settled, (keys) => process.write(keys))) return;
       answers += 1;
       trustFrom = bounded.length;
-      process.write("\r");
+      answer = makeTrustAnswer();
       trust.onAccepted();
     };
-    const inspect = (process?: PtyAdapter.PtyProcess) => {
+    const inspect = (settled = false) => {
       const bounded = raw.slice(0, LIMIT);
       const normalized = cleanOutput(bounded);
       // Preserve the first independently validated receipt even if the same chunk contains
@@ -434,7 +485,7 @@ const make = Effect.gen(function* () {
         failure = unknownSubmission(cause);
       }
       if (raw.length > LIMIT || raw.includes("\uFFFD")) failure = unknownSubmission();
-      answerTrust(bounded, process);
+      answerTrust(bounded, settled);
       const pending = bounded.slice(trustFrom);
       if (!failure && trustRefusal(pending))
         failure = receipt
@@ -467,7 +518,8 @@ const make = Effect.gen(function* () {
       {
         data: (chunk, process) => {
           if (raw.length <= LIMIT) raw = (raw + chunk).slice(0, LIMIT + 1);
-          inspect(process);
+          current = process;
+          inspect();
         },
         exit: (event) => {
           exit = event;
@@ -478,6 +530,13 @@ const make = Effect.gen(function* () {
         listeners,
       },
     );
+    // Keys go out only on a settled screen; see makeTrustAnswer.
+    if (trust)
+      yield* Effect.sync(() => {
+        const settled = raw.length === seen;
+        seen = raw.length;
+        if (!exit) inspect(settled);
+      }).pipe(Effect.repeat(Schedule.spaced(SETTLE)), Effect.forkScoped);
     const wait = <A>(decide: () => Effect.Effect<A, ClaudeCloudError> | undefined) =>
       Effect.callback<A, ClaudeCloudError>((resume) => {
         const listener = () => {

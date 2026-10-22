@@ -14,6 +14,8 @@ import { getProviderClient } from "../lib/providerClients";
 
 type ProviderIconProps = {
   readonly provider: string | null | undefined;
+  /** Behind the cloud badge, so it stays legible on any row. Defaults to the theme's card. */
+  readonly surfaceColor?: string;
   readonly iconUrl?: string | null | undefined;
   readonly size?: number;
 };
@@ -67,7 +69,52 @@ function AcpRegistryProviderIcon(props: {
   );
 }
 
+/**
+ * Cloud providers share their local provider's mark; a cloud in the corner tells them apart by
+ * shape, and the accessibility label names them.
+ */
 export function ProviderIcon(props: ProviderIconProps) {
+  const { themeAppearance } = useAppearancePreferences();
+  const client = getProviderClient(props.provider);
+  if (client?.executionLocation !== "cloud") return <ProviderMark {...props} />;
+  const size = props.size ?? 16;
+  const isDarkMode = themeAppearance === "dark";
+  const badge = Math.max(8, Math.round(size * 0.68));
+  const surface = props.surfaceColor ?? (isDarkMode ? "#1c1c1c" : "#ffffff");
+  return (
+    <View
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={client.label}
+      style={{ width: size, height: size }}
+    >
+      <ProviderMark {...props} />
+      <View
+        pointerEvents="none"
+        style={{
+          position: "absolute",
+          right: -Math.round(badge * 0.44),
+          bottom: -Math.round(badge * 0.35),
+          width: badge,
+          height: badge,
+          borderRadius: badge / 2,
+          backgroundColor: surface,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Svg width={badge * 0.86} height={badge * 0.86} viewBox="0 0 16 16">
+          <Path
+            fill={isDarkMode ? "#e5e5e5" : "#171717"}
+            d="M4.25 13.5h7.6a3.4 3.4 0 0 0 .42-6.78A4.75 4.75 0 0 0 3.2 7.5a3.01 3.01 0 0 0 1.05 6Z"
+          />
+        </Svg>
+      </View>
+    </View>
+  );
+}
+
+function ProviderMark(props: ProviderIconProps) {
   const { themeAppearance } = useAppearancePreferences();
   const isDarkMode = themeAppearance === "dark";
   const gradientId = useId();
@@ -164,7 +211,12 @@ export function ProviderInstanceIcon(props: {
   return (
     <View style={{ position: "relative" }}>
       <View style={{ opacity: 0.6 }}>
-        <ProviderIcon iconUrl={props.iconUrl} provider={props.provider} size={props.size} />
+        <ProviderIcon
+          iconUrl={props.iconUrl}
+          provider={props.provider}
+          size={props.size}
+          surfaceColor={props.surfaceColor}
+        />
       </View>
       {props.showBadge ? (
         // A wide right-aligned box lets the badge fit its initials. Alone, an

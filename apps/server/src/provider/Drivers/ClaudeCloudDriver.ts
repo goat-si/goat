@@ -12,12 +12,13 @@ import * as DateTime from "effect/DateTime";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
-import { ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import type { ProviderDriver } from "@goat/provider-core/server/driver";
 import { ProviderDriverError } from "@goat/provider-core/server/errors";
+import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentity";
 import {
@@ -167,6 +168,33 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
             }),
         ),
       );
+      const mainCheckout = (cwd: string) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const child = yield* spawner.spawn(
+              ChildProcess.make(
+                "git",
+                ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                {
+                  cwd,
+                  shell: false,
+                  stdin: "ignore",
+                },
+              ),
+            );
+            const [code, output] = yield* Effect.all(
+              [child.exitCode, collectUint8StreamText({ stream: child.stdout, maxBytes: 4096 })],
+              { concurrency: "unbounded" },
+            );
+            const commonDir = output.text.trim();
+            return Number(code) === 0 && path.basename(commonDir) === ".git"
+              ? path.dirname(commonDir)
+              : null;
+          }),
+        ).pipe(
+          Effect.timeout("5 seconds"),
+          Effect.orElseSucceed(() => null),
+        );
       const folderTrust = makeClaudeCloudFolderTrust({
         instanceId,
         sql,
@@ -176,6 +204,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
         path,
         resolveLogin,
         cli: operations,
+        mainCheckout,
       });
       const orchestrationAdapter = yield* makeClaudeCloudAdapter({
         instanceId,
