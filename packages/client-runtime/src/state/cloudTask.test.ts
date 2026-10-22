@@ -512,6 +512,7 @@ describe("presentCloudRun", () => {
     )!;
     expect(card.phase).toBe("running");
     expect(card.title).toBe("Claude Cloud is working");
+    expect(card.hiddenMessageIds.size).toBe(0);
   });
 
   it("says why a registered link-only task is not tracked", () => {

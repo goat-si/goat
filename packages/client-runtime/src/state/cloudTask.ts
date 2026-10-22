@@ -333,7 +333,8 @@ export function presentCloudRun(projection: CloudRunProjection | null | undefine
   }
   const resultItemId = "turn-item:cloud-result:" + run.id;
   const resultMessageId = "message:cloud-result:" + run.id;
-  if (phase !== "succeeded") {
+  // The card states failures; a success or an accepted follow-up keeps its result message.
+  if (phase === "failed" || phase === "cancelled" || phase === "unknown") {
     hiddenItemIds.add(resultItemId);
     hiddenMessageIds.add(resultMessageId);
   }
