@@ -97,7 +97,7 @@ import { Input } from "../ui/input";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { ScrollArea } from "../ui/scroll-area";
 import { Spinner } from "../ui/spinner";
-import { WizardPanel, WizardSteps, WizardPopup, WizardHeader } from "../ui/wizard";
+import { WizardPanel, WizardSteps, WizardPopup, WizardHeader } from "./OnboardingWizard";
 import { Dialog } from "../ui/dialog";
 import { toastManager } from "../ui/toast";
 import { cn } from "../../lib/utils";
