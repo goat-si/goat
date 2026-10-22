@@ -65,15 +65,18 @@ describe("Pi orchestration prompt section", () => {
   it("gives the development discipline to a thread without GOAT MCP", async () => {
     const bridge = await loadMcpBridge({ goatMcp: false });
     const hook = bridge.handlers.get("before_agent_start")!;
+    const context = { ui: { notify: assert.fail } };
     const sections: Record<string, string> = {};
-    assert.isUndefined(await hook({ systemPrompt: "base", systemPromptOptions: { sections } }, {}));
+    assert.isUndefined(
+      await hook({ systemPrompt: "base", systemPromptOptions: { sections } }, context),
+    );
     assert.deepEqual(sections, { goat_code_development: GOAT_DEVELOPMENT_INSTRUCTIONS });
     const forced = await hook(
       {
         systemPrompt: "forced",
         systemPromptOptions: { sections: {}, forceSystemPrompt: "forced" },
       },
-      {},
+      context,
     );
     assert.equal(forced?.systemPrompt, `forced\n\n${GOAT_DEVELOPMENT_INSTRUCTIONS}`);
   });
