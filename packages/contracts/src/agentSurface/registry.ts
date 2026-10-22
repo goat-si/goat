@@ -1576,6 +1576,7 @@ export const agentSurfaceRegistry = {
     description:
       "Run the workspace preparation of a GOAT thread's failed run again: the Git fetch, worktree checkout and setup script that must succeed before its agent starts. Use it after a launch report or goat_thread_status says the run failed during workspace_preparation with canRetry true, typically for a slow or stalled Git fetch; it is the same as Retry on the failure in the thread. Without runId the thread's latest run is retried. A run that failed for another reason cannot be retried this way; read it and send a new message with goat_thread_send instead. The launch watch reports the retried run when it ends. clientRequestId makes retries idempotent. Pass host (an SSH alias or linked host name, as goat_ssh_thread_launch returned it) to reach a thread on another machine's GOAT environment; its threadId belongs to that machine. That needs a caller allowed to use this machine's SSH keys. An older GOAT there answers that the tool is unknown; retry from a GOAT client connected to that host instead. host_unavailable means the machine, SSH, or its GOAT server could not be reached; it is distinct from thread_not_found.",
     effect: "write",
+    capability: "threads.launch",
     hostRoutable: true,
     requires: "either",
     dryRun: "unsupported",
@@ -3665,6 +3666,7 @@ export const agentSurfaceRegistry = {
     description:
       "Change a provider instance on this environment, or on an SSH host with host, the way Settings → Providers does: enable or disable it, rename it, set its accent color, merge driver settings (binary path, home, custom models, a cloud provider's login source), set environment variables, make one of its models the default for new threads, or install an ACP Registry agent with install:true. A caller allowed to manage providers gets kind applied: a client holding providers:manage, or a live full-access thread whose goatclaw permission profile includes providers.manage (any full-access thread while goatclaw is off). Any other thread agent gets needs_human: a person approves that exact change in the thread and GOAT applies it then; call goat_provider_diagnose afterwards. Every change is audited and shows in Settings at once. Results name environment variables and config keys, never their values. Signing in stays with goat_provider_login_start.",
     effect: "write",
+    capability: "settings.write",
     hostRoutable: true,
     requires: "either",
     dryRun: "unsupported",
@@ -3680,6 +3682,7 @@ export const agentSurfaceRegistry = {
     description:
       'Add a provider instance of any driver goat_provider_addable_list shows, on this environment or an SSH host with host. For an ACP Registry agent pass acpAgentId, such as "devin"; GOAT downloads it with its in-app installer unless install is false. Pass linkTo to make a Cursor Cloud, Claude Cloud, or Devin Cloud instance use the new instance\'s executable and sign-in, which is how Devin Cloud gets its Devin ACP instance. Same permission and approval rules as goat_provider_update. Sign in afterwards with goat_provider_login_start.',
     effect: "write",
+    capability: "settings.write",
     hostRoutable: true,
     requires: "either",
     dryRun: "unsupported",
@@ -3695,6 +3698,7 @@ export const agentSurfaceRegistry = {
     description:
       "Set which local instance a cloud provider uses for its executable and sign-in: a Cursor instance for Cursor Cloud, a Claude instance for Claude Cloud, an ACP Registry Devin instance for Devin Cloud. Adds and enables the automatic cloud instance when Settings has no entry for it yet. Same permission and approval rules as goat_provider_update.",
     effect: "write",
+    capability: "settings.write",
     hostRoutable: true,
     requires: "either",
     dryRun: "unsupported",
@@ -3710,6 +3714,7 @@ export const agentSurfaceRegistry = {
     description:
       "Remove a provider instance from Settings, or reset a built-in default instance to its defaults. Threads keep their history, but new turns cannot use a removed instance. Same permission and approval rules as goat_provider_update.",
     effect: "destructive",
+    capability: "settings.write",
     hostRoutable: true,
     requires: "either",
     dryRun: "unsupported",
