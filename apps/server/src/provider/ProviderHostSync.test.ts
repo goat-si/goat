@@ -7,6 +7,7 @@ import {
   type AuthEnvironmentScope,
   type AuthClientSession,
   EnvironmentId,
+  type HandoffState,
   ProviderDriverKind,
   ProviderHostMatrixResult,
   ProviderInstanceId,
@@ -93,6 +94,9 @@ const harness = (options: {
   readonly answer?: (call: Call) => Effect.Effect<unknown, Dispatch.SshRemoteDispatchError>;
   readonly installer?: { readonly stdout: string; readonly stderr: string; readonly code: number };
   readonly providers?: ReadonlyArray<unknown>;
+  readonly providersBroken?: boolean;
+  /** The persisted state of the approval handoff, read when no sync started. */
+  readonly handoffState?: () => HandoffState;
   readonly hub?: boolean;
   readonly cloud?: Partial<
     Record<
@@ -159,7 +163,9 @@ const harness = (options: {
             ) as never,
         }),
         Layer.mock(ProviderRegistry.ProviderRegistry)({
-          getProviders: Effect.succeed((options.providers ?? []) as never),
+          getProviders: options.providersBroken
+            ? Effect.die("provider registry unavailable")
+            : Effect.succeed((options.providers ?? []) as never),
           refreshInstance: () => Effect.succeed([]) as never,
         }),
         Layer.mock(Diagnosis.ProviderDiagnosisService)({
@@ -197,6 +203,11 @@ const harness = (options: {
             }),
           respond: (input) =>
             Effect.succeed({ handoffId: input.handoffId, state: input.action } as never),
+          read: (input) =>
+            Effect.succeed({
+              handoffId: input.handoffId,
+              state: options.handoffState?.() ?? "pending",
+            } as never),
         }),
         Layer.mock(Threads.ThreadManagementService)({
           getThreadSnapshot: () =>
@@ -461,6 +472,40 @@ it.effect("asks a person before an agent's sync touches any host, then runs it a
       ),
     );
     expect(Exit.isFailure(replay)).toBe(true);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("answers status for an approval that started no sync with how it ended", () => {
+  let handoffState: HandoffState = "opened";
+  const { layer } = harness({ providersBroken: true, handoffState: () => handoffState });
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const agent = { kind: "mcp", scope: threadScope } as const;
+    const requested = yield* sync.sync({ driver: "opencode", hosts: ["box"] }, agent);
+    expect(requested.kind).toBe("needs_human");
+    const status = sync.status({ handoffId: "handoff:sync" }, agent).pipe(Effect.flip);
+
+    expect(yield* status).toMatchObject({ code: "not_found", detail: /not started a sync yet/ });
+    for (const ended of ["declined", "expired", "cancelled"] as const) {
+      handoffState = ended;
+      expect(yield* status, ended).toMatchObject({ code: ended });
+    }
+
+    // Approved, but the sync cannot start: status says so instead of "not started yet".
+    handoffState = "completed";
+    yield* sync.respondHandoff(
+      {
+        threadId: ThreadId.make("agent-thread"),
+        handoffId: TurnItemId.make("handoff:sync"),
+        action: "completed",
+      },
+      person,
+    );
+    expect(yield* status).toMatchObject({
+      code: "start_failed",
+      detail:
+        "The person approved this sync, but it did not start: an unexpected error stopped it.",
+    });
   }).pipe(Effect.provide(layer));
 });
 

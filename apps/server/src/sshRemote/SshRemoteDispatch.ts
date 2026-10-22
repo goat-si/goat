@@ -25,6 +25,7 @@ import {
   type RuntimeMode,
   type SshLaunchWorkspace,
   type SshHostResult,
+  type SshDispatchFailureReason,
 } from "@goat/contracts";
 import * as Semaphore from "effect/Semaphore";
 import * as NetService from "@goat/shared/Net";
@@ -91,13 +92,7 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
    * and refused; remoteCode carries its failure code when it sent one.
    * caller_changed: the caller's modes changed while the call was in flight.
    */
-  readonly reason:
-    | "invalid_request"
-    | "host_unknown"
-    | "ssh_failed"
-    | "host_unavailable"
-    | "remote_refused"
-    | "caller_changed";
+  readonly reason: SshDispatchFailureReason;
   readonly message: string;
   readonly remoteCode?: string | undefined;
   readonly launchMayHaveStarted?: boolean | undefined;

@@ -65,6 +65,7 @@ import {
   type SshHostCaller,
 } from "../sshRemote/SshHostAuthorization.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { makeApprovedSyncs } from "./approvedSyncs.ts";
 import * as ProviderAuth from "./ProviderAuthService.ts";
 import * as Diagnosis from "./ProviderDiagnosisService.ts";
 import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydration.ts";
@@ -214,7 +215,7 @@ const make = Effect.gen(function* () {
   const platform = hostPlatform(runtimePlatform);
   const operations = new Map<string, SyncOperation>();
   const approvals = new Map<string, PendingApproval>();
-  const approvedSyncs = new Map<string, string>();
+  const approvedSyncs = makeApprovedSyncs(handoffs);
   const installers = yield* Semaphore.make(MAX_CONCURRENT_INSTALLERS);
 
   const readCeiling = (caller: SshHostCaller) =>
@@ -1034,14 +1035,11 @@ const make = Effect.gen(function* () {
     yield* readCeiling(caller);
     const syncId =
       input.syncId ??
-      (input.handoffId === undefined ? undefined : approvedSyncs.get(input.handoffId));
+      (input.handoffId === undefined ? undefined : approvedSyncs.syncId(input.handoffId));
     if (syncId === undefined)
-      return yield* fail(
-        input.handoffId === undefined ? "invalid_request" : "not_found",
-        input.handoffId === undefined
-          ? "Pass syncId or handoffId."
-          : "That approval has not started a sync yet. Ask the person to approve it.",
-      );
+      return yield* input.handoffId === undefined
+        ? fail("invalid_request", "Pass syncId or handoffId.")
+        : approvedSyncs.explain(input.handoffId, caller);
     const operation = yield* find(syncId);
     const state = view(operation);
     if (operation.owners.has(callerKey(caller)) || (yield* canManage(caller))) return state;
@@ -1103,10 +1101,8 @@ const make = Effect.gen(function* () {
       .pipe(Effect.tapError(() => Effect.sync(() => approvals.set(input.handoffId, pending))));
     if (handoff.state === "completed")
       yield* start(pending.input, { kind: "client", sessionId }, [pending.requester]).pipe(
-        Effect.tap((started) =>
-          Effect.sync(() => approvedSyncs.set(input.handoffId, started.sync.syncId)),
-        ),
-        Effect.catchCause(() => Effect.logWarning("Approved provider sync did not start.")),
+        Effect.tap((started) => approvedSyncs.started(input.handoffId, started.sync.syncId)),
+        Effect.catchCause((cause) => approvedSyncs.failed(input.handoffId, cause)),
       );
     return handoff;
   });

@@ -33,6 +33,7 @@ import {
   ProviderApprovalDecision,
 } from "./providerPolicy.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { OrchestratorMcpRunFailure } from "./orchestratorMcpFailure.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import {
@@ -895,24 +896,6 @@ export const OrchestratorMcpThreadPhase = Schema.Literals([
 ]);
 export type OrchestratorMcpThreadPhase = typeof OrchestratorMcpThreadPhase.Type;
 
-/**
- * A run that failed before its agent's first message: while GOAT prepared its workspace
- * (fetch, worktree, setup script), or when its provider refused to start it.
- */
-export const OrchestratorMcpRunFailure = Schema.Struct({
-  runId: RunId,
-  stage: Schema.Literals(["workspace_preparation", "before_first_message"]),
-  errorClass: OrchestrationV2ProviderFailureClass,
-  /** Whether the same request can succeed later, when the failure says. */
-  retryable: Schema.NullOr(Schema.Boolean),
-  message: Schema.String,
-  /** The redacted end of the preparation log: Git output and setup script output. */
-  log: Schema.NullOr(Schema.String),
-  /** goat_thread_retry runs the preparation again; only a failed preparation can be retried. */
-  canRetry: Schema.Boolean,
-});
-export type OrchestratorMcpRunFailure = typeof OrchestratorMcpRunFailure.Type;
-
 export const OrchestratorMcpThreadStatusResult = Schema.Struct({
   remoteUnavailable: Schema.optional(Schema.Boolean),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
@@ -1260,39 +1243,3 @@ export const OrchestratorMcpDeleteScheduledTaskResult = Schema.Struct({
 });
 export type OrchestratorMcpDeleteScheduledTaskResult =
   typeof OrchestratorMcpDeleteScheduledTaskResult.Type;
-
-export const OrchestratorMcpFailureCode = Schema.Literals([
-  "capability_denied",
-  "parent_not_active",
-  "provider_unavailable",
-  "model_unavailable",
-  "runtime_mode_escalation_denied",
-  "interaction_mode_escalation_denied",
-  "task_not_found",
-  "task_not_cancellable",
-  "thread_not_found",
-  "run_not_found",
-  "thread_not_sendable",
-  "thread_not_interruptible",
-  "invalid_request",
-  "orchestration_error",
-  "thread_credential_required",
-  "target_required",
-  "host_unavailable",
-  // A fleet goal (or another named record) that does not exist, or a stale expectedGeneration.
-  "not_found",
-  "conflict",
-  // GOAT Bot runs on another environment in this cluster; the message names it.
-  "not_home",
-  // fleet.pressure.admission is "block" and the target host is critical.
-  "host_pressure",
-]);
-export type OrchestratorMcpFailureCode = typeof OrchestratorMcpFailureCode.Type;
-
-export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFailure>()(
-  "OrchestratorMcpFailure",
-  {
-    code: OrchestratorMcpFailureCode,
-    message: Schema.String,
-  },
-) {}

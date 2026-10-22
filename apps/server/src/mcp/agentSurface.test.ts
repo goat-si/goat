@@ -549,7 +549,7 @@ const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
 
 const REASONS = {
   serviceThreadCheck: "Requires a thread inside its service, after the access layer.",
-  imageTool: "Image tools report refusals as text without a code (McpHttpServer.ts image path).",
+  imageTool: "preview_snapshot reports refusals as text without a code (McpHttpServer.ts).",
   sshFanOut:
     "Reaches other machines with this machine's SSH keys, which read-only clients may not use.",
   dryRunDefault: "Defaults to a dry run, which reads.",
@@ -591,7 +591,6 @@ const ACCESS_EXCEPTIONS: Readonly<
     readOnlyClient: "read_only",
     fullClient: "reached",
   },
-  "device.screenshot": { reason: "imageTool", readOnlyClient: "reached", fullClient: "reached" },
   "preview.snapshot": { reason: "imageTool", readOnlyClient: "reached", fullClient: "reached" },
   "scheduler.status": { reason: "sshFanOut", readOnlyClient: "read_only" },
   "pending_request.list": { reason: "sshFanOut", readOnlyClient: "read_only" },
