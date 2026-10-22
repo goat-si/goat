@@ -2,7 +2,6 @@ import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
-import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 import * as NotesService from "../notes/NotesService.ts";
 import * as SshDeviceAdd from "../sshRemote/SshDeviceAdd.ts";
@@ -67,7 +66,7 @@ import { EnvironmentId, HandoffSummary, ProviderInstanceId, ThreadId } from "@go
 import * as Arbitrary from "effect/Arbitrary";
 import * as Schema from "effect/Schema";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
-import { liveThreadsLayer } from "./McpToolAccess.testkit.ts";
+import { layerPermissionProfilesOff, liveThreadsLayer } from "./McpToolAccess.testkit.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { FAILURE_CLASSES } from "@goat/contracts/agentSurface/envelope";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -141,7 +140,8 @@ const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistrations))
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const dependencies = Layer.mergeAll(
   Layer.mock(DecisionInbox.DecisionInbox)({}),
-  Layer.mock(Profiles.PermissionProfiles)({}),
+  // goatclaw off: the capability gate admits every call, so handlers decide access.
+  layerPermissionProfilesOff,
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),

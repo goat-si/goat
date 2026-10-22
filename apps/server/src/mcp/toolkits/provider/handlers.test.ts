@@ -204,6 +204,7 @@ it.effect(
 
 const settingsServer = (manage: ProviderSettingsService.ProviderSettings["Service"]["manage"]) =>
   McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+    Layer.provide(layerPermissionProfilesOff),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(liveThreadsLayer),
     Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),
