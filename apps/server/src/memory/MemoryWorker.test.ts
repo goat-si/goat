@@ -354,32 +354,16 @@ describe("MemoryWorker", () => {
       [5000, 30000, 120000, 600000, 600000],
     );
   });
-  it.effect("refuses generic claim execution", () =>
-    Effect.gen(function* () {
-      const worker = yield* Worker.MemoryWorker;
-      assert.strictEqual(
-        (yield* worker.execute(work("claim")).pipe(Effect.flip)).code,
-        "unsupported_operation",
-      );
-    }).pipe(Effect.provide(live())),
-  );
-  it.effect("refuses generic resolution execution", () =>
-    Effect.gen(function* () {
-      const worker = yield* Worker.MemoryWorker;
-      assert.strictEqual(
-        (yield* worker.execute(work("resolve")).pipe(Effect.flip)).code,
-        "unsupported_operation",
-      );
-    }).pipe(Effect.provide(live())),
-  );
-  it.effect("refuses generic pending revert execution", () =>
-    Effect.gen(function* () {
-      const worker = yield* Worker.MemoryWorker;
-      assert.strictEqual(
-        (yield* worker.execute(work("revert_intent")).pipe(Effect.flip)).code,
-        "unsupported_operation",
-      );
-    }).pipe(Effect.provide(live())),
+  it.effect.each(["claim", "resolve", "revert_intent"] as const)(
+    "refuses generic %s execution",
+    (kind) =>
+      Effect.gen(function* () {
+        const worker = yield* Worker.MemoryWorker;
+        assert.strictEqual(
+          (yield* worker.execute(work(kind)).pipe(Effect.flip)).code,
+          "unsupported_operation",
+        );
+      }).pipe(Effect.provide(live())),
   );
   it.effect("refuses a foreign runtime owner", () =>
     Effect.gen(function* () {

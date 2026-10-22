@@ -345,6 +345,8 @@ export interface GitResolveRemoteTrackingCommitResult {
 export interface GitFetchWorktreeBaseCommitInput {
   cwd: string;
   refName: string;
+  /** Each line the fetch prints, progress included, for a launch's preparation log. */
+  onOutputLine?: ((line: string) => Effect.Effect<void, never>) | undefined;
 }
 
 export interface GitSetBranchUpstreamInput {

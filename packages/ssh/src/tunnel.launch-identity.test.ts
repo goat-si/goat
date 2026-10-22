@@ -13,7 +13,8 @@ import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { ARCHIVE, remoteShell } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
-import { buildRemoteNodeEnvScript, REMOTE_LAUNCH_LISTENER_SCRIPT } from "./tunnel.ts";
+import { REMOTE_LAUNCH_LISTENER_SCRIPT } from "./runtimeOwnershipScripts.ts";
+import { buildRemoteNodeEnvScript } from "./tunnel.ts";
 
 const listenerPrelude = () => {
   const env = buildRemoteNodeEnvScript();

@@ -1,11 +1,14 @@
-import type {
-  OrchestrationV2Run,
-  OrchestrationV2RunStatus,
-  OrchestrationV2ThreadShell,
-  OrchestrationV2TurnItem,
-  OrchestratorMcpThreadPhase,
-  OrchestratorMcpThreadReadResult,
-  OrchestratorMcpThreadStatusResult,
+import {
+  ORCHESTRATION_V2_PROVIDER_FAILURE_LOG_MAX_CHARS,
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  type OrchestrationV2Run,
+  type OrchestrationV2RunStatus,
+  type OrchestrationV2ThreadShell,
+  type OrchestrationV2TurnItem,
+  type OrchestratorMcpRunFailure,
+  type OrchestratorMcpThreadPhase,
+  type OrchestratorMcpThreadReadResult,
+  type OrchestratorMcpThreadStatusResult,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { cloudTaskView } from "./cloudTaskView.ts";
@@ -25,6 +28,8 @@ const SELF_ANSWERED_KINDS: ReadonlySet<string> = new Set(["dynamic_tool_call"]);
 export const LAST_MESSAGE_EXCERPT_CHARS = 280;
 /** goat_thread_status is a cheap poll; a provider error can be megabytes. */
 export const LAST_ERROR_CHARS = 500;
+/** A failure's message is the one thing a launcher needs to act on, so it gets more room. */
+const FAILURE_MESSAGE_CHARS = 1_000;
 
 export function threadPhase(
   runStatus: OrchestrationV2RunStatus | "idle" | null,
@@ -75,17 +80,67 @@ export function excerpt(text: string, max = LAST_MESSAGE_EXCERPT_CHARS): string 
 }
 
 /**
+ * Why a run failed before its agent said anything, from its error item: during workspace
+ * preparation (with the preparation log), or when its provider would not start it.
+ */
+export function runFailure(
+  run: Pick<OrchestrationV2Run, "id" | "status" | "workspacePreparation"> | null,
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): OrchestratorMcpRunFailure | null {
+  if (run === null || run.status !== "failed") return null;
+  const ofRun = items.filter((item) => item.runId === run.id);
+  if (ofRun.some((item) => item.type === "assistant_message")) return null;
+  const error = ofRun
+    .flatMap((item) => (item.type === "error" && item.status === "failed" ? [item] : []))
+    .toSorted((left, right) => left.ordinal - right.ordinal)
+    .at(-1);
+  if (error === undefined) return null;
+  const preparation = error.failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE;
+  return {
+    runId: run.id,
+    stage: preparation ? "workspace_preparation" : "before_first_message",
+    errorClass: error.failure.class,
+    retryable: error.failure.retryable,
+    message: error.failure.message,
+    log: error.failure.log ?? null,
+    canRetry: preparation && run.workspacePreparation !== undefined,
+  };
+}
+
+/** Keeps the end of a log, where the failure is. */
+function logTail(log: string): string {
+  return log.length <= ORCHESTRATION_V2_PROVIDER_FAILURE_LOG_MAX_CHARS
+    ? log
+    : `…${log.slice(log.length - ORCHESTRATION_V2_PROVIDER_FAILURE_LOG_MAX_CHARS + 1)}`;
+}
+
+/**
  * Bounds the parts of a status a thread controls, for a status from any host,
  * including one from a GOAT that predates the bounds.
  */
 export function boundedStatus<
-  S extends Pick<OrchestratorMcpThreadStatusResult, "lastMessage" | "lastError" | "cloudTask">,
+  S extends Pick<
+    OrchestratorMcpThreadStatusResult,
+    "lastMessage" | "lastError" | "cloudTask" | "failure"
+  >,
 >(status: S) {
-  const { cloudTask: rawCloudTask, ...fields } = status;
+  const { cloudTask: rawCloudTask, failure, ...fields } = status;
   const cloudTask = cloudTaskView(rawCloudTask);
   return {
     ...fields,
     ...(cloudTask === undefined ? {} : { cloudTask }),
+    ...(failure === undefined
+      ? {}
+      : {
+          failure:
+            failure === null
+              ? null
+              : {
+                  ...failure,
+                  message: excerpt(failure.message, FAILURE_MESSAGE_CHARS),
+                  log: failure.log === null ? null : logTail(failure.log),
+                },
+        }),
     lastMessage:
       status.lastMessage === null
         ? null
@@ -166,6 +221,7 @@ export function statusFromShell(
           },
     lastError: shell.lastError ?? null,
     lastErrorClass: shell.lastErrorClass ?? null,
+    failure: runFailure(run, items),
   });
 }
 

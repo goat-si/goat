@@ -5,6 +5,7 @@ import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, it, describe } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -12,6 +13,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
@@ -4818,6 +4820,138 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           .fetchWorktreeBaseCommit({ cwd, refName: initialBranch })
           .pipe(Effect.flip);
         assert.equal(error._tag, "GitCommandError");
+      }),
+    );
+
+    /**
+     * A remote whose upload-pack prints one line per step and waits for the test to write
+     * that step's file before going on; after the last step it serves the fetch for real.
+     * `stallFirst` makes only the first fetch wait forever, as a fetch stuck on the network.
+     */
+    const slowRemote = (input: { readonly steps: number; readonly stallFirst?: boolean }) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const cwd = yield* makeTmpDir();
+        const remote = yield* makeTmpDir("git-remote-");
+        const control = (yield* makeTmpDir("git-slow-remote-")).replaceAll("\\", "/");
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+        yield* git(cwd, ["push", "-u", "origin", initialBranch]);
+        const lines = Array.from(
+          { length: input.steps },
+          (_, step) =>
+            `echo "remote: step ${step}" >&2\nwhile [ ! -e '${control}/step-${step}' ]; do sleep 0.05; done`,
+        );
+        const script = input.stallFirst
+          ? `#!/bin/sh\nif [ -e '${control}/served' ]; then exec git upload-pack "$@"; fi\n: > '${control}/served'\necho "remote: stuck" >&2\nwhile [ ! -e '${control}/release' ]; do sleep 0.05; done\n`
+          : `#!/bin/sh\n${lines.join("\n")}\nexec git upload-pack "$@"\n`;
+        yield* writeTextFile(control, "upload-pack.sh", script);
+        yield* git(cwd, ["config", "remote.origin.uploadpack", `sh '${control}/upload-pack.sh'`]);
+        const fs = yield* FileSystem.FileSystem;
+        return {
+          cwd,
+          initialBranch,
+          head: yield* git(cwd, ["rev-parse", "HEAD"]),
+          continueStep: (step: number) =>
+            fs.writeFileString(path.join(control, `step-${step}`), ""),
+          release: fs.writeFileString(path.join(control, "release"), ""),
+        };
+      });
+
+    it.effect("keeps waiting for a slow worktree base fetch while it prints progress", () =>
+      Effect.gen(function* () {
+        const remote = yield* slowRemote({ steps: 2 });
+        const lines = yield* Queue.unbounded<string>();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fiber = yield* driver
+          .fetchWorktreeBaseCommit({
+            cwd: remote.cwd,
+            refName: remote.initialBranch,
+            onOutputLine: (line) => Queue.offer(lines, line).pipe(Effect.asVoid),
+          })
+          .pipe(Effect.forkChild);
+
+        // Nearly four minutes in all, far past the old 30 s limit, but never two silent ones.
+        assert.equal(yield* Queue.take(lines), "remote: step 0");
+        yield* TestClock.adjust("119 seconds");
+        yield* remote.continueStep(0);
+        assert.equal(yield* Queue.take(lines), "remote: step 1");
+        yield* TestClock.adjust("119 seconds");
+        yield* remote.continueStep(1);
+
+        assert.deepEqual(yield* Fiber.join(fiber), {
+          commitSha: remote.head,
+          remoteRefName: `origin/${remote.initialBranch}`,
+        });
+      }),
+    );
+
+    it.effect("retries a stalled worktree base fetch once after removing abandoned packs", () =>
+      Effect.gen(function* () {
+        const remote = yield* slowRemote({ steps: 0, stallFirst: true });
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const packs = path.join(remote.cwd, ".git", "objects", "pack");
+        yield* fs.makeDirectory(packs, { recursive: true });
+        // Left by an earlier fetch that was killed, and one a live fetch is still writing.
+        yield* fs.writeFileString(path.join(packs, "tmp_pack_abandoned"), "partial");
+        // On the test clock these are 2 and 0.5 minutes old when the fetch stalls (seconds).
+        const start = (yield* Clock.currentTimeMillis) / 1000;
+        yield* fs.utimes(path.join(packs, "tmp_pack_abandoned"), start, start);
+        yield* fs.writeFileString(path.join(packs, "tmp_pack_live"), "partial");
+        yield* fs.utimes(path.join(packs, "tmp_pack_live"), start + 90, start + 90);
+        const lines = yield* Queue.unbounded<string>();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fiber = yield* driver
+          .fetchWorktreeBaseCommit({
+            cwd: remote.cwd,
+            refName: remote.initialBranch,
+            onOutputLine: (line) => Queue.offer(lines, line).pipe(Effect.asVoid),
+          })
+          .pipe(Effect.forkChild);
+
+        assert.equal(yield* Queue.take(lines), "remote: stuck");
+        yield* TestClock.adjust("2 minutes");
+        const result = yield* Fiber.join(fiber);
+        yield* remote.release;
+
+        assert.deepEqual(result, {
+          commitSha: remote.head,
+          remoteRefName: `origin/${remote.initialBranch}`,
+        });
+        assert.match(
+          (yield* Queue.takeAll(lines)).join("\n"),
+          /Git made no progress for 2m 0s .* Retrying once after removing 1 abandoned temporary pack file\./,
+        );
+        assert.isFalse(yield* fs.exists(path.join(packs, "tmp_pack_abandoned")));
+        assert.isTrue(yield* fs.exists(path.join(packs, "tmp_pack_live")));
+      }),
+    );
+
+    it.effect("gives up on a worktree base fetch that stalls again after its retry", () =>
+      Effect.gen(function* () {
+        const remote = yield* slowRemote({ steps: 1 });
+        const lines = yield* Queue.unbounded<string>();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fiber = yield* driver
+          .fetchWorktreeBaseCommit({
+            cwd: remote.cwd,
+            refName: remote.initialBranch,
+            onOutputLine: (line) => Queue.offer(lines, line).pipe(Effect.asVoid),
+          })
+          .pipe(Effect.flip, Effect.forkChild);
+
+        assert.equal(yield* Queue.take(lines), "remote: step 0");
+        yield* TestClock.adjust("2 minutes");
+        assert.match(yield* Queue.take(lines), /Retrying once\.$/);
+        assert.equal(yield* Queue.take(lines), "remote: step 0");
+        yield* TestClock.adjust("2 minutes");
+        const error = yield* Fiber.join(fiber);
+        yield* remote.continueStep(0);
+
+        assert.equal(error.reason, "stalled");
+        assert.match(error.detail, /It had already stalled once and was retried\.$/);
       }),
     );
 

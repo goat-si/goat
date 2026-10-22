@@ -2101,45 +2101,13 @@ describe("native WP6 Settings commands", () => {
       expectedVersion: 1,
       sharedProjectId: "private-shared-key",
     });
+    expect(view.container.textContent).not.toContain("private-shared-key");
     await view.click("Use repository binding");
     expect(updates().at(-1)?.input).toMatchObject({ action: "useRepository", expectedVersion: 2 });
     await view.click("Clear selected project");
     expect(view.container.textContent).toContain("No project selected");
     expect(view.container.textContent).not.toContain("Choose shared binding project…");
     expect(candidateRows()).toHaveLength(0);
-    expect(view.container.textContent).not.toContain("private-shared-key");
-  });
-  it("selects a shared binding by project title without rendering its internal key", async () => {
-    setupImport();
-    const project = { environmentId: nativeEnv, projectId: "synthetic-project" as never };
-    h.projects.push({ id: "other-project", title: "Other project", environmentId: nativeEnv });
-    h.responses.set(WS_METHODS.memoryProjectBindingGet, (value) => ({
-      memorySpaceId: nativeSpace,
-      project: (value as { project: unknown }).project,
-      version: 1,
-      projectKey: { kind: "explicit", sharedProjectId: "private-shared-key" },
-      repositoryKey: null,
-    }));
-    h.responses.set(WS_METHODS.memoryProjectBindingUpdate, (value) => ({
-      requestId: (value as { requestId: string }).requestId,
-      binding: {
-        memorySpaceId: nativeSpace,
-        project,
-        version: 2,
-        projectKey: { kind: "explicit", sharedProjectId: "private-shared-key" },
-        repositoryKey: null,
-      },
-    }));
-    await show({ environmentId: nativeEnv, project });
-    await view.click("Choose shared binding project…");
-    await view.click("Use shared binding from Other project");
-    expect(
-      h.calls.findLast((call) => call.method === WS_METHODS.memoryProjectBindingUpdate)?.input,
-    ).toMatchObject({
-      action: "setExplicit",
-      sharedProjectId: "private-shared-key",
-      expectedVersion: 1,
-    });
     expect(view.container.textContent).not.toContain("private-shared-key");
   });
   it.each(["user", "project", "thread"] as const)(

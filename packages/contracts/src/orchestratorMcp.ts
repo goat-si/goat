@@ -895,6 +895,24 @@ export const OrchestratorMcpThreadPhase = Schema.Literals([
 ]);
 export type OrchestratorMcpThreadPhase = typeof OrchestratorMcpThreadPhase.Type;
 
+/**
+ * A run that failed before its agent's first message: while GOAT prepared its workspace
+ * (fetch, worktree, setup script), or when its provider refused to start it.
+ */
+export const OrchestratorMcpRunFailure = Schema.Struct({
+  runId: RunId,
+  stage: Schema.Literals(["workspace_preparation", "before_first_message"]),
+  errorClass: OrchestrationV2ProviderFailureClass,
+  /** Whether the same request can succeed later, when the failure says. */
+  retryable: Schema.NullOr(Schema.Boolean),
+  message: Schema.String,
+  /** The redacted end of the preparation log: Git output and setup script output. */
+  log: Schema.NullOr(Schema.String),
+  /** goat_thread_retry runs the preparation again; only a failed preparation can be retried. */
+  canRetry: Schema.Boolean,
+});
+export type OrchestratorMcpRunFailure = typeof OrchestratorMcpRunFailure.Type;
+
 export const OrchestratorMcpThreadStatusResult = Schema.Struct({
   remoteUnavailable: Schema.optional(Schema.Boolean),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
@@ -938,6 +956,8 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
   lastError: Schema.NullOr(Schema.String),
   /** What kind of failure lastError was, when the provider classified it. Older hosts omit it. */
   lastErrorClass: Schema.optional(Schema.NullOr(OrchestrationV2ProviderFailureClass)),
+  /** Why the described run failed before its agent's first message. Older hosts omit it. */
+  failure: Schema.optional(Schema.NullOr(OrchestratorMcpRunFailure)),
   /**
    * The caller's own launch watch on this thread: runs that will still be
    * reported, and whether its launch asked for completion webhook reports.
@@ -1025,6 +1045,24 @@ export const OrchestratorMcpThreadInterruptResult = Schema.Struct({
   stopCascade: Schema.optional(Schema.Literal(true)),
 });
 export type OrchestratorMcpThreadInterruptResult = typeof OrchestratorMcpThreadInterruptResult.Type;
+
+export const OrchestratorMcpThreadRetryInput = Schema.Struct({
+  threadId: ThreadId,
+  host: Schema.optional(OrchestratorMcpHost),
+  /** The failed run; defaults to the thread's latest run. */
+  runId: Schema.optional(RunId),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+});
+export type OrchestratorMcpThreadRetryInput = typeof OrchestratorMcpThreadRetryInput.Type;
+
+export const OrchestratorMcpThreadRetryResult = Schema.Struct({
+  host: OrchestratorMcpResultHost,
+  threadId: ThreadId,
+  runId: RunId,
+  /** The run is preparing its workspace again; it starts its agent when that succeeds. */
+  status: Schema.Literal("preparing"),
+});
+export type OrchestratorMcpThreadRetryResult = typeof OrchestratorMcpThreadRetryResult.Type;
 
 export const OrchestratorMcpCapabilitiesInput = Schema.Struct({
   search: Schema.optional(

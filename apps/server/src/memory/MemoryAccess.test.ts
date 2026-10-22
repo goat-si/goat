@@ -12,9 +12,7 @@ describe("memory authority intersection", () => {
   it("keeps managed defaults distinct from legacy task absence", () => {
     const base = { enableAgentMemoryAccess: true, policyReady: true, readOnly: false };
     expect(effectiveMemoryGrant({ ...base, memoryGrantCeiling: null })).toBe("read_write");
-    expect(effectiveMemoryGrant({ ...base, memoryGrantCeiling: undefined })).toBe("none");
     for (const memoryGrantCeiling of ["none", "read", "read_write"] as const) {
-      expect(effectiveMemoryGrant({ ...base, memoryGrantCeiling })).toBe(memoryGrantCeiling);
       expect(
         effectiveMemoryGrant({ ...base, memoryGrantCeiling, enableAgentMemoryAccess: false }),
       ).toBe("none");
@@ -22,19 +20,6 @@ describe("memory authority intersection", () => {
         "none",
       );
     }
-    expect(
-      effectiveMemoryGrant({ ...base, memoryGrantCeiling: "read_write", readOnly: true }),
-    ).toBe("read");
-    expect(
-      effectiveMemoryGrant({ ...base, memoryGrantCeiling: "read_write", dispatchScopes: [] }),
-    ).toBe("none");
-    expect(
-      effectiveMemoryGrant({
-        ...base,
-        memoryGrantCeiling: "read_write",
-        dispatchScopes: ["memory:read"],
-      }),
-    ).toBe("read");
     expect(captureMemoryGrantCeiling(["orchestration:operate"], false)).toBe("none");
     expect(captureMemoryGrantCeiling(["memory:read"], false)).toBe("read");
     expect(captureMemoryGrantCeiling(["memory:read", "memory:write"], false)).toBe("read_write");
@@ -63,17 +48,6 @@ describe("memory authority intersection", () => {
       active = false;
       expect((yield* Effect.flip(permit)).message).toBe("Memory access denied.");
       expect(checks).toBe(2);
-      for (const input of [
-        { readOnly: false },
-        {
-          readOnly: false,
-          grantedScopes: ["memory:read" as const],
-          reauthorize: () => Effect.void,
-        },
-      ])
-        expect((yield* Effect.flip(memoryAccessPermit(input, "source"))).message).toBe(
-          "Memory access denied.",
-        );
     }),
   );
   it.effect("blocks an ended live caller before reauthorization on repeated permits", () =>

@@ -1,0 +1,531 @@
+/**
+ * Rules for the goat_eval measurement campaign (docs/operations/agent-surface-eval.md).
+ * Nothing here touches a server, the clock, or the filesystem, so the rules that decide a
+ * verdict are tested apart from the runs they judge.
+ */
+
+export type Json =
+  | null
+  | boolean
+  | number
+  | string
+  | ReadonlyArray<Json>
+  | { readonly [key: string]: Json };
+export type JsonObject = { readonly [key: string]: Json };
+
+export type Claim = "reduces" | "no_gain";
+
+export interface Task {
+  readonly id: string;
+  readonly claim: Claim;
+  readonly falsifiedIf: string;
+  readonly manual: boolean;
+  readonly needs: ReadonlyArray<string>;
+  readonly fixture: { readonly kind: string } & JsonObject;
+  readonly prompt: string;
+  readonly answerKeys: ReadonlyArray<string>;
+  readonly checks: ReadonlyArray<string>;
+  readonly deadlineMs: number;
+}
+
+export interface TaskSet {
+  readonly version: number;
+  readonly tasks: ReadonlyArray<Task>;
+}
+
+export interface ModelSelection {
+  readonly instanceId: string;
+  readonly model: string;
+}
+
+export interface Arm {
+  readonly id: string;
+  readonly modelSelection: ModelSelection;
+  readonly forbidTools: ReadonlyArray<string>;
+  readonly forbidItemTypes: ReadonlyArray<string>;
+}
+
+export interface Campaign {
+  readonly taskSetVersion: number;
+  readonly projectId: string;
+  readonly pairs: number;
+  readonly baselineArm: string;
+  readonly candidateArm: string;
+  readonly arms: readonly [Arm, Arm];
+  readonly fixtureModel: ModelSelection;
+  readonly reviewModels: ReadonlyArray<ModelSelection>;
+  readonly values: Readonly<Record<string, string>>;
+}
+
+export interface Implemented {
+  readonly fixtures: ReadonlySet<string>;
+  readonly checks: ReadonlySet<string>;
+}
+
+export class CampaignError extends Error {}
+
+/** The fewest successful clean runs per arm and task before a median means anything. */
+export const MIN_CLEAN_RUNS = 10;
+/** D8: the candidate must need at least a third fewer model turns. */
+export const REQUIRED_TURN_RATIO = 2 / 3;
+/** Placeholders the runner fills on every run; tasks may also use campaign values and fixture.* */
+const RUN_VARIABLES = ["projectId", "tag", "reviewModels"];
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const isText = (value: unknown): value is string =>
+  typeof value === "string" && value.trim() !== "";
+const isTextList = (value: unknown): value is ReadonlyArray<string> =>
+  Array.isArray(value) && value.every(isText);
+const isPositiveInt = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value > 0;
+
+const modelSelection = (value: unknown, where: string): ModelSelection => {
+  if (!isObject(value) || !isText(value["instanceId"]) || !isText(value["model"]))
+    throw new CampaignError(where + " needs instanceId and model");
+  return { instanceId: value["instanceId"], model: value["model"] };
+};
+
+const placeholders = (template: string): ReadonlyArray<string> =>
+  [...template.matchAll(/\{\{([\w.]+)\}\}/g)].map((match) => match[1]!);
+
+/** A placeholder with no value is an error: an empty string would send a different prompt. */
+export const render = (template: string, vars: Readonly<Record<string, string>>) =>
+  template.replace(/\{\{([\w.]+)\}\}/g, (_, name: string) => {
+    const value = vars[name];
+    if (value === undefined) throw new CampaignError("no value for {{" + name + "}}");
+    return value;
+  });
+
+/** Appended to every prompt in both arms, so the answer contract never differs between them. */
+export const answerInstruction = (keys: ReadonlyArray<string>) =>
+  "\n\nWhen you are done, end your reply with exactly one line that starts with EVAL_JSON " +
+  "followed by a JSON object with the keys " +
+  keys.join(", ") +
+  ".";
+
+/** Checks a manual task names that the runner cannot evaluate yet. */
+export const pendingChecks = (task: Task, implemented: Implemented) =>
+  task.checks.filter((check) => !implemented.checks.has(check));
+
+export const validateTaskSet = (raw: unknown, implemented: Implemented): TaskSet => {
+  if (!isObject(raw) || !isPositiveInt(raw["version"]) || !Array.isArray(raw["tasks"]))
+    throw new CampaignError("a task set is { version, tasks: [...] }");
+  const tasks = raw["tasks"].map((value: unknown, index): Task => {
+    if (!isObject(value) || !isText(value["id"]))
+      throw new CampaignError("task " + index + " needs an id");
+    const id = value["id"];
+    const claim = value["claim"];
+    if (claim !== "reduces" && claim !== "no_gain")
+      throw new CampaignError(id + ": claim must be reduces or no_gain");
+    if (!isText(value["falsifiedIf"]))
+      throw new CampaignError(id + ": state what would falsify the claim");
+    const manual = value["manual"] === true;
+    const needs = value["needs"] ?? [];
+    if (!isTextList(needs) || (manual && needs.length === 0))
+      throw new CampaignError(id + ": a manual task lists what it needs");
+    const fixture = value["fixture"];
+    if (
+      !isObject(fixture) ||
+      !isText(fixture["kind"]) ||
+      !implemented.fixtures.has(fixture["kind"])
+    )
+      throw new CampaignError(id + ": unknown fixture " + JSON.stringify(fixture));
+    if (!isText(value["prompt"])) throw new CampaignError(id + ": no prompt");
+    const answerKeys = value["answerKeys"];
+    if (!isTextList(answerKeys) || answerKeys.length === 0)
+      throw new CampaignError(id + ": answerKeys must name what a correct answer reports");
+    const checks = value["checks"];
+    // Reaching the end of a transcript is not correctness, so every task needs an oracle.
+    if (!isTextList(checks) || checks.length === 0)
+      throw new CampaignError(id + ": every task needs at least one check");
+    const deadlineMs = value["deadlineMs"];
+    if (!isPositiveInt(deadlineMs)) throw new CampaignError(id + ": deadlineMs must be positive");
+    const task: Task = {
+      id,
+      claim,
+      falsifiedIf: value["falsifiedIf"],
+      manual,
+      needs,
+      fixture: fixture as Task["fixture"],
+      prompt: value["prompt"],
+      answerKeys,
+      checks,
+      deadlineMs,
+    };
+    // An automatic task judged only by the checks that happen to exist would pass by omission.
+    const pending = pendingChecks(task, implemented);
+    if (!manual && pending.length > 0)
+      throw new CampaignError(id + ": no implementation for " + pending.join(", "));
+    return task;
+  });
+  const ids = tasks.map((task) => task.id);
+  if (new Set(ids).size !== ids.length) throw new CampaignError("task ids must be unique");
+  // Without a control the report cannot tell a measurement artifact from a real gain.
+  const claims = new Set(tasks.map((task) => task.claim));
+  if (!claims.has("no_gain") || !claims.has("reduces"))
+    throw new CampaignError("a task set needs a no_gain control and at least one reduces task");
+  return { version: raw["version"], tasks };
+};
+
+export const validateCampaign = (
+  raw: unknown,
+  taskSet: TaskSet,
+  selected: ReadonlyArray<Task>,
+): Campaign => {
+  if (!isObject(raw)) throw new CampaignError("a campaign is a JSON object");
+  if (raw["taskSetVersion"] !== taskSet.version)
+    throw new CampaignError(
+      "campaign is for task set " +
+        String(raw["taskSetVersion"]) +
+        ", the set is " +
+        taskSet.version,
+    );
+  if (!isText(raw["projectId"])) throw new CampaignError("campaign needs a projectId");
+  if (!isPositiveInt(raw["pairs"])) throw new CampaignError("pairs must be a positive integer");
+  const rawArms = raw["arms"];
+  if (!Array.isArray(rawArms) || rawArms.length !== 2)
+    throw new CampaignError("a paired campaign compares exactly two arms");
+  const [first, second] = rawArms.map((value: unknown, index): Arm => {
+    if (!isObject(value) || !isText(value["id"]))
+      throw new CampaignError("arm " + index + " needs an id");
+    const forbidTools = value["forbidTools"] ?? [];
+    const forbidItemTypes = value["forbidItemTypes"] ?? [];
+    if (!isTextList(forbidTools) || !isTextList(forbidItemTypes))
+      throw new CampaignError(value["id"] + ": forbidTools and forbidItemTypes are string lists");
+    return {
+      id: value["id"],
+      modelSelection: modelSelection(value["modelSelection"], "arm " + value["id"]),
+      forbidTools,
+      forbidItemTypes,
+    };
+  }) as [Arm, Arm];
+  if (first.id === second.id) throw new CampaignError("the two arms need different ids");
+  const baselineArm = raw["baselineArm"];
+  const candidateArm = raw["candidateArm"];
+  const armIds = [first.id, second.id];
+  if (
+    !isText(baselineArm) ||
+    !isText(candidateArm) ||
+    baselineArm === candidateArm ||
+    !armIds.includes(baselineArm) ||
+    !armIds.includes(candidateArm)
+  )
+    throw new CampaignError("baselineArm and candidateArm name the two arms");
+  const values = raw["values"] ?? {};
+  if (!isObject(values) || !Object.values(values).every((value) => typeof value === "string"))
+    throw new CampaignError("values maps placeholder names to strings");
+  const reviewModels = Array.isArray(raw["reviewModels"])
+    ? raw["reviewModels"].map((value: unknown, index) =>
+        modelSelection(value, "reviewModels[" + index + "]"),
+      )
+    : [];
+  const known = new Set<string>([...RUN_VARIABLES, ...Object.keys(values)]);
+  for (const task of selected) {
+    const names = placeholders(task.prompt);
+    const missing = names.filter((name) => !name.startsWith("fixture.") && !known.has(name));
+    if (missing.length > 0)
+      throw new CampaignError(task.id + ": the campaign has no value for " + missing.join(", "));
+    if (names.includes("reviewModels") && reviewModels.length === 0)
+      throw new CampaignError(task.id + ": the campaign lists no reviewModels");
+  }
+  return {
+    taskSetVersion: taskSet.version,
+    projectId: raw["projectId"],
+    pairs: raw["pairs"],
+    baselineArm,
+    candidateArm,
+    arms: [first, second],
+    fixtureModel: modelSelection(raw["fixtureModel"], "fixtureModel"),
+    reviewModels,
+    values: values as Record<string, string>,
+  };
+};
+
+export interface Step {
+  readonly taskId: string;
+  readonly pair: number;
+  readonly slot: number;
+  readonly armId: string;
+}
+
+/**
+ * ABBA, derived from the pair index rather than a seed: a run that goes second inherits the
+ * server state the first one left, so the order alternates and two campaigns share a schedule.
+ */
+export const schedule = (tasks: ReadonlyArray<Task>, campaign: Campaign): ReadonlyArray<Step> =>
+  tasks.flatMap((task) =>
+    Array.from({ length: campaign.pairs }, (_, pair) => {
+      const [a, b] = campaign.arms;
+      return (pair % 2 === 0 ? [a, b] : [b, a]).map((arm, slot) => ({
+        taskId: task.id,
+        pair,
+        slot,
+        armId: arm.id,
+      }));
+    }).flat(),
+  );
+
+export interface TimelineItem {
+  readonly itemId: string;
+  readonly type: string;
+  readonly status: string;
+  readonly text: string | null;
+  readonly textTruncated: boolean;
+}
+
+const TOOL_TYPES = new Set([
+  "command_execution",
+  "file_change",
+  "file_search",
+  "web_search",
+  "dynamic_tool",
+]);
+const TURN_BOUNDARY_TYPES = new Set(["assistant_message", "reasoning", "proposed_plan"]);
+const HUMAN_TYPES = new Set([
+  "approval_request",
+  "user_input_request",
+  "human_handoff",
+  "secret_request",
+]);
+const OTHER_TYPES = new Set([
+  "user_message",
+  "todo_list",
+  "checkpoint",
+  "system_notice",
+  "notification",
+  "compaction",
+  "handoff",
+  "fork",
+  "run_interrupt_request",
+  "run_interrupt_result",
+  "error",
+]);
+
+// GOAT adds this item while it prepares the workspace, before the provider starts.
+const isWorkspacePreparation = (item: TimelineItem) =>
+  item.type === "command_execution" && item.itemId.includes(":native-item:workspace-preparation");
+
+/** The activity view summarizes a dynamic tool as JSON whose first key is toolName. */
+const toolNameOf = (item: TimelineItem): string | null =>
+  /"toolName":\s*"([^"]+)"/.exec(item.text ?? "")?.[1] ?? null;
+
+const namesTool = (name: string, tool: string) => name === tool || name.endsWith("." + tool);
+
+export interface RunMetrics {
+  readonly toolCalls: number;
+  readonly toolRounds: number;
+  /**
+   * Model requests are not recorded per run. Calls made in one response arrive as consecutive
+   * items, so tool rounds + 1 is a lower bound and tool calls + 1 an upper bound.
+   */
+  readonly modelTurns: { readonly min: number; readonly max: number };
+  readonly failedToolCalls: number;
+  readonly subagents: number;
+  readonly humanSteps: number;
+  readonly toolOutputChars: number;
+  readonly toolOutputTruncated: boolean;
+  readonly violations: ReadonlyArray<string>;
+}
+
+export const runMetrics = (items: ReadonlyArray<TimelineItem>, arm: Arm): RunMetrics => {
+  let toolCalls = 0;
+  let toolRounds = 0;
+  let failedToolCalls = 0;
+  let subagents = 0;
+  let humanSteps = 0;
+  let toolOutputChars = 0;
+  let toolOutputTruncated = false;
+  let inRound = false;
+  const violations = new Set<string>();
+  for (const item of items) {
+    if (isWorkspacePreparation(item)) continue;
+    if (TOOL_TYPES.has(item.type)) {
+      toolCalls += 1;
+      if (!inRound) toolRounds += 1;
+      inRound = true;
+      if (item.status === "failed") failedToolCalls += 1;
+      toolOutputChars += item.text?.length ?? 0;
+      toolOutputTruncated ||= item.textTruncated;
+      if (arm.forbidItemTypes.includes(item.type))
+        violations.add(item.type + " is not available to arm " + arm.id);
+      if (item.type === "dynamic_tool") {
+        const name = toolNameOf(item);
+        // Unreadable means unknown, and an unknown tool may be the forbidden one.
+        if (name === null) violations.add("a tool call with no readable name");
+        else if (arm.forbidTools.some((tool) => namesTool(name, tool)))
+          violations.add(name + " is not available to arm " + arm.id);
+      }
+    } else if (TURN_BOUNDARY_TYPES.has(item.type)) {
+      inRound = false;
+    } else if (HUMAN_TYPES.has(item.type)) {
+      humanSteps += 1;
+      inRound = false;
+    } else if (item.type === "subagent") {
+      // The delegate_task call that started it is already a dynamic_tool item.
+      subagents += 1;
+    } else if (!OTHER_TYPES.has(item.type)) {
+      // A new item kind would otherwise change the counts without anyone noticing.
+      violations.add("unclassified item type " + item.type);
+    }
+  }
+  return {
+    toolCalls,
+    toolRounds,
+    modelTurns: { min: toolRounds + 1, max: toolCalls + 1 },
+    failedToolCalls,
+    subagents,
+    humanSteps,
+    toolOutputChars,
+    toolOutputTruncated,
+    violations: [...violations],
+  };
+};
+
+type Verdict<A> =
+  | { readonly ok: true; readonly value: A }
+  | { readonly ok: false; readonly why: string };
+
+export const extractAnswer = (
+  finalText: string | null,
+  keys: ReadonlyArray<string>,
+): Verdict<JsonObject> => {
+  const lines = (finalText ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("EVAL_JSON "));
+  if (lines.length !== 1)
+    return { ok: false, why: lines.length + " EVAL_JSON lines in the final reply; expected 1" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(lines[0]!.slice("EVAL_JSON ".length));
+  } catch {
+    return { ok: false, why: "the EVAL_JSON line is not JSON" };
+  }
+  if (!isObject(parsed)) return { ok: false, why: "the answer is not a JSON object" };
+  // Only undefined is missing: 0, false, and "" are answers.
+  const missing = keys.filter((key) => parsed[key] === undefined);
+  if (missing.length > 0) return { ok: false, why: "the answer has no " + missing.join(", ") };
+  return { ok: true, value: parsed as JsonObject };
+};
+
+export interface RunRow {
+  readonly kind: "run";
+  readonly campaignId: string;
+  readonly taskSetVersion: number;
+  readonly task: string;
+  readonly arm: string;
+  readonly pair: number;
+  readonly slot: number;
+  readonly threadId: string | null;
+  readonly ok: boolean;
+  /** Why the run failed. A failed run stays in the failure rate. */
+  readonly failures: ReadonlyArray<string>;
+  /** Why the run does not measure its arm. Listed in the report, left out of every ratio. */
+  readonly contamination: ReadonlyArray<string>;
+  readonly metrics: RunMetrics | null;
+  readonly wallMs: number | null;
+  readonly at: string;
+}
+
+const median = (values: ReadonlyArray<number>): number | null => {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+};
+
+export interface ArmSummary {
+  readonly arm: string;
+  readonly runs: number;
+  readonly contaminated: number;
+  readonly clean: number;
+  readonly failed: number;
+  readonly failureRate: number | null;
+  readonly wentFirst: number;
+  readonly turnsMin: number | null;
+  readonly turnsMax: number | null;
+  readonly toolCalls: number | null;
+  readonly failedToolCalls: number | null;
+}
+
+export interface TaskSummary {
+  readonly task: string;
+  readonly claim: Claim;
+  readonly baseline: ArmSummary;
+  readonly candidate: ArmSummary;
+  readonly verdict: "pass" | "fail" | "not_run" | "as_expected" | "suspect";
+  readonly reasons: ReadonlyArray<string>;
+}
+
+const summarizeArm = (rows: ReadonlyArray<RunRow>, arm: string): ArmSummary => {
+  const own = rows.filter((row) => row.arm === arm);
+  const clean = own.filter((row) => row.contamination.length === 0);
+  const ok = clean.flatMap((row) => (row.ok && row.metrics !== null ? [row.metrics] : []));
+  const failed = clean.length - ok.length;
+  return {
+    arm,
+    runs: own.length,
+    contaminated: own.length - clean.length,
+    clean: clean.length,
+    failed,
+    failureRate: clean.length === 0 ? null : failed / clean.length,
+    wentFirst: own.filter((row) => row.slot === 0).length,
+    // Medians come from successful runs: a run that gave up early would look cheap.
+    turnsMin: median(ok.map((metrics) => metrics.modelTurns.min)),
+    turnsMax: median(ok.map((metrics) => metrics.modelTurns.max)),
+    toolCalls: median(ok.map((metrics) => metrics.toolCalls)),
+    failedToolCalls: median(ok.map((metrics) => metrics.failedToolCalls)),
+  };
+};
+
+// Each run's true turn count lies somewhere in its range, so a reduction only holds if the
+// candidate's most turns are below the baseline's fewest.
+const fewerTurns = (baseline: ArmSummary, candidate: ArmSummary) =>
+  baseline.turnsMin !== null &&
+  candidate.turnsMax !== null &&
+  candidate.turnsMax <= baseline.turnsMin * REQUIRED_TURN_RATIO;
+
+export const summarizeTask = (
+  task: Task,
+  rows: ReadonlyArray<RunRow>,
+  campaign: Pick<Campaign, "baselineArm" | "candidateArm">,
+): TaskSummary => {
+  const own = rows.filter((row) => row.task === task.id);
+  const baseline = summarizeArm(own, campaign.baselineArm);
+  const candidate = summarizeArm(own, campaign.candidateArm);
+  const base = { task: task.id, claim: task.claim, baseline, candidate };
+  if (baseline.clean === 0 || candidate.clean === 0)
+    return { ...base, verdict: "not_run", reasons: ["an arm has no clean runs"] };
+  if (task.claim === "no_gain")
+    return fewerTurns(baseline, candidate)
+      ? {
+          ...base,
+          verdict: "suspect",
+          reasons: ["the control shows a gain; check what is counted"],
+        }
+      : { ...base, verdict: "as_expected", reasons: [] };
+  const reasons: Array<string> = [];
+  const succeeded = (summary: ArmSummary) => summary.clean - summary.failed;
+  if (succeeded(baseline) < MIN_CLEAN_RUNS || succeeded(candidate) < MIN_CLEAN_RUNS)
+    reasons.push("fewer than " + MIN_CLEAN_RUNS + " successful clean runs in an arm");
+  if (!fewerTurns(baseline, candidate))
+    reasons.push("the candidate's most turns are not a third below the baseline's fewest");
+  if ((candidate.failureRate ?? 1) > (baseline.failureRate ?? 0))
+    reasons.push("the candidate failed more often");
+  return { ...base, verdict: reasons.length === 0 ? "pass" : "fail", reasons };
+};
+
+/**
+ * D8 passes only when every reduces task, manual ones included, ran and passed, and every
+ * control ran and showed no gain; a control that moved means the count itself is suspect.
+ */
+export const gate = (summaries: ReadonlyArray<TaskSummary>) => {
+  const notPassed = summaries.filter((summary) =>
+    summary.claim === "reduces" ? summary.verdict !== "pass" : summary.verdict !== "as_expected",
+  );
+  return {
+    pass: summaries.some((summary) => summary.claim === "reduces") && notPassed.length === 0,
+    notPassed: notPassed.map((summary) => summary.task + ": " + summary.verdict),
+  };
+};

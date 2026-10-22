@@ -8,6 +8,7 @@ import {
   isGlobalAgentRef,
   mergePersistedGlobalAgent,
   migratePersistedGlobalAgent,
+  selectGlobalAgentMode,
   useGlobalAgentStore,
 } from "./globalAgentStore";
 import { createMemoryStorage } from "./lib/storage";
@@ -27,7 +28,7 @@ async function hydrateFrom(raw: unknown) {
 }
 
 beforeEach(() => {
-  useGlobalAgentStore.setState({ ref: null, botRef: null, mode: "bot" });
+  useGlobalAgentStore.setState({ ref: null, botRef: null, mode: null });
 });
 
 describe("isGlobalAgentRef", () => {
@@ -45,23 +46,24 @@ describe("isGlobalAgentRef", () => {
 
 describe("persisted global agent", () => {
   it("migrate keeps a valid ref", () => {
-    expect(migratePersistedGlobalAgent({ ref: REF })).toEqual({
+    expect(migratePersistedGlobalAgent({ ref: REF }, 0)).toEqual({
       ref: REF,
       botRef: null,
-      mode: "bot",
+      mode: null,
     });
   });
   it("migrate drops an invalid ref", () => {
-    expect(migratePersistedGlobalAgent({ ref: 1 })).toEqual({
+    expect(migratePersistedGlobalAgent({ ref: 1 }, 0)).toEqual({
       ref: null,
       botRef: null,
-      mode: "bot",
+      mode: null,
     });
   });
-  it("keeps the chosen thread mode and reads anything else as the bot", () => {
+  it("keeps either chosen mode and reads anything else as unchosen", () => {
     const current = useGlobalAgentStore.getState();
     expect(mergePersistedGlobalAgent({ mode: "thread" }, current).mode).toBe("thread");
-    expect(mergePersistedGlobalAgent({ mode: "other" }, current).mode).toBe("bot");
+    expect(mergePersistedGlobalAgent({ mode: "bot" }, current).mode).toBe("bot");
+    expect(mergePersistedGlobalAgent({ mode: "other" }, current).mode).toBeNull();
   });
   it("merge drops an invalid ref and keeps actions", () => {
     const current = useGlobalAgentStore.getState();
@@ -70,13 +72,33 @@ describe("persisted global agent", () => {
     expect(merged.setRef).toBe(current.setRef);
   });
   it("same-version hydration drops an invalid ref (merge path)", async () => {
-    expect(await hydrateFrom({ state: { ref: { ...REF, threadId: "" } }, version: 2 })).toBeNull();
+    expect(await hydrateFrom({ state: { ref: { ...REF, threadId: "" } }, version: 3 })).toBeNull();
   });
   it("same-version hydration keeps a valid ref", async () => {
-    expect(await hydrateFrom({ state: { ref: REF }, version: 2 })).toEqual(REF);
+    expect(await hydrateFrom({ state: { ref: REF }, version: 3 })).toEqual(REF);
   });
   it("older-version hydration keeps a valid ref (migrate path)", async () => {
     expect(await hydrateFrom({ state: { ref: REF }, version: 0 })).toEqual(REF);
+  });
+});
+
+describe("logo mode", () => {
+  it("opens the global agent's thread until someone picks a mode", async () => {
+    expect(selectGlobalAgentMode(useGlobalAgentStore.getState())).toBe("thread");
+    await hydrateFrom({ state: { ref: REF }, version: 3 });
+    expect(selectGlobalAgentMode(useGlobalAgentStore.getState())).toBe("thread");
+  });
+  it("moves clients that only saved the old bot default to thread mode", async () => {
+    await hydrateFrom({ state: { ref: REF, mode: "bot" }, version: 2 });
+    expect(selectGlobalAgentMode(useGlobalAgentStore.getState())).toBe("thread");
+  });
+  it("keeps thread mode chosen before the default changed", async () => {
+    await hydrateFrom({ state: { ref: REF, mode: "thread" }, version: 2 });
+    expect(useGlobalAgentStore.getState().mode).toBe("thread");
+  });
+  it("remembers GOAT Bot once someone picks it", async () => {
+    await hydrateFrom({ state: { ref: REF, botRef: null, mode: "bot" }, version: 3 });
+    expect(selectGlobalAgentMode(useGlobalAgentStore.getState())).toBe("bot");
   });
 });
 

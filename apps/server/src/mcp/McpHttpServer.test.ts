@@ -75,6 +75,7 @@ const client = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provideMerge(PreviewAutomationBroker.layer),
@@ -84,6 +85,7 @@ const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
   Layer.provideMerge(NodeServices.layer),
 );
 const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provide(
@@ -173,6 +175,7 @@ const layerRecordingTools = (calls: Array<unknown>) => {
       goat_project_update: record,
     }),
   ).pipe(
+    Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(
       Layer.mergeAll(
@@ -997,6 +1000,7 @@ it.effect("admits provider and OAuth client credentials and points only clients 
           ),
         }),
       ).pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(McpHttpServer.layerMcpTransport),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({

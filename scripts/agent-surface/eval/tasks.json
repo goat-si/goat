@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "read-control",
+      "claim": "no_gain",
+      "falsifiedIf": "The candidate arm needs a third fewer model turns. One read is one call in either arm, so a gain here means the count measures something other than composition.",
+      "fixture": {
+        "kind": "existingThread"
+      },
+      "prompt": "What is the title of GOAT thread {{fixture.threadId}}?",
+      "answerKeys": ["title"],
+      "checks": ["answerTitle"],
+      "deadlineMs": 180000
+    },
+    {
+      "id": "wait-running",
+      "claim": "reduces",
+      "falsifiedIf": "The candidate arm's model turns fall by less than a third at either bound, or more of its runs fail.",
+      "fixture": {
+        "kind": "runningThreads",
+        "count": 3,
+        "message": "Reply with the single word: done"
+      },
+      "prompt": "Some GOAT threads in project {{projectId}} have titles containing \"{{fixture.titleTag}}\" and were just started. Wait until every one of them has finished, then report them as threads: a list of { threadId, status } where status is the final status of the thread's latest run.",
+      "answerKeys": ["threads"],
+      "checks": ["answerMatchesFixtureThreads"],
+      "deadlineMs": 600000
+    },
+    {
+      "id": "fan-out-review",
+      "claim": "reduces",
+      "falsifiedIf": "The candidate arm's model turns fall by less than a third at either bound, more of its runs fail, or any run starts a review twice.",
+      "fixture": {
+        "kind": "static",
+        "text": "function retry(call) {\n  for (;;) {\n    try { return call(); } catch {}\n  }\n}"
+      },
+      "prompt": "Get three independent reviews of the code below, one from each of these models (provider instance / model): {{reviewModels}}. Run each review as a delegated task, wait for all three, and report them as reviews: a list of { childThreadId, model, verdict } where verdict is the first line of the review.\n\n{{fixture.text}}",
+      "answerKeys": ["reviews"],
+      "checks": ["reviewsMatchRequestedModels"],
+      "deadlineMs": 900000
+    },
+    {
+      "id": "provider-sync-all-hosts",
+      "claim": "reduces",
+      "falsifiedIf": "The candidate arm's model turns fall by less than a third at either bound, more of its runs fail, or a run asks for the sync approval more than once.",
+      "manual": true,
+      "needs": [
+        "Two or more connected hosts on the eval server, with the provider missing from at least one",
+        "A person with providers:manage who approves each sync request in the app"
+      ],
+      "fixture": {
+        "kind": "none"
+      },
+      "prompt": "Make the {{syncProvider}} provider ready on every host this GOAT environment is connected to, then report each host and whether the provider is ready there.",
+      "answerKeys": ["hosts"],
+      "checks": ["providerReadyOnEveryHost", "oneApprovalPerSync"],
+      "deadlineMs": 1800000
+    },
+    {
+      "id": "human-step-resume",
+      "claim": "reduces",
+      "falsifiedIf": "The candidate arm's model turns fall by less than a third at either bound, more of its runs fail, or a run opens the human step again after it resumes.",
+      "manual": true,
+      "needs": [
+        "A provider on the eval server that is installed but not signed in",
+        "A person who finishes the setup handoff in the app"
+      ],
+      "fixture": {
+        "kind": "none"
+      },
+      "prompt": "Set up the {{setupProvider}} provider in this GOAT environment. If a person has to act, wait for them, then confirm the provider can be added and report its readiness.",
+      "answerKeys": ["provider", "ready"],
+      "checks": ["oneHandoffPerHumanStep"],
+      "deadlineMs": 1800000
+    }
+  ]
+}

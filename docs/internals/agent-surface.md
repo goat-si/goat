@@ -313,11 +313,32 @@ covers the mapping.
 **Now.** [registry.ts](../../packages/contracts/src/agentSurface/registry.ts) holds
 one entry per tool: resource, verb, legacy name, toolkit, summary, model-facing
 description, effect, `hostRoutable`, `requires` (`thread | client | either`),
-`dryRun`, `humanSteps`, and MCP hints. Toolkits read their names and descriptions
+`dryRun`, `humanSteps`, `capability`, and MCP hints. Toolkits read their names and descriptions
 from it. Registration takes read and destructive hints from each handler's
 `McpToolAccess` declaration, and the parity test checks that every assembled tool
 has an entry, every entry resolves a schema, and effects agree with access.
 Schemas stay with their toolkits.
+
+Every write names the goatclaw capability a caller's profile needs to run it, or
+`none` with `capabilityReason` saying what bounds it instead: the caller's own
+thread or browser, a person who completes the step, or another grant such as
+`memory:write`. The type refuses a write without one. Tools whose thread callers
+only ask a person, such as provider sign-in and sync, declare `none` so a profile
+never preempts the person's decision.
+No tool opens or merges a pull request, so `pr.open` gates only GOAT's pull
+request tracking, and `pr.merge` gates nothing here: agents run `gh` in their own
+terminal, which a profile bounds only through its runtime-mode ceiling. A goatclaw
+role launch is refused when the narrowed profile lacks a capability the role's work
+uses ([RoleTemplates.ts](../../apps/server/src/goatclaw/RoleTemplates.ts)), so a
+merge manager is never started without `pr.merge`.
+With goatclaw on, the served handle refuses a GOAT thread whose effective profile
+lacks the declared capability, before arguments decode, so `goat_call` and anything
+else that calls through the server inherit the check
+([McpToolAccess.ts](../../apps/server/src/mcp/McpToolAccess.ts)
+`requireDeclaredCapability`). Outside MCP clients are not gated per tool: other GOAT
+hosts call writes on each other as outside clients, so their approved access level
+and scopes bound them, and the launch, goal and hub handlers still apply the default
+profile to them.
 
 **Proposed.** Add the `idempotency`, `pagination`, and `operation` fields, and run
 each entry's examples as tests.
@@ -402,7 +423,7 @@ work. If it is built, these rules hold.
   `map` index) and a digest of its resolved arguments. On resume, completed read
   results, branch choices, and `map` bindings are fixed: they come from the
   journal and are never re-read. Write keys come from `(evalRunId, structural
-  id)`, never from a call counter.
+id)`, never from a call counter.
 - **Suspension.** A step that returns `needs_human` ends the run with that status
   and its `evalRunId`, and its journal entry holds the handoff. On
   `goat_eval { resume: evalRunId }` the evaluator reads that handoff instead of
@@ -426,7 +447,9 @@ work. If it is built, these rules hold.
 aside-codemode wrote its [protocol](https://github.com/lidge-jun/aside-codemode/blob/b395d89/evidence/bench-260918/PROTOCOL.md) and runner
 ([paired-run.mjs](https://github.com/lidge-jun/aside-codemode/blob/b395d89/eval/paired-run.mjs)) after a first pass measured the wrong transport
 and the wrong unit of work. `goat_eval` stays unbuilt until this protocol runs against a
-prototype on a branch and passes.
+prototype on a branch and passes. The task set, runner, and report are in
+[scripts/agent-surface/eval](../../scripts/agent-surface/eval/), and
+[Measuring `goat_eval`](../operations/agent-surface-eval.md) explains how to run them.
 
 - **Claims first, including losers.** Each workload states its claim and what falsifies it. A
   single-call control is included and is expected to show no gain, because one call is one turn
@@ -441,21 +464,27 @@ prototype on a branch and passes.
   (Codex code mode, or a shell with `goat call`) runs as a reference arm and is not part of the
   pass criterion.
 - **Pairs.** Arms alternate ABBA with a schedule derived from the pair index, and the report says
-  how often each arm went first. Each run is a fresh thread launched on a remote host with the
-  same seed state. At least 10 pairs per workload and provider, with raw rows kept and a separate
-  report step, so a disputed figure can be re-derived.
-- **Metrics.** Primary: model turns and tool calls per run, from the run's items. Secondary:
-  bytes of tool results that enter the transcript, failed runs, and wall time. Timing alone never
-  passes the gate. aside-codemode's agent-level pairs moved wall time only 5–45% (ratio 0.553 to
+  how often each arm went first. Each run is a fresh thread on a dev server with seeded data, and
+  its fixture is created for that run. At least 10 clean runs per arm and workload, with raw rows
+  kept and a separate report step, so a disputed figure can be re-derived.
+- **Metrics.** Primary: model turns per run. GOAT records no model request count, and calls made
+  in one response arrive as consecutive items, so turns are a range from the run's items: tool
+  rounds + 1 to tool calls + 1. Secondary: tool calls, bytes of tool results that enter the
+  transcript, failed runs, and wall time. Timing alone never passes the gate.
+  aside-codemode's agent-level pairs moved wall time only 5–45% (ratio 0.553 to
   0.952 against a target under 0.5), because about 8 s of fixed cost per model turn hid the
   primitive's speedup ([summary.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/evidence/summary.md)). Its gains were fewer calls and
   fewer bytes in context: one round trip instead of 24, and 356 bytes instead of 116,234 for eight
   pages ([BENCHMARKS.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/BENCHMARKS.md)).
-- **Contamination.** A run with a failed tool call, a mismatched oracle, or a different result
-  count from its pair is reported and excluded from the ratio, never quietly averaged in.
-- **Pass.** As stated above: at least a third fewer model turns on the multi-step workloads, with
-  no rise in failed runs and every oracle met. Anything else is "not built", and the result is
-  recorded either way.
+- **Contamination.** A run that used a tool or capability its arm does not have, or that the
+  harness could not finish, is reported and excluded from every figure. A failed tool call is
+  the arm's own cost: the run keeps its extra turns in the medians, and the report counts failed
+  calls per arm. A wrong answer keeps the run in the failure rate. Excluding either would hide the first-call mistakes a new syntax adds:
+  aside-codemode counted 47 failed results in 371 runs, and the four most common were wrong
+  names and argument shapes ([ADR-0011](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0011-the-block-carries-what-an-error-cannot-say.md)).
+- **Pass.** On each multi-step workload, the candidate's most model turns are at least a third
+  below the baseline's fewest, with no rise in failed runs and every oracle met, and the control
+  shows no gain. Anything else is "not built", and the result is recorded either way.
 
 ## Human steps
 
@@ -541,6 +570,14 @@ and the origin refuses a destination that has not shown it enforces ceilings
 instead of falling back to the relay, which would deliver without one. Remote
 servers answer only to the tool names they shipped with
 ([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)).
+The origin checks the calling thread's capability before forwarding, plus
+`threads.remote` and the profile's host allowlist for a host-routable write that
+names `host`.
+A thread launched or sent with a forwarded ceiling is bound to it on the
+destination, so its own calls there are checked against it. Other host-routed writes
+arrive as the origin's dispatch session, and the destination relies on the origin's
+check. Writes that name their target machine in another argument (`targetHost`,
+`destinationHost`, an alias) get the capability check but not the host allowlist.
 
 **Proposed.**
 

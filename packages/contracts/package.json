@@ -38,6 +38,10 @@
     "./agentSurface/llms": {
       "types": "./src/agentSurface/llms.ts",
       "import": "./src/agentSurface/llms.ts"
+    },
+    "./agentSurface/envelope": {
+      "types": "./src/agentSurface/envelope.ts",
+      "import": "./src/agentSurface/envelope.ts"
     }
   },
   "scripts": {
