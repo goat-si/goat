@@ -110,6 +110,7 @@ const makeLayer = <E, R>(serviceCore: Layer.Layer<Layer.Success<typeof core>, E,
     McpHttpServer.layerMemoryToolkit,
     McpHttpServer.layerMemoryAdministrationToolkit,
   ).pipe(
+    Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provideMerge(serviceCore),
     Layer.provideMerge(
       MemorySettings.layer.pipe(Layer.provideMerge(sync), Layer.provideMerge(settings)),
@@ -125,6 +126,7 @@ export const layerForThreadEnvironment = <E, R>(
   databaseLayer: Layer.Layer<SqlClient.SqlClient, E, R>,
 ) =>
   McpHttpServer.layerMemoryToolkit.pipe(
+    Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provideMerge(
       makeCore(
         Service.layer,

@@ -75,7 +75,7 @@ interface ClaimInput {
    */
   readonly remoteThreadId?: string | undefined;
 }
-type CheckResult =
+export type CheckResult =
   | { readonly ok: true; readonly effective: PermissionProfileView }
   | { readonly ok: false; readonly reason: string };
 interface CloudApprovalInput {
@@ -178,7 +178,7 @@ const ownerOf = (scope: McpInvocationScope) =>
 const encodeProfile = Schema.encodeSync(Schema.fromJsonString(PermissionProfile));
 const decodeProfile = Schema.decodeUnknownEffect(Schema.fromJsonString(PermissionProfile));
 
-const checkProfile = (
+export const checkProfile = (
   effective: PermissionProfileView,
   capability: PermissionCapability,
   context: CheckContext,
