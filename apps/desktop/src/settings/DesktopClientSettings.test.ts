@@ -65,7 +65,7 @@ const clientSettings: ClientSettings = {
   sidebarProjectSortOrder: "manual",
   sidebarThreadSortOrder: "created_at",
   sidebarThreadPreviewCount: 6,
-  legacySidebarEnabled: false,
+  projectsSidebarEnabled: false,
   sidebarWorkingShelfEnabled: false,
   loadBalancingEnabled: false,
   loadBalancingWeights: { "environment-1": 75, "environment-2": 0 },
@@ -239,18 +239,23 @@ describe("DesktopClientSettings", () => {
   );
 
   it.effect.each([
-    { label: "bare missing key", contents: "{}", expected: true },
-    { label: "wrapped missing key", contents: '{"settings":{}}', expected: true },
-    { label: "bare Projects", contents: '{"legacySidebarEnabled":true}', expected: true },
+    { label: "bare missing key", contents: "{}", expected: false },
+    { label: "wrapped missing key", contents: '{"settings":{}}', expected: false },
+    {
+      label: "bare old Projects default",
+      contents: '{"legacySidebarEnabled":true}',
+      expected: false,
+    },
+    { label: "bare Projects", contents: '{"projectsSidebarEnabled":true}', expected: true },
     {
       label: "wrapped Projects",
-      contents: '{"settings":{"legacySidebarEnabled":true}}',
+      contents: '{"settings":{"projectsSidebarEnabled":true}}',
       expected: true,
     },
-    { label: "bare Activity", contents: '{"legacySidebarEnabled":false}', expected: false },
+    { label: "bare Activity", contents: '{"projectsSidebarEnabled":false}', expected: false },
     {
       label: "wrapped Activity",
-      contents: '{"settings":{"legacySidebarEnabled":false}}',
+      contents: '{"settings":{"projectsSidebarEnabled":false}}',
       expected: false,
     },
   ])("preserves sidebar choice in $label documents", (document) =>
@@ -264,7 +269,7 @@ describe("DesktopClientSettings", () => {
         const persisted = yield* settings.get;
         assert.isTrue(Option.isSome(persisted));
         if (Option.isSome(persisted))
-          assert.equal(persisted.value.legacySidebarEnabled, document.expected);
+          assert.equal(persisted.value.projectsSidebarEnabled, document.expected);
       }),
     ),
   );

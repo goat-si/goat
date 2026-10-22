@@ -10,7 +10,11 @@ import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit
 import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@goat/contracts";
 import { isSideChatThread } from "@goat/contracts";
-import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@goat/contracts/settings";
+import {
+  DEFAULT_CLIENT_SETTINGS,
+  type SidebarProjectSortOrder,
+  type SidebarThreadSortOrder,
+} from "@goat/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import { planPinnedReorder } from "@goat/client-runtime/state/thread-sort";
 import {
@@ -817,7 +821,7 @@ export function resolveSidebarViewIsProjects(input: {
 }): boolean | null {
   if (input.status === "ready") return input.value;
   if (input.synchronousValue !== null) return input.synchronousValue;
-  if (input.status === "failed") return true;
+  if (input.status === "failed") return DEFAULT_CLIENT_SETTINGS.projectsSidebarEnabled;
   return null;
 }
 
