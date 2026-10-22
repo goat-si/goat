@@ -75,6 +75,8 @@ import { useThreadFindNavigation } from "./useThreadFindNavigation";
 import type { ThreadFindPositionReader } from "./threadFind";
 import { TooltipScrollDismissArea } from "../ui/tooltip";
 import { WorktreeSetupCard } from "./WorktreeSetupCard";
+import { CloudRunCard } from "./CloudRunCard";
+import type { CloudRunCard as CloudRunCardModel } from "@goat/client-runtime/state/cloud-task";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { useClientSettings } from "~/hooks/useSettings";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
@@ -185,6 +187,8 @@ interface MessagesTimelineProps {
   activeTurnInProgress: boolean;
   activeTurnStartedAt?: string | null;
   worktreeSetup?: WorktreeSetupSnapshot | null;
+  cloudRun?: CloudRunCardModel | null;
+  onRetryCloudRun?: (runId: RunId) => void;
   onCancelWorktreeSetup?: () => void;
   retryableWorkspacePreparationRunIds?: ReadonlySet<RunId>;
   onRetryWorkspacePreparation?: (runId: RunId) => void;
@@ -292,6 +296,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   activeTurnInProgress,
   activeTurnStartedAt = null,
   worktreeSetup = null,
+  cloudRun = null,
+  onRetryCloudRun,
   footer = null,
   onCancelWorktreeSetup,
   retryableWorkspacePreparationRunIds = EMPTY_RUN_IDS,
@@ -600,6 +606,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     threadStartCheckpointReady,
     availableRevertTurnCounts,
     worktreeSetup,
+    cloudRun,
   });
   const rows = useStableRows(rawRows, listIdentityKey);
   // Run status/timestamps churn on every stream event; the shared row context
@@ -928,6 +935,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onToggleWorkGroup,
     onToggleWorkEntry: suspendEndScrollMaintenanceForDisclosure,
     onCancelWorktreeSetup: onCancelWorktreeSetup ?? null,
+    onRetryCloudRun: onRetryCloudRun ?? null,
     retryableWorkspacePreparationRunIds,
     onRetryWorkspacePreparation: onRetryWorkspacePreparation ?? null,
     onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocally ?? null,
@@ -1217,6 +1225,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                   row.message.role === "assistant" &&
                   !row.showAssistantMeta) ||
                 row.kind === "worktree-setup" ||
+                row.kind === "cloud-run" ||
                 row.kind === "event" ||
                 row.kind === "attempt-fold" ||
                 row.kind === "html-render" ||
@@ -1272,10 +1281,23 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
+      {row.kind === "cloud-run" ? <CloudRunTimelineRow row={row} /> : null}
       {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
     </div>
   );
 });
+
+function CloudRunTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "cloud-run" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const retry = row.card.retry;
+  const onRetryCloudRun = ctx.onRetryCloudRun;
+  return (
+    <CloudRunCard
+      card={row.card}
+      onRetry={retry && onRetryCloudRun ? () => onRetryCloudRun(retry.runId) : null}
+    />
+  );
+}
 
 function WorktreeSetupTimelineRow({
   row,

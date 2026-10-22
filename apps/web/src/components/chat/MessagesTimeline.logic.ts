@@ -1,3 +1,4 @@
+import type { CloudRunCard } from "@goat/client-runtime/state/cloud-task";
 import { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
 export { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
 import { isLiveSubagentTurnItem } from "@goat/client-runtime/state/subagentRuntime";
@@ -526,6 +527,12 @@ export type MessagesTimelineRow = MessagesTimelineRowContent & {
 };
 
 type MessagesTimelineRowContent =
+  | {
+      kind: "cloud-run";
+      id: string;
+      createdAt: string | null;
+      card: CloudRunCard;
+    }
   | {
       kind: "worktree-setup";
       id: string;
@@ -1438,6 +1445,7 @@ export function deriveMessagesTimelineRows(input: {
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   liveAgentTaskIds?: ReadonlySet<string> | undefined;
   worktreeSetup?: WorktreeSetupSnapshot | null;
+  cloudRun?: CloudRunCard | null;
 }): MessagesTimelineRow[] {
   const timelineEntries = timelineRowEntries(input.timelineEntries);
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
@@ -2026,8 +2034,11 @@ export function deriveMessagesTimelineRows(input: {
     }
   }
 
-  const result = attachTrailingToolGroupsToAssistant(
-    attachCreatedThreadSummaries(nextRows, timelineEntries, collapsedFoldMemberIds),
+  const result = placeCloudRunCard(
+    attachTrailingToolGroupsToAssistant(
+      attachCreatedThreadSummaries(nextRows, timelineEntries, collapsedFoldMemberIds),
+    ),
+    input.cloudRun ?? null,
   );
   return result.map((row, index) =>
     timelineRowIsWorkLog(row) && timelineRowIsWorkLog(result[index + 1])
@@ -2097,6 +2108,63 @@ function attachCreatedThreadSummaries(
 }
 
 const WORKTREE_SETUP_ROW_ID = "worktree-setup-row";
+const CLOUD_RUN_ROW_ID = "cloud-run-row";
+
+/**
+ * Shows a cloud run as one card. Its generic failure row, workspace preparation row and
+ * failed result message repeat what the card says, so they are dropped. Rows are
+ * filtered after folding so fold anchors and failed-run detection keep their inputs,
+ * and the card takes the failed message's place in the timeline.
+ */
+function placeCloudRunCard(
+  rows: MessagesTimelineRow[],
+  card: CloudRunCard | null,
+): MessagesTimelineRow[] {
+  if (card === null) return rows;
+  const cardRow: MessagesTimelineRow = {
+    kind: "cloud-run",
+    id: CLOUD_RUN_ROW_ID,
+    createdAt: card.startedAt,
+    card,
+  };
+  let placed = false;
+  const hiddenEntry = (entry: WorkLogEntry) =>
+    entry.projectedItem !== undefined && card.hiddenItemIds.has(entry.projectedItem.item.id);
+  const next = rows.flatMap((row): MessagesTimelineRow[] => {
+    switch (row.kind) {
+      case "message":
+        if (!card.hiddenMessageIds.has(row.message.id)) {
+          if (row.message.id !== card.resultMessageId || placed) return [row];
+          placed = true;
+          return [cardRow, row];
+        }
+        if (placed) return [];
+        placed = true;
+        return [cardRow];
+      case "assistant-meta":
+        return card.hiddenMessageIds.has(row.message.id) ? [] : [row];
+      case "event":
+        return card.hiddenItemIds.has(row.projectedItem.item.id) ? [] : [row];
+      case "work": {
+        const groupedEntries = row.groupedEntries.filter((entry) => !hiddenEntry(entry));
+        if (groupedEntries.length === row.groupedEntries.length) return [row];
+        return groupedEntries.length === 0 ? [] : [{ ...row, groupedEntries }];
+      }
+      case "work-live":
+        return hiddenEntry(row.entry) ? [] : [row];
+      case "working":
+      case "thinking":
+        // The running card shows the live stage and elapsed time in their place.
+        if (card.phase !== "running") return [row];
+        if (placed) return [];
+        placed = true;
+        return [cardRow];
+      default:
+        return [row];
+    }
+  });
+  return placed ? next : [...next, cardRow];
+}
 
 export type MessagesTimelineRowsInput = Parameters<typeof deriveMessagesTimelineRows>[0];
 
@@ -2269,6 +2337,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     }
     case "worktree-setup":
       return a.snapshot === (b as typeof a).snapshot;
+    case "cloud-run":
+      return a.card === (b as typeof a).card;
 
     case "assistant-meta": {
       const bm = b as typeof a;

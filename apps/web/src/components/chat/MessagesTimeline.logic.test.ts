@@ -3978,3 +3978,127 @@ describe("GOAT read command labels", () => {
     ).toBe("sed -n '1,80p' apps/web/src/main.tsx");
   });
 });
+
+describe("cloud run card rows", () => {
+  function cloudEntries() {
+    const fixture = makeStreamingTimelineFixture();
+    const source = fixture.visibleTurnItems[0]!;
+    const common = {
+      ...source.item,
+      threadId: fixture.threadId,
+      runId: fixture.runId,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      status: "completed" as const,
+    };
+    const items: OrchestrationV2ProjectedTurnItem["item"][] = [
+      {
+        ...common,
+        id: TurnItemId.make("prep"),
+        type: "command_execution",
+        input: "Preparing workspace",
+        output: "Workspace preparation completed.",
+      },
+      {
+        ...common,
+        id: TurnItemId.make("error"),
+        type: "error",
+        status: "failed",
+        failure: {
+          class: "provider_error",
+          message: "Provider turn failed.",
+          code: null,
+          retryable: null,
+        },
+      },
+      {
+        ...common,
+        id: TurnItemId.make("turn-item:cloud-result:" + fixture.runId),
+        type: "assistant_message",
+        messageId: MessageId.make("message:cloud-result:" + fixture.runId),
+        text: "Cursor Cloud failed. Open the agent for details.",
+        attachments: [],
+        streaming: false,
+      },
+    ];
+    const timelineEntries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: items.map((item, position) => ({
+        ...source,
+        item,
+        position,
+        sourceItemId: item.id,
+      })),
+      optimisticMessages: [],
+    });
+    return { timelineEntries, runId: fixture.runId };
+  }
+  function card(runId: RunId, phase: "failed" | "succeeded" | "running") {
+    const failed = phase !== "succeeded";
+    return {
+      runId,
+      phase,
+      startedAt: "2026-10-22T17:39:56.000Z",
+      resultMessageId: "message:cloud-result:" + runId,
+      hiddenItemIds: new Set([
+        "prep",
+        "error",
+        ...(failed ? ["turn-item:cloud-result:" + runId] : []),
+      ]),
+      hiddenMessageIds: new Set(failed ? ["message:cloud-result:" + runId] : []),
+    } as unknown as NonNullable<Parameters<typeof deriveMessagesTimelineRows>[0]["cloudRun"]>;
+  }
+  const rowsFor = (
+    timelineEntries: ReadonlyArray<TimelineEntry>,
+    cloudRun: ReturnType<typeof card>,
+  ) =>
+    deriveMessagesTimelineRows({
+      timelineEntries,
+      isWorking: false,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      cloudRun,
+    });
+
+  it("shows a failed cloud run once, where its failure message was", () => {
+    const { timelineEntries, runId } = cloudEntries();
+    const without = deriveMessagesTimelineRows({
+      timelineEntries,
+      isWorking: false,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    expect(without.some((row) => row.kind === "message")).toBe(true);
+    const rows = rowsFor(timelineEntries, card(runId, "failed"));
+    expect(rows.filter((row) => row.kind === "cloud-run")).toHaveLength(1);
+    expect(
+      rows.some(
+        (row) =>
+          (row.kind === "message" || row.kind === "assistant-meta") &&
+          row.message.id === "message:cloud-result:" + runId,
+      ),
+    ).toBe(false);
+    const workItemIds = rows.flatMap((row) =>
+      row.kind === "work"
+        ? row.groupedEntries.map((entry) => entry.projectedItem?.item.id)
+        : row.kind === "event"
+          ? [row.projectedItem.item.id]
+          : [],
+    );
+    expect(workItemIds).not.toContain("error");
+    expect(workItemIds).not.toContain("prep");
+  });
+
+  it("puts a finished run's card before its result message", () => {
+    const { timelineEntries, runId } = cloudEntries();
+    const rows = rowsFor(timelineEntries, card(runId, "succeeded"));
+    const cardIndex = rows.findIndex((row) => row.kind === "cloud-run");
+    const messageIndex = rows.findIndex(
+      (row) => row.kind === "message" && row.message.id === "message:cloud-result:" + runId,
+    );
+    expect(cardIndex).toBeGreaterThanOrEqual(0);
+    expect(cardIndex).toBe(messageIndex - 1);
+  });
+});

@@ -260,7 +260,7 @@ import { ThreadTimeline } from "./chat/ThreadTimeline";
 import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { deriveCloudTaskState } from "@goat/client-runtime/state/cloud-task";
-import { CloudTaskStatus } from "./chat/CloudTaskStatus";
+import { useCloudRun } from "./chat/useCloudRun";
 import {
   overlayComposerIsResting,
   resolveComposerTimelineInset,
@@ -3113,6 +3113,15 @@ export default function ChatView(props: ChatViewProps) {
     });
     scheduleComposerFocus();
   };
+  const { cloudRun, onRetryCloudRun } = useCloudRun({
+    environmentId,
+    threadId: activeThread?.id ?? null,
+    projection: serverProjection,
+    canRetry: canOperateThread && cloudState.composerBlockReason === null && !isSendBusy,
+    runtimeMode,
+    interactionMode,
+    setThreadError,
+  });
   const { onResume, isResuming } = useComposerResume({
     environmentId,
     routeThreadKey,
@@ -3611,6 +3620,10 @@ export default function ChatView(props: ChatViewProps) {
                 {...((paintOnlyDisplayedTimeline ? heldPaintContext?.activity : null) ??
                   timelineActivity)}
                 worktreeSetup={paintOnlyDisplayedTimeline ? null : worktreeSetup}
+                cloudRun={paintOnlyDisplayedTimeline ? null : cloudRun}
+                {...(paintOnlyDisplayedTimeline || onRetryCloudRun === null
+                  ? {}
+                  : { onRetryCloudRun })}
                 onCancelWorktreeSetup={onCancelWorktreeSetupStable}
                 {...(paintOnlyDisplayedTimeline
                   ? {}
@@ -3812,9 +3825,6 @@ export default function ChatView(props: ChatViewProps) {
                                 <p role="status" className="px-4 text-sm">
                                   {cloudState.launchSourceNotice}
                                 </p>
-                              ) : null}
-                              {cloudState.cloudTask ? (
-                                <CloudTaskStatus task={cloudState.cloudTask} />
                               ) : null}
                               {cloudState.composerBlockReason ? (
                                 <p role="status" className="px-4 text-sm">
