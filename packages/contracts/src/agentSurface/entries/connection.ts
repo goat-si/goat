@@ -8,7 +8,9 @@ export const connectionEntries = {
     toolkit: "connection",
     summary: "List saved connections",
     description:
-      "List nodes owned by this GOAT server (the hub), including routes and notices. Works without the desktop app, including goat serve alone. Legacy connections includes only nodes with a known environmentId. No credentials are returned.",
+      "List this GOAT server's saved nodes, routes and notices. The legacy connections array omits nodes whose environment identity is unknown.",
+    guide:
+      "The server owns this catalog; no attached desktop app is needed, including with goat serve alone. Nodes combine registered SSH hosts, linked hosts and owned cloud machines. The response excludes credentials.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -27,7 +29,9 @@ export const connectionEntries = {
     toolkit: "connection",
     summary: "Add an SSH device",
     description:
-      "Alias of goat_ssh_host_add. Add an SSH device from a configured host alias or typed address. Runs preflight, asks a person to pin a new fingerprint, then saves the device when a full-access caller is available: in the desktop catalog when the GOAT desktop app is attached (desktopCatalog saved), and always in this GOAT server's (the hub's) node list (hub.saved, works without the desktop app). After approval call goat_ssh_host_add with next.host. A host GOAT has not run on yet is prepared first and then registered; otherwise returns saved:false with the result and reason. Key authentication only. Repeated calls return an existing connection with created:false. Preflight needs the orchestration capability. Creating a host trust handoff needs a running GOAT thread, and the approving person needs settings:write; saving needs full access; headless preparation needs environment:maintain. Denied steps return the preflight report with outcome capability_denied and the missing authority in reason. When preflight fails on a host GOAT pinned (preflight.destination.managed), goat_ssh_host_forget removes that pin.",
+      "Preflight and save an SSH device in this server's node catalog and, when attached, the desktop catalog. Human approval only pins a new host key; call goat_ssh_host_add again with next.host to connect. If the desktop stops answering, check Settings → Connections before retrying.",
+    guide:
+      "This is the same operation as goat_ssh_host_add, accepting a configured SSH alias or a typed address. It probes before provisioning; a failed preflight returns its report. Saving needs a live full-access/default thread or a full-access client. The desktop may save successfully while hub registration fails; inspect desktopCatalog and hub.saved rather than assuming both catalogs were updated. Without the desktop, the server saves the node itself. If it cannot identify a host where GOAT has not run, it prepares the managed host, then retries registration; preparation still in progress returns saved:false with its actual result and reason. Repeated successful adds reuse an existing connection with created:false. SSH accepts public-key authentication and unauthenticated SSH such as Tailscale SSH; this path does not supply a password. Preflight needs the orchestration capability. Creating a host-trust handoff needs a running writable GOAT thread, and the person approving its fingerprint needs settings:write. Headless preparation needs environment:maintain. Authorization denied after preflight returns that report with outcome capability_denied and a reason identifying the missing authority. When preflight.destination.managed is true, goat_ssh_host_forget can remove GOAT's pin, including after a failed preflight.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,
@@ -47,7 +51,9 @@ export const connectionEntries = {
     toolkit: "connection",
     summary: "Remove a saved connection",
     description:
-      "Remove a node owned by this GOAT server (the hub), using exactly one of nodeId or the legacy environmentId. Works without the desktop app. Linked credentials are forgotten; cloud nodes must be managed in Settings → Connections → Cloud machines. The remote GOAT server keeps running. The desktop sidebar is updated when the desktop app is attached; desktopCatalog reports saved, not_attached or failed.",
+      "Remove a saved node and its routes from this GOAT server, forgetting linked credentials locally. The remote server keeps running; its linked session remains valid until expiry or remote revocation.",
+    guide:
+      "Provide exactly one nodeId or legacy environmentId. The server performs removal without the desktop app. Cloud nodes must be managed in Settings → Connections → Cloud machines. When a node has a known environment identity, the tool also requests removal from the attached desktop catalog; desktopCatalog reports saved, not_attached or failed. A failed desktop update does not undo server removal. Needs a live full-access/default calling thread or a full-access client, plus hub.manage for a GOAT thread when goatclaw is enabled.",
     effect: "destructive",
     capability: "hub.manage",
     hostRoutable: false,
