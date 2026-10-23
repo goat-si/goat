@@ -528,6 +528,12 @@ it.effect("approving provider setup for an instance turns that instance on", () 
         "person-session" as never,
       );
       expect((yield* fixture.instances)[ProviderInstanceId.make("cursor")]?.enabled).toBe(true);
+      // The asking thread is woken with this once the instance is on.
+      const change = yield* fixture.service.readChange({
+        threadId,
+        handoffId: TurnItemId.make("handoff:1"),
+      });
+      expect(change?.outcome).toMatchObject({ state: "applied", result: { action: "update" } });
     }),
   ),
 );
