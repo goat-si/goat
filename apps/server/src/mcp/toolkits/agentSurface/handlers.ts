@@ -1,20 +1,14 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
 import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
-import {
-  FAILURE_CLASSES,
-  type AgentSurfaceResult,
-  type CallContext,
-  fromFailure,
-  fromInvalidParams,
-  fromToolResult,
-} from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
-import * as Ref from "effect/Ref";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { makeOperationTokens } from "../../operations/OperationTokens.ts";
 import { ToolDispatch } from "../../ToolDispatch.ts";
+import { dispatchEnvelope, envelopeError } from "./dispatchEnvelope.ts";
+import { makeOperations } from "./operations.ts";
 import { AgentSurfaceToolkit, type DescribeResult } from "./tools.ts";
 
 const entries: ReadonlyArray<AgentSurfaceRegistryEntry> = Object.values(agentSurfaceRegistry);
@@ -52,67 +46,11 @@ const availability = (
   return { now: true };
 };
 
-const stringField = (value: unknown, key: string) => {
-  const field =
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)[key]
-      : undefined;
-  return typeof field === "string" && field !== "" ? field : undefined;
-};
-
-/**
- * The declared domain literal behind a failure, which the MCP layer may have flattened to text.
- * Only literals the classification table names count: an undeclared failure is one the direct
- * call deliberately scrubs, so goat_call must not reveal even its tag. Free text such as a
- * reason string or a computed message never leaves through here.
- */
-const declaredLiteral = (
-  error: unknown,
-): { readonly _tag: string; readonly code?: string } | undefined => {
-  const tag = stringField(error, "_tag");
-  if (tag === undefined) return undefined;
-  const literal = (["code", "reason", "failureCode"] as const)
-    .map((key) => stringField(error, key))
-    .find((value) => value !== undefined && FAILURE_CLASSES[value] !== undefined);
-  if (literal !== undefined) return { _tag: tag, code: literal };
-  return FAILURE_CLASSES[tag] === undefined ? undefined : { _tag: tag };
-};
-
-/** Reclassifies a direct failure by its declared literal; the text stays what a direct call shows. */
-const reclassified = (
-  direct: AgentSurfaceResult,
-  error: unknown,
-  context: CallContext,
-): AgentSurfaceResult => {
-  const declared = declaredLiteral(error);
-  if (direct.status !== "error" || declared === undefined) return direct;
-  const classified = fromFailure({ ...declared, message: direct.error.message }, context);
-  if (classified.status !== "error") return direct;
-  return {
-    ...direct,
-    error: {
-      ...classified.error,
-      ...(direct.error.details === undefined ? {} : { details: direct.error.details }),
-    },
-  };
-};
-
-const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
-
-/** Where a routed call ran, so the agent can tell remote results from local ones. */
-const withHost = (result: AgentSurfaceResult, host: string | undefined): AgentSurfaceResult =>
-  host === undefined ? result : { ...result, meta: { ...result.meta, host } };
-
-const envelopeError = (
-  code: "invalid_request" | "not_found" | "internal",
-  reason: string,
-  message: string,
-): AgentSurfaceResult => ({ status: "error", error: { code, reason, message, retryable: false } });
-
 export const layer = McpToolAccess.toLayer(
   AgentSurfaceToolkit,
   Effect.gen(function* () {
     const dispatch = yield* ToolDispatch;
+    const operations = makeOperations(dispatch, yield* makeOperationTokens);
 
     const summary = (entry: AgentSurfaceRegistryEntry, scope: Scope) => ({
       path: entry.path,
@@ -196,45 +134,20 @@ export const layer = McpToolAccess.toLayer(
           "not_served",
           `This GOAT server does not serve ${entry.name}.`,
         );
-      const captured = yield* Ref.make<unknown>(undefined);
-      // Writes count as unkeyed until the registry says which ones the server deduplicates.
-      const context: CallContext = { effect: entry.effect, pathOf };
       const args = input.args ?? {};
       const host = entry.hostRoutable && typeof args.host === "string" ? args.host : undefined;
-      return yield* dispatch.call(entry.name, args).pipe(
-        Effect.provideService(McpToolAccess.CallFailureCapture, {
-          record: (error) => Ref.set(captured, error),
-        }),
-        Effect.flatMap((result) =>
-          result.isError === true
-            ? Effect.map(Ref.get(captured), (error) =>
-                reclassified(fromToolResult(result, context), error, context),
-              )
-            : Effect.succeed(fromToolResult(result, context)),
-        ),
-        Effect.map((result) => withHost(result, host)),
-        // A dying target still gets an answer, with the same fixed text a direct call shows.
-        Effect.catchDefect(() =>
-          Effect.succeed(
-            envelopeError(
-              "internal",
-              "tool_error",
-              "Tool execution failed due to an internal server error.",
-            ),
-          ),
-        ),
-        Effect.catchTags({
-          InvalidParams: (error) => Effect.succeed(fromInvalidParams(error.message)),
-          InternalError: (error) =>
-            Effect.succeed(envelopeError("internal", "internal_error", error.message)),
-        }),
-      );
+      const result = yield* dispatchEnvelope(dispatch, entry.name, args, entry.effect, host);
+      return yield* operations.withOperation(entry, result);
     });
 
     return {
       goat_describe: McpToolAccess.reads(describe),
       // Destructive so clients that prompt on destructive tools still prompt for the targets that are.
       goat_call: McpToolAccess.destructive(McpToolAccess.dispatches(call)),
+      goat_operation_read: McpToolAccess.reads(operations.read),
+      goat_operation_wait: McpToolAccess.reads(operations.wait),
+      // The kind's own cancel tool holds the checks, as goat_call's targets do.
+      goat_operation_cancel: McpToolAccess.destructive(McpToolAccess.dispatches(operations.cancel)),
     };
   }),
 );

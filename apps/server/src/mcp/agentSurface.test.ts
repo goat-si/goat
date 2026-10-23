@@ -35,7 +35,7 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(199); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, and preparation retry tools.
+  expect(entries).toHaveLength(202); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, preparation retry, and operation tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
@@ -414,6 +414,7 @@ const ACCESS_EXCEPTIONS: Readonly<
   "cloud_machine.stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.resume": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "surface.call": { reason: "dispatches", readOnlyClient: "reached" },
+  "operation.cancel": { reason: "dispatches", readOnlyClient: "reached" },
 };
 
 const expectedOutcome = (entry: Entry, caller: Caller, route: Route): Outcome => {
