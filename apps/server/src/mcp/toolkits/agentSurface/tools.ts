@@ -105,7 +105,8 @@ const DescribeTool = Tool.make(agentSurfaceRegistry["surface.describe"].name, {
   description: agentSurfaceRegistry["surface.describe"].description,
   parameters: Schema.Struct({
     path: Schema.optional(
-      Schema.String.annotate({
+      // Searched when it names no path or resource, so it is held to the query's length.
+      Schema.String.check(Schema.isMaxLength(500)).annotate({
         description:
           'A resource ("thread"), a path ("thread.send"), or a tool name. Omit to list resources.',
       }),

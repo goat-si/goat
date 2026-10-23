@@ -7,6 +7,7 @@ import { McpSchema, McpServer } from "effect/ai";
 
 import { catalog, client, dependencies } from "../../agentSurface.testkit.ts";
 import { McpInvocationContext, type McpInvocationScope } from "../../McpInvocationContext.ts";
+import { surfaceVersionOf } from "./describe.ts";
 import { searchEntries } from "./search.ts";
 
 const entries = Object.values(agentSurfaceRegistry);
@@ -231,6 +232,26 @@ describe("goat_describe search", () => {
   it.effect("refuses a query too long to be a search", () =>
     Effect.gen(function* () {
       const refused = yield* Effect.flip(describeAs("thread", { query: "word ".repeat(200) }));
+      expect(refused._tag).toBe("InvalidParams");
+    }).pipe(Effect.provide(registered)),
+  );
+
+  it("matches -y words and their -ies plurals", () => {
+    for (const plural of ["queries", "policies", "activities"])
+      expect(searchEntries(entries, plural).matches.length, plural).toBeGreaterThan(0);
+  });
+
+  it("changes the surface version when a summary or a legacy name changes", () => {
+    const send = agentSurfaceRegistry["thread.send"];
+    const version = surfaceVersionOf(entries);
+    const without = entries.filter((entry) => entry.path !== "thread.send");
+    expect(surfaceVersionOf([...without, { ...send, summary: "Other words" }])).not.toBe(version);
+    expect(surfaceVersionOf([...without, { ...send, legacyNames: ["send"] }])).not.toBe(version);
+  });
+
+  it.effect("holds a path that is searched to the query's length", () =>
+    Effect.gen(function* () {
+      const refused = yield* Effect.flip(describeAs("thread", { path: "x".repeat(600) }));
       expect(refused._tag).toBe("InvalidParams");
     }).pipe(Effect.provide(registered)),
   );

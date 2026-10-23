@@ -22,7 +22,11 @@ const guideOf = (entry: AgentSurfaceEntry) => entry.guide;
 
 // FNV-1a over every field an agent relies on or search reads, so a cursor from an earlier
 // registry is refused; stable across processes, unlike object identity.
-const surfaceVersion = (() => {
+export const surfaceVersionOf = (
+  entries: ReadonlyArray<
+    AgentSurfaceEntry & { readonly path: string; readonly legacyNames: ReadonlyArray<string> }
+  >,
+) => {
   let hash = 0x811c9dc5;
   for (const entry of entries)
     for (const char of `${JSON.stringify([entry.path, entry.name, entry.legacyNames, entry.effect, entry.requires, entry.summary, entry.description, guideOf(entry) ?? ""])}\n`) {
@@ -30,7 +34,8 @@ const surfaceVersion = (() => {
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
   return hash.toString(16).padStart(8, "0");
-})();
+};
+const surfaceVersion = surfaceVersionOf(entries);
 
 const DEFAULT_LIMIT = 10;
 const SEARCHED_FIELDS = ["path", "name", "summary", "description", "guide"] as const;

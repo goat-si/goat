@@ -40,11 +40,18 @@ const tokens = (text: string) =>
     .split(/[^a-z0-9]+/u)
     .filter((token) => token !== "");
 
+/** "queries" reads as "query", so a -y word and its -ies plural share a stem. */
+const unY = (word: string) =>
+  word.length > 4 && word.endsWith("ies") ? word.slice(0, -3) + "y" : word;
+
 /**
  * Two forms of one word: equal, or one extends the other by a short ending ("status" and
- * "statuses", "watch" and "watching"). Symmetric, so plural and singular find each other.
+ * "statuses", "watch" and "watching", "policy" and "policies"). Symmetric, so plural and
+ * singular find each other.
  */
-const sameWord = (a: string, b: string) => {
+const sameWord = (left: string, right: string) => {
+  const a = unY(left);
+  const b = unY(right);
   if (a === b) return true;
   const [short, long] = a.length < b.length ? [a, b] : [b, a];
   return short.length >= 4 && long.length - short.length <= 3 && long.startsWith(short);

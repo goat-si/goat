@@ -59,6 +59,12 @@ export const formatDescribe = (value: unknown): string => {
     ].join("\n");
   if (value.depth === "path" && isRecord(value.entry)) {
     const entry = value.entry;
+    // At detail names or summary the entry has only the fields a list shows.
+    if (!("inputSchema" in entry))
+      return [
+        ...table([entry as Row]),
+        ...(typeof entry.description === "string" ? ["", entry.description] : []),
+      ].join("\n");
     return [
       `${String(entry.path)} (${String(entry.name)}), ${String(entry.effect)}${availability(entry as Row) || "  (available)"}`,
       String(entry.summary),
