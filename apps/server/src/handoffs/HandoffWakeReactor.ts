@@ -15,6 +15,7 @@ import {
   endsWithItsRun,
   isHubDeviceHandoffPath,
   type OrchestrationV2DomainEvent,
+  type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -22,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
@@ -30,8 +32,11 @@ import type { LaunchWatchWake } from "../mcp/launchWatch.ts";
 import { wakeThread } from "../mcp/threadWake.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { forkParked } from "../serverActivation.ts";
 
 const RECONCILE_WINDOW_HOURS = 24;
+/** Fresh command ids a wake may use after earlier ones were rejected. */
+const MAX_ATTEMPTS = 20;
 const ENDED: ReadonlySet<string> = new Set([
   "completed",
   "declined",
@@ -104,20 +109,58 @@ const make = Effect.gen(function* () {
     yield* sql`INSERT INTO handoff_wake_epoch (id, since) VALUES (1, ${now}) ON CONFLICT (id) DO NOTHING`;
   });
 
-  const deliver = Effect.fn("HandoffWakeReactor.deliver")(function* (
-    handoff: Handoff,
-    since: string,
-  ) {
-    const wake = handoffWake(handoff);
-    if (wake === undefined) return;
-    const resolvedAt =
-      handoff.resolvedAt === undefined ? undefined : DateTime.formatIso(handoff.resolvedAt);
-    if (resolvedAt === undefined || resolvedAt < since) return;
-    const threadId = handoff.requestedBy.threadId;
-    const shell = yield* threads.getThreadShell(threadId);
-    if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null) return;
-    yield* wakeThread(threads, threadId, wake);
-  });
+  const permit = yield* Semaphore.make(1);
+  const delivered = (messageId: string) =>
+    sql<{ readonly found: number }>`
+      SELECT 1 AS found FROM orchestration_v2_projection_messages WHERE message_id = ${messageId}`.pipe(
+      Effect.map((rows) => rows.length > 0),
+    );
+  /**
+   * The message id is the delivery record and never changes. A command id the orchestrator once
+   * rejected (a transient planning failure) stays rejected, so a retry moves to the next attempt.
+   */
+  const dispatchWake = (
+    threadId: ThreadId,
+    wake: LaunchWatchWake,
+    attempt = 0,
+  ): Effect.Effect<
+    void,
+    | Orchestrator.OrchestratorV2Error
+    | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+  > =>
+    wakeThread(threads, threadId, {
+      ...wake,
+      ...(attempt === 0
+        ? {}
+        : { commandId: CommandId.make(`${wake.commandId}:attempt:${attempt}`) }),
+    }).pipe(
+      Effect.asVoid,
+      Effect.catchIf(
+        (error) =>
+          error._tag === "OrchestratorCommandPreviouslyRejectedError" && attempt + 1 < MAX_ATTEMPTS,
+        () => dispatchWake(threadId, wake, attempt + 1),
+      ),
+    );
+
+  const deliver = Effect.fn("HandoffWakeReactor.deliver")(
+    function* (handoff: Handoff, since: string) {
+      const wake = handoffWake(handoff);
+      if (wake === undefined) return;
+      const resolvedAt =
+        handoff.resolvedAt === undefined ? undefined : DateTime.formatIso(handoff.resolvedAt);
+      if (resolvedAt === undefined || resolvedAt < since) return;
+      const threadId = handoff.requestedBy.threadId;
+      const shell = yield* threads.getThreadShell(threadId);
+      if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null) return;
+      if (yield* delivered(wake.messageId)) return;
+      yield* dispatchWake(threadId, wake);
+    },
+    // One delivery at a time, so the tail and a reconcile never race to a second attempt.
+    permit.withPermits(1),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("handoff wake failed; the next reconcile retries it", { cause }),
+    ),
+  );
 
   const handle: HandoffWakeReactor["Service"]["handle"] = (event) =>
     event.type !== "turn-item.updated" ||
@@ -129,11 +172,7 @@ const make = Effect.gen(function* () {
           if (Option.isNone(since) || event.payload.type !== "human_handoff") return;
           if (event.payload.handoff !== undefined)
             yield* deliver(event.payload.handoff, since.value);
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("handoff wake failed; the next reconcile retries it", { cause }),
-          ),
-        );
+        }).pipe(Effect.catchCause((cause) => Effect.logWarning("handoff wake failed", { cause })));
 
   const reconcile: HandoffWakeReactor["Service"]["reconcile"] = Effect.gen(function* () {
     const since = yield* epoch;
@@ -142,24 +181,19 @@ const make = Effect.gen(function* () {
       DateTime.subtract(yield* DateTime.now, { hours: RECONCILE_WINDOW_HOURS }),
     );
     const from = since.value > windowStart ? since.value : windowStart;
+    // The partial index keeps this to the day's resolved handoffs; delivered wakes drop out here.
     const rows = yield* sql<{ readonly handoff_json: string | null }>`
-      SELECT json_extract(payload_json, '$.handoff') AS handoff_json
-      FROM orchestration_v2_projection_turn_items
-      WHERE type = 'human_handoff' AND status <> 'waiting' AND updated_at >= ${from}`;
+      SELECT json_extract(item.payload_json, '$.handoff') AS handoff_json
+      FROM orchestration_v2_projection_turn_items AS item
+      LEFT JOIN orchestration_v2_projection_messages AS message
+        ON message.message_id = 'message:handoff-wake:' || item.turn_item_id || ':'
+          || json_extract(item.payload_json, '$.handoff.state')
+      WHERE item.type = 'human_handoff' AND item.status <> 'waiting'
+        AND item.updated_at >= ${from} AND message.message_id IS NULL`;
     for (const row of rows) {
       if (row.handoff_json === null) continue;
       const handoff = decodeHandoff(row.handoff_json);
-      if (Option.isNone(handoff)) continue;
-      const wake = handoffWake(handoff.value);
-      if (wake === undefined) continue;
-      const delivered = yield* sql<{ readonly found: number }>`
-        SELECT 1 AS found FROM orchestration_v2_projection_messages WHERE message_id = ${wake.messageId}`;
-      if (delivered.length > 0) continue;
-      yield* deliver(handoff.value, since.value).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("handoff wake failed; the next reconcile retries it", { cause }),
-        ),
-      );
+      if (Option.isSome(handoff)) yield* deliver(handoff.value, since.value);
     }
   }).pipe(
     Effect.catchCause((cause) => Effect.logWarning("handoff wake reconcile failed", { cause })),
@@ -167,14 +201,15 @@ const make = Effect.gen(function* () {
 
   const start: HandoffWakeReactor["Service"]["start"] = Effect.gen(function* () {
     yield* seedEpoch;
-    // A live tail plus reconcile now and on every handoff-expiry tick: a resolution that lands
-    // between the two is woken by the next tick rather than lost.
-    yield* orchestrator.streamDomainEvents.pipe(
-      Stream.runForEach(handle),
-      Effect.catchCause((cause) => Effect.logWarning("handoff wake stream ended", { cause })),
-      Effect.forkScoped,
+    // After activation, so restart recovery does not hold a wake this server just queued. The
+    // handoff-expiry tick reconciles after recovery and then on every tick, which also covers a
+    // resolution that lands before the tail subscribes.
+    yield* forkParked(
+      orchestrator.streamDomainEvents.pipe(
+        Stream.runForEach(handle),
+        Effect.catchCause((cause) => Effect.logWarning("handoff wake stream ended", { cause })),
+      ),
     );
-    yield* reconcile;
   }).pipe(
     Effect.catchCause((cause) => Effect.logWarning("handoff wakes did not start", { cause })),
   );

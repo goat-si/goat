@@ -286,3 +286,43 @@ it.effect("wakes nothing before waking began, or resolved before it began", () =
     }),
   ),
 );
+
+it.effect(
+  "delivers on a fresh attempt when the orchestrator once rejected the wake's command",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const summary = yield* ask(world, "example.approve");
+        yield* world.handoffs.respond(
+          { threadId, handoffId: summary.handoffId, action: "completed" },
+          person,
+        );
+        // A transient planning failure leaves a rejected receipt under the first command id.
+        yield* world.sql`INSERT INTO orchestration_command_receipts
+        (command_id, aggregate_kind, aggregate_id, command_type, accepted_at, result_sequence, status, error)
+        VALUES (${`server:handoff-wake:${summary.handoffId}:completed`}, 'thread', ${threadId},
+        'message.dispatch', '2026-10-23T00:00:00.000Z', 0, 'rejected', 'adapter unavailable')`;
+        yield* world.reactor.reconcile;
+        yield* world.reactor.reconcile;
+        const sent = yield* wakes(world);
+        expect(sent.map((message) => message.id)).toEqual([
+          `message:handoff-wake:${summary.handoffId}:completed`,
+        ]);
+      }),
+    ),
+);
+
+it.effect("reads the day's resolved handoffs through their index, not the whole history", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      const plan = yield* world.sql<{ readonly detail: string }>`EXPLAIN QUERY PLAN
+        SELECT turn_item_id FROM orchestration_v2_projection_turn_items AS item
+        WHERE item.type = 'human_handoff' AND item.status <> 'waiting'
+          AND item.updated_at >= '2026-10-22T00:00:00.000Z'`;
+      expect(plan.map((row) => row.detail).join("\n")).toContain(
+        "orchestration_v2_projection_turn_items_resolved_handoff_idx (updated_at>?)",
+      );
+    }),
+  ),
+);
