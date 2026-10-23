@@ -126,6 +126,36 @@ const orchestratingCaller = refuseReadOnlyClient.pipe(
 /** What a read that uses this machine's SSH keys to reach another host must pass first. */
 export const hostReachingCaller = orchestratingCaller;
 
+/**
+ * Where a write is admitted: after its caller checks and before its handler runs. ToolAdmission
+ * provides one per call and reserves a clientRequestId here, so a replay passes every check
+ * again and a caller that lost its grant is refused instead of answered from the record.
+ */
+export class KeyedAdmission extends Context.Service<
+  KeyedAdmission,
+  {
+    /**
+     * Reserves the call's key, or ends the call with its recorded answer or a refusal and never
+     * returns. `params` are the decoded arguments; their digest binds the key to this request.
+     */
+    readonly admit: (params: unknown) => Effect.Effect<void>;
+  }
+>()("goat/mcp/McpToolAccess/KeyedAdmission") {}
+
+/**
+ * Admits a write here. Declarations admit after their checks; a handler whose own checks must
+ * pass first declares `admission: "handler"` and yields this itself.
+ */
+export const admit = (params: unknown) =>
+  Effect.flatMap(Effect.serviceOption(KeyedAdmission), (admission) =>
+    admission._tag === "Some" ? admission.value.admit(params) : Effect.void,
+  );
+
+const admitted = <A, E, R>(params: unknown, run: Effect.Effect<A, E, R>) =>
+  Effect.andThen(admit(params), run);
+
+type AdmissionOption = { readonly admission?: "handler" };
+
 const requireThreadCaller = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((scope) => McpInvocationContext.requireThreadScope(scope, "This tool")),
 );
@@ -266,19 +296,23 @@ export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A,
   declare("write", (params: P) =>
     requireThreadCaller.pipe(
       Effect.flatMap(() => writingCaller),
-      Effect.flatMap(() => handle(params)),
+      Effect.flatMap(() => admitted(params, handle(params))),
     ),
   );
 
 export const writes = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
-  declare("write", (params: P) => orchestratingCaller.pipe(Effect.flatMap(() => handle(params))));
+  declare("write", (params: P) =>
+    orchestratingCaller.pipe(Effect.flatMap(() => admitted(params, handle(params)))),
+  );
 
 /**
  * Unlike `writes` it does not need thread control; the handler checks its
  * capability, as the capability toolkits do.
  */
 export const writesWithCapability = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
-  declare("write", (params: P) => writingCaller.pipe(Effect.flatMap(() => handle(params))));
+  declare("write", (params: P) =>
+    writingCaller.pipe(Effect.flatMap(() => admitted(params, handle(params)))),
+  );
 
 export const writesThreads = <P, A, E, R>(
   threads: (params: P) => ReadonlyArray<ThreadId | undefined>,
@@ -310,7 +344,7 @@ export const writesThreads = <P, A, E, R>(
       // orchestrator checks again under the thread's lock and records its
       // refusal here, since handlers wrap dispatch errors their own way.
       const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
-      return yield* handle(params).pipe(
+      return yield* admitted(params, handle(params)).pipe(
         Effect.provideService(DispatchModeLimit, { ...caller.limits, refused }),
         Effect.catch((error) =>
           Effect.flatMap(Ref.get(refused), (refusal) =>
@@ -355,7 +389,7 @@ export const startsThreads = <P, A, E, R>(
           requested.interactionMode,
         ),
       };
-      return yield* handle(params, started);
+      return yield* admitted(params, handle(params, started));
     }),
   );
 
@@ -371,11 +405,20 @@ export const writesEnvironment = <P, A, E, R>(
     params: P,
     check: Effect.Effect<Caller, OrchestratorMcpFailure, CheckServices>,
   ) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
 ) => {
   const check = orchestratingCaller.pipe(
     Effect.tap((caller) => assertFullAccess(caller, fullAccessRequired)),
   );
-  return declare("write", (params: P) => check.pipe(Effect.flatMap(() => handle(params, check))));
+  return declare("write", (params: P) =>
+    check.pipe(
+      Effect.flatMap(() =>
+        options.admission === "handler"
+          ? handle(params, check)
+          : admitted(params, handle(params, check)),
+      ),
+    ),
+  );
 };
 
 type CheckServices = Effect.Services<typeof orchestratingCaller>;
@@ -393,12 +436,15 @@ export const removesCheckouts = <P, A, E, R>(
   removes: (params: P) => boolean,
   reachesHost: (params: P) => boolean,
   handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
 ) =>
   declare("destructive", (params: P) =>
     removes(params)
       ? orchestratingCaller.pipe(
           Effect.tap((caller) => assertFullAccess(caller, removesCheckoutsRequired)),
-          Effect.flatMap(() => handle(params)),
+          Effect.flatMap(() =>
+            options.admission === "handler" ? handle(params) : admitted(params, handle(params)),
+          ),
         )
       : reachesHost(params)
         ? orchestratingCaller.pipe(Effect.flatMap(() => handle(params)))

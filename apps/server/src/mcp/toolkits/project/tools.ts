@@ -41,6 +41,7 @@ import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpServ
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import { NotifyTargetInput } from "../../completionWebhook.ts";
 import { McpAttachmentInput } from "../attachment/input.ts";
+import { KeyedClientRequestId, withClientRequestId } from "../keyedParameters.ts";
 
 const shared = {
   success: Project,
@@ -102,7 +103,11 @@ const ProjectUpdateTool = Tool.make(agentSurfaceRegistry["project.update"].name,
 const ProjectDeleteTool = Tool.make(agentSurfaceRegistry["project.delete"].name, {
   ...shared,
   description: agentSurfaceRegistry["project.delete"].description,
-  parameters: Schema.Struct({ projectId: ProjectId, force: Schema.optionalKey(Schema.Boolean) }),
+  parameters: Schema.Struct({
+    projectId: ProjectId,
+    force: Schema.optionalKey(Schema.Boolean),
+    clientRequestId: Schema.optional(KeyedClientRequestId),
+  }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["project.delete"]));
 const ProjectCloneTool = Tool.make(agentSurfaceRegistry["project.clone"].name, {
   ...shared,
@@ -206,7 +211,7 @@ export const ThreadLaunchSuccess = Schema.Struct({
 const ThreadLaunchTool = Tool.make(agentSurfaceRegistry["thread.launch"].name, {
   ...shared,
   description: agentSurfaceRegistry["thread.launch"].description,
-  parameters: ThreadLaunchParameters,
+  parameters: withClientRequestId(ThreadLaunchParameters),
   success: ThreadLaunchSuccess,
   dependencies: [
     McpInvocationContext.McpInvocationContext,

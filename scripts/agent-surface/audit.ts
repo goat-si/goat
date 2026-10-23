@@ -422,6 +422,10 @@ function render(inventory: Inventory): string {
           mutating.length - mutatingWithoutCrid.length,
         ],
         [
+          "Mutating tools whose clientRequestId GOAT deduplicates",
+          mutating.filter((tool) => tool.deduplicated).length,
+        ],
+        [
           "Input parameters with a description",
           fields.length -
             undescribed.length +

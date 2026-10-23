@@ -1,7 +1,13 @@
 import { htmlPreviewDescription, htmlRenderDescription } from "./html.ts";
 import { noteSurfaceEntries } from "./notes.ts";
+import { providerSettingsSurfaceEntries } from "./providerSettings.ts";
 import { metaSurfaceEntries } from "./surfaceEntries.ts";
-import type { AgentSurfaceEntry, AgentSurfaceExample, CapabilityDeclaration } from "./types.ts";
+import type {
+  AgentSurfaceEntry,
+  AgentSurfaceExample,
+  CapabilityDeclaration,
+  IdempotencyDeclaration,
+} from "./types.ts";
 
 export type {
   AgentSurfaceCapability,
@@ -9,9 +15,12 @@ export type {
   AgentSurfaceEntry,
   AgentSurfaceExample,
   CapabilityDeclaration,
+  IdempotencyDeclaration,
 } from "./types.ts";
 
-const entry = <const E extends AgentSurfaceEntry & CapabilityDeclaration>(value: E) => ({
+const entry = <const E extends AgentSurfaceEntry & CapabilityDeclaration & IdempotencyDeclaration>(
+  value: E,
+) => ({
   ...value,
   path: `${value.resource}.${value.verb}` as `${E["resource"]}.${E["verb"]}`,
   legacyNames: [value.name],
@@ -2133,7 +2142,7 @@ export const agentSurfaceRegistry = {
     summary:
       "Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts.",
     description:
-      'Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree, and for work that owns a goal, runs a loop (HOTL, cxc-loop, repeated PABCD), or spans several cycles, even when the user calls it a subagent: top-level threads appear in the sidebar, where the user can open, steer, and resume them. Use delegate_task for bounded child subagents that report back and end. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. To fetch and start from the base branch\'s remote, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a GOAT thread must pass projectId and gets the project\'s default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Each call creates a new launch with no retry key; retain threadId. A calling GOAT thread is woken with a message when the run of the new thread ends or waits on a question, so do not poll it with goat_thread_wait; notifyOnCompletion:false or goat_thread_unwatch stops run-end and host-outage reports. Only local user-input questions still arrive. SSH-host questions then need goat_thread_wait({host}) or goat_pending_request_list({scope:"launched", hosts}). Approvals are no longer reported; check goat_thread_read or tell the user the thread may be waiting. To link a thread for the user, write `[title](goat-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; GOAT shows the thread\'s current title. After errors or lost responses, inspect goat_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling GOAT thread\'s own modes, or the permission mode an outside agent was approved with. A cloud provider runs without creating a local worktree or running setup. Most cloud providers start from the published source branch and refuse an unavailable or unpublished source with a reason; providers that upload the project folder (such as Claude Cloud) start from its current branch, and local changes may be included. Choose a project repository; scratch is unavailable for cloud tasks. Follow-ups target the same cloud session when its capabilities permit them.',
+      'Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree, and for work that owns a goal, runs a loop (HOTL, cxc-loop, repeated PABCD), or spans several cycles, even when the user calls it a subagent: top-level threads appear in the sidebar, where the user can open, steer, and resume them. Use delegate_task for bounded child subagents that report back and end. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. To fetch and start from the base branch\'s remote, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a GOAT thread must pass projectId and gets the project\'s default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Pass clientRequestId to retry safely: a repeat with the same arguments returns the first launch instead of starting another. Retain threadId. A calling GOAT thread is woken with a message when the run of the new thread ends or waits on a question, so do not poll it with goat_thread_wait; notifyOnCompletion:false or goat_thread_unwatch stops run-end and host-outage reports. Only local user-input questions still arrive. SSH-host questions then need goat_thread_wait({host}) or goat_pending_request_list({scope:"launched", hosts}). Approvals are no longer reported; check goat_thread_read or tell the user the thread may be waiting. To link a thread for the user, write `[title](goat-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; GOAT shows the thread\'s current title. After errors or lost responses, inspect goat_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling GOAT thread\'s own modes, or the permission mode an outside agent was approved with. A cloud provider runs without creating a local worktree or running setup. Most cloud providers start from the published source branch and refuse an unavailable or unpublished source with a reason; providers that upload the project folder (such as Claude Cloud) start from its current branch, and local changes may be included. Choose a project repository; scratch is unavailable for cloud tasks. Follow-ups target the same cloud session when its capabilities permit them.',
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -2144,6 +2153,8 @@ export const agentSurfaceRegistry = {
       idempotentHint: false,
       openWorldHint: true,
     },
+    idempotency: "key",
+    reconcile: "thread.list",
   }),
   "project.list": entry({
     resource: "project",
@@ -2238,6 +2249,8 @@ export const agentSurfaceRegistry = {
       idempotentHint: false,
       openWorldHint: true,
     },
+    idempotency: "key",
+    reconcile: "project.list",
   }),
   "project.clone": entry({
     resource: "project",
@@ -2639,6 +2652,8 @@ export const agentSurfaceRegistry = {
       idempotentHint: false,
       openWorldHint: true,
     },
+    idempotency: "key",
+    reconcile: "thread.list",
   }),
   "ssh.thread_handoff": entry({
     resource: "ssh",
@@ -3191,6 +3206,8 @@ export const agentSurfaceRegistry = {
       idempotentHint: false,
       openWorldHint: true,
     },
+    idempotency: "key",
+    reconcile: "worktree.inventory",
   }),
   "worktree.cleanup": entry({
     resource: "worktree",
@@ -3555,70 +3572,10 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { idempotentHint: true, openWorldHint: false },
   }),
-  "provider.update": entry({
-    resource: "provider",
-    verb: "update",
-    name: "goat_provider_update",
-    toolkit: "provider",
-    summary: "Change a provider instance's settings",
-    description:
-      "Change a provider instance on this environment, or on an SSH host with host, the way Settings → Providers does: enable or disable it, rename it, set its accent color, merge driver settings (binary path, home, custom models, a cloud provider's login source), set environment variables, make one of its models the default for new threads, or install an ACP Registry agent with install:true. A caller allowed to manage providers gets kind applied: a client holding providers:manage, or a live full-access thread whose goatclaw permission profile includes providers.manage (any full-access thread while goatclaw is off). Any other thread agent gets needs_human: a person approves that exact change in the thread and GOAT applies it then; call goat_provider_diagnose afterwards. Every change is audited and shows in Settings at once. Results name environment variables and config keys, never their values. Signing in stays with goat_provider_login_start.",
-    effect: "write",
-    capability: "settings.write",
-    hostRoutable: true,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: ["approval"],
-    annotations: { idempotentHint: true, openWorldHint: false },
-  }),
-  "provider.add": entry({
-    resource: "provider",
-    verb: "add",
-    name: "goat_provider_add",
-    toolkit: "provider",
-    summary: "Add a provider instance",
-    description:
-      'Add a provider instance of any driver goat_provider_addable_list shows, on this environment or an SSH host with host. For an ACP Registry agent pass acpAgentId, such as "devin"; GOAT downloads it with its in-app installer unless install is false. Pass linkTo to make a Cursor Cloud, Claude Cloud, or Devin Cloud instance use the new instance\'s executable and sign-in, which is how Devin Cloud gets its Devin ACP instance. Same permission and approval rules as goat_provider_update. Sign in afterwards with goat_provider_login_start.',
-    effect: "write",
-    capability: "settings.write",
-    hostRoutable: true,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: ["approval"],
-    annotations: { idempotentHint: false, openWorldHint: false },
-  }),
-  "provider.link": entry({
-    resource: "provider",
-    verb: "link",
-    name: "goat_provider_link",
-    toolkit: "provider",
-    summary: "Choose the local instance a cloud provider uses",
-    description:
-      "Set which local instance a cloud provider uses for its executable and sign-in: a Cursor instance for Cursor Cloud, a Claude instance for Claude Cloud, an ACP Registry Devin instance for Devin Cloud. Adds and enables the automatic cloud instance when Settings has no entry for it yet. Same permission and approval rules as goat_provider_update.",
-    effect: "write",
-    capability: "settings.write",
-    hostRoutable: true,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: ["approval"],
-    annotations: { idempotentHint: true, openWorldHint: false },
-  }),
-  "provider.remove": entry({
-    resource: "provider",
-    verb: "remove",
-    name: "goat_provider_remove",
-    toolkit: "provider",
-    summary: "Remove a provider instance",
-    description:
-      "Remove a provider instance from Settings, or reset a built-in default instance to its defaults. Threads keep their history, but new turns cannot use a removed instance. Same permission and approval rules as goat_provider_update.",
-    effect: "destructive",
-    capability: "settings.write",
-    hostRoutable: true,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: ["approval"],
-    annotations: { idempotentHint: true, openWorldHint: false },
-  }),
+  "provider.update": entry(providerSettingsSurfaceEntries.update),
+  "provider.add": entry(providerSettingsSurfaceEntries.add),
+  "provider.link": entry(providerSettingsSurfaceEntries.link),
+  "provider.remove": entry(providerSettingsSurfaceEntries.remove),
 } as const;
 
 export type AgentSurfacePath = keyof typeof agentSurfaceRegistry;

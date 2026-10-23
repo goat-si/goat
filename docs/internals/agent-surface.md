@@ -138,6 +138,22 @@ has no `clientRequestId`.
 
 ### Idempotency
 
+**Now.** Writes the registry marks `idempotency: "key"` (thread and SSH thread
+launch, provider add, update, link and remove, worktree remove, project delete)
+reserve their key in `mcp_request_reservations` through
+[ToolAdmission.ts](../../apps/server/src/mcp/ToolAdmission.ts). The key is taken
+where the declaration admits the write, after every caller check, so direct calls
+and `goat_call` share it and a replay passes the checks again. A handler that
+authorizes inside its body (SSH launch's profile and role checks, the worktree
+credential) declares `admission: "handler"` and admits after them. The
+reservation is its own statement, not part of each domain's transaction; the gap
+between it and the recorded outcome is what `unknown` covers. A transient
+refusal that ran nothing frees the key, other failures replay, and a failure that
+may have left effects, an interrupt, or a row an earlier server process left
+running stays `unknown` and never runs again. Only completed keys expire, after
+24 hours. Writes that already deduplicated in their own domain, such as
+`goat_thread_send` and `delegate_task`, keep those receipts for now.
+
 **Proposed.** A write that takes `clientRequestId` follows the rules payment APIs
 settled on ([Stripe](https://docs.stripe.com/api/idempotent_requests),
 [AIP-155](https://google.aip.dev/155)):
@@ -636,7 +652,9 @@ check. Writes that name their target machine in another argument (`targetHost`,
 **Now.** Each MCP call records one anonymous `mcp.tool.invoked` analytics event
 with no ids or text. Orchestration receipts record commands. The decision inbox
 keeps an append-only audit of actor, profile, action, target, and outcome, and
-handoff transitions are events with actors.
+handoff transitions are events with actors. A keyed write's reservation records
+principal, profile id, ceiling, host, path, argument digest, receipt id, and
+outcome.
 
 **Proposed.** Analytics stays anonymous. Every write through the invocation
 function records principal, profile id, effective ceiling, host, path, argument
@@ -791,7 +809,7 @@ Each PR ships on its own and leaves `tools/list` unchanged until the flip.
 | 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774) |
 | 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                 |
 | 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                 |
-| 6   | Idempotency receipts with digest, unknown state, audit columns                | Proposed                                                                                                                                                                   |
+| 6   | Idempotency receipts with digest, unknown state, audit columns                | Started: eight high-risk writes keyed                                                                                                                                      |
 | 7   | Operations over existing stores; durable provider sync                        | Proposed                                                                                                                                                                   |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
 | 9   | Registry-generated CLI commands and credentials                               | Proposed                                                                                                                                                                   |

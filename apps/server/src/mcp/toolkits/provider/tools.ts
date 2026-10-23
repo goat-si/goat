@@ -46,6 +46,7 @@ import * as ProviderHostSync from "../../../provider/ProviderHostSync.ts";
 import * as ProviderOnboarding from "../../../provider/ProviderOnboarding.ts";
 import * as ProviderSettings from "../../../provider/ProviderSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { withClientRequestId } from "../keyedParameters.ts";
 
 const ProviderDiagnoseTool = Tool.make(agentSurfaceRegistry["provider.diagnose"].name, {
   description: agentSurfaceRegistry["provider.diagnose"].description,
@@ -170,22 +171,22 @@ const settingsTool = {
 const ProviderUpdateTool = Tool.make(agentSurfaceRegistry["provider.update"].name, {
   ...settingsTool,
   description: agentSurfaceRegistry["provider.update"].description,
-  parameters: ProviderUpdateInput,
+  parameters: withClientRequestId(ProviderUpdateInput),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.update"]));
 const ProviderAddTool = Tool.make(agentSurfaceRegistry["provider.add"].name, {
   ...settingsTool,
   description: agentSurfaceRegistry["provider.add"].description,
-  parameters: ProviderAddInput,
+  parameters: withClientRequestId(ProviderAddInput),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.add"]));
 const ProviderLinkTool = Tool.make(agentSurfaceRegistry["provider.link"].name, {
   ...settingsTool,
   description: agentSurfaceRegistry["provider.link"].description,
-  parameters: ProviderLinkInput,
+  parameters: withClientRequestId(ProviderLinkInput),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.link"]));
 const ProviderRemoveTool = Tool.make(agentSurfaceRegistry["provider.remove"].name, {
   ...settingsTool,
   description: agentSurfaceRegistry["provider.remove"].description,
-  parameters: ProviderRemoveInput,
+  parameters: withClientRequestId(ProviderRemoveInput),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.remove"]));
 const cloudTool = {
   failure: OrchestratorMcpFailure,

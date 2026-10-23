@@ -74,6 +74,8 @@ export interface ToolEntry {
   /** The published schema allows extra keys; McpHttpServer refuses them at call time. */
   readonly acceptsUndeclaredArguments: boolean;
   readonly clientRequestId: boolean;
+  /** The registry marks it `idempotency: "key"`, so GOAT reserves its clientRequestId. */
+  readonly deduplicated: boolean;
   readonly pagination: ReadonlyArray<string>;
   readonly humanSteps: ReadonlyArray<string>;
   /** Hand-registered so it can return image content (see McpHttpServer). */
@@ -433,6 +435,14 @@ export async function collectTools(): Promise<{
   };
   const getAnnotation = Context["getOrUndefined"] as (context: unknown, key: unknown) => unknown;
   const getReference = Context["get"] as (context: unknown, key: unknown) => unknown;
+  const resolve = (await importFrom("@goat/contracts/agentSurface/resolve")) as {
+    resolveAgentSurfaceEntry: (name: string) => unknown;
+    isKeyedWrite: (entry: unknown) => boolean;
+  };
+  const keyed = (name: string) => {
+    const entry = resolve.resolveAgentSurfaceEntry(name);
+    return entry !== undefined && resolve.isKeyedWrite(entry);
+  };
 
   const mcpServerSource = readLines(mcpServerFile).join("\n");
   const imageRegistered = new Set(
@@ -518,6 +528,7 @@ export async function collectTools(): Promise<{
           mutating: isMutating(handler?.access ?? null, readOnly),
           acceptsUndeclaredArguments: input.additionalProperties !== false,
           clientRequestId: "clientRequestId" in props,
+          deduplicated: keyed(tool.name),
           pagination: [...fields.map((field) => field.name), ...outputKeys].filter((name) =>
             PAGINATION_FIELDS.has(name),
           ),

@@ -18,6 +18,9 @@ export const resolveAgentSurfaceEntry = (
   pathOrName: string,
 ): AgentSurfaceRegistryEntry | undefined => byName.get(pathOrName);
 
+/** Whether GOAT deduplicates this write by clientRequestId (docs/internals/agent-surface.md#idempotency). */
+export const isKeyedWrite = (entry: AgentSurfaceEntry) => entry.idempotency === "key";
+
 /**
  * Canonical names a served tool also answers to, mapped to the name it is served under. /mcp
  * accepts them in tools/call and leaves them out of tools/list until the listing flip

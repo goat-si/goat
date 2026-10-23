@@ -47,6 +47,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 import { McpAttachmentInput } from "../attachment/input.ts";
 import { NotifyTargetInput } from "../../completionWebhook.ts";
+import { KeyedClientRequestId } from "../keyedParameters.ts";
 
 const shared = {
   failure: OrchestratorMcpFailure,
@@ -224,6 +225,7 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
       description:
         "An SSH host alias from goat_ssh_host_list, or a linked host name from goat_host_link_list.",
     }),
+    clientRequestId: Schema.optional(KeyedClientRequestId),
     cwd: TrimmedNonEmptyString.annotate({
       description: "Absolute path (or ~/path) of the folder on the remote machine.",
     }),

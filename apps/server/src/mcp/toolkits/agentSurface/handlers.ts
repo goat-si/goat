@@ -1,10 +1,14 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
-import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import {
-  FAILURE_CLASSES,
+  canonicalToolName,
+  isKeyedWrite,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
+import {
   type AgentSurfaceResult,
   type CallContext,
+  declaredFailureLiteral,
   fromFailure,
   fromInvalidParams,
   fromToolResult,
@@ -52,39 +56,13 @@ const availability = (
   return { now: true };
 };
 
-const stringField = (value: unknown, key: string) => {
-  const field =
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)[key]
-      : undefined;
-  return typeof field === "string" && field !== "" ? field : undefined;
-};
-
-/**
- * The declared domain literal behind a failure, which the MCP layer may have flattened to text.
- * Only literals the classification table names count: an undeclared failure is one the direct
- * call deliberately scrubs, so goat_call must not reveal even its tag. Free text such as a
- * reason string or a computed message never leaves through here.
- */
-const declaredLiteral = (
-  error: unknown,
-): { readonly _tag: string; readonly code?: string } | undefined => {
-  const tag = stringField(error, "_tag");
-  if (tag === undefined) return undefined;
-  const literal = (["code", "reason", "failureCode"] as const)
-    .map((key) => stringField(error, key))
-    .find((value) => value !== undefined && FAILURE_CLASSES[value] !== undefined);
-  if (literal !== undefined) return { _tag: tag, code: literal };
-  return FAILURE_CLASSES[tag] === undefined ? undefined : { _tag: tag };
-};
-
 /** Reclassifies a direct failure by its declared literal; the text stays what a direct call shows. */
 const reclassified = (
   direct: AgentSurfaceResult,
   error: unknown,
   context: CallContext,
 ): AgentSurfaceResult => {
-  const declared = declaredLiteral(error);
+  const declared = declaredFailureLiteral(error);
   if (direct.status !== "error" || declared === undefined) return direct;
   const classified = fromFailure({ ...declared, message: direct.error.message }, context);
   if (classified.status !== "error") return direct;
@@ -197,9 +175,10 @@ export const layer = McpToolAccess.toLayer(
           `This GOAT server does not serve ${entry.name}.`,
         );
       const captured = yield* Ref.make<unknown>(undefined);
-      // Writes count as unkeyed until the registry says which ones the server deduplicates.
-      const context: CallContext = { effect: entry.effect, pathOf };
       const args = input.args ?? {};
+      // Only keyed writes that carry a key are deduplicated; ToolAdmission holds the key.
+      const deduplicated = isKeyedWrite(entry) && typeof args.clientRequestId === "string";
+      const context: CallContext = { effect: entry.effect, deduplicated, pathOf };
       const host = entry.hostRoutable && typeof args.host === "string" ? args.host : undefined;
       return yield* dispatch.call(entry.name, args).pipe(
         Effect.provideService(McpToolAccess.CallFailureCapture, {

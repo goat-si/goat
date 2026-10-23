@@ -80,6 +80,18 @@ export const LinkedHostFailureReason = Schema.Literals([
 ]);
 export type LinkedHostFailureReason = typeof LinkedHostFailureReason.Type;
 
+/**
+ * A repeated clientRequestId (docs/internals/agent-surface.md#idempotency). in_progress: the
+ * first call is still running. idempotency_mismatch: the key was used with other arguments.
+ * outcome_unknown: the first call started and never recorded an outcome. None of them runs anything.
+ */
+export const ClientRequestReservationReason = Schema.Literals([
+  "in_progress",
+  "idempotency_mismatch",
+  "outcome_unknown",
+]);
+export type ClientRequestReservationReason = typeof ClientRequestReservationReason.Type;
+
 /** The literal of the domain failure an OrchestratorMcpFailure wraps. */
 export const OrchestratorMcpFailureReason = Schema.Union([
   SshDispatchFailureReason,
@@ -87,6 +99,7 @@ export const OrchestratorMcpFailureReason = Schema.Union([
   CloudMachineErrorReason,
   HandoffErrorReason,
   ProviderHostSyncErrorCode,
+  ClientRequestReservationReason,
   // A remote task with this id is already launching or launched.
   Schema.Literal("duplicate_task"),
 ]);
@@ -107,5 +120,7 @@ export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFa
     mayHaveStarted: Schema.optionalKey(Schema.Boolean),
     /** The failure code a remote GOAT answered with, unchanged. */
     remoteCode: Schema.optionalKey(Schema.String),
+    /** The read path that tells whether a write with an unknown outcome happened. */
+    reconcile: Schema.optionalKey(Schema.String),
   },
 ) {}

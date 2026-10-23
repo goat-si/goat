@@ -19,6 +19,7 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import {
   canonicalToolAliases,
   canonicalToolName,
+  isKeyedWrite,
   resolveAgentSurfaceEntry,
 } from "@goat/contracts/agentSurface/resolve";
 import { type AgentSurfaceResult, FAILURE_CLASSES } from "@goat/contracts/agentSurface/envelope";
@@ -196,6 +197,16 @@ describe("agent surface schemas", () => {
           `${entry.path} ${slot}`,
         ).toEqual([]);
       }
+    }
+  });
+
+  it("takes clientRequestId on every write the registry says GOAT deduplicates", () => {
+    const keyed = entries.filter((entry) => isKeyedWrite(entry));
+    expect(keyed.length).toBeGreaterThan(0);
+    for (const entry of keyed) {
+      const input = Tool.getJsonSchema(toolOf(entry)) as JsonSchema;
+      const properties = isObject(input["properties"]) ? input["properties"] : {};
+      expect(Object.keys(properties), entry.path).toContain("clientRequestId");
     }
   });
 });
