@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { describeInstallFailure } from "./ProviderHostSync.ts";
 import {
+  describeInstallFailure,
   installCommand,
   installMethod,
   parseDeviceLogin,

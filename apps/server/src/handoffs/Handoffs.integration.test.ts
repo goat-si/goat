@@ -10,9 +10,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SecretStore from "../auth/ServerSecretStore.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Option from "effect/Option";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
@@ -21,7 +19,6 @@ import {
   Handoff,
   MessageId,
   ProjectId,
-  ProviderInstanceId,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -32,73 +29,10 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import * as Worker from "../orchestration-v2/EffectWorker.ts";
-import * as Registry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as Harness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
-import { makeFakeCloudAdapter } from "../orchestration-v2/testkit/FakeCloudAdapter.ts";
-import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import { instanceId, threadId, withHarness } from "./Handoffs.testkit.ts";
 
 const encodeHandoff = Schema.encodeEffect(Schema.toCodecJson(Handoff));
-const threadId = ThreadId.make("thread:handoff-tests");
-const instanceId = ProviderInstanceId.make("codex");
-const withHarness = <A, E, R>(
-  body: (input: {
-    orchestrator: Orchestrator.OrchestratorV2["Service"];
-    worker: Worker.OrchestrationEffectWorkerV2["Service"];
-  }) => Effect.Effect<A, E, R>,
-) =>
-  Effect.gen(function* () {
-    const fake = yield* makeFakeCloudAdapter(true, instanceId);
-    const adapter = {
-      ...fake.adapter,
-      getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
-      openSession: (input: Parameters<typeof fake.adapter.openSession>[0]) =>
-        fake.adapter
-          .openSession(input)
-          .pipe(Effect.map((session) => ({ ...session, startTurn: () => Effect.void }))),
-    };
-    const databaseLayer = Sqlite.layerMemory;
-    return yield* Effect.gen(function* () {
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      const worker = yield* Worker.OrchestrationEffectWorkerV2;
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        commandId: CommandId.make("create-thread"),
-        threadId,
-        projectId: ProjectId.make("project:handoff-tests"),
-        title: "Human handoff",
-        modelSelection: { instanceId, model: "fake" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        createdBy: "user",
-        creationSource: "web",
-      });
-      yield* orchestrator.dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make("start-run"),
-        threadId,
-        messageId: MessageId.make("message:handoff"),
-        text: "Set up the provider",
-        attachments: [],
-        dispatchMode: { type: "start_immediately" },
-        createdBy: "user",
-        creationSource: "web",
-      });
-      yield* worker.drain();
-      return yield* body({ orchestrator, worker });
-    }).pipe(
-      Effect.provide(
-        Harness.layerWithRegistry(
-          { name: "human-handoff" },
-          Registry.layerFromAdapters([adapter]),
-          { runEffectWorker: false, databaseLayer },
-        ).pipe(Layer.provideMerge(databaseLayer)),
-      ),
-    );
-  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
 
 const create = (
   orchestrator: Orchestrator.OrchestratorV2["Service"],
