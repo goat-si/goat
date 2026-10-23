@@ -57,9 +57,11 @@ export const surfaceArguments = (tool: string, payload: unknown): SurfaceArgumen
   if ((tool !== "goat_call" && tool !== "goat_describe") || !isRecord(payload))
     return { ok: true, payload };
   const { resource, verb, ...rest } = payload;
-  // resource with a verb is a path; for goat_describe a resource alone is one too.
+  // resource with a verb is a path; for goat_describe a resource alone is one too. A verb that is
+  // not a string stays behind, so the undeclared-argument refusal names it.
   const parts =
-    typeof resource === "string" && (typeof verb === "string" || tool === "goat_describe")
+    typeof resource === "string" &&
+    (typeof verb === "string" || (tool === "goat_describe" && verb === undefined))
       ? [["resource", typeof verb === "string" ? `${resource}.${verb}` : resource] as const]
       : [];
   const argsKeys: ReadonlyArray<string> = tool === "goat_call" ? ARGS_KEYS : [];

@@ -108,6 +108,9 @@ it.effect("refuses two fields that name different targets, naming both, and unkn
       "does not take bogus",
     );
     expect(yield* refusal("goat_describe", { verb: "read" })).toContain("does not take verb");
+    expect(yield* refusal("goat_describe", { resource: "thread", verb: 42 })).toContain(
+      "does not take resource, verb",
+    );
     // The same args object written in another key order is one value, not a conflict.
     expect(
       yield* refusal("goat_call", {
