@@ -7,7 +7,7 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
-import { makeHarness, policy, selection, sessionAnswer, source } from "./adapterTesting.ts";
+import { makeHarness, policy, selection, sessionAnswer, source } from "./adapter.testkit.ts";
 import { ClaudeCloudError } from "./protocol.ts";
 import { LOGIN } from "./testing.ts";
 

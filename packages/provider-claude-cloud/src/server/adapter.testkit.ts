@@ -33,7 +33,7 @@ export const sessionAnswer = (prompt: string, reply: string, costUsd: number | n
   });
 
 /** The Claude Cloud adapter over fake CLI, PR and ledger seams, shared by the adapter tests. */
-export const INSTANCE = ProviderInstanceId.make("claude-cloud-test");
+const INSTANCE = ProviderInstanceId.make("claude-cloud-test");
 const THREAD = ThreadId.make("cloud-thread-test");
 export const policy = {
   runtimeMode: "approval-required" as const,
@@ -47,7 +47,7 @@ export const source = {
   sha: "a".repeat(40),
 };
 
-export const makeTurn = Effect.fnUntraced(function* (
+const makeTurn = Effect.fnUntraced(function* (
   providerThread: OrchestrationV2ProviderThread,
   ordinal = 1,
 ): Effect.fn.Return<Adapter.ProviderAdapterV2TurnInput> {
@@ -250,7 +250,8 @@ export const makeHarness = Effect.fnUntraced(function* () {
       if (task.progress === "Follow-up accepted") yield* Deferred.succeed(admitted, undefined);
     });
   const input = { ...(yield* makeTurn(providerThread)), commitCloudTask };
-  const subscription = yield* runtime.subscribeEvents!;
+  if (!runtime.subscribeEvents) return yield* Effect.die("The adapter must expose its events.");
+  const subscription = yield* runtime.subscribeEvents;
   const events: Adapter.ProviderAdapterV2Event[] = [];
   const terminal = yield* Deferred.make<void>();
   yield* subscription.events.pipe(

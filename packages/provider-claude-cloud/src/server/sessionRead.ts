@@ -19,7 +19,7 @@ import { readTeleportResult } from "./transcript.ts";
  * whole cost, so it runs the cheapest model with no tools and a short prompt. The fork never
  * reaches claude.ai, and GOAT deletes it, its project entry and its folder after every read.
  */
-export const SESSION_READ_PROMPT = "Reply with OK only.";
+const SESSION_READ_PROMPT = "Reply with OK only.";
 export const sessionReadArgs = (sessionId: string) => [
   "--print",
   "--teleport",

@@ -49,7 +49,7 @@ export function cloudFollowUpReason(
 
 export function cloudTaskResultText(
   task: OrchestrationV2CloudTask,
-  terminal?: { readonly resultText?: string | undefined },
+  terminal?: { readonly status: string; readonly resultText?: string | undefined },
 ) {
   const title =
     task.tracking === "link-only" && task.status === "running"

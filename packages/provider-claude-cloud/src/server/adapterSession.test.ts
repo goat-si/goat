@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { cloudTaskResultText } from "@goat/provider-core/server/cloudTask";
-import { makeHarness, sessionAnswer } from "./adapterTesting.ts";
+import { makeHarness, sessionAnswer } from "./adapter.testkit.ts";
 import { ClaudeCloudError } from "./protocol.ts";
 import { cloudAssistant, cloudPrompt, teleportTranscript } from "./testing.ts";
 
@@ -41,7 +41,7 @@ it.effect("a session that answers without a PR completes the turn with its full 
       });
       expect(task?.summary?.length).toBeLessThanOrEqual(4000);
       // The run's result message carries the whole reply and the session link.
-      expect(cloudTaskResultText(task!, { resultText: reply })).toBe(
+      expect(cloudTaskResultText(task!, { status: "completed", resultText: reply })).toBe(
         reply + "\n\n- Cloud task: https://claude.ai/code/session_ABC123",
       );
     }),

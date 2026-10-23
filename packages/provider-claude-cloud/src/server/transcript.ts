@@ -56,7 +56,7 @@ export interface ReplyAnchor {
   readonly latest?: boolean;
 }
 
-export type SessionReply =
+type SessionReply =
   | { readonly state: "waiting" }
   | { readonly state: "running" }
   | { readonly state: "replied"; readonly text: string }

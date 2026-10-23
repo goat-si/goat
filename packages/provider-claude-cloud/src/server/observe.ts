@@ -19,7 +19,7 @@ const PULL_REQUEST_INTERVAL_MS = 60_000;
  * Gaps between session reads; the last one repeats. Every read runs one small paid model turn,
  * so reads back off instead of following the PR poll's one-minute interval.
  */
-export const SESSION_READ_CADENCE_MS = [30_000, 60_000, 120_000, 240_000, 600_000] as const;
+const SESSION_READ_CADENCE_MS = [30_000, 60_000, 120_000, 240_000, 600_000] as const;
 /** Consecutive failed reads after which GOAT stops reading and says so. */
 const READ_FAILURE_LIMIT = 3;
 export const FOLLOW_UP_ACCEPTED = "Follow-up accepted";
