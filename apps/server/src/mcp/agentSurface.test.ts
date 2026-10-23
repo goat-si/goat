@@ -326,6 +326,7 @@ const HANDLER_VALIDATION: Readonly<Record<string, string>> = {
   "project.create": "A project made from a title takes no other settings.",
 };
 const IMAGE_TOOL_FAILURE = /^(Preview snapshot|Device screenshot) failed/;
+const OPERATION_NOT_ISSUED = "No operation with that id was issued here to this caller.";
 const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
   const content = result.content[0];
   const text = content?.type === "text" ? content.text : "";
@@ -337,6 +338,8 @@ const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
   // Some toolkits (pull requests, images) return the refusal message without its code.
   if (/approved for read-only access/.test(text)) return "read_only";
   if (/"code":"capability_denied"/.test(text)) return "denied";
+  // Operation verbs refuse a sampled handle in their handler, after access passed.
+  if (path.startsWith("operation.") && text.includes(OPERATION_NOT_ISSUED)) return "reached";
   if (IMAGE_TOOL_FAILURE.test(text)) return "reached";
   const code = /"code":"([a-z_]+)"/.exec(text)?.[1];
   if (code === "invalid_request" && path in HANDLER_VALIDATION) return "reached";
@@ -843,4 +846,33 @@ it.effect("goat_operation_cancel meets exactly the refusals of the kind's own ca
       expect(result).toEqual(direct);
     }
   }).pipe(Effect.provide(registeredWithOperationKey)),
+);
+it.effect("goat_call starts no long work it could not hand back a handle for", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const run = asCaller(callerScope({ thread: true }));
+    const envelope = yield* run(viaCall(server, "task.create", { task: "Review the change." }));
+    // An inert orchestrator would have died here had delegate_task run.
+    expect(envelope).toMatchObject({
+      status: "error",
+      error: { code: "unavailable", reason: "operation_unavailable", retryable: true },
+    });
+  }).pipe(
+    Effect.provide(
+      catalog.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            dependencies,
+            Layer.mock(ServerSecretStore.ServerSecretStore)({
+              getOrCreateRandom: (name) =>
+                Effect.fail(
+                  new ServerSecretStore.SecretStoreReadError({ resource: name, cause: "disk" }),
+                ),
+            }),
+          ),
+        ),
+        Layer.provideMerge(McpServer.McpServer.layer),
+      ),
+    ),
+  ),
 );

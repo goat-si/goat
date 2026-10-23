@@ -1,6 +1,7 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
 import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -136,6 +137,17 @@ export const layer = McpToolAccess.toLayer(
         );
       const args = input.args ?? {};
       const host = entry.hostRoutable && typeof args.host === "string" ? args.host : undefined;
+      // Work that runs on needs a handle; without one, starting it would strand the caller (D1).
+      if (yield* operations.unready(entry))
+        return {
+          status: "error",
+          error: {
+            code: "unavailable",
+            reason: "operation_unavailable",
+            message: `GOAT could not prepare a handle for this work, so ${entry.name} did not run. Try again.`,
+            retryable: true,
+          },
+        } satisfies AgentSurfaceResult;
       const result = yield* dispatchEnvelope(dispatch, entry.name, args, entry.effect, host);
       return yield* operations.withOperation(entry, result);
     });

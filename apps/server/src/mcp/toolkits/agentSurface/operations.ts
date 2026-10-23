@@ -175,5 +175,18 @@ export const makeOperations = (dispatch: ToolDispatch["Service"], tokens: Operat
     return { ...result, meta: { ...result.meta, operation } } satisfies AgentSurfaceResult;
   });
 
-  return { read, wait, cancel, withOperation };
+  /** True when `entry` starts long work and no handle can be issued for it now. */
+  const unready = (entry: AgentSurfaceRegistryEntry) =>
+    "operation" in entry && entry.operation !== undefined
+      ? tokens.ready.pipe(
+          Effect.as(false),
+          Effect.catch((error) =>
+            Effect.logWarning("Could not load the operation signing key.", error).pipe(
+              Effect.as(true),
+            ),
+          ),
+        )
+      : Effect.succeed(false);
+
+  return { read, wait, cancel, withOperation, unready };
 };

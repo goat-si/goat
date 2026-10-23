@@ -56,14 +56,14 @@ export const makeOperationTokens = Effect.gen(function* () {
   const store = yield* ServerSecretStore.ServerSecretStore;
   let cached: Uint8Array | undefined;
   // Loaded on first use, so registering the tools never touches the secret store.
-  const key = Effect.suspend(() =>
+  const loadKey = Effect.suspend(() =>
     cached !== undefined
       ? Effect.succeed(cached)
-      : store.getOrCreateRandom(KEY_NAME, 32).pipe(
-          Effect.tap((value) => Effect.sync(() => void (cached = value))),
-          Effect.orDie,
-        ),
+      : store
+          .getOrCreateRandom(KEY_NAME, 32)
+          .pipe(Effect.tap((value) => Effect.sync(() => void (cached = value)))),
   );
+  const key = loadKey.pipe(Effect.orDie);
   const sign = (secret: Uint8Array, body: string) =>
     NodeCrypto.createHmac("sha256", secret).update(body).digest();
 
@@ -111,7 +111,10 @@ export const makeOperationTokens = Effect.gen(function* () {
     } satisfies VerifiedOperation;
   });
 
-  return { issue, verify };
+  /** Fails, before any work starts, when no handle could be issued for it. */
+  const ready = loadKey.pipe(Effect.asVoid);
+
+  return { issue, verify, ready };
 });
 
 export type OperationTokens = Effect.Success<typeof makeOperationTokens>;
