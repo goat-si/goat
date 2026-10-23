@@ -82,6 +82,7 @@ const laterGoatMigrations = [
   [98, "DecisionInbox"],
   [99, "HumanStepRecords"],
   [100, "McpRequestReservations"],
+  [101, "RemoteReportInboxRunId"],
 ] as const;
 const preMemoryGoatNames = [
   "ServerActivityIndexes",

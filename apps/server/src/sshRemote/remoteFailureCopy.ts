@@ -1,3 +1,4 @@
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 /**
  * Plain sentences for a remote GOAT that did not answer. Node's fetch reports every transport
  * failure as "fetch failed" and keeps the reason in its cause chain, so the cause decides the
@@ -49,7 +50,7 @@ export function classifyRemoteTransportFailure(error: unknown): RemoteTransportF
 export function remoteUnavailableMessage(alias: string, error: unknown): string {
   switch (classifyRemoteTransportFailure(error)) {
     case "refused":
-      return `GOAT on ${alias} is not accepting connections; it may be stopped or restarting. goat_ssh_host_status shows whether its runtime is up.`;
+      return `GOAT on ${alias} is not accepting connections; it may be stopped or restarting. ${goatCallText("ssh.host_status")} shows whether its runtime is up.`;
     case "timeout":
       return `GOAT on ${alias} is too busy to answer: the request timed out. A stalled server is usually overloaded or has a large database; Fleet shows its load and storage.`;
     case "dropped":

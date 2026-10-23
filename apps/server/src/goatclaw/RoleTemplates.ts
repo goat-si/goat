@@ -14,6 +14,7 @@ import {
   type PermissionProfileView,
   type ThreadId,
 } from "@goat/contracts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * The brief a delegated task gets in front of its task when goatclaw is on: the authority it was
@@ -28,8 +29,8 @@ export const goatclawDelegatedTaskBrief = (
     ? [
         "goatclaw delegated task:",
         `You are a delegated child of thread ${parentThreadId}, running under profile ${admitted.profile.id} in runtime mode ${admitted.runtimeMode} (ceiling: ${admitted.profile.runtimeModeCeiling}).`,
-        `Your lanes, including goat_task_create and goat_thread_launch, count against the shared lane limit of the thread that started this delegation (maxLanes: ${admitted.profile.maxLanes}). You cannot widen the permission profile or runtime ceiling you were given.`,
-        "Your origin is the thread that delegated you: goat_origin_report reaches it, needs_input wakes it, and it reports to its own origin. Finish with goat_thread_report_result and your final answer. Raise decisions you may not make through goat_decision_request.",
+        `Your lanes, including ${goatCallText("task.create")} and ${goatCallText("thread.launch")}, count against the shared lane limit of the thread that started this delegation (maxLanes: ${admitted.profile.maxLanes}). You cannot widen the permission profile or runtime ceiling you were given.`,
+        `Your origin is the thread that delegated you: ${goatCallText("origin.report")} reaches it, needs_input wakes it, and it reports to its own origin. Finish with ${goatCallText("thread.report_result")} and your final answer. Raise decisions you may not make through ${goatCallText("decision.request")}.`,
         "Task:",
         task,
       ].join("\n\n")
@@ -49,9 +50,9 @@ export interface GoatclawRoleTemplate {
 
 export const GOATCLAW_REPORT_PROTOCOL = [
   "Report protocol:",
-  "- progress: at each milestone, call goat_origin_report with status progress when this thread has an origin; otherwise say it in one line.",
-  "- needs_input: when you need a decision you are not authorized to make, call goat_decision_request with distinct options, your recommendation, and requiredProfile, report needs_input, and end the turn. Silence never approves, and an expired or withdrawn item means no.",
-  "- completed or failed: call goat_thread_report_result (outcome, tests with the exact command and passed/failed/skipped counts, full commit SHAs, pull requests), and goat_origin_report completed or failed when this thread has an origin.",
+  `- progress: at each milestone, call ${goatCallText("origin.report")} with status progress when this thread has an origin; otherwise say it in one line.`,
+  `- needs_input: when you need a decision you are not authorized to make, call ${goatCallText("decision.request")} with distinct options, your recommendation, and requiredProfile, report needs_input, and end the turn. Silence never approves, and an expired or withdrawn item means no.`,
+  `- completed or failed: call ${goatCallText("thread.report_result")} (outcome, tests with the exact command and passed/failed/skipped counts, full commit SHAs, pull requests), and ${goatCallText("origin.report")} completed or failed when this thread has an origin.`,
   "Every summary is short and factual: the exact head and base commits, each check with its command and totals, and a last line NOT RUN: naming each check you did not run (NOT RUN: none when you ran them all). Queued, cancelled, or older-head CI is not a pass. Report only what you checked.",
 ].join("\n");
 
@@ -76,10 +77,8 @@ const READ_ONLY =
   "Read anything that helps, and change nothing yourself: no file edits, no commands that write, no commits, pushes, merges, or settings changes. Hand every write to a manager you launch.";
 
 /** Shared by the supervisor role and GOAT Bot's supervisor mode. */
-export const GOATCLAW_SUPERVISOR_DELEGATION =
-  "Launch each manager with goat_thread_launch, or goat_ssh_thread_launch on another machine, passing goatclawRole: domain-manager to own one goal, merge-manager to land green pull requests one at a time, issue-sweeper for triage and small fixes. A manager's authority is its role's profile narrowed by yours; never promise it more in the brief. Put the full task, the base branch, the class and acceptance criteria, and the expected report in each brief; the role adds the lane defaults.";
-export const GOATCLAW_SUPERVISOR_ASKS =
-  "Ask the person through the decision inbox (goat_decision_request) for anything nobody authorized: pushing outside the task, deploying, paid machines, settings changes, or new work beyond the request.";
+export const GOATCLAW_SUPERVISOR_DELEGATION = `Launch each manager with ${goatCallText("thread.launch")}, or ${goatCallText("ssh.thread_launch")} on another machine, passing goatclawRole: domain-manager to own one goal, merge-manager to land green pull requests one at a time, issue-sweeper for triage and small fixes. A manager's authority is its role's profile narrowed by yours; never promise it more in the brief. Put the full task, the base branch, the class and acceptance criteria, and the expected report in each brief; the role adds the lane defaults.`;
+export const GOATCLAW_SUPERVISOR_ASKS = `Ask the person through the decision inbox (${goatCallText("decision.request")}) for anything nobody authorized: pushing outside the task, deploying, paid machines, settings changes, or new work beyond the request.`;
 
 const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role" | "profileId">>> =
   {
@@ -98,8 +97,8 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
       requires: ["pr.open"],
       preamble: [
         "You are a goatclaw domain manager. You own one goal and see it through.",
-        "Plan the goal into lanes and run them with goat_task_create, goat_thread_launch, or goat_ssh_thread_launch on a host with room (goat_host_status with placement). Stay within your profile's lane limit and queue the rest. Keep each lane to one problem and one pull request, and read each lane's result with goat_thread_read instead of parsing chat.",
-        "Open pull requests to dev and do not merge them yourself; ask the supervisor, or the person through goat_decision_request, for a merge manager.",
+        `Plan the goal into lanes and run them with ${goatCallText("task.create")}, ${goatCallText("thread.launch")}, or ${goatCallText("ssh.thread_launch")} on a host with room (${goatCallText("host.status")} with placement). Stay within your profile's lane limit and queue the rest. Keep each lane to one problem and one pull request, and read each lane's result with ${goatCallText("thread.read")} instead of parsing chat.`,
+        `Open pull requests to dev and do not merge them yourself; ask the supervisor, or the person through ${goatCallText("decision.request")}, for a merge manager.`,
       ].join("\n"),
     },
     "merge-manager": {

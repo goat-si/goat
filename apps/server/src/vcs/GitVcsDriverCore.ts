@@ -318,7 +318,7 @@ export function existingBranchConflictDetail(input: {
     worktreePath: input.worktreePath ?? input.suggestedPath,
     branch: input.branch,
   });
-  const relaunch = `relaunch with workspaceStrategy (goat_ssh_thread_launch: workspace) ${workspace}`;
+  const relaunch = `relaunch with workspaceStrategy (workspace for ssh.thread_launch through goat_call) ${workspace}`;
   const resume =
     input.worktreePath === null
       ? `To continue it, run git worktree add "${input.suggestedPath}" ${input.branch}, then ${relaunch}.`

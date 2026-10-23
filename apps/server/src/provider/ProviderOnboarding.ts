@@ -41,6 +41,7 @@ import { authorizeApprovalRequest } from "../sshRemote/SshHostAuthorization.ts";
 import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
 import * as ProviderAuthService from "./ProviderAuthService.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * How each driver signs in when its snapshot does not say. `command` is the
@@ -283,7 +284,7 @@ const make = Effect.gen(function* () {
         const session = yield* managingSession(scope);
         if (Option.isNone(session))
           return error("not_found", "This caller owns no sign-in flows.", {
-            instruction: "Call goat_provider_addable_list to read sign-in state.",
+            instruction: `Call ${goatCallText("provider.addable_list")} to read sign-in state.`,
             path: "provider.addable_list",
           });
         const state = yield* auth.subscribe({ instanceId: input.instanceId }, session.value).pipe(

@@ -139,6 +139,7 @@ import { makeRequestSecret } from "./SecretRequestTool.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
 import { statusFromShell } from "./threadStatus.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // Resolved per call: RemoteDispatchCoordinator → LaunchWatchService → PressureNudger →
 // HostStatusMcpService → HostThreadsMcpService → this module is an import cycle, so the
@@ -2657,7 +2658,7 @@ const make = Effect.gen(function* () {
             summary:
               refusal !== null
                 ? `Remote launch refused on host ${host}; nothing was launched (${refusal}).`
-                : `launch outcome unknown; inspect goat_thread_list with host ${host} before retrying`,
+                : `launch outcome unknown; inspect ${goatCallText("thread.list")} with host ${host} before retrying`,
           }).pipe(
             Effect.provideService(
               ThreadManagementService.ThreadManagementService,
@@ -3261,7 +3262,7 @@ const make = Effect.gen(function* () {
         if ((yield* permissions.resolve(scope, parent.thread.runtimeMode)).enabled)
           return yield* failure(
             "capability_denied",
-            "With goatclaw enabled, use goat_thread_launch or goat_task_create so every child inherits its permission profile.",
+            `With goatclaw enabled, use ${goatCallText("thread.launch")} or ${goatCallText("task.create")} so every child inherits its permission profile.`,
           );
         const parentNodeId = parentRun.rootNodeId;
         const providers = yield* loadProviders;
@@ -3835,7 +3836,7 @@ const make = Effect.gen(function* () {
       if (run.status !== "failed" || run.workspacePreparation === undefined)
         return yield* failure(
           "invalid_request",
-          `Run ${run.id} did not fail while preparing its workspace, so there is nothing to retry. Read the thread and send it a new message with goat_thread_send instead.`,
+          `Run ${run.id} did not fail while preparing its workspace, so there is nothing to retry. Read the thread and send it a new message with ${goatCallText("thread.send")} instead.`,
         );
       yield* threadLaunch
         .retryPreparation({

@@ -42,6 +42,7 @@ import {
   withHeldContext,
 } from "./pullRequestWatch.ts";
 import { pullRequestWakeMessageId } from "./goat/PullRequestWatchWakes.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * Checks take minutes, so a faster pass mostly spends the host's rate limit,
@@ -303,7 +304,7 @@ export const make = Effect.gen(function* () {
   const giveUp = (target: WatchTarget) =>
     record(target, null, {
       text: withHeldContext(
-        `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call goat_pull_request_watch to watch it again.`,
+        `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call ${goatCallText("pull_request.watch")} to watch it again.`,
         target.watch.heldContext,
       ),
       notification: {
@@ -412,7 +413,7 @@ export const make = Effect.gen(function* () {
       null,
       {
         text: withHeldContext(
-          `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call goat_pull_request_watch if it reopens.`,
+          `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call ${goatCallText("pull_request.watch")} if it reopens.`,
           target.watch.heldContext,
         ),
         notification: {

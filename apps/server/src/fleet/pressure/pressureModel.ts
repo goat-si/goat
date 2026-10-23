@@ -807,3 +807,7 @@ export function pressureNudgeText(input: PressureTextInput): {
 }
 
 export const pressureHostKey = (host: string | null) => host ?? FLEET_LOCAL_HOST_KEY;
+
+/** Pressure wakes are keyed host-pressure:<host>:…; TurnDigest keeps one per host. */
+export const HOST_PRESSURE_KEY_PREFIX = "host-pressure:";
+export const HOST_PRESSURE_MESSAGE_PREFIX = `message:${HOST_PRESSURE_KEY_PREFIX}`;
