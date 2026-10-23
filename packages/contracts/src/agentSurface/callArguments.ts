@@ -1,4 +1,5 @@
 import { resolveAgentSurfaceEntry } from "./resolve.ts";
+import { metaSurfaceEntries } from "./surfaceEntries.ts";
 
 /**
  * The argument shapes agents send goat_describe and goat_call first, mapped onto path and args:
@@ -9,6 +10,8 @@ import { resolveAgentSurfaceEntry } from "./resolve.ts";
  */
 const PATH_KEYS = ["path", "name", "tool"] as const;
 const ARGS_KEYS = ["args", "arguments", "input"] as const;
+const CALL = metaSurfaceEntries.call.name;
+const DESCRIBE = metaSurfaceEntries.describe.name;
 
 export type SurfaceArguments =
   | { readonly ok: true; readonly payload: unknown }
@@ -54,17 +57,16 @@ const pick = (
  * not know, a lone verb among them, are left for the undeclared-argument refusal.
  */
 export const surfaceArguments = (tool: string, payload: unknown): SurfaceArguments => {
-  if ((tool !== "goat_call" && tool !== "goat_describe") || !isRecord(payload))
-    return { ok: true, payload };
+  if ((tool !== CALL && tool !== DESCRIBE) || !isRecord(payload)) return { ok: true, payload };
   const { resource, verb, ...rest } = payload;
   // resource with a verb is a path; for goat_describe a resource alone is one too. A verb that is
   // not a string stays behind, so the undeclared-argument refusal names it.
   const parts =
     typeof resource === "string" &&
-    (typeof verb === "string" || (tool === "goat_describe" && verb === undefined))
+    (typeof verb === "string" || (tool === DESCRIBE && verb === undefined))
       ? [["resource", typeof verb === "string" ? `${resource}.${verb}` : resource] as const]
       : [];
-  const argsKeys: ReadonlyArray<string> = tool === "goat_call" ? ARGS_KEYS : [];
+  const argsKeys: ReadonlyArray<string> = tool === CALL ? ARGS_KEYS : [];
   const present = (keys: ReadonlyArray<string>) =>
     keys.filter((key) => Object.hasOwn(rest, key)).map((key) => [key, rest[key]] as const);
   const path = pick([...present(PATH_KEYS), ...parts], pathTarget);
@@ -88,7 +90,7 @@ export const surfaceArguments = (tool: string, payload: unknown): SurfaceArgumen
 export const goatCallTarget = (
   input: unknown,
 ): { readonly path?: unknown; readonly args?: unknown } => {
-  const folded = surfaceArguments("goat_call", input);
+  const folded = surfaceArguments(CALL, input);
   return folded.ok && isRecord(folded.payload)
     ? { path: folded.payload.path, args: folded.payload.args }
     : {};
