@@ -166,7 +166,7 @@ const CHANNEL_LABELS: Record<DesktopUpdateChannel, string> = {
   nightly: "Nightly",
 };
 
-export function desktopChannelLabel(channel: DesktopUpdateChannel): string {
+function desktopChannelLabel(channel: DesktopUpdateChannel): string {
   return CHANNEL_LABELS[channel];
 }
 

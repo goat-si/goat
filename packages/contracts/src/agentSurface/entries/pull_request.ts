@@ -1,0 +1,103 @@
+import { entry } from "../entry.ts";
+
+export const pullRequestEntries = {
+  "pull_request.link": entry({
+    resource: "pull_request",
+    verb: "link",
+    name: "link_pull_request",
+    toolkit: "pullRequests",
+    summary: "Link pull request to thread",
+    description:
+      "Register every pull request you open for this thread, including each layer of a stack, right after creating it. Links a pull request to this thread so GOAT tracks it, shows its status beside the thread, and settles the thread when it merges. By default, creating or agent-linking an open pull request also starts an automatic watch without keeping the thread in the user's Working list; use goat_pull_request_watch for an explicit watch. Pass the URL, or repository plus number. Linking an already-linked pull request succeeds with alreadyLinked=true.",
+    effect: "write",
+    capability: "pr.open",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Link pull request to thread",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
+  "pull_request.unlink": entry({
+    resource: "pull_request",
+    verb: "unlink",
+    name: "unlink_pull_request",
+    toolkit: "pullRequests",
+    summary: "Unlink pull request from thread",
+    description:
+      "Remove a pull request link from this thread, for example after closing a pull request you opened by mistake. Pass the URL, or repository plus number. Unlinking a pull request that is not linked succeeds with wasLinked=false.",
+    effect: "destructive",
+    capability: "pr.open",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Unlink pull request from thread",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
+  "pull_request.list": entry({
+    resource: "pull_request",
+    verb: "list",
+    name: "list_thread_pull_requests",
+    toolkit: "pullRequests",
+    summary: "List thread pull requests",
+    description:
+      "List the pull requests linked to a thread (omit threadId for this thread) with their last known host state, and how they chain into stacks (bottom to top). Register every pull request you open for this thread, including each layer of a stack, right after creating it.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "List thread pull requests",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
+  "pull_request.watch": entry({
+    resource: "pull_request",
+    verb: "watch",
+    name: "watch_pull_request",
+    toolkit: "pullRequests",
+    summary: "Watch pull request",
+    description:
+      "Have GOAT watch an open pull request for this thread, linking it first if needed. GOAT checks it every two minutes and follows the event policy: react wakes you, keep_as_context records timeline context for the next wake without starting a turn, and ignore drops the update. By default, check failures, passing required checks, and other people's comments or reviews wake you; bots are ignored unless listed in Settings under Bots that count as people, and conflicts do not wake threads idle for more than 3 days. Use this to monitor or babysit a pull request instead of polling, sleeping, or running a watcher. Only comments posted after this call wake you, so handle the existing ones first, then end your turn. A wake is news, not a merge decision: check readiness yourself before merging. This call makes the watch explicit and keeps the thread in the user's Working list; automatic watches started on create or agent-link do not. When you hand the work back to the user, call goat_pull_request_unwatch first so the thread returns to their inbox. Watching ends when the pull request merges or closes, when its thread settles or is archived, when GOAT fails to read it 8 times in a row (a host rate limit only delays it), when the user stops this thread, or when you call goat_pull_request_unwatch. Unsettle the thread before starting a new watch. A subagent cannot watch: its parent thread owns the pull request.",
+    effect: "write",
+    capability: "pr.open",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Watch pull request",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
+  "pull_request.unwatch": entry({
+    resource: "pull_request",
+    verb: "unwatch",
+    name: "unwatch_pull_request",
+    toolkit: "pullRequests",
+    summary: "Stop watching pull request",
+    description:
+      "Stop either an automatic or explicit GOAT watch of a pull request for this thread. The pull request stays linked. Pass the URL, or repository plus number.",
+    effect: "write",
+    capability: "pr.open",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Stop watching pull request",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
+} as const;

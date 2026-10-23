@@ -118,7 +118,7 @@ type RemoteFailure = {
 const classify = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailure => {
   const message = error.message;
   if (error._tag !== "SshRemoteDispatchError") return { status: "refused", message };
-  if (error.reason === "remote_refused" && message.includes(" does not have "))
+  if (Dispatch.refusedByRemote(error.reason) && message.includes(" does not have "))
     return { status: "update_runtime", message };
   if (error.reason === "host_unavailable" && message.includes("goat_ssh_host_prepare"))
     return { status: "not_ready", message };
