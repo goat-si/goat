@@ -556,7 +556,10 @@ it.effect("refuses a thread's replay once its interaction mode drops to plan", (
   Effect.gen(function* () {
     yield* seed;
     expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 1 });
-    yield* Ref.update(yield* ThreadModes, (modes) => ({ ...modes, interactionMode: "plan" }));
+    yield* Ref.update(yield* ThreadModes, (modes) => ({
+      ...modes,
+      interactionMode: "plan" as const,
+    }));
     expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toMatchObject({
       code: "capability_denied",
     });
