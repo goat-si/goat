@@ -206,5 +206,33 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.notInclude(events, "stop");
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
+
+    it.live.each([
+      // The same serve command run by someone else is not this user's runtime.
+      { name: "another user runs it", change: "uid" },
+      // A completion marker that does not name the version means GOAT never finished installing it.
+      { name: "its install never completed", change: "install" },
+    ] as const)("a hand-written identity is not repaired when $name", ({ change }) =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({ ...compatible, kind: "managed" });
+        yield* f.fs.writeFileString(`${f.state}/identity`, handWrittenIdentity(f));
+        if (change === "uid")
+          yield* f.fs.writeFileString(
+            `${f.test}/foreign-uid`,
+            `${(process.getuid?.() ?? 0) + 1}\n`,
+          );
+        else yield* f.fs.writeFileString(`${f.old}/.install-complete`, "");
+        const before = yield* f.snapshot;
+        const result = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.deepEqual(yield* f.snapshot, before);
+        assert.isFalse(yield* f.fs.exists(`${f.state}/identity.unverified`));
+        const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
+        assert.notInclude(events, "drain");
+        assert.notInclude(events, "stop");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
   },
 );
