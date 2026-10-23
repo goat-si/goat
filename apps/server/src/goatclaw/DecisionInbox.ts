@@ -26,7 +26,14 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
-import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import { clientRuntimeModeCeiling, type McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import {
+  PERSON,
+  canResolveHumanStep,
+  mcpResolver,
+  type HumanStep,
+  type HumanStepResolver,
+} from "../handoffs/HumanStepAuthority.ts";
 import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import {
@@ -108,7 +115,6 @@ const scopeOf = (caller: DecisionCaller): McpInvocationScope =>
           sessionId: caller.sessionId,
           label: "Decision inbox",
           access: "full-access",
-          approvals: true,
         },
         grantedScopes: caller.scopes,
       };
@@ -120,6 +126,10 @@ const actorOf = (caller: DecisionCaller) =>
       : `thread:${caller.scope.thread.threadId}`;
 const isOwner = (caller: DecisionCaller) =>
   caller.kind === "client" && caller.scopes.includes(AuthSettingsWriteScope);
+const resolverOf = (caller: DecisionCaller): HumanStepResolver =>
+  caller.kind === "client" ? PERSON : mcpResolver(caller.scope);
+const stepOf = (item: DecisionItem): HumanStep =>
+  "pending" in item && item.pending?.approval !== undefined ? "runtime_approval" : "person_only";
 const writeAccess = (caller: DecisionCaller) =>
   caller.kind === "client"
     ? caller.scopes.includes(AuthOrchestrationOperateScope)
@@ -621,9 +631,20 @@ const make = Effect.gen(function* () {
       yield* writeAccess(caller);
       const item = yield* get(caller, input.id);
       if (item.status !== "open") return yield* invalid("This decision is no longer open.");
-      if (item.humanRequired && caller.kind !== "client")
-        return yield* denied("This item requires a person in a client; forward it to the user.");
-      const profile = yield* requireProfile(caller, item.requiredProfile);
+      const resolver = resolverOf(caller);
+      const step = stepOf(item);
+      if (item.humanRequired && !canResolveHumanStep(resolver, step))
+        return yield* denied(
+          step === "runtime_approval"
+            ? "Approvals need a person in a client, or an MCP client token holding orchestration:approve; forward it to the user."
+            : "This item requires a person in a client; forward it to the user.",
+        );
+      // An approve-scoped outside client answers approvals here as it does through
+      // goat_pending_request_respond: under its own ceiling, not a goatclaw profile.
+      const outsideApprover = resolver.kind === "outside_client" && step === "runtime_approval";
+      const profile = outsideApprover
+        ? "approver"
+        : yield* requireProfile(caller, item.requiredProfile);
       if ("pending" in item && item.pending !== undefined) {
         if (input.optionId !== undefined)
           return yield* invalid("Answer projected questions with answers or decision.");
@@ -667,16 +688,22 @@ const make = Effect.gen(function* () {
               ...(input.decision === undefined ? {} : { decision: input.decision }),
             },
             commandId,
+            caller.kind === "client" ? PERSON : undefined,
           )
           .pipe(
             Effect.provideService(
               DispatchModeLimit,
               caller.kind === "client"
                 ? undefined
-                : {
-                    runtimeMode: effective.runtimeMode,
-                    interactionMode: callerThread?.interaction_mode ?? "default",
-                  },
+                : outsideApprover
+                  ? {
+                      runtimeMode: clientRuntimeModeCeiling(scope.client),
+                      interactionMode: "default",
+                    }
+                  : {
+                      runtimeMode: effective.runtimeMode,
+                      interactionMode: callerThread?.interaction_mode ?? "default",
+                    },
             ),
           );
         yield* reconcileAudits();

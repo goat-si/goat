@@ -350,6 +350,73 @@ it.effect("projects approvals as human-only even for an owner-profile MCP caller
   }).pipe(Effect.provide(fixture({ profile: "owner" }))),
 );
 
+const outsideClient = (approvals: boolean): Inbox.DecisionCaller => ({
+  kind: "agent",
+  scope: {
+    environmentId: EnvironmentId.make("test"),
+    issuedAt: 0,
+    requestNamespace: "outside",
+    capabilities: new Set(["orchestration"]),
+    thread: undefined,
+    client: {
+      sessionId: "approver",
+      label: "Grok Bot",
+      access: "full-access",
+      ...(approvals ? { approvals: true } : {}),
+    },
+  },
+});
+
+it.effect(
+  "lets an approve-scoped outside client answer a projected approval under its own ceiling",
+  () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make<
+        ReadonlyArray<{ readonly resolver: unknown; readonly limit: unknown }>
+      >([]);
+      yield* Effect.gen(function* () {
+        yield* seedPending("command");
+        const inbox = yield* Inbox.DecisionInbox;
+        const approver = outsideClient(true);
+        const item = (yield* inbox.list(approver, {})).items[0]!;
+        expect(item).toMatchObject({ humanRequired: true, requiredProfile: "owner" });
+        for (const refused of [outsideClient(false), agent])
+          expect(
+            (yield* Effect.flip(
+              inbox.answer(refused, { id: item.id, decision: "accept", reason: "Agent" }),
+            )).code,
+          ).toBe("capability_denied");
+        expect(yield* Ref.get(calls)).toEqual([]);
+        // The default worker profile would refuse an owner item; the approver needs no profile.
+        expect(
+          (yield* inbox.answer(approver, { id: item.id, decision: "accept", reason: "Bot" }))
+            .status,
+        ).toBe("answered");
+        yield* inbox.answer(owner, { id: item.id, decision: "accept", reason: "Person" });
+        expect(yield* Ref.get(calls)).toEqual([
+          {
+            resolver: undefined,
+            limit: { runtimeMode: "full-access", interactionMode: "default" },
+          },
+          { resolver: { kind: "person" }, limit: undefined },
+        ]);
+      }).pipe(
+        Effect.provide(
+          fixture({
+            pending: Layer.mock(PendingQuestions.PendingQuestionsMcpService)({
+              respond: (_scope, _input, _commandId, resolver) =>
+                Effect.gen(function* () {
+                  const limit = yield* DispatchModeLimit;
+                  yield* Ref.update(calls, (all) => [...all, { resolver, limit }]);
+                  return { sequence: 1 };
+                }),
+            }),
+          }),
+        ),
+      );
+    }),
+);
+
 it.effect(
   "persists delivery before sending and retries the same message id after a transient failure",
   () =>

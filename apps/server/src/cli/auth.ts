@@ -24,6 +24,7 @@ import {
   formatSessionList,
 } from "../cliAuthFormat.ts";
 import * as ServerConfig from "../config.ts";
+import { MCP_CLIENT_SUBJECT } from "../auth/mcpClientSubject.ts";
 import { authScopesFlag } from "./authScopes.ts";
 import {
   authLocationFlags,
@@ -258,8 +259,6 @@ const sessionCommand = Command.make("session").pipe(
   Command.withSubcommands([sessionIssueCommand, sessionListCommand, sessionRevokeCommand]),
 );
 
-/** The subject `/mcp` admits from outside a thread; see EnvironmentAuth. */
-const MCP_CLIENT_SUBJECT = "mcp-client";
 const MCP_CLIENT_TOKEN_TTL = Duration.days(90);
 
 const clientCreateCommand = Command.make("create", {
