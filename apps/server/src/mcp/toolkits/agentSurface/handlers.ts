@@ -1,11 +1,4 @@
-import { OrchestratorMcpFailure } from "@goat/contracts";
 import {
-  type AgentSurfaceEntry,
-  agentSurfaceRegistry,
-  type AgentSurfaceRegistryEntry,
-} from "@goat/contracts/agentSurface";
-import {
-  canonicalToolName,
   deprecatedReplacement,
   listedToolName,
   resolveAgentSurfaceEntry,
@@ -13,7 +6,6 @@ import {
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
 
-import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as Handoffs from "../../../handoffs/Handoffs.ts";
 import { makeHandoffReader } from "../../operations/handoffReads.ts";
@@ -21,86 +13,11 @@ import { makeOperationTokens } from "../../operations/OperationTokens.ts";
 import { ToolDispatch } from "../../ToolDispatch.ts";
 import { dispatchEnvelope, envelopeError } from "./dispatchEnvelope.ts";
 import { makeOperations } from "./operations.ts";
-import { AgentSurfaceToolkit, type DescribeResult } from "./tools.ts";
+import { makeDescribe } from "./describe.ts";
+import { AgentSurfaceToolkit } from "./tools.ts";
 
-const entries: ReadonlyArray<AgentSurfaceRegistryEntry> = Object.values(agentSurfaceRegistry);
-const guideOf = (entry: AgentSurfaceEntry) => entry.guide;
-
-// FNV-1a over what an agent relies on; stable across processes, unlike object identity.
-const surfaceVersion = (() => {
-  let hash = 0x811c9dc5;
-  for (const entry of entries)
-    for (const char of `${entry.path}|${entry.name}|${entry.effect}|${entry.requires}|${entry.description}|${guideOf(entry) ?? ""}\n`) {
-      hash ^= char.charCodeAt(0);
-      hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-  return hash.toString(16).padStart(8, "0");
-})();
 // Calling these through goat_call would only nest the same checks, or recurse.
 const NOT_CALLABLE: ReadonlySet<string> = new Set(["surface.call", "surface.eval"]);
-
-/** goat_describe's query returns this many paths and reads one more to say whether others match. */
-const SEARCH_LIMIT = 20;
-
-/**
- * Every word must appear in the path, summary, description or guide; a word in the path counts
- * most. Ties keep registry order by path, so the same query always answers the same way.
- */
-export const search = <Entry extends AgentSurfaceEntry & { readonly path: string }>(
-  candidates: ReadonlyArray<Entry>,
-  query: string,
-) => {
-  const words = query
-    .toLowerCase()
-    .split(/\s+/u)
-    .filter((word) => word !== "");
-  const scored: Array<{ readonly entry: Entry; readonly score: number }> = [];
-  for (const entry of candidates) {
-    const path = `${entry.path} ${entry.name}`.toLowerCase();
-    const summary = entry.summary.toLowerCase();
-    // Text moved from a description into its guide must stay findable.
-    const description = `${entry.description} ${guideOf(entry) ?? ""}`.toLowerCase();
-    let score = 0;
-    for (const word of words) {
-      const points = path.includes(word)
-        ? 3
-        : summary.includes(word)
-          ? 2
-          : description.includes(word)
-            ? 1
-            : 0;
-      if (points === 0) {
-        score = 0;
-        break;
-      }
-      score += points;
-    }
-    if (score > 0) scored.push({ entry, score });
-  }
-  return scored
-    .toSorted((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path))
-    .map(({ entry }) => entry);
-};
-
-type Availability = { readonly now: boolean; readonly reason?: string };
-type Scope = McpInvocationContext.McpInvocationScope;
-
-/** Only the static refusals this server is sure of; handlers still check at call time. */
-const availability = (
-  entry: AgentSurfaceRegistryEntry,
-  scope: Scope,
-  served: boolean,
-): Availability => {
-  if (!served) return { now: false, reason: "This GOAT server does not serve it." };
-  if (entry.resource === "surface") return { now: true };
-  if (entry.requires === "thread" && scope.thread === undefined)
-    return { now: false, reason: "Needs an agent running inside a GOAT thread." };
-  if (entry.requires === "client" && scope.thread !== undefined)
-    return { now: false, reason: "Only an outside MCP client can call it." };
-  if (entry.effect !== "read" && scope.client?.access === "read-only")
-    return { now: false, reason: "This MCP client was approved for read-only access." };
-  return { now: true };
-};
 
 export const layer = McpToolAccess.toLayer(
   AgentSurfaceToolkit,
@@ -112,84 +29,7 @@ export const layer = McpToolAccess.toLayer(
       makeHandoffReader(yield* Effect.serviceOption(Handoffs.Handoffs)),
     );
 
-    const summary = (entry: AgentSurfaceRegistryEntry, scope: Scope) => ({
-      path: entry.path,
-      name: listedToolName(entry),
-      summary: entry.summary,
-      effect: entry.effect,
-      available: availability(entry, scope, dispatch.served(listedToolName(entry)) !== undefined),
-    });
-
-    const describe = Effect.fn("AgentSurface.describe")(function* (input: {
-      readonly path?: string | undefined;
-      readonly query?: string | undefined;
-    }) {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      if (input.query !== undefined) {
-        const within =
-          input.path === undefined
-            ? entries
-            : entries.filter((candidate) => candidate.resource === input.path);
-        if (within.length === 0)
-          return yield* new OrchestratorMcpFailure({
-            code: "invalid_request",
-            message: `query searches every path or one resource, and GOAT has no resource named ${input.path}.`,
-          });
-        const matches = search(within, input.query);
-        return {
-          depth: "search" as const,
-          query: input.query,
-          entries: matches.slice(0, SEARCH_LIMIT).map((entry) => summary(entry, scope)),
-          truncated: matches.length > SEARCH_LIMIT,
-        } satisfies DescribeResult;
-      }
-      if (input.path === undefined) {
-        const resources = new Map<string, Array<string>>();
-        for (const entry of entries)
-          resources.set(entry.resource, [...(resources.get(entry.resource) ?? []), entry.verb]);
-        return {
-          depth: "surface" as const,
-          surfaceVersion,
-          resources: [...resources.entries()]
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([resource, verbs]) => ({ resource, verbs: verbs.sort() })),
-          next: 'Pass a resource ("thread") for its paths, or a path ("thread.send") for its schema and availability. Call any path with goat_call.',
-        } satisfies DescribeResult;
-      }
-      const entry = resolveAgentSurfaceEntry(input.path);
-      if (entry !== undefined) {
-        const tool = dispatch.served(listedToolName(entry));
-        return {
-          depth: "path" as const,
-          entry: {
-            ...summary(entry, scope),
-            canonicalName: canonicalToolName(entry),
-            legacyNames: entry.legacyNames,
-            description: entry.description,
-            ...(guideOf(entry) === undefined ? {} : { guide: guideOf(entry) }),
-            hostRoutable: entry.hostRoutable,
-            requires: entry.requires,
-            dryRun: entry.dryRun,
-            humanSteps: entry.humanSteps,
-            inputSchema: tool?.inputSchema ?? null,
-            outputSchema: tool?.outputSchema ?? null,
-          },
-        } satisfies DescribeResult;
-      }
-      const inResource = entries.filter((candidate) => candidate.resource === input.path);
-      if (inResource.length === 0)
-        return yield* new OrchestratorMcpFailure({
-          code: "not_found",
-          message: `GOAT has no resource or path named ${input.path}. Call goat_describe without path to list them.`,
-        });
-      return {
-        depth: "resource" as const,
-        resource: input.path,
-        entries: inResource
-          .toSorted((a, b) => a.verb.localeCompare(b.verb))
-          .map((candidate) => summary(candidate, scope)),
-      } satisfies DescribeResult;
-    });
+    const describe = makeDescribe(dispatch);
 
     const call = Effect.fn("AgentSurface.call")(function* (input: {
       readonly path: string;
@@ -200,7 +40,7 @@ export const layer = McpToolAccess.toLayer(
         return envelopeError(
           "not_found",
           "unknown_path",
-          `GOAT has no capability named ${input.path}. Find paths with goat_describe.`,
+          `No GOAT path or tool is named ${input.path}. Search with goat_describe { query }.`,
         );
       const name = listedToolName(entry);
       if (NOT_CALLABLE.has(entry.path))

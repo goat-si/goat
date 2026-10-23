@@ -16,22 +16,15 @@ import {
   type Inventory,
   type SourceRef,
   collectInventory,
-  findLine,
   readLines,
   repoRoot,
   sourceFiles,
 } from "./inventory.ts";
+import { at, files, ref } from "./citations.ts";
 import { SHIPPED_TOOL_NAMES, toolTokensIn } from "./listedNames.ts";
 import { code, list, pct, table, TICK } from "./markdown.ts";
 
 const OUTPUT = "docs/internals/agent-surface-audit.md";
-
-// A file, plus the symbol that names the evidence when one does. Line numbers would move with
-// every unrelated edit and make open pull requests conflict in the generated page (#1017).
-const ref = (source: SourceRef | null) => (source ? source.path : "(not found)");
-const at = (file: string, pattern: RegExp, symbol?: string) =>
-  findLine(file, pattern) === null ? "(not found)" : file + (symbol ? " " + code(symbol) : "");
-const files = (refs: ReadonlyArray<SourceRef>) => [...new Set(refs.map((source) => source.path))];
 
 interface Mention {
   readonly token: string;
@@ -477,6 +470,7 @@ export function render(inventory: Inventory): string {
       at(
         "apps/server/src/mcp/toolkits/core.test.ts",
         /filter\(\(name\) => name\.startsWith\("goat_"\)\)/,
+        "publishes unique tool names",
       ) +
       "). " +
       list(
@@ -538,7 +532,7 @@ export function render(inventory: Inventory): string {
       " with JSON in a text block and no " +
       code("structuredContent") +
       " (" +
-      at("apps/server/src/mcp/toolkits/core.test.ts", /Effect returns a declared tool failure/) +
+      at("apps/server/src/mcp/toolkits/core.test.ts", /const declaredFailure/, "declaredFailure") +
       "), so an agent parses text to branch on an error.",
     "- **" +
       errorFamilies.size +
@@ -971,7 +965,11 @@ function rankedFixes(
         " parameters have no description, and " +
         n.allUndescribed +
         " tools describe none. Extend the catalog test at " +
-        at("apps/server/src/mcp/toolkits/core.test.ts", /publishes unique tool names/) +
+        at(
+          "apps/server/src/mcp/toolkits/core.test.ts",
+          /publishes unique tool names/,
+          "publishes unique tool names",
+        ) +
         " to fail on an undescribed field.",
     },
     {
