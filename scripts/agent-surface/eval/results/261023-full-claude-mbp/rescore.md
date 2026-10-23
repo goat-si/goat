@@ -13,7 +13,10 @@ reported as `<instance> / <model>`, `<instance>/<model>`, or the bare id.
 - read-control and wait-running rows are copied unchanged.
 
 These are reference numbers from a one-arm campaign on task set 2, not paired with any other arm.
-[report-rescored.md](report-rescored.md) is built from rescored.jsonl:
+[report.md](report.md) is the original output of report.ts at bb7f97ae2 and is kept as it was;
+today's report.ts adds the reference label, the campaign id, and a not_run section for
+launch-and-wait. [report-rescored.md](report-rescored.md) is built from rescored.jsonl with
+today's report.ts:
 
 ```sh
 node scripts/agent-surface/eval/report.ts --campaign scripts/agent-surface/eval/results/261023-full-claude-mbp/campaign.json \

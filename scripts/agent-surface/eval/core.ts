@@ -617,6 +617,9 @@ export interface RunRow {
 export interface Cleanup {
   /** Delegated children still unfinished when the runner stopped the thread. */
   readonly unfinishedTasks: ReadonlyArray<string>;
+  /** Threads a fixture started for this run; they do not stop with the eval thread. */
+  readonly fixtureThreads?: ReadonlyArray<string>;
+  /** True once every thread reached a terminal state, not merely accepted the interrupt. */
   readonly stopped: boolean;
   readonly error: string | null;
 }
@@ -748,7 +751,14 @@ export const summarizeTask = (
   if (baseline.clean === 0 || candidate.clean === 0)
     return { ...base, verdict: "not_run", reasons: ["an arm has no clean runs"] };
   if (campaign.gate === "listing") return { ...base, ...listingVerdict(task, baseline, candidate) };
-  if (task.claim === "no_gain")
+  const reasons: Array<string> = [];
+  if (succeeded(baseline) < MIN_CLEAN_RUNS || succeeded(candidate) < MIN_CLEAN_RUNS)
+    reasons.push("fewer than " + MIN_CLEAN_RUNS + " successful clean runs in an arm");
+  // A control whose runs failed has no turns to compare, which must not read as "no gain".
+  if (task.claim === "no_gain") {
+    if ((candidate.failureRate ?? 1) > (baseline.failureRate ?? 0))
+      reasons.push("the candidate failed more often");
+    if (reasons.length > 0) return { ...base, verdict: "fail", reasons };
     return fewerTurns(baseline, candidate)
       ? {
           ...base,
@@ -756,9 +766,7 @@ export const summarizeTask = (
           reasons: ["the control shows a gain; check what is counted"],
         }
       : { ...base, verdict: "as_expected", reasons: [] };
-  const reasons: Array<string> = [];
-  if (succeeded(baseline) < MIN_CLEAN_RUNS || succeeded(candidate) < MIN_CLEAN_RUNS)
-    reasons.push("fewer than " + MIN_CLEAN_RUNS + " successful clean runs in an arm");
+  }
   if (!fewerTurns(baseline, candidate))
     reasons.push("the candidate's most turns are not a third below the baseline's fewest");
   if ((candidate.failureRate ?? 1) > (baseline.failureRate ?? 0))

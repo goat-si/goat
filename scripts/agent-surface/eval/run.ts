@@ -117,6 +117,8 @@ interface Context {
   readonly task: Task;
   readonly tag: string;
   readonly residents: Residents;
+  /** Threads a fixture has started for this run, recorded as each launch returns. */
+  readonly owned: Array<string>;
 }
 type Fixture = Readonly<Record<string, string>>;
 
@@ -167,7 +169,7 @@ const FIXTURES: Readonly<Record<string, (context: Context) => Promise<Fixture>>>
       "fixture.title": String(thread["title"]),
     };
   },
-  runningThreads: async ({ client, campaign, task, tag }) => {
+  runningThreads: async ({ client, campaign, task, tag, owned }) => {
     const count = Number(task.fixture["count"]);
     const titleTag = "fx-" + tag;
     const ids: Array<string> = [];
@@ -180,6 +182,7 @@ const FIXTURES: Readonly<Record<string, (context: Context) => Promise<Fixture>>>
         notifyOnCompletion: false,
       });
       ids.push(String(launched["threadId"]));
+      owned.push(String(launched["threadId"]));
     }
     return { "fixture.titleTag": titleTag, "fixture.threadIds": ids.join(",") };
   },
@@ -444,13 +447,43 @@ const nextRun = async (
  * Stops the eval thread the way GOAT's Stop does: its queue is held and the tasks it delegated
  * stop, so a later delivery cannot start a run nobody measures.
  */
-const stopThread = async (client: Client, threadId: string): Promise<Cleanup> => {
-  const unfinished = await unfinishedTasks(client, threadId).catch(() => []);
+const STOP_CONFIRM_MS = 60000;
+
+/**
+ * Stops the run's threads the way GOAT's Stop does, then waits until each is terminal and the
+ * eval thread has no unfinished delegated task: an accepted interrupt can still be stopping.
+ */
+const stopThreads = async (
+  client: Client,
+  threadId: string | null,
+  fixtures: ReadonlyArray<string>,
+): Promise<Cleanup> => {
+  const unfinished =
+    threadId === null ? [] : await unfinishedTasks(client, threadId).catch(() => []);
+  const threads = [...(threadId === null ? [] : [threadId]), ...fixtures];
+  const result = (stopped: boolean, error: string | null): Cleanup => ({
+    unfinishedTasks: unfinished,
+    ...(fixtures.length === 0 ? {} : { fixtureThreads: [...fixtures] }),
+    stopped,
+    error,
+  });
   try {
-    await client.call("goat_thread_interrupt", { threadId, stopCascade: true });
-    return { unfinishedTasks: unfinished, stopped: true, error: null };
+    for (const id of threads)
+      await client.call("goat_thread_interrupt", { threadId: id, stopCascade: true });
+    const until = Date.now() + STOP_CONFIRM_MS;
+    for (;;) {
+      const running: Array<string> = [];
+      for (const id of threads)
+        if ((await client.call("goat_thread_status", { threadId: id }))["terminal"] !== true)
+          running.push(id);
+      if (threadId !== null && (await unfinishedTasks(client, threadId)).length > 0)
+        running.push(threadId + " (delegated tasks)");
+      if (running.length === 0) return result(true, null);
+      if (Date.now() >= until) return result(false, "still running: " + running.join(", "));
+      await pause(2000);
+    }
   } catch (error) {
-    return { unfinishedTasks: unfinished, stopped: false, error: String(error).slice(0, 300) };
+    return result(false, String(error).slice(0, 300));
   }
 };
 
@@ -612,7 +645,11 @@ const runOnce = async (
   try {
     fixture = await FIXTURES[task.fixture.kind]!(context);
   } catch (error) {
-    return unrun("fixture: " + String(error));
+    // A fixture that failed partway may have started threads; they are stopped before moving on.
+    return {
+      ...unrun("fixture: " + String(error)),
+      cleanup: await stopThreads(client, null, context.owned),
+    };
   }
   const vars = {
     ...campaign.values,
@@ -639,7 +676,7 @@ const runOnce = async (
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ ok: false as const, error }),
   );
-  const cleanup = await stopThread(client, threadId);
+  const cleanup = await stopThreads(client, threadId, context.owned);
   const broken = (error: unknown): RunRow => ({
     ...row,
     threadId,
@@ -761,14 +798,15 @@ const main = async () => {
     const task = selected.find((candidate) => candidate.id === step.taskId)!;
     const arm = campaign.arms.find((candidate) => candidate.id === step.armId)!;
     const tag = campaignId + "-" + task.id + "-" + step.pair + "-" + arm.id;
+    const owned: Array<string> = [];
     const row = await runOnce(
-      { client, campaign, task, tag, residents },
+      { client, campaign, task, tag, residents, owned },
       arm,
       step,
       campaignId,
     ).catch(
       // A harness or transport error says nothing about the arm, so it is listed, not counted.
-      (error: unknown): RunRow => ({
+      async (error: unknown): Promise<RunRow> => ({
         ...rowHead(campaignId, campaign, task, arm, step),
         threadId: null,
         ok: false,
@@ -777,6 +815,8 @@ const main = async () => {
         metrics: null,
         wallMs: null,
         at: new Date().toISOString(),
+        // Fixture threads may already run when the eval thread's launch fails.
+        cleanup: await stopThreads(client, null, owned),
       }),
     );
     console.log(JSON.stringify(row));

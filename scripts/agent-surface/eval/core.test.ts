@@ -282,6 +282,32 @@ describe("summarizeTask", () => {
     expect(gate([reduces, flat]).pass).toBe(true);
   });
 
+  it("fails the gate when the control's runs failed, even with no turns to compare", () => {
+    const reduces = summarizeTask(
+      task,
+      [...runs("call-only", [9, 12]), ...runs("eval", [4, 6])],
+      arms,
+    );
+    const control = { id: "t", claim: "no_gain" } as Task;
+    const failed = (arm: string) =>
+      Array.from({ length: 10 }, (_, pair) =>
+        row(arm, pair, [2, 2], { ok: false, failures: ["oracle"] }),
+      );
+    const allFailed = summarizeTask(control, [...failed("call-only"), ...failed("eval")], arms);
+    expect(allFailed.reasons).toEqual(["fewer than 10 successful clean runs in an arm"]);
+    expect(gate([reduces, allFailed]).pass).toBe(false);
+    const candidateFailedMore = summarizeTask(
+      control,
+      [
+        ...runs("call-only", [2, 2]),
+        ...runs("eval", [2, 2]),
+        row("eval", 10, [2, 2], { ok: false, failures: ["oracle"] }),
+      ],
+      arms,
+    );
+    expect(candidateFailedMore.reasons).toEqual(["the candidate failed more often"]);
+  });
+
   it("reports a one-arm campaign without a verdict", () => {
     const summary = summarizeTask(task, runs("call-only", [3, 4]), {
       baselineArm: "call-only",
