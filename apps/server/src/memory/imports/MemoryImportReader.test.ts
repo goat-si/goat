@@ -20,6 +20,7 @@ import {
   captureMemoryImportInventory,
   makeMemoryImportWorkload,
   snapshotMemoryImportFiles,
+  hostGit,
 } from "./MemoryImportFixtures.fixture.ts";
 
 // Independent Git read oracle: raw bytes, without reusing the fixture writer.
@@ -266,7 +267,7 @@ describe("MemoryImportFixtures frozen API", () => {
     ),
   );
 
-  it.effect.each(byteFaults)(
+  it.effect.each(hostGit.cases(byteFaults))(
     "omo committed fault %s reaches actual HEAD blob and reader",
     ([fault, issue, expected]) =>
       Effect.scoped(
@@ -414,7 +415,7 @@ const makeSourceSpy = (fixture: MemoryImportFixture, root = fixture.trustedRoot)
 const assertNoSourceWrites = (log: { writes: number }) => assert.equal(log.writes, 0);
 
 describe("MemoryImportReader", () => {
-  it.effect.each(MEMORY_IMPORT_FIXTURE_PROFILES)(
+  it.effect.each(hostGit.profiles)(
     "reads %s without changing original bytes or Git state",
     (profile) =>
       Effect.scoped(
@@ -460,7 +461,7 @@ describe("MemoryImportReader", () => {
     ["config-include", "path_rejected"],
     ["missing-object", "source_unreadable"],
   ] as const;
-  it.effect.each(faults)("refuses %s with no source changes", ([fault, issue]) =>
+  it.effect.each(hostGit.faults(faults))("refuses %s with no source changes", ([fault, issue]) =>
     Effect.scoped(
       Effect.gen(function* () {
         const gitFault = [
@@ -674,7 +675,7 @@ describe("MemoryImportReader", () => {
     ),
   );
 
-  it.effect(
+  hostGit.it(
     "Git isolation ignores inherited config injection and executes only against owned snapshots",
     () =>
       Effect.scoped(
@@ -881,7 +882,7 @@ printf synthetic > '${marker}'
     ),
   );
 
-  it.effect("Git metadata/object entry ceilings count excluded entries at equality and +1", () =>
+  hostGit.it("Git metadata/object entry ceilings count excluded entries at equality and +1", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* buildMemoryImportFixture("omo-memory-core-beta63");
@@ -927,23 +928,21 @@ process.stdout.write("a".repeat(257));
       }),
     ),
   );
-  it.effect.each(MEMORY_IMPORT_FIXTURE_PROFILES)(
-    "Node source write spy stays zero for %s",
-    (profile) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fixture = yield* buildMemoryImportFixture(profile);
-          const { config, log } = makeSourceSpy(fixture);
-          const reader = yield* Reader.acquireMemoryImportReader(config);
-          const before = captureMemoryImportInventory(fixture.sourceRoot);
-          const readExit = yield* Effect.exit(reader.read({ slot: fixture.snapshot.slot }));
-          assert.isTrue(Exit.isSuccess(readExit));
-          assertNoSourceWrites(log);
-          assert.isAbove(log.reads, 0);
-          assert.deepEqual(captureMemoryImportInventory(fixture.sourceRoot), before);
-          assert.deepEqual(residue(fixture), []);
-        }),
-      ),
+  it.effect.each(hostGit.profiles)("Node source write spy stays zero for %s", (profile) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* buildMemoryImportFixture(profile);
+        const { config, log } = makeSourceSpy(fixture);
+        const reader = yield* Reader.acquireMemoryImportReader(config);
+        const before = captureMemoryImportInventory(fixture.sourceRoot);
+        const readExit = yield* Effect.exit(reader.read({ slot: fixture.snapshot.slot }));
+        assert.isTrue(Exit.isSuccess(readExit));
+        assertNoSourceWrites(log);
+        assert.isAbove(log.reads, 0);
+        assert.deepEqual(captureMemoryImportInventory(fixture.sourceRoot), before);
+        assert.deepEqual(residue(fixture), []);
+      }),
+    ),
   );
 
   it.effect.each(["claude-topic-v1", "omo-memory-core-beta63"] as const)(
@@ -1073,7 +1072,7 @@ process.stdout.write("a".repeat(257));
       }),
     ),
   );
-  it.effect("sealed snapshot keeps one commit when source HEAD moves", () =>
+  hostGit.it("sealed snapshot keeps one commit when source HEAD moves", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* buildMemoryImportFixture("omo-memory-core-beta63");
@@ -1269,7 +1268,7 @@ process.stdin.resume(); setInterval(() => {}, 1000000);
     ),
   );
 
-  it.effect("4096 metadata entry equality counts excluded logs, +1 refuses", () =>
+  hostGit.it("4096 metadata entry equality counts excluded logs, +1 refuses", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* buildMemoryImportFixture("omo-memory-core-beta63");
@@ -1310,7 +1309,7 @@ process.stdin.resume(); setInterval(() => {}, 1000000);
       }),
     ),
   );
-  it.effect.each(["config", "objects", "ancestor", "combined"] as const)(
+  it.effect.each(hostGit.cases(["config", "objects", "ancestor", "combined"] as const))(
     "seal barrier isolates original %s replacement",
     (variant) =>
       Effect.scoped(
@@ -1373,7 +1372,7 @@ process.stdin.resume(); setInterval(() => {}, 1000000);
       ),
   );
 
-  it.effect("loose and packed replace refs cannot redirect commit bytes", () =>
+  hostGit.it("loose and packed replace refs cannot redirect commit bytes", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* buildMemoryImportFixture("omo-memory-core-beta63");
