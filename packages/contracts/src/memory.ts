@@ -1251,7 +1251,8 @@ export const MemoryCausalBoundary = struct({
 export type MemoryCausalBoundary = typeof MemoryCausalBoundary.Type;
 
 export const MemoryContextSnapshot = struct({
-  protocolVersion: Schema.Literal(1),
+  /** Selects the frozen rendering `renderedText` must match; 1 names the memory tools directly. */
+  protocolVersion: Schema.Literals([1, 2]),
   memorySpaceId: MemorySpaceId,
   projectionWatermark: NonNegativeInt,
   items: array(
