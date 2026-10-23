@@ -1,6 +1,15 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
-import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
-import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import {
+  type AgentSurfaceEntry,
+  agentSurfaceRegistry,
+  type AgentSurfaceRegistryEntry,
+} from "@goat/contracts/agentSurface";
+import {
+  canonicalToolName,
+  deprecatedReplacement,
+  listedToolName,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
 
@@ -15,12 +24,13 @@ import { makeOperations } from "./operations.ts";
 import { AgentSurfaceToolkit, type DescribeResult } from "./tools.ts";
 
 const entries: ReadonlyArray<AgentSurfaceRegistryEntry> = Object.values(agentSurfaceRegistry);
+const guideOf = (entry: AgentSurfaceEntry) => entry.guide;
 
 // FNV-1a over what an agent relies on; stable across processes, unlike object identity.
 const surfaceVersion = (() => {
   let hash = 0x811c9dc5;
   for (const entry of entries)
-    for (const char of `${entry.path}|${entry.name}|${entry.effect}|${entry.requires}|${entry.description}\n`) {
+    for (const char of `${entry.path}|${entry.name}|${entry.effect}|${entry.requires}|${entry.description}|${guideOf(entry) ?? ""}\n`) {
       hash ^= char.charCodeAt(0);
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
@@ -28,6 +38,49 @@ const surfaceVersion = (() => {
 })();
 // Calling these through goat_call would only nest the same checks, or recurse.
 const NOT_CALLABLE: ReadonlySet<string> = new Set(["surface.call", "surface.eval"]);
+
+/** goat_describe's query returns this many paths and reads one more to say whether others match. */
+const SEARCH_LIMIT = 20;
+
+/**
+ * Every word must appear in the path, summary, description or guide; a word in the path counts
+ * most. Ties keep registry order by path, so the same query always answers the same way.
+ */
+export const search = <Entry extends AgentSurfaceEntry & { readonly path: string }>(
+  candidates: ReadonlyArray<Entry>,
+  query: string,
+) => {
+  const words = query
+    .toLowerCase()
+    .split(/\s+/u)
+    .filter((word) => word !== "");
+  const scored: Array<{ readonly entry: Entry; readonly score: number }> = [];
+  for (const entry of candidates) {
+    const path = `${entry.path} ${entry.name}`.toLowerCase();
+    const summary = entry.summary.toLowerCase();
+    // Text moved from a description into its guide must stay findable.
+    const description = `${entry.description} ${guideOf(entry) ?? ""}`.toLowerCase();
+    let score = 0;
+    for (const word of words) {
+      const points = path.includes(word)
+        ? 3
+        : summary.includes(word)
+          ? 2
+          : description.includes(word)
+            ? 1
+            : 0;
+      if (points === 0) {
+        score = 0;
+        break;
+      }
+      score += points;
+    }
+    if (score > 0) scored.push({ entry, score });
+  }
+  return scored
+    .toSorted((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path))
+    .map(({ entry }) => entry);
+};
 
 type Availability = { readonly now: boolean; readonly reason?: string };
 type Scope = McpInvocationContext.McpInvocationScope;
@@ -61,16 +114,35 @@ export const layer = McpToolAccess.toLayer(
 
     const summary = (entry: AgentSurfaceRegistryEntry, scope: Scope) => ({
       path: entry.path,
-      name: entry.name,
+      name: listedToolName(entry),
       summary: entry.summary,
       effect: entry.effect,
-      available: availability(entry, scope, dispatch.served(entry.name) !== undefined),
+      available: availability(entry, scope, dispatch.served(listedToolName(entry)) !== undefined),
     });
 
     const describe = Effect.fn("AgentSurface.describe")(function* (input: {
       readonly path?: string | undefined;
+      readonly query?: string | undefined;
     }) {
       const scope = yield* McpInvocationContext.McpInvocationContext;
+      if (input.query !== undefined) {
+        const within =
+          input.path === undefined
+            ? entries
+            : entries.filter((candidate) => candidate.resource === input.path);
+        if (within.length === 0)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: `query searches every path or one resource, and GOAT has no resource named ${input.path}.`,
+          });
+        const matches = search(within, input.query);
+        return {
+          depth: "search" as const,
+          query: input.query,
+          entries: matches.slice(0, SEARCH_LIMIT).map((entry) => summary(entry, scope)),
+          truncated: matches.length > SEARCH_LIMIT,
+        } satisfies DescribeResult;
+      }
       if (input.path === undefined) {
         const resources = new Map<string, Array<string>>();
         for (const entry of entries)
@@ -86,7 +158,7 @@ export const layer = McpToolAccess.toLayer(
       }
       const entry = resolveAgentSurfaceEntry(input.path);
       if (entry !== undefined) {
-        const tool = dispatch.served(entry.name);
+        const tool = dispatch.served(listedToolName(entry));
         return {
           depth: "path" as const,
           entry: {
@@ -94,6 +166,7 @@ export const layer = McpToolAccess.toLayer(
             canonicalName: canonicalToolName(entry),
             legacyNames: entry.legacyNames,
             description: entry.description,
+            ...(guideOf(entry) === undefined ? {} : { guide: guideOf(entry) }),
             hostRoutable: entry.hostRoutable,
             requires: entry.requires,
             dryRun: entry.dryRun,
@@ -129,18 +202,15 @@ export const layer = McpToolAccess.toLayer(
           "unknown_path",
           `GOAT has no capability named ${input.path}. Find paths with goat_describe.`,
         );
+      const name = listedToolName(entry);
       if (NOT_CALLABLE.has(entry.path))
         return envelopeError(
           "invalid_request",
           "not_callable",
-          `${entry.name} cannot run inside goat_call. Call it directly.`,
+          `${name} cannot run inside goat_call. Call it directly.`,
         );
-      if (dispatch.served(entry.name) === undefined)
-        return envelopeError(
-          "not_found",
-          "not_served",
-          `This GOAT server does not serve ${entry.name}.`,
-        );
+      if (dispatch.served(name) === undefined)
+        return envelopeError("not_found", "not_served", `This GOAT server does not serve ${name}.`);
       const args = input.args ?? {};
       const host = entry.hostRoutable && typeof args.host === "string" ? args.host : undefined;
       // Work that runs on needs a handle; without one, starting it would strand the caller (D1).
@@ -150,12 +220,16 @@ export const layer = McpToolAccess.toLayer(
           error: {
             code: "unavailable",
             reason: "operation_unavailable",
-            message: `GOAT could not prepare a handle for this work, so ${entry.name} did not run. Try again.`,
+            message: `GOAT could not prepare a handle for this work, so ${name} did not run. Try again.`,
             retryable: true,
           },
         } satisfies AgentSurfaceResult;
-      const result = yield* dispatchEnvelope(dispatch, entry.name, args, entry.effect, host);
-      return yield* operations.withOperation(entry, result);
+      const result = yield* dispatchEnvelope(dispatch, name, args, entry.effect, host);
+      const finished = yield* operations.withOperation(entry, result);
+      // The envelope names paths, so a deprecated name or path points at the current path.
+      return deprecatedReplacement(input.path) === undefined
+        ? finished
+        : { ...finished, meta: { ...finished.meta, deprecated: entry.path } };
     });
 
     return {

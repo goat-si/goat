@@ -1,0 +1,123 @@
+import { entry } from "../entry.ts";
+
+export const worktreeEntries = {
+  "worktree.handoff": entry({
+    resource: "worktree",
+    verb: "handoff",
+    name: "goat_worktree_handoff",
+    toolkit: "worktree",
+    summary: "Hand off thread to a git worktree",
+    description:
+      "Needs an agent running inside a GOAT thread. Move this agent thread into a new git worktree. To launch a separate agent already bound to a new or existing worktree, use goat_thread_launch with workspaceStrategy instead. Creates the worktree branch (optionally from the base branch's remote), re-points the thread at the worktree, and by default runs the project's setup script there. Changing the workspace detaches the live provider session, so the current turn ends shortly after the handoff is recorded; call this as the last action of the turn. To keep working after the handoff, pass continuationPrompt with the remaining work: it is queued as the thread's next message and starts a new turn inside the worktree with the conversation preserved. Without it the thread stays idle until the next message. The worktree is not removed automatically when the thread is deleted. Fails if the thread is already attached to a worktree.",
+    effect: "destructive",
+    capability: "worktree.create",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Hand off thread to a git worktree",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "worktree.status": entry({
+    resource: "worktree",
+    verb: "status",
+    name: "goat_worktree_status",
+    toolkit: "worktree",
+    summary: "Get thread worktree status",
+    description:
+      "Needs an agent running inside a GOAT thread. Report this agent thread's worktree binding: whether it is attached to a git worktree, the worktree path and branch, the project's main workspace root, and the server default for goat_worktree_handoff's startFromOrigin. Call this before goat_worktree_handoff to check whether a handoff is possible or has already happened.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Get thread worktree status",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
+  "worktree.list": entry({
+    resource: "worktree",
+    verb: "list",
+    name: "goat_worktree_list",
+    toolkit: "worktree",
+    summary:
+      "List branch refs and their associated checkout paths for a thread's workspace (omit threadId for this thread) using the app's ref inventory.",
+    description:
+      "List branch refs and their associated checkout paths for a thread's workspace (omit threadId for this thread) using the app's ref inventory. Detached worktrees without a branch are not included. Use goat_worktree_inventory for every worktree on a machine with its thread and unsaved work, goat_worktree_status for the thread binding, and goat_worktree_handoff to create a new worktree.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "worktree.inventory": entry({
+    resource: "worktree",
+    verb: "inventory",
+    name: "goat_worktree_inventory",
+    toolkit: "worktree",
+    summary: "List worktrees",
+    description:
+      "List every git worktree of this environment's project repositories (or of repo only): path, branch, the GOAT threads bound to it with their status and whether they are busy, uncommitted file count (dirtyCount), and commits on no remote as of the last fetch (aheadCount). Use it to find stale worktrees left by launched threads before goat_worktree_remove or goat_worktree_cleanup. Pass host (an SSH alias from goat_ssh_host_list or a linked host from goat_host_link_list) to act on that machine's GOAT environment instead; that needs a caller allowed to use this machine's SSH keys.",
+    effect: "read",
+    hostRoutable: true,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "List worktrees",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "worktree.remove": entry({
+    resource: "worktree",
+    verb: "remove",
+    name: "goat_worktree_remove",
+    toolkit: "worktree",
+    summary: "Remove a worktree",
+    description:
+      "Remove one git worktree, by path or by the threadId bound to it, with git worktree remove and prune. Always refuses a worktree whose thread is running, queued, or waiting on a question, a repository's main checkout, and a GOAT project's folder. Also refuses uncommitted changes and commits that no remote, other local branch, or merged pull request holds, unless force is true. Only worktrees of registered GOAT projects are accepted. The branch is kept unless deleteBranch is true, so a finished thread still bound to the path recreates its checkout if it runs again. Needs a full-access caller. Pass host (an SSH alias from goat_ssh_host_list or a linked host from goat_host_link_list) to act on that machine's GOAT environment instead; that needs a caller allowed to use this machine's SSH keys.",
+    effect: "destructive",
+    capability: "worktree.create",
+    hostRoutable: true,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Remove a worktree",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    idempotency: "key",
+    reconcile: "worktree.inventory",
+  }),
+  "worktree.cleanup": entry({
+    resource: "worktree",
+    verb: "cleanup",
+    name: "goat_worktree_cleanup",
+    toolkit: "worktree",
+    summary: "Clean up stale worktrees",
+    description:
+      "Sweep stale git worktrees. A worktree is removed when every bound thread finished (completed, failed, interrupted, cancelled) or is archived, or no thread is bound and it sits in GOAT's worktrees folder, and it has no uncommitted changes and its commits are on a remote, on another local branch, or in a merged pull request. Branches are kept. Only registered GOAT projects are swept; repo must be an absolute path in one. Defaults to dryRun:true, which only reports; pass dryRun:false to remove, which needs a full-access caller. Returns removed and kept worktrees with a reason for each; main checkouts are left out. Pass host (an SSH alias from goat_ssh_host_list or a linked host from goat_host_link_list) to act on that machine's GOAT environment instead; that needs a caller allowed to use this machine's SSH keys.",
+    effect: "destructive",
+    capability: "worktree.create",
+    hostRoutable: true,
+    requires: "either",
+    dryRun: "supported",
+    humanSteps: [],
+    annotations: {
+      title: "Clean up stale worktrees",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+} as const;

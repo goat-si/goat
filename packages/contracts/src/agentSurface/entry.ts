@@ -1,3 +1,4 @@
+import { legacyToolNames } from "./surfaceEntries.ts";
 import type {
   AgentSurfaceEntry,
   AgentSurfaceExample,
@@ -13,7 +14,8 @@ export const entry = <
 ) => ({
   ...value,
   path: `${value.resource}.${value.verb}` as `${E["resource"]}.${E["verb"]}`,
-  legacyNames: [value.name],
+  // The shipped name stays callable, unlisted, when it is not goat_<resource>_<verb>.
+  legacyNames: legacyToolNames(value),
   // Input resolves through Tool.getJsonSchema (including dynamic tools); outputs
   // reference the named tool's schema slots. No server imports enter contracts.
   schemaRefs: {

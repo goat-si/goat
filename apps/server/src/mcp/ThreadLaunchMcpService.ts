@@ -174,7 +174,7 @@ const make = Effect.gen(function* () {
         code: "invalid_request",
         message: `This GOAT has no provider instance ${selection.instanceId}; it has ${
           providers.map((entry) => entry.instanceId).join(", ") || "none"
-        }. orchestrator_capabilities lists providers and models.`,
+        }. goat_provider_list lists providers and models.`,
       });
     const misses = (candidate: typeof provider) =>
       requested &&
@@ -187,7 +187,7 @@ const make = Effect.gen(function* () {
     if (misses(provider))
       return yield* new OrchestratorMcpFailure({
         code: "invalid_request",
-        message: `Provider ${selection.instanceId} here does not offer model ${selection.model}, even after refreshing its model list. Pick one orchestrator_capabilities lists for it, or fix the provider's catalog and check it with goat_provider_diagnose {instanceId:"${selection.instanceId}"}.`,
+        message: `Provider ${selection.instanceId} here does not offer model ${selection.model}, even after refreshing its model list. Pick one goat_provider_list lists for it, or fix the provider's catalog and check it with goat_provider_diagnose {instanceId:"${selection.instanceId}"}.`,
       });
   });
   return ThreadLaunchMcpService.of({
@@ -356,7 +356,7 @@ const make = Effect.gen(function* () {
           return yield* new OrchestratorMcpFailure({
             code: "invalid_request",
             message:
-              "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
+              "Pass modelSelection: the project has no default model. goat_provider_list lists providers and models.",
           });
         const startedRuntimeMode =
           projectDefaults !== undefined && input.runtimeMode === undefined

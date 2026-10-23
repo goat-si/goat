@@ -76,7 +76,8 @@ export const probeRemoteStatus = (host: string, threadId: ThreadId, ceiling: Run
       // Only a refusal proves the host answered; an unknown alias or a changed caller says
       // nothing about the host either way.
       if (unreachable(answer.failure)) yield* monitor.recordContact(host, answer.failure.message);
-      const answered = answer.failure.reason === "remote_refused";
+      const answered =
+        answer.failure.reason === "remote_refused" || answer.failure.reason === "remote_outdated";
       if (answered) yield* monitor.recordContact(host, null);
       return { answered, status: null };
     }

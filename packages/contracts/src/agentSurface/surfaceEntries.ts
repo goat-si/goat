@@ -1,5 +1,23 @@
 import type { AgentSurfaceEntry, CapabilityDeclaration } from "./types.ts";
 
+type Named = Pick<AgentSurfaceEntry, "resource" | "verb" | "name">;
+
+/** The name a path projects to: goat_<resource>_<verb>. */
+export const canonicalToolName = (entry: Pick<AgentSurfaceEntry, "resource" | "verb">) =>
+  `goat_${entry.resource}_${entry.verb}`;
+
+/** The name /mcp lists a tool under. The meta tools keep their short names. */
+export const listedToolName = (entry: Named) =>
+  entry.resource === "surface" ? entry.name : canonicalToolName(entry);
+
+/**
+ * Names a tool shipped under that /mcp still accepts in tools/call without listing them. The
+ * toolkit keeps registering the tool under its shipped name, so handlers and access
+ * declarations keep their keys; only the listing and the call route change.
+ */
+export const legacyToolNames = (entry: Named): ReadonlyArray<string> =>
+  listedToolName(entry) === entry.name ? [] : [entry.name];
+
 /** The meta tools that reach every other path, kept beside the registry like notes.ts. */
 export const metaSurfaceEntries = {
   describe: {
@@ -9,7 +27,7 @@ export const metaSurfaceEntries = {
     toolkit: "agentSurface",
     summary: "Find GOAT capabilities and whether this caller can use them",
     description:
-      'Describe GOAT\'s agent surface. Without path: every resource and its verbs. With a resource such as "thread": its paths, one-line summaries and effects. With a full path such as "thread.send" (or a tool name): input and output JSON Schema, effect, human steps, legacy names, and available.now for this caller, with the reason when a static check already refuses it. Other checks still run when the call is made. Call a path with goat_call.',
+      'Describe GOAT\'s agent surface. Without path: every resource and its verbs. With a resource such as "thread": its paths, one-line summaries and effects. With a full path such as "thread.send" (or a tool name): input and output JSON Schema, effect, human steps, legacy names, and available.now for this caller, with the reason when a static check already refuses it. With query: up to 20 paths whose path, summary or description contain every word, best first, and truncated when more match; a resource as path narrows the search. Other checks still run when the call is made. Call a path with goat_call.',
     effect: "read",
     hostRoutable: false,
     requires: "either",

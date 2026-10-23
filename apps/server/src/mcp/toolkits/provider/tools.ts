@@ -96,14 +96,14 @@ const ProviderSyncTool = Tool.make(agentSurfaceRegistry["provider.sync"].name, {
   failureMode: "return" as const,
   dependencies: hostSyncDependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.sync"]));
-const ProviderSyncStatusTool = Tool.make(agentSurfaceRegistry["provider.sync_status"].name, {
-  description: agentSurfaceRegistry["provider.sync_status"].description,
+const ProviderSyncStatusTool = Tool.make(agentSurfaceRegistry["provider.sync_read"].name, {
+  description: agentSurfaceRegistry["provider.sync_read"].description,
   parameters: ProviderSyncStatusInput,
   success: ProviderSyncState,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
   dependencies: hostSyncDependencies,
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.sync_status"]));
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.sync_read"]));
 const ProviderSyncCancelTool = Tool.make(agentSurfaceRegistry["provider.sync_cancel"].name, {
   description: agentSurfaceRegistry["provider.sync_cancel"].description,
   parameters: ProviderSyncCancelInput,

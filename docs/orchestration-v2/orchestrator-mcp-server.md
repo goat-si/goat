@@ -189,7 +189,7 @@ normalized names coincide, so no hidden alias is registered. Existing saved
 loadouts or tool selectors using `mcp__t3-code__` or `mcp__t3_code__` must be
 updated to `mcp__goat__`; the old names remain readable in history but are not
 registered for execution. On Pi 0.99+,
-`orchestrator_capabilities`, `delegate_task`, and `task_status` remain directly
+`goat_provider_list`, `goat_task_create`, and `goat_task_read` remain directly
 available; optional tools are discovered through Pi's builtin `tool_search`.
 On older Pi or without builtin search, all tools remain directly available.
 The bridge calls the original MCP tool name over HTTP. Follow-up requests send
@@ -199,7 +199,7 @@ orchestration instructions.
 
 Pi keeps ownership of native extension discovery. GOAT does not replace Pi's
 `subagent` tool or reproduce Pi's package and project-trust loader. Durable
-delegation goes through the namespaced GOAT MCP `delegate_task` tool and the
+delegation goes through the namespaced GOAT MCP `goat_task_create` tool and the
 shared orchestration child-thread lifecycle. When Pi's example `subagent`
 extension is installed, the adapter observes its documented `details.results`
 shape and projects task cards with no child thread id. Unknown result shapes
@@ -220,7 +220,7 @@ provider selection model-visible without allowing a request that cannot run.
 
 The server exposes the following orchestration tools.
 
-### `orchestrator_capabilities`
+### `goat_provider_list`
 
 Returns:
 
@@ -238,10 +238,10 @@ of models, and every call lands in the agent's context. Each provider lists
 custom, favorite, and the caller's own models, plus all current (non-legacy)
 models for Codex, Claude, Muse, and Grok, or the first 8 current models in the
 user's model order for other providers. `omittedModels` counts the rest, and the
-`search` input finds them, legacy models included. `delegate_task` still accepts
+`search` input finds them, legacy models included. `goat_task_create` still accepts
 any catalog model.
 
-### `delegate_task`
+### `goat_task_create`
 
 Creates a GOAT-owned delegated task and immediately dispatches the supplied task
 prompt, in a local child thread or on an SSH host.
@@ -280,7 +280,7 @@ when unavailable. Selecting a different provider without a model uses that
 provider's first advertised model.
 
 A provider runs a runtime mode it does not offer as `approval-required`, so a
-child would ask for approval on every command. `orchestrator_capabilities`
+child would ask for approval on every command. `goat_provider_list`
 lists `runtimeModes` only for a provider that offers some of the modes, and
 omits it for a provider that offers all of them. When the target lists
 `runtimeModes`, an explicit `runtimeMode` outside that list is refused, and an
@@ -288,10 +288,10 @@ inherited mode steps down to the broadest mode the target offers.
 
 A local async child outlives an interrupt or Stop of the parent's turn and still wakes
 the parent when it finishes. A local `mode: "wait"` child stops with the turn whose
-blocking call it answers, unless that wait already timed out. `task_cancel` stops
+blocking call it answers, unless that wait already timed out. `goat_task_cancel` stops
 either kind.
 
-Each delegated review round uses a new `delegate_task` call with the original brief,
+Each delegated review round uses a new `goat_task_create` call with the original brief,
 prior findings, responses, and unresolved objections. Track each round by its own `taskId` and use
 a distinct `clientRequestId` per round, stable across retries of that round.
 `childThreadId` is backing storage, not a target for another review round through
@@ -306,7 +306,7 @@ provider session. The request becomes the V2 command
 `mode: "async"` returns the current durable state immediately.
 `mode: "wait"` waits for the task result, including nested work and completion follow-ups, or until
 the timeout expires. A wait timeout does not cancel the child; the result sets
-`waitTimedOut: true`, and the caller can continue with `task_status`. A pending blocking
+`waitTimedOut: true`, and the caller can continue with `goat_task_read`. A pending blocking
 question also ends the wait with `hasPendingQuestion: true` and `waitTimedOut: false`.
 If `hasPendingQuestion`, pass `threadId=childThreadId` to `goat_pending_request_list`,
 `goat_pending_request_read` (with `requestId`) and `goat_pending_request_respond`, or ask
@@ -349,17 +349,17 @@ type DelegateTaskResult = {
 Set `target.host` to an alias from `goat_ssh_host_list` and provide `remote.cwd`.
 `remote.workspace` selects the folder or a remote worktree. Remote delegation
 requires a full-access caller and launches with the caller's runtime mode as its
-ceiling. Keep the returned `taskId` for `task_status` and `task_cancel`; the
+ceiling. Keep the returned `taskId` for `goat_task_read` and `goat_task_cancel`; the
 host-qualified thread belongs to the remote environment.
 
 Remote results are summary-only: `resultContextTransferId` is null. Completion
 still arrives through delegated completion delivery when the launched remote run
 stops. A parent Stop or a wait-mode parent turn ending does not stop remote work;
-parent Stop disposes its automatic delivery. Use `task_cancel` to request an
+parent Stop disposes its automatic delivery. Use `goat_task_cancel` to request an
 interrupt on the remote. It returns `cancel_requested` until that run stops,
-while `task_status` continues to report the task's running state.
+while `goat_task_read` continues to report the task's running state.
 
-### `task_status`
+### `goat_task_read`
 
 Reads a delegated task from the parent thread's durable projection. A task ID
 from another parent thread is rejected. `childRunId` identifies the original
@@ -371,7 +371,7 @@ later follow-ups. `hasPendingChildRuns` reports later queued or executing turns;
 the published task result. Remote tasks expose summary-only results; a pending
 `cancel_requested` does not make them terminal.
 
-### `task_cancel`
+### `goat_task_cancel`
 
 For local tasks, stops the child thread with the internal `thread.stop` command, then stops every
 task the child delegated, and disposes automatic parent delivery. Like a user Stop,
@@ -383,7 +383,7 @@ optional cancellation reason. For remote tasks it requests an interrupt and
 returns `cancel_requested` until the remote run stops; parent Stop does not send
 that interrupt.
 
-### `create_threads`
+### `goat_thread_create_many`
 
 Creates between one and twenty ordinary top-level GOAT threads:
 
@@ -424,14 +424,14 @@ its own under the environment's Scratch project. For stacked PRs, use the parent
 `startFromOrigin: false`. The new thread may not run with broader runtime or
 interaction modes than the caller. Pass an optional `clientRequestId` to retry a launch safely: a repeat with the same
 arguments returns the first launch. Without one, inspect existing threads after a failed or lost response before
-launching again. `create_threads` remains the batch option for a shared checkout.
+launching again. `goat_thread_create_many` remains the batch option for a shared checkout.
 
 ### SSH launches and reports
 
 `goat_ssh_thread_launch` launches an ordinary thread on a host from
 `goat_ssh_host_list`, using `cwd` and `workspace` on that machine. It accepts up
 to eight pending attachments, uploads them to the remote before launch, and
-binds them to the remote's first message. Use `delegate_task` with `target.host`
+binds them to the remote's first message. Use `goat_task_create` with `target.host`
 for child work owned by the calling thread.
 
 The remote agent sends milestones or questions with `goat_origin_report`.
@@ -442,7 +442,7 @@ wake or prompt delivery. `goat_ssh_reports` reads the origin's bounded dispatch
 status list. Run-end notifications are controlled separately by
 `notifyOnCompletion` and the launch watch.
 
-A thread launched on the same machine (`goat_thread_launch`, `delegate_task`) has
+A thread launched on the same machine (`goat_thread_launch`, `goat_task_create`) has
 no origin binding. Its `goat_origin_report` goes to the launching thread instead,
 found the way question escalation finds it: `needs_input` wakes the launcher and
 other reports wait in its inbox for its next turn.
@@ -468,7 +468,7 @@ dispatched. Pass `notifyTarget` to `goat_thread_launch` or
   secret lives in the server secret store like every settings secret, and a
   settings patch merges targets per name, with `null` removing one.
 - `{ url, secretRef? }` routes to an inline receiver. `secretRef` comes from
-  `request_secret` in the calling thread; the launch consumes it and keeps the
+  `goat_handoff_create` in the calling thread; the launch consumes it and keeps the
   value in the secret store until the watch ends.
   Any agent that may launch can pick this URL, so it must resolve to public
   addresses only: loopback, private, link-local, CGNAT, and metadata addresses
@@ -686,7 +686,7 @@ ask the user. The message says whether the child is blocked or, for a Codex
 async question, still working. If the question is answered or dismissed before
 the notification starts a turn, that queued turn is cancelled. Approvals are not
 routed, because those tools cannot answer them.
-A parent still blocked in a `delegate_task` wait gets the blocking question
+A parent still blocked in a `goat_task_create` wait gets the blocking question
 through that wait instead.
 If the provider cuts that wait short, a still-pending live question wakes the
 parent when its launching run completes, fails, or waits for post-turn work.

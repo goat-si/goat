@@ -436,9 +436,16 @@ describe("derivePendingBackgroundWork kinds", () => {
 });
 
 describe("deriveBlockedOnThreadWait", () => {
-  it.each(["goat_thread_wait", "mcp__goat__goat_thread_wait", "t3_thread_wait"])(
+  it.each([
+    ["goat_thread_wait", {}],
+    ["mcp__goat__goat_thread_wait", {}],
+    ["t3_thread_wait", {}],
+    ["delegate_task", { mode: "wait" }],
+    // The listed name of delegate_task since the listing flip.
+    ["mcp__goat__goat_task_create", { mode: "wait" }],
+  ] as const)(
     "recognizes a blocked wait through %s and yields to other running tools",
-    (toolName) => {
+    (toolName, input) => {
       const runId = RunId.make("wait-run");
       const item = {
         id: TurnItemId.make("wait-item"),
@@ -457,7 +464,7 @@ describe("deriveBlockedOnThreadWait", () => {
         updatedAt: DateTime.makeUnsafe(0),
         type: "dynamic_tool" as const,
         toolName,
-        input: {},
+        input,
       };
       const activeRun = { id: runId, status: "running" as const };
       expect(deriveBlockedOnThreadWait({ activeRun, turnItems: [item] })).toBe(true);

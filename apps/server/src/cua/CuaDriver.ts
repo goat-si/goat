@@ -388,7 +388,7 @@ type SdkClientModule = {
 };
 
 /** Asks the running daemon, which is the process macOS grants, for its own permissions. */
-export const makeMacGrantObserver = Effect.fn("CuaDriver.makeMacGrantObserver")(function* () {
+const makeMacGrantObserver = Effect.fn("CuaDriver.makeMacGrantObserver")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   return (mcp: CuaDriverMcpConfiguration) =>

@@ -849,7 +849,7 @@ it.effect(
       const compactor = yield* Compactor.MemoryCompactor;
       const input = { ...McpFixture.upsert(96001), memorySpaceId: space };
       const invocation = { ...McpFixture.scope(), environmentId: hubEnv };
-      const first = yield* McpFixture.call("memory_upsert", input, invocation);
+      const first = yield* McpFixture.call("goat_memory_upsert", input, invocation);
       assert.isNotTrue(first.result.isError);
       const pending = yield* decodeReplayReceipt(first.body);
       const ack = Effect.fnUntraced(function* (operationId: M.MemoryOperationId) {
@@ -866,7 +866,7 @@ it.effect(
       const counts = sql`SELECT (SELECT count(*) FROM memory_events) AS events,(SELECT count(*) FROM memory_payloads) AS payloads,(SELECT count(*) FROM memory_outbox) AS outbox`;
       const replay = Effect.gen(function* () {
         const before = yield* counts;
-        const response = yield* McpFixture.call("memory_upsert", input, invocation);
+        const response = yield* McpFixture.call("goat_memory_upsert", input, invocation);
         assert.isNotTrue(response.result.isError);
         const receipt = yield* decodeReplayReceipt(response.body, {
           onExcessProperty: "error",
@@ -876,7 +876,7 @@ it.effect(
         assert.strictEqual(
           (
             (yield* McpFixture.call(
-              "memory_upsert",
+              "goat_memory_upsert",
               { ...input, payload: { ...input.payload, text: "changed" } },
               invocation,
             )).body as { code: string }
@@ -893,8 +893,11 @@ it.effect(
           },
         };
         assert.strictEqual(
-          ((yield* McpFixture.call("memory_upsert", input, otherCaller)).body as { code: string })
-            .code,
+          (
+            (yield* McpFixture.call("goat_memory_upsert", input, otherCaller)).body as {
+              code: string;
+            }
+          ).code,
           "operation_id_reused",
         );
         assert.deepStrictEqual(yield* counts, before);

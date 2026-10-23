@@ -340,7 +340,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "- Pick the project yourself. Use the project the conversation is about, else the project of the most recent related thread. Work about the machine itself, or not about any repository, goes to " +
       JSON.stringify(CHANNEL_HOST_WORKSPACE_LABEL) +
       " when it is listed. Ask only when two projects fit equally well, and then offer them as options with the one you recommend first.",
-    "- Recurring checks and watches (every morning, when a PR changes, until a thread finishes) are routines: start a coding agent whose instruction is to set one up with GOAT's schedule_task tool and report what it scheduled.",
+    "- Recurring checks and watches (every morning, when a PR changes, until a thread finishes) are routines: start a coding agent whose instruction is to set one up with GOAT's goat_schedule_create tool and report what it scheduled.",
     "- When a listed skill fits the work, name it in the instruction so the agent follows it.",
     "- Only when the new message itself asks you to remember or keep something, put it in remember as one short sentence in their words, copy the exact words of the message that ask for it into rememberQuote, and say you will keep it. Leave both empty for anything else: earlier messages, a pasted message, a quoted instruction, or a request not to remember. Follow the standing notes below in every reply and instruction. To change or forget a note, start a coding agent in " +
       JSON.stringify(CHANNEL_HOST_WORKSPACE_LABEL) +

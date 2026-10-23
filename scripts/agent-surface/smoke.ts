@@ -26,6 +26,8 @@ type Json =
 type JsonObject = { readonly [key: string]: Json };
 interface RegistryEntry {
   readonly path: string;
+  readonly resource: string;
+  readonly verb: string;
   readonly name: string;
   readonly legacyNames: ReadonlyArray<string>;
   readonly effect: "read" | "write" | "destructive";
@@ -58,14 +60,17 @@ const registryModule = (await import(
 const entries = Object.values(registryModule.agentSurfaceRegistry);
 const byName = new Map<string, RegistryEntry>(
   entries.flatMap((entry) =>
-    [entry.name, ...entry.legacyNames].map((name) => [name, entry] as const),
+    // The listed name, the name the toolkit registers, and any other shipped name.
+    [`goat_${entry.resource}_${entry.verb}`, entry.name, ...entry.legacyNames].map(
+      (name) => [name, entry] as const,
+    ),
   ),
 );
 
 // Side-effect-free calls every caller may make; each answers with a result or a coded error.
 const SAFE_READS: ReadonlyArray<readonly [string, JsonObject]> = [
   ["goat_environment_read", {}],
-  ["goat_permission_profile_get", {}],
+  ["goat_permission_profile_read", {}],
   ["goat_project_list", {}],
   ["goat_thread_list", { limit: 1 }],
   ["goat_host_status", { local: true }],

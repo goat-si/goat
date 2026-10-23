@@ -1,8 +1,8 @@
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
+import { advertisesMemoryTools, remoteToolName } from "./remoteToolNames.ts";
+export { refusedByRemote } from "./remoteRefusal.ts";
 import {
-  MEMORY_MCP_TOOLS,
-  MEMORY_ADMINISTRATION_MCP_TOOLS,
   AttachmentCreateUploadUrlInput,
   AttachmentCreateUploadUrlResult,
   type AuthEnvironmentScope,
@@ -89,7 +89,8 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
   /**
    * host_unavailable: SSH, the tunnel, or the remote server could not be
    * reached or did not answer in time. remote_refused: the remote answered
-   * and refused; remoteCode carries its failure code when it sent one.
+   * and refused; remoteCode carries its failure code when it sent one. remote_outdated: the
+   * remote has no such tool, so nothing ran there; this machine never runs it locally instead.
    * caller_changed: the caller's modes changed while the call was in flight.
    */
   readonly reason: SshDispatchFailureReason;
@@ -1088,11 +1089,7 @@ const make = Effect.gen(function* () {
       const declared = new Set(
         listed.value.find((tool) => tool.name === "goat_thread_launch")?.argumentNames ?? [],
       );
-      const advertisesMemory = listed.value.some((tool) =>
-        [...MEMORY_MCP_TOOLS, ...MEMORY_ADMINISTRATION_MCP_TOOLS].some(
-          (name) => tool.name === name,
-        ),
-      );
+      const advertisesMemory = advertisesMemoryTools(listed.value);
       if (advertisesMemory && !declared.has("memoryGrantCeiling"))
         return yield* memoryRefusal("Remote memory tools require explicit task ceiling admission.");
       const capabilities = { declared, advertisesMemory };
@@ -1972,7 +1969,7 @@ const make = Effect.gen(function* () {
       const answer = yield* callAcpMcpTool({
         endpoint: new URL("/mcp", link.host.baseUrl).toString(),
         authorization: `Bearer ${link.token}`,
-        tool: call.tool,
+        tool: remoteToolName(call.tool, link.host.serverVersion),
         arguments: call.arguments,
         beforeToolCall: stillAuthorized,
       }).pipe(
@@ -1980,10 +1977,10 @@ const make = Effect.gen(function* () {
         Effect.catch((error) => {
           if (!(error instanceof AcpMcpBridgeError)) return Effect.fail(error);
           if (error.kind === "http" && error.status === 401) return Effect.fail(linkExpired(alias));
-          if (isUnknownToolRefusal(error, call.tool))
+          if (isUnknownToolRefusal(error, remoteToolName(call.tool, link.host.serverVersion)))
             return Effect.fail(
               failure(
-                "remote_refused",
+                "remote_outdated",
                 missingRemoteToolMessage(alias, call.tool, link.host.serverVersion),
               ),
             );
@@ -2080,7 +2077,7 @@ const make = Effect.gen(function* () {
         const answer = yield* callAcpMcpTool({
           endpoint: new URL("mcp", bootstrap.httpBaseUrl).toString(),
           authorization: `Bearer ${session.token}`,
-          tool: call.tool,
+          tool: remoteToolName(call.tool, bootstrap.remoteServerVersion),
           arguments: call.arguments,
           beforeToolCall: stillAuthorized,
         }).pipe(Effect.timeoutOption(call.timeoutMs));
@@ -2133,10 +2130,12 @@ const make = Effect.gen(function* () {
                 )
               : attempt(true);
           }
-          if (isUnknownToolRefusal(error, call.tool)) {
+          if (
+            isUnknownToolRefusal(error, remoteToolName(call.tool, bootstrap.remoteServerVersion))
+          ) {
             return Effect.fail(
               failure(
-                "remote_refused",
+                "remote_outdated",
                 missingRemoteToolMessage(target.alias, call.tool, bootstrap.remoteServerVersion),
               ),
             );

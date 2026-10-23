@@ -26,7 +26,7 @@ export const providerSurfaceEntries = {
     toolkit: "provider",
     summary: "Read which machines have each provider CLI",
     description:
-      "Read the provider × host matrix: for this machine and each connected SSH host, which coding-agent CLIs (Codex, Claude, Cursor, Grok, OpenCode, Pi) are installed, their versions, whether they are signed in, and how GOAT would install and sign in to each there. The cloud field is present only when cloud:true is passed: Claude Cloud, Cursor Cloud, and Devin Cloud readiness from the same checks as goat_cloud_holders, which is slower because it diagnoses those three on every machine, and is not the same as the CLI being signed in. Pass hosts to choose machines; omit it for connected hosts and the aliases in ssh config. A host row with status update_runtime runs a GOAT too old to answer; tell the user to update GOAT there (goat_ssh_runtime_update). not_ready means its runtime is stopped; call goat_ssh_host_prepare first. versionMismatch means the host runs another GOAT build. Reading never installs, signs in, or starts a runtime, and never returns credentials.",
+      "Read the provider × host matrix: for this machine and each connected SSH host, which coding-agent CLIs (Codex, Claude, Cursor, Grok, OpenCode, Pi) are installed, their versions, whether they are signed in, and how GOAT would install and sign in to each there. The cloud field is present only when cloud:true is passed: Claude Cloud, Cursor Cloud, and Devin Cloud readiness from the same checks as goat_cloud_agent_holders, which is slower because it diagnoses those three on every machine, and is not the same as the CLI being signed in. Pass hosts to choose machines; omit it for connected hosts and the aliases in ssh config. A host row with status update_runtime runs a GOAT too old to answer; tell the user to update GOAT there (goat_ssh_runtime_update). not_ready means its runtime is stopped; call goat_ssh_host_prepare first. versionMismatch means the host runs another GOAT build. Reading never installs, signs in, or starts a runtime, and never returns credentials.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -42,7 +42,7 @@ export const providerSurfaceEntries = {
     operation: "provider_sync",
     summary: "Install and sign in to a provider CLI on other machines",
     description:
-      "Install a provider CLI on SSH hosts with the vendor's official installer (npm package or install script for that OS), pinned to this machine's version unless version is given, then start that provider's own sign-in on each host. A thread agent gets needs_human: a person approves in the thread, and the sync then runs under their session; call goat_provider_host_matrix afterwards to see the result. A person or providers:manage client gets started with a syncId; poll goat_provider_sync_status. Each host signs in on its own: a device code (url and userCode) or a vendor sign-in page is shown to the user, who signs in with their own account; a terminal command must be run on that host by a person. Never sign in for the user, never copy credential files between machines, and never use someone else's subscription; consumer subscriptions belong to one person. Results never contain tokens or installer output.",
+      "Install a provider CLI on SSH hosts with the vendor's official installer (npm package or install script for that OS), pinned to this machine's version unless version is given, then start that provider's own sign-in on each host. A thread agent gets needs_human: a person approves in the thread, and the sync then runs under their session; call goat_provider_host_matrix afterwards to see the result. A person or providers:manage client gets started with a syncId; poll goat_provider_sync_read. Each host signs in on its own: a device code (url and userCode) or a vendor sign-in page is shown to the user, who signs in with their own account; a terminal command must be run on that host by a person. Never sign in for the user, never copy credential files between machines, and never use someone else's subscription; consumer subscriptions belong to one person. Results never contain tokens or installer output.",
     effect: "write",
     capability: "none",
     capabilityReason:
@@ -53,9 +53,9 @@ export const providerSurfaceEntries = {
     humanSteps: ["approval", "sign_in"],
     annotations: { idempotentHint: false, openWorldHint: true },
   },
-  sync_status: {
+  sync_read: {
     resource: "provider",
-    verb: "sync_status",
+    verb: "sync_read",
     name: "goat_provider_sync_status",
     toolkit: "provider",
     summary: "Read a provider sync's per-host progress",

@@ -11,7 +11,6 @@
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-
 import {
   type CliEntry,
   type Inventory,
@@ -22,6 +21,7 @@ import {
   repoRoot,
   sourceFiles,
 } from "./inventory.ts";
+import { LISTED_TOOL_NAMES } from "./listedNames.ts";
 import { code, groupBy, list, pct, table, TICK } from "./markdown.ts";
 
 const OUTPUT = "docs/internals/agent-surface-audit.md";
@@ -193,7 +193,7 @@ function analyse(inventory: Inventory) {
   const mutating = tools.filter((tool) => tool.mutating);
   const fields = tools.flatMap((tool) => tool.input.fields);
   const firstSegments = new Set(tools.map((tool) => tool.name.split("_")[0] ?? ""));
-  const knownNames = new Set(tools.map((tool) => tool.name));
+  const knownNames = new Set([...tools.map((tool) => tool.name), ...LISTED_TOOL_NAMES]);
   // Error codes share the snake_case shape; they are not tools.
   const codes = new Set(tools.flatMap((tool) => tool.error.codes));
   // Strict scan finds names that do not exist; loose scan measures coverage.
@@ -706,7 +706,7 @@ function render(inventory: Inventory): string {
             ", " +
             at(
               "apps/server/src/mcp/completionWebhook.ts",
-              /secretRef comes from request_secret in a GOAT thread/,
+              /secretRef comes from goat_handoff_create in a GOAT thread/,
             ),
         ],
         [

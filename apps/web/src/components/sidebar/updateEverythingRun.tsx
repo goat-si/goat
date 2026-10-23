@@ -43,7 +43,7 @@ const isRunningThread = (status: string) =>
   status === "preparing" || status === "starting" || status === "running";
 
 /** Turns running on one machine; updates wait for this to reach zero instead of interrupting. */
-export const runningThreadCountAtom = Atom.family((environmentId: EnvironmentId) =>
+const runningThreadCountAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make(
     (get) =>
       get(environmentThreadShells.environmentThreadsAtom(environmentId)).filter((thread) =>

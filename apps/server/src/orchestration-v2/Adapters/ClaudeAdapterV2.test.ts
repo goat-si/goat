@@ -280,7 +280,7 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     });
     const append = (options.systemPrompt as { readonly append?: string }).append ?? "";
     assert.include(append, GOAT_DEVELOPMENT_INSTRUCTIONS);
-    assert.notInclude(append, "Use `delegate_task`");
+    assert.notInclude(append, "Use `goat_task_create`");
   });
 
   it.each([
@@ -660,15 +660,15 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       readOnlySandbox: true,
     });
     assert.deepEqual(overrides.allowedTools, [
-      "mcp__goat__orchestrator_capabilities",
-      "mcp__goat__list_scheduled_tasks",
+      "mcp__goat__goat_provider_list",
+      "mcp__goat__goat_schedule_list",
       "mcp__goat__goat_thread_list",
       "mcp__goat__goat_thread_wait",
       "mcp__goat__goat_thread_status",
       "mcp__goat__goat_thread_watch_list",
       "mcp__goat__goat_pending_request_list",
       "mcp__goat__goat_pending_request_read",
-      "mcp__goat__goat_thread_configuration",
+      "mcp__goat__goat_thread_configuration_read",
       "mcp__goat__goat_thread_transfers",
       "mcp__goat__goat_worktree_status",
       "mcp__goat__goat_worktree_list",
@@ -683,8 +683,8 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       "mcp__goat__goat_queue_list",
       "mcp__goat__goat_queue_read",
       "mcp__goat__goat_review_findings_export",
-      "mcp__goat__html_preview",
-      "mcp__goat__html_render",
+      "mcp__goat__goat_html_preview",
+      "mcp__goat__goat_html_render",
     ]);
     assert.isFalse(overrides.allowedTools?.includes("mcp__goat__goat_thread_read"));
   });
@@ -705,26 +705,26 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       ...Object.values(HtmlToolkit.tools),
     ]
       .filter((tool) => Context.get(tool.annotations, Tool.Readonly))
-      .map((tool) => `mcp__goat__${tool.name}`)
+      .map((tool) => ClaudeAdapterV2.claudeGoatToolName(tool.name))
       .sort();
 
     // Read-only metadata may grow without granting automatic approval to new tools.
     assert.includeMembers(
       readOnlyToolNames,
       ClaudeAdapterV2.CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS.filter(
-        (name) => name !== "mcp__goat__html_render",
+        (name) => name !== "mcp__goat__goat_html_render",
       ),
     );
-    assert.notInclude(readOnlyToolNames, "mcp__goat__html_render");
+    assert.notInclude(readOnlyToolNames, "mcp__goat__goat_html_render");
 
     for (const name of [
       "goat_thread_read",
       "goat_provider_host_matrix",
-      "goat_provider_sync_status",
+      "goat_provider_sync_read",
       "goat_provider_addable_list",
       "goat_provider_login_status",
-      "goat_cloud_holders",
-      "goat_cloud_run_list",
+      "goat_cloud_agent_holders",
+      "goat_cloud_agent_run_list",
       "goat_goal_get",
       "goat_goal_list",
       "goat_scheduler_status",
@@ -827,7 +827,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
     assert.equal(systemPrompt.type, "preset");
     assert.equal(systemPrompt.preset, "claude_code");
     assert.include(systemPrompt.append ?? "", GOAT_DEVELOPMENT_INSTRUCTIONS);
-    assert.include(systemPrompt.append ?? "", "Use `delegate_task`");
+    assert.include(systemPrompt.append ?? "", "Use `goat_task_create`");
     const logged = ClaudeAdapterV2.loggedClaudeQueryOptions(options);
     assert.equal(logged.hasMcpServers, true);
     assert.notInclude(JSON.stringify(logged), "secret-claude-token");

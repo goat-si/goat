@@ -16,11 +16,11 @@ describe("T3 orchestration provider instructions", () => {
   });
 
   it("distinguishes delegated subagents from ordinary top-level threads", () => {
-    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "Use `delegate_task`");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "Use `goat_task_create`");
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level GOAT conversations");
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "never use these tools merely");
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "cross-provider");
-    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "call `delegate_task` again");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "call `goat_task_create` again");
     assert.include(
       GOAT_ORCHESTRATION_INSTRUCTIONS,
       "Do not use `goat_thread_send` on `childThreadId`",

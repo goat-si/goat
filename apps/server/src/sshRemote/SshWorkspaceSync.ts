@@ -442,7 +442,7 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
               code:
                 error.remoteCode === "model_unavailable"
                   ? "model_unavailable"
-                  : error.reason === "remote_refused"
+                  : error.reason === "remote_refused" || error.reason === "remote_outdated"
                     ? "remote_unsupported"
                     : "host_unavailable",
               host: target.alias,
@@ -500,7 +500,9 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
                 code:
                   error.launchMayHaveStarted === true
                     ? "launch_uncertain"
-                    : error.reason === "remote_refused" || error.reason === "invalid_request"
+                    : error.reason === "remote_refused" ||
+                        error.reason === "remote_outdated" ||
+                        error.reason === "invalid_request"
                       ? "launch_refused"
                       : "launch_uncertain",
               }),

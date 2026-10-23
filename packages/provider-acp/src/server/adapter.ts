@@ -36,7 +36,7 @@ import { AgentScope, AgentScopeThreadId } from "@goat/shared/AgentScope";
 import { HTML_RENDER_TOOL_NAME } from "@goat/shared/htmlRender";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
-import { resolveGoatMcpToolId } from "@goat/shared/goatMcpToolPresentation";
+import { resolveGoatMcpShippedToolId } from "@goat/shared/goatMcpToolPresentation";
 import { compactDynamicToolOutput, htmlRenderFromToolItem } from "@goat/shared/toolOutput";
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
 import * as Cause from "effect/Cause";
@@ -3740,7 +3740,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const input =
               mcpIdentity.input ?? unknownRecord(rawInputRecord?.arguments) ?? rawInputRecord ?? {};
             let output = rawOutput === undefined ? undefined : acpMcpToolCallOutput(rawOutput);
-            const isHtmlRender = resolveGoatMcpToolId(toolName) === HTML_RENDER_TOOL_NAME;
+            const isHtmlRender = resolveGoatMcpShippedToolId(toolName) === HTML_RENDER_TOOL_NAME;
             const isError =
               compactDynamicToolOutput(output)?.isError === true ||
               compactDynamicToolOutput(rawOutputRecord?.result)?.isError === true;

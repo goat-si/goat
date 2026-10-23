@@ -1,6 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "./registry.ts";
-import { canonicalToolAliases, isKeyedWrite, resolveAgentSurfaceEntry } from "./resolve.ts";
+import {
+  deprecatedReplacement,
+  isKeyedWrite,
+  legacyAgentSurfacePaths,
+  legacyToolNameTargets,
+  listedToolName,
+  resolveAgentSurfaceEntry,
+} from "./resolve.ts";
 
 type Entry = (typeof agentSurfaceRegistry)[keyof typeof agentSurfaceRegistry];
 const entries: ReadonlyArray<Entry> = Object.values(agentSurfaceRegistry);
@@ -12,8 +19,8 @@ const kebab = (part: string) => part.replaceAll("_", "-");
 const cliCommand = (entry: AgentSurfaceEntry) =>
   `goat ${kebab(entry.resource)} ${kebab(entry.verb)}`;
 
-// Shipped names that are not the projection of their path. They stay callable and gain a
-// canonical name at the listing flip (docs/internals/agent-surface.md#rollout, step 10; #781).
+// Shipped names that are not the projection of their path. Since the listing flip they stay
+// callable without being listed (docs/internals/agent-surface.md#rollout, step 10; #781).
 const OFF_GRAMMAR_NAMES = [
   "channel_bot_home",
   "channel_bot_home_claim",
@@ -36,7 +43,12 @@ const OFF_GRAMMAR_NAMES = [
   "goat_cloud_run_forget",
   "goat_cloud_run_list",
   "goat_cloud_run_register",
+  "goat_decision_get",
   "goat_goatclaw_sync",
+  "goat_origin_reports_wait",
+  "goat_permission_profile_get",
+  "goat_provider_sync_status",
+  "goat_thread_configuration",
   "html_preview",
   "html_render",
   "link_pull_request",
@@ -142,14 +154,34 @@ describe("agent surface grammar", () => {
     }
   });
 
-  it("aliases exactly the off-grammar names by their canonical names, shadowing no served name", () => {
-    const served = new Set<string>(entries.map((entry) => entry.name));
+  it("routes exactly the off-grammar names to their canonical names, shadowing no listed name", () => {
+    const listed = new Set<string>(entries.map(listedToolName));
     for (const legacy of OFF_GRAMMAR_NAMES) {
       const owner = entries.find((entry) => entry.legacyNames.includes(legacy))!;
-      expect(canonicalToolAliases.get(mcpName(owner)), legacy).toBe(owner.name);
+      expect(legacyToolNameTargets.get(legacy), legacy).toBe(mcpName(owner));
+      expect(deprecatedReplacement(legacy), legacy).toBe(mcpName(owner));
     }
-    expect(canonicalToolAliases.size).toBe(OFF_GRAMMAR_NAMES.length);
-    for (const alias of canonicalToolAliases.keys()) expect(served.has(alias), alias).toBe(false);
+    expect(legacyToolNameTargets.size).toBe(OFF_GRAMMAR_NAMES.length);
+    for (const legacy of legacyToolNameTargets.keys())
+      expect(listed.has(legacy), legacy).toBe(false);
+    for (const entry of entries)
+      expect(deprecatedReplacement(listedToolName(entry))).toBeUndefined();
+  });
+
+  it("lists the meta tools under their short names and every other path by its projection", () => {
+    for (const entry of entries)
+      expect(listedToolName(entry), entry.path).toBe(
+        entry.resource === "surface" ? entry.name : mcpName(entry),
+      );
+    expect(agentSurfaceRegistry["surface.call"].legacyNames).toEqual([]);
+  });
+
+  it("keeps every renamed path resolvable to the entry that replaced it", () => {
+    for (const [legacy, path] of legacyAgentSurfacePaths) {
+      expect(resolveAgentSurfaceEntry(legacy)?.path, legacy).toBe(path);
+      expect(deprecatedReplacement(legacy), legacy).toBe(path);
+      expect(Object.hasOwn(agentSurfaceRegistry, legacy), legacy).toBe(false);
+    }
   });
 });
 

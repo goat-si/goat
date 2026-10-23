@@ -34,13 +34,13 @@ const shared = {
   ],
 };
 
-const PermissionProfileGetTool = Tool.make(agentSurfaceRegistry["permission_profile.get"].name, {
+const PermissionProfileGetTool = Tool.make(agentSurfaceRegistry["permission_profile.read"].name, {
   ...shared,
-  description: agentSurfaceRegistry["permission_profile.get"].description,
+  description: agentSurfaceRegistry["permission_profile.read"].description,
   parameters: Tool.EmptyParams,
   success: PermissionProfileView,
   dependencies: [...shared.dependencies, Profiles.PermissionProfiles],
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["permission_profile.get"]));
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["permission_profile.read"]));
 
 const GoatclawSyncTool = Tool.make(agentSurfaceRegistry["permission_profile.sync"].name, {
   ...shared,

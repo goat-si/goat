@@ -28,6 +28,7 @@ import { mcpToolSession, type McpToolSession } from "../mcp/AcpMcpStdioBridge.ts
 import { CliCredentialError } from "./cliCredential.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { resolveShellCredential } from "./login.ts";
+import { generatedVerbsNote } from "./agentSurfaceCommand.ts";
 
 /**
  * Short enough that a run which stops to ask the user something is noticed
@@ -664,7 +665,9 @@ const threadShowCommand = Command.make("show", {
 );
 
 export const threadCommand = Command.make("thread").pipe(
-  Command.withDescription("Start, message, and read threads on the running server."),
+  Command.withDescription(
+    `Start, message, and read threads on the running server. ${generatedVerbsNote("thread")}`,
+  ),
   Command.withSubcommands([
     threadListCommand,
     threadStartCommand,

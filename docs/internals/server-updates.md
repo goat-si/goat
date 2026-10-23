@@ -160,7 +160,7 @@ command and message IDs prevent duplicate submissions after an outbox retry. Cod
 resumes without adding provider prompt text unless the turn lost background work;
 other adapters receive the continuation message through their normal turn path.
 
-Delegated tasks (`delegate_task` child threads) are reconciled as their own threads,
+Delegated tasks (`goat_task_create` child threads) are reconciled as their own threads,
 never as the parent's background work. The orchestrator settles child results and
 completion deliveries in a startup pass after reconciliation, because the terminal-run
 listener ignores reconciliation's cancellations. A cancelled child whose restart
