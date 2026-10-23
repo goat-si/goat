@@ -1049,7 +1049,7 @@ export class PreviewAutomationNoAvailableHostError extends Schema.TaggedError<Pr
   },
 ) {
   override get message(): string {
-    return `No preview automation host is available for ${this.operation} in environment ${this.environmentId}. The server-owned browser may be starting or reconnecting. Retry goat_preview_status, then call goat_preview_open if no tab is available. If it remains unavailable, report the browser connection failure.`;
+    return `No preview automation host is available for ${this.operation} in environment ${this.environmentId}. The server-owned browser may be starting or reconnecting. Retry goat_call {path:"preview.status"}, then call goat_call {path:"preview.open"} if no tab is available. If it remains unavailable, report the browser connection failure.`;
   }
 }
 
@@ -1074,8 +1074,8 @@ export class PreviewAutomationTabNotFoundError extends Schema.TaggedError<Previe
 ) {
   override get message(): string {
     return this.tabId
-      ? `Preview tab ${this.tabId} was not found for ${this.operation}. Omit tabId to use the current tab, or call goat_preview_open.`
-      : `No active preview tab was found for ${this.operation}. Call goat_preview_open first.`;
+      ? `Preview tab ${this.tabId} was not found for ${this.operation}. Omit tabId to use the current tab, or call goat_call {path:"preview.open"}.`
+      : `No active preview tab was found for ${this.operation}. Call goat_call {path:"preview.open"} first.`;
   }
 }
 
@@ -1117,12 +1117,12 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
     if (this.reason === "humanControl")
       return "A human controls this browser tab. Wait until they release control.";
     if (this.reason === "tabRequired")
-      return "Multiple browser tabs belong to this session. Pass a tabId from goat_preview_open or from the tabs listed by goat_preview_status.";
+      return 'Multiple browser tabs belong to this session. Pass a tabId from goat_call {path:"preview.open"} or from the tabs listed by goat_call {path:"preview.status"}.';
     if (this.reason === "dialogPending")
-      return "A browser dialog is pending. Read goat_preview_status and resolve it with goat_preview_dialog.";
+      return 'A browser dialog is pending. Read goat_call {path:"preview.status"} and resolve it with goat_call {path:"preview.dialog"}.';
     if (this.reason === "tabLimit")
-      return "Too many server browser tabs are open. Close one with goat_preview_close, or reuse a tabId from goat_preview_status tabs.";
-    if (this.reason === "closed") return "This browser tab is closed. Call goat_preview_open.";
+      return 'Too many server browser tabs are open. Close one with goat_call {path:"preview.close"}, or reuse a tabId from goat_call {path:"preview.status"} tabs.';
+    if (this.reason === "closed") return 'Tab closed. Call goat_call {path:"preview.open"}.';
     if (this.reason === "interrupted")
       return "Browser control changed. Take a fresh snapshot before trying again.";
     return `Preview automation ${this.operation} was interrupted on client ${this.clientId}.`;

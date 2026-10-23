@@ -49,13 +49,16 @@ export const OrchestratorMcpFailureCode = Schema.Literals([
   "not_home",
   // fleet.pressure.admission is "block" and the target host is critical.
   "host_pressure",
+  // A routed call named a tool the remote GOAT is too old to have; nothing ran.
+  "remote_outdated",
 ]);
 export type OrchestratorMcpFailureCode = typeof OrchestratorMcpFailureCode.Type;
 
 /**
  * host_unavailable: SSH, the tunnel, or the remote server did not answer. ssh_failed: the SSH
  * call itself failed. remote_refused: the remote answered and refused, with its code in
- * remoteCode when it sent one. caller_changed: the caller's modes changed mid-call.
+ * remoteCode when it sent one. remote_outdated: the remote has no such tool, so nothing ran.
+ * caller_changed: the caller's modes changed mid-call.
  */
 export const SshDispatchFailureReason = Schema.Literals([
   "invalid_request",
@@ -63,6 +66,7 @@ export const SshDispatchFailureReason = Schema.Literals([
   "ssh_failed",
   "host_unavailable",
   "remote_refused",
+  "remote_outdated",
   "caller_changed",
 ]);
 export type SshDispatchFailureReason = typeof SshDispatchFailureReason.Type;
