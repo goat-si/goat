@@ -2964,7 +2964,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         });
         assert.include(
           params.additionalContext?.goat_code_orchestration_01?.value ?? "",
-          "goat_task_create",
+          "task.create",
         );
         const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
         const transcript = makeCodexReplayTranscript({
