@@ -9,6 +9,7 @@ import { makeAcpMcpOverAcpBridge } from "@goat/provider-acp/server/mcpOverAcpBri
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import { cursorMcpServers } from "@goat/provider-cursor/testing";
 import { goatRemoteMcpConfig } from "@goat/provider-opencode/testing";
+import { buildPiRpcLaunch, loadMcpBridge } from "@goat/provider-pi/testing";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
 import * as NodeStream from "node:stream";
@@ -256,6 +257,30 @@ describe("what each harness is offered from GOAT's /mcp", () => {
         expectOffered(listed.tools, listing);
         yield* bridge.dispose;
       }).pipe(Effect.orDie),
+    ),
+  );
+
+  it.effect("Pi: its bridge declares what /mcp marks to load and defers the rest", () =>
+    forEachListing((endpoint, listing) =>
+      Effect.gen(function* () {
+        const launch = buildPiRpcLaunch({
+          launchArgs: [],
+          environment: {},
+          mcpSession: session(endpoint),
+          extensionPath: "/fixture/pi-t3-extension.ts",
+        });
+        const bridge = yield* Effect.promise(() =>
+          loadMcpBridge({ modern: true, toolSearchAvailable: true, server: { env: launch.env } }),
+        );
+        const names = (exposure?: string) =>
+          bridge.tools
+            .filter((tool) => exposure === undefined || tool.exposure === exposure)
+            .map((tool) => tool.name.slice("mcp__goat__".length))
+            .toSorted();
+        expect(names(), listing).toEqual(listing === "core" ? CORE : threadTools.toSorted());
+        // The marked tools are declared to the model; the rest wait for tool_search.
+        expect(names("direct"), listing).toEqual(CORE);
+      }),
     ),
   );
 });
