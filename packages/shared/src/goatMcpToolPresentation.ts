@@ -449,6 +449,15 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_describe: tool(["Describe", "Describing", "Described", "GOAT capabilities"], "capabilities"),
   goat_call: tool(["Call", "Calling", "Called", "a GOAT capability"], "environment-update"),
+  goat_operation_read: tool(["Read", "Reading", "Read", "an operation"], "host-status"),
+  goat_operation_wait: tool(
+    ["Wait for", "Waiting for", "Waited for", "an operation"],
+    "host-status",
+  ),
+  goat_operation_cancel: tool(
+    ["Cancel", "Cancelling", "Cancelled", "an operation"],
+    "environment-update",
+  ),
   goat_goatclaw_sync: tool(["Sync", "Syncing", "Synced", "goatclaw policy"], "environment-update"),
   goat_goal_get: tool(["Read", "Reading", "Read", "a fleet goal"], "host-status"),
   goat_goal_list: tool(["List", "Listing", "Listed", "fleet goals"], "host-status"),
