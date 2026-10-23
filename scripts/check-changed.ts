@@ -2,6 +2,7 @@
 // Runs CI's fast checks for this branch's changes: format and lint of the
 // changed files, knip, generated GraphQL operations, typecheck of the affected
 // packages and their dependents, and the test files beside the changed files.
+// A change to prompt text also runs the provider replay suites that record it.
 // CI still runs the full test suites and the jobs listed in the summary.
 //
 //   vp run check:changed          compare against the merge base with origin/dev
@@ -13,6 +14,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { decide, readWorkspace } from "../.github/scripts/ci-changes.cjs";
+import { testsForChanges } from "./lib/changed-tests.ts";
 
 const root = NodePath.resolve(import.meta.dirname, "..");
 const CODE = /\.[cm]?[jt]sx?$/;
@@ -50,19 +52,7 @@ const code = present.filter((file) => CODE.test(file));
 const packages = readWorkspace();
 const { affected, outputs } = decide(files, packages, false);
 
-// Changed test files, and the test files beside a changed source file
-// (foo.ts -> foo.test.ts, foo.browser.test.tsx). Vitest's import-graph
-// `related` reaches most of a package: one leaf server file pulled in 252 of
-// 406 server test files and took 7 minutes. CI runs the rest.
-const TEST = /\.test\.[cm]?[jt]sx?$/;
-const tests = new Set(code.filter((file) => TEST.test(file)));
-for (const file of code) {
-  const dir = NodePath.dirname(file);
-  const prefix = `${NodePath.basename(file).replace(CODE, "")}.`;
-  for (const entry of NodeFS.readdirSync(NodePath.join(root, dir))) {
-    if (entry.startsWith(prefix) && TEST.test(entry)) tests.add(NodePath.join(dir, entry));
-  }
-}
+const tests = testsForChanges(root, code);
 
 // knip:check takes about 35 s and cannot be scoped to a package. Any code
 // change can leave a file, export, or dependency unused (removing the last
