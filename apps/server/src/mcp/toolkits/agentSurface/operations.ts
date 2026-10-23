@@ -17,7 +17,8 @@ import { McpSchema, Tool } from "effect/ai";
 
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { OPERATION_KINDS } from "../../operations/kinds.ts";
+import type { HandoffReader } from "../../operations/handoffReads.ts";
+import { OPERATION_KINDS, type ToolCall } from "../../operations/kinds.ts";
 import type { OperationTokens, VerifiedOperation } from "../../operations/OperationTokens.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
 import { dispatchEnvelope } from "./dispatchEnvelope.ts";
@@ -78,7 +79,7 @@ const refOf = (
     operationId,
     kind,
     state: waiting === undefined ? state : "waiting_human",
-    cancellable: spec.cancel !== undefined,
+    cancellable: spec.cancellable,
     ...(isTerminalOperationState(state) ? {} : { pollAfterMs: spec.pollAfterMs }),
     ...(waiting === undefined ? {} : { handoffId: waiting }),
   };
@@ -88,7 +89,11 @@ const refOf = (
  * operation.read, wait and cancel. Each verifies the handle, then runs the kind's existing
  * status or cancel tool through ToolDispatch, so the verb adds no authority of its own.
  */
-export const makeOperations = (dispatch: ToolDispatch["Service"], tokens: OperationTokens) => {
+export const makeOperations = (
+  dispatch: ToolDispatch["Service"],
+  tokens: OperationTokens,
+  readHandoff: HandoffReader,
+) => {
   const resolve = Effect.fn("Operation.resolve")(function* (operationId: string) {
     const scope = yield* McpInvocationContext.McpInvocationContext;
     const handle = yield* tokens.verify(operationId, scope);
@@ -106,8 +111,15 @@ export const makeOperations = (dispatch: ToolDispatch["Service"], tokens: Operat
     handle: VerifiedOperation,
   ) {
     const spec = OPERATION_KINDS[handle.kind];
-    const call = spec.status(handle.nativeId);
-    const result = yield* dispatchEnvelope(dispatch, call.tool, call.args, "read");
+    const source = spec.source(handle.nativeId);
+    const viaTool = (call: ToolCall) => dispatchEnvelope(dispatch, call.tool, call.args, "read");
+    let result: AgentSurfaceResult;
+    if ("tool" in source) result = yield* viaTool(source.tool);
+    else {
+      result = yield* readHandoff(source.handoffId);
+      // Once a person has acted, the work behind the handoff answers for itself.
+      if (result.status === "ok" && source.then !== undefined) result = yield* viaTool(source.then);
+    }
     const state = spec.state(result, handle.nativeId);
     return { operation: refOf(operationId, handle.kind, state, result), result };
   });
@@ -148,11 +160,18 @@ export const makeOperations = (dispatch: ToolDispatch["Service"], tokens: Operat
 
   const cancel = Effect.fn("Operation.cancel")(function* (input: { readonly operationId: string }) {
     const handle = yield* resolve(input.operationId);
-    const call = OPERATION_KINDS[handle.kind].cancel?.(handle.nativeId);
-    if (call === undefined)
+    const spec = OPERATION_KINDS[handle.kind];
+    if (spec.cancel === undefined)
       return yield* new OperationError({
         reason: "not_cancellable",
         message: "This kind of work has no cancel path. Read it until it finishes.",
+      });
+    const current = yield* readOnce(input.operationId, handle);
+    const call = spec.cancel(handle.nativeId, current.result);
+    if (call === undefined)
+      return yield* new OperationError({
+        reason: "not_cancellable",
+        message: "Nothing runs yet: a person has not approved this work. Read it again later.",
       });
     const result = yield* dispatchEnvelope(dispatch, call.tool, call.args, "destructive");
     const after = yield* readOnce(input.operationId, handle);
