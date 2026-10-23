@@ -58,7 +58,7 @@ import {
   goatMcpServerName,
 } from "@goat/provider-opencode/testing";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
-import { openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
+import { noMcpInstructions, openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
 import { makeProviderReplayGate, type ProviderReplayGate } from "@goat/provider-testing/replayGate";
 
 const SESSION = "ses_f148ca2deffeJcwCnRQtb0YFNX";
@@ -2473,7 +2473,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         out("session.instructions.entry.put", {
           sessionID: SESSION,
           key: "goat",
-          value: buildRuntimeInstructions({ harness: "OpenCode", model: bigPickle.model }),
+          value: noMcpInstructions(bigPickle.model),
         }),
         reply("session.instructions.entry.put", null),
         ...turn,

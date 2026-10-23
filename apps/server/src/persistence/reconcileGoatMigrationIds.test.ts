@@ -47,193 +47,95 @@ const hasReviewGuides = Effect.gen(function* () {
   return tables.length === 1;
 });
 
+const skippedUpstreamMigrations = [
+  [61, "PullRequestReviewGuides"],
+  [62, "ThreadFailureLookupIndex"],
+  [63, "DropUnusedV1Projections"],
+  [64, "CanonicalizeThreadPullRequestLinks"],
+  [65, "CodexUsageNativeTurnIndex"],
+  [66, "RepairClientSettlementTimestamps"],
+  [67, "WebhookDedupe"],
+] as const;
+const laterGoatMigrations = [
+  [76, "Memory"],
+  [77, "MemoryHubSync"],
+  [78, "MemorySearchCounters"],
+  [79, "MemoryTaskGrantCeiling"],
+  [80, "MemoryImportLineage"],
+  [81, "MemoryCheckpointAccounting"],
+  [82, "MemoryReportLifecycle"],
+  [83, "MemoryUsageCounters"],
+  [84, "MemoryRevertResults"],
+  [85, "HandoffLookupIndex"],
+  [86, "MemoryLastReadySpace"],
+  [87, "MemoryHubAdministered"],
+  [88, "MemoryCheckpointLifecycle"],
+  [89, "FleetGoals"],
+  [90, "FleetHealth"],
+  [91, "ThreadRunObservedChecks"],
+  [92, "RemoteDispatchObservation"],
+  [93, "MemoryRevisionCheckpointSize"],
+  [94, "HubNodes"],
+  [95, "MemorySummaryWorkThreadIndex"],
+  [96, "ThreadHistoryArchives"],
+  [97, "PermissionProfiles"],
+  [98, "DecisionInbox"],
+] as const;
+const preMemoryGoatNames = [
+  "ServerActivityIndexes",
+  "RemoteReports",
+  "RemoteDispatches",
+  "ChannelLedger",
+  "RemoteDispatchQuestions",
+  "ThreadRunResults",
+  "RemoteReportRelay",
+  "ProjectionTurnItemRequestIndex",
+];
+
 describe("GOAT migration ids", () => {
-  it.effect("moves today's released ledger past WebhookDedupe", () =>
-    Effect.gen(function* () {
-      yield* seedGoatLedger(goatNames, 65);
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [65, "CodexUsageNativeTurnIndex"],
-        [66, "RepairClientSettlementTimestamps"],
-        [67, "WebhookDedupe"],
-      ]);
-      assert.deepStrictEqual(yield* history, migrationManifest);
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-
-  it.effect("moves a released ledger past CanonicalizeThreadPullRequestLinks", () =>
-    Effect.gen(function* () {
-      yield* seedGoatLedger(goatNames, 64);
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "CodexUsageNativeTurnIndex"],
-        [66, "RepairClientSettlementTimestamps"],
-        [67, "WebhookDedupe"],
-      ]);
-      assert.deepStrictEqual(yield* history, migrationManifest);
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-
-  it.effect("moves a released memory ledger past DropUnusedV1Projections", () =>
-    Effect.gen(function* () {
-      yield* seedGoatLedger(goatNames, 63);
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [63, "DropUnusedV1Projections"],
-        [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "CodexUsageNativeTurnIndex"],
-        [66, "RepairClientSettlementTimestamps"],
-        [67, "WebhookDedupe"],
-      ]);
-      assert.deepStrictEqual(yield* history, migrationManifest);
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-
-  it.effect("runs the upstream migration a GOAT ledger skipped and moves GOAT's ids up", () =>
-    Effect.gen(function* () {
-      yield* seedGoatLedger([
-        "ServerActivityIndexes",
-        "RemoteReports",
-        "RemoteDispatches",
-        "ChannelLedger",
-        "RemoteDispatchQuestions",
-        "ThreadRunResults",
-        "RemoteReportRelay",
-        "ProjectionTurnItemRequestIndex",
-      ]);
-      assert.isFalse(yield* hasReviewGuides);
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [61, "PullRequestReviewGuides"],
-        [62, "ThreadFailureLookupIndex"],
-        [63, "DropUnusedV1Projections"],
-        [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "CodexUsageNativeTurnIndex"],
-        [66, "RepairClientSettlementTimestamps"],
-        [67, "WebhookDedupe"],
-        [76, "Memory"],
-        [77, "MemoryHubSync"],
-        [78, "MemorySearchCounters"],
-        [79, "MemoryTaskGrantCeiling"],
-        [80, "MemoryImportLineage"],
-        [81, "MemoryCheckpointAccounting"],
-        [82, "MemoryReportLifecycle"],
-        [83, "MemoryUsageCounters"],
-        [84, "MemoryRevertResults"],
-        [85, "HandoffLookupIndex"],
-        [86, "MemoryLastReadySpace"],
-        [87, "MemoryHubAdministered"],
-        [88, "MemoryCheckpointLifecycle"],
-        [89, "FleetGoals"],
-        [90, "FleetHealth"],
-        [91, "ThreadRunObservedChecks"],
-        [92, "RemoteDispatchObservation"],
-        [93, "MemoryRevisionCheckpointSize"],
-        [94, "HubNodes"],
-        [95, "MemorySummaryWorkThreadIndex"],
-        [96, "ThreadHistoryArchives"],
-        [97, "PermissionProfiles"],
-        [98, "DecisionInbox"],
-      ]);
-      assert.isTrue(yield* hasReviewGuides);
-      assert.deepStrictEqual(yield* history, migrationManifest);
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-
-  it.effect("finishes the GOAT migrations a partial ledger had not reached yet", () =>
-    Effect.gen(function* () {
-      yield* seedGoatLedger(["ServerActivityIndexes", "RemoteReports", "RemoteDispatches"]);
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [61, "PullRequestReviewGuides"],
-        [62, "ThreadFailureLookupIndex"],
-        [63, "DropUnusedV1Projections"],
-        [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "CodexUsageNativeTurnIndex"],
-        [66, "RepairClientSettlementTimestamps"],
-        [67, "WebhookDedupe"],
+  it.effect.each([
+    ["ledger before WebhookDedupe", 65, goatNames, skippedUpstreamMigrations.slice(4)],
+    [
+      "ledger before CanonicalizeThreadPullRequestLinks",
+      64,
+      goatNames,
+      skippedUpstreamMigrations.slice(3),
+    ],
+    ["ledger before DropUnusedV1Projections", 63, goatNames, skippedUpstreamMigrations.slice(2)],
+    [
+      "pre-memory ledger",
+      61,
+      preMemoryGoatNames,
+      [...skippedUpstreamMigrations, ...laterGoatMigrations],
+    ],
+    [
+      "partial pre-memory ledger",
+      61,
+      ["ServerActivityIndexes", "RemoteReports", "RemoteDispatches"],
+      [
+        ...skippedUpstreamMigrations,
         [71, "ChannelLedger"],
         [72, "RemoteDispatchQuestions"],
         [73, "ThreadRunResults"],
         [74, "RemoteReportRelay"],
         [75, "ProjectionTurnItemRequestIndex"],
-        [76, "Memory"],
-        [77, "MemoryHubSync"],
-        [78, "MemorySearchCounters"],
-        [79, "MemoryTaskGrantCeiling"],
-        [80, "MemoryImportLineage"],
-        [81, "MemoryCheckpointAccounting"],
-        [82, "MemoryReportLifecycle"],
-        [83, "MemoryUsageCounters"],
-        [84, "MemoryRevertResults"],
-        [85, "HandoffLookupIndex"],
-        [86, "MemoryLastReadySpace"],
-        [87, "MemoryHubAdministered"],
-        [88, "MemoryCheckpointLifecycle"],
-        [89, "FleetGoals"],
-        [90, "FleetHealth"],
-        [91, "ThreadRunObservedChecks"],
-        [92, "RemoteDispatchObservation"],
-        [93, "MemoryRevisionCheckpointSize"],
-        [94, "HubNodes"],
-        [95, "MemorySummaryWorkThreadIndex"],
-        [96, "ThreadHistoryArchives"],
-        [97, "PermissionProfiles"],
-        [98, "DecisionInbox"],
-      ]);
-      assert.isTrue(yield* hasReviewGuides);
-      assert.deepStrictEqual(yield* history, migrationManifest);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-
-  it.effect(
-    "moves a ledger that already ran PullRequestReviewGuides past ThreadFailureLookupIndex",
-    () =>
+        ...laterGoatMigrations,
+      ],
+    ],
+    [
+      "ledger after PullRequestReviewGuides",
+      62,
+      preMemoryGoatNames,
+      [...skippedUpstreamMigrations.slice(1), ...laterGoatMigrations],
+    ],
+  ] as const)(
+    "repairs %s and restarts without reapplying migrations",
+    ([_title, firstGoatId, names, expected]) =>
       Effect.gen(function* () {
-        yield* seedGoatLedger(
-          [
-            "ServerActivityIndexes",
-            "RemoteReports",
-            "RemoteDispatches",
-            "ChannelLedger",
-            "RemoteDispatchQuestions",
-            "ThreadRunResults",
-            "RemoteReportRelay",
-            "ProjectionTurnItemRequestIndex",
-          ],
-          62,
-        );
-        assert.deepStrictEqual(yield* runMigrations(), [
-          [62, "ThreadFailureLookupIndex"],
-          [63, "DropUnusedV1Projections"],
-          [64, "CanonicalizeThreadPullRequestLinks"],
-          [65, "CodexUsageNativeTurnIndex"],
-          [66, "RepairClientSettlementTimestamps"],
-          [67, "WebhookDedupe"],
-          [76, "Memory"],
-          [77, "MemoryHubSync"],
-          [78, "MemorySearchCounters"],
-          [79, "MemoryTaskGrantCeiling"],
-          [80, "MemoryImportLineage"],
-          [81, "MemoryCheckpointAccounting"],
-          [82, "MemoryReportLifecycle"],
-          [83, "MemoryUsageCounters"],
-          [84, "MemoryRevertResults"],
-          [85, "HandoffLookupIndex"],
-          [86, "MemoryLastReadySpace"],
-          [87, "MemoryHubAdministered"],
-          [88, "MemoryCheckpointLifecycle"],
-          [89, "FleetGoals"],
-          [90, "FleetHealth"],
-          [91, "ThreadRunObservedChecks"],
-          [92, "RemoteDispatchObservation"],
-          [93, "MemoryRevisionCheckpointSize"],
-          [94, "HubNodes"],
-          [95, "MemorySummaryWorkThreadIndex"],
-          [96, "ThreadHistoryArchives"],
-          [97, "PermissionProfiles"],
-          [98, "DecisionInbox"],
-        ]);
+        yield* seedGoatLedger(names, firstGoatId);
+        if (firstGoatId === 61) assert.isFalse(yield* hasReviewGuides);
+        assert.deepStrictEqual(yield* runMigrations(), [...expected]);
+        assert.isTrue(yield* hasReviewGuides);
         assert.deepStrictEqual(yield* history, migrationManifest);
         assert.deepStrictEqual(yield* runMigrations(), []);
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

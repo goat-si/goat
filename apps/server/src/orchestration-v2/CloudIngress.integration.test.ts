@@ -125,6 +125,107 @@ function assertCloudResultItem(projection: OrchestrationV2ThreadProjection, runI
   return result;
 }
 
+function cloudDelegationMcpLayer<A, E, R>(
+  runtime: Layer.Layer<A, E, R>,
+  registry: Layer.Layer<Registry.ProviderAdapterRegistryV2>,
+  projects: Layer.Layer<Projects.ProjectService>,
+) {
+  return McpHttpServer.layerOrchestratorToolkit.pipe(
+    Layer.provide(layerPermissionProfilesOff),
+    Layer.provide(layerNoFleetSync),
+    Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+    Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(runtime),
+    Layer.provide(registry),
+    Layer.provide(projects),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(
+      Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+    ),
+    Layer.provide(Layer.mock(ScheduledTasks.ScheduledTaskService)({})),
+    Layer.provide(Layer.mock(Secrets.SecretRequests)({})),
+    Layer.provide(Layer.mock(RemoteDispatch.RemoteDispatchCoordinator)({})),
+    Layer.provide(Layer.mock(SshDispatch.SshRemoteDispatch)({})),
+    Layer.provide(
+      Layer.mock(LaunchWatches.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
+        Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
+      ),
+    ),
+    Layer.provide(
+      ThreadResults.layer.pipe(
+        Layer.provide(runtime),
+        Layer.provide(SqlitePersistence.layerMemory),
+      ),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+}
+
+const seedCloudDelegation = Effect.fn("cloudTest.seedCloudDelegation")(function* (
+  prefix: string,
+  projectId: ProjectId,
+  instanceId: ProviderInstanceId,
+  task: string,
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const sink = yield* EventSink.EventSinkV2;
+  const parentId = ThreadId.make(`thread:${prefix}-parent`);
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    commandId: CommandId.make(`command:${prefix}-parent`),
+    threadId: parentId,
+    projectId,
+    title: "Parent",
+    modelSelection: { instanceId, model: "fake" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: "dev",
+    worktreePath: null,
+    createdBy: "user",
+    creationSource: "web",
+  });
+  yield* orchestrator.dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make(`command:${prefix}-parent-run`),
+    threadId: parentId,
+    messageId: MessageId.make(`message:${prefix}-parent`),
+    text: "Delegate",
+    attachments: [],
+    dispatchMode: { type: "defer_start", workspaceStrategy: { type: "root", branch: "dev" } },
+    createdBy: "user",
+    creationSource: "web",
+  });
+  const parentRun = (yield* orchestrator.getThreadProjection(parentId)).runs[0]!;
+  const now = yield* DateTime.now;
+  yield* sink.write({
+    events: [
+      {
+        id: EventId.make(`event:${prefix}-parent-running`),
+        type: "run.updated",
+        threadId: parentId,
+        occurredAt: now,
+        payload: { ...parentRun, status: "running", startedAt: now },
+      },
+    ],
+  });
+  const delegation = yield* orchestrator.dispatch({
+    type: "delegated_task.request",
+    commandId: CommandId.make(`command:${prefix}-delegate`),
+    parentThreadId: parentId,
+    parentRunId: parentRun.id,
+    parentNodeId: parentRun.rootNodeId!,
+    task,
+    modelSelection: { instanceId, model: "fake" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    completionWake: "always",
+    createdBy: "agent",
+    creationSource: "mcp",
+  });
+  return { parentId, delegation, now };
+});
+
 it.effect.each([
   { providerText: "same", projectFolder: false },
   { providerText: "different", projectFolder: false },
@@ -1990,94 +2091,17 @@ it.effect.each([
           },
         ),
       });
-      const mcp = McpHttpServer.layerOrchestratorToolkit.pipe(
-        Layer.provide(layerPermissionProfilesOff),
-        Layer.provide(layerNoFleetSync),
-        Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
-        Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provideMerge(runtime),
-        Layer.provide(registry),
-        Layer.provide(projects),
-        Layer.provide(ServerSettings.layerTest()),
-        Layer.provide(
-          Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
-        ),
-        Layer.provide(Layer.mock(ScheduledTasks.ScheduledTaskService)({})),
-        Layer.provide(Layer.mock(Secrets.SecretRequests)({})),
-        Layer.provide(Layer.mock(RemoteDispatch.RemoteDispatchCoordinator)({})),
-        Layer.provide(Layer.mock(SshDispatch.SshRemoteDispatch)({})),
-        Layer.provide(
-          Layer.mock(LaunchWatches.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
-            Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
-          ),
-        ),
-        Layer.provide(
-          ThreadResults.layer.pipe(
-            Layer.provide(runtime),
-            Layer.provide(SqlitePersistence.layerMemory),
-          ),
-        ),
-        Layer.provide(NodeServices.layer),
-      );
+      const mcp = cloudDelegationMcpLayer(runtime, registry, projects);
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const sink = yield* EventSink.EventSinkV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-        const parentId = ThreadId.make("thread:cloud-cancel-parent");
-        yield* orchestrator.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make("command:cancel-parent"),
-          threadId: parentId,
+        const { parentId, delegation } = yield* seedCloudDelegation(
+          "cloud-cancel",
           projectId,
-          title: "Parent",
-          modelSelection: { instanceId, model: "fake" },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: "dev",
-          worktreePath: null,
-          createdBy: "user",
-          creationSource: "web",
-        });
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make("command:cancel-parent-run"),
-          threadId: parentId,
-          messageId: MessageId.make("message:cancel-parent"),
-          text: "Delegate",
-          attachments: [],
-          dispatchMode: { type: "defer_start", workspaceStrategy: { type: "root", branch: "dev" } },
-          createdBy: "user",
-          creationSource: "web",
-        });
-        const before = yield* orchestrator.getThreadProjection(parentId);
-        const parentRun = before.runs[0]!;
-        const now = yield* DateTime.now;
-        yield* sink.write({
-          events: [
-            {
-              id: EventId.make("event:parent-running"),
-              type: "run.updated",
-              threadId: parentId,
-              occurredAt: now,
-              payload: { ...parentRun, status: "running", startedAt: now },
-            },
-          ],
-        });
-        const delegation = yield* orchestrator.dispatch({
-          type: "delegated_task.request",
-          commandId: CommandId.make("command:cloud-child"),
-          parentThreadId: parentId,
-          parentRunId: parentRun.id,
-          parentNodeId: parentRun.rootNodeId!,
-          task: "Cloud work",
-          modelSelection: { instanceId, model: "fake" },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          completionWake: "always",
-          createdBy: "agent",
-          creationSource: "mcp",
-        });
+          instanceId,
+          "Cloud work",
+        );
         const taskEvent = delegation.storedEvents.find(
           (stored) => stored.event.type === "subagent.updated",
         );
@@ -2896,40 +2920,13 @@ it.effect.each([
           ),
         },
       );
-      const mcp = McpHttpServer.layerOrchestratorToolkit.pipe(
-        Layer.provide(layerPermissionProfilesOff),
-        Layer.provide(layerNoFleetSync),
-        Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
-        Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provideMerge(
-          Layer.merge(
-            runtime,
-            CommandReceipts.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
-          ),
+      const mcp = cloudDelegationMcpLayer(
+        Layer.merge(
+          runtime,
+          CommandReceipts.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
         ),
-        Layer.provide(Registry.layerFromAdapters([adapter])),
-        Layer.provide(Layer.mock(Projects.ProjectService)({ getById: () => Effect.succeedNone })),
-        Layer.provide(ServerSettings.layerTest()),
-        Layer.provide(
-          Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
-        ),
-        Layer.provide(Layer.mock(ScheduledTasks.ScheduledTaskService)({})),
-        Layer.provide(Layer.mock(Secrets.SecretRequests)({})),
-        Layer.provide(Layer.mock(RemoteDispatch.RemoteDispatchCoordinator)({})),
-        Layer.provide(Layer.mock(SshDispatch.SshRemoteDispatch)({})),
-        Layer.provide(
-          Layer.mock(LaunchWatches.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
-            Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
-          ),
-        ),
-        Layer.provide(
-          ThreadResults.layer.pipe(
-            Layer.provide(runtime),
-            Layer.provide(SqlitePersistence.layerMemory),
-          ),
-        ),
-        Layer.provide(NodeServices.layer),
+        Registry.layerFromAdapters([adapter]),
+        Layer.mock(Projects.ProjectService)({ getById: () => Effect.succeedNone }),
       );
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -2937,59 +2934,12 @@ it.effect.each([
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
         const outbox = yield* EffectOutbox.EffectOutboxV2;
         const receipts = yield* CommandReceipts.CommandReceiptStoreV2;
-        const parentId = ThreadId.make("thread:recovery-parent");
-        yield* orchestrator.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make("command:recovery-parent"),
-          threadId: parentId,
-          projectId: ProjectId.make("project:recovery"),
-          title: "Parent",
-          modelSelection: { instanceId, model: "fake" },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: "dev",
-          worktreePath: null,
-          createdBy: "user",
-          creationSource: "web",
-        });
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make("command:recovery-parent-run"),
-          threadId: parentId,
-          messageId: MessageId.make("message:recovery-parent"),
-          text: "Delegate",
-          attachments: [],
-          dispatchMode: { type: "defer_start", workspaceStrategy: { type: "root", branch: "dev" } },
-          createdBy: "user",
-          creationSource: "web",
-        });
-        const parentRun = (yield* orchestrator.getThreadProjection(parentId)).runs[0]!;
-        const now = yield* DateTime.now;
-        yield* sink.write({
-          events: [
-            {
-              id: EventId.make("event:recovery-parent-running"),
-              type: "run.updated",
-              threadId: parentId,
-              occurredAt: now,
-              payload: { ...parentRun, status: "running", startedAt: now },
-            },
-          ],
-        });
-        yield* orchestrator.dispatch({
-          type: "delegated_task.request",
-          commandId: CommandId.make("command:recovery-delegate"),
-          parentThreadId: parentId,
-          parentRunId: parentRun.id,
-          parentNodeId: parentRun.rootNodeId!,
-          task: "Accepted cloud work",
-          modelSelection: { instanceId, model: "fake" },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          completionWake: "always",
-          createdBy: "agent",
-          creationSource: "mcp",
-        });
+        const { parentId, now } = yield* seedCloudDelegation(
+          "recovery",
+          ProjectId.make("project:recovery"),
+          instanceId,
+          "Accepted cloud work",
+        );
         const task = (yield* orchestrator.getThreadProjection(parentId)).subagents[0]!;
         const childId = task.childThreadId!;
         const initial = yield* orchestrator.getThreadProjection(childId);
