@@ -214,14 +214,21 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(storage));
     yield* PubSub.publish(signals, undefined);
   });
-  const append = Effect.fn("RemoteReportService.append")(function* (
-    threadId: ThreadId,
-    value: RemoteOriginReportInput,
-    relay: RemoteRelaySend | null,
-  ) {
+  // Read once per report: the run active now is the run that made it, even if a restart
+  // replaces it before the report is stored.
+  const liveShell = Effect.fn("RemoteReportService.liveShell")(function* (threadId: ThreadId) {
     const shell = yield* orchestrator.getThreadShell(threadId).pipe(Effect.mapError(unavailable));
     if (shell === null || shell.deletedAt !== null)
       return yield* new RemoteReportError({ reason: "thread_deleted" });
+    return shell;
+  });
+  type LiveShell = Effect.Success<ReturnType<typeof liveShell>>;
+  const append = Effect.fn("RemoteReportService.append")(function* (
+    threadId: ThreadId,
+    shell: LiveShell,
+    value: RemoteOriginReportInput,
+    relay: RemoteRelaySend | null,
+  ) {
     const runId = shell.activeRunId;
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     const result = yield* sql
@@ -280,10 +287,11 @@ const make = Effect.gen(function* () {
     input: RemoteOriginReportInput,
   ) {
     const value = yield* decodeReportInput(input).pipe(Effect.mapError(invalid));
-    return yield* append(threadId, value, null).pipe(
+    const shell = yield* liveShell(threadId);
+    return yield* append(threadId, shell, value, null).pipe(
       Effect.catchIf(
         (error) => error.reason === "not_bound",
-        () => reportToLauncher(threadId, value),
+        () => reportToLauncher(threadId, shell, value),
       ),
     );
   });
@@ -294,11 +302,9 @@ const make = Effect.gen(function* () {
    */
   const reportToLauncher = Effect.fn("RemoteReportService.reportToLauncher")(function* (
     threadId: ThreadId,
+    shell: LiveShell,
     value: RemoteOriginReportInput,
   ) {
-    const shell = yield* orchestrator.getThreadShell(threadId).pipe(Effect.mapError(unavailable));
-    if (shell === null || shell.deletedAt !== null)
-      return yield* new RemoteReportError({ reason: "thread_deleted" });
     const parentId = shell.lineage.parentThreadId;
     const subagents =
       shell.launchedBy === undefined &&
@@ -343,7 +349,7 @@ const make = Effect.gen(function* () {
       yield* sql`INSERT INTO remote_report_inbox
         (origin_thread_id, correlation_id, kind, text, run_id, created_at)
         VALUES (${launcherId}, ${`local:${threadId}`}, ${value.status}, ${text},
-          ${shell.activeRunId ?? shell.latestRunId}, ${createdAt})`.pipe(Effect.mapError(storage));
+          ${shell.activeRunId}, ${createdAt})`.pipe(Effect.mapError(storage));
     }
     return { sequence: 0, delivery: "launcher" as const };
   });
@@ -354,6 +360,7 @@ const make = Effect.gen(function* () {
     const value = yield* decodeRelayInput(input).pipe(Effect.mapError(invalid));
     return yield* append(
       threadId,
+      yield* liveShell(threadId),
       {
         status: "progress",
         summary: `Asked to relay goat_thread_send to thread ${value.threadId} on ${value.host}.`,
