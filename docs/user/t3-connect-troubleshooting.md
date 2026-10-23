@@ -1,19 +1,23 @@
 # T3 Connect troubleshooting
 
+Managed T3 Connect routes are currently unavailable in GOAT. Use
+[direct pairing or Tailscale](./remote-access.md) to connect devices. The checks below
+describe the upstream relay for builds with T3 Connect enabled.
+
 A T3 Connect connection goes through four parts, in this order:
 
 1. **This device** reaches T3 Connect over the internet.
 2. **T3 Connect** checks your sign-in and the host's link.
 3. **The host's tunnel** (cloudflared on the host) carries the request to the host.
-4. **T3 Code on the host** answers.
+4. **GOAT on the host** answers.
 
 When a connection fails, open **Settings > Connections**, find the environment,
 and select **Details**. The first part marked as failed is the cause. Find its
 section below.
 
-To see the host's side, run `t3 connect status` on the host, or open
+To see the host's side, run `goat connect status` on the host, or open
 **Settings > Connections** on the host. Both check the host's T3 Connect
-address from the host, and say why it fails. `t3 connect` runs the same check
+address from the host, and say why it fails. `goat connect` runs the same check
 when it finishes setup. This check cannot test another device's network. For a
 problem on one device, use **Details** on that device.
 
@@ -22,16 +26,16 @@ problem on one device, use **Details** on that device.
 T3 Connect could not reach the host's tunnel. This means one of these:
 
 - The host is asleep, turned off, or offline.
-- T3 Code is not running on the host.
+- GOAT is not running on the host.
 - The host's network blocks the tunnel. See
   [Port 7844 is blocked on the host](#port-7844-is-blocked-on-the-host).
 
 Fix:
 
-1. Make sure the host is awake and T3 Code runs on it.
-2. On the host, run `t3 connect status`. It names the problem on the host's side.
+1. Make sure the host is awake and GOAT runs on it.
+2. On the host, run `goat connect status`. It names the problem on the host's side.
 3. If the host was offline for a long time, T3 Connect removes its tunnel. Start
-   T3 Code on the host and update it to the latest version. It gets a new tunnel.
+   GOAT on the host and update it to the latest version. It gets a new tunnel.
 
 ## Port 7844 is blocked on the host
 
@@ -55,18 +59,20 @@ host and this device are on the same Tailscale network, add the host's
 Tailscale address as a direct route. See
 [Reach one machine several ways](./remote-access.md#reach-one-machine-several-ways).
 
-## The tunnel works, but T3 Code does not answer
+<a id="the-tunnel-works-but-t3-code-does-not-answer"></a>
 
-The host's tunnel is up, but it cannot reach T3 Code on the host. Common causes:
+## The tunnel works, but GOAT does not answer
 
-- T3 Code on the host stopped, crashed, or is still starting.
-- T3 Code restarted on a different port, for example after an update, and the
+The host's tunnel is up, but it cannot reach GOAT on the host. Common causes:
+
+- GOAT on the host stopped, crashed, or is still starting.
+- GOAT restarted on a different port, for example after an update, and the
   tunnel still points at the old port.
 - The server binds only one network address with `GOAT_HOST`. The tunnel
   sends requests to `127.0.0.1`, so the server must also listen there.
 
-Fix: restart T3 Code on the host. For the background service, run
-`t3 service restart`. Then run `t3 connect status` on the host.
+Fix: restart GOAT on the host. For the background service, run
+`goat service restart`. Then run `goat connect status` on the host.
 
 ## The T3 Connect address does not resolve or answer
 
@@ -76,7 +82,7 @@ secure (TLS) connection, or did not answer in time.
 Fix:
 
 1. Make sure the host is awake and online.
-2. On the host, run `t3 connect status`.
+2. On the host, run `goat connect status`.
 3. If the check fails only on the host, check the host's DNS, VPN, or proxy.
 
 ## This device can't reach T3 Connect
@@ -102,17 +108,17 @@ Fix:
 T3 Connect does not have an active link between your account and the host.
 
 - **The host is linked to a different account.** Sign in to the same T3 Connect
-  account on this device and on the host. On the host, run `t3 connect logout`,
-  then `t3 connect`.
+  account on this device and on the host. On the host, run `goat connect logout`,
+  then `goat connect`.
 - **T3 Connect is off on the host, or the host only publishes agent activity.**
   On the host, open **Settings > Connections** and turn **T3 Connect** on, or
-  run `t3 connect`.
+  run `goat connect`.
 - **The host was linked, but the server did not apply the link yet.** Run
-  `t3 service restart` on the host, or restart `t3 serve`.
+  `goat service restart` on the host, or restart `goat serve`.
 - **This device's sign-in expired, or the host no longer accepts this
   device.** Sign out of T3 Connect and sign in again.
 - **Your account reached its tunnel limit.** Remove an environment you do not
-  use from your T3 account's T3 Connect page, then restart T3 Code on the host.
+  use from your account's T3 Connect page, then restart GOAT on the host.
 
 ## The clock is off
 
@@ -120,25 +126,27 @@ T3 Connect signs requests with short-lived proofs. When the clock on this
 device or the host is a few minutes wrong, T3 Connect rejects them. Turn on
 automatic date and time on both devices, then retry.
 
-## The host runs an older T3 Code
+<a id="the-host-runs-an-older-t3-code"></a>
 
-This app needs a newer T3 Code on the host. Update T3 Code on the host. See
-[Updating T3 Code](./updating.md).
+## The host runs an older GOAT
+
+This app needs a newer GOAT on the host. Update GOAT on the host. See
+[Updating GOAT](./updating.md).
 
 ## T3 Connect returned an error
 
-| Error                                                     | Fix                                                                                                                                         |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `environment_link_limit_exceeded` or managed tunnel limit | Remove an unused environment, then restart T3 Code on the host.                                                                             |
-| `auth_invalid` or `invalid_bearer`                        | Run `t3 connect login`. If credentials were revoked, run `t3 connect logout`, then `t3 connect` again. Restart the server after signing in. |
-| Expired or invalid link proof                             | Check the host's date and time, update T3 Code, then restart it.                                                                            |
-| HTTP 403 without a recognized error                       | Check relay access, proxies, and firewall rules. Keep any Cloudflare Ray ID for a bug report.                                               |
-| HTTP 408, 429, or 5xx                                     | Wait a few minutes. T3 Code retries temporary failures on its own.                                                                          |
+| Error                                                     | Fix                                                                                                                                               |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `environment_link_limit_exceeded` or managed tunnel limit | Remove an unused environment, then restart GOAT on the host.                                                                                      |
+| `auth_invalid` or `invalid_bearer`                        | Run `goat connect login`. If credentials were revoked, run `goat connect logout`, then `goat connect` again. Restart the server after signing in. |
+| Expired or invalid link proof                             | Check the host's date and time, update GOAT, then restart it.                                                                                     |
+| HTTP 403 without a recognized error                       | Check relay access, proxies, and firewall rules. Keep any Cloudflare Ray ID for a bug report.                                                     |
+| HTTP 408, 429, or 5xx                                     | Wait a few minutes. GOAT retries temporary failures on its own.                                                                                   |
 
 After you fix a permanent rejection, restart the host's server with
-`t3 service restart`. For a foreground server, stop it and run `t3 serve` again.
+`goat service restart`. For a foreground server, stop it and run `goat serve` again.
 
-If T3 Code on the host disappears when SSH closes, see
+If GOAT on the host disappears when SSH closes, see
 [background-service troubleshooting](./background-service.md#troubleshooting).
 
 ## Report a problem
@@ -147,5 +155,5 @@ If none of this helps, open an issue on
 [GitHub](https://github.com/pingdotgg/t3code/issues). Include:
 
 - The text from **Copy diagnostics** in the environment's **Details**.
-- The output of `t3 connect status` on the host.
+- The output of `goat connect status` on the host.
 - The trace ID, if one is shown.

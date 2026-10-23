@@ -78,7 +78,7 @@ export class NoRunningServerError extends Schema.TaggedError<NoRunningServerErro
         ? ["In a linked worktree, pass --base-dir to pair with a server outside it."]
         : []),
       isGoatConnectEnabled()
-        ? "Start one with `npx t3 serve`, or connect this machine with T3 Connect: `npx t3 connect`."
+        ? "Start GOAT with `goat serve`, then pair this device with `goat pair`. For remote access, use `goat pair --tailscale`."
         : "Start one with `goat serve`.",
     ].join("\n");
   }

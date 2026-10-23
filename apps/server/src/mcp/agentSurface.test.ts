@@ -16,6 +16,7 @@ import {
   type McpInvocationScope,
 } from "./McpInvocationContext.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
 import {
   canonicalToolAliases,
   canonicalToolName,
@@ -160,6 +161,28 @@ const propertiesOf = (node: unknown, definitions: JsonSchema): JsonSchema => {
   const resolved = resolve(node, definitions);
   return isObject(resolved) && isObject(resolved["properties"]) ? resolved["properties"] : {};
 };
+
+// Writes whose `host` names something other than a fleet machine the call acts on.
+const NOT_A_FLEET_HOST: Readonly<Record<string, string>> = {
+  "connection.add_ssh": "the address of a machine being added, gated by hub.manage",
+  "ssh.host_add": "the address of a machine being added, gated by hub.manage",
+  "pull_request.link": "the git forge's host",
+  "pull_request.unlink": "the git forge's host",
+  "pull_request.watch": "the git forge's host",
+  "pull_request.unwatch": "the git forge's host",
+};
+
+it("declares every write argument that names a host, so the goatclaw host allowlist checks it", () => {
+  for (const entry of entries) {
+    if (entry.effect === "read" || entry.path in NOT_A_FLEET_HOST) continue;
+    const document = Schema.toJsonSchemaDocument(toolOf(entry).parametersSchema);
+    const named = Object.keys(propertiesOf(document.schema, document.definitions)).filter(
+      (key) => key === "host" || key.endsWith("Host") || key.endsWith("Alias"),
+    );
+    expect(hostArgumentsOf(entry).toSorted(), entry.path).toEqual(named.toSorted());
+  }
+});
+
 /** Every object schema reachable from a result schema whose kind is the literal needs_human. */
 const needsHumanArms = (document: { schema: unknown; definitions: JsonSchema }) => {
   const arms: Array<JsonSchema> = [];
@@ -307,7 +330,15 @@ const TARGET_THREAD = "thread:conformance-target";
  * unexpected and defect never match an expectation, so a wrong argument or a crash before the
  * handler cannot pass as access granted.
  */
-type Outcome = "thread_required" | "read_only" | "denied" | "reached" | "unexpected" | "defect";
+type Outcome =
+  | "thread_required"
+  | "read_only"
+  | "ssh_read_only"
+  | "denied"
+  | "uncoded"
+  | "reached"
+  | "unexpected"
+  | "defect";
 const INERT_SERVICE_DEFECT = "inert service";
 // The tool-level wrapper's text when a handler dies on an inert service.
 const HANDLER_DIED = "Tool execution failed due to an internal server error.";
@@ -320,19 +351,24 @@ const HANDLER_VALIDATION: Readonly<Record<string, string>> = {
   "project.create": "A project made from a title takes no other settings.",
 };
 const IMAGE_TOOL_FAILURE = /^(Preview snapshot|Device screenshot) failed/;
+// Read from the text alone: Pi and other text-only clients never see structuredContent.
+const refusalCode = (text: string) => /"code":"([a-z_]+)"/.exec(text)?.[1];
 const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
   const content = result.content[0];
   const text = content?.type === "text" ? content.text : "";
   if (!result.isError) return "reached";
   if (text === INERT_SERVICE_DEFECT || text === HANDLER_DIED) return "reached";
   if (text.startsWith("defect:")) return "defect";
+  const code = refusalCode(text);
+  // An agent tells a refusal from a failure by its code, so a refusal without one fails the case.
+  const refused = (outcome: Outcome) => (code === undefined ? "uncoded" : outcome);
   if (/thread_credential_required|acts as the calling GOAT thread/.test(text))
-    return "thread_required";
-  // Some toolkits (pull requests, images) return the refusal message without its code.
-  if (/approved for read-only access/.test(text)) return "read_only";
-  if (/"code":"capability_denied"/.test(text)) return "denied";
+    return refused("thread_required");
+  if (/reaches other machines with this machine's SSH keys/.test(text))
+    return refused("ssh_read_only");
+  if (/approved for read-only access/.test(text)) return refused("read_only");
+  if (code === "capability_denied") return "denied";
   if (IMAGE_TOOL_FAILURE.test(text)) return "reached";
-  const code = /"code":"([a-z_]+)"/.exec(text)?.[1];
   if (code === "invalid_request" && path in HANDLER_VALIDATION) return "reached";
   return code !== undefined && HANDLER_CODES.has(code) ? "reached" : "unexpected";
 };
@@ -352,8 +388,6 @@ const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
 };
 
 const REASONS = {
-  serviceThreadCheck: "Requires a thread inside its service, after the access layer.",
-  imageTool: "preview_snapshot reports refusals as text without a code (McpHttpServer.ts).",
   sshFanOut:
     "Reaches other machines with this machine's SSH keys, which read-only clients may not use.",
   dryRunDefault: "Defaults to a dry run, which reads.",
@@ -362,47 +396,15 @@ const REASONS = {
   dispatches: "Runs other tools, each under its own declaration, and adds no gate of its own.",
 } as const;
 // Where the runtime outcome differs from what requires and effect alone predict, and why.
-// The service checks, SSH refusal wording and codeless refusals are tracked in #791.
 const ACCESS_EXCEPTIONS: Readonly<
   Record<string, { readonly reason: keyof typeof REASONS } & Partial<Record<Caller, Outcome>>>
 > = {
-  "goal.apply": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "goal.pause": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "goal.resume": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "goal.delete": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "provider.home_request": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "provider.setup_open": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "preview.snapshot": { reason: "imageTool", readOnlyClient: "reached", fullClient: "reached" },
-  "scheduler.status": { reason: "sshFanOut", readOnlyClient: "read_only" },
-  "pending_request.list": { reason: "sshFanOut", readOnlyClient: "read_only" },
-  "provider.host_matrix": { reason: "sshFanOut", readOnlyClient: "read_only" },
-  "hub.device_verify": { reason: "sshFanOut", readOnlyClient: "read_only" },
-  "host.status": { reason: "sshFanOut", readOnlyClient: "read_only" },
-  "cloud_agent.holders": { reason: "sshFanOut", readOnlyClient: "read_only" },
+  "scheduler.status": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
+  "pending_request.list": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
+  "provider.host_matrix": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
+  "hub.device_verify": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
+  "host.status": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
+  "cloud_agent.holders": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
   "worktree.cleanup": { reason: "dryRunDefault", readOnlyClient: "reached" },
   "permission_profile.sync": { reason: "clientOnly", thread: "denied", fullClient: "denied" },
   "channel.task_move": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
@@ -412,11 +414,9 @@ const ACCESS_EXCEPTIONS: Readonly<
   "surface.call": { reason: "dispatches", readOnlyClient: "reached" },
 };
 
-const expectedOutcome = (entry: Entry, caller: Caller, route: Route): Outcome => {
+const expectedOutcome = (entry: Entry, caller: Caller): Outcome => {
   const exception = ACCESS_EXCEPTIONS[entry.path];
-  // goat_call reports the refusal an image tool's own text hides.
-  const applies = !(route === "goat_call" && exception?.reason === "imageTool");
-  if (applies && exception?.[caller] !== undefined) return exception[caller];
+  if (exception?.[caller] !== undefined) return exception[caller];
   if (caller === "thread") return entry.requires === "client" ? "denied" : "reached";
   if (entry.requires === "thread") return "thread_required";
   if (caller === "readOnlyClient" && entry.effect !== "read") return "read_only";
@@ -545,7 +545,7 @@ describe("agent surface access", () => {
                 ? "reached"
                 : classified;
             if (route === "direct") directOutcome = outcome;
-            const expected = expectedOutcome(entry, caller, route);
+            const expected = expectedOutcome(entry, caller);
             if (outcome !== expected) {
               const content = result.content[0];
               const detail = content?.type === "text" ? content.text.slice(0, 160) : "";

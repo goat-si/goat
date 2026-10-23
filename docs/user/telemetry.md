@@ -16,7 +16,7 @@ GOAT also sends relay connection traces to Axiom to diagnose T3 Connect connecti
 To disable product events and relay tracing, set `GOAT_TELEMETRY_ENABLED=false` in the server's
 environment before starting it. Relay tracing also stops when `GOAT_OTEL_SDK_DISABLED` or
 `OTEL_SDK_DISABLED` turns OpenTelemetry export off. The web app in a browser, including one the
-`t3` CLI opens, does not read these variables.
+`goat` CLI opens, does not read these variables.
 
 The desktop app reads `GOAT_TELEMETRY_ENABLED` from your shell profile (for example `~/.zshrc`) on macOS and
 Linux, so export it there and restart the app. On Windows, set it as a user environment variable.
