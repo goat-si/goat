@@ -391,7 +391,8 @@ examples as tests.
 through `goat_call`; each tool also stays callable by its own names. MCP clients, including
 other GOAT hosts, keep the full listing (D22): a host's dispatch reads a remote's `tools/list` to
 learn which launch arguments and memory tools it supports, and hosts on older versions have no
-other way.
+other way. A client's `tools/list` result names the listing agents get in
+`_meta["goat/agentToolListing"]`, which is how the D8 runner checks a core arm.
 
 **Proposed.** `goat_describe { path?, query?, host? }` answers at three depths:
 

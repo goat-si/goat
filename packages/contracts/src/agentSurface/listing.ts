@@ -15,3 +15,9 @@ export const DEFAULT_AGENT_TOOL_LISTING: AgentToolListing = "core";
 
 /** The _meta key Claude Code reads to load a tool up front instead of deferring it. */
 export const ALWAYS_LOAD_META_KEY = "anthropic/alwaysLoad";
+
+/**
+ * The _meta key on a tools/list result that names the listing agents GOAT runs get. Clients keep
+ * the full listing (D22), so this is how one, such as the D8 runner, learns what agents see.
+ */
+export const AGENT_TOOL_LISTING_META_KEY = "goat/agentToolListing";

@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  agentListedNames,
   type Arm,
   CampaignError,
   type RunMetrics,
@@ -415,6 +416,29 @@ describe("a run that answers in a follow-up run", () => {
       toolCalls: 3,
       modelTurns: { min: 4, max: 5 },
     });
+  });
+});
+
+describe("agentListedNames", () => {
+  const marked = { "anthropic/alwaysLoad": true };
+  const tools = [
+    { name: "goat_describe", _meta: marked },
+    { name: "goat_call", _meta: marked },
+    { name: "goat_thread_launch" },
+  ];
+
+  it("reads the agents' core listing from a server that keeps clients on the full one", () => {
+    // Without this a D8 core arm reads the client's full listing and is never run (D22).
+    expect(agentListedNames({ tools, _meta: { "goat/agentToolListing": "core" } })).toEqual([
+      "goat_describe",
+      "goat_call",
+    ]);
+    expect(agentListedNames({ tools, _meta: { "goat/agentToolListing": "full" } })).toHaveLength(3);
+  });
+
+  it("takes the client's listing as the agents' from a server that does not name it", () => {
+    expect(agentListedNames({ tools: tools.slice(0, 2) })).toEqual(["goat_describe", "goat_call"]);
+    expect(agentListedNames({ tools })).toHaveLength(3);
   });
 });
 

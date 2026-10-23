@@ -1,7 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
+import {
+  AGENT_TOOL_LISTING_META_KEY,
+  ALWAYS_LOAD_META_KEY,
+} from "@goat/contracts/agentSurface/listing";
 import { canonicalToolName, listedToolName } from "@goat/contracts/agentSurface/resolve";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
@@ -69,6 +72,8 @@ it.effect(
       expect(Object.keys(properties ?? {})).toEqual(
         expect.arrayContaining(["memoryGrantCeiling", "report", "standingInstructions"]),
       );
+      // A client that keeps the full listing still learns which listing agents get.
+      expect((yield* http.listResultMeta("client"))?.[AGENT_TOOL_LISTING_META_KEY]).toBe("core");
     }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 

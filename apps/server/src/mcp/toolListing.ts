@@ -1,4 +1,5 @@
 import {
+  AGENT_TOOL_LISTING_META_KEY,
   ALWAYS_LOAD_META_KEY,
   type AgentToolListing,
   DEFAULT_AGENT_TOOL_LISTING,
@@ -46,7 +47,10 @@ const listedTools = (
     return [{ ...tool, _meta: { ...meta, [ALWAYS_LOAD_META_KEY]: true } }];
   });
 
-/** A JSON-RPC message with its tools/list result filtered; any other message unchanged. */
+/**
+ * A JSON-RPC message with its tools/list result filtered and naming the listing agents get; any
+ * other message unchanged.
+ */
 const filterMessage = (
   text: string,
   scope: McpInvocationContext.McpInvocationScope,
@@ -55,9 +59,14 @@ const filterMessage = (
   const message = Option.getOrUndefined(decodeJson(text));
   if (!isRecord(message) || !isRecord(message.result) || !Array.isArray(message.result.tools))
     return text;
+  const meta = isRecord(message.result._meta) ? message.result._meta : {};
   return encodeJson({
     ...message,
-    result: { ...message.result, tools: listedTools(message.result.tools, scope, listing) },
+    result: {
+      ...message.result,
+      tools: listedTools(message.result.tools, scope, listing),
+      _meta: { ...meta, [AGENT_TOOL_LISTING_META_KEY]: listing },
+    },
   });
 };
 
