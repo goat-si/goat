@@ -1,3 +1,5 @@
+import { listingSetting, withCallerListing } from "./toolListing.ts";
+import * as Settings from "../serverSettings.ts";
 import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
@@ -290,6 +292,7 @@ const refusedToolCallId = (request: HttpServerRequest.HttpServerRequest) =>
 const makeMcpAuthMiddleware = Effect.gen(function* () {
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
+  const listing = listingSetting(yield* Effect.serviceOption(Settings.ServerSettingsService));
   return Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const authorization = request.headers.authorization;
@@ -348,7 +351,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
         message,
       });
     }
-    return yield* withServedToolNames(httpEffect).pipe(
+    return yield* withCallerListing(listing)(withServedToolNames(httpEffect)).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
       Effect.map(normalizeMcpHttpResponse),
     );
@@ -1345,6 +1348,25 @@ export const layerDeviceToolkit = Layer.mergeAll(
   layerDeviceScreenshotRegistration,
 );
 
+/** Tells connected clients to list tools again when the listing setting changes (MCP list_changed). */
+const layerListingChanges = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const settings = yield* Effect.serviceOption(Settings.ServerSettingsService);
+    if (Option.isNone(settings)) return;
+    // Changes carry no initial snapshot, so compare against the listing clients have now.
+    let listed = yield* listingSetting(settings);
+    yield* settings.value.streamChanges.pipe(
+      Stream.runForEach((current) => {
+        if (current.agentToolListing === listed) return Effect.void;
+        listed = current.agentToolListing;
+        return server.notifications["notifications/tools/list_changed"]({});
+      }),
+      Effect.forkScoped,
+    );
+  }),
+);
+
 export const layerMcpTransport = McpServer.layerHttp({
   name: "GOAT",
   version: packageJson.version,
@@ -1377,6 +1399,7 @@ export const layer = Layer.mergeAll(
   layerConnectionToolkit,
   layerRemoteReportRegistration,
   layerLlmsTxtRoute,
+  layerListingChanges,
 ).pipe(
   // LaunchWatchService and RemoteDispatchCoordinator are left to the caller:
   // the server provides one of each for these tools and the remote-launch
