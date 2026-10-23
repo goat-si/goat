@@ -68,7 +68,7 @@ const PROVIDER_CONTINUATION_PATHS = [
   "provider.setup",
 ] as const;
 export type ProviderContinuationPath = (typeof PROVIDER_CONTINUATION_PATHS)[number];
-const isProviderContinuationPath = (path: string): path is ProviderContinuationPath =>
+export const isProviderContinuationPath = (path: string): path is ProviderContinuationPath =>
   (PROVIDER_CONTINUATION_PATHS as ReadonlyArray<string>).includes(path);
 const ContinuationPayload = Schema.Struct({
   version: Schema.Literal(1),
@@ -202,6 +202,13 @@ export class Handoffs extends Context.Service<
     readonly readProviderProgress: (
       input: HandoffReadInput,
     ) => Effect.Effect<unknown, HandoffError>;
+    /**
+     * Whether an approved provider change is still waiting for the server to apply it, and the
+     * progress it recorded once it finished (absent when it finished without one).
+     */
+    readonly providerApplyState: (
+      input: HandoffReadInput,
+    ) => Effect.Effect<{ readonly applying: boolean; readonly progress?: unknown }, HandoffError>;
     readonly completedSshContinuations: Effect.Effect<
       ReadonlyArray<{
         readonly handoff: Handoff;
@@ -783,6 +790,16 @@ const make = Effect.gen(function* () {
     recordProviderProgress,
     finishProviderContinuation,
     readProviderProgress,
+    providerApplyState: (input) =>
+      loadPrivate(input.handoffId).pipe(
+        Effect.map((payload) =>
+          payload?.kind === "continuation" && payload.approvedBySessionId !== undefined
+            ? { applying: true }
+            : payload?.kind === "provider_outcome"
+              ? { applying: false, progress: payload.progress }
+              : { applying: false },
+        ),
+      ),
     resolvedSshOutcomes,
     finishSshContinuation,
     bindSshContinuation,
