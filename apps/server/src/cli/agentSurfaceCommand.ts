@@ -164,11 +164,12 @@ const CALL_HELP = [
 ].join("\n");
 
 const DESCRIBE_HELP = [
-  "Usage: goat describe [path | resource] [--query <text>] [--json]",
+  "Usage: goat describe [path | resource] [--query <text>] [--detail names|summary|full]",
+  "       [--limit <n>] [--cursor <nextCursor>] [--json]",
   "",
   "Without a path: every resource and its verbs. With a resource: its paths. With a path: its",
   "input schema and whether this caller can use it now. --query ranks paths by text, within the",
-  "resource when one is given.",
+  "resource when one is given; --cursor continues the same search.",
   "",
   EXIT_CODES_HELP,
 ].join("\n");
@@ -181,7 +182,8 @@ interface Parsed {
   readonly dryRun: boolean;
   readonly host?: string;
   readonly requestId?: string;
-  readonly query?: string;
+  /** goat_describe's query, detail, limit and cursor. */
+  readonly search?: Readonly<Record<string, unknown>>;
 }
 
 class UsageError {
@@ -232,7 +234,7 @@ const parseTokens = (
   let dryRun = false;
   let host: string | undefined;
   let requestId: string | undefined;
-  let query: string | undefined;
+  const search: Record<string, unknown> = {};
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index] ?? "";
     const equals = token.startsWith("--") ? token.indexOf("=") : -1;
@@ -252,8 +254,14 @@ const parseTokens = (
     else if (flag === "--dry-run" && allow.fields) dryRun = true;
     else if (flag === "--host" && allow.fields) host = value();
     else if (flag === "--request-id" && allow.fields) requestId = value();
-    else if (flag === "--query" && allow.query) query = value();
-    else if ((flag === "-f" || flag === "--raw-field") && allow.fields)
+    else if (flag === "--query" && allow.query) search.query = value();
+    else if (flag === "--detail" && allow.query) search.detail = value();
+    else if (flag === "--cursor" && allow.query) search.cursor = value();
+    else if (flag === "--limit" && allow.query) {
+      const limit = Number(value());
+      if (!Number.isInteger(limit)) throw new UsageError("--limit needs a whole number.");
+      search.limit = limit;
+    } else if ((flag === "-f" || flag === "--raw-field") && allow.fields)
       fields.push(field(value(), false, input));
     else if ((flag === "-F" || flag === "--field") && allow.fields)
       fields.push(field(value(), true, input));
@@ -268,7 +276,7 @@ const parseTokens = (
     dryRun,
     ...(host === undefined ? {} : { host }),
     ...(requestId === undefined ? {} : { requestId }),
-    ...(query === undefined ? {} : { query }),
+    ...(Object.keys(search).length === 0 ? {} : { search }),
   };
 };
 
@@ -361,7 +369,7 @@ const route = (
       path: "surface.describe",
       args: {
         ...(path === undefined ? {} : { path }),
-        ...(parsed.query === undefined ? {} : { query: parsed.query }),
+        ...parsed.search,
       },
       json: parsed.json,
       effect: "read",
