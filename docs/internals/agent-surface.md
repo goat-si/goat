@@ -145,7 +145,11 @@ reserve their key in `mcp_request_reservations` through
 where the declaration admits the write, after every caller check, so direct calls
 and `goat_call` share it and a replay passes the checks again. A handler that
 authorizes inside its body (SSH launch's profile and role checks, the worktree
-credential) declares `admission: "handler"` and admits after them. The
+credential) declares `admission: "handler"` and admits after them. Services also
+authorize inside (provider settings, lane claims), so the reservation records the
+caller's grant: its goatclaw capabilities and ceiling, or a client's scopes and
+read-only state. A replay is answered only while the caller still holds at least
+that grant, with a client's scopes reauthorized live. The
 reservation is its own statement, not part of each domain's transaction; the gap
 between it and the recorded outcome is what `unknown` covers. A transient
 refusal that ran nothing frees the key, other failures replay, and a failure that

@@ -1,5 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
+  AuthProvidersManageScope,
+  EnvironmentAuthorizationError,
   EnvironmentId,
   OrchestratorMcpFailure,
   ProviderInstanceId,
@@ -132,16 +134,21 @@ const seed = SqlClient.SqlClient.pipe(
 );
 
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
-const callTool = (name: string, args: Record<string, unknown>) =>
+const callTool = (
+  name: string,
+  args: Record<string, unknown>,
+  as: McpInvocationContext.McpInvocationScope = scope,
+) =>
   McpServer.McpServer.pipe(
     Effect.flatMap((server) => server.callTool({ name, arguments: args })),
     Effect.flatMap(({ content }) =>
       decodeJson(content.map((part) => (part.type === "text" ? part.text : "")).join("")),
     ),
     Effect.provideService(McpSchema.McpServerClient, mcpClient),
-    Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+    Effect.provideService(McpInvocationContext.McpInvocationContext, as),
   );
-const direct = (args: Record<string, unknown>) => callTool(keyed.name, args);
+const direct = (args: Record<string, unknown>, as?: McpInvocationContext.McpInvocationScope) =>
+  callTool(keyed.name, args, as);
 const viaGoatCall = (args: Record<string, unknown>) =>
   callTool("goat_call", { path: keyed.path, args });
 const runs = Effect.flatMap(Probe, (probe) => Ref.get(probe.runs));
@@ -205,9 +212,11 @@ it.effect(
       const sql = yield* SqlClient.SqlClient;
       const digest = yield* argumentsDigest({ projectId: "a" });
       yield* sql`INSERT INTO mcp_request_reservations (environment_id, principal, path,
-      client_request_id, receipt_id, tool_name, args_digest, state, boot_id, created_at, expires_at)
+      client_request_id, receipt_id, tool_name, args_digest, grant_json, state, boot_id, created_at,
+      expires_at)
       VALUES ('environment', ${`thread:${caller}`}, ${keyed.path}, 'k', 'receipt:stopped',
-        ${keyed.name}, ${digest}, 'running', 'boot:stopped', '1970-01-01T00:00:00.000Z',
+        ${keyed.name}, ${digest}, '{"goatclaw":null,"scopes":null,"readOnly":false}', 'running',
+        'boot:stopped', '1970-01-01T00:00:00.000Z',
         '1970-01-02T00:00:00.000Z')`;
       expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toMatchObject({
         code: "conflict",
@@ -323,5 +332,93 @@ it.effect("lets a completed key run again only after 24 hours", () =>
     expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 1 });
     yield* TestClock.adjust("1 hour");
     expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 2 });
+  }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect(
+  "refuses a replay once the thread's grant narrows where the capability gate does not look",
+  () =>
+    Effect.gen(function* () {
+      yield* seed;
+      expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 1 });
+      // settings.write stays, so the gate for project.delete still admits; threads.launch does not.
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const policy = (yield* settings.getSettings).goatclaw;
+      const owner = policy.profiles.owner!;
+      yield* settings.updateSettings({
+        goatclaw: {
+          ...policy,
+          profiles: {
+            ...policy.profiles,
+            owner: {
+              ...owner,
+              capabilities: owner.capabilities.filter(
+                (capability) => capability !== "threads.launch",
+              ),
+            },
+          },
+        },
+      });
+      expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toMatchObject({
+        code: "capability_denied",
+      });
+      expect(yield* runs).toBe(1);
+    }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect("refuses an outside client's replay once its scope is revoked or turns read-only", () =>
+  Effect.gen(function* () {
+    const revoked = yield* Ref.make(false);
+    const client = (readOnly: boolean): McpInvocationContext.McpInvocationScope => ({
+      environmentId: EnvironmentId.make("environment"),
+      requestNamespace: "client:session",
+      thread: undefined,
+      client: { sessionId: "session", label: "Outside agent", access: "full-access" },
+      capabilities: new Set(["orchestration"]),
+      issuedAt: 0,
+      readOnly,
+      grantedScopes: [AuthProvidersManageScope],
+      reauthorize: (required) =>
+        Effect.flatMap(Ref.get(revoked), (gone) =>
+          gone
+            ? Effect.fail(
+                new EnvironmentAuthorizationError({
+                  message: "The MCP session does not grant the required scope.",
+                  requiredScope: required[0] ?? AuthProvidersManageScope,
+                }),
+              )
+            : Effect.void,
+        ),
+    });
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" }, client(false))).toEqual({
+      run: 1,
+    });
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" }, client(false))).toEqual({
+      run: 1,
+    });
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" }, client(true))).toMatchObject({
+      code: "capability_denied",
+    });
+    yield* Ref.set(revoked, true);
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" }, client(false))).toMatchObject({
+      code: "capability_denied",
+    });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect("reserves the key as its declared schema decodes it and refuses any other key", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    expect(yield* direct({ projectId: "a", clientRequestId: " k " })).toEqual({ run: 1 });
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 1 });
+    for (const clientRequestId of [17, "", "  ", "x".repeat(257)])
+      expect(
+        yield* direct({ projectId: "a", clientRequestId }),
+        String(clientRequestId),
+      ).toMatchObject({
+        code: "invalid_request",
+      });
+    expect(yield* runs).toBe(1);
   }).pipe(Effect.provide(served("owner"))),
 );

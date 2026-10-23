@@ -1,7 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- argument digests and receipt ids need node:crypto.
 import * as NodeCrypto from "node:crypto";
 
-import { OrchestratorMcpFailure } from "@goat/contracts";
+import { AuthEnvironmentScope, OrchestratorMcpFailure, RuntimeMode } from "@goat/contracts";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import {
   declaredFailureLiteral,
@@ -21,6 +21,7 @@ import { McpSchema } from "effect/ai";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
+import { KeyedClientRequestId } from "./toolkits/keyedParameters.ts";
 import { refusalResult } from "./toolRefusals.ts";
 
 /** Completed keys live at least this long (docs/internals/agent-surface.md#idempotency). */
@@ -31,7 +32,12 @@ const PROCESS_BOOT_ID = NodeCrypto.randomUUID();
 type Outcome = McpSchema.CallToolResult | McpSchema.InputRequired;
 type Literal = { readonly _tag: string; readonly code?: string };
 type KeyedEntry = AgentSurfaceEntry & { readonly path: string };
-type Refusal = "in_progress" | "idempotency_mismatch" | "outcome_unknown" | "storage_failed";
+type Refusal =
+  | "in_progress"
+  | "idempotency_mismatch"
+  | "outcome_unknown"
+  | "storage_failed"
+  | "grant_lost";
 interface Reserve {
   readonly environmentId: string;
   readonly principal: string;
@@ -43,6 +49,7 @@ interface Reserve {
   readonly profileId: string | null;
   readonly ceiling: string | null;
   readonly host: string | null;
+  readonly grant: Grant;
 }
 type Reservation =
   | { readonly kind: "reserved" }
@@ -50,6 +57,7 @@ type Reservation =
       readonly kind: "replay";
       readonly result: McpSchema.CallToolResult;
       readonly failure?: Literal;
+      readonly grant: Grant;
     }
   | { readonly kind: Refusal };
 
@@ -69,6 +77,38 @@ const decodeResult = Schema.decodeEffect(ResultJson);
 const encodeResult = Schema.encodeEffect(ResultJson);
 const decodeLiteral = Schema.decodeEffect(LiteralJson);
 const encodeLiteral = Schema.encodeEffect(LiteralJson);
+const decodeKey = Schema.decodeUnknownEffect(KeyedClientRequestId);
+
+/**
+ * What the caller held when it reserved the key. A replay needs at least as much, so a grant
+ * narrowed where a handler or service checks it, not only at the capability gate, is refused.
+ * goatclaw null means no profile applied; scopes null means a thread credential.
+ */
+const Grant = Schema.Struct({
+  goatclaw: Schema.NullOr(
+    Schema.Struct({ capabilities: Schema.Array(Schema.String), runtimeMode: RuntimeMode }),
+  ),
+  scopes: Schema.NullOr(Schema.Array(AuthEnvironmentScope)),
+  readOnly: Schema.Boolean,
+});
+type Grant = typeof Grant.Type;
+const GrantJson = Schema.fromJsonString(Grant);
+const encodeGrant = Schema.encodeEffect(GrantJson);
+const decodeGrant = Schema.decodeEffect(GrantJson);
+
+const rank = (mode: RuntimeMode) => RuntimeMode.literals.indexOf(mode);
+const holdsAll = (held: ReadonlyArray<string> | null, needed: ReadonlyArray<string> | null) =>
+  (needed ?? []).every((item) => (held ?? []).includes(item));
+
+/** Whether `current` still holds everything `recorded` did. Turning goatclaw on narrows it. */
+export const coversGrant = (current: Grant, recorded: Grant) =>
+  (recorded.readOnly || !current.readOnly) &&
+  holdsAll(current.scopes, recorded.scopes) &&
+  (recorded.goatclaw === null
+    ? current.goatclaw === null
+    : current.goatclaw !== null &&
+      holdsAll(current.goatclaw.capabilities, recorded.goatclaw.capabilities) &&
+      rank(current.goatclaw.runtimeMode) >= rank(recorded.goatclaw.runtimeMode));
 
 /** Sorted object keys, array order kept, undefined dropped; null stays distinct from omitted. */
 const canonical = (value: unknown): unknown =>
@@ -104,6 +144,13 @@ const reservationRefusal = (reason: Refusal, entry: KeyedEntry, clientRequestId:
   const reconcile = entry.reconcile ?? entry.path;
   const call = `${entry.name} with clientRequestId ${clientRequestId}`;
   switch (reason) {
+    case "grant_lost":
+      return refusalResult(
+        new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: `This caller no longer holds the grant it had when it first sent ${call}, so GOAT does not return that call's result.`,
+        }),
+      );
     case "outcome_unknown":
       return refusalResult(
         new OrchestratorMcpFailure({
@@ -150,12 +197,13 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
       WHERE state = 'completed' AND expires_at <= ${createdAt}`;
     const inserted = yield* sql<{ readonly receipt_id: string }>`
       INSERT INTO mcp_request_reservations (environment_id, principal, path, client_request_id,
-        receipt_id, tool_name, args_digest, profile_id, ceiling, host, state, boot_id,
-        created_at, expires_at)
+        receipt_id, tool_name, args_digest, profile_id, ceiling, host, grant_json, state,
+        boot_id, created_at, expires_at)
       VALUES (${request.environmentId}, ${request.principal}, ${request.path},
         ${request.clientRequestId}, ${request.receiptId}, ${request.tool}, ${request.digest},
-        ${request.profileId}, ${request.ceiling}, ${request.host}, 'running', ${bootId},
-        ${createdAt}, ${DateTime.formatIso(DateTime.add(now, { hours: KEY_LIFETIME_HOURS }))})
+        ${request.profileId}, ${request.ceiling}, ${request.host},
+        ${yield* encodeGrant(request.grant)}, 'running', ${bootId}, ${createdAt},
+        ${DateTime.formatIso(DateTime.add(now, { hours: KEY_LIFETIME_HOURS }))})
       ON CONFLICT DO NOTHING RETURNING receipt_id`;
     if (inserted.length === 1) return { kind: "reserved" } satisfies Reservation as Reservation;
     const [row] = yield* sql<{
@@ -164,7 +212,9 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
       readonly boot_id: string;
       readonly result_json: string | null;
       readonly failure_json: string | null;
-    }>`SELECT args_digest, state, boot_id, result_json, failure_json FROM mcp_request_reservations
+      readonly grant_json: string;
+    }>`SELECT args_digest, state, boot_id, result_json, failure_json, grant_json
+      FROM mcp_request_reservations
       WHERE environment_id = ${request.environmentId} AND principal = ${request.principal}
         AND path = ${request.path} AND client_request_id = ${request.clientRequestId}`;
     // A row released between the insert and this read belonged to a call that just ended.
@@ -180,6 +230,7 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
     return {
       kind: "replay",
       result,
+      grant: yield* decodeGrant(row.grant_json),
       ...(failure === undefined ? {} : { failure }),
     } satisfies Reservation as Reservation;
   });
@@ -223,17 +274,44 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
   const database = yield* Effect.serviceOption(SqlClient.SqlClient);
   const store = Option.map(database, (sql) => makeStore(sql, bootId));
 
-  /** Who reserved the key under which grant, for the receipt's audit columns. */
-  const auditOf = (scope: McpInvocationContext.McpInvocationScope) =>
-    scope.thread === undefined
-      ? Effect.succeed({ profileId: null, ceiling: scope.client?.access ?? null })
-      : permissions.resolve(scope).pipe(
-          Effect.map((view) => ({
-            profileId: view.enabled ? view.profile.id : null,
-            ceiling: view.runtimeMode,
-          })),
-          Effect.orElseSucceed(() => ({ profileId: null, ceiling: null })),
-        );
+  /** The caller's grant now, and the audit columns it fills. A profile that cannot resolve fails. */
+  const grantOf = Effect.fnUntraced(function* (scope: McpInvocationContext.McpInvocationScope) {
+    const readOnly = scope.readOnly === true || scope.client?.access === "read-only";
+    const scopes = scope.grantedScopes ?? null;
+    if (scope.thread === undefined)
+      return {
+        profileId: null,
+        ceiling: scope.client?.access ?? null,
+        grant: { goatclaw: null, scopes, readOnly } satisfies Grant,
+      };
+    const view = yield* permissions.resolve(scope);
+    return {
+      profileId: view.enabled ? view.profile.id : null,
+      ceiling: view.runtimeMode,
+      grant: {
+        goatclaw: view.enabled
+          ? { capabilities: view.profile.capabilities, runtimeMode: view.runtimeMode }
+          : null,
+        scopes,
+        readOnly,
+      } satisfies Grant,
+    };
+  });
+
+  /** A replay is answered only while the caller holds the grant it reserved the key with. */
+  const stillGranted = (
+    scope: McpInvocationContext.McpInvocationScope,
+    current: Grant,
+    recorded: Grant,
+  ) =>
+    !coversGrant(current, recorded)
+      ? Effect.succeed(false)
+      : scope.reauthorize === undefined || recorded.scopes === null
+        ? Effect.succeed(true)
+        : scope.reauthorize(recorded.scopes).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          );
 
   const keyed =
     /* The request's span already covers each call. */
@@ -255,14 +333,14 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
       const outer = yield* Effect.serviceOption(McpToolAccess.CallFailureCapture);
       const forward = (error: unknown) =>
         Option.isSome(outer) ? outer.value.record(error) : Effect.void;
-      // Ends the call with \`result\` and parks the handler, which the race then interrupts.
+      // Ends the call with `result` and parks the handler, which the race then interrupts.
       const decide = (result: McpSchema.CallToolResult) =>
         Effect.andThen(Deferred.succeed(decided, result), Effect.never);
 
       const reservationFor = Effect.fnUntraced(function* (params: unknown) {
         if (Option.isNone(store)) return { kind: "storage_failed" } as const;
         const digest = yield* argumentsDigest(params);
-        const audit = yield* auditOf(scope);
+        const { grant, ...audit } = yield* grantOf(scope);
         const host = (params as { readonly host?: unknown } | null)?.host;
         const receiptId = NodeCrypto.randomUUID();
         const reservation = yield* store.value.reserve({
@@ -274,9 +352,15 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
           tool: entry.name,
           digest,
           ...audit,
+          grant,
           host: typeof host === "string" ? host : null,
         });
         if (reservation.kind === "reserved") yield* Ref.set(held, receiptId);
+        if (
+          reservation.kind === "replay" &&
+          !(yield* stillGranted(scope, grant, reservation.grant))
+        )
+          return { kind: "grant_lost" } as const;
         return reservation;
       });
 
@@ -372,9 +456,22 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
       return unkeyed(handle(payload));
     // Handlers never see the key, so a routed call never forwards it to an older remote.
     const { clientRequestId, ...args } = payload as Readonly<Record<string, unknown>>;
-    return typeof clientRequestId === "string"
-      ? keyed(entry, clientRequestId, args, handle)
-      : unkeyed(handle(args));
+    // The advertised JSON codec offers null for an omitted optional key.
+    if (clientRequestId === undefined || clientRequestId === null) return unkeyed(handle(args));
+    return decodeKey(clientRequestId).pipe(
+      Effect.matchEffect({
+        onFailure: () =>
+          Effect.succeed<Outcome>(
+            refusalResult(
+              new OrchestratorMcpFailure({
+                code: "invalid_request",
+                message: `clientRequestId must be a non-blank string of at most 256 characters, so ${tool} did not run.`,
+              }),
+            ),
+          ),
+        onSuccess: (key) => keyed(entry, key, args, handle),
+      }),
+    );
   };
 
   // Arguments never decode for a caller whose goatclaw profile refuses the tool.
