@@ -12,6 +12,7 @@ import {
 } from "@goat/contracts";
 import {
   resolveGoatMcpToolDefinition,
+  resolveGoatMcpItemCall,
   type GoatMcpToolDefinition,
   type GoatMcpToolSummaryAction,
 } from "@goat/shared/goatMcpToolPresentation";
@@ -229,7 +230,9 @@ function workEntryToolName(
   entry: Pick<WorkLogPresentationEntry, "label" | "toolTitle" | "toolData" | "structuredPayload">,
 ): string | undefined {
   const item = entry.structuredPayload;
-  if (item?.type === "dynamic_tool" && item.toolName) return item.toolName;
+  // goat_call reads as the tool its path names.
+  if (item?.type === "dynamic_tool" && item.toolName)
+    return resolveGoatMcpItemCall(item).toolName ?? item.toolName;
   const data = asRecord(entry.toolData);
   if (typeof data?.server === "string" && typeof data.tool === "string") {
     return `${data.server}.${data.tool}`;

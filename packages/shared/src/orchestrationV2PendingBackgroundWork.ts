@@ -10,7 +10,7 @@ import type {
 import { isOrchestrationV2WorkActive } from "@goat/contracts";
 import * as Predicate from "effect/Predicate";
 
-import { resolveGoatMcpShippedToolId } from "./goatMcpToolPresentation.ts";
+import { resolveGoatMcpItemCall, resolveGoatMcpShippedToolId } from "./goatMcpToolPresentation.ts";
 import { threadPullRequestKeyOf } from "./threadPullRequests.ts";
 
 const BACKGROUND_TURN_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
@@ -77,14 +77,16 @@ export function deriveBlockedOnThreadWait(input: {
       continue;
     }
     if (item.type !== "dynamic_tool") return false;
-    const tool = resolveGoatMcpShippedToolId(item.toolName);
+    // A call through goat_call counts as the tool it ran, with that tool's arguments.
+    const call = resolveGoatMcpItemCall(item);
+    const tool = resolveGoatMcpShippedToolId(call.toolName);
     if (
       tool !== "goat_thread_wait" &&
       tool !== "t3_thread_wait" &&
       !(
         tool === "delegate_task" &&
-        Predicate.isObject(item.input) &&
-        Reflect.get(item.input, "mode") === "wait"
+        Predicate.isObject(call.input) &&
+        Reflect.get(call.input, "mode") === "wait"
       )
     ) {
       return false;

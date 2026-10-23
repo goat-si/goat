@@ -443,6 +443,9 @@ describe("deriveBlockedOnThreadWait", () => {
     ["delegate_task", { mode: "wait" }],
     // The listed name of delegate_task since the listing flip.
     ["mcp__goat__goat_task_create", { mode: "wait" }],
+    // Through goat_call, the tool its path names with that tool's arguments.
+    ["mcp__goat__goat_call", { path: "thread.wait", args: {} }],
+    ["mcp__goat__goat_call", { path: "task.create", args: { mode: "wait" } }],
   ] as const)(
     "recognizes a blocked wait through %s and yields to other running tools",
     (toolName, input) => {

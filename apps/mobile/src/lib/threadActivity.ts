@@ -44,7 +44,7 @@ import {
   type WorkLogToolLifecycleStatus,
 } from "@goat/client-runtime/work-log/presentation";
 import {
-  resolveGoatMcpToolDefinition,
+  resolveGoatMcpItemCall,
   resolveGoatMcpToolPresentation,
   type GoatMcpToolLogo,
   type GoatMcpToolPresentation,
@@ -672,9 +672,7 @@ function itemToolPresentation(item: OrchestrationV2TurnItem): GoatMcpToolPresent
   if (item.type !== "dynamic_tool") {
     return null;
   }
-  return (
-    resolveGoatMcpToolPresentation(item.toolName) ?? resolveGoatMcpToolPresentation(item.title)
-  );
+  return resolveGoatMcpItemCall(item).presentation ?? resolveGoatMcpToolPresentation(item.title);
 }
 
 function itemSummary(
@@ -1023,7 +1021,7 @@ function groupAdjacentActivities(
         item.type === "dynamic_tool" &&
         item.runId !== null &&
         (item.status === "running" || item.status === "completed") &&
-        resolveGoatMcpToolDefinition(item.toolName)?.summaryAction === "delegate" &&
+        resolveGoatMcpItemCall(item).definition?.summaryAction === "delegate" &&
         !workEntryDisplayIndicatesToolFailure(entry.activity.workEntry)
       ) {
         const output = compactDynamicToolOutput(item.output);

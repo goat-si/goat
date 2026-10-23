@@ -880,6 +880,7 @@ export function resolveGoatMcpItemCall(item: {
   readonly toolName: string | null | undefined;
   readonly input: unknown;
   readonly definition: GoatMcpToolDefinition | null;
+  readonly presentation: GoatMcpToolPresentation | null;
 } {
   const input: unknown = item.input;
   const path = isRecord(input) ? input.path : undefined;
@@ -892,7 +893,11 @@ export function resolveGoatMcpItemCall(item: {
     entry === undefined || entry.resource === "surface"
       ? { toolName: item.toolName, input }
       : { toolName: entry.name, input: args };
-  return { ...call, definition: resolveGoatMcpToolDefinition(call.toolName) };
+  return {
+    ...call,
+    definition: resolveGoatMcpToolDefinition(call.toolName),
+    presentation: resolveGoatMcpToolPresentation(call.toolName),
+  };
 }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
