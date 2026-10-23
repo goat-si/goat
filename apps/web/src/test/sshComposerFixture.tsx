@@ -232,6 +232,9 @@ vi.mock("@effect/atom-react", async (original) => {
     },
   };
 });
+// Loaded here, after the mocks above and outside any test, so the first test does not spend its
+// timeout importing the chat view graph on a busy CI runner.
+const { ThreadRouteView } = await import("~/components/ThreadRouteView");
 export const local = EnvironmentId.make("local"),
   remote = EnvironmentId.make("remote");
 export const destination = { connectionId: "saved", environmentId: remote };
@@ -393,8 +396,6 @@ export async function setupSshComposer(realComposer = false) {
       : atom === vcsEnvironment.sshWorkspaceLaunch.permissionAtom(local)
         ? true
         : get(atom)) as typeof registry.get);
-  // Navigation hooks are mocked so both lanes can control completion and remounts.
-  const { ThreadRouteView } = await import("~/components/ThreadRouteView");
   const screen = stack.use(await render(<div />, { router: false }));
   stack.defer(() => act(() => state.composer?.onMultipleModelSelectionsChange(null)));
   state.navigate.mockReset().mockImplementation(async (request) => {
