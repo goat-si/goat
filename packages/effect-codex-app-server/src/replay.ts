@@ -246,6 +246,16 @@ function normalizeReplayFrame(value: unknown): unknown {
   return normalized;
 }
 
+/** Set on every thread/start since #1004, empty without a session (provider-core mcpSession.ts). */
+const THREAD_CREDENTIAL_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set(
+  [
+    "GOAT_ACP_MCP_ENDPOINT",
+    "GOAT_ACP_MCP_AUTHORIZATION",
+    "T3_ACP_MCP_ENDPOINT", // goat-rename: legacy: legacy env alias set beside the GOAT name.
+    "T3_ACP_MCP_AUTHORIZATION", // goat-rename: legacy: legacy env alias set beside the GOAT name.
+  ].map((name) => `shell_environment_policy.set.${name}`),
+);
+
 function recorderThreadConfigKeys(transcript: CodexAppServerReplayTranscript): ReadonlySet<string> {
   const keys = transcript.metadata?.recorderThreadConfigKeys;
   return new Set(Array.isArray(keys) ? keys.filter((key) => typeof key === "string") : []);
@@ -254,7 +264,8 @@ function recorderThreadConfigKeys(transcript: CodexAppServerReplayTranscript): R
 /**
  * `cwd`, `model` and host-supplied MCP servers (machine-local URLs, short-lived
  * authorization headers) vary per machine, and recorder-only keys are not the
- * client's.
+ * client's. The thread's MCP credential markers are the same per-session values
+ * passed as shell environment, and recordings from before they existed lack them.
  */
 function normalizeThreadRequest(frame: unknown, ignoredConfigKeys: ReadonlySet<string>): unknown {
   if (typeof frame !== "object" || frame === null) return frame;
@@ -272,7 +283,10 @@ function normalizeThreadRequest(frame: unknown, ignoredConfigKeys: ReadonlySet<s
   if (typeof config !== "object" || config === null) return { ...record, params };
   const owned = Object.fromEntries(
     Object.entries(config as Record<string, unknown>).filter(
-      ([key]) => key !== "mcp_servers" && !key.startsWith("mcp_servers."),
+      ([key]) =>
+        key !== "mcp_servers" &&
+        !key.startsWith("mcp_servers.") &&
+        !THREAD_CREDENTIAL_ENVIRONMENT_KEYS.has(key),
     ),
   );
   for (const key of ignoredConfigKeys) delete owned[key];
