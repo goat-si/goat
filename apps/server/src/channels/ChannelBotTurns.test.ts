@@ -129,7 +129,7 @@ describe("GOAT Bot turns", () => {
         assert.include(launch.initialMessage?.text ?? "", "You are GOAT Bot handling this message");
         // Read-only is the prompt's promise now that the sandbox allows everything.
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
-        assert.include(launch.initialMessage?.text ?? "", "goat_task_create");
+        assert.include(launch.initialMessage?.text ?? "", 'goat_call {path:"task.create"}');
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_ROUTING_RULE);
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_DISPATCH_RULE);
         assert.notInclude(launch.initialMessage?.text ?? "", GOAT_BOT_SUPERVISOR_RULE);
