@@ -111,6 +111,14 @@ function SshRuntimeSettingsRowContent({
     return () => clearTimeout(timer);
   }, [registry, input, result, enabled, busy, connecting]);
 
+  // A connection attempt that ended (a Retry, or a reconnect) decided the runtime's state; read it.
+  const wasConnecting = useRef(connecting);
+  useEffect(() => {
+    if (wasConnecting.current && !connecting && enabled)
+      void sshRuntime.refresh.run(registry, input);
+    wasConnecting.current = connecting;
+  }, [registry, input, enabled, connecting]);
+
   const update = async (mode: SshRuntimeUpdateMode) => {
     if (!enabled || busy) return;
     const generation = lifetime.current;

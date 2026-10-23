@@ -324,6 +324,7 @@ describe("connection rows", () => {
   it("name the snapshot age only while nothing is trying to connect", () => {
     expect(row({ phase: "offline" })).toBe(true);
     expect(row({ phase: "error" })).toBe(true);
+    expect(row({ phase: "unsupported" })).toBe(true);
   });
 
   it("leave a live attempt or retry countdown without a stale age beside it", () => {

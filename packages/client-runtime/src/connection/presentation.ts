@@ -255,12 +255,24 @@ export function offlineSnapshotAgeLabel(capturedAt: string | null, nowMs: number
  * status were stale.
  */
 export function connectionRowShowsSnapshotAge(connection: EnvironmentConnectionPresentation) {
-  return connection.phase === "offline" || connection.phase === "error";
+  return (
+    connection.phase === "offline" ||
+    connection.phase === "error" ||
+    connection.phase === "unsupported"
+  );
 }
 
 /** A retry waiting on its backoff, which opening or refreshing the connection may start now. */
 export function connectionWaitsToRetry(connection: EnvironmentConnectionPresentation): boolean {
   return connection.phase === "reconnecting" && connection.retryAt != null;
+}
+
+/** An attempt is running now, as opposed to waiting on its backoff or idle. */
+export function connectionAttemptRunning(connection: EnvironmentConnectionPresentation): boolean {
+  return (
+    (connection.phase === "connecting" || connection.phase === "reconnecting") &&
+    connection.retryAt == null
+  );
 }
 
 function formatRetryDelay(seconds: number): string {

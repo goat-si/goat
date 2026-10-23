@@ -58,6 +58,7 @@ import {
   connectionRoutes,
   environmentMcpUrl,
   hasSavedBearerRoute,
+  connectionAttemptRunning,
 } from "@goat/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
@@ -474,6 +475,7 @@ function SavedBackendListRow({
                 : {})}
               onReviewTrust={() => onReviewTrust(environment)}
               onRetry={retry}
+              connecting={enabled && connectionAttemptRunning(connection)}
               onRefreshConnection={live.refreshConnection}
             />
           ) : serverUpdateState.status !== "idle" ? (
