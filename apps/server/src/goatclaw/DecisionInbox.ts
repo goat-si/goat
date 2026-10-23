@@ -639,12 +639,18 @@ const make = Effect.gen(function* () {
             ? "Approvals need a person in a client, or an MCP client token holding orchestration:approve; forward it to the user."
             : "This item requires a person in a client; forward it to the user.",
         );
-      // An approve-scoped outside client answers approvals here as it does through
-      // goat_pending_request_respond: under its own ceiling, not a goatclaw profile.
+      // Whoever may resolve a runtime approval answers it here as in its thread or through
+      // goat_pending_request_respond: profiles narrow agents, and an outside approver keeps its
+      // own ceiling.
       const outsideApprover = resolver.kind === "outside_client" && step === "runtime_approval";
-      const profile = outsideApprover
-        ? "approver"
-        : yield* requireProfile(caller, item.requiredProfile);
+      const profile =
+        step === "runtime_approval"
+          ? outsideApprover
+            ? "approver"
+            : isOwner(caller)
+              ? "owner"
+              : "person"
+          : yield* requireProfile(caller, item.requiredProfile);
       if ("pending" in item && item.pending !== undefined) {
         if (input.optionId !== undefined)
           return yield* invalid("Answer projected questions with answers or decision.");
