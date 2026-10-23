@@ -125,4 +125,15 @@ describe("recurrence gate", () => {
       ),
     ).toHaveLength(1);
   });
+
+  it("keeps the HTML bridge's legacy t3/ comments but flags a new t3/ writer there", () => {
+    const path = "packages/shared/src/htmlRender.ts";
+    for (const line of [
+      "// A page writes events in goat/ once its client has sent goat/ shortcuts, and in t3/ to a client",
+      " * A page that hears goat/ shortcuts answers in goat/ from then on; t3/ still",
+    ]) {
+      expect(findResidue(path, line, KEEP_RULES)).toEqual([]);
+    }
+    expect(findResidue(path, 'const method = "t3/newFeature";', KEEP_RULES)).toHaveLength(1);
+  });
 });

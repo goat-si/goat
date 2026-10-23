@@ -77,7 +77,8 @@ export const WIRE_KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "wire-html-bridge-legacy-namespace",
-    pattern: /\bt3\//g,
+    // Only the two comments that describe the legacy namespace; a new t3/ writer must still fail.
+    pattern: /(?<=, and in )t3\/(?= to a client)|(?<=from then on; )t3\/(?= still)/g,
     scope: (path) => path === "packages/shared/src/htmlRender.ts",
     reason:
       "Saved HTML pages and older clients still speak the t3/ bridge methods, so the bridge documents how it answers them (#944, #966).",
