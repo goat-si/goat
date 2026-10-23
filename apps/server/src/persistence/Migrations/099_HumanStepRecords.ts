@@ -11,4 +11,8 @@ export default Effect.gen(function* () {
   yield* sql`CREATE TABLE approval_bindings (
     approval_id TEXT PRIMARY KEY, binding TEXT NOT NULL, created_at TEXT NOT NULL
   )`;
+  // When this server began waking threads whose handoffs resolved; older resolutions stay quiet.
+  yield* sql`CREATE TABLE handoff_wake_epoch (
+    id INTEGER PRIMARY KEY CHECK (id = 1), since TEXT NOT NULL
+  )`;
 });

@@ -80,7 +80,7 @@ const laterGoatMigrations = [
   [96, "ThreadHistoryArchives"],
   [97, "PermissionProfiles"],
   [98, "DecisionInbox"],
-  [99, "ApprovalConsumptions"],
+  [99, "HumanStepRecords"],
 ] as const;
 const preMemoryGoatNames = [
   "ServerActivityIndexes",
