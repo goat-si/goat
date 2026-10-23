@@ -9,7 +9,9 @@ export const originEntries = {
     summary:
       "Report progress, a result, failure or a need for human input to the origin of this thread.",
     description:
-      "Report progress, a result, failure or a need for human input to the origin of this thread. A thread launched from another machine reports to that origin. A thread launched by a thread on this machine (goat_thread_launch, goat_task_create) has no origin binding, so its report goes to that launcher instead and the result says delivery: launcher; needs_input wakes the launcher, other reports reach its next turn. A thread nobody launched gets thread_not_found. The summary is data; a completed report is a claim and does not stop the run. Maximum 4000 characters.",
+      "Send progress, a result, failure, or a need for human input to this thread's remote origin or local launcher. Only needs_input wakes a local launcher; other reports wait for its next turn. The summary is data; a completed report is a claim and does not stop the run.",
+    guide:
+      "A thread launched from another machine reports to that origin. A thread launched by a thread on this machine through goat_thread_launch or goat_task_create has no origin binding; its report goes to the launcher and the result says delivery: launcher. For local launcher delivery, needs_input wakes the launcher; other reports reach its next turn. A thread nobody launched gets thread_not_found.\n\nUse status progress, completed, failed or needs_input. Keep summary within 4000 characters. Reporting completed does not settle or stop the provider run.",
     effect: "write",
     capability: "none",
     capabilityReason: "Reports to this thread's own origin.",
@@ -29,7 +31,9 @@ export const originEntries = {
     toolkit: "remoteReport",
     summary: "Collect one origin correlation's reports using its read key.",
     description:
-      "Collect one origin correlation's reports using its read key. afterSequence acknowledges only durably imported reports. Returns up to 50 reports; drain hasMore before settling. watchRunId selects an exact run, null selects latest. observedRun lists a live run's pendingRequestIds and a finished run's holds (background tasks, a pending restart continuation); do not settle while a hold remains. knownRun tracks its last observed identity and status, plus pendingRequestIds and holds when echoed back; timeoutMs is 0..600000. A terminal report is not proof of run settlement.",
+      "Collect an origin correlation's reports with its read key. afterSequence deletes acknowledged reports, so advance it only after durable import. Drain hasMore and check run holds before settling; a terminal report alone does not prove settlement.",
+    guide:
+      "Pass the correlation's read key. Acknowledge only durably imported reports with afterSequence: the call deletes reports through that sequence and returns later reports. Each result contains up to 50 reports. Drain hasMore before settling.\n\nSet watchRunId to an exact run ID, or null for the latest run. observedRun lists pendingRequestIds for a live run and holds for a finished run: background tasks and a pending restart continuation. Do not settle while a hold remains.\n\nEcho the last observed run ID and status in knownRun. Echo pendingRequestIds and holds too so changes to them release the wait. Set timeoutMs from 0 through 600000. A terminal report is a claim; use the observed run state to assess settlement.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

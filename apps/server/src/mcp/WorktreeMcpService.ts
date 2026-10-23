@@ -237,13 +237,16 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const worktree = yield* restore(
           gitWorkflow
-            .createWorktree({
-              cwd: projectCwd,
-              refName: worktreeBaseRef,
-              newRefName: input.branch,
-              baseRefName,
-              path: null,
-            })
+            .createWorktree(
+              {
+                cwd: projectCwd,
+                refName: worktreeBaseRef,
+                newRefName: input.branch,
+                baseRefName,
+                path: null,
+              },
+              { skipSetupHook: input.runSetupScript ?? true },
+            )
             .pipe(asOperationFailed("Unable to create the worktree")),
         );
         const worktreePath = worktree.worktree.path;
