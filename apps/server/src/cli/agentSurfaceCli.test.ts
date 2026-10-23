@@ -353,6 +353,23 @@ describe("goat call's credential and routing", () => {
       }),
   );
 
+  it.effect("fails closed on a blanked thread credential without reading the stored login", () =>
+    Effect.gen(function* () {
+      const invocation = agentSurfaceInvocation(["call", "thread.read", "--json"], noInput)!;
+      const stdout: Array<string> = [];
+      const code = yield* runAgentSurfaceInvocation(invocation, {
+        env: { GOAT_ACP_MCP_ENDPOINT: "", GOAT_ACP_MCP_AUTHORIZATION: "" },
+        stdout: (text) => stdout.push(text),
+        stderr: () => undefined,
+        loadLogin: Effect.die("a blanked thread credential must not fall back to the login"),
+      });
+      expect(code).toBe(1);
+      expect(envelopeOf(stdout.join(""))).toMatchObject({
+        error: { code: "unauthenticated", reason: "thread_credential_invalid" },
+      });
+    }),
+  );
+
   it.effect("fails closed when the origin refuses the thread credential, at any step", () =>
     Effect.gen(function* () {
       // /mcp refuses an expired registry credential inside a 200 tools/call answer.

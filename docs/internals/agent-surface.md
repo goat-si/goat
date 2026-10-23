@@ -715,8 +715,11 @@ access checks, goatclaw gate, and host routing as a direct one; `--host` is only
 into JSON and reads `@file`. The operator verbs `thread list|start|send|show`, `project
 add|remove|rename`, and `provider diagnose` keep their meaning, and their help lists the
 registry verbs beside them. Exit codes follow the table above. When no envelope came back, a
-failure before `goat_call` was sent exits `4` only when the server could not be reached; after
-it was sent, a lost answer exits `4` for a read and `5` for a write. `goat operation` is not
+failure before `goat_call` was sent exits `4` only when the server could not be reached or
+answered the handshake with HTTP 429 or 5xx, and `1` for any other handshake refusal; after it
+was sent, a lost answer exits `4` for a read and `5` for a write. A refused credential (401, 403,
+or `/mcp`'s in-band refusal) exits `1` and never falls back to another credential. `acp-mcp-call`
+resolves credentials like `goat call`, so outside a thread it uses the `goat login` session. `goat operation` is not
 built yet. Credentials resolve as below, and `goat login`, `logout`, and `whoami` manage the
 stored one.
 

@@ -1,7 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthMcpClientAccess, AuthSessionId } from "@goat/contracts";
 import * as NetService from "@goat/shared/Net";
-import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -132,6 +131,26 @@ const withEnvironmentAuth = Effect.fn("cli.login.withEnvironmentAuth")(function*
 
 const decodeSessionId = Schema.decodeUnknownEffect(AuthSessionId);
 
+/**
+ * Replaces `file` with `contents` that only this user can read at every moment: the temp file is
+ * created exclusively with mode 0600 before any byte is written, then renamed over the old one.
+ */
+const writePrivateFile = Effect.fn("cli.login.writePrivateFile")(function* (
+  file: string,
+  contents: string,
+  /** Unique per write, such as the new session's id. */
+  tempSuffix: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const temp = `${file}.${tempSuffix}.tmp`;
+  yield* fs.writeFileString(temp, contents, { flag: "wx", mode: 0o600 }).pipe(
+    // umask only removes bits, but a loose umask policy must not widen this file.
+    Effect.andThen(fs.chmod(temp, 0o600)),
+    Effect.andThen(fs.rename(temp, file)),
+    Effect.tapError(() => fs.remove(temp, { force: true }).pipe(Effect.ignore)),
+  );
+});
+
 const describeCause = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
 /** Revokes a stored session; a failure names the session, which is still valid. */
@@ -192,22 +211,19 @@ export const loginCommand = Command.make("login", {
             client: { deviceType: "bot" },
           });
           const file = yield* loginFilePath(paths);
-          const fs = yield* FileSystem.FileSystem;
           // The old login keeps working until the new one is on disk; a new one that could
           // not be saved is revoked rather than left valid and unreachable.
-          yield* writeFileStringAtomically({
-            filePath: file,
-            contents: `${encodeLogin({
+          yield* writePrivateFile(
+            file,
+            `${encodeLogin({
               version: 1,
               sessionId: issued.sessionId,
               token: issued.token,
               label: LOGIN_LABEL,
               expiresAt: DateTime.formatIso(issued.expiresAt),
             })}\n`,
-          }).pipe(
-            Effect.andThen(fs.chmod(file, 0o600)),
-            Effect.tapError(() => auth.revokeSession(issued.sessionId).pipe(Effect.ignore)),
-          );
+            issued.sessionId,
+          ).pipe(Effect.tapError(() => auth.revokeSession(issued.sessionId).pipe(Effect.ignore)));
           if (Option.isSome(previous))
             yield* revokeStored(auth.revokeSession, previous.value).pipe(
               Effect.catchTags({
