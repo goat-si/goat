@@ -8,7 +8,9 @@ export const handoffEntries = {
     toolkit: "orchestrator",
     summary: "Request a secret from the user",
     description:
-      "Ask the user for a secret (a token, API key, signing secret, password) through a private card in this thread, and wait for them to answer. With wait:false it returns needs_human (status pending) with the card's handoff at once; call again with the same clientRequestId before this turn ends to collect it. The value is kept by the app and NEVER returned to you or shown in the transcript. When saved, the result carries a secretRef: pass it to a tool that accepts one (e.g. goat_schedule_create's signature.secretRef). It works once. Never ask for secrets in chat, and never invent one.",
+      "Ask for a secret through a private card in this thread, returning only a one-use secretRef. With wait:false, collect the answer using the same clientRequestId before the turn ends. Keep secrets out of chat and never invent them.",
+    guide:
+      "The card accepts tokens, API keys, signing secrets and passwords. By default the call waits for an answer; wait:false normally returns a pending needs_human handoff immediately, but falls back to waiting if the card has no handoff. An active run owned by this MCP provider session is required. A saved value stays in the server secret store and never appears in the tool result or transcript. Pass the reference to a tool that consumes it, such as goat_schedule_create’s signature.secretRef. Consumption is scoped to the same project and deletes the saved value; unused references expire after 24 hours. A person cannot answer a pending request once its run has ended.",
     effect: "write",
     capability: "none",
     capabilityReason: "Asks a person for a secret; the person decides.",
