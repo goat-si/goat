@@ -70,6 +70,7 @@ import { instanceFingerprint } from "./CodexRouteService.ts";
 import {
   decodeProgress,
   encodeProgress,
+  setupProgress,
   type ProviderSettingsEffect,
   type ProviderSettingsOutcome,
   type ProviderSettingsProgress,
@@ -1056,6 +1057,7 @@ const make = Effect.gen(function* () {
       entry.handoff.handoffId,
     );
     if (Exit.isFailure(outcome)) return yield* new HandoffError({ reason: "invalid_request" });
+    return outcome.value;
   });
 
   const consume = (
@@ -1072,12 +1074,10 @@ const make = Effect.gen(function* () {
           const outcome = yield* restore(Effect.exit(executeSetup(entry)));
           if (Exit.isFailure(outcome) && Cause.hasInterruptsOnly(outcome.cause))
             return yield* Effect.failCause(outcome.cause);
-          yield* handoffs.finishProviderContinuation(address);
-          if (Exit.isFailure(outcome)) return yield* Effect.failCause(outcome.cause);
-          return;
+          yield* handoffs.finishProviderContinuation(address, setupProgress(outcome));
+          return yield* Effect.asVoid(outcome);
         }
-        // A stop, or progress that could not be recorded, leaves the continuation where its
-        // last record put it for resumeContinuations.
+        // A stop, or progress it could not record, leaves the continuation to resumeContinuations.
         const progress = yield* restore(executeSettings(entry));
         yield* handoffs.finishProviderContinuation(
           address,

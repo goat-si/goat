@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import {
   AuthSessionId,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
+  PROVIDER_SETTINGS_HANDOFF_PATH,
   CommandId,
   EnvironmentId,
   MessageId,
@@ -105,6 +106,7 @@ const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
       });
       yield* worker.drain();
       const now = yield* DateTime.now;
+      const secrets = new Map<string, Uint8Array>();
       const outage: World["outage"] = {
         failing: 0,
         slowMs: 0,
@@ -115,7 +117,7 @@ const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
         sessionId: person,
         subject: "browser",
         method: "browser-session-cookie",
-        scopes: ["orchestration:operate", "settings:write"],
+        scopes: ["orchestration:operate", "settings:write", "providers:manage"],
         client: { label: "Laptop", deviceType: "unknown" },
         issuedAt: now,
         expiresAt: DateTime.add(now, { days: 7 }),
@@ -154,34 +156,37 @@ const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
         getThreadRecords: orchestrator.getThreadRecords,
         getThreadShell: (id) => Effect.succeed(liveThreadShell(id)),
       });
-      const services = Layer.mergeAll(
-        Handoffs.layer.pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              threads,
-              Layer.mock(ServerEnvironment.ServerEnvironment)({
-                getEnvironmentId: Effect.succeed(environmentId),
-              }),
-              Layer.mock(SecretRequests.SecretRequests)({}),
-              Layer.mock(SessionStore.SessionStore)({
-                cookieName: "test",
-                legacyCookieName: undefined,
-                listActive: () => Effect.succeed([session]),
-              }),
-              Layer.succeed(
-                SecretStore.ServerSecretStore,
-                SecretStore.ServerSecretStore.of({
-                  get: () => Effect.succeed(Option.none()),
-                  set: () => Effect.void,
-                  create: () => Effect.void,
-                  remove: () => Effect.void,
-                  getOrCreateRandom: (_name, size) => Effect.succeed(new Uint8Array(size).fill(7)),
+      const services = HandoffWakeReactor.layer.pipe(
+        Layer.provide(threads),
+        Layer.provideMerge(
+          Handoffs.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                threads,
+                Layer.mock(ServerEnvironment.ServerEnvironment)({
+                  getEnvironmentId: Effect.succeed(environmentId),
                 }),
+                Layer.mock(SecretRequests.SecretRequests)({}),
+                Layer.mock(SessionStore.SessionStore)({
+                  cookieName: "test",
+                  legacyCookieName: undefined,
+                  listActive: () => Effect.succeed([session]),
+                }),
+                Layer.succeed(
+                  SecretStore.ServerSecretStore,
+                  SecretStore.ServerSecretStore.of({
+                    get: (name) => Effect.sync(() => Option.fromNullishOr(secrets.get(name))),
+                    set: (name, value) => Effect.sync(() => void secrets.set(name, value)),
+                    create: (name, value) => Effect.sync(() => void secrets.set(name, value)),
+                    remove: (name) => Effect.sync(() => void secrets.delete(name)),
+                    getOrCreateRandom: (_name, size) =>
+                      Effect.succeed(new Uint8Array(size).fill(7)),
+                  }),
+                ),
               ),
             ),
           ),
         ),
-        HandoffWakeReactor.layer.pipe(Layer.provide(threads)),
       );
       return yield* Effect.gen(function* () {
         return yield* body({
@@ -269,7 +274,8 @@ it.effect("wakes the asking thread once when a person answers, even while its ru
       const sent = yield* wakes(world);
       expect(sent).toHaveLength(1);
       expect(sent[0]!.id).toBe(`message:handoff-wake:${summary.handoffId}:completed`);
-      expect(sent[0]!.text).toContain("was approved by Laptop");
+      expect(sent[0]!.text).toContain("was approved by a person");
+      expect(sent[0]!.text).not.toContain("Laptop");
       expect(sent[0]!.text).not.toContain("PRIVATE-INSTRUCTIONS");
     }),
   ),
@@ -437,4 +443,45 @@ it.effect("counts the backoff from when a slow attempt failed", () =>
       expect(world.outage.sent).toHaveLength(2);
     }),
   ),
+);
+
+it.effect(
+  "wakes after GOAT finishes applying an approved provider change, saying how it ended",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const summary = yield* ask(world, PROVIDER_SETTINGS_HANDOFF_PATH);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: summary.handoffId, action: "completed" },
+          person,
+        );
+        // Approved but not yet applied: an idle thread woken now would see no change and ask again.
+        yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toEqual([]);
+        yield* world.handoffs.finishProviderContinuation(
+          { threadId, handoffId: summary.handoffId },
+          {
+            version: 1,
+            effects: { install: "started" },
+            outcome: {
+              state: "unknown_outcome",
+              effect: "install",
+              reason: "orchestration_error",
+              message: "The install did not answer.",
+              reconcile: { call: "goat_provider_diagnose", arguments: { instanceId: "cursor-2" } },
+            },
+          },
+        );
+        yield* world.reactor.reconcile;
+        yield* world.reactor.reconcile;
+        const sent = yield* wakes(world);
+        expect(sent.map((message) => message.id)).toEqual([
+          `message:handoff-wake:${summary.handoffId}:completed`,
+        ]);
+        expect(sent[0]!.text).toContain(
+          'Call goat_provider_diagnose with {"instanceId":"cursor-2"} to settle it',
+        );
+      }),
+    ),
 );

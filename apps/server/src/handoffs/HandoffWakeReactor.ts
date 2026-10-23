@@ -32,7 +32,12 @@ import type { LaunchWatchWake } from "../mcp/launchWatch.ts";
 import { wakeThread } from "../mcp/threadWake.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import {
+  ProviderSettingsProgress,
+  type ProviderSettingsOutcome,
+} from "../provider/ProviderSettingsProgress.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as Handoffs from "./Handoffs.ts";
 
 const RECONCILE_WINDOW_HOURS = 24;
 /** Attempt n waits 2^n seconds after the resolution, at most this long between attempts. */
@@ -55,10 +60,27 @@ const VERB = {
 const decodeHandoff = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.toCodecJson(Handoff)),
 );
+const decodeProgress = Schema.decodeUnknownOption(Schema.toCodecJson(ProviderSettingsProgress));
 
-const continuation = (handoff: Handoff) => {
+/** What GOAT did with a provider change it applies itself, once the apply finished. */
+const appliedText = (outcome: ProviderSettingsOutcome | undefined) => {
+  switch (outcome?.state) {
+    case "failed":
+      return `GOAT could not apply it (${outcome.reason}: ${outcome.message}). Ask again only if the user still wants it.`;
+    case "unknown_outcome":
+      return `GOAT cannot tell whether its ${outcome.effect} step happened (${outcome.message}). Call goat_provider_diagnose with ${JSON.stringify(outcome.reconcile.arguments)} to settle it before asking again.`;
+    default:
+      return "GOAT applied it; goat_provider_diagnose shows the provider now.";
+  }
+};
+
+/** An applied provider change's outcome, or undefined for every other kind of handoff. */
+type Applied = { readonly outcome: ProviderSettingsOutcome | undefined };
+
+const continuation = (handoff: Handoff, applied: Applied | undefined) => {
   if (handoff.state !== "completed")
     return "Nothing ran. Ask again only if the user still wants it.";
+  if (applied !== undefined) return appliedText(applied.outcome);
   if (isHubDeviceHandoffPath(handoff.target.path))
     return `Call ${handoff.target.path === "hub.device_join" ? "goat_hub_device_join" : handoff.target.path === "hub.device_leave" ? "goat_hub_device_leave" : "goat_hub_device_repair"} again with decisionId "${handoff.handoffId}" to continue.`;
   if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
@@ -67,20 +89,21 @@ const continuation = (handoff: Handoff) => {
 };
 
 /** The wake for a handoff's current state, or undefined when the asking thread needs none. */
-const handoffWake = (handoff: Handoff): LaunchWatchWake | undefined => {
+const handoffWake = (handoff: Handoff, applied?: Applied): LaunchWatchWake | undefined => {
   if (!ENDED.has(handoff.state) || handoff.kind === "secret") return undefined;
   // An approval tied to its run expired because that run ended; waking would ask again forever.
   if (handoff.state === "expired" && endsWithItsRun(handoff)) return undefined;
   // The asking agent ended it itself.
   if (handoff.actor.type === "agent") return undefined;
   const state = handoff.state as keyof typeof VERB;
-  const by = handoff.resolvedBy ?? (handoff.actor.type === "server" ? "GOAT" : "a person");
+  // The person's device label stays out of the agent's transcript.
+  const by = handoff.actor.type === "server" ? "GOAT" : "a person";
   const key = `handoff-wake:${handoff.handoffId}:${state}`;
-  const summary = `${handoff.title}: ${VERB[state]}`;
+  const summary = `${handoff.title}: ${applied?.outcome?.state ?? VERB[state]}`;
   return {
     commandId: CommandId.make(`server:${key}`),
     messageId: MessageId.make(`message:${key}`),
-    text: `The handoff "${handoff.title}" (${handoff.handoffId}, ${handoff.target.path}) was ${VERB[state]} by ${by}. ${continuation(handoff)}`,
+    text: `The handoff "${handoff.title}" (${handoff.handoffId}, ${handoff.target.path}) was ${VERB[state]} by ${by}. ${continuation(handoff, applied)}`,
     notification: { source: { kind: "system" }, outcome: "updated", summary },
   };
 };
@@ -97,6 +120,7 @@ export class HandoffWakeReactor extends Context.Service<
 const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const handoffs = yield* Handoffs.Handoffs;
   const sql = yield* SqlClient.SqlClient;
 
   /** Waking began here; older resolutions stay quiet. Absent until the first start. */
@@ -182,7 +206,17 @@ const make = Effect.gen(function* () {
         retries.delete(wake.messageId);
         return;
       }
-      yield* dispatchWake(threadId, wake);
+      if (
+        handoff.state !== "completed" ||
+        !Handoffs.isProviderContinuationPath(handoff.target.path)
+      )
+        return yield* dispatchWake(threadId, wake);
+      // GOAT applies these after the approval; wake once that ends, with how it ended. Until then
+      // each reconcile finds the wake still owed.
+      const state = yield* handoffs.providerApplyState({ threadId, handoffId: handoff.handoffId });
+      if (state.applying) return;
+      const outcome = Option.getOrUndefined(decodeProgress(state.progress))?.outcome;
+      yield* dispatchWake(threadId, handoffWake(handoff, { outcome }) ?? wake);
     },
     // One delivery at a time, so the tail and a reconcile never race to a second attempt.
     permit.withPermits(1),
