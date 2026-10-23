@@ -18,6 +18,8 @@ import * as UrlParams from "effect/http/UrlParams";
 import * as OpenCode2Client from "@goat/provider-opencode/server/v2/OpenCode2Client";
 import * as OpenCode2Server from "@goat/provider-opencode/server/v2/OpenCode2Server";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
+import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
@@ -392,3 +394,7 @@ export const OpenCode2OrchestratorReplayHarness: OrchestratorV2ProviderReplayHar
     ),
   makeProviderAdapterRegistryLayer: layerRegistry,
 };
+
+/** The instructions entry a turn writes when GOAT MCP is unavailable: the development discipline stays. */
+export const noMcpInstructions = (model: string) =>
+  `${buildRuntimeInstructions({ harness: "OpenCode", model })}\n\n${GOAT_DEVELOPMENT_INSTRUCTIONS}`;
