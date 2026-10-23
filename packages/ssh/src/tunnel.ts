@@ -63,6 +63,7 @@ import {
   decodeRemoteJsonOutput,
   isNodeScriptRunner,
   matchesSignals,
+  liveRuntimeBlocksUpdate,
   notifyRuntimePhase,
   REMOTE_ARCHIVE_CHECKSUMS_SECONDS,
   REMOTE_ARCHIVE_DOWNLOAD_SECONDS,
@@ -4350,12 +4351,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           { version: probe.liveVersion, commitTime: probe.liveCommitTime },
           { version: requestedVersion, commitTime: runner?.archiveCommitTime },
         );
-        const blocked =
-          probe.liveOwned !== true ||
-          order === undefined ||
-          order > 0 ||
-          (probe.liveVersion !== requestedVersion && probe.liveDrain !== true);
         const compatible = matchesSignals(probe.liveSignals, requestedVersion);
+        const runsRequested = probe.liveVersion === requestedVersion;
+        const blocked = liveRuntimeBlocksUpdate(probe, order, compatible, runsRequested);
         compatibleLive =
           compatible &&
           probe.identityAbsent !== true &&
