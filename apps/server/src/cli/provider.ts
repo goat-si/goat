@@ -39,6 +39,7 @@ import * as ServerConfig from "../config.ts";
 import { resolveBaseDir } from "../os-jank.ts";
 import { LIVE_DIAGNOSIS_DRIVERS, diagnoseProviders } from "../provider/ProviderDiagnosis.ts";
 import { baseDirFlag } from "./config.ts";
+import { generatedVerbsNote } from "./agentSurfaceCommand.ts";
 
 const decodeSettingsFile = Schema.decodeUnknownEffect(fromLenientJson(ServerSettings));
 const decodeSnapshotFile = Schema.decodeUnknownOption(Schema.fromJsonString(ServerProvider));
@@ -209,6 +210,8 @@ const providerDiagnoseCommand = Command.make("diagnose", {
 );
 
 export const providerCommand = Command.make("provider").pipe(
-  Command.withDescription("Inspect this environment's provider instances."),
+  Command.withDescription(
+    `Inspect this environment's provider instances. ${generatedVerbsNote("provider")}`,
+  ),
   Command.withSubcommands([providerDiagnoseCommand]),
 );

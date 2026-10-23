@@ -63,6 +63,7 @@ import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { layerPermissionProfilesOff, liveThreadsLayer } from "./McpToolAccess.testkit.ts";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -102,7 +103,7 @@ import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as Schema from "effect/Schema";
-import { HttpBody, HttpClient, HttpRouter } from "effect/http";
+import { HttpBody, HttpClient, HttpRouter, HttpServer } from "effect/http";
 
 // The assembled /mcp catalog over inert services: registration and early refusals run, domain
 // handlers do not touch live state.
@@ -140,10 +141,8 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
-export const dependencies = Layer.mergeAll(
+const inertDependencies = Layer.mergeAll(
   Layer.mock(DecisionInbox.DecisionInbox)({}),
-  // goatclaw off: the capability gate admits every call, so handlers decide access.
-  layerPermissionProfilesOff,
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
@@ -174,7 +173,6 @@ export const dependencies = Layer.mergeAll(
   Layer.mock(DeviceService.DeviceService)({}),
   Path.layer,
   Layer.mock(ServerEnvironment.ServerEnvironment)({}),
-  Layer.mock(Settings.ServerSettingsService)({}),
   Layer.mock(ThreadCommandExecutor.ThreadCommandExecutor)({}),
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
   Layer.mock(HubParity.HubParity)({}),
@@ -238,6 +236,16 @@ export const dependencies = Layer.mergeAll(
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   NodeCrypto.layer,
 );
+// goatclaw off: the capability gate admits every call, so handlers decide access.
+const servicesOff = Layer.mergeAll(layerPermissionProfilesOff, inertDependencies);
+const settingsOff = Layer.mock(Settings.ServerSettingsService)({});
+export const dependencies = Layer.mergeAll(servicesOff, settingsOff);
+/**
+ * The same inert services with goatclaw on, so the capability gate holds threads to their
+ * profiles. The caller provides SqlClient (with the calling thread seeded) and the
+ * ServerSettingsService both the gate and the handlers read, and can change the policy through it.
+ */
+const enforcingDependencies = Layer.mergeAll(Profiles.layer, inertDependencies);
 export const client = McpSchema.McpServerClient.of({
   clientId: 1,
   clientCapabilities: {},
@@ -266,6 +274,7 @@ type RpcMessage = {
  * and the auth middleware provides that caller's scope. Needs an HTTP server and client, such as
  * NodeHttpServer.layerTest, and a scope that keeps the server up.
  */
+/** Registrations served over /mcp the way agents reach it; see serveCatalogOverHttp. */
 export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
   scopes: Readonly<Record<string, McpInvocationScope>>,
   registrations: Layer.Layer<never, E, R>,
@@ -325,7 +334,11 @@ export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(func
           capabilities: {},
           clientInfo: { name: "agent-surface-http", version: "1" },
         });
+  const address = (yield* HttpServer.HttpServer).address;
   return {
+    /** Where /mcp listens, for clients that bring their own HTTP stack, such as the CLI. */
+    endpoint:
+      address._tag === "UnixPathAddress" ? "unix-socket" : `http://127.0.0.1:${address.port}/mcp`,
     /** tools/call as the caller; a JSON-RPC error comes back as an error result naming it. */
     callTool: (caller: string, name: string, args: object) =>
       ensureSession(caller).pipe(
@@ -357,6 +370,16 @@ export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(func
   };
 });
 
-/** The assembled catalog over inert services, served over /mcp. */
+// Settings come from the caller, so a test can change the goatclaw policy.
+const serveWith = <E, R>(
+  scopes: Readonly<Record<string, McpInvocationScope>>,
+  services: Layer.Layer<Layer.Success<typeof servicesOff>, E, R>,
+) => serveOverHttp(scopes, catalog.pipe(Layer.provide(services)));
+
 export const serveCatalogOverHttp = (scopes: Readonly<Record<string, McpInvocationScope>>) =>
-  serveOverHttp(scopes, catalog.pipe(Layer.provide(dependencies)));
+  serveWith(scopes, servicesOff).pipe(Effect.provide(settingsOff));
+
+/** serveCatalogOverHttp with goatclaw enforcing; see enforcingDependencies for what it needs. */
+export const serveEnforcingCatalogOverHttp = (
+  scopes: Readonly<Record<string, McpInvocationScope>>,
+) => serveWith(scopes, enforcingDependencies);

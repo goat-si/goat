@@ -188,6 +188,17 @@ the message to read it from stdin.
 2 when the agent waits for an answer you give in the app. Add `--json` for a
 result that always includes the thread id.
 
+Every other capability is a command too. `goat describe` lists them, `goat describe thread`
+shows one resource, and `goat describe thread.read` prints its arguments. Run one as
+`goat thread read -f threadId=$id` or `goat call thread.read '{"threadId":"…"}'`: `-f key=value`
+passes a string and `-F key=value` passes `true`, `false`, `null`, or a whole number. `--json` prints
+a result with `status` `ok`, `error`, or `needs_human`. The exit code is 0 for ok, 1 for an
+error, 2 for a mistyped command, 3 when you need to act in the app, 4 when retrying is safe, and 5
+when a change may have happened, so check before retrying. Work that keeps running after the
+command returns prints an operation id; `goat operation wait <id>` follows it and exits 0 when it
+succeeded, 1 when it failed or was cancelled, 3 when it waits for you, and 6 when it is still
+running at the deadline.
+
 `goat login` stores a client session for this environment that lasts 30 days. It
 appears under **Settings → Connections** as "goat CLI", and threads it starts or
 changes run at most `approval-required` unless you pass `--access`. `goat whoami`
