@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HubParityResult } from "./hubParity.ts";
+import { needsHumanFields } from "./humanStepResult.ts";
 
 /**
  * How a device reaches the hub. Remote Link refuses Windows, and a device GOAT reaches only by
@@ -51,3 +52,26 @@ export const HubDeviceOperationResult = Schema.Struct({
   decisionId: Schema.optional(Schema.String),
 });
 export type HubDeviceOperationResult = typeof HubDeviceOperationResult.Type;
+
+const hubNeedsHuman = <const Call extends string>(call: Call) =>
+  Schema.Struct({
+    ...HubDeviceOperationResult.fields,
+    state: Schema.Literal("needs_human"),
+    /** The handoff's id: pass it back as decisionId once a person approved it. */
+    decisionId: Schema.String,
+    ...needsHumanFields("approval", call),
+  });
+/**
+ * What the hub MCP tools return. A thread caller's approval is a handoff, and decisionId is its
+ * id; a caller without a thread still gets an inbox decisionId and no handoff.
+ */
+export const HubDeviceMcpResult = Schema.Union([
+  hubNeedsHuman("goat_hub_device_join"),
+  hubNeedsHuman("goat_hub_device_leave"),
+  hubNeedsHuman("goat_hub_device_repair"),
+  HubDeviceOperationResult,
+]);
+export type HubDeviceMcpResult = typeof HubDeviceMcpResult.Type;
+/** One hub tool's result: its needs_human names only that tool as the next call. */
+export const hubDeviceToolResult = <const Call extends string>(call: Call) =>
+  Schema.Union([hubNeedsHuman(call), HubDeviceOperationResult]);

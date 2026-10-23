@@ -15,6 +15,8 @@ import {
   handoffSummary,
   isHandoffPending,
   isClockedHandoffPath,
+  isHubDeviceHandoffPath,
+  endsWithItsRun,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   TurnItemId,
   type HandoffReadInput,
@@ -42,6 +44,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import { itemHandoff } from "../orchestration-v2/handoffState.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import { ThreadArchiveGate } from "../orchestration-v2/ThreadArchiveGate.ts";
+import { canResolveHumanStep, sessionResolver } from "./HumanStepAuthority.ts";
 
 export const SshProgressBinding = Schema.Struct({
   host: SshHostAlias,
@@ -60,6 +63,7 @@ export type SshProgressBinding = typeof SshProgressBinding.Type;
 /** Provider approvals whose approval the server applies, keeping their arguments until it does. */
 const PROVIDER_CONTINUATION_PATHS = [
   "provider.home_request",
+  "provider.host_sync",
   "provider.settings",
   "provider.setup",
 ] as const;
@@ -221,6 +225,11 @@ export class Handoffs extends Context.Service<
       sessionId: AuthSessionId,
     ) => Effect.Effect<SshProgressBinding | null, HandoffError | EnvironmentAuthorizationError>;
     readonly sweep: Effect.Effect<void, HandoffError>;
+    /** Whether a handoff was created with exactly these continuation arguments. */
+    readonly matchesArgs: (
+      handoff: Handoff,
+      args: Readonly<Record<string, unknown>>,
+    ) => Effect.Effect<boolean>;
   }
 >()("goat/handoffs/Handoffs") {}
 
@@ -333,12 +342,19 @@ const make = Effect.gen(function* () {
           ? ("environment:maintain" as const)
           : record.target.path.startsWith("provider.")
             ? ("providers:manage" as const)
-            : // Admitting an unattended thread to the screen is as strong as turning computer use on.
-              record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH
+            : // Admitting an unattended thread to the screen, or changing the hub's members, is as
+              // strong as changing this environment's settings.
+              record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH ||
+                isHubDeviceHandoffPath(record.target.path)
               ? ("settings:write" as const)
               : ("orchestration:operate" as const);
     const active = yield* sessions.listActive().pipe(Effect.mapError(unavailable));
     const session = active.find((session) => session.sessionId === sessionId);
+    if (session && !canResolveHumanStep(sessionResolver(session), "person_only"))
+      return yield* new EnvironmentAuthorizationError({
+        requiredScope: "orchestration:operate",
+        message: "Only a person's client can act on this handoff.",
+      });
     for (const requiredScope of new Set(["orchestration:operate" as const, targetScope])) {
       if (!session || !(session.permissions ?? session.scopes).includes(requiredScope))
         return yield* new EnvironmentAuthorizationError({
@@ -372,7 +388,15 @@ const make = Effect.gen(function* () {
       const payload = yield* loadPrivate(input.handoffId);
       if (payload === null || !("kind" in payload) || payload.kind !== "continuation")
         return yield* new HandoffError({ reason: "unavailable" });
-      yield* savePrivate(input.handoffId, { ...payload, approvedBySessionId: sessionId }, true);
+      // Approvals asked before a path became a continuation path carry no namespace yet.
+      const namespace = isProviderContinuationPath(record.target.path)
+        ? { namespace: record.target.path }
+        : {};
+      yield* savePrivate(
+        input.handoffId,
+        { ...payload, ...namespace, approvedBySessionId: sessionId },
+        true,
+      );
     }
     const result = yield* transition(input, input.action, { type: "client", label });
     if (isComputerUseGrant && Option.isSome(computerUseLeases))
@@ -497,9 +521,7 @@ const make = Effect.gen(function* () {
       if (
         (handoff.expiresAt !== null &&
           DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)) ||
-        (handoff.kind === "approval" &&
-          !handoff.target.path.startsWith("ssh.") &&
-          !isClockedHandoffPath(handoff.target.path) &&
+        (endsWithItsRun(handoff) &&
           (runStatus === null || ThreadManagement.isTerminalRunStatus(runStatus)))
       ) {
         const input = yield* decodeAddress({
@@ -728,7 +750,11 @@ const make = Effect.gen(function* () {
   ) {
     const active = yield* sessions.listActive().pipe(Effect.mapError(unavailable));
     const session = active.find((session) => session.sessionId === sessionId);
-    if (!session || !(session.permissions ?? session.scopes).includes("orchestration:operate"))
+    if (
+      !session ||
+      !canResolveHumanStep(sessionResolver(session), "person_only") ||
+      !(session.permissions ?? session.scopes).includes("orchestration:operate")
+    )
       return yield* new EnvironmentAuthorizationError({
         requiredScope: "orchestration:operate",
         message: "This client cannot answer this request.",
@@ -741,6 +767,14 @@ const make = Effect.gen(function* () {
     open,
     respond,
     sweep,
+    matchesArgs: (handoff, args) =>
+      Effect.sync(() => {
+        const expected = Buffer.from(
+          NodeCrypto.createHmac("sha256", key).update(targetKey(args)).digest("hex"),
+        );
+        const actual = Buffer.from(handoff.dedupeKey);
+        return expected.length === actual.length && NodeCrypto.timingSafeEqual(expected, actual);
+      }),
     answerSecret,
     completedSshContinuations,
     completedProviderHomeContinuations,

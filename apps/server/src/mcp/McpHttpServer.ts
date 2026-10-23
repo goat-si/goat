@@ -1,6 +1,6 @@
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
-import { ToolDispatch } from "./ToolDispatch.ts";
+import { ToolDispatch, withServedToolNames } from "./ToolDispatch.ts";
 import {
   argumentKeys,
   encodeReferenceRefusal,
@@ -343,7 +343,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
         message,
       });
     }
-    return yield* httpEffect.pipe(
+    return yield* withServedToolNames(httpEffect).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
       Effect.map(normalizeMcpHttpResponse),
     );
