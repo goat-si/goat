@@ -7,8 +7,11 @@ import * as Schema from "effect/Schema";
 export const AgentToolListing = Schema.Literals(["core", "full"]);
 export type AgentToolListing = typeof AgentToolListing.Type;
 
-/** "full" until the context-diet flip makes "core" the default for every harness. */
-export const DEFAULT_AGENT_TOOL_LISTING: AgentToolListing = "full";
+/**
+ * Every harness gets the core listing unless the environment's settings ask for "full", the
+ * rollback for a harness that regresses (D21 in docs/internals/agent-surface.md).
+ */
+export const DEFAULT_AGENT_TOOL_LISTING: AgentToolListing = "core";
 
 /** The _meta key Claude Code reads to load a tool up front instead of deferring it. */
 export const ALWAYS_LOAD_META_KEY = "anthropic/alwaysLoad";

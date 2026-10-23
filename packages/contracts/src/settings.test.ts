@@ -44,6 +44,16 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("agent tool listing", () => {
+  it("lists the core tools to an environment that never chose, and keeps full for one that did", () => {
+    expect(decodeServerSettings({}).agentToolListing).toBe("core");
+    expect(decodeServerSettings({ agentToolListing: "full" }).agentToolListing).toBe("full");
+    expect(decodeServerSettingsPatch({ agentToolListing: "full" })).toEqual({
+      agentToolListing: "full",
+    });
+  });
+});
+
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();

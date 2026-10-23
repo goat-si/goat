@@ -3,11 +3,12 @@
  * What GOAT puts into each harness's context: the served tool listing, the instruction block,
  * what a later turn adds, and (with --db) the wake messages GOAT writes into threads.
  *
- *   node scripts/agent-surface/context-budget.ts [--json] [--listing full|core] [--db <copy>]
+ *   node scripts/agent-surface/context-budget.ts [--json] [--check] [--listing full|core] [--db <copy>]
  *
  * The listing comes from servedCatalog.ts: the registrations /mcp mounts, built in-process at the
  * checked-out commit, and passes through the server's own tools/list filter as a GOAT thread
- * receives it under agentToolListing --listing (default full).
+ * receives it under agentToolListing --listing (default: the server's default listing).
+ * --check exits 1 when a harness goes over BUDGET, so CI holds the context diet's targets.
  * Instruction text comes from the exported builders. Adapters compose those builders inline, so
  * each harness below names the source that composes it and a fragment that source must still
  * contain; the script exits 1 when one is missing instead of reporting a stale composition.
@@ -257,8 +258,11 @@ const git = (args: ReadonlyArray<string>) =>
 const argv = process.argv.slice(2);
 const dbIndex = argv.indexOf("--db");
 const dbPath = dbIndex === -1 ? undefined : argv[dbIndex + 1];
+const { DEFAULT_AGENT_TOOL_LISTING } = await fromRepo<{
+  readonly DEFAULT_AGENT_TOOL_LISTING: string;
+}>("packages/contracts/src/agentSurface/listing.ts");
 const listingIndex = argv.indexOf("--listing");
-const listingMode = listingIndex === -1 ? "full" : argv[listingIndex + 1];
+const listingMode = listingIndex === -1 ? DEFAULT_AGENT_TOOL_LISTING : argv[listingIndex + 1];
 if (listingMode !== "full" && listingMode !== "core") {
   console.error("--listing takes full or core");
   process.exit(1);
@@ -311,12 +315,33 @@ const rows = harnesses.map((harness) => {
     laterTurnBytes: laterTurn,
   };
 });
+/** The always-injected targets every harness keeps (D21 in docs/internals/agent-surface.md). */
+const BUDGET = {
+  instructionBytes: 6 * 1024,
+  listingBytes: 6 * 1024,
+  firstPromptBytes: 12 * 1024,
+  laterTurnBytes: 300,
+} as const;
+const overBudget = rows.flatMap((row) =>
+  (
+    [
+      ["instructions", row.instructionBytes, BUDGET.instructionBytes],
+      ["listing", listing.modelFacingBytes, BUDGET.listingBytes],
+      ["first prompt", row.firstPromptBytes, BUDGET.firstPromptBytes],
+      ["each later turn", row.laterTurnBytes, BUDGET.laterTurnBytes],
+    ] as const
+  )
+    .filter(([, measured, limit]) => measured > limit)
+    .map(([what, measured, limit]) => `${row.harness}: ${what} ${measured} B, over ${limit} B`),
+);
 const report = {
   commit: git(["rev-parse", "HEAD"]),
   dirty: git(["status", "--porcelain", "--untracked-files=no"]) !== "",
   tokenEstimate: "utf8 bytes / 4",
   listing,
   harnesses: rows,
+  budget: BUDGET,
+  overBudget,
   wakes: dbPath === undefined ? null : await wakeMessages(dbPath),
 };
 
@@ -368,6 +393,17 @@ if (argv.includes("--json")) {
     "",
     "Largest tools (model-facing bytes): " +
       listing.largest.map((tool) => tool.name + " " + n(tool.bytes)).join(", "),
+    "",
+    "Budget per harness: instructions " +
+      n(BUDGET.instructionBytes) +
+      " B, listing " +
+      n(BUDGET.listingBytes) +
+      " B, first prompt " +
+      n(BUDGET.firstPromptBytes) +
+      " B, each later turn " +
+      n(BUDGET.laterTurnBytes) +
+      " B. " +
+      (overBudget.length === 0 ? "Every harness is within it." : overBudget.join("; ") + "."),
   ];
   if (report.wakes !== null) {
     out.push(
@@ -391,4 +427,10 @@ if (argv.includes("--json")) {
     );
   }
   console.log(out.join("\n"));
+}
+if (argv.includes("--check") && overBudget.length > 0) {
+  console.error(
+    "Over the context budget under agentToolListing " + listingMode + ":\n" + overBudget.join("\n"),
+  );
+  process.exitCode = 1;
 }
