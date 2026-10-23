@@ -1,5 +1,6 @@
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "./registry.ts";
 import { canonicalToolName, listedToolName } from "./surfaceEntries.ts";
+import type { AgentSurfaceEntry } from "./types.ts";
 
 export { canonicalToolName, listedToolName };
 
@@ -35,6 +36,9 @@ for (const [legacy, path] of legacyAgentSurfacePaths) {
 export const resolveAgentSurfaceEntry = (
   pathOrName: string,
 ): AgentSurfaceRegistryEntry | undefined => byName.get(pathOrName);
+
+/** Whether GOAT deduplicates this write by clientRequestId (docs/internals/agent-surface.md#idempotency). */
+export const isKeyedWrite = (entry: AgentSurfaceEntry) => entry.idempotency === "key";
 
 /**
  * Shipped tool names mapped to the name /mcp lists the tool under. A tools/call by one of them

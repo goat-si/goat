@@ -8,7 +8,7 @@ import {
 } from "@goat/contracts";
 import {
   type HtmlRenderShortcut,
-  htmlRenderShortcutsMessage,
+  htmlRenderShortcutsMessages,
   htmlRenderThemeFragment,
   htmlRenderThemeMessage,
   htmlRenderResult,
@@ -178,10 +178,9 @@ export function HtmlRenderDocument(props: {
   }
   const shortcuts = [...shortcutsByKey.values()];
   const postShortcuts = () => {
-    frameRef.current?.contentWindow?.postMessage(
-      htmlRenderShortcutsMessage(shortcuts, blocked),
-      "*",
-    );
+    const frame = frameRef.current?.contentWindow;
+    for (const message of htmlRenderShortcutsMessages(shortcuts, blocked))
+      frame?.postMessage(message, "*");
   };
   useEffect(postShortcuts, [blocked, shortcuts]);
   // The page reports the key and code, and a page script can report any pair,

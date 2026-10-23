@@ -81,6 +81,7 @@ const laterGoatMigrations = [
   [97, "PermissionProfiles"],
   [98, "DecisionInbox"],
   [99, "HumanStepRecords"],
+  [100, "McpRequestReservations"],
 ] as const;
 const preMemoryGoatNames = [
   "ServerActivityIndexes",
