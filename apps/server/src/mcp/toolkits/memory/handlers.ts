@@ -9,6 +9,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { MemoryToolkit } from "./tools.ts";
 
+const isProfileError = Schema.is(M.OrchestratorMcpFailure);
 const isMemoryError = Schema.is(M.MemoryRpcError);
 const isCapacityDimension = Schema.is(M.MemoryCapacityDimension);
 const isCapacity = Schema.is(M.MemoryCapacityExceeded);
@@ -116,8 +117,7 @@ const makeHandlers = Effect.gen(function* () {
     if (scope.thread !== undefined) yield* profiles.require(scope, "threads.launch");
     return yield* invocationPermit("write");
   });
-  const writeError = (error: unknown) =>
-    Schema.is(M.OrchestratorMcpFailure)(error) ? error : memoryError(error);
+  const writeError = (error: unknown) => (isProfileError(error) ? error : memoryError(error));
   return {
     memory_search: McpToolAccess.reads((input) =>
       Effect.gen(function* () {

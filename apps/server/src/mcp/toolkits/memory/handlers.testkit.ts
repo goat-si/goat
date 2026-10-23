@@ -107,13 +107,9 @@ const sync = Layer.unwrap(
   }),
 ).pipe(Layer.provide(admin));
 
-const makeLayer = <E, R>(
+const makeLayer = <E, R, E2, R2>(
   serviceCore: Layer.Layer<Layer.Success<typeof core>, E, R>,
-  profiles: Layer.Layer<
-    Profiles.PermissionProfiles,
-    E,
-    R
-  > = McpToolAccessTestkit.layerPermissionProfilesOff,
+  profiles: Layer.Layer<Profiles.PermissionProfiles, E2, R2>,
 ) =>
   Layer.mergeAll(
     McpHttpServer.layerMemoryToolkit,
@@ -128,7 +124,7 @@ const makeLayer = <E, R>(
     Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
     Layer.provide(NodeServices.layer),
   );
-export const layer = makeLayer(core);
+export const layer = makeLayer(core, McpToolAccessTestkit.layerPermissionProfilesOff);
 const profileCore = Layer.effectDiscard(
   Effect.gen(function* () {
     yield* profileMigration;
@@ -194,7 +190,11 @@ export const layerForThreadEnvironment = <E, R>(
   );
 export const layerWithSourceReadAuthority = (
   authority: Service.MemorySourceReadAuthority["readSource"],
-) => makeLayer(makeCore(Service.layerWithSourceReadAuthority(authority), database));
+) =>
+  makeLayer(
+    makeCore(Service.layerWithSourceReadAuthority(authority), database),
+    McpToolAccessTestkit.layerPermissionProfilesOff,
+  );
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
   clientCapabilities: {},
