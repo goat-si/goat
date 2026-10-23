@@ -94,6 +94,8 @@ export const projectEntries = {
       idempotentHint: false,
       openWorldHint: true,
     },
+    idempotency: "key",
+    reconcile: "project.list",
   }),
   "project.clone": entry({
     resource: "project",

@@ -212,7 +212,7 @@
   "apps/server/src/mcp/ThreadReplicaService.test.ts": { "lines": 1022 },
   "apps/server/src/mcp/WorktreeInventoryService.ts": { "nonNull": 6 },
   "apps/server/src/mcp/toolkits/connection/handlers.ts": { "nonNull": 1 },
-  "apps/server/src/mcp/toolkits/core.test.ts": { "lines": 1782 },
+  "apps/server/src/mcp/toolkits/core.test.ts": { "lines": 1779 },
   "apps/server/src/mcp/toolkits/device/handlers.ts": { "nonNull": 1 },
   "apps/server/src/mcp/toolkits/memory/handlers.ts": { "nonNull": 1 },
   "apps/server/src/mcp/toolkits/memory/tools.ts": { "nonNull": 1 },
