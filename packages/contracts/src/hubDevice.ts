@@ -72,3 +72,6 @@ export const HubDeviceMcpResult = Schema.Union([
   HubDeviceOperationResult,
 ]);
 export type HubDeviceMcpResult = typeof HubDeviceMcpResult.Type;
+/** One hub tool's result: its needs_human names only that tool as the next call. */
+export const hubDeviceToolResult = <const Call extends string>(call: Call) =>
+  Schema.Union([hubNeedsHuman(call), HubDeviceOperationResult]);
