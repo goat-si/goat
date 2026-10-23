@@ -18,7 +18,7 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
-import { describeUpdateErrorCause } from "./updateFailures.ts";
+import { describeUpdateErrorCause, UPDATE_CHECK_SETTLE_WAIT } from "./updateFailures.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 import {
   getDesktopUpdateInstallationMessage,
@@ -341,7 +341,7 @@ describe("DesktopUpdates", () => {
             const check = yield* updates.check("poll").pipe(Effect.forkScoped);
             yield* Deferred.await(checkStarted);
             const install = yield* updates
-              .installPrepared("1.2.4", { waitForCheck: true })
+              .installPrepared("1.2.4", { waitForCheck: true, checkWait: UPDATE_CHECK_SETTLE_WAIT })
               .pipe(Effect.forkScoped);
             yield* flushCallbacks;
             yield* TestClock.adjust("2 minutes");

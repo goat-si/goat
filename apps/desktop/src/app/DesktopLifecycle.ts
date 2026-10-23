@@ -15,6 +15,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+import { UPDATE_CHECK_SETTLE_WAIT } from "../updates/updateFailures.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 export class DesktopLifecycleRelaunchError extends Schema.TaggedError<DesktopLifecycleRelaunchError>()(
@@ -138,6 +139,7 @@ function handleBeforeQuit(
         // from skipping the downloaded update.
         const installation = yield* updates.installPrepared(update.downloadedVersion, {
           waitForCheck: true,
+          checkWait: UPDATE_CHECK_SETTLE_WAIT,
         });
         if (installation.accepted)
           return installation.failed ? ("failed" as const) : ("installing" as const);

@@ -41,6 +41,7 @@ import {
   checkFailureMessage,
   DesktopUpdateCheckTimeoutError,
   describeUpdateErrorCause,
+  isAbandonedCheckFailure,
   UPDATE_CHECK_TIMEOUT,
   UPDATE_CHECK_TIMEOUT_MINUTES,
 } from "./updateFailures.ts";
@@ -65,8 +66,9 @@ import {
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
-// A running check always settles within its deadline, so a prepared install can wait it out.
-const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(UPDATE_CHECK_TIMEOUT_MINUTES * 60 + 15);
+// Remote installs (DesktopRemoteUpdates) must answer within the server's commit budget, so
+// they wait less than a check's full deadline; quit passes UPDATE_CHECK_SETTLE_WAIT instead.
+const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(90);
 
 type UpdateAction = "check" | "download" | "install" | "install-recovery" | "channel";
 
@@ -209,7 +211,7 @@ export class DesktopUpdates extends Context.Service<
     readonly install: Effect.Effect<DesktopUpdateActionResult>;
     readonly installPrepared: (
       expectedVersion: string,
-      options?: { readonly waitForCheck: boolean },
+      options?: { readonly waitForCheck: boolean; readonly checkWait?: Duration.Duration },
     ) => Effect.Effect<DesktopPreparedUpdateInstallResult>;
   }
 >()("@goat/desktop/updates/DesktopUpdates") {}
@@ -816,6 +818,7 @@ export const make = Effect.gen(function* () {
     expectedVersion?: string,
     automaticAdmission?: Effect.Effect<boolean>,
     waitForCheck = true,
+    checkWait: Duration.Duration = PREPARED_INSTALL_CHECK_WAIT,
   ) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -855,7 +858,7 @@ export const make = Effect.gen(function* () {
           );
           if (admission === "wait-for-check") {
             const finishedAction = yield* PubSub.take(actionCompletions).pipe(
-              Effect.timeoutOption(PREPARED_INSTALL_CHECK_WAIT),
+              Effect.timeoutOption(checkWait),
             );
             if (Option.isNone(finishedAction)) admission = "refused";
           }
@@ -929,6 +932,7 @@ export const make = Effect.gen(function* () {
   const installWithExpectedVersion = Effect.fn("desktop.updates.install")(function* (
     expectedVersion?: string,
     waitForCheck = true,
+    checkWait?: Duration.Duration,
   ) {
     if (yield* Ref.get(desktopState.quitting)) {
       return {
@@ -938,7 +942,12 @@ export const make = Effect.gen(function* () {
         state: yield* Ref.get(updateStateRef),
       };
     }
-    const result = yield* installDownloadedUpdate(expectedVersion, undefined, waitForCheck);
+    const result = yield* installDownloadedUpdate(
+      expectedVersion,
+      undefined,
+      waitForCheck,
+      checkWait,
+    );
     return {
       accepted: result.accepted,
       completed: result.completed,
@@ -1177,17 +1186,10 @@ export const make = Effect.gen(function* () {
     detail: unknown,
   ) {
     const activeAction = yield* activeUpdateAction;
-    // electron-updater reports a failed check with this detail. A check that outlived its
-    // deadline can fail later, while a download or install that has nothing to do with it runs.
-    if (
-      typeof detail === "string" &&
-      detail.startsWith("Cannot check for updates") &&
-      Option.isSome(activeAction) &&
-      activeAction.value !== "check"
-    ) {
+    if (isAbandonedCheckFailure(detail, Option.getOrUndefined(activeAction))) {
       yield* logUpdaterWarning("an update check failed after its deadline", {
         cause: describeUpdateErrorCause(cause),
-        activeAction: activeAction.value,
+        activeAction: Option.getOrUndefined(activeAction),
       });
       return;
     }
@@ -1542,7 +1544,11 @@ export const make = Effect.gen(function* () {
       Effect.map(({ accepted, completed, state }) => ({ accepted, completed, state })),
     ),
     installPrepared: (expectedVersion, options) =>
-      installWithExpectedVersion(expectedVersion, options?.waitForCheck ?? true),
+      installWithExpectedVersion(
+        expectedVersion,
+        options?.waitForCheck ?? true,
+        options?.checkWait,
+      ),
   });
 });
 

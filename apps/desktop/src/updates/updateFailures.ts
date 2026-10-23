@@ -4,14 +4,15 @@ import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 
-// electron-updater arms its request timeout on a "socket" event that Electron's
-// net.ClientRequest never emits, so a stalled check can stay pending indefinitely.
-// The deadline frees GOAT's check and shows the stall. electron-updater keeps the
-// stalled request and hands it to later checks, so one request is ever in flight
-// and its eventual result is the current one. A check is two small feed requests,
-// so this bound stays well under the poll interval.
+// Each updater request has its own response deadline (ElectronUpdater.installRequestDeadlines),
+// but a check can chain several requests and redirects. This bound frees GOAT's check and
+// shows the stall; electron-updater keeps the request in flight and hands it to later
+// checks until its own deadline fails it, so one request is ever in flight and its
+// eventual result is the current one. It stays well under the poll interval.
 export const UPDATE_CHECK_TIMEOUT_MINUTES = 2;
 export const UPDATE_CHECK_TIMEOUT = Duration.minutes(UPDATE_CHECK_TIMEOUT_MINUTES);
+/** How long quit waits for a running check before installing: the check's deadline plus slack. */
+export const UPDATE_CHECK_SETTLE_WAIT = Duration.seconds(UPDATE_CHECK_TIMEOUT_MINUTES * 60 + 15);
 
 export class DesktopUpdateCheckTimeoutError extends Schema.TaggedError<DesktopUpdateCheckTimeoutError>()(
   "DesktopUpdateCheckTimeoutError",
@@ -81,4 +82,17 @@ export function describeUpdateErrorCause(cause: unknown): string {
 
 export function checkFailureMessage(reason: string): string {
   return `Could not check for updates: ${reason}`;
+}
+
+/**
+ * electron-updater reports a failed check with this "error" detail. A check that outlived
+ * its deadline can fail later, while a download or install that has nothing to do with it runs.
+ */
+export function isAbandonedCheckFailure(detail: unknown, activeAction: string | undefined) {
+  return (
+    typeof detail === "string" &&
+    detail.startsWith("Cannot check for updates") &&
+    activeAction !== undefined &&
+    activeAction !== "check"
+  );
 }

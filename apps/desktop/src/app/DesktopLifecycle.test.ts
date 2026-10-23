@@ -14,6 +14,7 @@ import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+import { UPDATE_CHECK_SETTLE_WAIT } from "../updates/updateFailures.ts";
 import { createInitialDesktopUpdateState } from "../updates/updateMachine.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
@@ -151,6 +152,7 @@ describe("DesktopLifecycle", () => {
                 Effect.gen(function* () {
                   assert.equal(version, "1.2.4");
                   assert.isTrue(options?.waitForCheck);
+                  assert.strictEqual(options?.checkWait, UPDATE_CHECK_SETTLE_WAIT);
                   events.push("install");
                   yield* Deferred.succeed(installationStarted, undefined);
                   yield* Deferred.await(allowInstallation);
