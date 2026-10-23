@@ -13,6 +13,7 @@ import * as ProviderSettings from "../../../provider/ProviderSettings.ts";
 import { dispatchFacts } from "../../hostFailure.ts";
 import * as McpInvocation from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { settled } from "../settled.ts";
 import { ProviderToolkit } from "./tools.ts";
 
 const LEGACY_SYNC_CODES: Partial<
@@ -110,10 +111,14 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
     onboarding((service, scope) => service.loginStart(input, scope)),
   ),
   goat_provider_login_status: McpToolAccess.reads((input) =>
-    onboarding((service, scope) => service.loginStatus(input, scope)),
+    onboarding((service, scope) =>
+      service.loginStatus(input, scope).pipe(Effect.flatMap(settled("goat_provider_login_status"))),
+    ),
   ),
   goat_provider_login_cancel: McpToolAccess.writes((input) =>
-    onboarding((service, scope) => service.loginCancel(input, scope)),
+    onboarding((service, scope) =>
+      service.loginCancel(input, scope).pipe(Effect.flatMap(settled("goat_provider_login_cancel"))),
+    ),
   ),
   // The service decides between applying and asking a person, so these need no thread control.
   goat_provider_update: McpToolAccess.writesWithCapability((input) =>

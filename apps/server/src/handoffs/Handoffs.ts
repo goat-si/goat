@@ -15,6 +15,7 @@ import {
   handoffSummary,
   isHandoffPending,
   isClockedHandoffPath,
+  endsWithItsRun,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   TurnItemId,
   type HandoffReadInput,
@@ -497,9 +498,7 @@ const make = Effect.gen(function* () {
       if (
         (handoff.expiresAt !== null &&
           DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)) ||
-        (handoff.kind === "approval" &&
-          !handoff.target.path.startsWith("ssh.") &&
-          !isClockedHandoffPath(handoff.target.path) &&
+        (endsWithItsRun(handoff) &&
           (runStatus === null || ThreadManagement.isTerminalRunStatus(runStatus)))
       ) {
         const input = yield* decodeAddress({
