@@ -116,11 +116,11 @@ Cloud runs settle directly without a local checkpoint or workspace refresh. `Che
 then commits a `checkpoint.captured` event through the same sink.
 
 `CHECKPOINT_REFS_PREFIX` in `apps/server/src/orchestration-v2/CheckpointService.ts` is
-`refs/t3/orchestration-v2/checkpoints`. `apps/server/src/checkpointing/CheckpointStore.ts` captures
+`refs/goat/orchestration-v2/checkpoints` (with legacy `refs/t3/orchestration-v2/checkpoints` readers). `apps/server/src/checkpointing/CheckpointStore.ts` captures
 a hidden git ref through the VCS driver. `apps/server/src/vcs/GitVcsDriver.ts` implements
 `captureCheckpoint` as `captureTree` at that ref. The legacy helper
 `checkpointRefForThreadTurn` in `apps/server/src/checkpointing/Utils.ts` still uses
-`refs/t3/checkpoints`.
+`refs/goat/checkpoints`; old `refs/t3/checkpoints` remain readable.
 
 The ref is how the app diffs a turn and restores the tree. It is not a branch the user is asked
 to check out.
