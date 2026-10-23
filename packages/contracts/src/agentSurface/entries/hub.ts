@@ -10,7 +10,7 @@ export const hubEntries = {
     description:
       "Check a device's P1–P8 parity with this machine's OpenCodex Home. Verification reports evidence and failures; use goat_hub_device_repair to fix them.",
     guide:
-      "The call reads the Home locally and requests goat_host_status with parity evidence on the device. Parity collection requests GET /v1/models on each machine. The verdict is ok, degraded, broken or unproven, with check IDs and reasons. Verification does not repair, sync, restart or join the device. Reaching the device needs a live caller allowed to use this machine's SSH keys; read-only MCP clients cannot make this call.",
+      "The call reads the Home locally and requests goat_host_status with parity evidence on the device. Parity collection requests non-billed GET /v1/models on each machine. The verdict is ok, degraded, broken or unproven, with check IDs and reasons. Verification does not repair, sync, restart or join the device. Reaching the device needs a live caller allowed to use this machine's SSH keys; read-only MCP clients cannot make this call.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

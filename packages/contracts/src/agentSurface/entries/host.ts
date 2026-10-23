@@ -69,7 +69,7 @@ export const hostEntries = {
     verb: "drain",
     name: "goat_host_drain",
     toolkit: "fleetHealth",
-    summary: "Cordon a host and move its goal attempts away between runs",
+    summary: "Cordon a host and mark it Draining",
     description:
       "Persistently cordon a host and mark it Draining, excluding it from new placements. Existing goal attempts are currently not moved automatically. Use goat_host_uncordon to clear both flags.",
     guide:
