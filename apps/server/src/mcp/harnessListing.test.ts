@@ -2,7 +2,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { ALWAYS_LOAD_META_KEY, type AgentToolListing } from "@goat/contracts/agentSurface/listing";
+import type { AgentToolListing } from "@goat/contracts/agentSurface/listing";
 import { listedToolName } from "@goat/contracts/agentSurface/resolve";
 import { acpMcpContext } from "@goat/provider-acp/server/mcpContext";
 import { makeAcpMcpOverAcpBridge } from "@goat/provider-acp/server/mcpOverAcpBridge";
@@ -29,6 +29,8 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
  */
 
 const PROTOCOL = "2025-06-18";
+/** Spelled out: it is Claude Code's wire key, so a renamed constant must not move it silently. */
+const ALWAYS_LOAD = "anthropic/alwaysLoad";
 const thread: McpInvocationScope = {
   environmentId: EnvironmentId.make("environment"),
   capabilities: new Set(["orchestration", "worktree", "pull-requests", "preview"] as const),
@@ -65,7 +67,7 @@ const expectOffered = (
 ) => {
   const names = offered.map((tool) => tool.name).toSorted();
   const marked = offered
-    .filter((tool) => tool._meta?.[ALWAYS_LOAD_META_KEY] === true)
+    .filter((tool) => tool._meta?.[ALWAYS_LOAD] === true)
     .map((tool) => tool.name)
     .toSorted();
   expect(marked, listing).toEqual(CORE);
