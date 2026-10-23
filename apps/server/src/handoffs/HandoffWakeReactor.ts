@@ -67,7 +67,7 @@ const continuation = (handoff: Handoff) => {
 };
 
 /** The wake for a handoff's current state, or undefined when the asking thread needs none. */
-export const handoffWake = (handoff: Handoff): LaunchWatchWake | undefined => {
+const handoffWake = (handoff: Handoff): LaunchWatchWake | undefined => {
   if (!ENDED.has(handoff.state) || handoff.kind === "secret") return undefined;
   // An approval tied to its run expired because that run ended; waking would ask again forever.
   if (handoff.state === "expired" && endsWithItsRun(handoff)) return undefined;
