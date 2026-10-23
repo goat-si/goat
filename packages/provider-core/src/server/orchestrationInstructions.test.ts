@@ -15,7 +15,7 @@ import {
  * the next line is a judgment, not a test failure: does an agent without it reach a wrong
  * conclusion, or only earn a refusal that names the right call? Only the first belongs.
  */
-const ALWAYS_INJECTED_BUDGET_BYTES = 6_144;
+const ALWAYS_INJECTED_BUDGET_BYTES = 5_632;
 
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 

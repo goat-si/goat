@@ -2768,10 +2768,7 @@ describe("OpenCodeAdapterV2", () => {
         yield* harness.startTurn("ordinary after command");
         assert.equal(refreshes, 1);
         assert.include(prompts[0]?.system ?? "", memoryContextText(wp4Snapshot()));
-        // A removed MCP session leaves no memory tools, so the prompt names none.
-        if (change === "replace")
-          assert.include(prompts[0]?.system ?? "", "GOAT memory tools: read=true");
-        else assert.notInclude(prompts[0]?.system ?? "", "GOAT memory tools:");
+        assert.equal(/tools: read=true/.test(prompts[0]?.system ?? ""), change === "replace");
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),

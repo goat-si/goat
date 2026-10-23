@@ -21,7 +21,7 @@ export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
 
 const GOAT_DEVICE_TOOL_INSTRUCTIONS = `## GOAT devices
 
-For iOS Simulator or Android Emulator work, call \`goat_device_list\`, then \`goat_device_open\` so the user can watch in their Device panel. Drive the device with the \`agent-device\` launcher path, host config, and session flags that \`goat_device_open\` returns, on every command; prefer \`agent-device snapshot -i\` refs over coordinates, and use \`goat_device_screenshot\` to see the screen. \`xcrun simctl\` and \`adb\` stay available for builds, logs, and anything else. If \`goat_device_list\` reports a platform unavailable, say so.`;
+For iOS Simulator or Android Emulator work, run \`device.list\`, then \`device.open\` so the user can watch in their Device panel. Drive the device with the \`agent-device\` launcher path, host config, and session flags that \`device.open\` returns, on every command; prefer \`agent-device snapshot -i\` refs over coordinates, and use \`device.screenshot\` to see the screen. \`xcrun simctl\` and \`adb\` stay available for builds, logs, and anything else. If \`device.list\` reports a platform unavailable, say so.`;
 
 export interface GoatToolAvailability {
   readonly browser: boolean;
@@ -184,15 +184,7 @@ If the user stays in Plan mode and asks for revisions after a prior \`<proposed_
 
 const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
 
-You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
-
-Your active mode changes only when new developer instructions with a different \`<collaboration_mode>...</collaboration_mode>\` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.
-
-## request_user_input availability
-
-Use the \`request_user_input\` tool only when it is listed in the available tools for this turn.
-
-In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
+Default mode is active and replaces any earlier mode. Only developer instructions with another \`<collaboration_mode>\` change it; user requests and tool descriptions do not. Use \`request_user_input\` only when it is listed for this turn. Prefer reasonable assumptions and carry out the request; when a risky assumption cannot be settled from local context, ask one concise plain-text question, never a multiple-choice question written as text.
 </collaboration_mode>`;
 
 export interface CodexRuntimeInfo {

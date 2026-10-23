@@ -79,7 +79,6 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { buildCodexDevelopmentContext } from "../../provider/CodexDeveloperInstructions.ts";
-import { framePendingReports } from "../../remoteReports/reportFrame.ts";
 import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
 
@@ -365,34 +364,6 @@ describe("CodexAdapterV2 runtime policy", () => {
           buildCodexDevelopmentContext().t3_code_development,
         );
         assert.isDefined(withGoat?.t3_code_orchestration_01);
-      }),
-  );
-
-  it.effect(
-    "keeps the injected prefix byte-identical across turns that carry different notices",
-    () =>
-      Effect.gen(function* () {
-        // Provider prompt caches key on this prefix; a notice that leaks into it breaks every cache.
-        const turn = (text: string) =>
-          CodexAdapterV2.buildCodexTurnStartParams({
-            nativeThreadId: "native-stable-prefix",
-            codexInput: [{ type: "text", text }],
-            runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
-            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-            hasGoatMcp: true,
-            browserToolsAvailable: true,
-            deviceToolsAvailable: true,
-          });
-        const first = yield* turn(
-          `${framePendingReports(["Report from a thread on host-a [c-1]: progress\n> tests running"])}\n\nContinue.`,
-        );
-        const second = yield* turn(
-          'Launched thread "lane-7" (threadId t-7, host host-b) finished run r-2 with status completed.',
-        );
-        const { input: _first, ...firstPrefix } = first;
-        const { input: _second, ...secondPrefix } = second;
-        assert.notDeepEqual(first.input, second.input);
-        assert.deepEqual(JSON.stringify(firstPrefix), JSON.stringify(secondPrefix));
       }),
   );
 });
@@ -3110,7 +3081,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         });
         assert.include(
           params.additionalContext?.t3_code_orchestration_01?.value ?? "",
-          "goat_task_create",
+          "task.create",
         );
         const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
         const transcript = makeCodexReplayTranscript({

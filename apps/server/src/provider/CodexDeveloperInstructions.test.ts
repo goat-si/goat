@@ -70,8 +70,11 @@ describe("buildCodexAdditionalContext", () => {
     });
   });
 
-  it("names only tools the GOAT server lists", () => {
-    const listed = new Set(Object.values(agentSurfaceRegistry).map(listedToolName));
+  it("names only tools and paths the GOAT registry has", () => {
+    const entries = Object.values(agentSurfaceRegistry);
+    const listed = new Set(entries.map(listedToolName));
+    const paths = new Set(entries.map((entry) => entry.path));
+    const resources = new Set(entries.map((entry) => entry.resource));
     const context = buildCodexAdditionalContext(
       { model: "gpt-5.3-codex", reasoningEffort: "high" },
       { browser: true, device: true, computerUse: true },
@@ -79,6 +82,10 @@ describe("buildCodexAdditionalContext", () => {
     for (const [key, entry] of Object.entries(context)) {
       for (const name of entry.value.match(/\bgoat_[a-z_]+\b/g) ?? []) {
         NodeAssert.ok(listed.has(name), `${key} names ${name}, which no GOAT tool is listed as`);
+      }
+      for (const [, path, resource] of entry.value.matchAll(/`(([a-z_]+)\.[a-z_]+)`/g)) {
+        if (resources.has(resource!))
+          NodeAssert.ok(paths.has(path!), `${key} names ${path}, which is not a GOAT path`);
       }
     }
   });

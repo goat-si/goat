@@ -41,7 +41,10 @@ import * as Stream from "effect/Stream";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import {
+  buildRuntimeInstructions,
+  GOAT_PULL_REQUEST_INSTRUCTIONS,
+} from "@goat/provider-core/server/runtimeInstructions";
 import { museModelCapabilities, resolveMuseReasoningEffort } from "./modelCatalog.ts";
 import {
   MuseApproval,
@@ -2042,11 +2045,11 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                 input: [
                   {
                     type: "text",
-                    text: buildRuntimeInstructions({
+                    text: `${buildRuntimeInstructions({
                       harness: "Muse Code",
                       model: session.model ?? undefined,
                       reasoningEffort: effort,
-                    }),
+                    })}\n\n${GOAT_PULL_REQUEST_INSTRUCTIONS}`,
                   },
                   ...parts,
                 ],
