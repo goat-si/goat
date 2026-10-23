@@ -16,6 +16,13 @@ describe("server service keys", () => {
     );
   });
 
+  it("keeps SSH runner environment handoffs", () => {
+    const source = "GOAT_SPAWN_ENV='T3CODE_NO_BROWSER=1'";
+    expect(
+      applyTextRules("packages/ssh/src/runtimeOwnershipScripts.ts", source, TEXT_RULES).text,
+    ).toBe(source);
+  });
+
   it("keeps branch names", () => {
     for (const branch of ["t3/abcd1234", "t3/renamed", "t3/feature-x", "t3/ssh/12345678"]) {
       expect(server(`launchFrom("${branch}")`)).toBe(`launchFrom("${branch}")`);
@@ -33,6 +40,11 @@ describe("package scope", () => {
 });
 
 describe("env names", () => {
+  it("renames SSH auth variables outside the frozen tunnel runner", () => {
+    expect(applyTextRules("packages/ssh/src/auth.ts", "T3_SSH_AUTH_SECRET", TEXT_RULES).text).toBe(
+      "GOAT_SSH_AUTH_SECRET",
+    );
+  });
   const rename = (source: string) =>
     applyTextRules("apps/server/src/x.ts", source, TEXT_RULES).text;
 
@@ -369,5 +381,255 @@ describe("repository hygiene on an upstream checkout", () => {
     expect(
       applyTextRules("AGENTS.md", "use `test-t3-app` or $test-t3-mobile", TEXT_RULES).text,
     ).toBe("use `test-goat-app` or $test-goat-mobile");
+  });
+});
+
+const keptVisibleCopy = [
+  [
+    ".agents/skills/contribution-triage/SKILL.md",
+    "description: Enforce T3 Code's PR contribution policy by closing ineligible submissions and triggering Macroscope review for eligible work within authorized scope. Supports explicit dry runs. Use for contribution moderation, not installation diagnostics or a full code review.",
+  ],
+  [
+    ".github/SECURITY.md",
+    "Report security vulnerabilities affecting T3 Code or T3 Tools-operated infrastructure to",
+  ],
+  [
+    ".github/triage/PLAYBOOK.md",
+    "- How is T3 Code running on this machine: `npx t3 serve` in a terminal, the",
+  ],
+  [
+    "apps/desktop/src/app/DesktopLegacyLocalStorage.ts",
+    'const V1_PROFILE_NAMES = ["T3 Code (Alpha)", "t3code"];',
+  ],
+  [
+    "apps/desktop/src/app/DesktopSafeStorageKeyMigration.ts",
+    ' * name (`productName`, for example "GOAT" or "T3 Code (Alpha)"); `T3 Code <stage>` is checked too.',
+  ],
+  [
+    "apps/mobile/src/features/connection/pairing.ts",
+    "/** App-link protocols whose `pair` URL wraps a pairing URL; T3 Code's are kept for older QR codes. */",
+  ],
+  [
+    "apps/server/scripts/acp-mock-agent.ts",
+    '              Content: { url: "https://t3.codes", content: "T3 Code page" },',
+  ],
+  [
+    "apps/server/scripts/acp-mock-agent.ts",
+    '            content: [{ type: "content", content: { type: "text", text: "T3 Code page" } }],',
+  ],
+  [
+    "apps/server/scripts/threadTitleEvaluationCases.ts",
+    '    request: "How can we improve title generation in T3 Code?",',
+  ],
+  [
+    "apps/server/scripts/threadTitleEvaluationCases.ts",
+    '      { role: "user", text: "How can we improve title gen further in T3 Code?" },',
+  ],
+  [
+    "apps/server/src/cloud/bootService.ts",
+    " * Installed by builds before the GOAT rename, and by upstream T3 Code. Install",
+  ],
+  [
+    "apps/server/src/cloud/bootService.ts",
+    '    .replace(/^Description=T3 Code server$/m, "Description=GOAT server")',
+  ],
+  [
+    "apps/server/src/cloud/bootService.ts",
+    "   * that serves another home is upstream T3 Code's or another install's, and",
+  ],
+  ["apps/server/src/provider/CodexChatGptAuth.ts", '        : { agent_name_hint: "T3 Code" }),'],
+  ["apps/server/src/provider/CodexProvider.ts", 'const CODEX_CLIENT_NAME = "T3 Code";'],
+  [
+    "apps/server/src/telemetry/AnalyticsService.ts",
+    " * Events go to the T3 Code ingest endpoint, which keeps a copy and forwards",
+  ],
+  ["apps/server/src/vcs/GitVcsDriver.ts", '      GIT_AUTHOR_NAME: "T3 Code",'],
+  ["apps/server/src/vcs/GitVcsDriver.ts", '      GIT_COMMITTER_NAME: "T3 Code",'],
+  ["docs/internals/overview.md", "## Upstream T3 Code"],
+  [
+    "docs/internals/remote-updates.md",
+    "Upstream T3 Code (`pingdotgg/t3code` at `771fd93f`) only downloads on the host,",
+  ],
+  [
+    "docs/operations/mobile-app-store-screenshots.md",
+    "2. Creates T3 Code, React, and Linux Git repositories with recognizable favicons, feature branches,",
+  ],
+  [
+    "docs/operations/mobile-app-store-screenshots.md",
+    "   and a deterministic T3 Code review diff.",
+  ],
+  [
+    "docs/operations/mobile-app-store-screenshots.md",
+    "The Pending rows use the production offline outbox and point at the real T3 Code and React fixture",
+  ],
+  [
+    "docs/user/background-service.md",
+    "including one still named `t3code.service` or an upstream T3 Code install, is",
+  ],
+  [
+    "docs/user/remote-access.md",
+    "codes printed by older T3 Code versions still scan. Browsers use the",
+  ],
+  [
+    "docs/user/remote-access.md",
+    "and data under `~/.goat`, apart from any T3 Code install in `~/.t3`. A fresh host",
+  ],
+  ["packages/contracts/src/relay.ts", '  .annotate(OpenApi.Title, "T3 Code Relay API")'],
+  ["packages/provider-cursor/src/server/adapter.ts", "    name: `T3 Code ${input.threadId}`,"],
+  [
+    "packages/provider-cursor/src/server/auth.ts",
+    "            apiKeyName: `T3 Code - ${options.displayName}`,",
+  ],
+  [
+    "packages/provider-muse/src/server/sdk.ts",
+    '    clientInfo: { name: "t3_code", title: "T3 Code", version: "1" },',
+  ],
+  [
+    "packages/provider-opencode/src/server/textGeneration.ts",
+    "                  title: `T3 Code ${input.operation}`,",
+  ],
+  [
+    "packages/provider-opencode/src/server/v2/textGeneration.ts",
+    "    title: `T3 Code ${input.operation}`,",
+  ],
+  [
+    "packages/provider-testing/src/replayWorkspace.ts",
+    '  yield* runGit(cwd, ["config", "user.name", "T3 Code Test"]);',
+  ],
+  ["packages/shared/src/goatHome.ts", " * T3 Code may be using `~/.t3` at the same time."],
+  [
+    "packages/shared/src/usageLimits.ts",
+    "  \"I've reached the limit for using my ChatGPT plan in T3 Code. Could you increase our workspace's usage limits so I can continue?\\n\\nGo to admin.openai.com → Workspace → Usage limits. Thank you!\";",
+  ],
+  [
+    "packages/source-control-github/src/server/githubStackRebase.ts",
+    '    GIT_CONFIG_VALUE_1: "T3 Code",',
+  ],
+  [
+    "README.md",
+    "GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code) and keeps its fast, event-sourced core. On top of it, GOAT adds:",
+  ],
+  [
+    "README.md",
+    "- **Its own desktop app.** The GOAT desktop app has its own app ID, data folder and update feed, so it installs beside the T3 Code app without sharing state. Its command line is `goat`.",
+  ],
+  [
+    "README.md",
+    "GOAT is a fork of [T3 Code](https://github.com/pingdotgg/t3code) by Ping and shares its git history. We merge upstream every cycle, and [devlog/_chase](./devlog/_chase/README.md) records how far GOAT has followed and where it deliberately differs. Thank you to the T3 Code team for the foundation.",
+  ],
+  [
+    "README.md",
+    "MIT. [LICENSE](./LICENSE) keeps the original T3 Code copyright notice. Icons: [Solar](https://www.figma.com/community/file/1166831539721848736) by 480 Design, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).",
+  ],
+  [
+    "scripts/build-cli-archive.ts",
+    "  // Upstream T3 Code's MIT notice travels with every GOAT archive.",
+  ],
+  [
+    "scripts/build-desktop-artifact.ts",
+    "  // Upstream T3 Code's MIT notice ships with every GOAT app (staged from LICENSE).",
+  ],
+  [
+    "scripts/lib/release-notices.ts",
+    '    "GOAT includes the software listed below. GOAT is based on T3 Code; its MIT notice is in LICENSE-T3CODE.txt.",',
+  ],
+  ["scripts/mobile-showcase-environment.ts", '    title: "T3 Code",'],
+  [
+    "scripts/mobile-showcase-environment.ts",
+    '      "Give T3 Code a remote-first command center. Make three machines feel one tap away, keep agent work in sync, and make every handoff feel instant.",',
+  ],
+  [
+    "scripts/mobile-showcase-environment.ts",
+    '      "T3 Code now treats every machine like it is right here in the room. ✦\\n\\n- Moonbase, Suspense Station, and Kernel Cabin stay live together\\n- Terminal state follows you without losing a single line\\n- Agent work remains perfectly in sync across devices\\n- Handoffs land before your train of thought can wander\\n\\nI also ran the changed workspace: **612 tests passed**.",',
+  ],
+  [
+    "structure/decisions/ADR-0005-desktop-home.md",
+    "- 목적과 의도: Package GOAT as its own desktop app, with its own data directory and update feed, so it can sit beside an upstream T3 Code install.",
+  ],
+  [
+    "structure/decisions/ADR-0005-desktop-home.md",
+    '- 기존 구현 및 제약 조건: The message says a packaged build was still "T3 Code" with upstream\'s bundle id, Electron profile, and `~/.t3/userdata`, and that its update feed followed `GITHUB_REPOSITORY`. That could collide with an upstream install or update into upstream T3.',
+  ],
+  [
+    "structure/decisions/ADR-0006-goat-cli-and-ssh-home.md",
+    "- 검토한 주요 대안: The message does not record a third directory layout. It rejects sharing `~/.t3` on a host that also runs upstream T3 Code.",
+  ],
+  [
+    "structure/decisions/ADR-0007-mcp-tool-names.md",
+    '- 기존 구현 및 제약 조건: The message says agents saw `t3_thread_list`, `t3_ssh_thread_launch`, and the rest, from a server named "T3 Code".',
+  ],
+  [
+    "structure/decisions/ADR-0014-desktop-runtime-identity.md",
+    "  `T3 Code <stage>` on `t3code://app`, without losing saved secrets or renderer storage and with a",
+  ],
+  [
+    "structure/decisions/ADR-0014-desktop-runtime-identity.md",
+    '  from `app.name` as it stands before the event loop starts. `app.setName("T3 Code <stage>")` ran',
+  ],
+  [
+    "structure/decisions/ADR-0014-desktop-runtime-identity.md",
+    "    copy the key of the initial package name (or `T3 Code <stage>`) to the new name. All ciphertext",
+  ],
+  [
+    "structure/decisions/ADR-0022-cua-driver-computer-use.md",
+    "  - Upstream T3 Code had two open, unmerged Cua Driver stacks. The newer one (#21694-#21697, by",
+  ],
+  [
+    "structure/desktop.md",
+    "  (or `T3 Code <stage>`) to the new name before anything reads safeStorage (macOS Keychain, Linux",
+  ],
+  [
+    "structure/overview.md",
+    "GOAT is a fork of T3 Code and shares its git history. [`README.md`](../README.md) states that.",
+  ],
+] as const;
+
+describe("visible GOAT copy", () => {
+  it("preserves KDE capture's installed desktop entry identity (ADR-0014)", () => {
+    const path = "apps/desktop/src/snapShot/KdeSnapShot.ts";
+    const source = '    "Name=T3 Code SnapShots",';
+    expect(applyTextRules(path, source, TEXT_RULES).text).toBe(source);
+    expect(findResidue(path, source, KEEP_RULES)).toEqual([]);
+    expect(applyTextRules(path, '"T3 Code capture failed"', TEXT_RULES).text).toBe(
+      '"GOAT capture failed"',
+    );
+  });
+  it.each(keptVisibleCopy)("keeps inventory copy in %s", (path, current) => {
+    expect(applyTextRules(path, current, TEXT_RULES).text).toBe(current);
+  });
+
+  it("renames the connection banner and implemented CLI commands", () => {
+    const path = "packages/client-runtime/src/connection/diagnosis.ts";
+    const source = "T3 Code on ${host} did not answer. Run `npx t3 serve` or `t3 pair`.";
+    const expected = "GOAT on ${host} did not answer. Run `goat serve` or `goat pair`.";
+    const first = applyTextRules(path, source, TEXT_RULES).text;
+    expect(first).toBe(expected);
+    expect(applyTextRules(path, first, TEXT_RULES).text).toBe(first);
+  });
+
+  it("renames older-host failures without renaming upstream version history", () => {
+    expect(server("host runs an older T3 Code")).toBe("host runs an older GOAT");
+    expect(server("a T3 Code session")).toBe("a GOAT session");
+    expect(server("original T3 Code; upstream T3 Code; any T3 Code install")).toBe(
+      "original T3 Code; upstream T3 Code; any T3 Code install",
+    );
+  });
+
+  it("keeps tests, frozen desktop identities, upstream help links and unknown commands", () => {
+    for (const path of [
+      "apps/web/src/copy.test.ts",
+      "apps/desktop/package.json",
+      "apps/desktop/scripts/electron-launcher.mjs",
+      "AGENTS.md",
+      "packages/ssh/src/x.ts",
+      "apps/server/src/sshRemote/x.ts",
+      "apps/server/src/orchestration-v2/Orchestrator.ts",
+    ]) {
+      const source = "T3 Code: npx t3 serve";
+      expect(applyTextRules(path, source, TEXT_RULES).text).toBe(source);
+    }
+    const source =
+      "T3 Connect: t3ConnectTroubleshootingUrl #the-host-runs-an-older-t3-code `npx t3 unknown`";
+    expect(server(source)).toBe(source);
   });
 });

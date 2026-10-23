@@ -12,7 +12,7 @@ import {
   dismissVersionMismatch,
   isServerUpdateFailureDismissed,
   isVersionMismatchDismissed,
-  manualServerUpdateCommand,
+  manualServerUpdateInstructions,
   resolveVersionMismatch,
 } from "./versionSkew";
 
@@ -20,13 +20,19 @@ const MISMATCH_HINT =
   "Version mismatch. Try syncing the client and server to the same GOAT version.";
 
 describe("versionSkew", () => {
-  it("updates only the proven npm prefix and safely quotes its path", () => {
-    expect(manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/node" })).toBe(
-      "npm install --global --prefix '/opt/node' t3@0.0.45",
+  it("gives pinned runtime installs the versioned GOAT update command", () => {
+    expect(manualServerUpdateInstructions("0.0.45")).toBe("goat update 0.0.45");
+  });
+
+  it.each([
+    { kind: "npm-global", prefix: "/opt/maria's node" },
+    { kind: "pnpm-dlx" },
+    { kind: "bunx" },
+    { kind: "npx" },
+  ] as const)("directs $kind installs to GOAT release archives", (installation) => {
+    expect(manualServerUpdateInstructions("0.0.45", installation)).toBe(
+      "Install GOAT 0.0.45 from https://github.com/goat-si/goat-releases/releases, then restart GOAT with your usual options.",
     );
-    expect(
-      manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/maria's node" }),
-    ).toBe("npm install --global --prefix '/opt/maria'\\''s node' t3@0.0.45");
   });
   beforeEach(() => {
     branding.APP_VERSION = "0.0.34";

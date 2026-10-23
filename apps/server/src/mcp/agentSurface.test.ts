@@ -16,6 +16,7 @@ import {
   type McpInvocationScope,
 } from "./McpInvocationContext.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
 import {
   canonicalToolAliases,
   canonicalToolName,
@@ -162,6 +163,28 @@ const propertiesOf = (node: unknown, definitions: JsonSchema): JsonSchema => {
   const resolved = resolve(node, definitions);
   return isObject(resolved) && isObject(resolved["properties"]) ? resolved["properties"] : {};
 };
+
+// Writes whose `host` names something other than a fleet machine the call acts on.
+const NOT_A_FLEET_HOST: Readonly<Record<string, string>> = {
+  "connection.add_ssh": "the address of a machine being added, gated by hub.manage",
+  "ssh.host_add": "the address of a machine being added, gated by hub.manage",
+  "pull_request.link": "the git forge's host",
+  "pull_request.unlink": "the git forge's host",
+  "pull_request.watch": "the git forge's host",
+  "pull_request.unwatch": "the git forge's host",
+};
+
+it("declares every write argument that names a host, so the goatclaw host allowlist checks it", () => {
+  for (const entry of entries) {
+    if (entry.effect === "read" || entry.path in NOT_A_FLEET_HOST) continue;
+    const document = Schema.toJsonSchemaDocument(toolOf(entry).parametersSchema);
+    const named = Object.keys(propertiesOf(document.schema, document.definitions)).filter(
+      (key) => key === "host" || key.endsWith("Host") || key.endsWith("Alias"),
+    );
+    expect(hostArgumentsOf(entry).toSorted(), entry.path).toEqual(named.toSorted());
+  }
+});
+
 /** Every object schema reachable from a result schema whose kind is the literal needs_human. */
 const needsHumanArms = (document: { schema: unknown; definitions: JsonSchema }) => {
   const arms: Array<JsonSchema> = [];
