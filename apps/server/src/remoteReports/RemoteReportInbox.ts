@@ -19,6 +19,7 @@ const Entry = Schema.Struct({
   text: Schema.String,
   host: Schema.NullOr(Schema.String),
   threadId: Schema.NullOr(Schema.String),
+  runId: Schema.NullOr(Schema.String),
 });
 
 /** A pending report and the launched thread it came from, when the inbox knows it. */
@@ -27,6 +28,8 @@ export interface PendingReport {
   readonly text: string;
   readonly host: string | null;
   readonly threadId: string | null;
+  /** The run the report was sent from; null for older rows and reports without a run. */
+  readonly runId: string | null;
 }
 const decodeEntries = Schema.decodeUnknownEffect(Schema.Array(Entry));
 
@@ -52,7 +55,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const pending = Effect.fn("RemoteReportInbox.pending")(function* (threadId: ThreadId) {
     // A local launch reports under local:<threadId>; a remote one under its dispatch.
-    const rows = yield* sql`SELECT i.id, i.kind, i.text, d.host AS host,
+    const rows = yield* sql`SELECT i.id, i.kind, i.text, d.host AS host, i.run_id AS "runId",
         COALESCE(d.remote_thread_id, CASE WHEN i.correlation_id LIKE 'local:%'
           THEN substr(i.correlation_id, 7) END) AS "threadId"
       FROM remote_report_inbox i LEFT JOIN remote_dispatches d ON d.correlation_id = i.correlation_id
@@ -69,7 +72,13 @@ const make = Effect.gen(function* () {
       const size = row.text.length + (texts.length === 0 ? 0 : 2);
       if (characters + size > 16_000) break;
       texts.push(row.text);
-      reports.push({ kind: row.kind, text: row.text, host: row.host, threadId: row.threadId });
+      reports.push({
+        kind: row.kind,
+        text: row.text,
+        host: row.host,
+        threadId: row.threadId,
+        runId: row.runId,
+      });
       throughId = row.id;
       characters += size;
     }

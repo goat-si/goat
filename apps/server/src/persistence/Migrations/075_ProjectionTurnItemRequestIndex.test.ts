@@ -57,6 +57,7 @@ it.effect(
         [98, "DecisionInbox"],
         [99, "HumanStepRecords"],
         [100, "McpRequestReservations"],
+        [101, "RemoteReportInboxRunId"],
       ]);
       yield* ProjectionTurnItemRequestIndex;
       assert.deepStrictEqual(yield* runMigrations(), []);

@@ -36,6 +36,7 @@ type StreamEvent =
       readonly report: "progress" | "completed";
       readonly host: string | null;
       readonly threadId: string;
+      readonly runId: string;
       readonly text: string;
     }
   | { readonly kind: "wake"; readonly id: string; readonly text: string };
@@ -52,6 +53,7 @@ export function overnightNoticeStream(lanes = 30): ReadonlyArray<StreamEvent> {
         report: "progress",
         host,
         threadId: `thread-lane-${lane}`,
+        runId: `run-${lane}`,
         text: frameRemoteReport({
           host: host ?? "this machine",
           correlationId,
@@ -67,6 +69,7 @@ export function overnightNoticeStream(lanes = 30): ReadonlyArray<StreamEvent> {
       report: "completed",
       host,
       threadId: `thread-lane-${lane}`,
+      runId: `run-${lane}`,
       text: frameRemoteReport({
         host: host ?? "this machine",
         correlationId,
@@ -175,6 +178,7 @@ export function replayNoticeDigest(
     report: string;
     host: string | null;
     threadId: string;
+    runId: string;
     kind: string;
     text: string;
   }> = [];
@@ -184,8 +188,17 @@ export function replayNoticeDigest(
   const startTurn = (notices: ReadonlyArray<Notice>, at: number) => {
     const [first] = notices;
     if (first === undefined) return;
-    turns.push(bytes(turnText({ messageId: first.id, text: renderNotices(notices) }, inbox)));
-    inbox = [];
+    // RemoteReportInbox.pending hands a turn at most 20 rows and 16,000 characters.
+    const drained: typeof inbox = [];
+    let characters = 0;
+    for (const row of inbox) {
+      const size = row.text.length + (drained.length === 0 ? 0 : 2);
+      if (drained.length === 20 || characters + size > 16_000) break;
+      drained.push(row);
+      characters += size;
+    }
+    turns.push(bytes(turnText({ messageId: first.id, text: renderNotices(notices) }, drained)));
+    inbox = inbox.slice(drained.length);
     busyUntil = at + busyFor;
   };
   events.forEach((event, index) => {
@@ -205,5 +218,7 @@ export function replayNoticeDigest(
     else startTurn([notice], index);
   });
   startTurn(queued, events.length);
+  // Reports left over ride on whatever turn comes next, so they are counted as turns too.
+  while (inbox.length > 0) startTurn([{ id: "message:next-turn", text: "" }], events.length);
   return turns;
 }

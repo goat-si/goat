@@ -341,10 +341,9 @@ const make = Effect.gen(function* () {
     } else {
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       yield* sql`INSERT INTO remote_report_inbox
-        (origin_thread_id, correlation_id, kind, text, created_at)
-        VALUES (${launcherId}, ${`local:${threadId}`}, ${value.status}, ${text}, ${createdAt})`.pipe(
-        Effect.mapError(storage),
-      );
+        (origin_thread_id, correlation_id, kind, text, run_id, created_at)
+        VALUES (${launcherId}, ${`local:${threadId}`}, ${value.status}, ${text},
+          ${shell.activeRunId ?? shell.latestRunId}, ${createdAt})`.pipe(Effect.mapError(storage));
     }
     return { sequence: 0, delivery: "launcher" as const };
   });

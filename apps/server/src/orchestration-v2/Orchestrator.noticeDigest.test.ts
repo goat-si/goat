@@ -4,6 +4,7 @@ import {
   MessageId,
   ProjectId,
   ProviderDriverKind,
+  type OrchestrationV2Notification,
   ProviderInstanceId,
   RunId,
   ThreadId,
@@ -69,7 +70,7 @@ const notice = (input: {
   readonly commandId: string;
   readonly messageId: string;
   readonly text: string;
-  readonly summary: string;
+  readonly notification: OrchestrationV2Notification;
 }) => ({
   type: "message.dispatch" as const,
   commandId: CommandId.make(input.commandId),
@@ -77,11 +78,7 @@ const notice = (input: {
   messageId: MessageId.make(input.messageId),
   text: input.text,
   attachments: [],
-  notification: {
-    source: { kind: "monitor" as const },
-    outcome: "updated" as const,
-    summary: input.summary,
-  },
+  notification: input.notification,
   dispatchMode: { type: "queue_after_active" as const },
   createdBy: "agent" as const,
   creationSource: "server" as const,
@@ -127,7 +124,7 @@ it.effect(
             commandId: wake.commandId,
             messageId: wake.messageId,
             text: wake.text,
-            summary: wake.notification.summary,
+            notification: wake.notification,
           }),
         );
       for (const level of ["elevated", "critical"])
@@ -136,7 +133,11 @@ it.effect(
             commandId: `server:pressure:${level}`,
             messageId: `${HOST_PRESSURE_MESSAGE_PREFIX}box-a:wake:${level}`,
             text: `Resource pressure: box-a is ${level}.`,
-            summary: `box-a is under ${level} resource pressure`,
+            notification: {
+              source: { kind: "monitor" },
+              outcome: "updated",
+              summary: `box-a is under ${level} resource pressure`,
+            },
           }),
         );
       yield* orchestrator.dispatch({
@@ -157,7 +158,7 @@ it.effect(
           commandId: later.commandId,
           messageId: later.messageId,
           text: later.text,
-          summary: later.notification.summary,
+          notification: later.notification,
         }),
       );
 
@@ -165,19 +166,21 @@ it.effect(
       const queued = queuedRunsInDeliveryOrder(projection).map((run) =>
         projection.messages.find((message) => message.id === run.userMessageId)!,
       );
+      // Run ends share one turn; pressure follows the current model, so it waits apart, and its
+      // newer level replaces the older. The user message and the notice after it keep their places.
       expect(queued.map((message) => message.id)).toEqual([
         laneA.messageId,
+        `${HOST_PRESSURE_MESSAGE_PREFIX}box-a:wake:elevated`,
         "message:user-follow-up",
         later.messageId,
       ]);
-      const digest = queued[0]!;
-      expect(digest.text).toContain('<notices count="3">');
-      expect(digest.text).toContain("lane-a is done.");
-      expect(digest.text).toContain("lane-b is done.");
-      // A host's newer pressure notice replaces the older one.
-      expect(digest.text).toContain("box-a is critical.");
-      expect(digest.text).not.toContain("box-a is elevated.");
-      expect(digest.notification?.summary).toMatch(/^3 notices · /);
-      expect(queued[2]!.text).toBe(later.text);
+      const [runEnds, pressure, , last] = queued;
+      expect(runEnds!.text).toContain('<notices count="2">');
+      expect(runEnds!.text).toContain("lane-a is done.");
+      expect(runEnds!.text).toContain("lane-b is done.");
+      expect(runEnds!.notification?.source.kind).toBe("background_task");
+      expect(runEnds!.notification?.summary).toMatch(/^2 notices · /);
+      expect(pressure!.text).toBe("Resource pressure: box-a is critical.");
+      expect(last!.text).toBe(later.text);
     }).pipe(Effect.provide(layer)),
 );

@@ -29,6 +29,7 @@ export interface Notice {
 export interface InboxReport {
   readonly host: string | null;
   readonly threadId: string | null;
+  readonly runId: string | null;
   readonly kind: string;
   readonly text: string;
 }
@@ -54,15 +55,19 @@ function noticeLane(id: string): string | null {
 /** The lane key for a launched thread, shared by run-end notices and inbox reports. */
 const threadLane = (host: string | null, threadId: string) => `thread:${host ?? ""}/${threadId}`;
 
-const isRunEnd = (id: string) =>
-  id.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX) &&
-  segments(id, LAUNCH_WATCH_MESSAGE_PREFIX).slice(3).join(":").startsWith("run:");
+/** The run a launch-watch run-end notice reports on, or null for any other notice. */
+const runEndRunId = (id: string) => {
+  if (!id.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX)) return null;
+  const event = segments(id, LAUNCH_WATCH_MESSAGE_PREFIX).slice(3).join(":");
+  return event.startsWith("run:") ? event.slice("run:".length) : null;
+};
 
 const OPEN = "<notice id=";
 const CLOSE = "</notice>";
-// Notice text can quote remote data; it must not be able to end its own block.
-const escapeBody = (text: string) => text.replaceAll(CLOSE, "<\\/notice>");
-const unescapeBody = (text: string) => text.replaceAll("<\\/notice>", CLOSE);
+// Notice text can quote remote data, so it may neither open nor close a block. Escaping is
+// idempotent, so a digest folded again keeps the same text.
+const escapeBody = (text: string) =>
+  text.replaceAll("</notice", "&lt;/notice").replaceAll("<notice", "&lt;notice");
 
 function render(notices: ReadonlyArray<Notice>): string {
   return [
@@ -74,20 +79,29 @@ function render(notices: ReadonlyArray<Notice>): string {
   ].join("\n");
 }
 
+const parseId = (raw: string): string | null => {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+};
+
 /** The notices a message holds: one, or the blocks of a digest this module wrote. */
 export function parseNotices(id: string, text: string): ReadonlyArray<Notice> {
-  if (!text.startsWith("<notices count=")) return [{ id, text }];
+  // Only a notice message can hold a digest; anything else is plain text.
+  if (noticeLane(id) === null || !text.startsWith("<notices count=")) return [{ id, text }];
   const notices: Notice[] = [];
   for (const block of text.split(`\n${OPEN}`).slice(1)) {
     const end = block.indexOf(">\n");
     const bodyEnd = block.lastIndexOf(`\n${CLOSE}`);
     if (end === -1 || bodyEnd === -1) continue;
-    notices.push({
-      id: JSON.parse(block.slice(0, end)) as string,
-      text: unescapeBody(block.slice(end + 2, bodyEnd)),
-    });
+    const blockId = parseId(block.slice(0, end));
+    if (blockId === null) return [{ id, text }];
+    notices.push({ id: blockId, text: block.slice(end + 2, bodyEnd) });
   }
-  return notices;
+  return notices.length === 0 ? [{ id, text }] : notices;
 }
 
 /**
@@ -117,11 +131,20 @@ export function renderNotices(notices: ReadonlyArray<Notice>): string {
 }
 
 /** The summary a client shows for a digest: how many notices, and the newest. */
+/**
+ * The digest keeps its first notice's source, which decides whose model selection the turn runs
+ * on; the summary says how many notices it holds and names the newest.
+ */
 function foldedNotification(
   count: number,
+  queued: OrchestrationV2Notification,
   newest: OrchestrationV2Notification,
 ): OrchestrationV2Notification {
-  return { ...newest, summary: `${count} notices · ${newest.summary}`.slice(0, 160) };
+  return {
+    ...queued,
+    outcome: newest.outcome,
+    summary: `${count} notices · ${newest.summary}`.slice(0, 160),
+  };
 }
 
 /**
@@ -134,14 +157,19 @@ export function turnText(
   inbox: ReadonlyArray<InboxReport>,
 ): string {
   if (inbox.length === 0) return message.text;
+  // A report and a run end match only on the same thread and the same run.
   const reported = new Set(
     inbox
       .filter((report) => report.kind === "completed" || report.kind === "failed")
-      .flatMap((report) => reportLane(report) ?? []),
+      .flatMap((report) => {
+        const lane = reportLane(report);
+        return lane === null || report.runId === null ? [] : [`${lane}#${report.runId}`];
+      }),
   );
   let shortened = false;
   const notices = parseNotices(message.messageId, message.text).map((notice) => {
-    if (!isRunEnd(notice.id) || !reported.has(noticeLane(notice.id) ?? "")) return notice;
+    const runId = runEndRunId(notice.id);
+    if (runId === null || !reported.has(`${noticeLane(notice.id) ?? ""}#${runId}`)) return notice;
     shortened = true;
     return { ...notice, text: notice.text.split("\n", 1)[0] ?? notice.text };
   });
@@ -190,7 +218,15 @@ export function foldIntoQueuedNotice(
   const queued: OrchestrationV2ConversationMessage | undefined = projection.messages.find(
     (message) => message.id === target?.userMessageId,
   );
-  if (target === undefined || queued === undefined || !isNoticeMessage(queued)) return undefined;
+  if (
+    target === undefined ||
+    queued === undefined ||
+    !isNoticeMessage(queued) ||
+    // Monitor notices follow the current conversation's model and others keep the run's own,
+    // so only notices of one source kind share a turn.
+    queued.notification?.source.kind !== command.notification.source.kind
+  )
+    return undefined;
   const notices = foldNotice(parseNotices(queued.id, queued.text), {
     id: command.messageId,
     text: command.text,
@@ -205,7 +241,7 @@ export function foldIntoQueuedNotice(
     payload: {
       ...queued,
       text: renderNotices(notices),
-      notification: foldedNotification(notices.length, command.notification),
+      notification: foldedNotification(notices.length, queued.notification, command.notification),
       updatedAt: now,
     },
   };
