@@ -9,7 +9,9 @@ export const providerEntries = {
     toolkit: "orchestrator",
     summary: "Get orchestration capabilities",
     description:
-      "List the V2 provider instances, a short list of their models from the same live catalog as the composer, inherited runtime settings, and app-owned orchestration features available to this caller. The list has the user's favorite and custom models, your own model, every current Codex, Claude, Muse and Grok model, and the first 8 current models of other providers. Other legacy models are left out. omittedModels counts models left out; pass search, such as 'sonnet 4.6', to find them. goat_task_create accepts any catalog model, listed or not. For a separate top-level thread in a new or existing worktree, use goat_thread_launch with workspaceStrategy.",
+      "List provider instances, a model shortlist, inherited runtime settings, and orchestration features. A missing model may only be omitted from the shortlist; search before treating it as unavailable. goat_task_create can use catalog models outside this shortlist.",
+    guide:
+      "The models come from the provider registry also streamed to clients. Without a search, the shortlist includes visible favorite, custom, and caller-selected models, including pinned legacy models. It includes all visible current Codex, Claude, Muse, and Grok models, and the first eight current models of other drivers in the user's model order. Hidden non-custom models are excluded even when pinned. Other visible legacy models are omitted. omittedModels counts visible models excluded from the current response; with a search, it counts unlisted matches. Search matches every term against the model slug, name, and subprovider, keeps exact slug matches above the limit, and otherwise lists up to eight matches. Task creation still checks provider readiness and model options. For a separate top-level thread in a new or existing worktree, call goat_thread_launch with workspaceStrategy.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

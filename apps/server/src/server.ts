@@ -20,6 +20,7 @@ import * as Path from "effect/Path";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ChannelLayers from "./channels/ChannelLayers.ts";
 import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
+import * as CloudFolderTrust from "./cloudAgents/CloudFolderTrust.ts";
 import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
 import * as GoalLayers from "./fleet/goals/GoalLayers.ts";
 import * as FleetHealth from "./fleet/health/layer.ts";
@@ -758,6 +759,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
+  CloudFolderTrust.layer,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
@@ -1007,7 +1009,7 @@ const layerMakeRoutes = Layer.mergeAll(
     SshDeviceAdd.layer.pipe(
       Layer.provideMerge(
         SshHostSetup.layer.pipe(
-          Layer.provide(MaintenanceAudit.layer),
+          Layer.provide(Layer.mergeAll(MaintenanceAudit.layer, PermissionProfiles.layer)),
           Layer.provideMerge(
             ProviderHostSync.layer.pipe(
               Layer.provide(
