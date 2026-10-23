@@ -4,7 +4,7 @@ import {
   HandoffError,
   type HandoffReadInput,
   type ProviderSyncInput,
-  TurnItemId,
+  ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -172,6 +172,16 @@ it.effect("asks a person before an agent's sync touches any host, then runs it o
           { kind: "client", sessionId: viewer },
         );
         expect(Exit.isFailure(yield* Effect.exit(stop))).toBe(true);
+        // Another thread holds no approval with this id.
+        const stranger = {
+          kind: "mcp",
+          scope: {
+            ...agent.scope,
+            thread: { ...agent.scope.thread, threadId: ThreadId.make("x") },
+          },
+        } as const;
+        const foreign = sync.status({ handoffId: address.handoffId }, stranger);
+        expect(yield* Effect.flip(foreign)).toMatchObject({ code: "not_found" });
       }),
     ).pipe(Effect.tap(() => Effect.sync(() => expect(remoteCalls()).toBe(1)))),
   ),
@@ -450,7 +460,7 @@ it.effect(
         });
         yield* boot({ answer: remote(remoteGate), wrap }, (sync) =>
           Effect.gen(function* () {
-            const address = yield* ask(sync);
+            const address = yield* ask(sync, { hosts: ["box", "spare"] });
             const approving = yield* Effect.forkChild(approve(sync, address));
             yield* Deferred.await(reached);
             const interrupting = yield* Effect.forkChild(Fiber.interrupt(approving));
@@ -461,10 +471,69 @@ it.effect(
             const { syncId, done } = yield* statusOf(sync, address);
             expect(done).toBe(false);
             yield* Deferred.succeed(remoteGate, undefined);
-            expect((yield* sync.awaitDone(syncId)).hosts[0]?.phase).toBe("installed");
+            const finished = yield* sync.awaitDone(syncId);
+            expect(finished.hosts.map((host) => [host.host, host.phase])).toEqual([
+              ["box", "installed"],
+              ["spare", "installed"],
+            ]);
           }),
         );
-        expect(remoteCalls()).toBe(1);
+        expect(remoteCalls()).toBe(2);
       }),
     ),
+);
+
+it.effect(
+  "settles a start a stop left only as recorded intent as may have run, and never runs it",
+  () =>
+    servers(({ boot, remoteCalls }) =>
+      Effect.gen(function* () {
+        // The server stopped after recording the intent and before registering the sync.
+        const address = yield* boot({}, (sync, handoffs) =>
+          Effect.gen(function* () {
+            const address = yield* ask(sync);
+            yield* handoffs.respond({ ...address, action: "completed" }, person);
+            yield* handoffs.recordProviderProgress(address, { starting: true });
+            return address;
+          }),
+        );
+        const failure = yield* boot({}, (sync) =>
+          Effect.gen(function* () {
+            yield* sync.resumeApprovals;
+            yield* sync.resumeApprovals;
+            return yield* Effect.flip(statusOf(sync, address));
+          }),
+        );
+        expect(failure).toMatchObject({ code: "start_failed", detail: /may have run/ });
+        expect(remoteCalls()).toBe(0);
+      }),
+    ),
+);
+
+it.effect("retries a finished sync's result that could not be written, so a restart keeps it", () =>
+  servers(({ boot }) =>
+    Effect.gen(function* () {
+      let refuse = true;
+      const wrap: Wrap = (handoffs) => ({
+        ...handoffs,
+        finishProviderContinuation: (address, progress) =>
+          refuse && typeof progress === "object" && progress !== null && "result" in progress
+            ? Effect.sync(() => void (refuse = false)).pipe(
+                Effect.andThen(Effect.fail(new HandoffError({ reason: "unavailable" }))),
+              )
+            : handoffs.finishProviderContinuation(address, progress),
+      });
+      const address = yield* boot({ wrap }, (sync) =>
+        Effect.gen(function* () {
+          const address = yield* ask(sync);
+          yield* approve(sync, address);
+          yield* sync.awaitDone((yield* statusOf(sync, address)).syncId);
+          yield* sync.resumeApprovals;
+          return address;
+        }),
+      );
+      const after = yield* boot({}, (sync) => statusOf(sync, address));
+      expect(after).toMatchObject({ done: true, hosts: [{ host: "box", phase: "installed" }] });
+    }),
+  ),
 );

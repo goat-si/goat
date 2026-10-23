@@ -186,7 +186,7 @@
   "apps/server/src/git/GitManager.ts": { "lines": 3301 },
   "apps/server/src/goatclaw/DecisionInbox.ts": { "nonNull": 12 },
   "apps/server/src/goatclaw/PermissionProfiles.ts": { "nonNull": 3 },
-  "apps/server/src/handoffs/Handoffs.integration.test.ts": { "lines": 1092 },
+  "apps/server/src/handoffs/Handoffs.integration.test.ts": { "lines": 1026 },
   "apps/server/src/handoffs/Handoffs.ts": { "nonNull": 2 },
   "apps/server/src/htmlRender/headlessChrome.ts": { "nonNull": 1 },
   "apps/server/src/htmlRender/publicProxy.ts": { "nonNull": 12 },
