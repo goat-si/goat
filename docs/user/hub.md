@@ -50,10 +50,11 @@ to change this hub's settings.
 
 ## Permission profiles
 
-**Permission profiles** is off by default. With it on, GOAT refuses an agent's
+**Permission profiles** is off by default, and when you turn it on an agent
+without its own profile gets the widest built-in profile, **owner**, until you
+pick a narrower **Default profile**. With it on, GOAT refuses an agent's
 request to launch or steer threads, work on other machines, manage the fleet or
-change settings when its profile does not allow it. An agent without its own
-profile gets **Default profile**. Pull requests are opened and merged from the
+change settings when its profile does not allow it. Pull requests are opened and merged from the
 agent's own terminal, which profiles do not control; GOAT only refuses to start a
 merge manager for an agent whose profile cannot merge. Turn it on in
 **Settings → Hub**.
@@ -62,7 +63,9 @@ The switch covers your whole fleet. Turning it on or off on one machine does the
 same on every host connected to it, and the most recent change wins wherever you
 made it. The row lists each host as **applied**, **waiting** (not reached yet) or
 **needs a GOAT update**; a host on an older GOAT cannot take the setting, and
-agents cannot launch or send follow-ups to it while profiles are on.
+agents cannot launch new threads on it while profiles are on. Follow-up messages
+to threads already running there are still delivered, as they are to a host that
+is still **waiting**, so your agents can keep steering their work.
 
 ## Read a device
 
