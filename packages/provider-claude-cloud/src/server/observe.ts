@@ -36,37 +36,63 @@ const resultSummary = (summary: string) =>
 /** The saved summary is bounded; the run's result message carries the full reply. */
 const shorten = (text: string) =>
   text.length <= SUMMARY_LIMIT ? text : text.slice(0, SUMMARY_LIMIT - 1) + "…";
+/** A reply summary cut to fit; recovery reads the session again for the whole reply. */
+export const isShortenedReply = (task: Task) =>
+  task.progress?.startsWith(REPLIED) === true &&
+  task.summary?.length === SUMMARY_LIMIT &&
+  task.summary.endsWith("…");
 const dollars = (cost: number) => "$" + cost.toFixed(4);
+const REPLIED = "Session replied";
 
 export type Observation =
   | { readonly kind: "done" }
   | { readonly kind: "replied"; readonly text: string }
   | { readonly kind: "failed"; readonly error: ClaudeCloudError };
+/** What one read established short of an outcome. */
+type ReadState = "working" | "unconfirmed";
 
-/**
- * Follows one run until the cloud session answers it. Reading the session is the primary signal.
- * A first turn also polls for a session-linked PR as before, which completes the run on its own
- * when reads fail. A follow-up has no PR of its own to wait for, so when reads fail it settles on
- * the admission receipt as it did before reads existed.
- */
-export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(function* (input: {
-  readonly thread: () => Thread;
-  readonly commit: (thread: Thread) => Effect.Effect<void, ClaudeCloudError>;
-  readonly findPullRequest: () => Effect.Effect<PullRequest | null, ClaudeCloudError>;
-  readonly readSession: () => Effect.Effect<SessionRead, ClaudeCloudError>;
+interface RunAnchor {
   readonly startedAt: DateTime.Utc;
   readonly followUp: boolean;
   /** A session registered after its prompt: its latest prompt is this run's. */
   readonly registered: boolean;
-  readonly prompt?: string;
-}) {
+  /** The run's own message; without it only a prompt sent after the run started counts. */
+  readonly prompt?: string | undefined;
+}
+const anchorOf = (input: RunAnchor): ReplyAnchor => ({
+  since: DateTime.toEpochMillis(input.startedAt),
+  latest: input.registered && !input.followUp,
+  ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
+});
+
+/** The run's full reply from one more read, for a result whose saved summary was cut. */
+export const recoverCloudReply = Effect.fn("ClaudeCloudAdapter.recoverReply")(function* (
+  input: RunAnchor & { readonly readSession: () => Effect.Effect<SessionRead, ClaudeCloudError> },
+) {
+  const read = yield* input.readSession().pipe(Effect.result);
+  if (read._tag === "Failure") return undefined;
+  const reply = readSessionReply(read.success.transcript, anchorOf(input));
+  return reply.state === "replied" ? reply.text : undefined;
+});
+
+/**
+ * Follows one run until the cloud session answers it. Reading the session is the primary signal.
+ * A first turn also polls for a session-linked PR. A PR found while a read confirms the session is
+ * still working is recorded and the run keeps waiting for the reply; the PR completes the run on
+ * its own only when the session cannot be read. A follow-up has no PR of its own to wait for, so
+ * when reads fail it settles on the admission receipt as it did before reads existed.
+ */
+export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(function* (
+  input: RunAnchor & {
+    readonly thread: () => Thread;
+    readonly commit: (thread: Thread) => Effect.Effect<void, ClaudeCloudError>;
+    readonly findPullRequest: () => Effect.Effect<PullRequest | null, ClaudeCloudError>;
+    readonly readSession: () => Effect.Effect<SessionRead, ClaudeCloudError>;
+  },
+) {
   const started = DateTime.toEpochMillis(input.startedAt);
   const deadline = started + OBSERVATION_WINDOW_MS;
-  const anchor: ReplyAnchor = {
-    since: started,
-    latest: input.registered && !input.followUp,
-    ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
-  };
+  const anchor = anchorOf(input);
   const base = input.followUp ? FOLLOW_UP_ACCEPTED : RUNNING;
   const clock = DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
   let nextPullRequest = input.followUp ? Number.POSITIVE_INFINITY : yield* clock;
@@ -76,6 +102,7 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
   let spent = 0;
   let costUnknown = false;
   let readable = true;
+  let pullRequest: PullRequest | undefined;
   let pullRequestError: string | undefined;
   let pullRequestCause: unknown;
 
@@ -103,9 +130,10 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
     (costUnknown ? "at least " : "") +
     dollars(spent);
 
-  const read = Effect.fn("ClaudeCloudAdapter.readSessionOnce")(function* (
-    pullRequest?: PullRequest,
-  ) {
+  const read = Effect.fn("ClaudeCloudAdapter.readSessionOnce")(function* (): Effect.fn.Return<
+    Observation | ReadState,
+    ClaudeCloudError
+  > {
     const left = Math.max(deadline - (yield* clock), 1);
     const result = yield* input.readSession().pipe(Effect.timeout(left), Effect.result);
     reads += 1;
@@ -119,7 +147,7 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
           ...task,
           progress: base + ". The last session check failed (" + reason + "); GOAT will retry.",
         }));
-        return undefined;
+        return "unconfirmed";
       }
       readable = false;
       if (input.followUp) {
@@ -131,7 +159,7 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
             reason +
             "). Open the session for the reply.",
         }));
-        return { kind: "done" } as const;
+        return { kind: "done" };
       }
       yield* save((task) => ({
         ...task,
@@ -139,9 +167,11 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
           RUNNING +
           ". GOAT can't read the session (" +
           reason +
-          "), so it waits for a session-linked PR instead.",
+          (pullRequest
+            ? "), so the session-linked PR stands as the result."
+            : "), so it waits for a session-linked PR instead."),
       }));
-      return undefined;
+      return "unconfirmed";
     }
     failures = 0;
     const cost = result.success.costUsd;
@@ -155,12 +185,12 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
           ...pullRequest,
           status: "succeeded",
           tracking: "polled",
-          progress: "Session replied (" + spentText() + ")",
+          progress: REPLIED + " (" + spentText() + ")",
           summary: shorten(reply.text),
         }),
         "idle",
       );
-      return { kind: "replied", text: reply.text } as const;
+      return { kind: "replied", text: reply.text };
     }
     if (reply.state === "failed") {
       yield* save(
@@ -176,7 +206,7 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
       return {
         kind: "failed",
         error: new ClaudeCloudError({ detail: reply.error, outcome: "uncertain" }),
-      } as const;
+      };
     }
     const state =
       reply.state === "waiting"
@@ -188,17 +218,12 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
       progress:
         base + ". Session checked: " + state + " (last read " + last + "; " + spentText() + ").",
     }));
-    return undefined;
+    return reply.state === "running" ? "working" : "unconfirmed";
   });
 
   const pullRequestResult = Effect.fn("ClaudeCloudAdapter.pullRequestResult")(function* (
     found: PullRequest,
   ) {
-    // A PR often lands just before the session's last message; one read can still import it.
-    if (readable) {
-      const outcome = yield* read(found);
-      if (outcome !== undefined && outcome.kind !== "done") return outcome;
-    }
     yield* save(
       ({ error: _error, ...task }) => ({
         ...task,
@@ -210,12 +235,17 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
       }),
       "idle",
     );
-    return { kind: "done" } as const;
+    return { kind: "done" } satisfies Observation;
+  });
+  const nextReadAfter = Effect.fn("ClaudeCloudAdapter.scheduleRead")(function* () {
+    const gap = SESSION_READ_CADENCE_MS[Math.min(reads, SESSION_READ_CADENCE_MS.length - 1)];
+    nextRead = (yield* clock) + (gap ?? SESSION_READ_CADENCE_MS[0]);
   });
 
   while (true) {
     const now = yield* clock;
     if (now >= deadline) {
+      if (pullRequest) return yield* pullRequestResult(pullRequest);
       if (input.followUp) {
         yield* save((task) => ({
           ...task,
@@ -236,8 +266,24 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
       const found = yield* input
         .findPullRequest()
         .pipe(Effect.timeout(deadline - now), Effect.result);
-      if (found._tag === "Success" && found.success !== null)
-        return yield* pullRequestResult(found.success);
+      if (found._tag === "Success" && found.success !== null) {
+        if (!readable) return yield* pullRequestResult(found.success);
+        // The PR may land before the session's last message: read before letting it stand.
+        pullRequest = found.success;
+        const outcome = yield* read();
+        if (typeof outcome !== "string") return outcome;
+        if (outcome === "unconfirmed") return yield* pullRequestResult(found.success);
+        nextPullRequest = Number.POSITIVE_INFINITY;
+        const recorded = found.success;
+        yield* save((task) => ({
+          ...task,
+          prUrl: recorded.prUrl,
+          branch: recorded.branch,
+          progress: RUNNING + ". Found a session-linked PR; waiting for the session to finish.",
+        }));
+        yield* nextReadAfter();
+        continue;
+      }
       if (found._tag === "Failure") {
         pullRequestError =
           "GitHub observation was incomplete; check project source-control access.";
@@ -247,9 +293,9 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
     }
     if (readable && (yield* clock) >= nextRead) {
       const outcome = yield* read();
-      if (outcome !== undefined) return outcome;
-      const gap = SESSION_READ_CADENCE_MS[Math.min(reads, SESSION_READ_CADENCE_MS.length - 1)];
-      nextRead = (yield* clock) + (gap ?? SESSION_READ_CADENCE_MS[0]);
+      if (typeof outcome !== "string") return outcome;
+      if (!readable && pullRequest) return yield* pullRequestResult(pullRequest);
+      yield* nextReadAfter();
     }
     const wake = Math.min(nextPullRequest, readable ? nextRead : deadline, deadline);
     const wait = wake - (yield* clock);

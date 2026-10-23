@@ -49,6 +49,38 @@ describe("readSessionReply", () => {
         since: RUN_START,
       }),
     ).toEqual({ state: "waiting" });
+    // A turn that ended seconds before this run started is still not this run's reply.
+    const justAnswered = teleportTranscript([
+      cloudPrompt("List the top-level folders.", "2026-10-23T09:59:50.000Z"),
+      cloudAssistant({ type: "text", text: "apps, packages, docs" }, "end_turn"),
+    ]);
+    expect(
+      readSessionReply(justAnswered, {
+        prompt: "reply with exactly the word done",
+        since: RUN_START,
+      }),
+    ).toEqual({ state: "waiting" });
+    // Without its text, a run only claims a prompt stamped after it started.
+    expect(readSessionReply(justAnswered, { since: RUN_START })).toEqual({ state: "waiting" });
+  });
+
+  it("does not take a snapshot for a reply when another prompt queues behind it", () => {
+    const queued = [
+      followUp,
+      cloudAssistant({ type: "text", text: "| partial" }, "stop_sequence"),
+      cloudPrompt("also count them", "2026-10-23T10:00:05.000Z"),
+    ];
+    const anchor = { prompt: "reply with exactly the word done", since: RUN_START };
+    expect(readSessionReply(teleportTranscript(queued), anchor)).toEqual({ state: "running" });
+    expect(
+      readSessionReply(
+        teleportTranscript([
+          ...queued,
+          cloudAssistant({ type: "text", text: "done, 3" }, "end_turn"),
+        ]),
+        anchor,
+      ),
+    ).toEqual({ state: "replied", text: "done, 3" });
   });
 
   it("fails with the session's own API error", () => {

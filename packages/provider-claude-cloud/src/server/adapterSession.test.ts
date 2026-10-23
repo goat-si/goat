@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { cloudTaskResultText } from "@goat/provider-core/server/cloudTask";
-import { makeHarness, sessionAnswer } from "./adapter.testkit.ts";
+import { makeHarness, sessionAnswer, sessionWorkingRead } from "./adapter.testkit.ts";
 import { ClaudeCloudError } from "./protocol.ts";
 import { cloudAssistant, cloudPrompt, teleportTranscript } from "./testing.ts";
 
@@ -116,6 +116,7 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         const h = yield* launchWithoutPullRequest();
+        h.sessionWorking();
         for (let step = 0; step < 56; step++) yield* TestClock.adjust("30 seconds");
         expect(h.sessionReadTimes).toEqual([
           30_000, 90_000, 210_000, 450_000, 1_050_000, 1_650_000,
@@ -123,4 +124,61 @@ it.effect(
         expect(terminalOf(h)).toBeUndefined();
       }),
     ),
+);
+
+it.effect(
+  "a PR found while the session still works is recorded and the run waits for the reply",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        h.sessionReads(sessionWorkingRead, sessionAnswer("task", "Done; see the PR."));
+        yield* Deferred.succeed(h.deliver, undefined);
+        yield* h.runtime.startTurn(h.input);
+        yield* Deferred.await(h.accepted);
+        yield* Deferred.succeed(h.exit, undefined);
+        yield* Deferred.await(h.prRecorded);
+        expect(terminalOf(h)).toBeUndefined();
+        expect(h.ledger.at(-1)).toMatchObject({
+          status: "running",
+          prUrl: "https://github.com/fixture/repository/pull/1",
+          progress:
+            "Running in the cloud. Found a session-linked PR; waiting for the session to finish.",
+        });
+        yield* TestClock.adjust("1 minute");
+        yield* Deferred.await(h.terminal);
+        expect(terminalOf(h)).toMatchObject({
+          status: "completed",
+          resultText: "Done; see the PR.",
+        });
+        expect(h.ledger.at(-1)).toMatchObject({
+          status: "succeeded",
+          prUrl: "https://github.com/fixture/repository/pull/1",
+          branch: "claude/result",
+        });
+        expect(h.counts().reads).toBe(1);
+      }),
+    ),
+);
+
+it.effect("a restart after a cut reply reads the session once to import the whole reply", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const reply = "Full reply. " + "y".repeat(5000);
+      const h = yield* makeHarness();
+      h.sessionReads(sessionAnswer("task", reply));
+      yield* h.runtime.resumeTurn!({
+        ...h.attach,
+        cloudTask: {
+          ...h.saved.cloudTask,
+          status: "succeeded",
+          progress: "Session replied (1 read, $0.0064)",
+          summary: reply.slice(0, 3999) + "…",
+        },
+      });
+      yield* Deferred.await(h.terminal);
+      expect(terminalOf(h)).toMatchObject({ status: "completed", resultText: reply });
+      expect(h.sessionReadTimes).toHaveLength(1);
+    }),
+  ),
 );

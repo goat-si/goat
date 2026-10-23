@@ -31,6 +31,15 @@ export const sessionAnswer = (prompt: string, reply: string, costUsd: number | n
     ]),
     costUsd,
   });
+const sessionStillWorking = teleportTranscript([
+  cloudPrompt("task", "1970-01-01T00:00:01.000Z"),
+  cloudAssistant({ type: "tool_use", id: "tool-1" }, "tool_use"),
+]);
+/** A read of a session still working on the run's prompt. */
+export const sessionWorkingRead = Effect.succeed({
+  transcript: sessionStillWorking,
+  costUsd: 0.0064,
+});
 
 /** The Claude Cloud adapter over fake CLI, PR and ledger seams, shared by the adapter tests. */
 const INSTANCE = ProviderInstanceId.make("claude-cloud-test");
@@ -102,8 +111,11 @@ export const makeHarness = Effect.fnUntraced(function* () {
   let starts = 0;
   let sends = 0;
   let reads = 0;
-  // Scripted session reads in order; an exhausted script reads a session still working.
+  // Scripted session reads in order. Once they run out, a read fails unless the session is
+  // marked as working, so PR-only tests keep today's PR completion.
   let sessionReplies: Array<Effect.Effect<SessionRead, ClaudeCloudError>> = [];
+  let sessionWorking = false;
+  let runPrompt: string | undefined = "task";
   const sessionReadTimes: number[] = [];
   let startError: ClaudeCloudError | undefined;
   let observedSummary = "Changed behavior.";
@@ -118,6 +130,7 @@ export const makeHarness = Effect.fnUntraced(function* () {
   const ledger: NonNullable<OrchestrationV2ProviderThread["cloudTask"]>[] = [];
   const accepted = yield* Deferred.make<void>();
   const admitted = yield* Deferred.make<void>();
+  const prRecorded = yield* Deferred.make<void>();
   // Completes when an observation reads its deadline, just before it starts waiting.
   const following = yield* Deferred.make<void>();
   const exit = yield* Deferred.make<void, ClaudeCloudError>();
@@ -171,7 +184,14 @@ export const makeHarness = Effect.fnUntraced(function* () {
         sessionReadTimes.push(
           DateTime.toEpochMillis(yield* DateTime.now) - DateTime.toEpochMillis(startedAt),
         );
-        return yield* sessionReplies.shift() ?? Effect.succeed({ transcript: "", costUsd: 0.0064 });
+        const next = sessionReplies.shift();
+        if (next) return yield* next;
+        return sessionWorking
+          ? { transcript: sessionStillWorking, costUsd: 0.0064 }
+          : yield* new ClaudeCloudError({
+              detail: "Fixture session is unreadable.",
+              outcome: "uncertain",
+            });
       }),
     send: (login, cwd, id) =>
       Effect.gen(function* () {
@@ -194,6 +214,7 @@ export const makeHarness = Effect.fnUntraced(function* () {
       controlError ? Effect.fail(controlError) : Effect.succeed("/fixture/goat/control"),
     ),
     runStartedAt: () => Deferred.succeed(following, undefined).pipe(Effect.as(startedAt)),
+    runPrompt: () => Effect.sync(() => runPrompt),
     resolveReadRoot: Effect.succeed("/fixture/goat/reads"),
     observe: (input) =>
       Effect.gen(function* () {
@@ -248,6 +269,7 @@ export const makeHarness = Effect.fnUntraced(function* () {
       if (task.status === "running" && task.progress === "Running in the cloud")
         yield* Deferred.succeed(accepted, undefined);
       if (task.progress === "Follow-up accepted") yield* Deferred.succeed(admitted, undefined);
+      if (task.status === "running" && task.prUrl) yield* Deferred.succeed(prRecorded, undefined);
     });
   const input = { ...(yield* makeTurn(providerThread)), commitCloudTask };
   if (!runtime.subscribeEvents) return yield* Effect.die("The adapter must expose its events.");
@@ -293,6 +315,7 @@ export const makeHarness = Effect.fnUntraced(function* () {
     events,
     accepted,
     admitted,
+    prRecorded,
     following,
     exit,
     read,
@@ -345,5 +368,11 @@ export const makeHarness = Effect.fnUntraced(function* () {
       sessionReplies = replies;
     },
     sessionReadTimes,
+    sessionWorking: () => {
+      sessionWorking = true;
+    },
+    forgetPrompt: () => {
+      runPrompt = undefined;
+    },
   };
 });

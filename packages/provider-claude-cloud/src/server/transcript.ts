@@ -48,7 +48,7 @@ const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Line));
 const PROMPT_CLOCK_SKEW_MS = 60_000;
 
 export interface ReplyAnchor {
-  /** The text GOAT sent for this run, when it is still known. */
+  /** The text GOAT sent for this run. When known, only a cloud prompt that matches it counts. */
   readonly prompt?: string;
   /** When this run started, in epoch milliseconds. */
   readonly since: number;
@@ -77,11 +77,16 @@ const isPrompt = (line: Line) =>
   blocks(line).some((block) => block.type === "text") &&
   !blocks(line).some((block) => block.type === "tool_result");
 const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
+/** Short prompts must match exactly; a longer one may arrive wrapped in context Claude adds. */
+const matches = (cloud: string, wanted: string) =>
+  cloud === wanted || (wanted.length >= 16 && cloud.includes(wanted));
 
 /**
- * The reply to the run's prompt. A turn is finished only when the last cloud line after that
- * prompt is an assistant line that stopped with end_turn; a tool_use line, a tool result or a
- * stop_sequence snapshot means the session is still working.
+ * The reply to the run's prompt. The prompt is found by its text, or without text by the first
+ * prompt after the run started; GOAT never guesses another run's prompt. The turn is finished at
+ * the first assistant line after it that stopped with end_turn; until then a tool_use line, a
+ * tool result or a stop_sequence snapshot means the session is still working. A prompt sent
+ * meanwhile is queued into the same turn, so it does not end it.
  */
 export function readSessionReply(transcript: string, anchor: ReplyAnchor): SessionReply {
   const lines = transcript
@@ -93,23 +98,34 @@ export function readSessionReply(transcript: string, anchor: ReplyAnchor): Sessi
   const prompts = lines.flatMap((line, index) => {
     if (!isPrompt(line)) return [];
     const at = line.timestamp === undefined ? Number.NaN : Date.parse(line.timestamp);
-    return anchor.latest || Number.isNaN(at) || at >= anchor.since - PROMPT_CLOCK_SKEW_MS
-      ? [{ index, text: normalize(textOf([line])) }]
-      : [];
+    return [{ index, at, text: normalize(textOf([line])) }];
   });
+  const recent = (at: number, margin: number) => Number.isNaN(at) || at >= anchor.since - margin;
   const wanted = anchor.prompt === undefined ? undefined : normalize(anchor.prompt);
-  const start = (prompts.findLast((prompt) => prompt.text === wanted) ?? prompts.at(-1))?.index;
+  const start = (
+    wanted !== undefined
+      ? prompts.findLast(
+          (prompt) => matches(prompt.text, wanted) && recent(prompt.at, PROMPT_CLOCK_SKEW_MS),
+        )
+      : anchor.latest
+        ? prompts.at(-1)
+        : // Without its text, only a prompt stamped after the run started can be the run's.
+          prompts.find((prompt) => !Number.isNaN(prompt.at) && recent(prompt.at, 0))
+  )?.index;
   if (start === undefined) return { state: "waiting" };
-  const next = lines.findIndex((line, index) => index > start && isPrompt(line));
-  const turn = lines.slice(start + 1, next < 0 ? undefined : next);
-  const last = turn.at(-1);
-  if (last?.type !== "assistant") return { state: "running" };
-  if (last.isApiErrorMessage === true)
-    return { state: "failed", error: textOf([last]) || "The cloud session reported an error." };
-  // A later prompt means the session moved past this turn even without a clean stop.
-  if (last.message?.stop_reason !== "end_turn" && next < 0) return { state: "running" };
-  let final = turn.length;
-  while (final > 0 && turn[final - 1]?.type === "assistant") final -= 1;
-  const text = textOf(turn.slice(final)) || textOf(turn);
+  const end = lines.findIndex(
+    (line, index) =>
+      index > start && line.type === "assistant" && line.message?.stop_reason === "end_turn",
+  );
+  if (end < 0) {
+    const last = lines.at(-1);
+    // Claude writes a synthetic error line once its retries are spent; nothing follows it.
+    return lines.length - 1 > start && last?.isApiErrorMessage === true
+      ? { state: "failed", error: textOf([last]) || "The cloud session reported an error." }
+      : { state: "running" };
+  }
+  let final = end;
+  while (final > start + 1 && lines[final - 1]?.type === "assistant") final -= 1;
+  const text = textOf(lines.slice(final, end + 1)) || textOf(lines.slice(start + 1, end + 1));
   return { state: "replied", text: text || "The cloud session finished without a text reply." };
 }

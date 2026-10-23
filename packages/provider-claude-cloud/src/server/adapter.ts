@@ -26,8 +26,10 @@ import * as Cli from "./cli.ts";
 import type { ClaudeCloudLogin } from "./cli.ts";
 import {
   FOLLOW_UP_ACCEPTED,
+  isShortenedReply,
   OBSERVATION_WINDOW_MS,
   observeCloudSession,
+  recoverCloudReply,
   type Observation,
 } from "./observe.ts";
 import {
@@ -147,6 +149,8 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
   /** Environment-owned folder under which each session read makes and removes its own folder. */
   readonly resolveReadRoot: Effect.Effect<string, ClaudeCloudError>;
   readonly runStartedAt: (input: Turn | Attach) => Effect.Effect<DateTime.Utc, ClaudeCloudError>;
+  /** The run's own message, read back after a restart when the turn input no longer has it. */
+  readonly runPrompt: (input: Attach) => Effect.Effect<string | undefined, ClaudeCloudError>;
   readonly observe: (input: {
     readonly projectId: ProjectId;
     readonly repository: string;
@@ -386,12 +390,30 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
           });
         return yield* cli.readSession(login, yield* options.resolveReadRoot, ref.nativeId);
       });
+      const anchor = Effect.fn("ClaudeCloudAdapter.anchor")(function* (
+        i: Turn | Attach,
+        followUp: boolean,
+      ) {
+        const registered = current(i).cloudTask?.attach === "registered";
+        return {
+          startedAt: yield* options.runStartedAt(i),
+          followUp,
+          registered,
+          // A registered session's prompt was sent outside GOAT; its latest prompt is the run's.
+          prompt:
+            registered && !followUp
+              ? undefined
+              : "message" in i
+                ? i.message.text
+                : yield* options.runPrompt(i).pipe(Effect.orElseSucceed(() => undefined)),
+        };
+      });
       const observe = Effect.fn("ClaudeCloudAdapter.follow")(function* (
         i: Turn | Attach,
         followUp: boolean,
       ) {
-        const startedAt = yield* options.runStartedAt(i);
         return yield* observeCloudSession({
+          ...(yield* anchor(i, followUp)),
           thread: () => current(i),
           commit: (thread) => commit(i, thread),
           findPullRequest: () => {
@@ -410,10 +432,6 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 );
           },
           readSession: () => readSession(i),
-          startedAt,
-          followUp,
-          registered: current(i).cloudTask?.attach === "registered",
-          ...("message" in i ? { prompt: i.message.text } : {}),
         });
       });
       const finish = (i: Turn | Attach, outcome: Observation) =>
@@ -885,7 +903,16 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                       detail: "Saved cloud result is incomplete; open the session.",
                     }),
                   );
-                yield* settle(i);
+                // A crash between the result and its terminal kept only the cut summary.
+                const text = isShortenedReply(task)
+                  ? yield* anchor(i, false).pipe(
+                      Effect.flatMap((runAnchor) =>
+                        recoverCloudReply({ ...runAnchor, readSession: () => readSession(i) }),
+                      ),
+                      Effect.orElseSucceed(() => undefined),
+                    )
+                  : undefined;
+                yield* settle(i, undefined, text);
                 return;
               }
               if (task.progress === "Follow-up rejected") {

@@ -223,6 +223,20 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
           ),
         ),
         folderTrust: folderTrust.policy,
+        runPrompt: (input) =>
+          projection.getThreadRecords(input.threadId, ["runs", "messages"]).pipe(
+            Effect.map((records) => {
+              const run = records.runs.find((item) => item.id === input.runId);
+              return records.messages.find((message) => message.id === run?.userMessageId)?.text;
+            }),
+            Effect.mapError(
+              () =>
+                new ClaudeCloudError({
+                  detail: "Could not read the run's message to follow its reply.",
+                  outcome: "uncertain",
+                }),
+            ),
+          ),
         observe: (input) =>
           pullRequests.findCloudSessionPullRequest(input).pipe(
             Effect.mapError(

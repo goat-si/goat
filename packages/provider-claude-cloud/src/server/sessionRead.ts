@@ -52,9 +52,8 @@ const failure = (detail: string, cause?: unknown) =>
 const asReadError = (detail: string) => (cause: unknown) =>
   isClaudeCloudError(cause) ? cause : failure(detail, cause);
 
-/** The scratch folder's name as it appears in Claude's per-folder project directory name. */
-const scratchToken = (directory: string) =>
-  (directory.split(/[\\/]/).at(-1) ?? "").replace(/[^A-Za-z0-9]/g, "-");
+/** Claude names a folder's project directory after its path with every other character a dash. */
+const projectSlug = (directory: string) => directory.replace(/[^A-Za-z0-9]/g, "-");
 
 export const makeSessionRead = (deps: {
   readonly run: ClaudeCloudRun;
@@ -63,8 +62,11 @@ export const makeSessionRead = (deps: {
   readonly path: Path.Path;
 }) => {
   const { fileSystem, path } = deps;
-  /** Teleport resolves the session's repository from the folder; it must never find a checkout. */
-  const insideGitWorkTree = (login: ClaudeCloudLogin, cwd: string) =>
+  /**
+   * Teleport resolves the session's repository from its folder, so it must never run inside a
+   * checkout. Only Git's own "not a repository" answer counts as outside; anything else refuses.
+   */
+  const outsideGit = (login: ClaudeCloudLogin, cwd: string) =>
     Effect.scoped(
       Effect.gen(function* () {
         const env = yield* Effect.try(() => validateLogin(login));
@@ -76,12 +78,20 @@ export const makeSessionRead = (deps: {
             stdin: "ignore",
           }),
         );
-        return Number(yield* child.exitCode) === 0;
+        return Number(yield* child.exitCode);
       }),
     ).pipe(
       Effect.timeout("10 seconds"),
-      // Without Git, teleport cannot resolve a checkout either. A login error surfaces on the read.
-      Effect.orElseSucceed(() => false),
+      Effect.result,
+      Effect.map((result) =>
+        result._tag === "Failure"
+          ? "unknown"
+          : result.success === 128
+            ? "outside"
+            : result.success === 0
+              ? "inside"
+              : "unknown",
+      ),
     );
   const scratch = Effect.fn("ClaudeCloudCli.readScratch")(function* (
     login: ClaudeCloudLogin,
@@ -89,62 +99,56 @@ export const makeSessionRead = (deps: {
   ) {
     yield* fileSystem.makeDirectory(root, { recursive: true });
     const preferred = yield* fileSystem.makeTempDirectory({ directory: root, prefix: "read-" });
-    if (!(yield* insideGitWorkTree(login, preferred))) return preferred;
+    const first = yield* outsideGit(login, preferred);
+    if (first === "outside") return preferred;
     yield* fileSystem.remove(preferred, { recursive: true });
+    if (first === "unknown")
+      return yield* failure(
+        "GOAT could not confirm with Git that its read folder is outside a checkout.",
+      );
     // A development state directory lives inside its checkout; fall back to the OS temp folder.
     const fallback = yield* fileSystem.makeTempDirectory({ prefix: "goat-claude-cloud-read-" });
-    if (!(yield* insideGitWorkTree(login, fallback))) return fallback;
+    if ((yield* outsideGit(login, fallback)) === "outside") return fallback;
     yield* fileSystem.remove(fallback, { recursive: true });
     return yield* failure("GOAT found no folder outside a Git checkout to read the session in.");
   });
 
-  const cleanup = (
+  /**
+   * Removes everything this read owns: its folder, the project directories Claude named after
+   * exactly that folder, and the transcript it wrote. Every step runs even if another fails, a
+   * second pass retries what is left, and the paths still present are returned.
+   */
+  const cleanup = Effect.fn("ClaudeCloudCli.readCleanup")(function* (
     login: ClaudeCloudLogin,
     directory: string,
-    projects: string | undefined,
-    found: { readonly folder: string; readonly file: string; readonly id: string } | undefined,
-  ) => {
-    const token = scratchToken(directory);
-    // Each step runs even when an earlier one fails, so no transcript copy outlives the read.
-    return Effect.forEach(
-      [
-        // purge also drops the folder's entry from Claude's global config. Older CLIs lack it.
-        deps
-          .run(login, directory, ["--help"])
-          .pipe(
-            Effect.flatMap((help) =>
-              /^\s*purge\b/m.test(help.stdout)
-                ? deps.run(login, directory, ["purge", "-y", directory])
-                : Effect.void,
-            ),
-          ),
-        projects === undefined || token.length < 10
-          ? Effect.void
-          : fileSystem.readDirectory(projects).pipe(
-              Effect.flatMap((entries) =>
-                Effect.forEach(
-                  entries.filter((entry) => entry.includes(token)),
-                  (entry) => fileSystem.remove(path.join(projects, entry), { recursive: true }),
-                  { discard: true },
-                ),
-              ),
-            ),
-        found === undefined || path.basename(found.folder).includes(token)
-          ? Effect.void
-          : Effect.all([
-              fileSystem.remove(found.file, { force: true }),
-              fileSystem.remove(path.join(found.folder, found.id), {
-                recursive: true,
-                force: true,
-              }),
-            ]),
-      ],
-      (step) => Effect.ignore(step),
-      { discard: true },
-    ).pipe(
-      Effect.andThen(Effect.ignore(fileSystem.remove(directory, { recursive: true, force: true }))),
+    owned: ReadonlyArray<string>,
+    found: { readonly file: string; readonly sidecar: string } | undefined,
+  ) {
+    // purge also drops the folder's entry from Claude's global config. Older CLIs lack it.
+    yield* deps.run(login, directory, ["--help"]).pipe(
+      Effect.flatMap((help) =>
+        /^\s*purge\b/m.test(help.stdout)
+          ? deps.run(login, directory, ["purge", "-y", directory])
+          : Effect.void,
+      ),
+      Effect.ignore,
     );
-  };
+    const targets = [...owned, ...(found ? [found.file, found.sidecar] : []), directory];
+    const left = () =>
+      Effect.filter(targets, (target) =>
+        fileSystem.exists(target).pipe(Effect.orElseSucceed(() => true)),
+      );
+    for (let pass = 0; pass < 2; pass++) {
+      const remaining = yield* left();
+      if (remaining.length === 0) return [];
+      yield* Effect.forEach(
+        remaining,
+        (target) => Effect.ignore(fileSystem.remove(target, { recursive: true, force: true })),
+        { discard: true },
+      );
+    }
+    return yield* left();
+  });
 
   return Effect.fn("ClaudeCloudCli.readSession")(function* (
     login: ClaudeCloudLogin,
@@ -158,37 +162,36 @@ export const makeSessionRead = (deps: {
         asReadError("GOAT could not create a private folder to read the session in."),
       ),
     );
-    let projects: string | undefined;
-    let found: { folder: string; file: string; id: string } | undefined;
-    return yield* Effect.gen(function* () {
+    let owned: string[] = [];
+    let found: { file: string; sidecar: string } | undefined;
+    const read = Effect.gen(function* () {
       const auth = yield* deps.run(login, directory, ["auth", "status"]);
       const account = yield* parseAuthEffect(auth.stdout).pipe(
         Effect.mapError((cause) => failure("Claude auth status did not return valid JSON.", cause)),
       );
-      const directoryOfProjects = account.projectsDirectory;
-      if (!directoryOfProjects)
+      const projects = account.projectsDirectory;
+      if (!projects)
         return yield* failure(
           "This Claude CLI does not report its projects directory. Update the sibling Claude CLI.",
         );
-      projects = directoryOfProjects;
+      const real = yield* fileSystem
+        .realPath(directory)
+        .pipe(Effect.orElseSucceed(() => directory));
+      owned = [...new Set([directory, real])].map((folder) =>
+        path.join(projects, projectSlug(folder)),
+      );
       const reply = yield* deps.run(login, directory, sessionReadArgs(sessionId), {
         timeout: TELEPORT_TIMEOUT,
       });
       const result = readTeleportResult(reply.stdout);
       if (!result) return yield* failure("Claude did not report the session it read.");
       const name = result.localSessionId + ".jsonl";
-      const token = scratchToken(directory);
-      const entries = (yield* fileSystem.readDirectory(directoryOfProjects)).toSorted(
-        (left, right) => Number(right.includes(token)) - Number(left.includes(token)),
-      );
-      for (const entry of entries) {
-        const file = path.join(directoryOfProjects, entry, name);
+      // The fork's ID is new and unique, so the folder holding it is this read's even when
+      // Claude shortened the folder's name.
+      for (const entry of yield* fileSystem.readDirectory(projects)) {
+        const file = path.join(projects, entry, name);
         if (yield* fileSystem.exists(file)) {
-          found = {
-            folder: path.join(directoryOfProjects, entry),
-            file,
-            id: result.localSessionId,
-          };
+          found = { file, sidecar: path.join(projects, entry, result.localSessionId) };
           break;
         }
       }
@@ -200,7 +203,18 @@ export const makeSessionRead = (deps: {
       return { transcript, costUsd: result.costUsd } satisfies SessionRead;
     }).pipe(
       Effect.mapError(asReadError("GOAT could not read the session transcript Claude wrote.")),
-      Effect.ensuring(Effect.suspend(() => cleanup(login, directory, projects, found))),
     );
+    const exit = yield* read.pipe(
+      Effect.onInterrupt(() => Effect.ignore(cleanup(login, directory, owned, found))),
+      Effect.exit,
+    );
+    const left = yield* cleanup(login, directory, owned, found);
+    if (left.length > 0)
+      return yield* failure(
+        "GOAT could not remove the local copy of the cloud session at " +
+          left.join(", ") +
+          ". Delete it by hand.",
+      );
+    return yield* exit;
   });
 };

@@ -255,7 +255,8 @@ it.effect("restart after follow-up ack follows the session reply without PR obse
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeHarness();
-      h.sessionReads(sessionAnswer("an earlier prompt GOAT no longer has", "Restarted reply."));
+      // The restarted run reads its own message back from the projection to find its reply.
+      h.sessionReads(sessionAnswer("task", "Restarted reply."));
       yield* h.runtime.resumeTurn!({
         ...h.attach,
         cloudTask: { ...h.saved.cloudTask, progress: "Follow-up accepted" },
