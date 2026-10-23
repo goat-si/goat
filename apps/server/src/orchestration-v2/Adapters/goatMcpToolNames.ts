@@ -67,8 +67,25 @@ export const CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = (
     "review_findings.export",
     "html.preview",
     "html.render",
+    "surface.describe",
   ] as const
 ).map((path) => claude(listed(path)));
+
+const CLAUDE_GOAT_CALL = claude(listed("surface.call"));
+
+/**
+ * The Claude name of the tool a call runs: for goat_call, the tool its path names, so approval
+ * and memory grants judge the target as they judge a direct call; otherwise the tool itself.
+ */
+export const claudeGoatCallTarget = (toolName: string, toolInput: unknown): string => {
+  if (toolName !== CLAUDE_GOAT_CALL || typeof toolInput !== "object" || toolInput === null)
+    return toolName;
+  const path = "path" in toolInput ? toolInput.path : undefined;
+  const entry = typeof path === "string" ? resolveAgentSurfaceEntry(path) : undefined;
+  return entry === undefined || entry.resource === "surface"
+    ? toolName
+    : claude(listedToolName(entry));
+};
 
 export const CLAUDE_MEMORY_SOURCE_TOOL = claude(GOAT_MEMORY_SOURCE_TOOL_NAME);
 export const CLAUDE_MEMORY_READ_TOOLS: ReadonlyArray<string> = [

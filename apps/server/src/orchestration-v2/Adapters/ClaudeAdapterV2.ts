@@ -10,6 +10,7 @@ import {
   CLAUDE_MEMORY_WRITE_TOOLS,
   CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS,
   claudeAllowedToolName,
+  claudeGoatCallTarget,
   claudeGoatToolName,
   claudeGoatMemoryTool,
 } from "./goatMcpToolNames.ts";
@@ -9055,7 +9056,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 } satisfies PermissionResult);
           }
 
-          const memoryTool = claudeGoatMemoryTool(toolName);
+          // goat_call is judged by the tool it runs, as a direct call to that tool would be.
+          const target = claudeGoatCallTarget(toolName, toolInput);
+          const memoryTool = claudeGoatMemoryTool(target);
           if (memoryTool !== undefined) {
             const availability = McpProviderSession.memoryToolAvailability(
               yield* readMcpSession(context.input.threadId),
@@ -9080,7 +9083,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // allowedTools is fixed at query creation. Recover the same read-only
           // preapproval here using live authority without replacing the query.
           if (
-            CLAUDE_MEMORY_READ_TOOLS.some((name) => name === memoryTool) &&
+            (CLAUDE_MEMORY_READ_TOOLS.some((name) => name === memoryTool) ||
+              (target !== toolName && CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS.includes(target))) &&
             sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) === "readOnly"
           ) {
             return { behavior: "allow", updatedInput: toolInput } satisfies PermissionResult;

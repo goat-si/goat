@@ -717,8 +717,9 @@ it("resolves paths, canonical names and legacy names to one entry without collis
 it.effect("lists canonical names and keeps legacy names callable, unlisted and deprecated", () =>
   Effect.gen(function* () {
     const http = yield* serveCatalogOverHttp(callers);
-    const listed = yield* http.listToolNames("thread");
-    expect(listed.toSorted()).toEqual(entries.map(listedToolName).sort());
+    const listed = (yield* http.listTools("thread")).map((tool) => tool.name);
+    const forThreads = entries.filter((entry) => entry.requires !== "client");
+    expect(listed.toSorted()).toEqual(forThreads.map(listedToolName).sort());
     expect(listed).toContain("goat_task_create");
     expect(listed).not.toContain("delegate_task");
     const callBody = (name: string) =>

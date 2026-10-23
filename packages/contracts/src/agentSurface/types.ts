@@ -23,6 +23,11 @@ export interface AgentSurfaceEntry {
   readonly description: string;
   /** Guidance longer than the description, served only by goat_describe for one path. */
   readonly guide?: string;
+  /**
+   * "core" lists the tool in the core listing and marks it to load up front in every listing.
+   * Everything else is found with goat_describe and called by name or through goat_call.
+   */
+  readonly listing?: "core";
   readonly effect: AgentSurfaceEffect;
   readonly hostRoutable: boolean;
   readonly requires: "thread" | "client" | "either";

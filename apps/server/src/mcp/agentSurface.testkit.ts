@@ -1,3 +1,8 @@
+import {
+  type AgentToolListing,
+  DEFAULT_AGENT_TOOL_LISTING,
+} from "@goat/contracts/agentSurface/listing";
+import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
 import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.ts";
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
@@ -275,6 +280,13 @@ type RpcMessage = {
  * NodeHttpServer.layerTest, and a scope that keeps the server up.
  */
 /** Registrations served over /mcp the way agents reach it; see serveCatalogOverHttp. */
+export interface ListedTool {
+  readonly name: string;
+  readonly description?: string;
+  readonly inputSchema?: unknown;
+  readonly _meta?: Readonly<Record<string, unknown>>;
+}
+
 export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
   scopes: Readonly<Record<string, McpInvocationScope>>,
   registrations: Layer.Layer<never, E, R>,
@@ -354,18 +366,18 @@ export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(func
             : decodeCallToolResult(message.result),
         ),
       ),
-    /** Every tool name tools/list shows the caller, across pages. */
-    listToolNames: Effect.fn(function* (caller: string) {
+    /** Every tool tools/list shows the caller, across pages. */
+    listTools: Effect.fn(function* (caller: string) {
       yield* ensureSession(caller);
-      const names: Array<string> = [];
+      const tools: Array<ListedTool> = [];
       let cursor: unknown;
       do {
         const page = (yield* post(caller, "tools/list", cursor === undefined ? {} : { cursor }))
-          .result as { tools: ReadonlyArray<{ name: string }>; nextCursor?: unknown };
-        names.push(...page.tools.map((tool) => tool.name));
+          .result as { tools: ReadonlyArray<ListedTool>; nextCursor?: unknown };
+        tools.push(...page.tools);
         cursor = page.nextCursor;
       } while (cursor !== undefined && cursor !== null);
-      return names;
+      return tools;
     }),
   };
 });
@@ -376,8 +388,16 @@ const serveWith = <E, R>(
   services: Layer.Layer<Layer.Success<typeof servicesOff>, E, R>,
 ) => serveOverHttp(scopes, catalog.pipe(Layer.provide(services)));
 
-export const serveCatalogOverHttp = (scopes: Readonly<Record<string, McpInvocationScope>>) =>
-  serveWith(scopes, servicesOff).pipe(Effect.provide(settingsOff));
+/** Default settings, with the tool listing a test chooses; /mcp reads it for tools/list. */
+const settingsListing = (agentToolListing: AgentToolListing) =>
+  Layer.mock(Settings.ServerSettingsService)({
+    getSettings: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, agentToolListing }),
+  });
+
+export const serveCatalogOverHttp = (
+  scopes: Readonly<Record<string, McpInvocationScope>>,
+  agentToolListing: AgentToolListing = DEFAULT_AGENT_TOOL_LISTING,
+) => serveWith(scopes, servicesOff).pipe(Effect.provide(settingsListing(agentToolListing)));
 
 /** serveCatalogOverHttp with goatclaw enforcing; see enforcingDependencies for what it needs. */
 export const serveEnforcingCatalogOverHttp = (

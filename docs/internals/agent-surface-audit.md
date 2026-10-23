@@ -142,7 +142,7 @@ One intent is spelled several ways (tool counts in parentheses):
 - **Idempotency.** 12 tools accept `clientRequestId`: `channel_ingest`, `create_threads`, `delegate_task`, `goat_goal_apply`, `goat_review_findings_record`, `goat_thread_interrupt`, `goat_thread_retry`, `goat_thread_send`, `goat_thread_update`, `request_secret`, and 2 more. The other 113 mutating tools have no retry key, including the destructive `delete_scheduled_task`, `device_close`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_call`, `goat_cloud_run_forget`, `goat_connection_remove`, `goat_decision_answer`, `goat_environment_preferences_update`, `goat_goal_delete`, and 42 more.
 - **Pagination.** 10 tools use `cursor/nextCursor` (`channel_task_export`, `channel_task_list`, `goat_goal_list`, `goat_preview_list`, and 6 more); 10 tools use `limit only` (`goat_cloud_run_list`, `goat_decision_list`, `goat_describe`, `goat_ssh_browse`, and 6 more); 1 tool uses `afterSequence/hasMore` (`goat_origin_reports_wait`); 1 tool uses `limit/hasMore` (`goat_thread_read`). List tools with no page control: `device_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`.
 - **Hints that disagree with enforcement.** The handler's `McpToolAccess` declaration is what the server enforces; the MCP `readOnlyHint` is what clients see. They disagree for no tools. Reads declared `actsAsCaller` without a read-only hint: `task_status`.
-- **Image results.** `preview_snapshot`, `device_screenshot`, and `html_preview` are registered by hand to return image content (apps/server/src/mcp/McpHttpServer.ts:1187), outside the toolkit path every other tool uses.
+- **Image results.** `preview_snapshot`, `device_screenshot`, and `html_preview` are registered by hand to return image content (apps/server/src/mcp/McpHttpServer.ts:1190), outside the toolkit path every other tool uses.
 
 ## Descriptions and examples
 
@@ -205,7 +205,8 @@ Names that look like tools but are not in the registry:
 | Name             | Where                                                                                                                    |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `update_runtime` | packages/provider-core/src/server/orchestrationInstructions.ts:45                                                        |
-| `goat_eval`      | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:444, docs/internals/agent-surface.md:863 (+1)         |
+| `goat_eval`      | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:449, docs/internals/agent-surface.md:868 (+1)         |
+| `list_changed`   | docs/internals/agent-surface.md:404                                                                                      |
 | `run_steps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144 |
 | `run_script`     | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145 |
 | `list_apps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                              |
