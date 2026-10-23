@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { memoryToolAvailability, withAgentDeviceEnvironment } from "./mcpSession.ts";
+import {
+  memoryToolAvailability,
+  withAgentDeviceEnvironment,
+  withThreadMcpEnvironment,
+} from "./mcpSession.ts";
 
 describe("device CLI environment", () => {
   it("preserves provider credentials and commands while routing devices to the owned daemon", () => {
@@ -54,5 +58,33 @@ describe("memory tool availability", () => {
     expect(
       memoryToolAvailability({ grantedScopes: ["memory:read", "orchestration:read"] }),
     ).toEqual({ read: true, write: false, source: true });
+  });
+});
+
+describe("thread CLI environment", () => {
+  it("replaces inherited thread credentials and fails closed when the session is absent (#934)", () => {
+    const inherited = {
+      GOAT_ACP_MCP_ENDPOINT: "http://parent/mcp",
+      GOAT_ACP_MCP_AUTHORIZATION: "Bearer parent",
+      T3_ACP_MCP_AUTHORIZATION: "Bearer legacy-parent", // goat-rename: legacy
+      PROVIDER_KEY: "fixture-provider",
+    };
+    const current = withThreadMcpEnvironment(inherited, {
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer current-thread",
+    });
+    expect(current).toMatchObject({
+      GOAT_ACP_MCP_ENDPOINT: "http://127.0.0.1:43123/mcp",
+      GOAT_ACP_MCP_AUTHORIZATION: "Bearer current-thread",
+      T3_ACP_MCP_AUTHORIZATION: "Bearer current-thread", // goat-rename: legacy
+      PROVIDER_KEY: "fixture-provider",
+    });
+    expect(withThreadMcpEnvironment(inherited, undefined)).toMatchObject({
+      GOAT_ACP_MCP_ENDPOINT: "",
+      GOAT_ACP_MCP_AUTHORIZATION: "",
+      T3_ACP_MCP_AUTHORIZATION: "", // goat-rename: legacy
+      PROVIDER_KEY: "fixture-provider",
+    });
+    expect(inherited.GOAT_ACP_MCP_AUTHORIZATION).toBe("Bearer parent");
   });
 });

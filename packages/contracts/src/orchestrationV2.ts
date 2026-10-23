@@ -3478,6 +3478,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     watch: Schema.NullOr(ThreadPullRequestWatch),
     /** With `watch: null`, the state the ended watch keeps instead of its last saved one. */
     endedWatch: Schema.optional(ThreadPullRequestWatch),
+    /** The pull request merged or closed: wakes this watch queued and that have not started are dropped. */
+    dropQueuedWakes: Schema.optional(Schema.Literal(true)),
     wake: Schema.optional(
       Schema.Struct({
         messageId: MessageId,
