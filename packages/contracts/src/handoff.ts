@@ -89,9 +89,23 @@ export const isProviderHandoffPath = (path: string) => PROVIDER_SETTINGS_HANDOFF
  */
 export const COMPUTER_USE_GRANT_HANDOFF_PATH = "computer_use.grant";
 
+/**
+ * A person approving a hub membership change. The asking turn has usually ended, so these run
+ * on a clock; the agent continues with the same tool, passing the handoff id as its decisionId.
+ */
+export const HUB_DEVICE_HANDOFF_PATHS = {
+  join: "hub.device_join",
+  leave: "hub.device_leave",
+  repair: "hub.device_repair",
+} as const;
+const HUB_PATHS: ReadonlySet<string> = new Set(Object.values(HUB_DEVICE_HANDOFF_PATHS));
+export const isHubDeviceHandoffPath = (path: string) => HUB_PATHS.has(path);
+
 /** Handoffs that expire on their clock instead of when the requesting run ends. */
 export const isClockedHandoffPath = (path: string) =>
-  isProviderHandoffPath(path) || path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+  isProviderHandoffPath(path) ||
+  path === COMPUTER_USE_GRANT_HANDOFF_PATH ||
+  isHubDeviceHandoffPath(path);
 
 /**
  * Steps that end with the run that asked: a secret card, whose caller collects it in that run,

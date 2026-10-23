@@ -65,6 +65,7 @@ it.effect(
         [96, "ThreadHistoryArchives"],
         [97, "PermissionProfiles"],
         [98, "DecisionInbox"],
+        [99, "ApprovalConsumptions"],
       ]);
       yield* assertUsageCounters;
       assert.deepStrictEqual(yield* runMigrations(), []);

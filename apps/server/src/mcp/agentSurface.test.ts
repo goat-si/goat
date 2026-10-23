@@ -402,13 +402,6 @@ describe("agent surface schemas", () => {
   });
 });
 
-// quarantine: #782 hub devices ask through the decision inbox: state needs_human with a decisionId, no handoff.
-const DECISION_INBOX_NEEDS_HUMAN = new Set([
-  "hub.device_join",
-  "hub.device_leave",
-  "hub.device_repair",
-]);
-
 describe("agent surface needs_human results", () => {
   it("hands work to a person only through the shared handoff summary and a registered next call", () => {
     const summaryKeys = Object.keys(HandoffSummary.fields).sort();
@@ -440,7 +433,6 @@ describe("agent surface needs_human results", () => {
     const missing = entries.filter(
       (entry) =>
         entry.description.includes("needs_human") &&
-        !DECISION_INBOX_NEEDS_HUMAN.has(entry.path) &&
         needsHumanArms(resultDocument(entry)).length === 0,
     );
     expect(missing.map((entry) => entry.path)).toEqual([]);

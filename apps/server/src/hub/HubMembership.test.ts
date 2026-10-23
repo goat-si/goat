@@ -3,9 +3,20 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   BUILTIN_PERMISSION_PROFILES,
   EnvironmentId,
+  HandoffError,
+  NodeId,
+  ProviderInstanceId,
+  RunId,
+  MessageId,
+  ThreadId,
+  TurnItemId,
+  handoffSummary,
+  type Handoff,
+  type OrchestrationV2ThreadProjection,
   type HubParityCheckId,
   type HubParityResult,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -13,6 +24,10 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Inbox from "../goatclaw/DecisionInbox.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
+import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -31,6 +46,16 @@ const scope: McpInvocationScope = {
   requestNamespace: "hub-test",
   thread: undefined,
   client: { sessionId: "agent", label: "Agent", access: "full-access" },
+};
+const asking = ThreadId.make("thread:hub-agent");
+const threadScope: McpInvocationScope = {
+  ...scope,
+  client: undefined,
+  thread: {
+    threadId: asking,
+    providerSessionId: "session",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
 };
 const owner: Inbox.DecisionCaller = {
   kind: "client",
@@ -122,8 +147,76 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
       },
     },
   };
+  // Handoffs as the person's client sees them: created by the agent, answered in a GOAT app.
+  const handoffs = new Map<string, { record: Handoff; args: string }>();
+  const now = yield* DateTime.now;
+  const handoffLayer = Layer.mock(Handoffs.Handoffs)({
+    create: (input) =>
+      Effect.sync(() => {
+        const record: Handoff = {
+          handoffId: TurnItemId.make(`handoff:${handoffs.size + 1}`),
+          kind: input.kind,
+          title: input.title,
+          reason: input.reason,
+          requestedBy: input.requestedBy,
+          target: input.target,
+          dedupeKey: "hmac",
+          state: "pending",
+          expiresAt: input.expiresAt ?? null,
+          createdAt: now,
+          actor: { type: "agent", threadId: input.requestedBy.threadId },
+        };
+        handoffs.set(record.handoffId, { record, args: JSON.stringify(input.args) });
+        return handoffSummary(record);
+      }),
+    read: (input) => {
+      const entry = handoffs.get(input.handoffId);
+      return entry === undefined
+        ? Effect.fail(new HandoffError({ reason: "not_found" }))
+        : Effect.succeed(entry.record);
+    },
+    matchesArgs: (handoff, args) =>
+      Effect.succeed(handoffs.get(handoff.handoffId)?.args === JSON.stringify(args)),
+  });
+  const run: OrchestrationV2ThreadProjection = {
+    ...idleThreadProjection(liveThreadShell(asking)),
+    runs: [
+      {
+        id: RunId.make("run:hub-agent"),
+        threadId: asking,
+        ordinal: 1,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake" },
+        providerThreadId: null,
+        userMessageId: MessageId.make("message:hub-agent"),
+        rootNodeId: NodeId.make("node:hub-agent"),
+        activeAttemptId: null,
+        status: "running" as const,
+        requestedAt: now,
+        startedAt: now,
+        completedAt: null,
+        checkpointId: null,
+        contextHandoffId: null,
+        memoryGrantCeiling: "none",
+      },
+    ],
+  };
+  const threadLayer = Layer.mock(ThreadManagement.ThreadManagementService)({
+    getThreadRecords: () => Effect.succeed(run),
+  });
   const context = yield* Layer.build(
-    HubMembership.layer.pipe(
+    HubMembership.layerWithoutDependencies.pipe(
+      Layer.provide(
+        ApprovalHandoffs.layer.pipe(
+          Layer.provide(handoffLayer),
+          Layer.provide(threadLayer),
+          Layer.provide(
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getEnvironmentId: Effect.succeed(EnvironmentId.make("hub")),
+            }),
+          ),
+        ),
+      ),
       Layer.provide(
         Layer.succeed(
           HubOcx,
@@ -174,7 +267,7 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
       ),
       Layer.provideMerge(Inbox.layer),
       Layer.provideMerge(Profiles.layer),
-      Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
+      Layer.provide(threadLayer),
       Layer.provide(Layer.mock(PendingQuestions.PendingQuestionsMcpService)({})),
       Layer.provideMerge(Settings.layerTest({ goatclaw })),
       Layer.provideMerge(Sqlite.layerMemory),
@@ -184,6 +277,9 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
   const membership = Context.get(context, HubMembership.HubMembership);
   const inbox = Context.get(context, Inbox.DecisionInbox);
   const sql = Context.get(context, SqlClient.SqlClient);
+  // Profiles read the asking thread's own modes.
+  yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+    VALUES (${asking}, 'project', 'Hub agent', 'codex', 'full-access', 'default', '2026-10-23', '2026-10-23', '{}')`;
   const audit = sql<{
     action: string;
     target: string;
@@ -197,6 +293,19 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
     calls,
     approve: (id: string, optionId = "approve") =>
       inbox.answer(owner, { id, optionId, reason: "Reviewed the host key." }),
+    /** A person answers a handoff in a GOAT client. */
+    answer: (id: string, state: Handoff["state"] = "completed") =>
+      Effect.sync(() => {
+        const entry = handoffs.get(id)!;
+        entry.record = {
+          ...entry.record,
+          state,
+          actor: { type: "client", label: "Reviewer" },
+          resolvedAt: now,
+          resolvedBy: "Reviewer",
+        };
+      }),
+    inboxItems: inbox.list(owner, {}),
     offer: (fingerprint: string) => {
       offered = fingerprint;
     },
@@ -688,5 +797,112 @@ it.effect(
       expect(hub.calls).toContain(
         "home link revoke --link-id lnk_0123456789abcdef --force --yes --json",
       );
+    }),
+);
+
+it.effect("a thread's unpinned join asks through a handoff whose id continues it once", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ addFails: true });
+    const first = yield* hub.membership.join(threadScope, { deviceAlias: "lidge-ts" });
+    expect(first).toMatchObject({
+      kind: "needs_human",
+      state: "needs_human",
+      handoff: { kind: "approval", state: "pending", targetPath: "hub.device_join" },
+      next: { after: "approval", call: "goat_hub_device_join" },
+    });
+    expect(first.decisionId).toBe((first as { handoff: { handoffId: string } }).handoff.handoffId);
+    expect((yield* hub.inboxItems).items).toEqual([]);
+    const early = yield* hub.membership
+      .join(threadScope, { deviceAlias: "lidge-ts", decisionId: first.decisionId! })
+      .pipe(Effect.flip);
+    expect(early.message).toContain("still open");
+
+    yield* hub.answer(first.decisionId!);
+    const joined = yield* hub.membership.join(threadScope, {
+      deviceAlias: "lidge-ts",
+      decisionId: first.decisionId!,
+    });
+    expect(joined.state).toBe("failed");
+    expect(hub.calls).toContain(`home link add lidge-ts --expect-fingerprint ${PINNED} --json`);
+    const reused = yield* hub.membership
+      .join(threadScope, { deviceAlias: "lidge-ts", decisionId: first.decisionId! })
+      .pipe(Effect.flip);
+    expect(reused.message).toContain("already used");
+  }),
+);
+
+it.effect("a handoff covers only the change it was asked for", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ linked: ["box"] });
+    const join = yield* hub.membership.join(threadScope, { deviceAlias: "lidge-ts" });
+    yield* hub.answer(join.decisionId!);
+    hub.offer(OTHER);
+    const swapped = yield* hub.membership
+      .join(threadScope, { deviceAlias: "lidge-ts", decisionId: join.decisionId! })
+      .pipe(Effect.flip);
+    expect(swapped.message).toContain("does not cover this change");
+    const leave = yield* hub.membership
+      .leave(threadScope, { deviceAlias: "box", decisionId: join.decisionId! })
+      .pipe(Effect.flip);
+    expect(leave.message).toContain("does not cover this change");
+    const declined = yield* hub.membership.join(threadScope, { deviceAlias: "other-ts" });
+    yield* hub.answer(declined.decisionId!, "declined");
+    expect(
+      (yield* hub.membership
+        .join(threadScope, { deviceAlias: "other-ts", decisionId: declined.decisionId! })
+        .pipe(Effect.flip)).message,
+    ).toContain("was not given");
+    expect(hub.calls.some((call) => call.includes("link add"))).toBe(false);
+  }),
+);
+
+it.effect("a thread force-removes and re-links through handoffs bound to those steps", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ linked: ["lidge-ts"], deviceExit: { disconnect: 125 } });
+    const asked = yield* hub.membership.leave(threadScope, { deviceAlias: "lidge-ts" });
+    expect(asked).toMatchObject({
+      kind: "needs_human",
+      next: { call: "goat_hub_device_leave" },
+      handoff: { targetPath: "hub.device_leave" },
+    });
+    yield* hub.answer(asked.decisionId!);
+    const forced = yield* hub.membership.leave(threadScope, {
+      deviceAlias: "lidge-ts",
+      decisionId: asked.decisionId!,
+    });
+    expect(forced.state).toBe("degraded");
+    expect(forced.steps.map(({ step }) => step)).toEqual(["revoke", "link_removed"]);
+
+    const relinkHub = yield* setup({
+      linked: ["macmini-ts"],
+      verdicts: [verdict(["P2"]), verdict(["P2"]), verdict()],
+    });
+    const relink = yield* relinkHub.membership.repair(threadScope, { deviceAlias: "macmini-ts" });
+    expect(relink).toMatchObject({ kind: "needs_human", next: { call: "goat_hub_device_repair" } });
+    yield* relinkHub.answer(relink.decisionId!);
+    const relinked = yield* relinkHub.membership.repair(threadScope, {
+      deviceAlias: "macmini-ts",
+      decisionId: relink.decisionId!,
+    });
+    expect(relinked.state).toBe("child");
+  }),
+);
+
+it.effect(
+  "an inbox approval answered by an owner-profile agent does not approve a hub change",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup();
+      const asked = yield* hub.membership.join(scope, { deviceAlias: "lidge-ts" });
+      expect(asked.state).toBe("needs_human");
+      expect(asked).not.toHaveProperty("handoff");
+      yield* hub.inbox.answer(
+        { kind: "agent", scope },
+        { id: asked.decisionId!, optionId: "approve", reason: "Looks fine." },
+      );
+      const refused = yield* hub.membership
+        .join(scope, { deviceAlias: "lidge-ts", decisionId: asked.decisionId! })
+        .pipe(Effect.flip);
+      expect(refused.message).toContain("answered by an agent");
     }),
 );
