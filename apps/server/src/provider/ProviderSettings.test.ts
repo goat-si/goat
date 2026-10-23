@@ -18,6 +18,7 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
+import { fromFailure } from "@goat/contracts/agentSurface/envelope";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -472,6 +473,32 @@ it.effect("rejects linking a cloud provider to the wrong kind of instance", () =
         ),
       );
       expect(error.code).toBe("invalid_request");
+      expect((yield* fixture.instances)[cursorCloud]).toBeUndefined();
+    }),
+  ),
+);
+
+it.effect("tells a caller that a host too old for the provider tool needs updating", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* setup({
+        remoteFailure: new Dispatch.SshRemoteDispatchError({
+          reason: "remote_outdated",
+          message: "GOAT on box does not have goat_provider_update; it runs 0.1.0.",
+        }),
+      });
+      const failure = yield* Effect.flip(
+        fixture.service.manage(
+          { action: "update", input: { instanceId: cursorCloud, enabled: true, host: "box" } },
+          managingClient,
+        ),
+      );
+      expect(failure).toMatchObject({ code: "remote_outdated" });
+      // goat_call classifies it as a precondition, not an internal error, and nothing ran.
+      expect(fromFailure({ ...failure }, { effect: "write" })).toMatchObject({
+        status: "error",
+        error: { code: "failed_precondition", reason: "remote_outdated", retryable: false },
+      });
       expect((yield* fixture.instances)[cursorCloud]).toBeUndefined();
     }),
   ),
