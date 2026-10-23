@@ -97,6 +97,8 @@ export const worktreeEntries = {
       idempotentHint: false,
       openWorldHint: true,
     },
+    idempotency: "key",
+    reconcile: "worktree.inventory",
   }),
   "worktree.cleanup": entry({
     resource: "worktree",
