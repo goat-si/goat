@@ -6,7 +6,8 @@ import { createNewerHostUpdateCheck } from "./newerHostUpdateCheck.logic";
 
 const checkWhenHostIsNewer = createNewerHostUpdateCheck(APP_VERSION, () => {
   const bridge = window.desktopBridge;
-  if (!bridge) return;
+  // Older desktop builds and partial test bridges may lack the update API.
+  if (typeof bridge?.checkForUpdate !== "function") return;
   void bridge.checkForUpdate().catch((error: unknown) => {
     toastManager.add(
       stackedThreadToast({
