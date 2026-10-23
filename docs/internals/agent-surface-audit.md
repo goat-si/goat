@@ -199,17 +199,13 @@ Scanned 160 Markdown files (docs, structure, skills, root guides) and 3 agent pr
 
 Names that look like tools but are not in the registry:
 
-| Name                      | Where                                                                                                                    |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `update_runtime`          | packages/provider-core/src/server/orchestrationInstructions.ts:45                                                        |
-| `goat_eval`               | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:438, docs/internals/agent-surface.md:819 (+1)         |
-| `goat_host_cordon`        | docs/internals/agentic-k8s.md:955                                                                                        |
-| `goat_thread_reschedule`  | docs/internals/agentic-k8s.md:955                                                                                        |
-| `goat_scheduler_status`   | docs/internals/agentic-k8s.md:958                                                                                        |
-| `goat_fallback_chain_get` | docs/internals/agentic-k8s.md:958                                                                                        |
-| `run_steps`               | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144 |
-| `run_script`              | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145 |
-| `list_apps`               | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                              |
+| Name             | Where                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `update_runtime` | packages/provider-core/src/server/orchestrationInstructions.ts:45                                                        |
+| `goat_eval`      | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:438, docs/internals/agent-surface.md:819 (+1)         |
+| `run_steps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144 |
+| `run_script`     | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145 |
+| `list_apps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                              |
 
 CLI invocations in the docs that do not resolve:
 

@@ -26,7 +26,7 @@ Tool names, descriptions, schema references and discovery metadata live in
 [`agentSurface/registry.ts`](../packages/contracts/src/agentSurface/registry.ts). Each entry has
 an explicit `resource.verb` path and the name its toolkit registers, which access declarations and
 analytics key on. `tools/list` shows the path's canonical `goat_<resource>_<verb>` projection
-instead (`layerListedToolNames`). When the registered name differs, `/mcp` still accepts it in
+instead (`McpHttpServer` `withListedNames`). When the registered name differs, `/mcp` still accepts it in
 `tools/call` without listing it and marks the result deprecated
 ([`ToolDispatch.ts`](../apps/server/src/mcp/ToolDispatch.ts) `withServedToolNames`). Schemas
 remain with their owning toolkit or contracts module.

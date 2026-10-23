@@ -93,7 +93,7 @@ returns `_meta["goat/deprecated"]` naming the listed name
 ([ToolDispatch.ts](../../apps/server/src/mcp/ToolDispatch.ts) `withServedToolNames`).
 Toolkits register under the shipped name, so access declarations, capability checks, and
 analytics keep that key whichever name a caller used; only the listing renames
-(`layerListedToolNames`). Paths that used a near synonym of a standard verb were
+(`McpHttpServer` `withListedNames`). Paths that used a near synonym of a standard verb were
 normalized (D11): `decision.read`, `permission_profile.read`,
 `thread.configuration_read`, `provider.sync_read`, `origin.report_wait`,
 `memory.settings_read`, `memory.source_read`, and `preview.wait`. `goat_call` and
@@ -425,13 +425,13 @@ message is always the text the direct call shows, so free-text reasons the direc
 scrubs never leave through it. Writes count as unkeyed until the registry gains
 `idempotency`, and routed calls set `meta.host`.
 
-**Now.** A direct `tools/call` by a canonical alias runs the served tool. The `/mcp`
-auth middleware swaps the name for the served one before Effect's MCP core sees the
-request, because the core checks one visibility predicate for both `tools/list` and
+**Now.** A direct `tools/call` by a legacy name runs the listed tool. The `/mcp` auth
+middleware swaps the name for the listed one before Effect's MCP core sees the request,
+because the core checks one visibility predicate for both `tools/list` and
 `tools/call` and cannot hide a tool that stays callable. The call therefore gets the
-served tool's argument refusal, access checks, and result, and analytics record it
-under the served name, so each tool keeps one series until the flip renames it.
-Remote hosts are still called by the names they shipped with.
+listed tool's argument refusal, access checks, and result, plus
+`_meta["goat/deprecated"]`. Analytics record every call under the shipped name the
+toolkit registers, whichever name the caller used, so each tool keeps one series.
 
 ## Composition: `goat_eval`
 
@@ -870,7 +870,7 @@ every gate runs per step (D7).
 | D17 | `needs_human` only with a handoff a person can act on; a block nobody can clear stays `error`                                                                     | A human status that does not hold makes agents hand back work no person can fix                                                                  | Inferring human steps from messages            |
 | D18 | The D8 gate is a written protocol with paired ABBA runs, an oracle per workload, and model turns as the primary metric                                            | Agent-level timing hid real gains behind per-turn cost in aside-codemode; fewer turns and bytes were the measurable effect                       | A wall-clock threshold                         |
 | D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                        | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                 | Renaming paths to match shipped names          |
-| D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks, result and analytics name apply                                            | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                           | Registering alias tools, which would list them |
+| D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                           | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                           | Registering alias tools, which would list them |
 
 ## Open questions
 
