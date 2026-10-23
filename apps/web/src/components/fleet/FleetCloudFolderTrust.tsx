@@ -11,7 +11,7 @@ const dateLabel = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 
 /** One sentence a person can act on; GOAT answers the prompt itself either way. */
-export function folderTrustLabel(folder: CloudFolderTrust): string {
+function folderTrustLabel(folder: CloudFolderTrust): string {
   if (folder.trusted === true)
     return folder.acceptedByGoatAt === null
       ? "Claude Code trusts this folder"

@@ -134,7 +134,6 @@
   "apps/server/scripts/migrate-dev-db.ts": { "nonNull": 1 },
   "apps/server/scripts/record-codex-app-server-replay-fixture.ts": { "lines": 1672, "nonNull": 2 },
   "apps/server/scripts/record-grok-acp-replay-fixture.ts": { "nonNull": 1 },
-  "apps/server/scripts/seed-channel-placement-fixture.ts": { "nonNull": 3 },
   "apps/server/src/assets/AssetAccess.test.ts": { "lines": 1185 },
   "apps/server/src/assets/AssetAccess.ts": { "lines": 1040 },
   "apps/server/src/assets/NativeAppIconResolver.ts": { "nonNull": 1 },
