@@ -2875,8 +2875,7 @@ const make = Effect.gen(function* () {
           host,
           worktree: remote.workspace?.type === "worktree",
         });
-        // The destination must enforce this ceiling; goatclaw's fleet policy reaches it first.
-        if (admitted.enabled) yield* fleet.ensure(host);
+        if (admitted.enabled) yield* FleetSync.syncBeforeForwarding(fleet, host);
         runtimeMode = admitted.runtimeMode;
         const register = Effect.gen(function* () {
           yield* permissions.recheck(scope, admitted, { host });

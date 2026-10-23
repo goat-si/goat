@@ -358,10 +358,11 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
         const pressure = yield* admitLaunch(input.host);
         const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
         // goatclaw applies fleet-wide: bring the destination's policy up to date before it must
-        // enforce this ceiling. A host that cannot take it still refuses the launch clearly.
+        // enforce this ceiling. A destination that does not accept a ceiling at all still refuses
+        // the launch in SshRemoteDispatch.
         if (effective.enabled) {
           const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
-          if (fleet._tag === "Some") yield* fleet.value.ensure(input.host);
+          if (fleet._tag === "Some") yield* FleetSync.syncBeforeForwarding(fleet.value, input.host);
         }
         // The thread on this machine that launches; an outside client has none to record.
         const launcher = caller.caller;
