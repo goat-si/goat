@@ -13,6 +13,7 @@ import {
   type EnvironmentAuthorizationError,
   type HandoffError,
   OrchestratorMcpFailure,
+  CommandId,
   RunId,
   type ServerActivityBlocker,
   type SshHostResult,
@@ -24,6 +25,8 @@ import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
+import * as ChannelChildWork from "../../../channels/ChannelChildWork.ts";
+import { childWorkCorrelationIdFor } from "../../../channels/channelIds.ts";
 import * as CloudMachineService from "../../../cloudMachines/CloudMachineService.ts";
 import * as LinkedHosts from "../../../linkedHosts/LinkedHosts.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
@@ -38,6 +41,12 @@ import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { dispatchFacts } from "../../hostFailure.ts";
 import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
+import {
+  admissionCorrelationId,
+  admitChildWork,
+  bindChildWork,
+  launchRemoteChildWork,
+} from "../../childWorkAdmission.ts";
 import { admitLaunch } from "../../pressureAdmission.ts";
 import { SshToolkit, SshThreadHandoffFailure } from "./tools.ts";
 
@@ -336,7 +345,35 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
         const caller = yield* check;
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const permissions = yield* Profiles.PermissionProfiles;
-        const laneId = yield* newCommandId();
+        // A channel-owned caller (a GOAT Bot worker thread) admits this launch against its
+        // task's descendant budget; the record's identity drives the lane and correlation ids,
+        // so a retry collides with the first attempt instead of launching twice.
+        const channelChildWork = yield* Effect.serviceOption(ChannelChildWork.ChannelChildWork);
+        const admission =
+          scope.thread === undefined
+            ? undefined
+            : yield* admitChildWork(channelChildWork, {
+                callerThreadId: scope.thread.threadId,
+                surface: "ssh_thread_launch",
+                prompt: input.message ?? "",
+                destinationKey: [
+                  input.host,
+                  input.cwd ?? "",
+                  input.workspace === undefined
+                    ? ""
+                    : input.workspace.type === "worktree"
+                      ? "worktree:" + input.workspace.branch
+                      : "cwd",
+                  input.modelSelection?.instanceId ?? "",
+                  input.modelSelection?.model ?? "",
+                  input.goatclawRole ?? "",
+                ].join("\u0000"),
+                destinationHint: input.host + ":" + (input.cwd ?? ""),
+              });
+        const laneId =
+          admission === undefined
+            ? yield* newCommandId()
+            : CommandId.make(admission.record.childWorkId);
         const effective = yield* permissions.require(scope, "threads.remote", {
           host: input.host,
           runtimeMode: caller.limits.runtimeMode,
@@ -383,6 +420,32 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
           .validateLaunchAttachments(input.attachments ?? [])
           .pipe(Effect.mapError(toMcpFailure));
         const coordinator = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
+        if (
+          admission !== undefined &&
+          admission._tag === "existing" &&
+          admission.record.state !== "reserved"
+        ) {
+          // A retry of a launch this machine already recorded never launches again; it answers
+          // with where the first attempt stands.
+          const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+          const row = yield* coordinator
+            .get(correlationId)
+            .pipe(Effect.mapError(toCoordinationFailure));
+          return yield* new OrchestratorMcpFailure({
+            code: "conflict",
+            message:
+              "This exact launch was already admitted (correlation id " +
+              correlationId +
+              (row?.remoteThreadId === null || row === null
+                ? ""
+                : ", remote thread " + row.remoteThreadId) +
+              ", state " +
+              (row === null ? "never persisted" : row.state) +
+              '). Use goat_thread_status with host "' +
+              input.host +
+              '" to follow it, or a changed request to launch anew.',
+          });
+        }
         const referenceMessage =
           input.references === undefined || input.references.length === 0
             ? input.message
@@ -482,15 +545,23 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                   );
                   return { ...value, correlationId: null };
                 }
+                yield* launchRemoteChildWork(channelChildWork, admission, input.host);
                 const value = yield* coordinator.launch(
                   {
                     kind: "thread",
                     originThreadId: scope.thread.threadId,
                     delivery: input.reportDelivery ?? "wake",
+                    // A channel-owned launch carries its record's correlation id, so a retry's
+                    // INSERT collides on the row instead of starting a second remote thread.
+                    correlationId: admissionCorrelationId(admission),
                     launch: guardedLaunch,
                   },
                   authorize.pipe(Effect.asVoid),
                 );
+                yield* bindChildWork(channelChildWork, admission, {
+                  correlationId: value.correlationId,
+                  host: input.host,
+                });
                 return { ...value.launch, correlationId: value.correlationId };
               }).pipe(
                 Effect.tapError((error) => {

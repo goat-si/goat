@@ -6,11 +6,13 @@ import {
 } from "../goatclaw/RoleTemplates.ts";
 import {
   OrchestratorMcpFailure,
+  CommandId,
   MessageId,
   ThreadId,
   type RuntimeMode,
   type ProviderInteractionMode,
 } from "@goat/contracts";
+import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
 import { captureRpcMemoryGrantCeiling } from "../auth/RpcAuthorization.ts";
 import { effectiveMemoryGrant } from "../memory/MemoryAccess.ts";
 import * as Context from "effect/Context";
@@ -39,6 +41,12 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { nativeWorkspacePath } from "../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
+import {
+  admitChildWork,
+  bindChildWork,
+  launchChildWork,
+  releaseChildWork,
+} from "./childWorkAdmission.ts";
 import { resolveRuntimeMode } from "./OrchestratorMcpService.ts";
 import {
   newCommandId,
@@ -154,6 +162,7 @@ const make = Effect.gen(function* () {
   const adapters = yield* ProviderAdapters.ProviderAdapterRegistryV2;
   const sources = yield* CloudSource.CloudTaskSourceService;
   const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
+  const channelChildWork = yield* Effect.serviceOption(ChannelChildWork.ChannelChildWork);
   /**
    * Refuses a provider instance this environment does not have, or a requested
    * model its provider does not list, before any thread exists. An SSH launch
@@ -265,7 +274,36 @@ const make = Effect.gen(function* () {
             message:
               "launchedBy is accepted only from an outside caller naming a foreign environment.",
           });
-        const commandId = yield* newCommandId();
+        // A channel-owned caller (a GOAT Bot worker thread) admits this launch against its
+        // task's descendant budget; the record's id becomes the command id, so a retry replays
+        // the same launch instead of starting a second thread.
+        const admission =
+          caller === undefined
+            ? undefined
+            : yield* admitChildWork(channelChildWork, {
+                callerThreadId: caller.id,
+                surface: "thread_launch",
+                prompt: input.message ?? "",
+                destinationKey: [
+                  input.projectId ?? caller.projectId ?? "",
+                  input.workspaceStrategy === undefined
+                    ? ""
+                    : input.workspaceStrategy.type +
+                      ":" +
+                      (input.workspaceStrategy.branch ?? "") +
+                      (input.workspaceStrategy.type === "existing_worktree"
+                        ? ":" + input.workspaceStrategy.worktreePath
+                        : ""),
+                  input.modelSelection?.instanceId ?? "",
+                  input.modelSelection?.model ?? "",
+                  input.goatclawRole ?? "",
+                ].join("\u0000"),
+                ...(input.title === undefined ? {} : { destinationHint: input.title }),
+              });
+        const commandId =
+          admission === undefined
+            ? yield* newCommandId()
+            : CommandId.make(admission.record.childWorkId);
         const threadId = cloudRun?.threadId ?? ThreadId.make(commandId);
         const messageId = MessageId.make(commandId);
         const attachments = input.attachments ?? [];
@@ -493,6 +531,7 @@ const make = Effect.gen(function* () {
                 ),
           (route) =>
             Effect.gen(function* () {
+              yield* launchChildWork(channelChildWork, admission, { threadId });
               const admitted = yield* permissions.claim(scope, {
                 id: commandId,
                 childThreadId: threadId,
@@ -586,6 +625,8 @@ const make = Effect.gen(function* () {
                     ? permissions.release(commandId, true).pipe(Effect.ignore)
                     : Effect.void,
                 ),
+                // A launch error means no thread committed, so the admission releases.
+                Effect.onError(() => releaseChildWork(channelChildWork, admission)),
               );
               const result = yield* report === undefined
                 ? protectedLaunch
@@ -612,6 +653,7 @@ const make = Effect.gen(function* () {
                       ),
                     );
                   });
+              yield* bindChildWork(channelChildWork, admission, { threadId });
               const thread = result.projection.thread;
               const run = result.projection.runs.find((run) => run.userMessageId === messageId);
               // A launch another machine's GOAT forwards is watched by that machine.

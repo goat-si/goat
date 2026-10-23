@@ -8,10 +8,8 @@ import {
   MessageId,
   ModelSelection,
   NodeId,
-  NonNegativeInt,
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
-  OrchestrationV2TaskRole,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
@@ -101,6 +99,16 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
+import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
+import {
+  admissionCorrelationId,
+  admitDelegate,
+  bindChildWork,
+  launchChildWork,
+  launchRemoteChildWork,
+  releaseChildWork,
+} from "./childWorkAdmission.ts";
+import * as ReviewExport from "./reviewExport.ts";
 import { recordRemoteTaskResult } from "../remoteReports/recordRemoteTaskResult.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -145,51 +153,6 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 const isRemoteDispatchError = (u: unknown): u is RemoteDispatchCoordinator.RemoteDispatchError =>
   Schema.is(RemoteDispatchCoordinator.RemoteDispatchError)(u);
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
-
-const ReviewExportCursor = Schema.fromJsonString(
-  Schema.Struct({
-    from: IsoDateTime,
-    to: IsoDateTime,
-    taskId: NodeId,
-    index: NonNegativeInt,
-  }),
-);
-const decodeReviewExportCursor = Schema.decodeUnknownEffect(ReviewExportCursor);
-const encodeReviewExportCursor = Schema.encodeEffect(ReviewExportCursor);
-const ReviewExportFields = {
-  taskId: NodeId,
-  threadId: ThreadId,
-  role: Schema.optional(OrchestrationV2TaskRole),
-  reviewerModel: Schema.NullOr(ModelSelection),
-  authorModel: Schema.NullOr(ModelSelection),
-};
-const encodeReviewExportEntry = Schema.encodeEffect(
-  Schema.fromJsonString(
-    Schema.Union([
-      Schema.Struct({
-        ...ReviewLedgerEntry.members[0].fields,
-        ...ReviewExportFields,
-        latestOutcome: Schema.NullOr(ReviewLedgerEntry.members[1]),
-      }),
-      Schema.Struct({ ...ReviewLedgerEntry.members[1].fields, ...ReviewExportFields }),
-    ]),
-  ),
-);
-
-/** Latest decisions and any outcome recorded after that decision. */
-function reviewFindings(reviewLedger: ReadonlyArray<ReviewLedgerEntry>) {
-  const findings = new Map<string, OrchestratorMcpReviewFindingsRecordResult["findings"][number]>();
-  for (const entry of reviewLedger) {
-    if (entry.kind === "decision")
-      findings.set(entry.findingId, { decision: entry, latestOutcome: null });
-    else {
-      const finding = findings.get(entry.findingId);
-      if (finding !== undefined)
-        findings.set(entry.findingId, { ...finding, latestOutcome: entry });
-    }
-  }
-  return [...findings.values()];
-}
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -1236,6 +1199,7 @@ const make = Effect.gen(function* () {
   const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
   const gitDriver = yield* GitVcsDriver.GitVcsDriver;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const channelChildWork = yield* Effect.serviceOption(ChannelChildWork.ChannelChildWork);
 
   const requireProject = (projectId: ProjectId) =>
     projects.getById(projectId).pipe(
@@ -2858,7 +2822,15 @@ const make = Effect.gen(function* () {
           parent.thread.interactionMode,
           input.interactionMode,
         );
-        const key = yield* requestKey(input.clientRequestId);
+        const admission = yield* admitDelegate(channelChildWork, {
+          callerThreadId: scope.thread.threadId,
+          prompt: taskPrompt(input),
+          clientRequestId: input.clientRequestId,
+          target: input.target,
+          role: input.role,
+          remote: { host, cwd: remote.cwd, workspace: remote.workspace },
+        });
+        const key = admission?.requestKey ?? (yield* requestKey(input.clientRequestId));
         const commandId = stableCommandId({ scope, requestKey: key, operation: "delegate-task" });
         const taskId = derive.delegatedTaskNode({ commandId });
         const existing = parent.subagents.find((task) => task.id === taskId);
@@ -2917,6 +2889,7 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.mapError(threadManagementFailure));
         });
+        yield* launchRemoteChildWork(channelChildWork, admission, host);
         const launched = yield* remoteDispatch
           .launch(
             {
@@ -2924,6 +2897,9 @@ const make = Effect.gen(function* () {
               originThreadId: scope.thread.threadId,
               delivery: "wake",
               task: { taskId, parentRunId: parentRun.id },
+              // A channel-owned caller's binding id derives from its child-work record, so a
+              // retry collides on the remote_dispatches key instead of launching twice.
+              correlationId: admissionCorrelationId(admission),
               launch: {
                 host,
                 cwd: remote.cwd,
@@ -2969,6 +2945,7 @@ const make = Effect.gen(function* () {
             launched.success.launch.threadId,
             launched.success.correlationId,
           );
+        if (launched._tag === "Success") yield* bindChildWork(channelChildWork, admission);
         if (
           launched._tag === "Failure" &&
           isRemoteDispatchError(launched.failure) &&
@@ -3047,7 +3024,15 @@ const make = Effect.gen(function* () {
       }
 
       const providers = yield* loadProviders;
-      const key = yield* requestKey(input.clientRequestId);
+      const admission = yield* admitDelegate(channelChildWork, {
+        callerThreadId: scope.thread.threadId,
+        prompt: taskPrompt(input),
+        clientRequestId: input.clientRequestId,
+        target: input.target,
+        isolation: input.isolation,
+        role: input.role,
+      });
+      const key = admission?.requestKey ?? (yield* requestKey(input.clientRequestId));
       const commandId = stableCommandId({
         scope,
         requestKey: key,
@@ -3115,12 +3100,17 @@ const make = Effect.gen(function* () {
           failure("invalid_request", "Caller memory authority is no longer available."),
         ),
       );
-      const admitted = yield* permissions.claim(scope, {
-        id: commandId,
-        childThreadId: derive.delegatedTaskThread({ commandId }),
-        runtimeMode: requestedRuntimeMode,
-        worktree: input.isolation === "worktree",
+      yield* launchChildWork(channelChildWork, admission, {
+        threadId: derive.delegatedTaskThread({ commandId }),
       });
+      const admitted = yield* permissions
+        .claim(scope, {
+          id: commandId,
+          childThreadId: derive.delegatedTaskThread({ commandId }),
+          runtimeMode: requestedRuntimeMode,
+          worktree: input.isolation === "worktree",
+        })
+        .pipe(Effect.onError(() => releaseChildWork(channelChildWork, admission)));
       const runtimeMode = admitted.runtimeMode;
       const result = yield* threadManagement
         .dispatch({
@@ -3151,6 +3141,8 @@ const make = Effect.gen(function* () {
               ? permissions.release(commandId, true).pipe(Effect.ignore)
               : Effect.void,
           ),
+          // A dispatch error means the command never committed, so the launch never happened.
+          Effect.onError(() => releaseChildWork(channelChildWork, admission)),
           Effect.mapError((error) =>
             error._tag === "ThreadManagementProviderInstanceDisabledError"
               ? threadManagementFailure(error)
@@ -3173,6 +3165,8 @@ const make = Effect.gen(function* () {
       }
       const taskId = taskEvent.event.payload.id;
       const childThreadId = taskEvent.event.payload.childThreadId;
+      if (childThreadId !== null)
+        yield* bindChildWork(channelChildWork, admission, { threadId: childThreadId });
       const childRunEvent = result.storedEvents.find(
         (stored) => stored.event.type === "run.created" && stored.event.threadId === childThreadId,
       );
@@ -3238,7 +3232,11 @@ const make = Effect.gen(function* () {
         const updated = yield* loadProjection(parent.thread.id);
         const reviewLedger =
           updated.subagents.find((task) => task.id === input.taskId)?.reviewLedger ?? [];
-        return { taskId: input.taskId, reviewLedger, findings: reviewFindings(reviewLedger) };
+        return {
+          taskId: input.taskId,
+          reviewLedger,
+          findings: ReviewExport.reviewFindings(reviewLedger),
+        };
       }),
     exportReviewFindings: (scope, input) =>
       Effect.gen(function* () {
@@ -3250,7 +3248,7 @@ const make = Effect.gen(function* () {
         const cursor =
           input.cursor === undefined
             ? undefined
-            : yield* decodeReviewExportCursor(input.cursor).pipe(
+            : yield* ReviewExport.decodeReviewExportCursor(input.cursor).pipe(
                 Effect.mapError(() =>
                   failure("invalid_request", "Invalid review findings cursor."),
                 ),
@@ -3287,7 +3285,7 @@ const make = Effect.gen(function* () {
             reviewerModel: task.modelSelection ?? null,
             authorModel: task.parentModelSelection ?? null,
           };
-          return encodeReviewExportEntry(
+          return ReviewExport.encodeReviewExportEntry(
             entry.kind === "decision"
               ? {
                   ...entry,
@@ -3307,7 +3305,7 @@ const make = Effect.gen(function* () {
           ...(rows.length <= limit || last === undefined
             ? {}
             : {
-                nextCursor: yield* encodeReviewExportCursor({
+                nextCursor: yield* ReviewExport.encodeReviewExportCursor({
                   from: input.from,
                   to: input.to,
                   taskId: last.task.id,
