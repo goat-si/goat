@@ -135,6 +135,7 @@ const delegateWithRemote = (
   targeted: { readonly catalogs: RemoteCatalogProviders } | { readonly fails: true },
   options?: ReadonlyArray<{ readonly id: string; readonly value: string }>,
   model: string | null = "gpt-6-astra",
+  inheritedOptions?: ReadonlyArray<{ readonly id: string; readonly value: string }>,
 ) =>
   Effect.gen(function* () {
     const commands: OrchestrationV2ServerCommand[] = [];
@@ -149,7 +150,11 @@ const delegateWithRemote = (
           title: "MCP parent",
           createdBy: "user",
           creationSource: "web",
-          modelSelection: { instanceId: codexInstanceId, model: "gpt-5.4" },
+          modelSelection: {
+            instanceId: codexInstanceId,
+            model: "gpt-5.4",
+            ...(inheritedOptions === undefined ? {} : { options: inheritedOptions }),
+          },
           runtimeMode: "full-access",
           interactionMode: "default",
         },
@@ -388,6 +393,46 @@ describe("remote delegate_task model resolution", () => {
       );
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") assert.equal(result.failure.code, "invalid_request");
+    }),
+  );
+
+  it.effect("overrides inherited options by id and clears them with [], as local tasks do", () =>
+    Effect.gen(function* () {
+      const targeted = {
+        catalogs: [
+          {
+            instanceId: codexInstanceId,
+            models: [
+              {
+                id: "gpt-5.4",
+                label: null,
+                options: [
+                  { id: "reasoningEffort", values: ["high", "max"], default: "high" },
+                  { id: "serviceTier", values: ["priority", "flex"] },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+      const inherited = [
+        { id: "reasoningEffort", value: "high" },
+        { id: "serviceTier", value: "priority" },
+      ];
+      const overridden = yield* delegateWithRemote(
+        targeted,
+        [{ id: "reasoningEffort", value: "max" }],
+        "gpt-5.4",
+        inherited,
+      );
+      assert.equal(overridden.result._tag, "Success");
+      assert.deepEqual(overridden.launchInputs[0]?.launch.modelSelection?.options, [
+        { id: "reasoningEffort", value: "max" },
+        { id: "serviceTier", value: "priority" },
+      ]);
+      const cleared = yield* delegateWithRemote(targeted, [], "gpt-5.4", inherited);
+      assert.equal(cleared.result._tag, "Success");
+      assert.deepEqual(cleared.launchInputs[0]?.launch.modelSelection?.options, []);
     }),
   );
 });
