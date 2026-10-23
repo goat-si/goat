@@ -51,6 +51,7 @@ export const fixture = (
   let launchVersion = ARCHIVE.archiveVersion as string;
   let drainPending = false;
   let drainReplacement: "older" | "capability" = "older";
+  let launchDefect = false;
   // The version the server behind a forward reports; unset answers no descriptor.
   let descriptorVersion: string | undefined;
   let readinessGate:
@@ -119,6 +120,7 @@ export const fixture = (
         return makeSuccessfulProcess(typeof probe === "string" ? probe : JSON.stringify(probe));
       }
       calls.launches++;
+      if (launchDefect) return yield* Effect.die(new Error("launch defect"));
       return makeSuccessfulProcess(
         JSON.stringify({
           status: "ready",
@@ -157,6 +159,10 @@ export const fixture = (
     },
     setLaunchVersion: (value: string) => {
       launchVersion = value;
+    },
+    /** The next launches die with a defect, the one failure no typed handler sees. */
+    dieOnLaunch: () => {
+      launchDefect = true;
     },
     setDescriptorVersion: (value: string) => {
       descriptorVersion = value;

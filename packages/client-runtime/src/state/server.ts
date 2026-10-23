@@ -1010,23 +1010,6 @@ export function createServerEnvironmentAtoms<R, E>(
     tag: WS_METHODS.cloudAgentsListRuns,
     staleTimeMs: 5_000,
   });
-  /** Claude Code folder trust for this environment's projects; Fleet reads it while open. */
-  const cloudFolderTrust = createEnvironmentRpcQueryAtomFamily(runtime, {
-    label: "environment-data:server:cloud-folder-trust",
-    tag: WS_METHODS.cloudAgentsListFolderTrust,
-    staleTimeMs: 30_000,
-  });
-  const acceptCloudFolderTrust = createEnvironmentRpcCommand(runtime, {
-    label: "environment-data:server:accept-cloud-folder-trust",
-    tag: WS_METHODS.cloudAgentsAcceptFolderTrust,
-    onSuccess: (
-      target: { readonly environmentId: EnvironmentId },
-      registry: AtomRegistry.AtomRegistry,
-    ) =>
-      Effect.sync(() =>
-        registry.refresh(cloudFolderTrust({ environmentId: target.environmentId, input: {} })),
-      ),
-  });
   /** Boat machines this environment manages. Reading it never wakes a machine. */
   const cloudMachines = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:server:cloud-machines",
@@ -1091,8 +1074,6 @@ export function createServerEnvironmentAtoms<R, E>(
   return {
     cloudMachines,
     cloudAgentRuns,
-    cloudFolderTrust,
-    acceptCloudFolderTrust,
     configureCloudMachines: cloudMachineCommand(WS_METHODS.cloudMachinesConfigure),
     disconnectCloudMachines: cloudMachineCommand(WS_METHODS.cloudMachinesDisconnect),
     createCloudMachine: cloudMachineCommand(WS_METHODS.cloudMachinesCreate),

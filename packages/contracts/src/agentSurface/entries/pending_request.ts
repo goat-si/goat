@@ -8,7 +8,9 @@ export const pendingRequestEntries = {
     toolkit: "thread",
     summary: "List pending user-input questions.",
     description:
-      "List pending user-input questions. Approvals are human-only and excluded, except that an MCP client token with orchestration:approve also gets approvalRequestIds for one thread. Omit threadId for this thread, or pass host and threadId for another machine. scope='launched' shows your launched threads' questions locally and on connected hosts plus hosts[]. Host fan-out caps at 16; unavailableHosts reports skipped aliases and hosts that could not be queried. Results cap at 100; when truncated, answer questions or narrow with host and threadId. Launcher filters are reserved for outside host transport.",
+      "List pending user-input questions for a thread or your launched threads across machines. Reads only. Launched discovery can be partial: check unavailableHosts and truncated. Approvals are excluded unless an outside MCP client token holds orchestration:approve.",
+    guide:
+      "Omit threadId for this thread. Pass host and threadId for another machine. An approve-scoped MCP client also gets approvalRequestIds when listing one thread.\n\nUse scope='launched' to discover your launched threads' questions locally, on connected hosts, and on hosts[]. Host fan-out caps at 16; unavailableHosts reports skipped aliases and hosts that could not be queried. Launched results cap at 100; if truncated, answer questions or narrow with host and threadId.\n\nLauncher filters are reserved for outside host transport.",
     effect: "read",
     hostRoutable: true,
     requires: "either",
@@ -27,7 +29,9 @@ export const pendingRequestEntries = {
     summary:
       "Read a pending or resolved user question, including status, responder and resolution time when available.",
     description:
-      "Read a pending or resolved user question, including status, responder and resolution time when available. A caller with orchestration:approve can also read an approval, returned with approval.kind and approval.prompt. Pass host and threadId for another machine. Answer with goat_pending_request_respond or forward to the user; old remotes may omit status and provenance.",
+      "Read a pending or resolved user question, including status, responder, and resolution time when available. Reads only; use goat_pending_request_respond to answer or forward it to the user.",
+    guide:
+      "Pass host and threadId for another machine. An outside MCP client token holding orchestration:approve can also read an approval's kind. Older remotes may omit status and provenance.",
     effect: "read",
     hostRoutable: true,
     requires: "either",
@@ -46,7 +50,9 @@ export const pendingRequestEntries = {
     summary:
       "Answer a pending user-input question with answers and a required reason (1–2000 characters, including non-whitespace text).",
     description:
-      "Answer a pending user-input question with answers keyed by question id from goat_pending_request_read: a string for single select/free text, or a string array for multiSelect. Include a required reason shown to the user (1–2000 characters, including non-whitespace text). Pass host and threadId for another machine; remote writes need default interaction mode. Approvals are human-only, except for an MCP client token with orchestration:approve, which answers one with decision ('accept' or 'decline') instead of answers. Forward humanRequired questions to the user. respondedBy is reserved for outside host transport; thread callers must omit it.",
+      "Answer a pending user-input question or, for an approve-scoped outside MCP client, accept or decline an approval. Records the response and reason for the user. Forward humanRequired questions to the user.",
+    guide:
+      "Use answers keyed by question id from goat_pending_request_read. Send a string for single select or free text, or a string array for multiSelect. Include reason with 1–2000 characters and some non-whitespace text; it is shown to the user.\n\nPass host and threadId for another machine. Remote writes require default interaction mode.\n\nApprovals require a person, except an MCP client token holding orchestration:approve can answer with decision (accept or decline) instead of answers. Do not send both fields.\n\nrespondedBy is reserved for outside host transport. Thread callers must omit it.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: true,

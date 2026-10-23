@@ -297,7 +297,10 @@ export const LEGACY_DESKTOP_RUNTIME_APP_BASE_NAME = "T3 Code";
 export const LEGACY_DESKTOP_RENDERER_SCHEME = "t3code";
 export const LEGACY_DESKTOP_DEV_RENDERER_SCHEME = "t3code-dev";
 
-/** Saved HTML and older clients need legacy writes until a minimum client version is enforced. */
+/**
+ * Saved pages listen only for legacy shortcuts, so clients keep sending them. A page sends
+ * legacy events only to a client that has not sent goat/ shortcuts, which older clients do not.
+ */
 export const LEGACY_HTML_SHORTCUTS_METHOD = "t3/notifications/shortcuts";
 export const LEGACY_HTML_KEY_DOWN_METHOD = "t3/notifications/keydown";
 export const LEGACY_HTML_OPEN_IMAGE_METHOD = "t3/notifications/open-image";
