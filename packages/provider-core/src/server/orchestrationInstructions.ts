@@ -47,7 +47,7 @@ const GOAT_ACP_TOOL_FALLBACK = `If your harness hides MCP tools behind its own s
 
 const GOAT_ACP_DEFAULT_MODE_INSTRUCTIONS = `## GOAT interaction mode: Default
 
-Make reasonable assumptions and carry out the request; ask a concise question only when a missing decision would change the result. This mode holds until GOAT names another.`;
+Make reasonable assumptions and carry out the request; ask a concise question only when a missing decision would materially change the result. This mode holds until GOAT names another.`;
 
 const GOAT_ACP_PLAN_MODE_INSTRUCTIONS = `## GOAT interaction mode: Plan
 
