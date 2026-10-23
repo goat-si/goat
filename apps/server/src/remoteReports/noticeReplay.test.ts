@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { overnightNoticeStream, replayNoticeStream } from "./noticeReplay.testkit.ts";
+import {
+  overnightNoticeStream,
+  replayNoticeDigest,
+  replayNoticeStream,
+} from "./noticeReplay.testkit.ts";
 
 /**
  * Per-turn notice bytes for the synthetic 30-lane night. On dev before the compaction this
@@ -16,5 +20,18 @@ describe("notice replay", () => {
     const total = turns.reduce((sum, bytes) => sum + bytes, 0);
     expect(total / turns.length).toBeLessThanOrEqual(MEAN_TURN_BUDGET_BYTES);
     expect(Math.max(...turns)).toBeLessThanOrEqual(LARGEST_TURN_BUDGET_BYTES);
+  });
+
+  it("delivers each lane's result once and folds notices that wait for a busy thread", () => {
+    const total = (turns: ReadonlyArray<number>) => turns.reduce((sum, bytes) => sum + bytes, 0);
+    const events = overnightNoticeStream();
+    // Idle supervisor: one turn per wake as before, but a run end no longer repeats its report.
+    const idle = replayNoticeDigest(events, 1);
+    expect(idle).toHaveLength(33);
+    expect(total(idle)).toBeLessThanOrEqual(88_000);
+    // Busy for eight events per turn: wakes that arrive meanwhile share one turn.
+    const busy = replayNoticeDigest(events, 8);
+    expect(busy.length).toBeLessThanOrEqual(20);
+    expect(total(busy)).toBeLessThanOrEqual(94_000);
   });
 });
