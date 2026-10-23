@@ -1,7 +1,14 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- argument digests and receipt ids need node:crypto.
 import * as NodeCrypto from "node:crypto";
 
-import { AuthEnvironmentScope, OrchestratorMcpFailure, RuntimeMode } from "@goat/contracts";
+import {
+  AuthEnvironmentScope,
+  GOATCLAW_ROLE_PROFILES,
+  GoatclawRole,
+  OrchestratorMcpFailure,
+  PermissionProfile,
+  RuntimeMode,
+} from "@goat/contracts";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import {
   declaredFailureLiteral,
@@ -19,6 +26,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { McpSchema } from "effect/ai";
 
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { KeyedClientRequestId } from "./toolkits/keyedParameters.ts";
@@ -78,6 +86,8 @@ const encodeResult = Schema.encodeEffect(ResultJson);
 const decodeLiteral = Schema.decodeEffect(LiteralJson);
 const encodeLiteral = Schema.encodeEffect(LiteralJson);
 const decodeKey = Schema.decodeUnknownEffect(KeyedClientRequestId);
+const decodeForwarded = Schema.decodeUnknownOption(PermissionProfile);
+const decodeRole = Schema.decodeUnknownOption(GoatclawRole);
 
 /**
  * What the caller held when it reserved the key. A replay needs at least as much, so a grant
@@ -271,27 +281,52 @@ const unkeyed = <A, E, R>(run: Effect.Effect<A, E, R>) =>
  */
 export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = PROCESS_BOOT_ID) {
   const permissions = yield* Profiles.PermissionProfiles;
+  // goatclaw itself reads these settings; a role launch's profile cannot resolve without them.
+  const settings = yield* Effect.serviceOption(ServerSettingsService);
   const database = yield* Effect.serviceOption(SqlClient.SqlClient);
   const store = Option.map(database, (sql) => makeStore(sql, bootId));
 
-  /** The caller's grant now, and the audit columns it fills. A profile that cannot resolve fails. */
-  const grantOf = Effect.fnUntraced(function* (scope: McpInvocationContext.McpInvocationScope) {
+  /**
+   * The caller's grant now, and the audit columns it fills, resolved the way a launch resolves
+   * it: an outside dispatch's forwarded ceiling narrows the destination's profile, and a role
+   * launch holds only what the role's profile and the caller's share. A profile that cannot
+   * resolve refuses the call, as the launch itself would.
+   */
+  const grantOf = Effect.fnUntraced(function* (
+    scope: McpInvocationContext.McpInvocationScope,
+    params: unknown,
+  ) {
     const readOnly = scope.readOnly === true || scope.client?.access === "read-only";
     const scopes = scope.grantedScopes ?? null;
-    if (scope.thread === undefined)
-      return {
-        profileId: null,
-        ceiling: scope.client?.access ?? null,
-        grant: { goatclaw: null, scopes, readOnly } satisfies Grant,
-      };
-    const view = yield* permissions.resolve(scope);
+    const fields = (typeof params === "object" && params !== null ? params : {}) as Readonly<
+      Record<string, unknown>
+    >;
+    const forwarded =
+      scope.thread === undefined
+        ? Option.getOrUndefined(decodeForwarded(fields.permissionProfileCeiling))
+        : undefined;
+    const view = yield* permissions.resolve(scope, undefined, forwarded);
+    const role = Option.getOrUndefined(decodeRole(fields.goatclawRole));
+    if (role !== undefined && view.enabled && Option.isNone(settings))
+      return yield* new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        message: "GOAT could not read the goatclaw role profiles, so this launch did not run.",
+      });
+    const named =
+      role === undefined || !view.enabled || Option.isNone(settings)
+        ? undefined
+        : (yield* settings.value.getSettings).goatclaw.profiles[GOATCLAW_ROLE_PROFILES[role]];
+    const capabilities =
+      role === undefined
+        ? view.profile.capabilities
+        : named === undefined
+          ? []
+          : Profiles.intersectProfiles(named, view.profile).capabilities;
     return {
       profileId: view.enabled ? view.profile.id : null,
       ceiling: view.runtimeMode,
       grant: {
-        goatclaw: view.enabled
-          ? { capabilities: view.profile.capabilities, runtimeMode: view.runtimeMode }
-          : null,
+        goatclaw: view.enabled ? { capabilities, runtimeMode: view.runtimeMode } : null,
         scopes,
         readOnly,
       } satisfies Grant,
@@ -340,7 +375,11 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
       const reservationFor = Effect.fnUntraced(function* (params: unknown) {
         if (Option.isNone(store)) return { kind: "storage_failed" } as const;
         const digest = yield* argumentsDigest(params);
-        const { grant, ...audit } = yield* grantOf(scope);
+        const granted = yield* grantOf(scope, params).pipe(
+          Effect.catchTag("OrchestratorMcpFailure", (failure) => Effect.succeed({ failure })),
+        );
+        if ("failure" in granted) return { kind: "refused", failure: granted.failure } as const;
+        const { grant, ...audit } = granted;
         const host = (params as { readonly host?: unknown } | null)?.host;
         const receiptId = NodeCrypto.randomUUID();
         const reservation = yield* store.value.reserve({
@@ -384,6 +423,8 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
                     switch (reservation.kind) {
                       case "reserved":
                         return Effect.void;
+                      case "refused":
+                        return restore(decide(refusalResult(reservation.failure)));
                       case "replay":
                         // goat_call reclassifies the replayed failure as it did the first call's.
                         return restore(

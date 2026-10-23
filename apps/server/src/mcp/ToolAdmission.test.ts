@@ -2,8 +2,11 @@ import { expect, it } from "@effect/vitest";
 import {
   AuthProvidersManageScope,
   EnvironmentAuthorizationError,
+  BUILTIN_PERMISSION_PROFILES,
   EnvironmentId,
+  GoatclawRole,
   OrchestratorMcpFailure,
+  PermissionProfile,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
@@ -46,6 +49,9 @@ const ProbeToolkit = Toolkit.make(
       projectId: Schema.String,
       force: Schema.optional(Schema.Boolean),
       clientRequestId: Schema.optional(Schema.String),
+      // What a launch carries that narrows the grant it runs under.
+      permissionProfileCeiling: Schema.optional(PermissionProfile),
+      goatclawRole: Schema.optional(GoatclawRole),
     }),
     success: Schema.Struct({ run: Schema.Number }),
     failure: OrchestratorMcpFailure,
@@ -419,6 +425,60 @@ it.effect("reserves the key as its declared schema decodes it and refuses any ot
       ).toMatchObject({
         code: "invalid_request",
       });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner"))),
+);
+
+const narrowProfile = (id: string, without: string) =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const policy = (yield* settings.getSettings).goatclaw;
+    const profile = policy.profiles[id]!;
+    yield* settings.updateSettings({
+      goatclaw: {
+        ...policy,
+        profiles: {
+          ...policy.profiles,
+          [id]: {
+            ...profile,
+            capabilities: profile.capabilities.filter((capability) => capability !== without),
+          },
+        },
+      },
+    });
+  });
+
+it.effect("refuses a forwarded launch's replay once the destination's profile narrows", () =>
+  Effect.gen(function* () {
+    const dispatch: McpInvocationContext.McpInvocationScope = {
+      environmentId: EnvironmentId.make("environment"),
+      requestNamespace: "client:dispatch",
+      thread: undefined,
+      client: { sessionId: "dispatch", label: "GOAT SSH dispatch", access: "full-access" },
+      capabilities: new Set(["orchestration"]),
+      issuedAt: 0,
+    };
+    const launch = {
+      projectId: "a",
+      clientRequestId: "k",
+      permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.owner!,
+    };
+    expect(yield* direct(launch, dispatch)).toEqual({ run: 1 });
+    expect(yield* direct(launch, dispatch)).toEqual({ run: 1 });
+    yield* narrowProfile("owner", "worktree.create");
+    expect(yield* direct(launch, dispatch)).toMatchObject({ code: "capability_denied" });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect("refuses a role launch's replay once the role's profile narrows", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const launch = { projectId: "a", clientRequestId: "k", goatclawRole: "merge-manager" };
+    expect(yield* direct(launch)).toEqual({ run: 1 });
+    expect(yield* direct(launch)).toEqual({ run: 1 });
+    yield* narrowProfile("merge-manager", "pr.merge");
+    expect(yield* direct(launch)).toMatchObject({ code: "capability_denied" });
     expect(yield* runs).toBe(1);
   }).pipe(Effect.provide(served("owner"))),
 );
