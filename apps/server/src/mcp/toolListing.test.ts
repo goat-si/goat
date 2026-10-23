@@ -53,14 +53,23 @@ const textOf = (result: { readonly content: ReadonlyArray<unknown> }) =>
 /** What a thread's model sees of the core listing: name, description and input schema. */
 const CORE_LISTING_BUDGET_BYTES = 6 * 1024;
 
-it.effect("lists only core tools in the core listing, each caller only those it can use", () =>
-  Effect.gen(function* () {
-    const http = yield* serveCatalogOverHttp(callers, "core");
-    expect(names(yield* http.listTools("thread"))).toEqual(
-      listed((entry) => "listing" in entry && entry.listing === "core"),
-    );
-    expect(names(yield* http.listTools("client"))).toEqual(["goat_call", "goat_describe"]);
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+it.effect(
+  "lists threads only the core tools, and keeps for clients the launch arguments another host's dispatch reads",
+  () =>
+    Effect.gen(function* () {
+      const http = yield* serveCatalogOverHttp(callers, "core");
+      expect(names(yield* http.listTools("thread"))).toEqual(
+        listed((entry) => "listing" in entry && entry.listing === "core"),
+      );
+      const launch = (yield* http.listTools("client")).find(
+        (tool) => tool.name === "goat_thread_launch",
+      );
+      const properties = (launch?.inputSchema as { readonly properties?: object } | undefined)
+        ?.properties;
+      expect(Object.keys(properties ?? {})).toEqual(
+        expect.arrayContaining(["memoryGrantCeiling", "report", "standingInstructions"]),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect(

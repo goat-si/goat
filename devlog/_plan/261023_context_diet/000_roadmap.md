@@ -72,10 +72,10 @@ from adapter source by `context-budget.ts`).
 
 | Measure                                   |                       Baseline |                                    Target |
 | ----------------------------------------- | -----------------------------: | ----------------------------------------: |
-| Resident listing, any harness             | 278,143 (0 in Codex code mode) |                                    ≤ 6 KB |
-| Always-injected instructions, any harness |                       20–25 KB |                                    ≤ 6 KB |
+| Resident listing, any harness             | 278,143 (0 in Codex code mode) |                                   ≤ 6 KiB |
+| Always-injected instructions, any harness |                       20–25 KB |                                   ≤ 6 KiB |
 | Extra bytes on every message              |                    up to 2,150 |                                     ≤ 300 |
-| Total always-injected, any harness        |                   about 300 KB |                                   ≤ 12 KB |
+| Total always-injected, any harness        |                   about 300 KB |                                  ≤ 12 KiB |
 | Per-tool short description                |             up to about 4.5 KB |               ≤ 400 chars, ratchet-tested |
 | Model turns, D8 single-call control       |                            n/a |       at most +1 against the full listing |
 | Model turns, D8 multi-step workloads      |                            n/a | no rise in median; no rise in failed runs |
@@ -266,7 +266,7 @@ measures each merged step; its findings block until answered.
 
 ## Done when
 
-The flip is on `dev` for every harness; `context-budget.ts` measures ≤ 12 KB always-injected per
+The flip is on `dev` for every harness; `context-budget.ts` measures ≤ 12 KiB always-injected per
 harness and fails above it; D8 numbers are recorded in `docs/internals/agent-surface.md`; and
 every row above is merged or filed as an issue.
 

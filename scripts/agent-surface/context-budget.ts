@@ -290,6 +290,14 @@ const builders = await loadBuilders();
 const catalog = await loadServedCatalog();
 const listed = await catalog.listedAsThread(listingMode);
 await catalog.dispose();
+// A catalog that failed to build would measure zero bytes and pass every budget.
+const missingCore = ["goat_describe", "goat_call"].filter(
+  (name) => !listed.some((tool) => tool.name === name),
+);
+if (missingCore.length > 0) {
+  console.error("The served listing has no " + missingCore.join(" or ") + "; nothing to measure.");
+  process.exit(1);
+}
 const perTool = listed
   .map((tool) => ({ name: tool.name, bytes: modelFacing(tool) }))
   .toSorted((a, b) => b.bytes - a.bytes);
