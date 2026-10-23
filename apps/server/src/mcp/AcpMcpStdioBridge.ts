@@ -26,17 +26,21 @@ export class AcpMcpBridgeError extends Error {
   readonly _tag = "AcpMcpBridgeError";
   readonly kind: AcpMcpBridgeErrorKind;
   readonly status: number | undefined;
+  /** The JSON-RPC error code, for an rpc error that has one. */
+  readonly rpcCode: number | undefined;
   constructor(
     message: string,
     options?: {
       readonly cause?: unknown;
       readonly kind?: AcpMcpBridgeErrorKind;
       readonly status?: number;
+      readonly rpcCode?: number;
     },
   ) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.kind = options?.kind ?? "transport";
     this.status = options?.status;
+    this.rpcCode = options?.rpcCode;
   }
 }
 
@@ -234,10 +238,14 @@ function requestResult(
 ): Effect.Effect<unknown, AcpMcpBridgeError> {
   const envelope = asEnvelope(responses.find((entry) => asEnvelope(entry)?.id === id));
   if (envelope === null || envelope.error !== undefined) {
+    const code = (envelope?.error as { readonly code?: unknown } | undefined)?.code;
     return Effect.fail(
       new AcpMcpBridgeError(
         `${describe} failed${envelope?.error === undefined ? "." : `: ${JSON.stringify(envelope.error)}`}`,
-        { kind: envelope === null ? "protocol" : "rpc" },
+        {
+          kind: envelope === null ? "protocol" : "rpc",
+          ...(typeof code === "number" ? { rpcCode: code } : {}),
+        },
       ),
     );
   }
@@ -497,59 +505,25 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
 }
 
 /**
- * Kept free of heavy imports: these commands run on the ACP first-message
- * critical path.
+ * Kept free of heavy imports: it runs on the ACP first-message critical path. `acp-mcp-call`
+ * is `goat call` now (cli/agentSurfaceCli.ts).
  */
-export async function runAcpMcpCliFastPath(
-  command: "acp-mcp-bridge" | "acp-mcp-call",
-  args: ReadonlyArray<string>,
-): Promise<void> {
+export async function runAcpMcpBridgeFastPath(): Promise<void> {
   const endpoint = process.env.GOAT_ACP_MCP_ENDPOINT;
   const authorization = process.env.GOAT_ACP_MCP_AUTHORIZATION;
   if (endpoint === undefined || authorization === undefined) {
     process.stderr.write(
-      `${command} requires GOAT_ACP_MCP_ENDPOINT and GOAT_ACP_MCP_AUTHORIZATION.\n`,
+      "acp-mcp-bridge requires GOAT_ACP_MCP_ENDPOINT and GOAT_ACP_MCP_AUTHORIZATION.\n",
     );
     process.exitCode = 2;
     return;
   }
-  if (command === "acp-mcp-bridge") {
-    await Effect.runPromise(
-      runAcpMcpStdioBridge({
-        endpoint,
-        authorization,
-        input: process.stdin,
-        output: process.stdout,
-      }),
-    );
-    return;
-  }
-  const [tool, argumentsJson] = args;
-  if (tool === undefined || argumentsJson === undefined) {
-    process.stderr.write("acp-mcp-call requires <tool> and <arguments-json>.\n");
-    process.exitCode = 2;
-    return;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(argumentsJson);
-  } catch {
-    process.stderr.write("acp-mcp-call arguments must be valid JSON.\n");
-    process.exitCode = 2;
-    return;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    process.stderr.write("acp-mcp-call arguments must be a JSON object.\n");
-    process.exitCode = 2;
-    return;
-  }
-  const result = await Effect.runPromise(
-    callAcpMcpTool({
+  await Effect.runPromise(
+    runAcpMcpStdioBridge({
       endpoint,
       authorization,
-      tool,
-      arguments: parsed as Record<string, unknown>,
+      input: process.stdin,
+      output: process.stdout,
     }),
   );
-  process.stdout.write(`${JSON.stringify(result)}\n`);
 }

@@ -1,4 +1,6 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthMcpClientAccess, AuthSessionId } from "@goat/contracts";
+import * as NetService from "@goat/shared/Net";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -77,6 +79,25 @@ const loadStoredLogin = Effect.fn("cli.login.load")(function* (paths: Paths) {
     login: login.value,
   });
 });
+
+const isCliCredentialError = Schema.is(CliCredentialError);
+
+/** The stored login for the default GOAT home (GOAT_HOME or ~/.goat), for goat call. */
+export const loadDefaultStoredLogin: Effect.Effect<
+  Option.Option<StoredLogin>,
+  CliCredentialError
+> = resolveCliAuthConfig({ baseDir: Option.none(), devUrl: Option.none() }, Option.none()).pipe(
+  Effect.flatMap(loadStoredLogin),
+  Effect.mapError((error) =>
+    isCliCredentialError(error)
+      ? error
+      : new CliCredentialError({
+          reason: "login_unreadable",
+          detail: `Could not read this GOAT home's login: ${error.message}`,
+        }),
+  ),
+  Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer)),
+);
 
 /**
  * The credential for this shell: the thread's own when set, otherwise the stored login. Paths

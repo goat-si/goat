@@ -29,6 +29,45 @@ const surfaceVersion = (() => {
 // Calling these through goat_call would only nest the same checks, or recurse.
 const NOT_CALLABLE: ReadonlySet<string> = new Set(["surface.call", "surface.eval"]);
 
+/** goat_describe's query returns this many paths and reads one more to say whether others match. */
+const SEARCH_LIMIT = 20;
+
+/**
+ * Every word must appear in the path, summary or description; a word in the path counts most.
+ * Ties keep registry order by path, so the same query always answers the same way.
+ */
+const search = (candidates: ReadonlyArray<AgentSurfaceRegistryEntry>, query: string) => {
+  const words = query
+    .toLowerCase()
+    .split(/\s+/u)
+    .filter((word) => word !== "");
+  const scored: Array<{ readonly entry: AgentSurfaceRegistryEntry; readonly score: number }> = [];
+  for (const entry of candidates) {
+    const path = `${entry.path} ${entry.name}`.toLowerCase();
+    const summary = entry.summary.toLowerCase();
+    const description = entry.description.toLowerCase();
+    let score = 0;
+    for (const word of words) {
+      const points = path.includes(word)
+        ? 3
+        : summary.includes(word)
+          ? 2
+          : description.includes(word)
+            ? 1
+            : 0;
+      if (points === 0) {
+        score = 0;
+        break;
+      }
+      score += points;
+    }
+    if (score > 0) scored.push({ entry, score });
+  }
+  return scored
+    .toSorted((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path))
+    .map(({ entry }) => entry);
+};
+
 type Availability = { readonly now: boolean; readonly reason?: string };
 type Scope = McpInvocationContext.McpInvocationScope;
 
@@ -69,8 +108,27 @@ export const layer = McpToolAccess.toLayer(
 
     const describe = Effect.fn("AgentSurface.describe")(function* (input: {
       readonly path?: string | undefined;
+      readonly query?: string | undefined;
     }) {
       const scope = yield* McpInvocationContext.McpInvocationContext;
+      if (input.query !== undefined) {
+        const within =
+          input.path === undefined
+            ? entries
+            : entries.filter((candidate) => candidate.resource === input.path);
+        if (within.length === 0)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: `query searches every path or one resource, and GOAT has no resource named ${input.path}.`,
+          });
+        const matches = search(within, input.query);
+        return {
+          depth: "search" as const,
+          query: input.query,
+          entries: matches.slice(0, SEARCH_LIMIT).map((entry) => summary(entry, scope)),
+          truncated: matches.length > SEARCH_LIMIT,
+        } satisfies DescribeResult;
+      }
       if (input.path === undefined) {
         const resources = new Map<string, Array<string>>();
         for (const entry of entries)

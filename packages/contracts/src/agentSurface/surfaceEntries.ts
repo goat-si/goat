@@ -9,7 +9,7 @@ export const metaSurfaceEntries = {
     toolkit: "agentSurface",
     summary: "Find GOAT capabilities and whether this caller can use them",
     description:
-      'Describe GOAT\'s agent surface. Without path: every resource and its verbs. With a resource such as "thread": its paths, one-line summaries and effects. With a full path such as "thread.send" (or a tool name): input and output JSON Schema, effect, human steps, legacy names, and available.now for this caller, with the reason when a static check already refuses it. Other checks still run when the call is made. Call a path with goat_call.',
+      'Describe GOAT\'s agent surface. Without path: every resource and its verbs. With a resource such as "thread": its paths, one-line summaries and effects. With a full path such as "thread.send" (or a tool name): input and output JSON Schema, effect, human steps, legacy names, and available.now for this caller, with the reason when a static check already refuses it. With query: up to 20 paths whose path, summary or description contain every word, best first, and truncated when more match; a resource as path narrows the search. Other checks still run when the call is made. Call a path with goat_call.',
     effect: "read",
     hostRoutable: false,
     requires: "either",
