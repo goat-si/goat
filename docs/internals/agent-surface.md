@@ -388,8 +388,10 @@ keeps large tool sets out of context
 [registry](../../packages/contracts/src/agentSurface/registry.ts), reading input and output
 schemas from the tools this server actually serves, with `surfaceVersion` at the top.
 `available` reports only the static refusals the server is sure of (thread-only,
-client-only, read-only client, not served); goatclaw capabilities, lanes, `query`,
-`host`, examples, and related paths are not in it yet. See
+client-only, read-only client, not served); goatclaw capabilities, lanes, `host`,
+examples, and related paths are not in it yet. `query` returns up to 20 paths whose path,
+summary, or description contains every word, best first, and `truncated` when more match;
+with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
 
 **Proposed (later).** A `core` listing profile shows only the meta tools, the
@@ -398,9 +400,10 @@ measured against the full listing before it becomes a default.
 
 ## Calling: `goat_call`
 
-**Now.** `goat acp-mcp-call <tool> <json>` calls any tool from a terminal with
-`GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`
-([AcpMcpStdioBridge.ts](../../apps/server/src/mcp/AcpMcpStdioBridge.ts)).
+**Now.** `goat call <path> [json | -]` calls any capability from a terminal by sending one
+`goat_call` to the origin's `/mcp` with the shell's credential (see
+[The `goat` command](#the-goat-command)). `goat acp-mcp-call <tool> <json>`, the ACP terminal
+fallback, is its alias and always prints the envelope.
 
 **Proposed.** `goat_call { path, args }` runs one registry entry and returns the
 envelope. It uses the one invocation function that direct MCP calls, the CLI, and
@@ -710,6 +713,25 @@ maps the operation's state: `succeeded` exits `0`, `failed` and `cancelled`
 exit `1`, `waiting_human` exits `3`, `unknown` exits `5`, and a wait that
 times out while the work is still `queued` or `running` exits `6`.
 
+**Now.** `goat describe`, `goat call`, and a `goat <resource> <verb>` command for every
+registry path run before the operator CLI loads
+([agentSurfaceCommand.ts](../../apps/server/src/cli/agentSurfaceCommand.ts)). Each sends one
+`goat_call` to the origin's `/mcp`, so a call through the CLI gets the same argument refusal,
+access checks, goatclaw gate, and host routing as a direct one; `--host` is only the call's
+`host` argument. Arguments are a JSON object (or `-` for stdin) plus `gh api`-style fields:
+`-f key=value` sets a string, and `-F key=value` turns `true`, `false`, `null`, and integers
+into JSON and reads `@file`. The operator verbs `thread list|start|send|show`, `project
+add|remove|rename`, and `provider diagnose` keep their meaning, and their help lists the
+registry verbs beside them. Exit codes follow the table above. When no envelope came back, a
+failure before `goat_call` was sent exits `4` only when the server could not be reached or
+answered the handshake with HTTP 429 or 5xx, and `1` for any other handshake refusal; after it
+was sent, a lost answer exits `4` for a read and `5` for a write. A refused credential (401, 403,
+or `/mcp`'s in-band refusal) exits `1` and never falls back to another credential. `acp-mcp-call`
+resolves credentials like `goat call`, so outside a thread it uses the `goat login` session.
+`goat operation read|wait|cancel <id>` are the generated commands for the operation verbs, and
+`wait` exits by the operation's state as the table above says. Credentials resolve as below, and `goat login`, `logout`, and `whoami` manage the
+stored one.
+
 The npm package keeps its `goat` and `t3` bins, and bare `goat` keeps starting a
 server. Use `goat serve` for GOAT; `npx t3` launches upstream T3 Code. The desktop launcher marks itself so that
 bare `goat` from it prints help instead of starting a second server. Linux
@@ -801,9 +823,9 @@ Each PR ships on its own and leaves `tools/list` unchanged until the flip.
 | 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                 |
 | 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                 |
 | 6   | Idempotency receipts with digest, unknown state, audit columns                | Proposed                                                                                                                                                                   |
-| 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup)                                                                          |
+| 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup; then provider syncs and approved provider changes)                       |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
-| 9   | Registry-generated CLI commands and credentials                               | Proposed                                                                                                                                                                   |
+| 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                 |
 | 10  | Listing flip, verb normalization, remote name translation                     | Started: canonical names callable as unlisted aliases ([#906](https://github.com/goat-si/goat/pull/906))                                                                   |
 | 11  | `goat_eval`                                                                   | Gated on measurement                                                                                                                                                       |
 

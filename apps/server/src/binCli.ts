@@ -14,7 +14,12 @@ import * as CliError from "effect/cli/CliError";
 
 import * as NetService from "@goat/shared/Net";
 import packageJson from "../package.json" with { type: "json" };
-import { acpMcpBridgeCommand, acpMcpCallCommand } from "./cli/acpMcpBridge.ts";
+import {
+  acpMcpBridgeCommand,
+  acpMcpCallCommand,
+  callCommand,
+  describeCommand,
+} from "./cli/acpMcpBridge.ts";
 import { authCommand } from "./cli/auth.ts";
 import { appCommand } from "./cli/app.ts";
 import { browserCommand } from "./cli/browser.ts";
@@ -96,6 +101,8 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       ),
       acpMcpBridgeCommand,
       acpMcpCallCommand,
+      callCommand,
+      describeCommand,
       startCommand,
       serveCommand,
       appCommand,

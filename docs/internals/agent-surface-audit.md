@@ -14,11 +14,11 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | Toolkits                                   | 24               |
 | Mutating tools, by enforced handler access | 125              |
 | Mutating tools that accept clientRequestId | 12               |
-| Input parameters with a description        | 160 of 698 (23%) |
+| Input parameters with a description        | 160 of 699 (23%) |
 | Tool descriptions with an example          | 16 of 195        |
-| CLI commands, listed / unlisted            | 56 / 19          |
-| CLI commands with usage examples           | 0 of 75          |
-| Listed CLI leaf commands with --json       | 11 of 43         |
+| CLI commands, listed / unlisted            | 58 / 19          |
+| CLI commands with usage examples           | 0 of 77          |
+| Listed CLI leaf commands with --json       | 11 of 45         |
 
 | Toolkit                | Tools | Mutating | clientRequestId | Paginated | failureMode   | Error tags | Source                                                     |
 | ---------------------- | ----- | -------- | --------------- | --------- | ------------- | ---------- | ---------------------------------------------------------- |
@@ -164,7 +164,7 @@ Long descriptions carry routing policy (when to use another tool, what to tell t
 ## Errors an agent cannot act on
 
 - `orchestration_error` is raised from 85 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:192, apps/server/src/mcp/HostThreadsMcpService.ts:119, apps/server/src/mcp/HostThreadsMcpService.ts:149, apps/server/src/mcp/HostThreadsMcpService.ts:419. The code does not say whether to retry, fix the input, or ask the user.
-- `invalid_request` is raised from 138 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:275, apps/server/src/mcp/HostStatusMcpService.ts:330, apps/server/src/mcp/HostStatusMcpService.ts:333, apps/server/src/mcp/HostThreadsMcpService.ts:310. The code does not say whether to retry, fix the input, or ask the user.
+- `invalid_request` is raised from 139 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:275, apps/server/src/mcp/HostStatusMcpService.ts:330, apps/server/src/mcp/HostStatusMcpService.ts:333, apps/server/src/mcp/HostThreadsMcpService.ts:310. The code does not say whether to retry, fix the input, or ask the user.
 - `OrchestratorMcpFailure` has only `code` and `message` (packages/contracts/src/orchestratorMcpFailure.ts:100): no retry hint, offending field, or next action. Recovery advice, where it exists, lives in message text.
 
 ## Where a human is required
@@ -188,11 +188,11 @@ There is no single handoff primitive. Each case has its own tool, error code, or
 
 ## CLI
 
-The CLI operates a server; it is not an agent interface. Its 56 listed commands cover serving, auth tokens, pairing, the background service, updates, themes, traces, triage, and T3 Connect. Nothing lists, reads, or drives threads or tasks, and projects only have `goat project add`, `remove`, and `rename`. The one generic bridge, `goat acp-mcp-call`, is unlisted and its arguments are undescribed (apps/server/src/cli/acpMcpBridge.ts:15).
+The CLI operates a server; it is not an agent interface. Its 58 listed commands cover serving, auth tokens, pairing, the background service, updates, themes, traces, triage, and T3 Connect. Nothing lists, reads, or drives threads or tasks, and projects only have `goat project add`, `remove`, and `rename`. The one generic bridge, `goat acp-mcp-call`, is unlisted and its arguments are undescribed (apps/server/src/cli/acpMcpBridge.ts:29).
 
-- 0 of 75 commands define usage examples, so `--help` never shows a worked call.
-- 11 of 43 listed leaf commands offer `--json`: `goat auth pairing create`, `goat auth pairing list`, `goat auth session issue`, `goat auth session list`, `goat auth client create`, `goat auth client list`, `goat provider diagnose`, `goat thread list`, `goat thread start`, `goat thread send`, `goat thread show`.
-- 20 commands have no description, all of them unlisted internals. Undescribed parameters: `goat acp-mcp-call tool`, `goat acp-mcp-call arguments-json`, `goat imessage enable --allow`, `goat imessage enable --own`, `goat imessage enable --full-access`, `goat imessage link-code --ttl`, and 49 more.
+- 0 of 77 commands define usage examples, so `--help` never shows a worked call.
+- 11 of 45 listed leaf commands offer `--json`: `goat auth pairing create`, `goat auth pairing list`, `goat auth session issue`, `goat auth session list`, `goat auth client create`, `goat auth client list`, `goat provider diagnose`, `goat thread list`, `goat thread start`, `goat thread send`, `goat thread show`.
+- 20 commands have no description, all of them unlisted internals. Undescribed parameters: `goat acp-mcp-call arguments`, `goat call arguments`, `goat describe arguments`, `goat imessage enable --allow`, `goat imessage enable --own`, `goat imessage enable --full-access`, and 50 more.
 - `goat auth client revoke` reuses the session revoke command under a second parent, so its help reads "Revoke an active session." (apps/server/src/cli/auth.ts:244).
 - Server flags such as `--dev-url` repeat on subcommands that start no server, such as `goat auth pairing create`.
 
@@ -205,16 +205,17 @@ Names that look like tools but are not in the registry:
 | Name             | Where                                                                                                                    |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `update_runtime` | packages/provider-core/src/server/orchestrationInstructions.ts:45                                                        |
-| `goat_eval`      | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:441, docs/internals/agent-surface.md:827 (+1)         |
+| `goat_eval`      | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:444, docs/internals/agent-surface.md:849 (+1)         |
 | `run_steps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144 |
 | `run_script`     | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145 |
 | `list_apps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                              |
 
 CLI invocations in the docs that do not resolve:
 
-| Text                              | Problem                                    | Where                              |
-| --------------------------------- | ------------------------------------------ | ---------------------------------- |
-| `goat service install --no-start` | `goat service install` has no `--no-start` | docs/user/background-service.md:14 |
+| Text                               | Problem                                    | Where                              |
+| ---------------------------------- | ------------------------------------------ | ---------------------------------- |
+| `goat service install --no-start`  | `goat service install` has no `--no-start` | docs/user/background-service.md:14 |
+| `goat thread read -f threadId=$id` | no subcommand `read` under `goat thread`   | docs/user/outside-agents.md:193    |
 
 118 of 195 tools are never named in any Markdown doc, and 105 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_answer`, `goat_decision_get`, `goat_decision_list`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_link_create`, `goat_host_link_remove`, `goat_hub_device_join`, `goat_hub_device_leave`, and 81 more. Agents learn these only from the MCP catalog.
 
@@ -227,14 +228,14 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (155 `return`, 40 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
 3. **Serve the full tool reference from the registry.** 105 tools appear in no doc or prompt. `/llms.txt` now lists every path for the calling credential; `goat_describe` should serve arguments and examples from the same registry, with no committed reference pages (decision D14 in agent-surface.md).
-4. **Describe every parameter.** 538 of 698 parameters have no description, and 132 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts:148 to fail on an undescribed field.
+4. **Describe every parameter.** 539 of 699 parameters have no description, and 132 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts:148 to fail on an undescribed field.
 5. **Publish the real argument contract.** 175 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
 6. **Retry keys on every mutating tool.** 113 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 7. **One naming grammar.** Pick one shape for all 195 tools, keep old names as hidden aliases for a release, and drop the partial `goat_` prefix that the MCP server name already supplies.
 8. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 9. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.
 10. **Give the CLI an agent face.** Add listed `goat tool list` and `goat tool call <name> --json` generated from the same registry, so shells and CI reach every MCP capability through one documented grammar. Today only the unlisted `acp-mcp-call` exists.
-11. **`--json` on every listed leaf command.** Only 11 of 43 offer it; agents parse human tables otherwise.
+11. **`--json` on every listed leaf command.** Only 11 of 45 offer it; agents parse human tables otherwise.
 12. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 16 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
 13. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
 14. **Move routing policy out of tool descriptions.** The longest description is 4550 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
