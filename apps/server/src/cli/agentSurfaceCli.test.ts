@@ -155,7 +155,7 @@ describe("goat call through the origin's /mcp", () => {
           Effect.map((cli) => envelopeOf(cli.stdout)),
         );
       const found = yield* search("--query", "send message");
-      expect(found).toMatchObject({ status: "ok", value: { depth: "search", truncated: false } });
+      expect(found).toMatchObject({ status: "ok", value: { depth: "search", mode: "all" } });
       const paths = (
         found as { value: { entries: ReadonlyArray<{ path: string }> } }
       ).value.entries.map((entry) => entry.path);

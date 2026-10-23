@@ -20,6 +20,7 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
 import {
   canonicalToolName,
+  isKeyedWrite,
   legacyToolNameTargets,
   listedToolName,
   resolveAgentSurfaceEntry,
@@ -231,6 +232,15 @@ describe("agent surface schemas", () => {
         ).toEqual([]);
       }
     }
+  });
+
+  it("takes clientRequestId on every write the registry says GOAT deduplicates", () => {
+    const keyed = entries.filter((entry) => isKeyedWrite(entry));
+    expect(keyed.length).toBeGreaterThan(0);
+    for (const entry of keyed)
+      expect(Tool.getJsonSchema(toolOf(entry)).properties, entry.path).toHaveProperty(
+        "clientRequestId",
+      );
   });
 });
 
@@ -810,11 +820,8 @@ it.effect("goat_describe answers at three depths with availability for this call
     expect((yield* detail(readOnly, "goat_call")).available).toEqual({ now: true });
     expect((yield* detail(thread, "thread.send")).inputSchema).toMatchObject({ type: "object" });
 
-    const missing = yield* asCaller(thread)(
-      server.callTool({ name: "goat_describe", arguments: { path: "teleport" } }),
-    );
-    expect(missing.isError).toBe(true);
-    expect(textOf(missing)).toContain("no resource or path named teleport");
+    // A name that is no path or resource is searched, never answered with absence.
+    expect(yield* describe(thread, "teleport")).toMatchObject({ depth: "search", total: 0 });
   }).pipe(Effect.provide(registered)),
 );
 
