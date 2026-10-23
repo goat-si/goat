@@ -1,7 +1,16 @@
 import { RunId, ThreadId } from "@goat/contracts";
 
 import { finishedWake, newLaunchWatch } from "../mcp/launchWatch.ts";
-import { pressureNudgeText } from "../fleet/pressure/pressureModel.ts";
+import {
+  HOST_PRESSURE_MESSAGE_PREFIX,
+  pressureNudgeText,
+} from "../fleet/pressure/pressureModel.ts";
+import {
+  foldNotice,
+  type Notice,
+  renderNotices,
+  turnText,
+} from "../orchestration-v2/TurnDigest.ts";
 import { framePendingReports, frameRemoteReport } from "./reportFrame.ts";
 
 /**
@@ -25,9 +34,11 @@ type StreamEvent =
       readonly kind: "report";
       readonly lane: number;
       readonly report: "progress" | "completed";
+      readonly host: string | null;
+      readonly threadId: string;
       readonly text: string;
     }
-  | { readonly kind: "wake"; readonly text: string };
+  | { readonly kind: "wake"; readonly id: string; readonly text: string };
 
 export function overnightNoticeStream(lanes = 30): ReadonlyArray<StreamEvent> {
   const events: StreamEvent[] = [];
@@ -39,6 +50,8 @@ export function overnightNoticeStream(lanes = 30): ReadonlyArray<StreamEvent> {
         kind: "report",
         lane,
         report: "progress",
+        host,
+        threadId: `thread-lane-${lane}`,
         text: frameRemoteReport({
           host: host ?? "this machine",
           correlationId,
@@ -52,6 +65,8 @@ export function overnightNoticeStream(lanes = 30): ReadonlyArray<StreamEvent> {
       kind: "report",
       lane,
       report: "completed",
+      host,
+      threadId: `thread-lane-${lane}`,
       text: frameRemoteReport({
         host: host ?? "this machine",
         correlationId,
@@ -70,21 +85,20 @@ export function overnightNoticeStream(lanes = 30): ReadonlyArray<StreamEvent> {
       notifyWebhook: false,
       now: 0,
     });
-    events.push({
-      kind: "wake",
-      text: finishedWake({
-        watch,
-        runId: RunId.make(`run-${lane}`),
-        status: "completed",
-        title: `lane-${lane}`,
-        branch: `feat/lane-${lane}`,
-        worktreePath: `/work/lane-${lane}`,
-        excerpt: final,
-      }).text,
+    const wake = finishedWake({
+      watch,
+      runId: RunId.make(`run-${lane}`),
+      status: "completed",
+      title: `lane-${lane}`,
+      branch: `feat/lane-${lane}`,
+      worktreePath: `/work/lane-${lane}`,
+      excerpt: final,
     });
+    events.push({ kind: "wake", id: wake.messageId, text: wake.text });
     if (lane % 8 === 0)
       events.push({
         kind: "wake",
+        id: `${HOST_PRESSURE_MESSAGE_PREFIX}box-a:wake:${lane}`,
         text: pressureNudgeText({
           kind: "rise",
           host: "box-a",
@@ -143,5 +157,53 @@ export function replayNoticeStream(events: ReadonlyArray<StreamEvent>): Readonly
       bytes(drained.length === 0 ? event.text : `${framePendingReports(drained)}\n\n${event.text}`),
     );
   }
+  return turns;
+}
+
+/**
+ * Delivery with the turn digest: a turn keeps the thread busy while the next `busyFor` events
+ * arrive, wakes in that window fold into one queued turn, and every turn opens with the inbox
+ * through TurnDigest.turnText, so a lane's report and run end arrive once.
+ */
+export function replayNoticeDigest(
+  events: ReadonlyArray<StreamEvent>,
+  busyFor = 4,
+): ReadonlyArray<number> {
+  const bytes = (text: string) => new TextEncoder().encode(text).length;
+  let inbox: Array<{
+    lane: string;
+    report: string;
+    host: string | null;
+    threadId: string;
+    kind: string;
+    text: string;
+  }> = [];
+  let queued: ReadonlyArray<Notice> = [];
+  let busyUntil = -1;
+  const turns: number[] = [];
+  const startTurn = (notices: ReadonlyArray<Notice>, at: number) => {
+    const [first] = notices;
+    if (first === undefined) return;
+    turns.push(bytes(turnText({ messageId: first.id, text: renderNotices(notices) }, inbox)));
+    inbox = [];
+    busyUntil = at + busyFor;
+  };
+  events.forEach((event, index) => {
+    if (index >= busyUntil && queued.length > 0) {
+      startTurn(queued, index);
+      queued = [];
+    }
+    if (event.kind === "report") {
+      const lane = `${event.host ?? ""}/${event.threadId}`;
+      if (event.report === "progress")
+        inbox = inbox.filter((row) => !(row.lane === lane && row.report === "progress"));
+      inbox.push({ ...event, lane, kind: event.report });
+      return;
+    }
+    const notice = { id: event.id, text: event.text };
+    if (index < busyUntil) queued = queued.length === 0 ? [notice] : foldNotice(queued, notice);
+    else startTurn([notice], index);
+  });
+  startTurn(queued, events.length);
   return turns;
 }
