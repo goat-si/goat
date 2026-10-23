@@ -376,7 +376,7 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
         if (Option.isNone(store)) return { kind: "storage_failed" } as const;
         const digest = yield* argumentsDigest(params);
         const granted = yield* grantOf(scope, params).pipe(
-          Effect.catchTag("OrchestratorMcpFailure", (failure) => Effect.succeed({ failure })),
+          Effect.catchTags({ OrchestratorMcpFailure: (failure) => Effect.succeed({ failure }) }),
         );
         if ("failure" in granted) return { kind: "refused", failure: granted.failure } as const;
         const { grant, ...audit } = granted;
