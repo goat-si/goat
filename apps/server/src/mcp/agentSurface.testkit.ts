@@ -156,7 +156,10 @@ const inertDependencies = Layer.mergeAll(
     Layer.provide(Path.layer),
     Layer.provide(FileSystem.layerNoop({ makeDirectory: () => Effect.void })),
   ),
-  Layer.mock(ServerSecretStore.ServerSecretStore)({}),
+  // A real server always has its secret store; goat_call loads the handle key before work starts.
+  Layer.mock(ServerSecretStore.ServerSecretStore)({
+    getOrCreateRandom: () => Effect.succeed(new Uint8Array(32).fill(1)),
+  }),
   FileSystem.layerNoop({ makeDirectory: () => Effect.void }),
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),

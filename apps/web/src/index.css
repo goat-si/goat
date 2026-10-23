@@ -8,44 +8,6 @@
   font-display: swap;
 }
 
-/* Brand and hero lettering (PixelText). Departure Mono draws every glyph on an 11px
-   grid, so text-pixel-* sizes stay at 11/22/33px. The subset covers Latin only:
-   Hangul and other scripts fall through to the UI font instead of a mismatched
-   pixel face. index.html preloads this file. */
-@font-face {
-  font-family: "Departure Mono";
-  src: url("./assets/fonts/DepartureMono-Latin.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-  unicode-range: U+0020-007E, U+00A0-017F, U+2010-2027, U+2030-203A, U+20AC, U+2122;
-}
-
-/* Local monospace faces scaled to Departure Mono's 0.636em advance and 1em/0.273em
-   line box, so the swap changes letterforms without moving text. size-adjust also
-   scales the overrides, hence the divided ascent/descent values. */
-@font-face {
-  font-family: "Departure Mono Fallback";
-  src:
-    local("Menlo Regular"), local("Menlo-Regular"), local("DejaVu Sans Mono"),
-    local("DejaVuSansMono");
-  size-adjust: 105.7%;
-  ascent-override: 94.61%;
-  descent-override: 25.8%;
-  line-gap-override: 0%;
-  unicode-range: U+0020-007E, U+00A0-017F, U+2010-2027, U+2030-203A, U+20AC, U+2122;
-}
-
-@font-face {
-  font-family: "Departure Mono Fallback Consolas";
-  src: local("Consolas"), local("Consolas Regular");
-  size-adjust: 115.74%;
-  ascent-override: 86.4%;
-  descent-override: 23.57%;
-  line-gap-override: 0%;
-  unicode-range: U+0020-007E, U+00A0-017F, U+2010-2027, U+2030-203A, U+20AC, U+2122;
-}
-
 @custom-variant dark (&:is(.dark, .dark *));
 @custom-variant light (&:not(.dark, .dark *));
 /* Window Controls Overlay: active when Electron exposes native titlebar control geometry. */
@@ -222,9 +184,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 @theme {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-brand: "Pretendard", sans-serif;
-  --font-pixel:
-    "Departure Mono", "Departure Mono Fallback", "Departure Mono Fallback Consolas",
-    var(--font-sans);
   --font-mono:
     ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
 }
@@ -239,18 +198,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --text-2xs--line-height: calc(1 / 0.6875);
   --text-3xs: 0.625rem;
   --text-3xs--line-height: calc(0.875 / 0.625);
-  /* Pixel lettering sizes are fixed px multiples of Departure Mono's 11px grid, with
-     whole-pixel line boxes and one grid pixel of negative tracking, so glyph edges land
-     on device pixels. They do not follow Appearance text scaling. */
-  --text-pixel-label: 11px;
-  --text-pixel-label--line-height: 14px;
-  --text-pixel-label--letter-spacing: -1px;
-  --text-pixel-title: 22px;
-  --text-pixel-title--line-height: 28px;
-  --text-pixel-title--letter-spacing: -2px;
-  --text-pixel-display: 33px;
-  --text-pixel-display--line-height: 42px;
-  --text-pixel-display--letter-spacing: -3px;
   --text-4xs: 0.5rem;
   --text-4xs--line-height: 1;
   --text-5xs: 0.4375rem;

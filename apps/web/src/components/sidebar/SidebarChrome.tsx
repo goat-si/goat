@@ -9,7 +9,6 @@ import { resolveThreadRouteTarget } from "../../threadRoutes";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
-import { GoatLogotype } from "../GoatLogotype";
 import { GoatWordmark } from "../GoatWordmark";
 import { useBrandChannel } from "./brandChannel";
 import { BrandChannelPill } from "./BrandChannelPill";
@@ -207,7 +206,22 @@ function SidebarBrandContents({ wordmark }: { wordmark: boolean }) {
 
 function SidebarBrandMark({ wordmark }: { wordmark: boolean }) {
   if (!wordmark) return <GoatWordmark aria-hidden className="size-4 shrink-0" />;
-  return <GoatLogotype className="text-foreground" />;
+  return (
+    // Center the visible capitals, without the font's ascender/descender space.
+    // Padding keeps ascenders and round-letter overshoot inside the truncation clip.
+    <span className="inline-flex min-w-0 items-center gap-1.5 text-sm">
+      <GoatWordmark aria-hidden className="size-4 shrink-0" />
+      <span
+        className={cn(
+          // oxlint-disable-next-line shadcn/no-arbitrary-values -- Brand letter spacing follows the approved wordmark.
+          "font-brand truncate font-bold tracking-[0.04em] [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
+          "text-foreground",
+        )}
+      >
+        GOAT
+      </span>
+    </span>
+  );
 }
 
 function SidebarUtilityItem({

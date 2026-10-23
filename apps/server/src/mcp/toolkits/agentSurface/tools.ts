@@ -6,6 +6,7 @@ import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { OperationCancelTool, OperationReadTool, OperationWaitTool } from "./operations.ts";
 
 const Effect = Schema.Literals(["read", "write", "destructive"]);
 const Availability = Schema.Struct({
@@ -100,4 +101,10 @@ const CallTool = Tool.make(agentSurfaceRegistry["surface.call"].name, {
   dependencies: [McpInvocationContext.McpInvocationContext, McpSchema.McpServerClient],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["surface.call"]));
 
-export const AgentSurfaceToolkit = Toolkit.make(DescribeTool, CallTool);
+export const AgentSurfaceToolkit = Toolkit.make(
+  DescribeTool,
+  CallTool,
+  OperationReadTool,
+  OperationWaitTool,
+  OperationCancelTool,
+);
