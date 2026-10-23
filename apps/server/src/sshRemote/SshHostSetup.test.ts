@@ -1948,9 +1948,12 @@ it.effect.each(["revoke", "revoke-remote", "revoke-credential"] as const)(
       expect(result).toMatchObject({
         status: { state: "failed", failure: { reason: "authorization_revoked" } },
       });
-      expect(result.status?.detail).toContain(
-        { revoke: "hub.manage", "revoke-remote": "threads.remote" }[reason] ?? "Credential revoked",
-      );
+      const expected: Record<typeof reason, string> = {
+        revoke: "hub.manage",
+        "revoke-remote": "threads.remote",
+        "revoke-credential": "Credential revoked",
+      };
+      expect(result.status?.detail).toContain(expected[reason]);
       expect(result.status?.failure?.fix.instruction).toContain("Retry on box");
       expect(f.preparations).toEqual([]);
     }),
