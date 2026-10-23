@@ -557,6 +557,11 @@ Around it, a human step reaches an agent in several shapes:
 | Decisions                    | `DecisionItem` by id                                                             | agent or person, per item                | answer delivered as a thread message                                                                                                                             |
 | Cloud launch consent         | `needs_human` from a thread; outside one, a refusal naming a decision GOAT filed | person approving the handoff or decision | agent calls launch again with the same arguments and `handoffId` or `decisionId`; the approval binds a digest of the launch and its holder and starts one launch |
 
+`delegate_task` and `goat_thread_launch` onto a cloud provider have no consent handoff and
+take no `decisionId`: they refuse a turn a person did not start and point to
+`goat_cloud_launch` on the machine that holds the account, since it does not take a remote
+holder while goatclaw is on.
+
 When a handoff resolves or expires, GOAT wakes the thread that asked with a
 queued message naming the next call
 ([HandoffWakeReactor.ts](../../apps/server/src/handoffs/HandoffWakeReactor.ts)).
