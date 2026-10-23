@@ -43,19 +43,23 @@ const NOT_CALLABLE: ReadonlySet<string> = new Set(["surface.call", "surface.eval
 const SEARCH_LIMIT = 20;
 
 /**
- * Every word must appear in the path, summary or description; a word in the path counts most.
- * Ties keep registry order by path, so the same query always answers the same way.
+ * Every word must appear in the path, summary, description or guide; a word in the path counts
+ * most. Ties keep registry order by path, so the same query always answers the same way.
  */
-const search = (candidates: ReadonlyArray<AgentSurfaceRegistryEntry>, query: string) => {
+export const search = <Entry extends AgentSurfaceEntry & { readonly path: string }>(
+  candidates: ReadonlyArray<Entry>,
+  query: string,
+) => {
   const words = query
     .toLowerCase()
     .split(/\s+/u)
     .filter((word) => word !== "");
-  const scored: Array<{ readonly entry: AgentSurfaceRegistryEntry; readonly score: number }> = [];
+  const scored: Array<{ readonly entry: Entry; readonly score: number }> = [];
   for (const entry of candidates) {
     const path = `${entry.path} ${entry.name}`.toLowerCase();
     const summary = entry.summary.toLowerCase();
-    const description = entry.description.toLowerCase();
+    // Text moved from a description into its guide must stay findable.
+    const description = `${entry.description} ${guideOf(entry) ?? ""}`.toLowerCase();
     let score = 0;
     for (const word of words) {
       const points = path.includes(word)
