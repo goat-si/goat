@@ -848,7 +848,7 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
       assert.deepEqual(message?.delegatedCompletion?.taskIds, [firstTaskId, secondTaskId]);
       assert.include(message?.text ?? "", String(firstTaskId));
       assert.include(message?.text ?? "", String(secondTaskId));
-      assert.include(message?.text ?? "", "goat_task_read");
+      assert.include(message?.text ?? "", "task.read");
       assert.include(message?.text ?? "", "child finished");
     }),
   );
@@ -868,7 +868,7 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
       inlineFirst: true,
       inlineSecond: false,
     },
-  ])("uses goat_task_read for $name beyond the inline budget", (testCase) =>
+  ])("points to task.read for $name beyond the inline budget", (testCase) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const sink = yield* EventSink.EventSinkV2;
@@ -930,7 +930,7 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
         message.text,
         `Delegated task ${deferredTaskId} (Inspect regression) [${testCase.inlineFirst ? "cancelled" : "failed"}]`,
       );
-      assert.include(message.text, `Use goat_task_read with taskId ${deferredTaskId}`);
+      assert.include(message.text, `args: {taskId: "${deferredTaskId}"}`);
       assert.deepEqual(message.delegatedCompletion?.taskIds, [firstTaskId, secondTaskId]);
       assert.equal(
         projection.subagents.find((candidate) => candidate.id === deferredTaskId)?.result,
