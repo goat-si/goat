@@ -12,7 +12,7 @@ stops every goal on the next check without touching running threads.
 
 ## Declare a goal
 
-An agent running inside a GOAT thread declares a goal with `goat_goal_apply`. The goal then acts as
+An agent running inside a GOAT thread declares a goal with `goat_call {path:"goal.apply"}`. The goal then acts as
 that thread: workers never get more access than the thread had when it declared the goal, and later
 updates can only lower that. Workers run on this machine for now.
 
@@ -45,9 +45,9 @@ with its `id`. Pass `dryRun: true` to check a spec without saving it.
 
 ## Follow a goal
 
-`goat_goal_get` shows a goal's phase (`pending`, `progressing`, `blocked`, `degraded`,
+The `goal.get` path shows a goal's phase (`pending`, `progressing`, `blocked`, `degraded`,
 `succeeded`, `failed`, `paused` or `deleting`), its workers and their threads, and its
-recent events, which say what GOAT did and why. `goat_goal_list` lists the goals your thread
+recent events, which say what GOAT did and why. `goal.list` lists the goals your thread
 declared.
 
 Each worker run gets at most one follow-up: when CI fails on its pull request, or when it finished
@@ -57,7 +57,7 @@ and 24 hours).
 
 ## Pause, resume, or delete
 
-`goat_goal_pause` stops GOAT from acting on a goal until `goat_goal_resume`. `goat_goal_delete`
+`goal.pause` stops GOAT from acting on a goal until `goal.resume`. `goal.delete`
 interrupts the goal's running workers and then removes it; `force: true` removes it at once. Threads,
 worktrees and branches always stay. Only the thread that declared a goal, or a thread with full
 access, can pause or delete it.

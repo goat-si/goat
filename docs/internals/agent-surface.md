@@ -614,8 +614,10 @@ give the person a terminal route.
 host. Writes forward the caller's runtime ceiling. Since
 [#758](https://github.com/goat-si/goat/pull/758), a follow-up `thread.send` with
 `host` also forwards the caller's goatclaw ceiling as `permissionProfileCeiling`,
-and the origin refuses a destination that has not shown it enforces ceilings
-instead of falling back to the relay, which would deliver without one. Remote
+and a send that carries one never falls back to the relay, which would deliver
+without it. A destination that has not yet confirmed it enforces ceilings still
+gets the launch or send, and the result's `ceiling` field says so; a launch to a
+destination that cannot accept a ceiling at all is still refused. Remote
 servers built before canonical names answer only to the tool names they shipped with
 ([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)), so the origin sends a
 host-routed call under its canonical name only to a remote whose `serverVersion` is past
@@ -746,13 +748,21 @@ packages gain `/usr/bin/goat`, and the welcome wizard offers the install once.
 The CLI resolves a credential for the origin server only:
 
 1. `GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`, which GOAT sets for
-   ACP agents' processes, so `goat` inside such a thread has exactly that thread's
-   grant. Other providers do not get them yet
-   ([#934](https://github.com/goat-si/goat/issues/934)). When they are present and invalid, the CLI fails; it never falls
+   Claude Code, ACP (including Grok and Antigravity), Muse and Pi agent
+   processes, Codex thread shell environments, and GOAT thread terminals, so `goat` uses the same credential as
+   that thread's MCP connection. A terminal started before a credential exists
+   gets empty markers; restart it after the provider attaches. A revoked credential
+   stays invalid in existing shells. When the variables are present and invalid, the CLI fails; it never falls
    back to a stored login, which could carry more authority.
 2. A session from `goat login`, which pairs with the local server and must yield an
    `mcp-client` credential, the only outside subject `/mcp` accepts
    ([EnvironmentAuth.ts](../../apps/server/src/auth/EnvironmentAuth.ts)).
+
+Cursor's local SDK exposes no per-agent process environment, and OpenCode's local
+server shares one process across threads; their native shells do not receive a
+thread credential. External OpenCode servers and cloud agents do not have a
+supported route to the origin's thread MCP credential. Their GOAT thread terminals
+use the destination environment's credential like other providers.
 
 `--host` is routing, not a credential. The CLI sends the call with `host` to the
 origin, which applies lane admission and ceiling forwarding; calling a remote

@@ -140,7 +140,7 @@ is left, the thread waits for its reset as before, with **Resume at reset** and 
 turned them on.
 
 Chains are off until you create one. Ask an agent with full access to call
-`goat_fallback_chain_set`, or add them under `fleet` in the environment's `settings.json`.
+`goat_call {path:"fallback_chain.set"}`, or add them under `fleet` in the environment's `settings.json`.
 This chain tries two Claude accounts routed through Codex, then GPT, then the Claude Code CLI:
 
 ```json
@@ -195,7 +195,7 @@ aliases, with `local` for this machine:
 }
 ```
 
-`goat_scheduler_status` shows each machine's threads against these limits, its quota per
+The `scheduler.status` path shows each machine's threads against these limits, its quota per
 provider, why it would refuse goal work now, the models cooling down after a failure, and recent
 placement decisions.
 

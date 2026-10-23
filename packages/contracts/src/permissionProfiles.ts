@@ -141,6 +141,19 @@ export const GoatclawHostSync = Schema.Struct({
 });
 export type GoatclawHostSync = typeof GoatclawHostSync.Type;
 
+/**
+ * On a launch or send that forwarded a goatclaw ceiling to a host that has not yet shown it
+ * enforces one. The call went through anyway, so this only tells the caller the ceiling may not
+ * bind there until that host's sync is applied.
+ */
+export const GoatclawCeilingAdvice = Schema.Struct({
+  enforcement: Schema.Literal("unconfirmed"),
+  host: Schema.String,
+  sync: GoatclawHostSync,
+  message: Schema.String,
+});
+export type GoatclawCeilingAdvice = typeof GoatclawCeilingAdvice.Type;
+
 export const PermissionProfileView = Schema.Struct({
   enabled: Schema.Boolean,
   profile: PermissionProfile,
