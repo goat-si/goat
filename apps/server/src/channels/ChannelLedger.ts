@@ -1198,6 +1198,7 @@ const make = Effect.gen(function* () {
           readonly worker_json: string | null;
           readonly human_interventions: number;
           readonly reruns: number;
+          readonly generation_starts: number;
         }>`
           SELECT outcome.sequence, task.owner_id, task.task_json, outcome.event_json,
             (SELECT frozen.event_json FROM channel_task_events AS frozen
@@ -1215,12 +1216,17 @@ const make = Effect.gen(function* () {
                 AND answer.sequence < outcome.sequence
                 AND answer.sequence > COALESCE((
                   SELECT MAX(boundary.sequence) FROM channel_task_events AS boundary
-                  WHERE boundary.task_id = outcome.task_id AND boundary.type = 'task.retry.requested'
+                  WHERE boundary.task_id = outcome.task_id
+                    AND boundary.type IN ('task.retry.requested', 'task.moved')
                     AND boundary.sequence < outcome.sequence
                 ), 0)) AS human_interventions,
             (SELECT COUNT(*) FROM channel_task_events AS retry
               WHERE retry.task_id = outcome.task_id AND retry.type = 'task.retry.requested'
-                AND retry.sequence < outcome.sequence) AS reruns
+                AND retry.sequence < outcome.sequence) AS reruns,
+            (SELECT COUNT(*) FROM channel_task_events AS start
+              WHERE start.task_id = outcome.task_id
+                AND start.type IN ('task.retry.requested', 'task.moved')
+                AND start.sequence < outcome.sequence) AS generation_starts
           FROM channel_task_events AS outcome
           JOIN channel_tasks AS task ON task.task_id = outcome.task_id
           WHERE task.owner_id = ${input.ownerId}
@@ -1237,10 +1243,11 @@ const make = Effect.gen(function* () {
           const frozen = row.brief_json === null ? undefined : decodeEvent(row.brief_json);
           const bound = row.worker_json === null ? undefined : decodeEvent(row.worker_json);
           const brief = frozen?.type === "task.brief.frozen" ? frozen.payload.brief : null;
+          // A retry and a move each start exactly the next generation; a cancellation names none.
           const generation =
             outcome.type === "task.completed" || outcome.type === "task.failed"
               ? outcome.payload.generation
-              : row.reruns + 1;
+              : row.generation_starts + 1;
           const worker =
             bound?.type === "task.worker.bound" && bound.payload.worker.generation === generation
               ? bound.payload.worker
@@ -1293,7 +1300,8 @@ const make = Effect.gen(function* () {
         WHERE task_id = ${taskId} AND type = 'task.question.answered' AND sequence < ${sequence}
           AND sequence > COALESCE((
             SELECT MAX(boundary.sequence) FROM channel_task_events AS boundary
-            WHERE boundary.task_id = ${taskId} AND boundary.type = 'task.retry.requested'
+            WHERE boundary.task_id = ${taskId}
+              AND boundary.type IN ('task.retry.requested', 'task.moved')
               AND boundary.sequence < ${sequence}
           ), 0)
         ORDER BY sequence LIMIT 501
