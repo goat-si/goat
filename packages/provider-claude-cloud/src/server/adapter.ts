@@ -407,18 +407,31 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
       const anchor = Effect.fn("ClaudeCloudAdapter.anchor")(function* (
         i: Turn | Attach,
         followUp: boolean,
-      ) {
+      ): Effect.fn.Return<
+        {
+          readonly startedAt: DateTime.Utc;
+          readonly followUp: boolean;
+          readonly ownership: "creation" | "latest" | "unique";
+          readonly prompt: string | undefined;
+        },
+        ClaudeCloudError
+      > {
         const startedAt = yield* options.runStartedAt(i);
         const history = yield* options.runHistory(i).pipe(Effect.result);
-        // Without the saved history GOAT cannot tell repeated messages apart, so it only claims a
-        // prompt stamped after the run started.
-        if (history._tag === "Failure") return { startedAt, followUp, latest: false };
+        const registered = current(i).cloudTask?.attach === "registered";
+        // A run is the session's first exactly when it is not a follow-up; the saved history,
+        // when readable, confirms it.
+        const first = history._tag === "Success" ? history.success.first : !followUp;
         return {
           startedAt,
           followUp,
-          // The registering run's prompt was sent outside GOAT; the session's latest is its own.
-          latest: history.success.first && current(i).cloudTask?.attach === "registered",
-          prompt: "message" in i ? i.message.text : history.success.prompt,
+          ownership: !first ? "unique" : registered ? "latest" : "creation",
+          prompt:
+            "message" in i
+              ? i.message.text
+              : history._tag === "Success"
+                ? history.success.prompt
+                : undefined,
         };
       });
       const observe = Effect.fn("ClaudeCloudAdapter.follow")(function* (

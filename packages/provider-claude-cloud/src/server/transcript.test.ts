@@ -11,6 +11,11 @@ const first = [
   cloudAssistant({ type: "text", text: "apps, packages, docs" }, "end_turn"),
 ];
 const followUp = cloudPrompt("reply with exactly the word done", "2026-10-23T10:00:02.000Z");
+const anchor = {
+  prompt: "reply with exactly the word done",
+  since: RUN_START,
+  ownership: "unique",
+} as const;
 
 describe("readSessionReply", () => {
   it("imports only the final cloud reply to the run's prompt and ignores the teleport's own turn", () => {
@@ -19,16 +24,13 @@ describe("readSessionReply", () => {
       followUp,
       cloudAssistant({ type: "text", text: "done" }, "end_turn"),
     ]);
-    expect(
-      readSessionReply(transcript, {
-        prompt: "reply with exactly the word done",
-        since: RUN_START,
-      }),
-    ).toEqual({ state: "replied", text: "done" });
-    // The first turn's reply is its final text, not the narration before its tool call.
-    expect(
-      readSessionReply(transcript, { prompt: "List the top-level folders.", since: 0 }),
-    ).toEqual({ state: "replied", text: "apps, packages, docs" });
+    expect(readSessionReply(transcript, anchor)).toEqual({ state: "replied", text: "done" });
+    // The session's creating turn owns its first prompt; its reply is the final text, not the
+    // narration before its tool call.
+    expect(readSessionReply(transcript, { since: 0, ownership: "creation" })).toEqual({
+      state: "replied",
+      text: "apps, packages, docs",
+    });
   });
 
   it("reports a session still working for a tool call, a tool result or a stop_sequence snapshot", () => {
@@ -37,31 +39,16 @@ describe("readSessionReply", () => {
       [cloudAssistant({ type: "tool_use", id: "tool-2" }, "tool_use"), cloudToolResult("tool-2")],
       [cloudAssistant({ type: "text", text: "| partial" }, "stop_sequence")],
     ])
-      expect(
-        readSessionReply(teleportTranscript([...first, followUp, ...tail]), { since: RUN_START }),
-      ).toEqual({ state: "running" });
+      expect(readSessionReply(teleportTranscript([...first, followUp, ...tail]), anchor)).toEqual({
+        state: "running",
+      });
   });
 
   it("waits while the run's prompt has not reached the session, even though an older turn ended", () => {
+    expect(readSessionReply(teleportTranscript(first), anchor)).toEqual({ state: "waiting" });
     expect(
-      readSessionReply(teleportTranscript(first), {
-        prompt: "reply with exactly the word done",
-        since: RUN_START,
-      }),
+      readSessionReply(teleportTranscript(first), { since: RUN_START, ownership: "unique" }),
     ).toEqual({ state: "waiting" });
-    // A turn that ended seconds before this run started is still not this run's reply.
-    const justAnswered = teleportTranscript([
-      cloudPrompt("List the top-level folders.", "2026-10-23T09:59:50.000Z"),
-      cloudAssistant({ type: "text", text: "apps, packages, docs" }, "end_turn"),
-    ]);
-    expect(
-      readSessionReply(justAnswered, {
-        prompt: "reply with exactly the word done",
-        since: RUN_START,
-      }),
-    ).toEqual({ state: "waiting" });
-    // Without its text, a run only claims a prompt stamped after it started.
-    expect(readSessionReply(justAnswered, { since: RUN_START })).toEqual({ state: "waiting" });
   });
 
   it("does not take a snapshot for a reply when another prompt queues behind it", () => {
@@ -70,7 +57,6 @@ describe("readSessionReply", () => {
       cloudAssistant({ type: "text", text: "| partial" }, "stop_sequence"),
       cloudPrompt("also count them", "2026-10-23T10:00:05.000Z"),
     ];
-    const anchor = { prompt: "reply with exactly the word done", since: RUN_START };
     expect(readSessionReply(teleportTranscript(queued), anchor)).toEqual({ state: "running" });
     expect(
       readSessionReply(
@@ -90,9 +76,49 @@ describe("readSessionReply", () => {
       isApiErrorMessage: true,
       message: { content: [{ type: "text", text: "API Error: overloaded" }], stop_reason: null },
     });
-    expect(readSessionReply(teleportTranscript([followUp, error]), { since: RUN_START })).toEqual({
+    expect(readSessionReply(teleportTranscript([followUp, error]), anchor)).toEqual({
       state: "failed",
       error: "API Error: overloaded",
+    });
+  });
+});
+
+describe("a prompt the run cannot prove is its own", () => {
+  const answered = (stamp: string, text: string) => [
+    cloudPrompt("reply with exactly the word done", stamp),
+    cloudAssistant({ type: "text", text }, "end_turn"),
+  ];
+  it.each([
+    // Typed on claude.ai while GOAT was still checking readiness, then answered.
+    ["sent during readiness", "2026-10-23T10:00:01.000Z"],
+    // Sent just before the run started, stamped after it by a cloud clock running ahead.
+    ["stamped late by a fast cloud clock", "2026-10-23T10:00:03.000Z"],
+    // An identical earlier prompt, by GOAT or claude.ai, within the clock-skew allowance.
+    ["sent just before the run", "2026-10-23T09:59:50.000Z"],
+  ])("an identical prompt %s makes the run unattributable once its own arrives", (_, stamp) => {
+    const transcript = teleportTranscript([
+      ...answered(stamp, "Someone else's answer."),
+      cloudPrompt("reply with exactly the word done", "2026-10-23T10:00:04.000Z"),
+    ]);
+    expect(readSessionReply(transcript, anchor).state).toBe("unattributable");
+  });
+
+  it("a matching prompt without a time is never guessed", () => {
+    const unstamped = teleportTranscript(answered("2026-10-23T10:00:02.000Z", "done")).replaceAll(
+      /"timestamp":"[^"]*",/g,
+      "",
+    );
+    expect(readSessionReply(unstamped, anchor).state).toBe("unattributable");
+  });
+
+  it("the creating turn keeps the session's first prompt whatever follows", () => {
+    const transcript = teleportTranscript([
+      ...answered("2026-10-23T10:00:30.000Z", "GOAT's answer."),
+      ...answered("2026-10-23T10:00:40.000Z", "Someone else's answer."),
+    ]);
+    expect(readSessionReply(transcript, { since: RUN_START, ownership: "creation" })).toEqual({
+      state: "replied",
+      text: "GOAT's answer.",
     });
   });
 });
@@ -105,28 +131,4 @@ it("reads the local fork's ID and cost from the teleport's JSON result", () => {
   ).toEqual({ localSessionId: "b29613b5-0000-4000-8000-000000000001", costUsd: 0.0064 });
   // A session ID becomes a file name, so anything but a UUID is refused.
   expect(readTeleportResult('{"session_id":"../../etc"}')).toBeUndefined();
-});
-
-describe("a repeated message", () => {
-  const earlierTurn = [
-    cloudPrompt("continue", "2026-10-23T09:59:50.000Z"),
-    cloudAssistant({ type: "text", text: "Earlier answer." }, "end_turn"),
-  ];
-  const anchor = { prompt: "continue", since: RUN_START };
-  it("waits for its own prompt instead of adopting the answer to the earlier one", () => {
-    expect(readSessionReply(teleportTranscript(earlierTurn), anchor)).toEqual({ state: "waiting" });
-    // Without a time on the matching prompt GOAT refuses to guess.
-    const unstamped = teleportTranscript(earlierTurn).replaceAll(/"timestamp":"[^"]*",/g, "");
-    expect(readSessionReply(unstamped, anchor).state).toBe("unattributable");
-    expect(
-      readSessionReply(
-        teleportTranscript([
-          ...earlierTurn,
-          cloudPrompt("continue", "2026-10-23T10:00:03.000Z"),
-          cloudAssistant({ type: "text", text: "New answer." }, "end_turn"),
-        ]),
-        anchor,
-      ),
-    ).toEqual({ state: "replied", text: "New answer." });
-  });
 });

@@ -251,37 +251,32 @@ it.effect("one failed read beside a found PR does not let the PR end the run ear
 );
 
 it.effect(
-  "a registered session's follow-up ignores an identical prompt asked earlier on claude.ai",
+  "a registered session's follow-up never takes an identical claude.ai prompt's reply as its own",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         const h = yield* makeHarness();
-        const external = [
+        // Asked on claude.ai two seconds before GOAT's run started, and answered.
+        const transcript = teleportTranscript([
           cloudPrompt("task", "1969-12-31T23:59:58.000Z"),
           cloudAssistant({ type: "text", text: "Answer from claude.ai." }, "end_turn"),
-        ];
+          cloudPrompt("task", "1970-01-01T00:00:03.000Z"),
+          cloudAssistant({ type: "text", text: "Answer to GOAT." }, "end_turn"),
+        ]);
+        const read = Effect.succeed({ transcript, costUsd: 0.0064 });
         h.history({ first: false });
-        h.sessionReads(
-          Effect.succeed({ transcript: teleportTranscript(external), costUsd: 0.0064 }),
-          Effect.succeed({
-            transcript: teleportTranscript([
-              ...external,
-              cloudPrompt("task", "1970-01-01T00:00:31.000Z"),
-              cloudAssistant({ type: "text", text: "Answer to GOAT." }, "end_turn"),
-            ]),
-            costUsd: 0.0064,
-          }),
-        );
+        h.sessionReads(read, read, read);
         yield* h.runtime.startTurn({
           ...h.input,
           providerThread: { ...h.saved, cloudTask: { ...h.saved.cloudTask, attach: "registered" } },
         });
         yield* Deferred.await(h.admitted);
-        yield* TestClock.adjust("30 seconds");
-        expect(terminalOf(h)).toBeUndefined();
-        yield* TestClock.adjust("1 minute");
+        yield* TestClock.adjust("210 seconds");
         yield* Deferred.await(h.terminal);
-        expect(terminalOf(h)).toMatchObject({ status: "completed", resultText: "Answer to GOAT." });
+        expect(terminalOf(h)).toMatchObject({ status: "completed" });
+        expect(terminalOf(h)).not.toHaveProperty("resultText");
+        expect(h.ledger.at(-1)?.summary).toContain("another prompt like this run's");
+        expect(h.sessionReadTimes).toEqual([30_000, 90_000, 210_000]);
       }),
     ),
 );

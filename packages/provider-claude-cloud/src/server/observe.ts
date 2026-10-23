@@ -53,14 +53,14 @@ export type Observation =
 interface RunAnchor {
   readonly startedAt: DateTime.Utc;
   readonly followUp: boolean;
-  /** The first run of a session registered after its prompt: its latest prompt is the run's. */
-  readonly latest: boolean;
+  /** How the run owns its cloud prompt; see ReplyAnchor. */
+  readonly ownership: ReplyAnchor["ownership"];
   /** The run's own message; without it only a prompt sent after the run started counts. */
   readonly prompt?: string | undefined;
 }
 const anchorOf = (input: RunAnchor): ReplyAnchor => ({
   since: DateTime.toEpochMillis(input.startedAt),
-  latest: input.latest,
+  ownership: input.ownership,
   ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
 });
 
