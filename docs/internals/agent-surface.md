@@ -719,8 +719,9 @@ packages gain `/usr/bin/goat`, and the welcome wizard offers the install once.
 The CLI resolves a credential for the origin server only:
 
 1. `GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`, which GOAT sets for
-   agent subprocesses and terminals, so `goat` inside a thread has exactly that
-   thread's grant. When they are present and invalid, the CLI fails; it never falls
+   ACP agents' processes, so `goat` inside such a thread has exactly that thread's
+   grant. Other providers do not get them yet
+   ([#934](https://github.com/goat-si/goat/issues/934)). When they are present and invalid, the CLI fails; it never falls
    back to a stored login, which could carry more authority.
 2. A session from `goat login`, which pairs with the local server and must yield an
    `mcp-client` credential, the only outside subject `/mcp` accepts
