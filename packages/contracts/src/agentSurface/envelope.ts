@@ -400,10 +400,15 @@ export const fromToolResult = (
   const [onlyText] = texts;
   const parsedText = texts.length === 1 && onlyText !== undefined ? parseJson(onlyText) : undefined;
 
-  // Image tools report failures inside their structured content.
-  const nested = asFields(structured?.error);
+  // Image tools report failures inside their structured content; a value may also have an error field.
+  const nested = result.isError === true ? asFields(structured?.error) : undefined;
   if (nested !== undefined && stringOf(nested, "_tag") !== undefined)
-    return fromFailure(nested, context);
+    return fromFailure(
+      stringOf(nested, "message") === undefined && texts.length > 0
+        ? { ...nested, message: texts.join("\n") }
+        : nested,
+      context,
+    );
   if (result.isError === true) {
     const encoded = asFields(parsedText) ?? structured;
     if (encoded !== undefined && REASON_KEYS.concat().some((key) => key in encoded))
