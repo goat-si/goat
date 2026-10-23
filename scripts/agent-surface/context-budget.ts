@@ -6,8 +6,8 @@
  *   node scripts/agent-surface/context-budget.ts [--json] [--listing full|core] [--db <copy>]
  *
  * The listing comes from servedCatalog.ts: the registrations /mcp mounts, built in-process at the
- * checked-out commit. --listing core keeps only the entries the agentToolListing "core" setting
- * lists (registry listing "core"); the default, full, keeps every tool.
+ * checked-out commit, and passes through the server's own tools/list filter as a GOAT thread
+ * receives it under agentToolListing --listing (default full).
  * Instruction text comes from the exported builders. Adapters compose those builders inline, so
  * each harness below names the source that composes it and a fragment that source must still
  * contain; the script exits 1 when one is missing instead of reporting a stale composition.
@@ -284,12 +284,7 @@ if (stale.length > 0) {
 
 const builders = await loadBuilders();
 const catalog = await loadServedCatalog();
-const { resolveAgentSurfaceEntry } = await fromRepo<{
-  readonly resolveAgentSurfaceEntry: (name: string) => { readonly listing?: "core" } | undefined;
-}>("packages/contracts/src/agentSurface/resolve.ts");
-const listed = catalog.tools.filter(
-  (tool) => listingMode === "full" || resolveAgentSurfaceEntry(tool.name)?.listing === "core",
-);
+const listed = await catalog.listedAsThread(listingMode);
 await catalog.dispose();
 const perTool = listed
   .map((tool) => ({ name: tool.name, bytes: modelFacing(tool) }))

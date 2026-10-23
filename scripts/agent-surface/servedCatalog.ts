@@ -34,6 +34,11 @@ export interface CallResult {
 
 export interface ServedCatalog {
   readonly tools: ReadonlyArray<ListedTool>;
+  /**
+   * What tools/list sends a GOAT thread under an agentToolListing value, filtered by the server's
+   * own /mcp listing filter (apps/server/src/mcp/toolListing.ts) so a measurement cannot drift from it.
+   */
+  readonly listedAsThread: (listing: "full" | "core") => Promise<ReadonlyArray<ListedTool>>;
   /** tools/call as an agent inside a GOAT thread with every capability granted. */
   readonly callAsThread: (name: string, args: object) => Promise<CallResult>;
   readonly dispose: () => Promise<void>;
@@ -77,6 +82,12 @@ export async function loadServedCatalog(): Promise<ServedCatalog> {
   const { McpInvocationContext } = await fromRepo<{ readonly McpInvocationContext: unknown }>(
     "apps/server/src/mcp/McpInvocationContext.ts",
   );
+  const { filterToolsListBody } = await fromRepo<{
+    readonly filterToolsListBody: (body: unknown, scope: unknown, listing: string) => Program;
+  }>("apps/server/src/mcp/toolListing.ts");
+  const { HttpBody } = await fromServer<{
+    readonly HttpBody: { readonly text: (body: string, contentType: string) => unknown };
+  }>("effect/http");
   const runtime = ManagedRuntime.make(
     kit.catalog.pipe(
       LayerModule.provide(kit.dependencies),
@@ -104,8 +115,19 @@ export async function loadServedCatalog(): Promise<ServedCatalog> {
     ]),
     issuedAt: 0,
   };
+  const tools = await withServer((server) => server.tools.map(({ tool }) => tool));
   return {
-    tools: await withServer((server) => server.tools.map(({ tool }) => tool)),
+    tools,
+    listedAsThread: async (listing) => {
+      const response = JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools } });
+      const body = HttpBody.text(response, "application/json");
+      const filtered = await runtime.runPromise<{ readonly body: Uint8Array }>(
+        filterToolsListBody(body, threadScope, listing),
+      );
+      const message: { readonly result: { readonly tools: ReadonlyArray<ListedTool> } } =
+        JSON.parse(new TextDecoder().decode(filtered.body));
+      return message.result.tools;
+    },
     callAsThread: (name, args) =>
       runtime.runPromise<CallResult>(
         McpServer.McpServer.pipe(
