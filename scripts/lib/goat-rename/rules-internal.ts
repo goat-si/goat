@@ -59,6 +59,13 @@ const commentScope = (path: string) => !isTest(path) && COMMENT_PATHS.has(path);
 
 export const INTERNAL_TEXT_RULES: readonly TextRule[] = [
   {
+    id: "internal-masthead-artwork-comment",
+    category: "comments",
+    find: /T3 brand artwork/g,
+    replace: "GOAT brand artwork",
+    scope: (path) => path === "vite.config.ts",
+  },
+  {
     id: "internal-fixture-example-path",
     category: "paths",
     find: /(?<=\/tmp\/)t3-seed(?=\.sql)/g,
