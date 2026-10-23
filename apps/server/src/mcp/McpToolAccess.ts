@@ -10,6 +10,7 @@ import {
   type AgentSurfaceEntry,
   agentSurfaceRegistry,
 } from "@goat/contracts/agentSurface";
+import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -131,9 +132,11 @@ const requireThreadCaller = McpInvocationContext.McpInvocationContext.pipe(
 );
 
 // Keyed by the served legacy names and by path.
-const declaredEntries: ReadonlyMap<string, AgentSurfaceEntry> = new Map(
+const declaredEntries: ReadonlyMap<string, AgentSurfaceEntry & { readonly path: string }> = new Map(
   Object.values(agentSurfaceRegistry).flatMap((entry) =>
-    [...entry.legacyNames, entry.path].map((name) => [name, entry as AgentSurfaceEntry] as const),
+    [...entry.legacyNames, entry.path].map(
+      (name) => [name, entry as AgentSurfaceEntry & { readonly path: string }] as const,
+    ),
   ),
 );
 
@@ -157,12 +160,30 @@ const admitCapability = (
         capabilityRefused(`${tool} needs the goatclaw ${capability} capability. ${result.reason}`),
       );
 
+const admitHost = (tool: string, host: string, result: Profiles.CheckResult) =>
+  result.ok
+    ? Effect.void
+    : Effect.fail(
+        capabilityRefused(
+          `${tool} acts on host ${host}, which needs the goatclaw threads.remote capability and a host the profile allows. ${result.reason}`,
+        ),
+      );
+
+const namedHosts = (
+  entry: (AgentSurfaceEntry & { readonly path: string }) | undefined,
+  args: unknown,
+) =>
+  entry === undefined
+    ? []
+    : hostArgumentsOf(entry).flatMap((key) => stringArgument(args, key) ?? []);
+
 /**
  * With goatclaw on, a GOAT thread runs a write only when its effective profile holds the
- * capability the tool's registry entry declares, plus threads.remote and an allowed host when
- * the call names a host. Direct calls and goat_call reach it through the served handle, before
- * arguments decode. Outside clients stay bounded by their approved access: other GOAT hosts
- * call writes as one. A call without an invocation scope comes from inside this process.
+ * capability the tool's registry entry declares, plus threads.remote and an allowed host for
+ * every host the call names, even when the entry declares no capability. Direct calls and
+ * goat_call reach it through the served handle, before arguments decode. Outside clients stay
+ * bounded by their approved access: other GOAT hosts call writes as one. A call without an
+ * invocation scope comes from inside this process.
  */
 export const requireDeclaredCapability = (
   permissions: Profiles.PermissionProfiles["Service"],
@@ -174,7 +195,8 @@ export const requireDeclaredCapability = (
   const capability = entry?.capability;
   // A mismatch between the registry and the handler's declaration fails closed below.
   const reads = declaredEffect === "read" && (entry?.effect ?? "read") === "read";
-  if (reads || capability === "none") return Effect.void;
+  const hosts = reads ? [] : namedHosts(entry, args);
+  if (reads || (capability === "none" && hosts.length === 0)) return Effect.void;
   return Effect.gen(function* () {
     const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
     if (Option.isNone(scope) || scope.value.thread === undefined) return;
@@ -192,18 +214,10 @@ export const requireDeclaredCapability = (
         return yield* capabilityRefused(`${tool} declares no goatclaw capability.`);
       return;
     }
-    const host = entry?.hostRoutable === true ? stringArgument(args, "host") : undefined;
-    yield* admitCapability(
-      tool,
-      capability,
-      Profiles.checkProfile(effective, capability, { host }),
-    );
-    if (host !== undefined)
-      yield* admitCapability(
-        tool,
-        "threads.remote",
-        Profiles.checkProfile(effective, "threads.remote", { host }),
-      );
+    if (capability !== "none")
+      yield* admitCapability(tool, capability, Profiles.checkProfile(effective, capability, {}));
+    for (const host of hosts)
+      yield* admitHost(tool, host, Profiles.checkProfile(effective, "threads.remote", { host }));
   });
 };
 
