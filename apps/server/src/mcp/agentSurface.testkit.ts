@@ -316,7 +316,13 @@ export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(func
   const http = yield* HttpClient.HttpClient;
   const sessions = new Map<string, string>();
   let nextId = 0;
-  const post = Effect.fn(function* (caller: string, method: string, params: object) {
+  const post = Effect.fn(function* (
+    caller: string,
+    method: string,
+    params: object,
+    /** Rewrites the encoded request, for spellings JSON allows but encoders never produce. */
+    rewrite: (body: string) => string = (body) => body,
+  ) {
     const id = ++nextId;
     const session = sessions.get(caller);
     const response = yield* http.post("/mcp", {
@@ -327,7 +333,10 @@ export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(func
           ? {}
           : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
       },
-      body: HttpBody.text(encodeJson({ jsonrpc: "2.0", id, method, params }), "application/json"),
+      body: HttpBody.text(
+        rewrite(encodeJson({ jsonrpc: "2.0", id, method, params })),
+        "application/json",
+      ),
     });
     const sessionId = response.headers["mcp-session-id"];
     if (session === undefined && sessionId !== undefined) sessions.set(caller, sessionId);
@@ -367,13 +376,17 @@ export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(func
         ),
       ),
     /** Every tool tools/list shows the caller, across pages. */
-    listTools: Effect.fn(function* (caller: string) {
+    listTools: Effect.fn(function* (caller: string, rewrite?: (body: string) => string) {
       yield* ensureSession(caller);
       const tools: Array<ListedTool> = [];
       let cursor: unknown;
       do {
-        const page = (yield* post(caller, "tools/list", cursor === undefined ? {} : { cursor }))
-          .result as { tools: ReadonlyArray<ListedTool>; nextCursor?: unknown };
+        const page = (yield* post(
+          caller,
+          "tools/list",
+          cursor === undefined ? {} : { cursor },
+          rewrite,
+        )).result as { tools: ReadonlyArray<ListedTool>; nextCursor?: unknown };
         tools.push(...page.tools);
         cursor = page.nextCursor;
       } while (cursor !== undefined && cursor !== null);

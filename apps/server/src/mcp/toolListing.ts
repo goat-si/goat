@@ -58,20 +58,13 @@ const filterMessage = (
   });
 };
 
-/** The body of a response to tools/list, filtered whether it came as JSON or as SSE events. */
-const filteredBody = Effect.fnUntraced(function* (
-  body: HttpBody.HttpBody,
+/** SSE text with each event's tools/list result filtered. */
+const filterEvents = (
+  text: string,
   scope: McpInvocationContext.McpInvocationScope,
   listing: AgentToolListing,
-) {
-  if (body._tag === "Uint8Array")
-    return HttpBody.text(
-      filterMessage(new TextDecoder().decode(body.body), scope, listing),
-      body.contentType,
-    );
-  if (body._tag !== "Stream") return body;
-  const text = yield* body.stream.pipe(Stream.decodeText, Stream.mkString, Effect.orDie);
-  const events = text
+) =>
+  text
     .split("\n")
     .map((line) =>
       line.startsWith("data:")
@@ -79,7 +72,25 @@ const filteredBody = Effect.fnUntraced(function* (
         : line,
     )
     .join("\n");
-  return HttpBody.text(events, body.contentType);
+
+/**
+ * The body of a response to tools/list, filtered whether it came as JSON or as SSE events, and
+ * whether those were buffered or streamed: the content type says which, never the body's shape.
+ */
+export const filterToolsListBody = Effect.fnUntraced(function* (
+  body: HttpBody.HttpBody,
+  scope: McpInvocationContext.McpInvocationScope,
+  listing: AgentToolListing,
+) {
+  if (body._tag !== "Uint8Array" && body._tag !== "Stream") return body;
+  const text =
+    body._tag === "Uint8Array"
+      ? new TextDecoder().decode(body.body)
+      : yield* body.stream.pipe(Stream.decodeText, Stream.mkString, Effect.orDie);
+  const filtered = body.contentType.includes("text/event-stream")
+    ? filterEvents(text, scope, listing)
+    : filterMessage(text, scope, listing);
+  return HttpBody.text(filtered, body.contentType);
 });
 
 /**
@@ -95,13 +106,17 @@ export const withCallerListing = (listing: Effect.Effect<AgentToolListing>) =>
     if (request.method !== "POST") return yield* httpEffect;
     // The body is read once and cached, so the MCP server reads this same text afterwards.
     const body = yield* Effect.option(request.text);
-    if (Option.isNone(body) || !body.value.includes("tools/list")) return yield* httpEffect;
+    // A cheap guard only: JSON may escape the slash ("tools\/list"), so the decoded method decides.
+    if (Option.isNone(body) || !body.value.includes("tools")) return yield* httpEffect;
     const call = Option.getOrUndefined(decodeJson(body.value));
     if (!isRecord(call) || call.method !== "tools/list") return yield* httpEffect;
     const scope = yield* McpInvocationContext.McpInvocationContext;
     const mode = yield* listing;
     const response = yield* httpEffect;
-    return HttpServerResponse.setBody(response, yield* filteredBody(response.body, scope, mode));
+    return HttpServerResponse.setBody(
+      response,
+      yield* filterToolsListBody(response.body, scope, mode),
+    );
   });
 
 /**

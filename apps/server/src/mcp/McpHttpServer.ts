@@ -1362,12 +1362,14 @@ const layerListingChanges = Layer.effectDiscard(
     const server = yield* McpServer.McpServer;
     const settings = yield* Effect.serviceOption(Settings.ServerSettingsService);
     if (Option.isNone(settings)) return;
+    // Changes carry no initial snapshot, so compare against the listing clients have now.
+    let listed = yield* listingSetting(settings);
     yield* settings.value.streamChanges.pipe(
-      Stream.map((current) => current.agentToolListing),
-      Stream.changes,
-      // The first value is the listing clients already have.
-      Stream.drop(1),
-      Stream.runForEach(() => server.notifications["notifications/tools/list_changed"]({})),
+      Stream.runForEach((current) => {
+        if (current.agentToolListing === listed) return Effect.void;
+        listed = current.agentToolListing;
+        return server.notifications["notifications/tools/list_changed"]({});
+      }),
       Effect.forkScoped,
     );
   }),

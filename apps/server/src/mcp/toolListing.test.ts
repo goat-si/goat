@@ -5,9 +5,12 @@ import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
 import { canonicalToolName, listedToolName } from "@goat/contracts/agentSurface/resolve";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import { HttpBody } from "effect/http";
 
 import { type ListedTool, serveCatalogOverHttp } from "./agentSurface.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { filterToolsListBody } from "./toolListing.ts";
 
 const entries = Object.values(agentSurfaceRegistry);
 const base = {
@@ -127,4 +130,33 @@ it.effect("keeps the core listing a thread's model sees within its byte budget",
     }));
     expect(Buffer.byteLength(JSON.stringify(seen))).toBeLessThanOrEqual(CORE_LISTING_BUDGET_BYTES);
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("filters a tools/list whose method JSON spells with an escaped slash", () =>
+  Effect.gen(function* () {
+    const http = yield* serveCatalogOverHttp(callers, "core");
+    const escaped = yield* http.listTools("thread", (body) =>
+      body.replace('"tools/list"', '"tools\\/list"'),
+    );
+    expect(names(escaped)).toEqual(
+      listed((entry) => "listing" in entry && entry.listing === "core"),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("filters a tools/list answer sent as SSE, buffered or streamed", () =>
+  Effect.gen(function* () {
+    const tools = entries.map((entry) => ({ name: listedToolName(entry) }));
+    const event = `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools } })}\n\n`;
+    for (const body of [
+      HttpBody.text(event, "text/event-stream"),
+      HttpBody.stream(Stream.make(new TextEncoder().encode(event)), "text/event-stream"),
+    ]) {
+      const filtered = yield* filterToolsListBody(body, callers.thread, "core");
+      const text = filtered._tag === "Uint8Array" ? new TextDecoder().decode(filtered.body) : "";
+      const data = text.split("\n").find((line) => line.startsWith("data:")) ?? "";
+      const result = JSON.parse(data.slice(5)) as { result: { tools: ReadonlyArray<ListedTool> } };
+      expect(names(result.result.tools), body._tag).toEqual(["goat_call", "goat_describe"]);
+    }
+  }),
 );
