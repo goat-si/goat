@@ -11,7 +11,7 @@ import {
   type HtmlRenderReference,
 } from "./htmlRender.ts";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference, type McpAppReference } from "./mcpApp.ts";
-import { resolveGoatMcpToolId } from "./goatMcpToolPresentation.ts";
+import { resolveGoatMcpShippedToolId } from "./goatMcpToolPresentation.ts";
 
 const MAX_PARSED_BYTES = 16_384;
 const MAX_METADATA_BYTES = 8_192;
@@ -44,6 +44,18 @@ interface CompactToolOutput {
   [MCP_APP_OUTPUT_KEY]?: McpAppReference;
   thread?: { threadId: string };
   threads?: Array<{ threadId?: string; status?: "rolled_back" }>;
+}
+
+const ENVELOPE_KEYS: ReadonlySet<PropertyKey> = new Set(["status", "value", "meta"]);
+
+function isOkEnvelope(
+  value: Record<PropertyKey, unknown>,
+): value is { readonly status: "ok"; readonly value: unknown } {
+  return (
+    value.status === "ok" &&
+    "value" in value &&
+    Object.keys(value).every((key) => ENVELOPE_KEYS.has(key))
+  );
 }
 
 function readResult(value: unknown, budget: ResultReadBudget, depth = 0): ResultEnvelope {
@@ -89,6 +101,8 @@ function readResult(value: unknown, budget: ResultReadBudget, depth = 0): Result
     return { ...(data === undefined ? {} : { data }), failed };
   }
   if (!Predicate.isObject(value)) return { failed: false };
+  // goat_call's envelope, which `goat call` and `goat acp-mcp-call` print: an ok result is its value.
+  if (isOkEnvelope(value)) return readResult(value.value, budget, depth + 1);
   const failed =
     value.isError === true ||
     value.is_error === true ||
@@ -185,7 +199,7 @@ export function htmlRenderFromToolItem(item: {
   readonly toolName: string | null | undefined;
   readonly output?: unknown;
 }): HtmlRenderReference | undefined {
-  if (resolveGoatMcpToolId(item.toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
+  if (resolveGoatMcpShippedToolId(item.toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
   const output = compactDynamicToolOutput(item.output);
   return output?.isError ? undefined : output?.htmlRender;
 }

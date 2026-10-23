@@ -1,6 +1,5 @@
 import {
   CommandId,
-  MessageId,
   type OrchestrationV2Notification,
   type PullRequestActivity,
   type PullRequestComment,
@@ -42,6 +41,7 @@ import {
   pullRequestWatchOutcome,
   withHeldContext,
 } from "./pullRequestWatch.ts";
+import { pullRequestWakeMessageId } from "./goat/PullRequestWatchWakes.ts";
 
 /**
  * Checks take minutes, so a faster pass mostly spends the host's rate limit,
@@ -281,6 +281,7 @@ export const make = Effect.gen(function* () {
     wake?: { readonly text: string; readonly notification: OrchestrationV2Notification },
     note?: OrchestrationV2Notification,
     endedWatch?: ThreadPullRequestWatch,
+    dropQueuedWakes?: true,
   ) {
     const uuid = yield* crypto.randomUUIDv4();
     yield* engine.dispatch({
@@ -293,15 +294,16 @@ export const make = Effect.gen(function* () {
       ...(endedWatch === undefined ? {} : { endedWatch }),
       ...(wake === undefined
         ? {}
-        : { wake: { ...wake, messageId: MessageId.make(`message:pr-watch:${uuid}`) } }),
+        : { wake: { ...wake, messageId: pullRequestWakeMessageId(target.link, uuid) } }),
       ...(note === undefined ? {} : { note }),
+      ...(dropQueuedWakes === undefined ? {} : { dropQueuedWakes }),
     });
   });
 
   const giveUp = (target: WatchTarget) =>
     record(target, null, {
       text: withHeldContext(
-        `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call watch_pull_request to watch it again.`,
+        `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call goat_pull_request_watch to watch it again.`,
         target.watch.heldContext,
       ),
       notification: {
@@ -405,17 +407,24 @@ export const make = Effect.gen(function* () {
   );
 
   const closed = (target: WatchTarget) =>
-    record(target, null, {
-      text: withHeldContext(
-        `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call watch_pull_request if it reopens.`,
-        target.watch.heldContext,
-      ),
-      notification: {
-        source: { kind: "monitor" },
-        outcome: "updated",
-        summary: `#${target.link.number}: closed, stopped watching`,
+    record(
+      target,
+      null,
+      {
+        text: withHeldContext(
+          `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call goat_pull_request_watch if it reopens.`,
+          target.watch.heldContext,
+        ),
+        notification: {
+          source: { kind: "monitor" },
+          outcome: "updated",
+          summary: `#${target.link.number}: closed, stopped watching`,
+        },
       },
-    }).pipe(
+      undefined,
+      undefined,
+      true,
+    ).pipe(
       Effect.tap(() => woke(target)),
       Effect.tap(() => ended(target, "closed")),
     );
@@ -534,7 +543,9 @@ export const make = Effect.gen(function* () {
       return yield* eachTarget(group, (target) =>
         detail.state === "closed"
           ? closed(target)
-          : record(target, null).pipe(Effect.tap(() => ended(target, "merged"))),
+          : record(target, null, undefined, undefined, undefined, true).pipe(
+              Effect.tap(() => ended(target, "merged")),
+            ),
       );
     }
 
@@ -625,7 +636,14 @@ export const make = Effect.gen(function* () {
     yield* Effect.forEach(
       ending,
       ([target, reason]) =>
-        record(target, null).pipe(
+        record(
+          target,
+          null,
+          undefined,
+          undefined,
+          undefined,
+          reason === "merged" || undefined,
+        ).pipe(
           Effect.tap(() => ended(target, reason)),
           Effect.catchCause(
             logFailure("pull request watch stop failed", {

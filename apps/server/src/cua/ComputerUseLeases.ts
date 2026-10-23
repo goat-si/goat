@@ -94,7 +94,7 @@ const leaseOf = (handoff: Handoff, now: DateTime.Utc): Option.Option<ComputerUse
       })
     : Option.none();
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const directory = yield* ChannelBotDirectory.ChannelBotDirectory;
   const signals = yield* PubSub.sliding<void>(16);

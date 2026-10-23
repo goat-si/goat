@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
+import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpServer } from "effect/ai";
@@ -36,7 +37,9 @@ it.effect(
       const server = yield* McpServer.McpServer;
       const names = server.tools.map(({ tool }) => tool.name);
       expect(names.sort()).toEqual(
-        [...M.MEMORY_MCP_TOOLS, ...M.MEMORY_ADMINISTRATION_MCP_TOOLS].sort(),
+        [...M.MEMORY_MCP_TOOLS, ...M.MEMORY_ADMINISTRATION_MCP_TOOLS]
+          .map((name) => listedToolName(resolveAgentSurfaceEntry(name)!))
+          .sort(),
       );
       expect(new Set(names).size).toBe(12);
       const result = yield* Fixture.call(

@@ -493,9 +493,9 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
       );
     yield* Effect.gen(function* () {
       const writes = [
-        ["goat_cloud_launch", { provider: "cursorCloud", repo: "goat-si/goat", prompt: "x" }],
+        ["goat_cloud_agent_launch", { provider: "cursorCloud", repo: "goat-si/goat", prompt: "x" }],
         [
-          "goat_cloud_run_register",
+          "goat_cloud_agent_run_register",
           {
             provider: "devinCloud",
             externalId: "abc123def456",
@@ -503,7 +503,7 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
             launchedBy: "Bot",
           },
         ],
-        ["goat_cloud_run_forget", { threadId: "thread:any" }],
+        ["goat_cloud_agent_run_forget", { threadId: "thread:any" }],
       ] as const;
       for (const access of ["read-only", "approval-required"] as const) {
         for (const [name, args] of writes) {
@@ -514,9 +514,9 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
       }
       assert.equal(world.launches.length, 0);
       const outputs = [
-        yield* call("read-only", "goat_cloud_holders", { local: true }),
-        yield* call("read-only", "goat_cloud_run_list", {}),
-        yield* call("full-access", "goat_cloud_launch", {
+        yield* call("read-only", "goat_cloud_agent_holders", { local: true }),
+        yield* call("read-only", "goat_cloud_agent_run_list", {}),
+        yield* call("full-access", "goat_cloud_agent_launch", {
           provider: "cursorCloud",
           repo: "goat-si/goat",
           prompt: "x",

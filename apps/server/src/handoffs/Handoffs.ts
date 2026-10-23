@@ -203,6 +203,18 @@ export class Handoffs extends Context.Service<
       input: HandoffReadInput,
     ) => Effect.Effect<unknown, HandoffError>;
     /**
+     * One thread's handoff with its provider continuation, read in one load: `applying` while an
+     * approved change has not finished, and the progress it recorded. No arguments leave it.
+     */
+    readonly readProviderContinuation: (input: HandoffReadInput) => Effect.Effect<
+      {
+        readonly handoff: Handoff;
+        readonly applying: boolean;
+        readonly progress?: unknown;
+      },
+      HandoffError
+    >;
+    /**
      * Whether an approved provider change is still waiting for the server to apply it, and the
      * progress it recorded once it finished (absent when it finished without one).
      */
@@ -631,6 +643,26 @@ const make = Effect.gen(function* () {
         return payload.progress;
       return undefined;
     });
+  const readProviderContinuation = Effect.fn("Handoffs.readProviderContinuation")(function* (
+    input: HandoffReadInput,
+  ) {
+    // The thread-scoped read first: another thread's handoff is not_found here.
+    const handoff = yield* read(input);
+    if (!isProviderContinuationPath(handoff.target.path)) return { handoff, applying: false };
+    const payload = yield* loadPrivate(input.handoffId);
+    if (payload?.kind === "continuation" && payload.approvedBySessionId !== undefined)
+      return {
+        handoff,
+        applying: true,
+        ...(payload.progress === undefined ? {} : { progress: payload.progress }),
+      };
+    if (
+      payload?.kind === "provider_outcome" &&
+      payload.retainUntil > DateTime.toEpochMillis(yield* DateTime.now)
+    )
+      return { handoff, applying: false, progress: payload.progress };
+    return { handoff, applying: false };
+  });
   const resolvedSshOutcomes = Effect.gen(function* () {
     const since = DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { hours: 24 }));
     const rows = yield* sql<{
@@ -790,6 +822,7 @@ const make = Effect.gen(function* () {
     recordProviderProgress,
     finishProviderContinuation,
     readProviderProgress,
+    readProviderContinuation,
     providerApplyState: (input) =>
       loadPrivate(input.handoffId).pipe(
         Effect.map((payload) =>

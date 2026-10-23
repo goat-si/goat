@@ -631,7 +631,7 @@ const make = Effect.gen(function* () {
     ) {
       return yield* failure(
         "invalid_request",
-        "This remote thread backs a delegated task. Use task_status and task_cancel; its completion is already delivered to its parent.",
+        "This remote thread backs a delegated task. Use goat_task_read and goat_task_cancel; its completion is already delivered to its parent.",
       );
     }
     // Reading the thread checks the caller may see it, here or on the host.
@@ -834,10 +834,12 @@ const make = Effect.gen(function* () {
                   : { clientRequestId: input.clientRequestId }),
               });
         const ceiling = admission?.ceiling;
-        if (host !== undefined && ceiling !== undefined)
-          yield* FleetSync.syncBeforeForwarding(fleet, host);
+        const ceilingAdvice =
+          host !== undefined && ceiling !== undefined
+            ? yield* FleetSync.syncBeforeForwarding(fleet, host)
+            : undefined;
         const forwarded = ceiling === undefined ? {} : { permissionProfileCeiling: ceiling };
-        const result = yield* (
+        const sent = yield* (
           host === undefined
             ? local
                 .sendToThread(scope, input)
@@ -906,6 +908,10 @@ const make = Effect.gen(function* () {
                   ),
           ),
         );
+        const result =
+          ceilingAdvice === undefined || sent.delivery === "relayed"
+            ? sent
+            : { ...sent, ceiling: ceilingAdvice };
         if (requestKey !== undefined) rememberSentRequest(requestKey, result);
         return result;
       }),

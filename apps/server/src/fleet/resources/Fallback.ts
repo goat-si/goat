@@ -14,7 +14,6 @@ import {
   type FallbackChainStep,
   type FallbackFailure,
   type FleetSettings,
-  FallbackChain,
   type GoatFallbackChainGetResult,
   type GoatFallbackChainSetInput,
   type GoatFallbackChainSetResult,
@@ -553,7 +552,6 @@ export const layerChains = Layer.effect(
       get: Effect.map(read, view),
       set: (input, authorizeAtCommit) =>
         Effect.gen(function* () {
-          const fleet = yield* read;
           const warnings: Array<string> = [];
           if (input.chain !== null) {
             const providers = yield* registry.getProviders;
@@ -564,7 +562,7 @@ export const layerChains = Layer.effect(
                   message:
                     "Provider instance " +
                     step.instanceId +
-                    " is not configured here; orchestrator_capabilities lists the instances.",
+                    " is not configured here; goat_provider_list lists the instances.",
                 });
               if (
                 !provider.models.some(

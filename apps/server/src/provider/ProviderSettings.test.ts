@@ -18,6 +18,7 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
+import { fromFailure } from "@goat/contracts/agentSurface/envelope";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -382,6 +383,9 @@ it.effect("an approval by a person without providers:manage changes nothing", ()
         ),
       );
       expect(failed).toBeInstanceOf(HandoffError);
+      // The approver is told the change failed, not that their request was invalid.
+      expect(failed).toMatchObject({ reason: "invalid_request", outcome: "apply_failed" });
+      expect(failed.message).toMatch(/^GOAT could not apply this change: /);
       expect((yield* fixture.instances)[cursorCloud]).toBeUndefined();
     }),
   ),
@@ -472,6 +476,32 @@ it.effect("rejects linking a cloud provider to the wrong kind of instance", () =
         ),
       );
       expect(error.code).toBe("invalid_request");
+      expect((yield* fixture.instances)[cursorCloud]).toBeUndefined();
+    }),
+  ),
+);
+
+it.effect("tells a caller that a host too old for the provider tool needs updating", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* setup({
+        remoteFailure: new Dispatch.SshRemoteDispatchError({
+          reason: "remote_outdated",
+          message: "GOAT on box does not have goat_provider_update; it runs 0.1.0.",
+        }),
+      });
+      const failure = yield* Effect.flip(
+        fixture.service.manage(
+          { action: "update", input: { instanceId: cursorCloud, enabled: true, host: "box" } },
+          managingClient,
+        ),
+      );
+      expect(failure).toMatchObject({ code: "remote_outdated" });
+      // goat_call classifies it as a precondition, not an internal error, and nothing ran.
+      expect(fromFailure({ ...failure }, { effect: "write" })).toMatchObject({
+        status: "error",
+        error: { code: "failed_precondition", reason: "remote_outdated", retryable: false },
+      });
       expect((yield* fixture.instances)[cursorCloud]).toBeUndefined();
     }),
   ),
@@ -789,6 +819,10 @@ it.effect("a host add that may have been sent is never sent again and names the 
         dropped.service.respond({ ...handoff1, action: "completed" }, "person-session" as never),
       );
       expect(refused).toBeInstanceOf(HandoffError);
+      // It may have landed on box: the approver is told to check before approving again.
+      expect(refused).toMatchObject({ reason: "invalid_request", outcome: "apply_unknown" });
+      expect(refused.message).toContain("connection reset");
+      expect(refused.message).toContain("Check the provider with Diagnose");
       yield* dropped.service.resumeContinuations;
       expect(dropped.remote).toHaveLength(1);
       expect((yield* dropped.service.readChange(handoff1))?.outcome).toMatchObject({

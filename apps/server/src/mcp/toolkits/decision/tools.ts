@@ -30,10 +30,10 @@ const list = Tool.make("goat_decision_list", {
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["decision.list"]));
 const get = Tool.make("goat_decision_get", {
   ...shared,
-  description: agentSurfaceRegistry["decision.get"].description,
+  description: agentSurfaceRegistry["decision.read"].description,
   parameters: DecisionGetInput,
   success: DecisionItem,
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["decision.get"]));
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["decision.read"]));
 const request = Tool.make("goat_decision_request", {
   ...shared,
   description: agentSurfaceRegistry["decision.request"].description,

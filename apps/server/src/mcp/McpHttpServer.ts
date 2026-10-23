@@ -1,6 +1,11 @@
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
-import { ToolDispatch, withServedToolNames } from "./ToolDispatch.ts";
+import {
+  listedRegistration,
+  registeredToolName,
+  ToolDispatch,
+  withServedToolNames,
+} from "./ToolDispatch.ts";
 import {
   argumentKeys,
   encodeReferenceRefusal,
@@ -17,8 +22,7 @@ import {
   type RunId,
   ThreadId,
 } from "@goat/contracts";
-import { type LlmsTxtCaller, renderLlmsTxt } from "@goat/contracts/agentSurface/llms";
-import * as Cause from "effect/Cause";
+import { llmsTxtCaller, llmsTxtResponse } from "./llmsTxtResponse.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -354,18 +358,6 @@ const layerMcpAuthMiddleware = HttpRouter.middleware<{
   provides: McpInvocationContext.McpInvocationContext;
 }>()(makeMcpAuthMiddleware).layer;
 
-const llmsTxtCaller = (scope: McpInvocationContext.McpInvocationScope): LlmsTxtCaller =>
-  scope.client === undefined
-    ? { kind: "thread" }
-    : { kind: "client", readOnly: scope.client.access === "read-only" };
-
-const llmsTxtResponse = (caller: LlmsTxtCaller) =>
-  HttpServerResponse.text(renderLlmsTxt(caller), {
-    contentType: "text/plain; charset=utf-8",
-    // The body depends on the credential, so no shared cache may keep it.
-    headers: { "cache-control": "no-store", vary: "authorization" },
-  });
-
 /**
  * The registry index for agents. Without a credential it lists every path; a
  * credential that /mcp would accept filters it, and one /mcp would refuse gets
@@ -445,7 +437,7 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   const { accessibilityTree, ...withoutTree } = metadata;
   const ariaTree = typeof accessibilityTree === "string" ? accessibilityTree : undefined;
   if (accessibilityTree !== undefined && ariaTree === undefined) {
-    omitted.push("accessibilityTree (use interactiveElements locators or preview_evaluate)");
+    omitted.push("accessibilityTree (use interactiveElements locators or goat_preview_evaluate)");
   }
   const tail = <A>(entries: ReadonlyArray<A>, label: string) => {
     if (entries.length > MAX_SNAPSHOT_LOG_ENTRIES) {
@@ -545,7 +537,7 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   }
   if (visibleTextChars < metadata.visibleText.length) {
     omitted.push(
-      `visibleText after ${visibleTextChars} characters (use preview_evaluate for more)`,
+      `visibleText after ${visibleTextChars} characters (use goat_preview_evaluate for more)`,
     );
   }
   if (ariaTree !== undefined && ariaTreeChars < ariaTree.length) {
@@ -1142,6 +1134,15 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/** Applied outside the access and analytics wrappers, which keep keying by the shipped name. */
+const withListedNames = <A, E, R>(registration: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(McpServer.McpServer, (server) =>
+    Effect.provideService(registration, McpServer.McpServer, {
+      ...server,
+      addTool: (options) => server.addTool(listedRegistration(options)),
+    }),
+  );
+
 /**
  * `McpServer.toolkit` asks for every service its tools declare when it
  * registers them, but the auth middleware provides `McpInvocationContext` to
@@ -1153,7 +1154,9 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) => {
   const registration = Layer.effectDiscard(
-    withToolAnalytics(applyToolContracts(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    withListedNames(
+      withToolAnalytics(applyToolContracts(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    ),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
   const registered = registration as Layer.Layer<
@@ -1173,8 +1176,10 @@ const layerToolDispatch = Layer.effect(
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     return ToolDispatch.of({
-      call: (name, args) => server.callTool({ name, arguments: args }),
-      served: (name) => server.tools.find(({ tool }) => tool.name === name)?.tool,
+      // Callers may name a tool as it shipped; the server registers it under its listed name.
+      call: (name, args) => server.callTool({ name: registeredToolName(name), arguments: args }),
+      served: (name) =>
+        server.tools.find(({ tool }) => tool.name === registeredToolName(name))?.tool,
     });
   }),
 );
@@ -1183,7 +1188,7 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
   register: Effect.Effect<A, E, R>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) =>
-  Layer.effectDiscard(withToolAnalytics(applyToolContracts(register))).pipe(
+  Layer.effectDiscard(withListedNames(withToolAnalytics(applyToolContracts(register)))).pipe(
     Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)),
   );
 
@@ -1323,7 +1328,7 @@ const layerProjectRegistration = catalogRegistrations.project.pipe(
   Layer.provide(OrchestratorMcpService.layer),
 );
 
-export const layerConnectionToolkit = catalogRegistrations.connection;
+const layerConnectionToolkit = catalogRegistrations.connection;
 
 const layerRemoteReportRegistration = catalogRegistrations.remoteReport;
 

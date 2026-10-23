@@ -35,8 +35,8 @@ import { decideHubWork, homeUnreachable, type HubWork, UNAFFECTED } from "./hubD
 import { localOpenCodexRoutes } from "./localRoutes.ts";
 
 /** A relayed request per minute at most; a Child waits up to 15 s for its tunnel per request. */
-export const OBSERVE_INTERVAL_MS = 60_000;
-export const HUB_DOWN_DECISION_PREFIX = "decision:hub-unreachable:";
+const OBSERVE_INTERVAL_MS = 60_000;
+const HUB_DOWN_DECISION_PREFIX = "decision:hub-unreachable:";
 const MAX_MOVE_OPTIONS = 5;
 
 export interface PausedGoalWork {
@@ -76,7 +76,7 @@ interface Observation {
 const isLinked = (snapshot: OpenCodexInventorySnapshot) =>
   snapshot.link.role === "child" || snapshot.hubClient !== undefined;
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const inventory = yield* Inventory.OpenCodexInventory;
   const providers = yield* ProviderRegistry.ProviderRegistry;
   const settings = yield* ServerSettings.ServerSettingsService;

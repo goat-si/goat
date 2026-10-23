@@ -33,7 +33,9 @@ const declaredLiteral = (
 ): { readonly _tag: string; readonly code?: string } | undefined => {
   const tag = stringField(error, "_tag");
   if (tag === undefined) return undefined;
-  const literal = (["code", "reason", "failureCode"] as const)
+  // A wrapper keeps a legacy code and names the wrapped literal in reason; the declared reason
+  // wins, as fromFailure documents.
+  const literal = (["reason", "code", "failureCode"] as const)
     .map((key) => stringField(error, key))
     .find((value) => value !== undefined && FAILURE_CLASSES[value] !== undefined);
   if (literal !== undefined) return { _tag: tag, code: literal };
@@ -59,7 +61,7 @@ const reclassified = (
   };
 };
 
-export const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
+const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
 
 /** Where a routed call ran, so the agent can tell remote results from local ones. */
 const withHost = (result: AgentSurfaceResult, host: string | undefined): AgentSurfaceResult =>

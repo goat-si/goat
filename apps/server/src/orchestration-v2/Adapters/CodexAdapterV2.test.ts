@@ -67,7 +67,11 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import packageJson from "../../../package.json" with { type: "json" };
+import {
+  makeCodexReplayTurn,
+  codexReplayPreamble,
+  makeCodexReplayTranscript,
+} from "./CodexReplay.testkit.ts";
 
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
@@ -90,8 +94,23 @@ const layerAdapterTest = Layer.mergeAll(
 );
 
 const replayTranscriptJson = Schema.fromJsonString(CodexReplay.CodexAppServerReplayTranscript);
+// Every memory tool by the name /mcp lists, which is what Codex disables.
+const GOAT_MEMORY_TOOLS = [
+  "goat_memory_list",
+  "goat_memory_search",
+  "goat_memory_read",
+  "goat_memory_history",
+  "goat_memory_sync_status",
+  "goat_memory_source_read",
+  "goat_memory_upsert",
+  "goat_memory_forget",
+  "goat_memory_revert_resolution",
+];
 const encodeReplayTranscriptJson = Schema.encodeEffect(replayTranscriptJson);
 const decodeReplayTranscriptJson = Schema.decodeUnknownEffect(replayTranscriptJson);
+const decodeThreadConfig = Schema.decodeUnknownEffect(
+  Schema.Struct({ config: Schema.Record(Schema.String, Schema.Unknown) }),
+);
 const encodeStringJson = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
 
 const wp4Memory = () =>
@@ -649,164 +668,6 @@ function makeCodexTestTurnInput(input: {
   };
 }
 
-function makeCodexReplayTurn(input: {
-  readonly id: string;
-  readonly status: "inProgress" | "completed" | "interrupted" | "failed";
-}): Record<string, unknown> {
-  const terminal =
-    input.status === "completed" || input.status === "interrupted" || input.status === "failed";
-  return {
-    id: input.id,
-    items: [],
-    itemsView: "notLoaded",
-    status: input.status,
-    error: null,
-    startedAt: 1782622440,
-    completedAt: terminal ? 1782622450 : null,
-    durationMs: null,
-  };
-}
-
-function codexReplayPreamble(input: {
-  readonly nativeThreadId: string;
-  readonly nativeTurnId: string;
-  readonly prompt: string;
-  readonly sentPrompt?: string;
-}): Array<CodexReplay.CodexAppServerReplayEntry> {
-  return [
-    {
-      type: "expect_outbound",
-      label: "initialize",
-      frame: {
-        id: 1,
-        method: "initialize",
-        params: {
-          clientInfo: { name: "T3 Code", title: "T3 Code", version: packageJson.version },
-          capabilities: {
-            experimentalApi: true,
-            optOutNotificationMethods: ["turn/diff/updated"],
-            extensions: {
-              "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] },
-            },
-          },
-        },
-      },
-    },
-    {
-      type: "emit_inbound",
-      label: "initialize",
-      frame: {
-        id: 1,
-        result: {
-          userAgent: "T3 Code/0.156.1",
-          codexHome: "/tmp/codex-home",
-          platformFamily: "unix",
-          platformOs: "macos",
-        },
-      },
-    },
-    { type: "expect_outbound", label: "initialized", frame: { method: "initialized" } },
-    {
-      type: "expect_outbound",
-      label: "thread/start",
-      frame: {
-        id: 2,
-        method: "thread/start",
-        params: { config: CodexAdapterV2.CODEX_THREAD_CONFIG },
-      },
-    },
-    {
-      type: "emit_inbound",
-      label: "thread/start",
-      frame: {
-        id: 2,
-        result: {
-          thread: {
-            id: input.nativeThreadId,
-            sessionId: input.nativeThreadId,
-            forkedFromId: null,
-            preview: "",
-            ephemeral: false,
-            modelProvider: "openai",
-            createdAt: 1782622440,
-            updatedAt: 1782622440,
-            status: { type: "idle" },
-            path: `/tmp/${input.nativeThreadId}.jsonl`,
-            cwd: "/workspace",
-            cliVersion: "0.144.0",
-            source: "vscode",
-            threadSource: null,
-            agentNickname: null,
-            agentRole: null,
-            gitInfo: null,
-            name: null,
-            turns: [],
-          },
-          model: "gpt-5.4",
-          modelProvider: "openai",
-          serviceTier: null,
-          cwd: "/workspace",
-          instructionSources: [],
-          approvalPolicy: "on-request",
-          approvalsReviewer: "user",
-          sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
-          reasoningEffort: "medium",
-        },
-      },
-    },
-    {
-      type: "expect_outbound",
-      label: "turn/start",
-      frame: {
-        id: 3,
-        method: "turn/start",
-        params: {
-          threadId: input.nativeThreadId,
-          input: [{ type: "text", text: input.sentPrompt ?? input.prompt }],
-          cwd: "/workspace",
-          model: "gpt-5.4",
-          approvalPolicy: "never",
-          approvalsReviewer: "user",
-          sandboxPolicy: { type: "dangerFullAccess" },
-          summary: "detailed",
-        },
-      },
-    },
-    {
-      type: "emit_inbound",
-      label: "turn/start",
-      frame: {
-        id: 3,
-        result: { turn: makeCodexReplayTurn({ id: input.nativeTurnId, status: "inProgress" }) },
-      },
-    },
-    {
-      type: "emit_inbound",
-      label: "turn/started",
-      frame: {
-        method: "turn/started",
-        params: {
-          threadId: input.nativeThreadId,
-          turn: makeCodexReplayTurn({ id: input.nativeTurnId, status: "inProgress" }),
-        },
-      },
-    },
-  ];
-}
-
-function makeCodexReplayTranscript(input: {
-  readonly scenario: string;
-  readonly entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>;
-}): CodexReplay.CodexAppServerReplayTranscript {
-  return {
-    provider: "codex",
-    protocol: "codex.app-server",
-    version: "0.144.0",
-    scenario: input.scenario,
-    entries: input.entries,
-  };
-}
-
 function withReplayRequestId(
   entry: CodexReplay.CodexAppServerReplayEntry,
   id: number,
@@ -820,6 +681,7 @@ describe("CodexAdapterV2 session initialize", () => {
   const openReplaySession = (
     transcript: CodexReplay.CodexAppServerReplayTranscript,
     beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
+    ownerThreadId?: ThreadId,
   ) =>
     Effect.gen(function* () {
       const driver = yield* CodexReplay.makeReplayDriver(
@@ -827,13 +689,18 @@ describe("CodexAdapterV2 session initialize", () => {
         beforeEmitInbound === undefined ? {} : { beforeEmitInbound },
       );
       let initializeRequests = 0;
+      let processEnvironment: NodeJS.ProcessEnv = {};
+      const threadConfigs: unknown[] = [];
       const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
         instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CODEX_SETTINGS,
         environment: {},
         clientFactory: {
           open: (openInput) =>
-            Layer.build(CodexReplay.layerReplayWithDriver(driver)).pipe(
+            Effect.sync(() => {
+              processEnvironment = openInput.environment;
+            }).pipe(
+              Effect.andThen(Layer.build(CodexReplay.layerReplayWithDriver(driver))),
               Effect.flatMap((context) =>
                 Effect.service(CodexClient.CodexAppServerClient).pipe(Effect.provide(context)),
               ),
@@ -844,6 +711,7 @@ describe("CodexAdapterV2 session initialize", () => {
                     request: (method, params) =>
                       Effect.sync(() => {
                         if (method === "initialize") initializeRequests++;
+                        if (method === "thread/start") threadConfigs.push(params);
                       }).pipe(Effect.andThen(client.request(method, params))),
                   }) satisfies CodexClient.CodexAppServerClient["Service"],
               ),
@@ -863,7 +731,7 @@ describe("CodexAdapterV2 session initialize", () => {
         serverConfig: yield* makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie),
       });
       const runtime = yield* adapter.openSession({
-        threadId: ThreadId.make(`thread-${transcript.scenario}`),
+        threadId: ownerThreadId ?? ThreadId.make(`thread-${transcript.scenario}`),
         providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
         modelSelection: CODEX_TEST_MODEL_SELECTION,
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
@@ -876,14 +744,27 @@ describe("CodexAdapterV2 session initialize", () => {
             runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
           }),
         initializeRequests: () => initializeRequests,
+        processEnvironment: () => processEnvironment,
+        threadConfigs,
       };
     });
 
   const replayPreamble = (nativeThreadId: string) =>
     codexReplayPreamble({ nativeThreadId, nativeTurnId: "unused", prompt: "unused" });
 
-  it.effect("sends one initialize when two threads start on a fresh session at once", () =>
+  it.effect("isolates credentials for two threads sharing a Codex process (#934)", () =>
     Effect.gen(function* () {
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      for (const name of ["first", "second"])
+        yield* sessions.set({
+          environmentId: EnvironmentId.make("fixture"),
+          threadId: ThreadId.make(`thread-concurrent-${name}`),
+          providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+          providerSessionId: `credential-${name}`,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: `Bearer fixture-${name}`,
+          browserToolsAvailable: false,
+        });
       const initializeAwaitingResponse = yield* Deferred.make<void>();
       const releaseInitialize = yield* Deferred.make<void>();
       // The transcript allows exactly one handshake: a second `initialize`
@@ -904,6 +785,7 @@ describe("CodexAdapterV2 session initialize", () => {
                 Effect.andThen(Deferred.await(releaseInitialize)),
               )
             : Effect.void,
+        ThreadId.make("thread-concurrent-first"),
       );
 
       const first = yield* session
@@ -917,6 +799,18 @@ describe("CodexAdapterV2 session initialize", () => {
 
       const providerThreads = [yield* Fiber.join(first), yield* Fiber.join(second)];
       assert.equal(session.initializeRequests(), 1);
+      assert.equal(session.processEnvironment().GOAT_ACP_MCP_AUTHORIZATION, "");
+      for (const [index, name] of ["first", "second"].entries()) {
+        const { config } = yield* decodeThreadConfig(session.threadConfigs[index]);
+        assert.equal(
+          config["shell_environment_policy.set.GOAT_ACP_MCP_AUTHORIZATION"],
+          `Bearer fixture-${name}`,
+        );
+        assert.equal(
+          config["shell_environment_policy.set.GOAT_ACP_MCP_ENDPOINT"],
+          "http://127.0.0.1:43123/mcp",
+        );
+      }
       assert.sameMembers(
         providerThreads.map((providerThread) => providerThread.nativeThreadRef?.nativeId),
         ["concurrent-first", "concurrent-second"],
@@ -1070,9 +964,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             yield* Fiber.join(timer);
           }),
       };
+      let processEnvironment: NodeJS.ProcessEnv = {};
       const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
         open: (openInput) =>
           Effect.gen(function* () {
+            processEnvironment = openInput.environment;
             const driver = yield* CodexReplay.makeReplayDriver(
               transcript,
               beforeEmitInbound ? { beforeEmitInbound } : {},
@@ -1205,6 +1101,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       return {
         runtime,
+        processEnvironment,
         providerThread,
         threadId,
         serverConfig,
@@ -1286,15 +1183,19 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             )(requests[0]);
             const server = request.config["mcp_servers.goat"];
             assert.equal(server.http_headers.Authorization, credential);
-            for (const name of ["memory_upsert", "memory_forget", "memory_revert_resolution"])
+            for (const name of [
+              "goat_memory_upsert",
+              "goat_memory_forget",
+              "goat_memory_revert_resolution",
+            ])
               assert.equal(server.disabled_tools.includes(name), index === 1 || index === 2);
             for (const name of [
-              "memory_list",
-              "memory_search",
-              "memory_read",
-              "memory_history",
-              "memory_sync_status",
-              "memory_read_source",
+              "goat_memory_list",
+              "goat_memory_search",
+              "goat_memory_read",
+              "goat_memory_history",
+              "goat_memory_sync_status",
+              "goat_memory_source_read",
             ])
               assert.equal(server.disabled_tools.includes(name), index === 1);
           }),
@@ -2127,17 +2028,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             });
           if (mode === "availability") {
             yield* turn(3, 1);
-            resume(4, stale, undefined, [
-              "memory_list",
-              "memory_search",
-              "memory_read",
-              "memory_history",
-              "memory_sync_status",
-              "memory_read_source",
-              "memory_upsert",
-              "memory_forget",
-              "memory_revert_resolution",
-            ]);
+            resume(4, stale, undefined, GOAT_MEMORY_TOOLS);
             yield* turn(5, 2);
             resume(6, config);
             yield* turn(7, 3);
@@ -2249,17 +2140,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               mcp_optional_startup_grace_ms: 10_000,
               "mcp_servers.goat": {
                 url: config.endpoint,
-                disabled_tools: [
-                  "memory_list",
-                  "memory_search",
-                  "memory_read",
-                  "memory_history",
-                  "memory_sync_status",
-                  "memory_read_source",
-                  "memory_upsert",
-                  "memory_forget",
-                  "memory_revert_resolution",
-                ],
+                disabled_tools: GOAT_MEMORY_TOOLS,
                 tool_timeout_sec: 3900,
                 http_headers: { Authorization: config.authorizationHeader },
               },
@@ -3083,7 +2964,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         });
         assert.include(
           params.additionalContext?.goat_code_orchestration_01?.value ?? "",
-          "delegate_task",
+          "goat_task_create",
         );
         const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
         const transcript = makeCodexReplayTranscript({
@@ -8519,7 +8400,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     );
   });
 
-  it.effect("adds the session MCP server without replacing launch-argument servers", () =>
+  it.effect("configures Codex shells with the thread MCP credential (#934)", () =>
     Effect.gen(function* () {
       const scenario = "launch-mcp-servers";
       yield* (yield* McpProviderSessions.McpProviderSessions).set({
@@ -8532,7 +8413,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         browserToolsAvailable: true,
       });
       const requests: Array<unknown> = [];
-      yield* makeCodexReplayHarness(
+      const { processEnvironment } = yield* makeCodexReplayHarness(
         makeCodexReplayTranscript({
           scenario,
           entries: codexReplayPreamble({
@@ -8547,6 +8428,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             if (method === "thread/start") requests.push(params);
           }),
       );
+      assert.equal(processEnvironment.GOAT_ACP_MCP_ENDPOINT, "");
+      assert.equal(processEnvironment.GOAT_ACP_MCP_AUTHORIZATION, "");
       assert.deepEqual(requests, [
         {
           cwd: "/workspace",
@@ -8554,19 +8437,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           config: {
             "tools.update_plan.enabled": true,
             mcp_optional_startup_grace_ms: 10_000,
+            "shell_environment_policy.set.GOAT_ACP_MCP_ENDPOINT": "http://127.0.0.1:43123/mcp",
+            "shell_environment_policy.set.GOAT_ACP_MCP_AUTHORIZATION": "Bearer secret-codex-token",
+            "shell_environment_policy.set.T3_ACP_MCP_ENDPOINT": "http://127.0.0.1:43123/mcp",
+            "shell_environment_policy.set.T3_ACP_MCP_AUTHORIZATION": "Bearer secret-codex-token",
             "mcp_servers.goat": {
               url: "http://127.0.0.1:43123/mcp",
-              disabled_tools: [
-                "memory_list",
-                "memory_search",
-                "memory_read",
-                "memory_history",
-                "memory_sync_status",
-                "memory_read_source",
-                "memory_upsert",
-                "memory_forget",
-                "memory_revert_resolution",
-              ],
+              disabled_tools: GOAT_MEMORY_TOOLS,
               tool_timeout_sec: 3_900,
               http_headers: { Authorization: "Bearer secret-codex-token" },
             },

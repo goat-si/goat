@@ -70,7 +70,7 @@ const HtmlRenderTool = Tool.make(agentSurfaceRegistry["html.render"].name, {
       Schema.isMaxLength(HTML_RENDER_MAX_TITLE_LENGTH),
     ).annotate({ description: "Short name for the page." }),
     height: Schema.Int.annotate({
-      description: `The frame height in CSS pixels, ${HTML_RENDER_MIN_HEIGHT}-${HTML_RENDER_MAX_HEIGHT}. Use html_preview's contentHeight. A lower height makes long content scroll inside the frame on mobile only.`,
+      description: `The frame height in CSS pixels, ${HTML_RENDER_MIN_HEIGHT}-${HTML_RENDER_MAX_HEIGHT}. Use goat_html_preview's contentHeight. A lower height makes long content scroll inside the frame on mobile only.`,
     }),
   }),
   success: Schema.Struct({

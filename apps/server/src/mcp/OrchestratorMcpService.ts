@@ -2,6 +2,7 @@ import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CommandId,
+  type GoatclawCeilingAdvice,
   IsoDateTime,
   isOrchestrationV2WorkActive,
   isProviderAvailable,
@@ -2475,7 +2476,15 @@ const make = Effect.gen(function* () {
         const commandId = stableCommandId({ scope, requestKey: key, operation: "delegate-task" });
         const taskId = derive.delegatedTaskNode({ commandId });
         const existing = parent.subagents.find((task) => task.id === taskId);
-        if (existing !== undefined) return yield* finishTaskWait(scope, taskId, key, input);
+        const acknowledge = (ceiling: GoatclawCeilingAdvice | undefined) =>
+          finishTaskWait(scope, taskId, key, input).pipe(
+            Effect.map((delegated) =>
+              ceiling === undefined ? delegated : { ...delegated, ceiling },
+            ),
+          );
+        // A replay or a concurrent duplicate forwards nothing itself, and whether the call that
+        // launched carried a ceiling is not recorded, so neither says anything about one.
+        if (existing !== undefined) return yield* acknowledge(undefined);
         yield* permissions.require(scope, "threads.launch", { host, runtimeMode });
         yield* permissions.require(scope, "threads.remote", { host, runtimeMode });
         const target = yield* resolveRemoteTarget(scope, parent, {
@@ -2488,7 +2497,9 @@ const make = Effect.gen(function* () {
           host,
           worktree: remote.workspace?.type === "worktree",
         });
-        if (admitted.enabled) yield* FleetSync.syncBeforeForwarding(fleet, host);
+        const ceilingAdvice = admitted.enabled
+          ? yield* FleetSync.syncBeforeForwarding(fleet, host)
+          : undefined;
         runtimeMode = admitted.runtimeMode;
         const register = Effect.gen(function* () {
           yield* permissions.recheck(scope, admitted, { host });
@@ -2586,7 +2597,7 @@ const make = Effect.gen(function* () {
           isRemoteDispatchError(launched.failure) &&
           launched.failure.reason === "duplicate_task"
         )
-          return yield* finishTaskWait(scope, taskId, key, input);
+          return yield* acknowledge(undefined);
         if (
           launched._tag === "Failure" &&
           isRemoteDispatchError(launched.failure) &&
@@ -2599,7 +2610,7 @@ const make = Effect.gen(function* () {
           if (ownerError === undefined)
             return yield* failure(
               "invalid_request",
-              "An earlier delegate_task with this clientRequestId did not finish launching; use a new clientRequestId.",
+              "An earlier goat_task_create with this clientRequestId did not finish launching; use a new clientRequestId.",
             );
         }
         if (launched._tag === "Failure" || launched.success.launch.runId === null) {
@@ -2655,7 +2666,7 @@ const make = Effect.gen(function* () {
             Effect.mapError(threadManagementFailure),
           );
         }
-        return yield* finishTaskWait(scope, taskId, key, input);
+        return yield* acknowledge(ceilingAdvice);
       }
 
       const providers = yield* loadProviders;
@@ -3250,7 +3261,7 @@ const make = Effect.gen(function* () {
         if ((yield* permissions.resolve(scope, parent.thread.runtimeMode)).enabled)
           return yield* failure(
             "capability_denied",
-            "With goatclaw enabled, use goat_thread_launch or delegate_task so every child inherits its permission profile.",
+            "With goatclaw enabled, use goat_thread_launch or goat_task_create so every child inherits its permission profile.",
           );
         const parentNodeId = parentRun.rootNodeId;
         const providers = yield* loadProviders;

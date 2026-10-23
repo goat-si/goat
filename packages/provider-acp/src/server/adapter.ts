@@ -35,8 +35,8 @@ import {
 import { AgentScope, AgentScopeThreadId } from "@goat/shared/AgentScope";
 import { HTML_RENDER_TOOL_NAME } from "@goat/shared/htmlRender";
 import { modelSelectionsEqual } from "@goat/shared/model";
-import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
-import { resolveGoatMcpToolId } from "@goat/shared/goatMcpToolPresentation";
+import { type SelfInvocation } from "@goat/shared/nodeRuntime";
+import { resolveGoatMcpShippedToolId } from "@goat/shared/goatMcpToolPresentation";
 import { compactDynamicToolOutput, htmlRenderFromToolItem } from "@goat/shared/toolOutput";
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
 import * as Cause from "effect/Cause";
@@ -122,7 +122,12 @@ import {
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
+import {
+  acpMcpContext,
+  acpMcpActivation,
+  acpMcpCredentialsMatch,
+  type AcpMcpContext,
+} from "./mcpContext.ts";
 
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 
@@ -603,65 +608,6 @@ function negotiatedCapabilities(
       providerCanReadConversationSnapshot: canLoad,
     },
   };
-}
-
-interface AcpMcpContext {
-  readonly servers: ReadonlyArray<EffectAcpSchema.McpServer>;
-  readonly acpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
-  readonly processEnvironment?: NodeJS.ProcessEnv;
-  readonly endpoint?: string;
-  readonly authorization?: string;
-  /** The session's activation lists the managed `cua-driver` server. */
-  readonly computerUse?: boolean;
-  /** Identity of that driver (`cuaDriverKey`), empty when the session has none. */
-  readonly computerUseKey?: string;
-}
-
-function acpMcpContext(
-  session: McpProviderSession.McpProviderSessionConfig | undefined,
-  self: SelfInvocation,
-): AcpMcpContext {
-  if (session === undefined) {
-    return { servers: [], acpServers: [] };
-  }
-  // Agents that advertise optional http support still routinely fail to wire
-  // injected http servers through to their backend (codex-acp 1.2.0 and pi-acp
-  // both drop them), so every ACP session gets the `goat acp-mcp-bridge` stdio
-  // server, which forwards JSON-RPC to T3's authenticated MCP endpoint. The
-  // managed Cua Driver is already a stdio server, so it is listed in both
-  // forms: an agent with MCP-over-ACP receives only `acpServers`.
-  const cua = McpProviderSession.cuaAcpMcpServers(session);
-  return {
-    servers: [
-      {
-        name: "goat",
-        command: self.command,
-        args: [...selfInvocationArgs(self, ["acp-mcp-bridge"])],
-        env: [
-          { name: "ELECTRON_RUN_AS_NODE", value: "1" },
-          { name: "GOAT_ACP_MCP_ENDPOINT", value: session.endpoint },
-          { name: "GOAT_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
-        ],
-      },
-      ...cua,
-    ],
-    acpServers: [{ type: "acp", name: "goat", serverId: "goat" }, ...cua],
-    endpoint: session.endpoint,
-    authorization: session.authorizationHeader,
-    computerUse: cua.length > 0,
-    computerUseKey: McpProviderSession.cuaDriverKey(session.cuaDriver),
-    // Agent instructions and terminal fallbacks written for older builds read the legacy names.
-    processEnvironment: withLegacyEnvNames({
-      GOAT_ACP_MCP_ENDPOINT: session.endpoint,
-      GOAT_ACP_MCP_AUTHORIZATION: session.authorizationHeader,
-      GOAT_ACP_MCP_NODE: self.command,
-      ...(self.entrypoint === undefined ? {} : { GOAT_ACP_MCP_ENTRYPOINT: self.entrypoint }),
-    }),
-  };
-}
-
-function acpMcpActivation(context: AcpMcpContext) {
-  return { mcpServers: context.servers, acpMcpServers: context.acpServers };
 }
 
 function nativeThreadId(
@@ -2136,6 +2082,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         let runtime!: AcpSessionRuntime.AcpSessionRuntime["Service"];
         let runtimeMcpBridge: AcpMcpOverAcpBridge | undefined;
         let runtimeMcpContext: AcpMcpContext | undefined;
+        let runtimeProcessMcpContext: AcpMcpContext | undefined;
         yield* Effect.addFinalizer(() =>
           runtimeScope === undefined
             ? Effect.void
@@ -3740,7 +3687,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const input =
               mcpIdentity.input ?? unknownRecord(rawInputRecord?.arguments) ?? rawInputRecord ?? {};
             let output = rawOutput === undefined ? undefined : acpMcpToolCallOutput(rawOutput);
-            const isHtmlRender = resolveGoatMcpToolId(toolName) === HTML_RENDER_TOOL_NAME;
+            const isHtmlRender = resolveGoatMcpShippedToolId(toolName) === HTML_RENDER_TOOL_NAME;
             const isError =
               compactDynamicToolOutput(output)?.isError === true ||
               compactDynamicToolOutput(rawOutputRecord?.result)?.isError === true;
@@ -6431,6 +6378,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const mcpContext = yield* readMcpContext(threadId);
           runtimeMcpBridge = yield* makeRuntimeMcpBridge(mcpContext, runtimeScope);
           runtimeMcpContext = mcpContext;
+          runtimeProcessMcpContext = mcpContext;
           const runtimeGeneration = yield* Ref.get(runtimeCallbackGeneration);
           runtime = yield* flavor
             .makeRuntime(makeRuntimeInput(runtimeGeneration, mcpContext, resumeSessionId))
@@ -6570,6 +6518,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   runtimeScope = replacementScope;
                   runtimeMcpBridge = replacementMcpBridge;
                   runtimeMcpContext = replacementExit.value.mcpContext;
+                  runtimeProcessMcpContext = replacementExit.value.mcpContext;
                   yield* Ref.set(runtimeCallbackGeneration, replacementGeneration);
                   prepareTerminalEnvironment(
                     replacementExit.value.mcpContext,
@@ -6681,6 +6630,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             return yield* initialFailure;
           }
           const mcpContext = yield* readMcpContext(threadId);
+          if (!acpMcpCredentialsMatch(runtimeProcessMcpContext, mcpContext))
+            yield* startReplacementAcpRuntime(threadId, () => Effect.void);
           const activationOptions = acpMcpActivation(mcpContext);
           prepareTerminalEnvironment(mcpContext, sessionId);
           const activated = canLoadSession
@@ -7348,7 +7299,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const installedComputerUse = computerUseKeyBySessionId.get(requestedSessionId);
             const computerUseChanged =
               (installedComputerUse ?? "") !== (currentMcpContext.computerUseKey ?? "");
-            if (computerUseChanged && installedComputerUse !== undefined)
+            if (
+              (computerUseChanged && installedComputerUse !== undefined) ||
+              !acpMcpCredentialsMatch(runtimeProcessMcpContext, currentMcpContext)
+            )
               yield* Ref.set(runtimeRestartRequired, true);
             const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
               turnInput.threadId,
@@ -7356,9 +7310,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const installedEnvironment = terminalEnvironmentBySessionId.get(requestedSessionId);
             const attachmentChanged =
               computerUseChanged ||
-              installedEnvironment?.GOAT_ACP_MCP_AUTHORIZATION !==
-                currentMcpContext.authorization ||
-              installedEnvironment?.GOAT_ACP_MCP_ENDPOINT !== currentMcpContext.endpoint;
+              (installedEnvironment?.GOAT_ACP_MCP_AUTHORIZATION ?? "") !==
+                (currentMcpContext.authorization ?? "") ||
+              (installedEnvironment?.GOAT_ACP_MCP_ENDPOINT ?? "") !==
+                (currentMcpContext.endpoint ?? "");
             const needsSessionActivation =
               (yield* Ref.get(activeSessionId)) !== requestedSessionId ||
               restartAfterInterrupt ||
@@ -8587,6 +8542,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     forkInput.sourceProviderThread,
                   );
                   const mcpContext = yield* readMcpContext(forkInput.targetThreadId);
+                  if (!acpMcpCredentialsMatch(runtimeProcessMcpContext, mcpContext))
+                    yield* startReplacementAcpRuntime(forkInput.targetThreadId, () => Effect.void);
                   prepareTerminalEnvironment(mcpContext);
                   const forked = yield* runtime.forkSession(
                     sourceSessionId,

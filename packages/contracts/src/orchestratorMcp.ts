@@ -34,6 +34,7 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import { OrchestratorMcpRunFailure } from "./orchestratorMcpFailure.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
+import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import {
   ThreadLinkedPullRequest,
@@ -49,7 +50,6 @@ import {
   OrchestrationV2TaskRole,
   ReviewLedgerEntry,
   ReviewLedgerEntryInput,
-  OrchestrationV2CloudTask,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2UserInputQuestion,
   OrchestrationV2CreationSource,
@@ -63,7 +63,7 @@ import {
   ProviderOptionSelectionValue,
 } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
-import { PermissionProfile } from "./permissionProfiles.ts";
+import { GoatclawCeilingAdvice, PermissionProfile } from "./permissionProfiles.ts";
 
 const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)).annotate({
   description: "Complete task or message text for the target agent.",
@@ -155,7 +155,7 @@ export type SshLaunchWorkspace = typeof SshLaunchWorkspace.Type;
 export const OrchestratorMcpTarget = Schema.Struct({
   providerInstanceId: Schema.optional(
     ProviderInstanceId.annotate({
-      description: "Configured provider instance id from orchestrator_capabilities.",
+      description: "Configured provider instance id from goat_provider_list.",
     }),
   ),
   driverKind: Schema.optional(
@@ -171,7 +171,7 @@ export const OrchestratorMcpTarget = Schema.Struct({
   options: Schema.optional(
     OrchestratorMcpTargetOptions.annotate({
       description:
-        "Model options from orchestrator_capabilities. For the same provider instance and model, overrides individual inherited values; [] or {} clears them. Claude: {effort: 'max', fastMode: true}; Codex: {reasoningEffort: 'max', serviceTier: 'priority'}. Only use options advertised by the selected model.",
+        "Model options from goat_provider_list. For the same provider instance and model, overrides individual inherited values; [] or {} clears them. Claude: {effort: 'max', fastMode: true}; Codex: {reasoningEffort: 'max', serviceTier: 'priority'}. Only use options advertised by the selected model.",
     }),
   ),
 });
@@ -251,22 +251,6 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
 });
 export type OrchestratorMcpDelegateTaskInput = typeof OrchestratorMcpDelegateTaskInput.Type;
 
-export const OrchestratorMcpCloudTask = Schema.Struct({
-  taskId: Schema.String.check(Schema.isMaxLength(512)),
-  status: OrchestrationV2CloudTask.fields.status,
-  tracking: OrchestrationV2CloudTask.fields.tracking,
-  url: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
-  prUrl: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
-  branch: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
-  progress: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
-  summary: Schema.optional(Schema.String.check(Schema.isMaxLength(4000))),
-  localChangesExcluded: Schema.Boolean,
-  localChangesIncluded: OrchestrationV2CloudTask.fields.localChangesIncluded,
-  error: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
-  updatedAt: IsoDateTime,
-});
-export type OrchestratorMcpCloudTask = typeof OrchestratorMcpCloudTask.Type;
-
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   taskId: NodeId,
@@ -308,10 +292,12 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   }),
   waitTimedOut: Schema.Boolean.annotate({
     description:
-      "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later task_status reads return false and use status for liveness.",
+      "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later goat_task_read reads return false and use status for liveness.",
   }),
   /** Set when this machine is under resource pressure; see goat_host_status placement. */
   pressure: Schema.optional(HostPressureAdvice),
+  /** Set when the remote host has not confirmed it enforces the forwarded goatclaw ceiling. */
+  ceiling: Schema.optional(GoatclawCeilingAdvice),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
 
@@ -826,6 +812,8 @@ export const OrchestratorMcpThreadSendDelivered = Schema.Struct({
   taskId: Schema.optional(NodeId),
   status: OrchestrationV2RunStatus,
   delivery: Schema.Literals(["started", "queued", "steered", "restarted"]),
+  /** Set when the host has not confirmed it enforces the forwarded goatclaw ceiling. */
+  ceiling: Schema.optional(GoatclawCeilingAdvice),
 });
 export type OrchestratorMcpThreadSendDelivered = typeof OrchestratorMcpThreadSendDelivered.Type;
 /**

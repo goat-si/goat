@@ -6,6 +6,7 @@ import {
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as ErrorReporter from "effect/ErrorReporter";
 import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/ai";
 
@@ -30,9 +31,30 @@ const refusalText = (refusal: Readonly<Record<string, unknown>>) => JSON.stringi
 
 const isPreviewAutomationError = Schema.is(PreviewAutomationError);
 
+// Effect's registerToolkit answers a dying handler with this text; image tools register directly
+// and must answer the same way, as a tool result an agent can retry or report (#907).
+const HANDLER_DIED_TEXT = "Tool execution failed due to an internal server error.";
+
+/**
+ * Interruption still propagates. A handler defect is logged, reported, and becomes an error result
+ * instead of the JSON-RPC internal error some MCP clients treat as the whole server failing.
+ */
+const dyingHandler = <E>(cause: Cause.Cause<E>, toolName: string) =>
+  Cause.hasInterrupts(cause)
+    ? Effect.failCause(cause).pipe(Effect.orDie)
+    : Effect.logError(`${toolName} handler died`, cause).pipe(
+        Effect.andThen(ErrorReporter.report(cause)),
+        Effect.as(
+          new McpSchema.CallToolResult({
+            isError: true,
+            content: [{ type: "text", text: HANDLER_DIED_TEXT }],
+          }),
+        ),
+      );
+
 export const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
   if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
-    return Effect.failCause(cause).pipe(Effect.orDie);
+    return dyingHandler(cause, "preview_snapshot");
   }
   const failures = cause.reasons.filter(Cause.isFailReason);
   const firstFailure = failures[0]?.error;
@@ -97,7 +119,7 @@ export const imageToolFailure =
   <E>(toolName: string, operation: string, failureText: string | ((error: E) => string)) =>
   (cause: Cause.Cause<E>) => {
     if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
-      return Effect.failCause(cause).pipe(Effect.orDie);
+      return dyingHandler(cause, toolName);
     }
     const failures = cause.reasons.filter(Cause.isFailReason);
     const firstFailure = failures[0]?.error;

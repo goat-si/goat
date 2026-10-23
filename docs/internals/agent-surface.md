@@ -85,20 +85,21 @@ it running, as `cloud_agent.run_forget` does.
 A verb on a sub-resource names the sub-resource first: `channel.task_read`,
 `memory.settings_update`, `ssh.host_prepare`.
 
-**Now.** 74 shipped names are not the projection of their path
-([#781](https://github.com/goat-si/goat/issues/781)). They are still served and listed
-under those names, and `/mcp` also accepts each one's canonical
-`goat_<resource>_<verb>` name in `tools/call`, without listing it until the flip
+**Now.** `tools/list` shows every path as `goat_<resource>_<verb>`; the meta tools keep
+their short names, `goat_describe` and `goat_call`. 79 names a tool shipped under are
+not that projection ([#781](https://github.com/goat-si/goat/issues/781)). `/mcp` still
+accepts each of them in `tools/call` without listing it, runs the listed tool, and
+returns `_meta["goat/deprecated"]` naming the listed name
 ([ToolDispatch.ts](../../apps/server/src/mcp/ToolDispatch.ts) `withServedToolNames`).
-Their paths keep the resource and verb they shipped with, except three that used a
-synonym (D11): `memory.settings_read`, `memory.source_read`, and `preview.wait`. The
-meta tools keep their short names, `goat_describe` and `goat_call`.
-
-**Proposed.** On-grammar paths that use a near synonym of a standard verb, such as
-`decision.get`, `thread.configuration`, `provider.sync_status`, and
-`origin.reports_wait`, become `read`, `wait`, or a `list` on a sub-resource at the
-listing flip, and the old path stays as an alias. The registry and the audit page
-are the catalog; this page keeps the rules.
+Toolkits register under the shipped name, so access declarations, capability checks, and
+analytics keep that key whichever name a caller used; only the listing renames
+(`McpHttpServer` `withListedNames`). Paths that used a near synonym of a standard verb were
+normalized (D11): `decision.read`, `permission_profile.read`,
+`thread.configuration_read`, `provider.sync_read`, `origin.report_wait`,
+`memory.settings_read`, `memory.source_read`, and `preview.wait`. `goat_call` and
+`goat_describe` still accept the old paths, and `goat_call` then reports the current
+path in `meta.deprecated`. The registry and the audit page are the catalog; this page
+keeps the rules.
 
 Three projections come from a path:
 
@@ -270,9 +271,9 @@ Legacy tool names keep their current result shapes until they are removed.
 
 | Work                   | Handle                     | Observe                       | Stop                        | Survives restart |
 | ---------------------- | -------------------------- | ----------------------------- | --------------------------- | ---------------- |
-| Provider sync          | `handoffId`, then `syncId` | `goat_provider_sync_status`   | `goat_provider_sync_cancel` | Approved syncs   |
+| Provider sync          | `handoffId`, then `syncId` | `goat_provider_sync_read`     | `goat_provider_sync_cancel` | Approved syncs   |
 | SSH prepare and update | host alias                 | `goat_ssh_host_status`        | `goat_ssh_host_forget`      | Yes              |
-| Delegated task         | `taskId`                   | `task_status`, wait mode      | `task_cancel`               | Yes              |
+| Delegated task         | `taskId`                   | `goat_task_read`, wait mode   | `goat_task_cancel`          | Yes              |
 | Thread or cloud launch | `threadId`                 | `goat_thread_status`, watches | `goat_thread_interrupt`     | Yes              |
 | Cloud machine create   | machine id once it answers | `goat_cloud_machine_list`     | `goat_cloud_machine_stop`   | Partly           |
 | Worktree cleanup       | none; blocks               | none                          | none                        | n/a              |
@@ -305,7 +306,7 @@ type OperationRef = {
   through the invocation function. Each verb therefore runs exactly the checks of
   the tool it replaces: cancel is a write and needs the domain's write
   authorization, runtime mode, and profile, the same as `goat_provider_sync_cancel`
-  or `task_cancel` today.
+  or `goat_task_cancel` today.
 - A valid token whose store has no record reports `unknown`: the server issued it,
   so the work may have happened. A token that fails verification is `not_found`.
   A token older than its kind's retention is `expired`. Kinds with in-memory stores
@@ -387,8 +388,10 @@ keeps large tool sets out of context
 [registry](../../packages/contracts/src/agentSurface/registry.ts), reading input and output
 schemas from the tools this server actually serves, with `surfaceVersion` at the top.
 `available` reports only the static refusals the server is sure of (thread-only,
-client-only, read-only client, not served); goatclaw capabilities, lanes, `query`,
-`host`, examples, and related paths are not in it yet. See
+client-only, read-only client, not served); goatclaw capabilities, lanes, `host`,
+examples, and related paths are not in it yet. `query` returns up to 20 paths whose path,
+summary, or description contains every word, best first, and `truncated` when more match;
+with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
 
 **Proposed (later).** A `core` listing profile shows only the meta tools, the
@@ -397,9 +400,10 @@ measured against the full listing before it becomes a default.
 
 ## Calling: `goat_call`
 
-**Now.** `goat acp-mcp-call <tool> <json>` calls any tool from a terminal with
-`GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`
-([AcpMcpStdioBridge.ts](../../apps/server/src/mcp/AcpMcpStdioBridge.ts)).
+**Now.** `goat call <path> [json | -]` calls any capability from a terminal by sending one
+`goat_call` to the origin's `/mcp` with the shell's credential (see
+[The `goat` command](#the-goat-command)). `goat acp-mcp-call <tool> <json>`, the ACP terminal
+fallback, is its alias and always prints the envelope.
 
 **Proposed.** `goat_call { path, args }` runs one registry entry and returns the
 envelope. It uses the one invocation function that direct MCP calls, the CLI, and
@@ -427,13 +431,13 @@ message is always the text the direct call shows, so free-text reasons the direc
 scrubs never leave through it. Writes count as unkeyed until the registry gains
 `idempotency`, and routed calls set `meta.host`.
 
-**Now.** A direct `tools/call` by a canonical alias runs the served tool. The `/mcp`
-auth middleware swaps the name for the served one before Effect's MCP core sees the
-request, because the core checks one visibility predicate for both `tools/list` and
+**Now.** A direct `tools/call` by a legacy name runs the listed tool. The `/mcp` auth
+middleware swaps the name for the listed one before Effect's MCP core sees the request,
+because the core checks one visibility predicate for both `tools/list` and
 `tools/call` and cannot hide a tool that stays callable. The call therefore gets the
-served tool's argument refusal, access checks, and result, and analytics record it
-under the served name, so each tool keeps one series until the flip renames it.
-Remote hosts are still called by the names they shipped with.
+listed tool's argument refusal, access checks, and result, plus
+`_meta["goat/deprecated"]`. Analytics record every call under the shipped name the
+toolkit registers, whichever name the caller used, so each tool keeps one series.
 
 ## Composition: `goat_eval`
 
@@ -610,10 +614,18 @@ give the person a terminal route.
 host. Writes forward the caller's runtime ceiling. Since
 [#758](https://github.com/goat-si/goat/pull/758), a follow-up `thread.send` with
 `host` also forwards the caller's goatclaw ceiling as `permissionProfileCeiling`,
-and the origin refuses a destination that has not shown it enforces ceilings
-instead of falling back to the relay, which would deliver without one. Remote
-servers answer only to the tool names they shipped with
-([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)).
+and a send that carries one never falls back to the relay, which would deliver
+without it. A destination that has not yet confirmed it enforces ceilings still
+gets the launch or send, and the result's `ceiling` field says so; a launch to a
+destination that cannot accept a ceiling at all is still refused. Remote
+servers built before canonical names answer only to the tool names they shipped with
+([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)), so the origin sends a
+host-routed call under its canonical name only to a remote whose `serverVersion` is past
+0.1.2, and under the shipped name otherwise, which every version accepts; the steps a
+remote launch runs inside the dispatcher keep shipped names
+([remoteToolNames.ts](../../apps/server/src/sshRemote/remoteToolNames.ts)). A remote that
+has no such tool answers `failed_precondition` with reason `remote_outdated`, and the
+call never runs locally instead.
 The origin checks the calling thread's capability before forwarding, plus
 `threads.remote` and the profile's host allowlist for every machine a write names:
 `host` on a host-routable entry, and each argument listed for it in
@@ -621,7 +633,8 @@ The origin checks the calling thread's capability before forwarding, plus
 as on cordon or SSH setup). This holds for writes that declare no capability of
 their own, such as `thread.watch`. A `host` that names something else, such as a
 git forge or the address of a machine being added, is not listed; a test pins
-which arguments are.
+which arguments are. A write that lets placement pick the machine, such as
+`thread.reschedule` without `targetHost`, picks only among the allowlist.
 A thread launched or sent with a forwarded ceiling is bound to it on the
 destination, so its own calls there are checked against it. Other host-routed writes
 arrive as the origin's dispatch session, and the destination relies on the origin's
@@ -631,12 +644,9 @@ check.
 
 - Forwarding stays with the origin server. A meta tool, the CLI, or a composed
   step names a `host`, and the origin's router builds the ceiling, claims the
-  lane, and translates canonical names to legacy ones when the remote's
-  `serverVersion` predates the listing flip.
+  lane, and picks the tool name the remote answers to.
 - `meta.host` says where a call ran. Remote errors keep their `reason` and gain
   `details.host`.
-- A remote too old for a requested feature answers `failed_precondition` with
-  reason `remote_outdated`. It never falls back to running locally.
 
 ## Audit
 
@@ -709,6 +719,25 @@ maps the operation's state: `succeeded` exits `0`, `failed` and `cancelled`
 exit `1`, `waiting_human` exits `3`, `unknown` exits `5`, and a wait that
 times out while the work is still `queued` or `running` exits `6`.
 
+**Now.** `goat describe`, `goat call`, and a `goat <resource> <verb>` command for every
+registry path run before the operator CLI loads
+([agentSurfaceCommand.ts](../../apps/server/src/cli/agentSurfaceCommand.ts)). Each sends one
+`goat_call` to the origin's `/mcp`, so a call through the CLI gets the same argument refusal,
+access checks, goatclaw gate, and host routing as a direct one; `--host` is only the call's
+`host` argument. Arguments are a JSON object (or `-` for stdin) plus `gh api`-style fields:
+`-f key=value` sets a string, and `-F key=value` turns `true`, `false`, `null`, and integers
+into JSON and reads `@file`. The operator verbs `thread list|start|send|show`, `project
+add|remove|rename`, and `provider diagnose` keep their meaning, and their help lists the
+registry verbs beside them. Exit codes follow the table above. When no envelope came back, a
+failure before `goat_call` was sent exits `4` only when the server could not be reached or
+answered the handshake with HTTP 429 or 5xx, and `1` for any other handshake refusal; after it
+was sent, a lost answer exits `4` for a read and `5` for a write. A refused credential (401, 403,
+or `/mcp`'s in-band refusal) exits `1` and never falls back to another credential. `acp-mcp-call`
+resolves credentials like `goat call`, so outside a thread it uses the `goat login` session.
+`goat operation read|wait|cancel <id>` are the generated commands for the operation verbs, and
+`wait` exits by the operation's state as the table above says. Credentials resolve as below, and `goat login`, `logout`, and `whoami` manage the
+stored one.
+
 The npm package keeps its `goat` and `t3` bins, and bare `goat` keeps starting a
 server. Use `goat serve` for GOAT; `npx t3` launches upstream T3 Code. The desktop launcher marks itself so that
 bare `goat` from it prints help instead of starting a second server. Linux
@@ -719,12 +748,21 @@ packages gain `/usr/bin/goat`, and the welcome wizard offers the install once.
 The CLI resolves a credential for the origin server only:
 
 1. `GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`, which GOAT sets for
-   agent subprocesses and terminals, so `goat` inside a thread has exactly that
-   thread's grant. When they are present and invalid, the CLI fails; it never falls
+   Claude Code, ACP (including Grok and Antigravity), Muse and Pi agent
+   processes, Codex thread shell environments, and GOAT thread terminals, so `goat` uses the same credential as
+   that thread's MCP connection. A terminal started before a credential exists
+   gets empty markers; restart it after the provider attaches. A revoked credential
+   stays invalid in existing shells. When the variables are present and invalid, the CLI fails; it never falls
    back to a stored login, which could carry more authority.
 2. A session from `goat login`, which pairs with the local server and must yield an
    `mcp-client` credential, the only outside subject `/mcp` accepts
    ([EnvironmentAuth.ts](../../apps/server/src/auth/EnvironmentAuth.ts)).
+
+Cursor's local SDK exposes no per-agent process environment, and OpenCode's local
+server shares one process across threads; their native shells do not receive a
+thread credential. External OpenCode servers and cloud agents do not have a
+supported route to the origin's thread MCP credential. Their GOAT thread terminals
+use the destination environment's credential like other providers.
 
 `--host` is routing, not a credential. The CLI sends the call with `host` to the
 origin, which applies lane admission and ceiling forwarding; calling a remote
@@ -799,10 +837,10 @@ Each PR ships on its own and leaves `tools/list` unchanged until the flip.
 | 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                 |
 | 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                 |
 | 6   | Idempotency receipts with digest, unknown state, audit columns                | Proposed                                                                                                                                                                   |
-| 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup)                                                                          |
+| 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup; then provider syncs and approved provider changes)                       |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
-| 9   | Registry-generated CLI commands and credentials                               | Proposed                                                                                                                                                                   |
-| 10  | Listing flip, verb normalization, remote name translation                     | Started: canonical names callable as unlisted aliases ([#906](https://github.com/goat-si/goat/pull/906))                                                                   |
+| 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                 |
+| 10  | Listing flip, verb normalization, remote name translation                     | Shipped: aliases ([#906](https://github.com/goat-si/goat/pull/906)); flip, normalization, and translation (#781)                                                           |
 | 11  | `goat_eval`                                                                   | Gated on measurement                                                                                                                                                       |
 
 Testing follows the repository rules: focused tests per behavior, effect worker
@@ -876,7 +914,7 @@ every gate runs per step (D7).
 | D17 | `needs_human` only with a handoff a person can act on; a block nobody can clear stays `error`                                                                     | A human status that does not hold makes agents hand back work no person can fix                                                                  | Inferring human steps from messages            |
 | D18 | The D8 gate is a written protocol with paired ABBA runs, an oracle per workload, and model turns as the primary metric                                            | Agent-level timing hid real gains behind per-turn cost in aside-codemode; fewer turns and bytes were the measurable effect                       | A wall-clock threshold                         |
 | D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                        | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                 | Renaming paths to match shipped names          |
-| D20 | Before the flip, canonical names are unlisted aliases resolved at `/mcp` to the served tool, whose checks, result and analytics name apply                        | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                           | Registering alias tools, which would list them |
+| D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                           | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                           | Registering alias tools, which would list them |
 
 ## Open questions
 

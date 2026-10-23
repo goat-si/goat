@@ -18,7 +18,7 @@ const BoundedUrl = Schema.String.check(Schema.isTrimmed())
 const URL_GUIDANCE =
   "Absolute http(s) URL or a schemeless host such as t3.chat or localhost:5173. Schemeless public hosts use https; loopback hosts use http.";
 const PROFILE_GUIDANCE =
-  "Browser profile for a new tab, by id or name (case-insensitive) from preview_status profiles. Omit to use the user's default profile. A tab keeps the profile it opened with.";
+  "Browser profile for a new tab, by id or name (case-insensitive) from goat_preview_status profiles. Omit to use the user's default profile. A tab keeps the profile it opened with.";
 const OptionalTimeoutMs = Schema.optional(
   Schema.Int.check(Schema.isGreaterThan(0))
     .check(Schema.isLessThanOrEqualTo(60_000))
@@ -66,11 +66,11 @@ const PreviewAutomationTabTargetFields = {
   tabId: Schema.optional(
     PreviewTabId.annotate({
       description:
-        "Exact collaborative browser tab to target, including a tab the user opened (see preview_status tabs). Omit to use this agent session's current tab, or the user's visible tab when this session has none.",
+        "Exact collaborative browser tab to target, including a tab the user opened (see goat_preview_status tabs). Omit to use this agent session's current tab, or the user's visible tab when this session has none.",
     }),
   ).annotate({
     description:
-      "Exact collaborative browser tab to target, including a tab the user opened (see preview_status tabs). Omit to use this agent session's current tab, or the user's visible tab when this session has none.",
+      "Exact collaborative browser tab to target, including a tab the user opened (see goat_preview_status tabs). Omit to use this agent session's current tab, or the user's visible tab when this session has none.",
   }),
 };
 
@@ -209,7 +209,7 @@ export const PreviewAutomationOpenInput = Schema.Struct({
   )
   .annotate({
     description:
-      "Opens the collaborative browser for the current thread. Use preview_navigate afterward when readiness waiting matters.",
+      "Opens the collaborative browser for the current thread. Use goat_preview_navigate afterward when readiness waiting matters.",
   });
 export type PreviewAutomationOpenInput = typeof PreviewAutomationOpenInput.Type;
 
@@ -1049,7 +1049,7 @@ export class PreviewAutomationNoAvailableHostError extends Schema.TaggedError<Pr
   },
 ) {
   override get message(): string {
-    return `No preview automation host is available for ${this.operation} in environment ${this.environmentId}. The server-owned browser may be starting or reconnecting. Retry preview_status, then call preview_open if no tab is available. If it remains unavailable, report the browser connection failure.`;
+    return `No preview automation host is available for ${this.operation} in environment ${this.environmentId}. The server-owned browser may be starting or reconnecting. Retry goat_call {path:"preview.status"}, then call goat_call {path:"preview.open"} if no tab is available. If it remains unavailable, report the browser connection failure.`;
   }
 }
 
@@ -1074,8 +1074,8 @@ export class PreviewAutomationTabNotFoundError extends Schema.TaggedError<Previe
 ) {
   override get message(): string {
     return this.tabId
-      ? `Preview tab ${this.tabId} was not found for ${this.operation}. Omit tabId to use the current tab, or call preview_open.`
-      : `No active preview tab was found for ${this.operation}. Call preview_open first.`;
+      ? `Preview tab ${this.tabId} was not found for ${this.operation}. Omit tabId to use the current tab, or call goat_call {path:"preview.open"}.`
+      : `No active preview tab was found for ${this.operation}. Call goat_call {path:"preview.open"} first.`;
   }
 }
 
@@ -1117,12 +1117,12 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
     if (this.reason === "humanControl")
       return "A human controls this browser tab. Wait until they release control.";
     if (this.reason === "tabRequired")
-      return "Multiple browser tabs belong to this session. Pass a tabId from preview_open or from the tabs listed by preview_status.";
+      return 'Multiple browser tabs belong to this session. Pass a tabId from goat_call {path:"preview.open"} or from the tabs listed by goat_call {path:"preview.status"}.';
     if (this.reason === "dialogPending")
-      return "A browser dialog is pending. Read preview_status and resolve it with preview_dialog.";
+      return 'A browser dialog is pending. Read goat_call {path:"preview.status"} and resolve it with goat_call {path:"preview.dialog"}.';
     if (this.reason === "tabLimit")
-      return "Too many server browser tabs are open. Close one with goat_preview_close, or reuse a tabId from preview_status tabs.";
-    if (this.reason === "closed") return "This browser tab is closed. Call preview_open.";
+      return 'Too many server browser tabs are open. Close one with goat_call {path:"preview.close"}, or reuse a tabId from goat_call {path:"preview.status"} tabs.';
+    if (this.reason === "closed") return 'Tab closed. Call goat_call {path:"preview.open"}.';
     if (this.reason === "interrupted")
       return "Browser control changed. Take a fresh snapshot before trying again.";
     return `Preview automation ${this.operation} was interrupted on client ${this.clientId}.`;

@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
  * Long-running work behind one handle (docs/internals/agent-surface.md, "Long-running work").
  * Kinds and states ship with the producers that emit them.
  */
-export const OperationKind = Schema.Literals(["task", "ssh_setup"]);
+export const OperationKind = Schema.Literals(["task", "ssh_setup", "provider_sync", "handoff"]);
 export type OperationKind = typeof OperationKind.Type;
 
 export const OperationState = Schema.Literals([

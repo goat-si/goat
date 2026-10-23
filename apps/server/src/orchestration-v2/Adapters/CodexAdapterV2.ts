@@ -9,6 +9,7 @@ import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import { goatMemoryToolsWithout } from "./goatMcpToolNames.ts";
 import {
   mcpToolPresentation,
   type McpToolPresentation,
@@ -1428,12 +1429,23 @@ export class CodexAppServerClientFactory extends Context.Service<
   CodexAppServerClientFactoryShape
 >()("goat/orchestration-v2/Adapters/CodexAdapterV2/CodexAppServerClientFactory") {}
 
+// One app-server hosts many threads, so its process must never carry a thread credential.
+const codexThreadMcpEnvironment = (
+  session: McpProviderSession.McpProviderSessionConfig | undefined,
+) =>
+  Object.fromEntries(
+    Object.entries(McpProviderSession.withThreadMcpEnvironment({}, session)).map(
+      ([name, value]) => [`shell_environment_policy.set.${name}`, value ?? ""],
+    ),
+  );
+
 /**
  * Codex waits this long for MCP servers before the first model request and
  *   leaves out any server still starting (default 1 s, too short for cold
  *   `npx`/`uvx` servers).
  */
 export const CODEX_THREAD_CONFIG = {
+  ...codexThreadMcpEnvironment(undefined),
   "tools.update_plan.enabled": true,
   mcp_optional_startup_grace_ms: 10_000,
 } as const;
@@ -1500,13 +1512,7 @@ export function codexThreadRuntimeParams(input: {
 } {
   const { mcpSession } = input;
   const memory = McpProviderSession.memoryToolAvailability(mcpSession);
-  const disabledMemoryTools = [
-    ...(!memory.read
-      ? ["memory_list", "memory_search", "memory_read", "memory_history", "memory_sync_status"]
-      : []),
-    ...(!memory.source ? ["memory_read_source"] : []),
-    ...(!memory.write ? ["memory_upsert", "memory_forget", "memory_revert_resolution"] : []),
-  ];
+  const disabledMemoryTools = goatMemoryToolsWithout(memory);
   const cuaDriver = codexManagedCuaDriver(mcpSession, input.userCuaDriver === true);
   // Codex merges a dotted thread-config entry over the user's own `cua-driver`; disabling the
   // whole entry keeps theirs from running for an unattended turn without a lease.
@@ -1528,6 +1534,7 @@ export function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      ...codexThreadMcpEnvironment(mcpSession),
       ...codexNativeSubagentConfig(mcpSession?.nativeSubagentLimit, input.codexVersion).config,
       ...(mcpSession === undefined
         ? {}
@@ -1996,7 +2003,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: routeInput.execution.environment,
+          environment: McpProviderSession.withThreadMcpEnvironment(
+            routeInput.execution.environment,
+            undefined,
+          ),
           routeArgs,
         });
         const memoryByThread = new Map<

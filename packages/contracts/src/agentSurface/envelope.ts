@@ -38,8 +38,8 @@ export const AgentSurfaceError = Schema.Struct({
 export type AgentSurfaceError = typeof AgentSurfaceError.Type;
 
 /**
- * Only fields something produces today. nextCursor and deprecated join with the rollout steps
- * that emit them, so no agent learns to read a field that is never set.
+ * Only fields something produces today. nextCursor joins with the rollout step
+ * that emits it, so no agent learns to read a field that is never set.
  */
 export const AgentSurfaceMeta = Schema.Struct({
   /** Where a routed call ran. */
@@ -48,6 +48,11 @@ export const AgentSurfaceMeta = Schema.Struct({
   content: Schema.optionalKey(Schema.Array(Schema.Unknown)),
   /** Accepted work still running; an ok result without it is finished. */
   operation: Schema.optionalKey(OperationRef),
+  /**
+   * Set when the call named a deprecated tool name or path: the current path to use instead.
+   * The call itself ran normally.
+   */
+  deprecated: Schema.optionalKey(Schema.String),
 });
 export type AgentSurfaceMeta = typeof AgentSurfaceMeta.Type;
 
@@ -134,6 +139,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   ssh_failed: c("unavailable"),
   // Classified by remoteCode when the remote sent a known one.
   remote_refused: c("failed_precondition"),
+  remote_outdated: before("failed_precondition"),
   caller_changed: before("conflict"),
   duplicate_task: before("conflict"),
   // Linked hosts (OrchestratorMcpFailure reason)

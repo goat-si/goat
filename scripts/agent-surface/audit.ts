@@ -11,7 +11,6 @@
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-
 import {
   type CliEntry,
   type Inventory,
@@ -22,6 +21,7 @@ import {
   repoRoot,
   sourceFiles,
 } from "./inventory.ts";
+import { SHIPPED_TOOL_NAMES, toolTokensIn } from "./listedNames.ts";
 import { code, list, pct, table, TICK } from "./markdown.ts";
 
 const OUTPUT = "docs/internals/agent-surface-audit.md";
@@ -71,12 +71,10 @@ const toolMentions = (
               .filter((span) => !span.startsWith("<"))
           : []
         : [line];
-      const tokens = texts.flatMap((text) =>
-        [...text.matchAll(/\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g)].map((match) => match[1] ?? ""),
-      );
+      const tokens = texts.flatMap(toolTokensIn);
       for (const token of new Set([...prefixed, ...tokens])) {
         const first = token.split("_")[0] ?? "";
-        if (first === "goat" || firstSegments.has(first)) {
+        if (first === "goat" || firstSegments.has(first) || token.includes(".")) {
           out.push({ token, ref: { path: file, line: index + 1 } });
         }
       }
@@ -202,7 +200,7 @@ function analyse(inventory: Inventory) {
   const mutating = tools.filter((tool) => tool.mutating);
   const fields = tools.flatMap((tool) => tool.input.fields);
   const firstSegments = new Set(tools.map((tool) => tool.name.split("_")[0] ?? ""));
-  const knownNames = new Set(tools.map((tool) => tool.name));
+  const knownNames = new Set([...tools.map((tool) => tool.name), ...SHIPPED_TOOL_NAMES.keys()]);
   // Error codes share the snake_case shape; they are not tools.
   const codes = new Set(tools.flatMap((tool) => tool.error.codes));
   // Strict scan finds names that do not exist; loose scan measures coverage.
@@ -217,8 +215,9 @@ function analyse(inventory: Inventory) {
         // Stems of real names, such as goat_thread in "goat_thread_*".
         ![...knownNames].some((name) => name.startsWith(mention.token + "_")),
     );
-  const docSet = new Set(docCoverage.map((mention) => mention.token));
-  const promptSet = new Set(promptMentions.map((mention) => mention.token));
+  const shipped = (mention: Mention) => SHIPPED_TOOL_NAMES.get(mention.token) ?? mention.token;
+  const docSet = new Set(docCoverage.map(shipped));
+  const promptSet = new Set(promptMentions.map(shipped));
   const cliDocMentions = cliMentions(DOC_FILES());
   const cliDrift = cliDocMentions
     .map((mention) => checkCliMention(mention, inventory.cli))
@@ -711,7 +710,7 @@ function render(inventory: Inventory): string {
             ", " +
             at(
               "apps/server/src/mcp/completionWebhook.ts",
-              /secretRef comes from request_secret in a GOAT thread/,
+              /secretRef comes from goat_handoff_create in a GOAT thread/,
             ),
         ],
         [
