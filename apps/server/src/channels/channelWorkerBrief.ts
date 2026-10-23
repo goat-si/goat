@@ -7,6 +7,9 @@
  * worker on another machine cannot reach those files, so the notes and any skill the
  * instruction names travel inside its first message instead.
  *
+ * A GOAT Bot turn, where the bot handles a message itself, is told the routing, read-only,
+ * dispatch, and supervisor rules below.
+ *
  * @module channelWorkerBrief
  */
 import type { ChannelTask } from "@goat/contracts";
@@ -14,6 +17,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+import {
+  GOATCLAW_SUPERVISOR_ASKS,
+  GOATCLAW_SUPERVISOR_DELEGATION,
+} from "../goatclaw/RoleTemplates.ts";
 import type { ChannelBotFiles } from "./channelBotNotes.ts";
 
 /** At most this many skills, each cut to this many characters, ride a remote worker's message. */
@@ -74,6 +81,39 @@ export const channelWorkerRules = (reporting: "local" | "remote") =>
         REPORT_RESULT,
         FINISH,
       ];
+
+/**
+ * GOAT Bot runs with full access so reading anything never stops on an approval, which makes
+ * read-only a promise this text alone keeps. Work that changes things is a coding task.
+ */
+export const GOAT_BOT_READ_ONLY_RULE =
+  "You run with full access and are read-only by instruction: nothing in GOAT stops you, so keep this rule yourself. Read anything that helps: files anywhere on this machine, git history and status, logs, system status, and GOAT's tools. Change nothing yourself: no file edits, no commands that write, install, delete, move, or restart anything, no commits or pushes, and no settings changes in GOAT or anywhere else. Subagents you start keep the same rule. If the request needs a change, that is a coding thread: launch it by the routing rule instead of changing anything yourself; if it is unclear whether the person wants the change, ask them first.";
+
+/**
+ * The grok-bot split a GOAT Bot turn applies: settle small lookups from its own reads, delegate
+ * investigations to one bounded subagent, and hand coding work to a worktree thread whose result
+ * comes back into the same conversation.
+ */
+export const GOAT_BOT_ROUTING_RULE =
+  "Route what this needs one of three ways. Small lookups you settle yourself: read the files, notes, memory, or task status that answer it, and reply. Investigations that take several steps or parallel searching go to a bounded subagent with delegate_task: wait for it and fold what it found into your answer; never paste its output raw. Work that changes anything goes to a coding thread: goat_thread_launch here or goat_ssh_thread_launch on another machine, always with a worktree workspace; when GOAT tells you that thread ended, report its result back into this conversation. Follow-ups from the person arrive while you work: acknowledge each one, answer what you can between waits on children, and fold the rest in when the child completes.";
+
+/**
+ * GOAT Bot hands work to the machines that have room for it; the general placement guidance is in
+ * the GOAT orchestration instructions every agent gets.
+ */
+export const GOAT_BOT_DISPATCH_RULE =
+  "When more than one machine is connected, spread work instead of doing it all here: check goat_host_status and the host lists, then start each lane on a machine that has what it needs and room to spare, with delegate_task here or goat_ssh_thread_launch on another machine. Put the read-only rule in every brief you send, never start a Boat cloud machine unless the person asked, rely on GOAT's notifications instead of polling, and say in your answer which machine ran what.";
+
+/**
+ * With goatclaw on, GOAT Bot fronts the supervisor (design §8.4): it plans and launches managers,
+ * whose profiles carry the authority, and it stays read-only by the rule above.
+ */
+export const GOAT_BOT_SUPERVISOR_RULE = [
+  "goatclaw is on, so you front the goatclaw supervisor. The read-only rule still holds: plan the work and hand every change to a manager.",
+  GOATCLAW_SUPERVISOR_DELEGATION,
+  GOATCLAW_SUPERVISOR_ASKS,
+  "Fold each manager's report into your answer with its exact heads, check totals, and NOT RUN line.",
+].join(" ");
 
 /**
  * The first message of a worker on another machine, carrying the home machine's notes. When it

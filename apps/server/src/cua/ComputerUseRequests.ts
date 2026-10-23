@@ -96,6 +96,8 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   return {
     kind: "needs_human",
     handoff,
+    // Calling again after approval reads the admission and returns available.
+    next: { after: "approval", call: "goat_computer_use_request" },
     message: `A person must approve this in a GOAT app; a reply in a chat channel does not count. If they approve before ${until}, your next turn in this thread has the cua-driver tools until then. End this turn now.`,
   } satisfies ComputerUseRequestResult;
 });

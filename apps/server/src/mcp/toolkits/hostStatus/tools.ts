@@ -6,7 +6,7 @@ import {
   GoatHubDeviceVerifyInput,
   GoatHubDeviceVerifyResult,
   HubDeviceOperationInput,
-  HubDeviceOperationResult,
+  hubDeviceToolResult,
   OrchestratorMcpFailure,
 } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
@@ -51,7 +51,7 @@ const membershipTool = <
   Tool.make(agentSurfaceRegistry[path].name, {
     description: agentSurfaceRegistry[path].description,
     parameters: HubDeviceOperationInput,
-    success: HubDeviceOperationResult,
+    success: hubDeviceToolResult(agentSurfaceRegistry[path].name),
     failure: OrchestratorMcpFailure,
     failureMode: "return" as const,
     dependencies: [

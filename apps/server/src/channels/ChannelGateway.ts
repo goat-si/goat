@@ -107,6 +107,8 @@ export const lowerRuntimeMode = (left: RuntimeMode, right: RuntimeMode): Runtime
 /**
  * Whether someone may answer a task's question. An answer steers work that runs under the asker's
  * ceiling, so the answerer needs to be allowed to run work and at least as far as the asker.
+ * A linked channel account is a person, whom handoffs/HumanStepAuthority.ts lets resolve every
+ * human step; this adds the channel's own owner, scope and ceiling checks for the target.
  */
 export const mayAnswerFor = (answerer: ChannelRequester, asker: ChannelRequester): boolean =>
   answerer.ownerId === asker.ownerId &&

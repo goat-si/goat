@@ -15,7 +15,7 @@ import {
   OrchestratorMcpFailure,
   RunId,
   type ServerActivityBlocker,
-  type SshHostResult,
+  type SshHostSettledResult,
   SshWorkspaceError,
   type SshLaunchWorkspace,
   ThreadId,
@@ -39,6 +39,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import { dispatchFacts } from "../../hostFailure.ts";
 import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
 import { admitLaunch } from "../../pressureAdmission.ts";
+import { settled } from "../settled.ts";
 import { SshToolkit, SshThreadHandoffFailure } from "./tools.ts";
 
 // Resolved per call: the coordinator sits on an import cycle through LaunchWatchService and
@@ -70,9 +71,9 @@ const toMcpFailure = (error: SshRemoteDispatch.SshRemoteDispatchError) =>
 
 /** Names what a busy host is running, so a waiting update says what it waits for. */
 export const withUpdateBlockers = (
-  result: SshHostResult,
+  result: SshHostSettledResult,
   blockers: ReadonlyArray<ServerActivityBlocker>,
-): SshHostResult => {
+): SshHostSettledResult => {
   if (result.kind !== "ok" || blockers.length === 0) return result;
   const shown = blockers
     .slice(0, 3)
@@ -212,7 +213,9 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     Effect.gen(function* () {
       yield* requireOrchestration;
       const setup = yield* SshHostSetup.SshHostSetup;
-      const result = yield* setup.status(input);
+      const result = yield* setup
+        .status(input)
+        .pipe(Effect.flatMap(settled("goat_ssh_host_status")));
       if (
         result.kind !== "ok" ||
         result.status.state !== "update_waiting" ||
@@ -239,7 +242,10 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
         const setup = yield* SshHostSetup.SshHostSetup;
         return yield* setup
           .forget(input, { kind: "mcp", scope })
-          .pipe(Effect.mapError(toSetupFailure("orchestration_error")));
+          .pipe(
+            Effect.mapError(toSetupFailure("orchestration_error")),
+            Effect.flatMap(settled("goat_ssh_host_forget")),
+          );
       }),
     ),
   ),
@@ -358,10 +364,11 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
         const pressure = yield* admitLaunch(input.host);
         const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
         // goatclaw applies fleet-wide: bring the destination's policy up to date before it must
-        // enforce this ceiling. A host that cannot take it still refuses the launch clearly.
+        // enforce this ceiling. A destination that does not accept a ceiling at all still refuses
+        // the launch in SshRemoteDispatch.
         if (effective.enabled) {
           const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
-          if (fleet._tag === "Some") yield* fleet.value.ensure(input.host);
+          if (fleet._tag === "Some") yield* FleetSync.syncBeforeForwarding(fleet.value, input.host);
         }
         // The thread on this machine that launches; an outside client has none to record.
         const launcher = caller.caller;

@@ -24,8 +24,11 @@ same checks in-process (`apps/server/src/provider/ProviderDiagnosis.ts`).
 
 Tool names, descriptions, schema references and discovery metadata live in
 [`agentSurface/registry.ts`](../packages/contracts/src/agentSurface/registry.ts). Each entry has
-an explicit `resource.verb` path and retains its current MCP name; this does not change `tools/list`
-or introduce callable aliases. Schemas remain with their owning toolkit or contracts module.
+an explicit `resource.verb` path and retains its current MCP name, which `tools/list` shows. When
+that name is not the path's canonical `goat_<resource>_<verb>` projection, `/mcp` also accepts the
+canonical name in `tools/call` and runs the served tool, without listing it
+([`ToolDispatch.ts`](../apps/server/src/mcp/ToolDispatch.ts) `withServedToolNames`). Schemas
+remain with their owning toolkit or contracts module.
 
 `McpToolAccess` declarations carry the effect class. Registration derives the read-only and
 destructive hints from those declarations, overriding presentation metadata. The catalog test
@@ -65,6 +68,7 @@ launches that skip this one.
 
 The registered names include `goat_*` forms, unprefixed names, and `channel_*`, `preview_*`,
 `device_*`, `html_*`, and `memory_*` tools. Presentation of older `t3_*` tool names, when it exists, is display recovery for history.
-Registration uses the current names.
+Registration uses the current names. Presentation also maps the unlisted canonical aliases to the
+tool they ran.
 
 > Decision record: [ADR-0007](decisions/ADR-0007-mcp-tool-names.md)

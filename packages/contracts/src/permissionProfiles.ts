@@ -54,7 +54,7 @@ export const BUILTIN_PERMISSION_PROFILES: Readonly<Record<string, PermissionProf
   },
 };
 
-const DEFAULT_GOATCLAW_PROFILE = "worker";
+const DEFAULT_GOATCLAW_PROFILE = "owner";
 
 export const GoatclawSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
