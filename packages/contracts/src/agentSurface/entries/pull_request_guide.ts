@@ -8,7 +8,9 @@ export const pullRequestGuideEntries = {
     toolkit: "pullRequests",
     summary: "Write pull request guides",
     description:
-      "Write review guides for up to 20 pull requests, the tour a maintainer reads in a pull request's Guide tab. Each run reads its change in a temporary checkout and takes minutes, so this returns once the runs are under way; read a guide with goat_pull_request_guide_read to see when it is written. A guide for the same head that is already running is joined, not restarted; a pull request whose guide is current is written again. Each pull request is read through the project in this environment whose checkout has that repository. Fails while review guides are off on this server.",
+      "Start writing pull request review guides in the background. Read progress with goat_pull_request_guide_read. A running guide for the same head is reused; a completed guide for that head is generated again.",
+    guide:
+      "Accepts up to 20 pull requests. Each guide is a maintainer’s tour shown in the pull request’s Guide tab. Generation reads the change in a temporary checkout; the response returns after runs start. Each target must match a project checkout in this environment. Review guides must be enabled on the server.",
     effect: "write",
     capability: "threads.launch",
     hostRoutable: false,
@@ -28,7 +30,9 @@ export const pullRequestGuideEntries = {
     toolkit: "pullRequests",
     summary: "Read pull request guide",
     description:
-      "Read a pull request's stored review guide and its run: run.Running while one is being written, run.Failed with the reason when the last one failed, guide null when none was written. stale is true after a push the guide has not caught up with. Never starts a run.",
+      "Read a pull request’s stored review guide and generation status. A stale guide describes an older head; this call does not start generation.",
+    guide:
+      "run has tag Running while generation is active and Failed with details when the last run failed. guide is null when no guide is stored. stale compares the guide head to the currently known host head; if no current head is available, it is false rather than proof the guide is current.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

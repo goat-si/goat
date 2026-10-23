@@ -13,7 +13,4 @@ export const DESCRIPTIONS_OVER_BUDGET: Readonly<Record<string, number>> = {
   "hub.device_leave": 745,
   "hub.device_repair": 544,
   "hub.device_verify": 422,
-  "pull_request_guide.update": 578,
-  "pull_request.link": 551,
-  "pull_request.watch": 1416,
 };
