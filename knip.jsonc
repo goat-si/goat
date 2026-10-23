@@ -47,8 +47,6 @@
         "scripts/probe-claude-fork-local-rollback-replay.ts",
         "scripts/update-test-shard-weights.ts",
         "scripts/verify-background-live.ts",
-        // An offline fixture CLI from the channel placement work, run by hand.
-        "scripts/seed-channel-placement-fixture.ts",
         "src/provider/testFixtures/*.mjs",
         // sshRuntimeSpawn.test.ts spawns it by path as a separate process.
         "src/cloud/sshRuntimeSpawn.fixture.ts",

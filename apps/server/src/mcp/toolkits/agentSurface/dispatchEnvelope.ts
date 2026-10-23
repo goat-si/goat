@@ -61,7 +61,7 @@ const reclassified = (
   };
 };
 
-export const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
+const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
 
 /** Where a routed call ran, so the agent can tell remote results from local ones. */
 const withHost = (result: AgentSurfaceResult, host: string | undefined): AgentSurfaceResult =>

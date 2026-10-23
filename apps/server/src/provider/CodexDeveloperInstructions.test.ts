@@ -25,6 +25,7 @@ describe("buildCodexAdditionalContext", () => {
       { browser: true, device: false },
       { browser: false, device: true },
       { browser: true, device: true },
+      { browser: true, device: true, computerUse: true },
     ])("keeps every entry within Codex's per-entry cap with tools %j", (availability) => {
       const context = buildCodexAdditionalContext(runtime, availability);
 
@@ -45,8 +46,9 @@ describe("buildCodexAdditionalContext", () => {
       model: "gpt-5.3-codex",
       reasoningEffort: "high",
     });
+    NodeAssert.ok(Object.keys(context).every((key) => key.startsWith("goat_code_")));
     const sections = Object.keys(context)
-      .filter((key) => key.startsWith("t3_code_orchestration_"))
+      .filter((key) => key.startsWith("goat_code_orchestration_"))
       .sort()
       .map((key) => context[key]!);
 
@@ -62,7 +64,7 @@ describe("buildCodexAdditionalContext", () => {
 
   it("delivers the development discipline even when GOAT tools are unavailable", () => {
     const context = buildCodexAdditionalContext({ model: "gpt-5.3-codex" }, false);
-    NodeAssert.deepEqual(context.t3_code_development, {
+    NodeAssert.deepEqual(context.goat_code_development, {
       kind: "application",
       value: GOAT_DEVELOPMENT_INSTRUCTIONS,
     });
@@ -82,5 +84,5 @@ describe("buildCodexDeveloperInstructions", () => {
 });
 
 function runtimeInstructions(runtime: Parameters<typeof buildCodexAdditionalContext>[0]) {
-  return buildCodexAdditionalContext(runtime).t3_code_runtime!.value;
+  return buildCodexAdditionalContext(runtime).goat_code_runtime!.value;
 }

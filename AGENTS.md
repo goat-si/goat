@@ -1,60 +1,60 @@
-# T3 Code
+# GOAT
 
-T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
+GOAT runs the coding agents people already use, such as Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity, Pi and ACP agents, on the machines they own, puts cloud agents that run in their vendor's environment beside them, and lets people steer all of it from the desktop app, a browser, or a phone. Every machine runs a GOAT server: a Node WebSocket server that wraps the provider CLIs and serves the web, desktop, and mobile clients. On top of that, GOAT adds GOAT Bot, agents that start and follow work on other machines, Fleet, memory, and the `goat` MCP tools agents use to orchestrate other threads.
 
-You can think of T3 Code as an open source "bring-your-own-subscription" alternative to apps like Claude Desktop, Codex App, Cursor Glass and Conductor.
+GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code). It keeps that event-sourced core and still merges upstream changes, so many files here are shared with upstream. [Fork delta](devlog/_chase/010_fork_delta.md) records the areas where the two differ.
 
-## What makes T3 Code special?
+## What GOAT protects
 
-We have over 500,000 users who love T3 Code. It's important we maintain the things they love as we continue to iterate on the product. Here's a brief list of the things we can never compromise on.
+These are the things we do not trade away while the product changes.
 
 ### 1. Open at the core
 
-T3 Code is truly open. We share our roadmap, we share how we think about things, and of course we share all our code. A large number of our users run forks. We work in the open, and should strive to stay that way.
+GOAT is developed in a public repository. We track work in GitHub issues and pull requests, explain our reasoning there, and keep the code readable for the people who run forks of it.
 
 ### 2. Performance without compromise
 
-Lots of apps have gotten bogged down with bad tech decisions and "slop". We have not, and we're proud of the performance of T3 Code. We regularly audit for performance regressions, often caused by sending too much data over websockets, css animations causing gpu spikes, lists being hard to render, and more. Make sure all changes are considerate of performance impact.
+Users drive agents all day, and a slow client costs them every minute. Performance regressions usually come from sending too much data over websockets, CSS animations causing GPU spikes, lists that are hard to render, and similar choices. Make sure every change is considerate of performance impact.
 
-### 3. Remote ready
+### 3. Every machine, every screen
 
-The architecture of T3 Code's websocket layer (npx t3) enables a lot of awesome remote features. These have become core to the product. Whether users are connecting directly over their local network, using Tailscale, or leaning in fully with T3 Connect (our tunnel solution, also in this repo), we need to make sure new features are properly supported.
+The GOAT server's websocket layer is what makes remote work possible, and remote work is core to the product. Users connect directly over their local network, over Tailscale, or through SSH hosts that receive their own GOAT runtime, and they link other GOAT servers so agents can start work there. GOAT Connect, the managed tunnel, is not available yet. New features need to work when the client, the server, and the agent are on different machines.
 
 ### 4. Multi-surface
 
-T3 Code has 3 key app surfaces: **web**, **desktop**, and **mobile**.
+GOAT has 3 key app surfaces: **web**, **desktop**, and **mobile**.
 
-**Web** is kind of two surfaces, as we have the public facing "app.t3.codes" as well as locally hosting the web app through the `npx t3` command. Both need to be supported by all new features where reasonable.
+**Web** is served by every GOAT server: `goat` opens it locally, and paired browsers reach it from other devices.
 
-**Desktop** is the main surface most users install first. It's a full Electron app that bundles the server runner as well. The desktop app can also be used as the host server, allowing remote connections from app.t3.codes or the mobile app.
+**Desktop** is the Electron app most users install first. It bundles the server, so it can also host the environment that browsers, phones, and other desktops connect to.
 
-**Mobile** is a React Native app for both iOS and Android, available on the App Store and Google Play. The mobile app allows for connecting to any T3 Code server to control work remotely.
+**Mobile** is a React Native app for iOS and Android (`apps/mobile`). It connects to any GOAT server to control work remotely. GOAT's own build (`si.goat.mobile`) is not in the App Store or Google Play yet; the store listings the user guides link are upstream's app.
 
-## A note from Theo
+## Design stance
 
-I like ambitious ideas, simple systems, and software that feels obvious. Do not preserve complexity just because it already exists. Do not introduce machinery because it looks architecturally impressive. Understand the real constraint, then fight for the smallest model that makes the correct behavior unsurprising.
+We like ambitious ideas, simple systems, and software that feels obvious. Do not preserve complexity just because it already exists. Do not introduce machinery because it looks architecturally impressive. Understand the real constraint, then fight for the smallest model that makes the correct behavior unsurprising.
 
 Channel both "measure twice, cut once" and "yagni". Fight scope creep. Try to honor the dev's intent in both a minimal and realistic fashion.
 
 The rest of this document is meant to help you navigate the codebase and make changes effectively. Think of these instructions less as "hard rules", more as "good defaults". The developer's preferences should be able to override anything here.
 
-Of note: Most T3 Code contributions will come from T3 Code itself, often controlled remotely. This means you should be careful about accessing data, killing dev servers, and other things that may damage the T3 Code instance that the contributor is using.
+Of note: Most GOAT contributions come from GOAT itself, often controlled remotely. This means you should be careful about accessing data, killing dev servers, and other things that may damage the GOAT instance that the contributor is using.
 
 ## A small glossary
 
 We need to be on the same page with terminology. When communicating, use this language:
 
-- **you** means the agent reading this file and changing T3 Code.
-- **we, us, and maintainers** mean Theo, Julius and the people building T3 Code. These are who you are talking to now.
-- **user** means the person using T3 Code to direct coding agents.
-- **agent** means the coding agent a user runs inside T3 Code. Depending on context, that may also include you.
-- **provider** means the agent runtime or harness T3 Code talks to, such as Codex, Claude, Cursor, or OpenCode.
+- **you** means the agent reading this file and changing GOAT.
+- **we, us, and maintainers** mean the people building GOAT. These are who you are talking to now.
+- **user** means the person using GOAT to direct coding agents.
+- **agent** means the coding agent a user runs inside GOAT. Depending on context, that may also include you.
+- **provider** means the agent runtime or harness GOAT talks to, such as Codex, Claude, Cursor, or OpenCode.
 - **client** means the web, desktop, or mobile UI.
-- **environment** means one running T3 server and the machine, filesystem, provider credentials, and state it owns.
+- **environment** means one running GOAT server and the machine, filesystem, provider credentials, and state it owns.
 - **project** means an environment-local workspace record rooted at a directory.
 - **thread** means the durable conversation and work history for a project.
 - **turn** means one user-to-agent cycle, including follow-up work such as checkpointing.
-- **T3 home** means the base data directory. Runtime state normally lives below its userdata directory.
+- **GOAT home** means the base data directory. Runtime state normally lives below its userdata directory.
 
 ## The three ways to hurt yourself
 
@@ -154,7 +154,7 @@ For authorized mobile verification, a missing or outdated native client is a bui
 - UI changes need before/after images embedded in the PR description. Motion or timing needs a short video. The `goat-screenshot-gate` check flags a PR that changes `apps/web`, `apps/desktop`, `apps/mobile`, or `apps/marketing` without an embedded image; after adding one, re-run that job. Drafts and non-UI PRs are skipped, and only a maintainer can waive it with the `gui-screenshot-waived` label.
 - Attach images by dragging them into the description editor, or, from the command line, run `node scripts/pr-assets.ts upload <pr> <files...>`. It commits them to the orphan `pr-assets` branch as `<pr>/<name>` without touching your checkout, checks that each URL loads, and prints markdown that links them by commit SHA. Add `--patch-body` to repoint embeds already in the description, such as `![after](pr-assets/after.png)`. Relative paths and branch-name links never render, and the gate rejects them. Never commit screenshots or PR-only assets to the PR branch; the squash merge carries them into `dev`.
 - One request is one PR. Split it only when the maintainer asks. Outside contributions follow the stricter [one problem per PR](CONTRIBUTING.md#one-problem) rule.
-- When babysitting: call `goat_pull_request_watch` and end your turn. GOAT wakes you on checks, comments, or conflicts. Do not poll or sleep. Verify each bot finding against the source, fix real ones, dismiss false positives with a written reason. Stay quiet when nothing is new. Stop when the bots are green on the latest commit.
+- When babysitting: call `goat_call {path:"pull_request.watch"}` and end your turn. GOAT wakes you on checks, comments, or conflicts. Do not poll or sleep. Verify each bot finding against the source, fix real ones, dismiss false positives with a written reason. Stay quiet when nothing is new. Stop when the bots are green on the latest commit.
 
 ## Merging
 
@@ -175,7 +175,7 @@ Most code changes do not need an internal documentation change. Agents can read 
 - When a documented decision or constraint changes, rewrite or remove the affected text. Do not append another account of the new behavior. A new internal page needs a distinct, durable reason to exist.
 - `docs/user/` helps users accomplish tasks. Give each major feature a concise section explaining what it does, how to start, and anything unintuitive. A settings path is useful; descriptions of visible buttons, icons, layouts, animations, or every UI state are not. Before adding text, ask what task or decision it helps the user with.
 - Keep user docs in the shipped product's voice, without implementation details or contributor tooling. Update the relevant feature section when how to use it changes. A UI tweak does not need a documentation entry, and a new control does not need its own page.
-- `docs/operations/` holds maintainer setup, release, and debugging procedures. Keep instructions for operating an installed T3 Code server in the user guides.
+- `docs/operations/` holds maintainer setup, release, and debugging procedures. Keep instructions for operating an installed GOAT server in the user guides.
 
 ## Plans and work artifacts
 

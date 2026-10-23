@@ -1,3 +1,6 @@
+import { LEGACY_RENDER_COUNTER_HOOK } from "@goat/contracts/legacyT3Names";
+import { renderCounterAliases } from "./render-counter-protocol";
+
 // Dev-only render counter driven by `scripts/measure-renders.mts` through the
 // Hermes inspector. It wraps the DevTools hook's commit callback, so it must load
 // before React renders anything; see `render-counter-entry.ts`.
@@ -26,7 +29,8 @@ interface HookSlot {
 }
 interface DevToolsHook {
   onCommitFiberRoot?: (id: unknown, root: { current: Fiber }, ...rest: unknown[]) => unknown;
-  __t3RenderCounter?: true;
+  __goatRenderCounter?: true;
+  [LEGACY_RENDER_COUNTER_HOOK]?: true;
 }
 interface RenderCounterState {
   on: boolean;
@@ -108,8 +112,8 @@ function install(state: RenderCounterState) {
     setTimeout(() => install(state), 50);
     return;
   }
-  if (hook.__t3RenderCounter) return;
-  hook.__t3RenderCounter = true;
+  if (hook.__goatRenderCounter || hook[LEGACY_RENDER_COUNTER_HOOK]) return;
+  hook.__goatRenderCounter = true;
   const original = hook.onCommitFiberRoot.bind(hook);
 
   const visit = (fiber: Fiber | null, parentName: string) => {
@@ -144,34 +148,37 @@ const sorted = (map: Map<string, number>) =>
 
 install(state);
 
-Object.assign(globalThis, {
-  /** Routes an app link in-process, so drivers need no simctl or adb access. */
-  __t3RenderCounterOpen(url: string) {
-    const { Linking } = require("react-native") as typeof import("react-native");
-    void Linking.openURL(url);
-    return true;
-  },
-  /** Restarts the JS app on Home; deferred so the inspector call can reply first. */
-  __t3RenderCounterReload() {
-    const { DevSettings } = require("react-native") as typeof import("react-native");
-    setTimeout(() => DevSettings.reload(), 100);
-    return true;
-  },
-  __t3RenderCounterStart() {
-    state.commits = 0;
-    state.counts = new Map();
-    state.causes = new Map();
-    state.on = true;
-    return true;
-  },
-  __t3RenderCounterStop(): RenderCounterReport {
-    state.on = false;
-    const components = sorted(state.counts);
-    return {
-      commits: state.commits,
-      totalRenders: components.reduce((total, entry) => total + entry.count, 0),
-      components,
-      causes: sorted(state.causes),
-    };
-  },
-});
+Object.assign(
+  globalThis,
+  renderCounterAliases({
+    /** Routes an app link in-process, so drivers need no simctl or adb access. */
+    open(url: string) {
+      const { Linking } = require("react-native") as typeof import("react-native");
+      void Linking.openURL(url);
+      return true;
+    },
+    /** Restarts the JS app on Home; deferred so the inspector call can reply first. */
+    reload() {
+      const { DevSettings } = require("react-native") as typeof import("react-native");
+      setTimeout(() => DevSettings.reload(), 100);
+      return true;
+    },
+    start() {
+      state.commits = 0;
+      state.counts = new Map();
+      state.causes = new Map();
+      state.on = true;
+      return true;
+    },
+    stop(): RenderCounterReport {
+      state.on = false;
+      const components = sorted(state.counts);
+      return {
+        commits: state.commits,
+        totalRenders: components.reduce((total, entry) => total + entry.count, 0),
+        components,
+        causes: sorted(state.causes),
+      };
+    },
+  }),
+);
