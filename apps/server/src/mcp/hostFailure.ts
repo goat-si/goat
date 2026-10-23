@@ -30,6 +30,8 @@ export function hostFailure(
       return failure("host_unavailable", error.message);
     case "caller_changed":
       return failure("runtime_mode_escalation_denied", error.message);
+    case "remote_outdated":
+      return failure("remote_outdated", error.message);
     case "remote_refused":
       return failure(
         error.remoteCode !== undefined && isFailureCode(error.remoteCode)
