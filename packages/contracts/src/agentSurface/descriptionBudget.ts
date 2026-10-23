@@ -6,14 +6,12 @@ export const DESCRIPTION_BUDGET = 400;
  * shrink but never grow, and leaves this list once it fits; descriptionBudget.test.ts holds both.
  */
 export const DESCRIPTIONS_OVER_BUDGET: Readonly<Record<string, number>> = {
-  "channel.task_export": 1094,
   "cloud_agent.holders": 752,
   "cloud_agent.launch": 915,
   "cloud_agent.run_register": 653,
   "computer_use.request": 831,
   "connection.add_ssh": 1117,
   "connection.remove": 401,
-  "decision.answer": 450,
   "environment.preferences_update": 432,
   "environment.read": 420,
   "handoff.create": 586,
@@ -24,12 +22,9 @@ export const DESCRIPTIONS_OVER_BUDGET: Readonly<Record<string, number>> = {
   "hub.device_leave": 745,
   "hub.device_repair": 544,
   "hub.device_verify": 422,
-  "note.write": 531,
   "operation.cancel": 451,
   "operation.read": 644,
   "operation.wait": 456,
-  "origin.report": 563,
-  "origin.report_wait": 573,
   "preview.logs": 1206,
   "preview.open": 639,
   "preview.snapshot": 1211,
