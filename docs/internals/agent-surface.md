@@ -468,6 +468,14 @@ Two full-listing sets are kept as references and are not paired with anything: C
 (48 runs) and Claude on the MacBook Pro (rescored, original rows unchanged). The Claude arm of the
 paired campaign has not run.
 
+A third Claude reference, not paired: `claudeAgent` `claude-opus-4-8` with the full listing, on
+`fan-out-review` only, had 10 of 10 clean successful runs, each answering in its fourth run after
+three reviews, with median model turns of 7 to 9.5, a median of 5.5 tool calls, and a median wall
+time of 55.3 s. Its rows are in `scripts/agent-surface/eval/results/261024-full-claude-mbp-fanout/`
+([#1069](https://github.com/goat-si/goat/pull/1069)). The one recurring failed call was
+`goat_provider_list` called with an `args` wrapper, refused with a message that named the legacy
+tool name ([#1068](https://github.com/goat-si/goat/issues/1068)).
+
 ## Calling: `goat_call`
 
 **Now.** `goat call <path> [json | -]` calls any capability from a terminal by sending one
