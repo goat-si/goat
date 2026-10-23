@@ -34,6 +34,7 @@ import {
   type OrchestrationV2InternalCommand,
   type OrchestrationV2LimitRecoveryUpdate,
   type OrchestrationV2ServerCommand,
+  type ThreadPullRequestKey,
   type ThreadPullRequestLink,
   type ThreadPullRequestWatch,
   type OrchestrationV2AppThread,
@@ -109,6 +110,7 @@ import {
   newPullRequestWatch,
   syncedPullRequestWatch,
 } from "./goat/PullRequestAutoWatch.ts";
+import { dropQueuedPullRequestWakes as dropQueuedWakes } from "./goat/PullRequestWatchWakes.ts";
 import {
   cancelledBeforeStart,
   isRestartContinuationSource,
@@ -2747,6 +2749,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       yield* dispatchThreadMutation(command, events, effects);
+      if (command.dropQueuedWakes === true) yield* dropQueuedPullRequestWakes(command, events);
       if (command.wake === undefined) {
         if (command.note === undefined) return;
         // Kept as context: the timeline shows it, and no turn starts.
@@ -2804,6 +2807,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     },
   );
+
+  // A stopped watch, or one whose pull request merged or closed, drops the wakes it queued (#926).
+  const dropQueuedPullRequestWakes = (
+    command: ThreadPullRequestKey & { readonly commandId: CommandId; readonly threadId: ThreadId },
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    dropQueuedWakes(
+      command,
+      projectionStore
+        .getThreadRecords(command.threadId, ["runs"])
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        ),
+      (runId) =>
+        dispatchQueuedRunCancel(
+          {
+            type: "queued-run.cancel",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            runId,
+          },
+          events,
+        ),
+    );
 
   const { shouldAutoWatchPullRequest } = makePullRequestAutoWatch({
     serverSettings,
@@ -12008,9 +12037,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.mark-unread":
       case "thread.metadata.update":
       case "thread.pull-request.link":
-      case "thread.pull-request.unlink":
       case "thread.pull-request-link.sync":
-      case "thread.pull-request.watch":
       case "thread.pull-request.sync":
       case "thread.title.regeneration.complete":
       case "thread.runtime-mode.set":
@@ -12018,6 +12045,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.model-selection.set":
       case "provider.switch":
         yield* dispatchThreadMutation(command, events, effects);
+        break;
+      case "thread.pull-request.watch":
+      case "thread.pull-request.unlink":
+        yield* dispatchThreadMutation(command, events, effects);
+        if (command.type === "thread.pull-request.unlink" || !command.watching)
+          yield* dropQueuedPullRequestWakes(command, events);
         break;
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);
