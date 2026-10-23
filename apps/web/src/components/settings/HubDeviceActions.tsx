@@ -48,7 +48,7 @@ const entryKey = (environmentId: EnvironmentId, alias: string) => `${environment
  * The last action per device. Kept alive so a decision answered in Settings → Decision inbox can
  * be continued here, and so a device that left the hub keeps its result after the list refreshes.
  */
-export const hubActionsAtom = Atom.make<Readonly<Record<string, HubActionEntry>>>({}).pipe(
+const hubActionsAtom = Atom.make<Readonly<Record<string, HubActionEntry>>>({}).pipe(
   Atom.keepAlive,
   Atom.withLabel("hub-device-actions"),
 );

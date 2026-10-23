@@ -19,7 +19,10 @@ export interface AgentSurfaceEntry {
   readonly name: string;
   readonly toolkit: string;
   readonly summary: string;
+  /** What a listing shows; at most DESCRIPTION_BUDGET characters (descriptionBudget.ts). */
   readonly description: string;
+  /** Guidance longer than the description, served only by goat_describe for one path. */
+  readonly guide?: string;
   readonly effect: AgentSurfaceEffect;
   readonly hostRoutable: boolean;
   readonly requires: "thread" | "client" | "either";

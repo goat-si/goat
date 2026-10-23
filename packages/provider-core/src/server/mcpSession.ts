@@ -1,3 +1,4 @@
+import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 import type {
   AuthEnvironmentScope,
   CuaDriverMcpConfiguration,
@@ -165,4 +166,16 @@ export function memoryToolAvailability(
     write: read && scopes.includes("memory:write"),
     source: read && scopes.includes("orchestration:read"),
   };
+}
+
+/** Empty markers prevent a thread shell from falling back to a broader stored login. */
+export function withThreadMcpEnvironment(
+  base: NodeJS.ProcessEnv,
+  config: Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader"> | undefined,
+): NodeJS.ProcessEnv {
+  return withLegacyEnvNames({
+    ...base,
+    GOAT_ACP_MCP_ENDPOINT: config?.endpoint ?? "",
+    GOAT_ACP_MCP_AUTHORIZATION: config?.authorizationHeader ?? "",
+  });
 }
