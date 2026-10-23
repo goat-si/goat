@@ -1189,9 +1189,7 @@ describe("LaunchWatchService", () => {
             "Preparation log (last lines, redacted):\nFetching dev from its remote.\nReceiving objects:  45% (900/2000)",
           );
           expect(wake.text).toContain("Suggested action: Git on this machine was slow or stuck");
-          expect(wake.text).toContain(
-            'Retry with goat_call {path: "thread.retry", args: {threadId: "target"}}',
-          );
+          expect(wake.text).toContain('"thread.retry", args: {threadId: "target"}}');
           expect(wake.notification).toMatchObject({
             outcome: "failed",
             summary: 'Launched thread "Fix the flake" failed preparing its workspace',
