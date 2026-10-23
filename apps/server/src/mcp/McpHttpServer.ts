@@ -1,6 +1,7 @@
 import { listingSetting, withCallerListing } from "./toolListing.ts";
 import * as Settings from "../serverSettings.ts";
 import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
+import { surfaceArgumentAliases } from "./toolkits/agentSurface/argumentAliases.ts";
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
 import {
@@ -13,6 +14,7 @@ import {
   argumentKeys,
   encodeReferenceRefusal,
   keepingRefusalCode,
+  refusalResult,
   undeclaredArgumentsResult,
 } from "./toolRefusals.ts";
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
@@ -889,7 +891,10 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                 ...registration.tool,
                 inputSchema: { ...inputSchema, additionalProperties: false },
               }),
-              handle: (payload) => {
+              handle: (input) => {
+                const aliased = surfaceArgumentAliases(registration.tool.name, input);
+                if (!aliased.ok) return Effect.succeed(refusalResult(aliased.failure));
+                const payload = aliased.payload;
                 const undeclared = argumentKeys(payload).filter(
                   (key) => !Object.hasOwn(properties, key),
                 );
