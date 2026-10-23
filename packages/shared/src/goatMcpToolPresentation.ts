@@ -1,3 +1,5 @@
+import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+
 export type GoatMcpToolLogo = "t3-code";
 
 export interface GoatMcpToolPresentation {
@@ -865,3 +867,33 @@ export function resolveGoatMcpToolPresentation(
   const definition = resolveGoatMcpToolDefinition(toolName);
   return definition === null ? null : { displayName: definition.displayName, logo: "t3-code" };
 }
+
+/**
+ * The GOAT tool an item ran, the arguments it ran with, and that tool's definition. For goat_call
+ * that is the tool its path names and its args, so clients label, link and render the call as
+ * that tool; any other item is itself.
+ */
+export function resolveGoatMcpItemCall(item: {
+  readonly toolName: string | null | undefined;
+  readonly input?: unknown;
+}): {
+  readonly toolName: string | null | undefined;
+  readonly input: unknown;
+  readonly definition: GoatMcpToolDefinition | null;
+} {
+  const input: unknown = item.input;
+  const path = isRecord(input) ? input.path : undefined;
+  const entry =
+    resolveGoatMcpShippedToolId(item.toolName) === "goat_call" && typeof path === "string"
+      ? resolveAgentSurfaceEntry(path)
+      : undefined;
+  const args = isRecord(input) && isRecord(input.args) ? input.args : {};
+  const call =
+    entry === undefined || entry.resource === "surface"
+      ? { toolName: item.toolName, input }
+      : { toolName: entry.name, input: args };
+  return { ...call, definition: resolveGoatMcpToolDefinition(call.toolName) };
+}
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
