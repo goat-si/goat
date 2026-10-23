@@ -5,6 +5,7 @@ import {
   DeviceSession,
   EnvironmentId,
   HandoffSummary,
+  ProviderHostSyncError,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
@@ -25,6 +26,7 @@ import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 
 import { catalog, client, dependencies, entries, toolkits } from "./agentSurface.testkit.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ProviderHostSync from "../provider/ProviderHostSync.ts";
 import { makeOperationTokens } from "./operations/OperationTokens.ts";
 import {
   resolveGoatMcpToolDefinition,
@@ -875,4 +877,48 @@ it.effect("goat_call starts no long work it could not hand back a handle for", (
       ),
     ),
   ),
+);
+it.effect(
+  "classifies a wrapped provider sync refusal by its domain reason, for goat_call and operations",
+  () =>
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const scope = callerScope({ thread: true });
+      const run = asCaller(scope);
+      const envelope = yield* run(viaCall(server, "provider.sync_status", { syncId: "sync_1" }));
+      // The handler wraps it with the legacy code conflict; the declared reason still decides.
+      expect(envelope).toMatchObject({
+        status: "error",
+        error: { code: "cancelled", reason: "declined" },
+      });
+      const tokens = yield* makeOperationTokens.pipe(Effect.provide(dependencies));
+      const operationId = yield* tokens.issue("provider_sync", "sync:sync_1", scope);
+      const read = yield* run(
+        server.callTool({ name: "goat_operation_read", arguments: { operationId } }),
+      );
+      expect(read.structuredContent).toMatchObject({
+        operation: { kind: "provider_sync", state: "cancelled" },
+        result: { status: "error", error: { reason: "declined" } },
+      });
+    }).pipe(
+      Effect.provide(
+        catalog.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              dependencies,
+              Layer.mock(ProviderHostSync.ProviderHostSync)({
+                status: () =>
+                  Effect.fail(
+                    new ProviderHostSyncError({
+                      code: "declined",
+                      detail: "The person declined this sync, so it will not run.",
+                    }),
+                  ),
+              }),
+            ),
+          ),
+          Layer.provideMerge(McpServer.McpServer.layer),
+        ),
+      ),
+    ),
 );

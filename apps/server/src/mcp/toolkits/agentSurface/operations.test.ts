@@ -420,6 +420,7 @@ it.effect("reads how a sync approval ended, and a sync the store forgot as unkno
         ok({ kind: "started", sync: syncState(false, "queued") }),
       ),
     );
+    expect(direct.state).toBe("running");
     status = refused("not_found", "No such sync. It may have finished more than two hours ago.");
     expect(yield* stateOf(direct.operationId)).toBe("unknown");
   }).pipe(as(owner)),

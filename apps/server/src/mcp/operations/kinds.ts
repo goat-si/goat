@@ -148,7 +148,9 @@ const providerSync: OperationKindSpec = {
   },
   state: (result) => {
     if (result.status === "error") return SYNC_ERRORS[result.error.reason] ?? "unknown";
-    const value = okFields(result);
+    // goat_provider_sync answers { kind: "started", sync }; the status tool answers the sync.
+    const answer = okFields(result);
+    const value = answer?.kind === "started" ? fieldsOf(answer.sync) : answer;
     const hosts = Array.isArray(value?.hosts) ? value.hosts.map(fieldsOf) : undefined;
     if (hosts === undefined || typeof value?.done !== "boolean") return "unknown";
     if (!value.done) return "running";
