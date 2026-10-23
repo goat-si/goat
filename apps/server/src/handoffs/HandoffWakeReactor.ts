@@ -119,36 +119,38 @@ const make = Effect.gen(function* () {
   /**
    * The message id is the delivery record and never changes. A command id the orchestrator once
    * rejected (a transient planning failure) stays rejected, so a retry moves to the next attempt
-   * id. Earlier rejected attempts are skipped on every tick; a fresh one waits out its backoff
-   * from the resolution, so a long failure retries ever more slowly but never stops retrying.
+   * id. Each wake remembers its next attempt and when it may run, so a tick makes at most one
+   * fresh attempt and waits longer after each failure; only the first try after a restart walks
+   * past earlier rejected ids. A long failure retries ever more slowly but never stops.
    */
-  const dispatchWake = (
+  const retries = new Map<string, { readonly next: number; readonly eligibleAt: number }>();
+  const dispatchWake = Effect.fn("HandoffWakeReactor.dispatchWake")(function* (
     threadId: ThreadId,
     wake: LaunchWatchWake,
-    resolvedAtMs: number,
-    attempt = 0,
-  ): Effect.Effect<
-    void,
-    | Orchestrator.OrchestratorV2Error
-    | ThreadManagement.ThreadManagementProviderInstanceDisabledError
-  > =>
-    wakeThread(threads, threadId, {
-      ...wake,
-      ...(attempt === 0
-        ? {}
-        : { commandId: CommandId.make(`${wake.commandId}:attempt:${attempt}`) }),
-    }).pipe(
-      Effect.asVoid,
-      Effect.catchIf(
-        (error) => error._tag === "OrchestratorCommandPreviouslyRejectedError",
-        () =>
-          Effect.gen(function* () {
-            const now = DateTime.toEpochMillis(yield* DateTime.now);
-            if (now < resolvedAtMs + retryAfterMs(attempt + 1)) return;
-            yield* dispatchWake(threadId, wake, resolvedAtMs, attempt + 1);
-          }),
-      ),
-    );
+  ) {
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    const retry = retries.get(wake.messageId) ?? { next: 0, eligibleAt: 0 };
+    if (now < retry.eligibleAt) return;
+    for (let attempt = retry.next; ; attempt++) {
+      const sent = yield* wakeThread(threads, threadId, {
+        ...wake,
+        ...(attempt === 0
+          ? {}
+          : { commandId: CommandId.make(`${wake.commandId}:attempt:${attempt}`) }),
+      }).pipe(Effect.result);
+      if (sent._tag === "Success") {
+        retries.delete(wake.messageId);
+        return;
+      }
+      // An earlier rejection under this id: move on without spending a fresh attempt.
+      if (sent.failure._tag === "OrchestratorCommandPreviouslyRejectedError") continue;
+      retries.set(wake.messageId, {
+        next: attempt + 1,
+        eligibleAt: now + retryAfterMs(attempt + 1),
+      });
+      return yield* sent.failure;
+    }
+  });
 
   const deliver = Effect.fn("HandoffWakeReactor.deliver")(
     function* (handoff: Handoff, since: string) {
@@ -160,12 +162,11 @@ const make = Effect.gen(function* () {
       const threadId = handoff.requestedBy.threadId;
       const shell = yield* threads.getThreadShell(threadId);
       if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null) return;
-      if (yield* delivered(wake.messageId)) return;
-      yield* dispatchWake(
-        threadId,
-        wake,
-        handoff.resolvedAt === undefined ? 0 : DateTime.toEpochMillis(handoff.resolvedAt),
-      );
+      if (yield* delivered(wake.messageId)) {
+        retries.delete(wake.messageId);
+        return;
+      }
+      yield* dispatchWake(threadId, wake);
     },
     // One delivery at a time, so the tail and a reconcile never race to a second attempt.
     permit.withPermits(1),
