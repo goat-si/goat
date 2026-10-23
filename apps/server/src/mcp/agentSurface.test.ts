@@ -29,6 +29,8 @@ import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/ai";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { makeOperationTokens } from "./operations/OperationTokens.ts";
 import {
   catalog,
   client,
@@ -51,7 +53,7 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(199); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, and preparation retry tools.
+  expect(entries).toHaveLength(202); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, preparation retry, and operation tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
@@ -362,6 +364,7 @@ const HANDLER_VALIDATION: Readonly<Record<string, string>> = {
   "project.create": "A project made from a title takes no other settings.",
 };
 const IMAGE_TOOL_FAILURE = /^(Preview snapshot|Device screenshot) failed/;
+const OPERATION_NOT_ISSUED = "No operation with that id was issued here to this caller.";
 // Read from the text alone: Pi and other text-only clients never see structuredContent.
 const refusalCode = (text: string) => /"code":"([a-z_]+)"/.exec(text)?.[1];
 const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
@@ -379,6 +382,8 @@ const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
     return refused("ssh_read_only");
   if (/approved for read-only access/.test(text)) return refused("read_only");
   if (code === "capability_denied") return "denied";
+  // Operation verbs refuse a sampled handle in their handler, after access passed.
+  if (path.startsWith("operation.") && text.includes(OPERATION_NOT_ISSUED)) return "reached";
   if (IMAGE_TOOL_FAILURE.test(text)) return "reached";
   if (code === "invalid_request" && path in HANDLER_VALIDATION) return "reached";
   return code !== undefined && HANDLER_CODES.has(code) ? "reached" : "unexpected";
@@ -423,6 +428,7 @@ const ACCESS_EXCEPTIONS: Readonly<
   "cloud_machine.stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.resume": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "surface.call": { reason: "dispatches", readOnlyClient: "reached" },
+  "operation.cancel": { reason: "dispatches", readOnlyClient: "reached" },
 };
 
 const expectedOutcome = (entry: Entry, caller: Caller): Outcome => {
@@ -862,6 +868,65 @@ it("gives goat_describe and goat_call a tool presentation", () => {
     );
   }
 });
+const OPERATION_KEY = new Uint8Array(32).fill(7);
+const operationKey = Layer.mock(ServerSecretStore.ServerSecretStore)({
+  getOrCreateRandom: () => Effect.succeed(OPERATION_KEY),
+});
+const registeredWithOperationKey = catalog.pipe(
+  Layer.provide(Layer.mergeAll(dependencies, operationKey)),
+  Layer.provideMerge(McpServer.McpServer.layer),
+);
+
+it.effect("goat_operation_cancel meets exactly the refusals of the kind's own cancel tool", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const tokens = yield* makeOperationTokens.pipe(Effect.provide(operationKey));
+    for (const scope of [callerScope({ client: "read-only" }), callerScope({ thread: true })]) {
+      const run = asCaller(scope);
+      const operationId = yield* tokens.issue("task", "task:conformance", scope);
+      const direct = yield* run(viaCall(server, "task.cancel", { taskId: "task:conformance" }));
+      const viaOperation = yield* run(
+        server.callTool({ name: "goat_operation_cancel", arguments: { operationId } }),
+      );
+      expect(viaOperation.isError, textOf(viaOperation)).toBe(false);
+      const { result } = viaOperation.structuredContent as {
+        readonly result: AgentSurfaceResult;
+      };
+      // The verb returns the cancel tool's own answer, as goat_call would: same refusal and text.
+      expect(direct.status, scope.requestNamespace).toBe("error");
+      expect(result).toEqual(direct);
+    }
+  }).pipe(Effect.provide(registeredWithOperationKey)),
+);
+it.effect("goat_call starts no long work it could not hand back a handle for", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const run = asCaller(callerScope({ thread: true }));
+    const envelope = yield* run(viaCall(server, "task.create", { task: "Review the change." }));
+    // An inert orchestrator would have died here had delegate_task run.
+    expect(envelope).toMatchObject({
+      status: "error",
+      error: { code: "unavailable", reason: "operation_unavailable", retryable: true },
+    });
+  }).pipe(
+    Effect.provide(
+      catalog.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            dependencies,
+            Layer.mock(ServerSecretStore.ServerSecretStore)({
+              getOrCreateRandom: (name) =>
+                Effect.fail(
+                  new ServerSecretStore.SecretStoreReadError({ resource: name, cause: "disk" }),
+                ),
+            }),
+          ),
+        ),
+        Layer.provideMerge(McpServer.McpServer.layer),
+      ),
+    ),
+  ),
+);
 
 it("presents a call by canonical name as the tool it ran", () => {
   const presented = [...canonicalToolAliases].filter(

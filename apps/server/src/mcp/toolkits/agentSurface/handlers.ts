@@ -1,24 +1,15 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
-import {
-  canonicalToolName,
-  isKeyedWrite,
-  resolveAgentSurfaceEntry,
-} from "@goat/contracts/agentSurface/resolve";
-import {
-  type AgentSurfaceResult,
-  type CallContext,
-  declaredFailureLiteral,
-  fromFailure,
-  fromInvalidParams,
-  fromToolResult,
-} from "@goat/contracts/agentSurface/envelope";
+import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
-import * as Ref from "effect/Ref";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { makeOperationTokens } from "../../operations/OperationTokens.ts";
 import { ToolDispatch } from "../../ToolDispatch.ts";
+import { dispatchEnvelope, envelopeError } from "./dispatchEnvelope.ts";
+import { makeOperations } from "./operations.ts";
 import { AgentSurfaceToolkit, type DescribeResult } from "./tools.ts";
 
 const entries: ReadonlyArray<AgentSurfaceRegistryEntry> = Object.values(agentSurfaceRegistry);
@@ -56,52 +47,11 @@ const availability = (
   return { now: true };
 };
 
-/**
- * Reclassifies a direct failure by its declared literal; the text stays what a direct call shows.
- * A failure that says the write may have started stays unknown_outcome whatever its literal.
- */
-const reclassified = (
-  direct: AgentSurfaceResult,
-  error: unknown,
-  context: CallContext,
-): AgentSurfaceResult => {
-  const declared = declaredFailureLiteral(error);
-  if (direct.status !== "error" || declared === undefined) return direct;
-  const mayHaveStarted =
-    direct.error.code === "unknown_outcome" ||
-    (typeof error === "object" &&
-      error !== null &&
-      (error as { readonly mayHaveStarted?: unknown }).mayHaveStarted === true);
-  const classified = fromFailure(
-    { ...declared, message: direct.error.message, ...(mayHaveStarted ? { mayHaveStarted } : {}) },
-    context,
-  );
-  if (classified.status !== "error") return direct;
-  return {
-    ...direct,
-    error: {
-      ...classified.error,
-      ...(direct.error.details === undefined ? {} : { details: direct.error.details }),
-    },
-  };
-};
-
-const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
-
-/** Where a routed call ran, so the agent can tell remote results from local ones. */
-const withHost = (result: AgentSurfaceResult, host: string | undefined): AgentSurfaceResult =>
-  host === undefined ? result : { ...result, meta: { ...result.meta, host } };
-
-const envelopeError = (
-  code: "invalid_request" | "not_found" | "internal",
-  reason: string,
-  message: string,
-): AgentSurfaceResult => ({ status: "error", error: { code, reason, message, retryable: false } });
-
 export const layer = McpToolAccess.toLayer(
   AgentSurfaceToolkit,
   Effect.gen(function* () {
     const dispatch = yield* ToolDispatch;
+    const operations = makeOperations(dispatch, yield* makeOperationTokens);
 
     const summary = (entry: AgentSurfaceRegistryEntry, scope: Scope) => ({
       path: entry.path,
@@ -185,46 +135,31 @@ export const layer = McpToolAccess.toLayer(
           "not_served",
           `This GOAT server does not serve ${entry.name}.`,
         );
-      const captured = yield* Ref.make<unknown>(undefined);
       const args = input.args ?? {};
-      // Only keyed writes that carry a key are deduplicated; ToolAdmission holds the key.
-      const deduplicated = isKeyedWrite(entry) && typeof args.clientRequestId === "string";
-      const context: CallContext = { effect: entry.effect, deduplicated, pathOf };
       const host = entry.hostRoutable && typeof args.host === "string" ? args.host : undefined;
-      return yield* dispatch.call(entry.name, args).pipe(
-        Effect.provideService(McpToolAccess.CallFailureCapture, {
-          record: (error) => Ref.set(captured, error),
-        }),
-        Effect.flatMap((result) =>
-          result.isError === true
-            ? Effect.map(Ref.get(captured), (error) =>
-                reclassified(fromToolResult(result, context), error, context),
-              )
-            : Effect.succeed(fromToolResult(result, context)),
-        ),
-        Effect.map((result) => withHost(result, host)),
-        // A dying target still gets an answer, with the same fixed text a direct call shows.
-        Effect.catchDefect(() =>
-          Effect.succeed(
-            envelopeError(
-              "internal",
-              "tool_error",
-              "Tool execution failed due to an internal server error.",
-            ),
-          ),
-        ),
-        Effect.catchTags({
-          InvalidParams: (error) => Effect.succeed(fromInvalidParams(error.message)),
-          InternalError: (error) =>
-            Effect.succeed(envelopeError("internal", "internal_error", error.message)),
-        }),
-      );
+      // Work that runs on needs a handle; without one, starting it would strand the caller (D1).
+      if (yield* operations.unready(entry))
+        return {
+          status: "error",
+          error: {
+            code: "unavailable",
+            reason: "operation_unavailable",
+            message: `GOAT could not prepare a handle for this work, so ${entry.name} did not run. Try again.`,
+            retryable: true,
+          },
+        } satisfies AgentSurfaceResult;
+      const result = yield* dispatchEnvelope(dispatch, entry.name, args, entry.effect, host);
+      return yield* operations.withOperation(entry, result);
     });
 
     return {
       goat_describe: McpToolAccess.reads(describe),
       // Destructive so clients that prompt on destructive tools still prompt for the targets that are.
       goat_call: McpToolAccess.destructive(McpToolAccess.dispatches(call)),
+      goat_operation_read: McpToolAccess.reads(operations.read),
+      goat_operation_wait: McpToolAccess.reads(operations.wait),
+      // The kind's own cancel tool holds the checks, as goat_call's targets do.
+      goat_operation_cancel: McpToolAccess.destructive(McpToolAccess.dispatches(operations.cancel)),
     };
   }),
 );

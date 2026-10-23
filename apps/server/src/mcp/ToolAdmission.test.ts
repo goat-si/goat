@@ -24,6 +24,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -132,6 +133,12 @@ const served = (defaultProfile: string, enabled = true) =>
           release: Deferred.make<void>(),
         }),
       ),
+    ),
+    // goat_call signs operation handles with the server's key.
+    Layer.provideMerge(
+      Layer.mock(ServerSecretStore.ServerSecretStore)({
+        getOrCreateRandom: () => Effect.succeed(new Uint8Array(32).fill(1)),
+      }),
     ),
     Layer.provideMerge(Profiles.layer),
     Layer.provideMerge(McpServer.McpServer.layer),

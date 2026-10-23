@@ -1,13 +1,10 @@
 import { htmlPreviewDescription, htmlRenderDescription } from "./html.ts";
+import { entry } from "./entry.ts";
+import { launchSurfaceEntries } from "./launchEntries.ts";
 import { noteSurfaceEntries } from "./notes.ts";
-import { providerSettingsSurfaceEntries } from "./providerSettings.ts";
+import { operationSurfaceEntries } from "./operations.ts";
+import { providerSurfaceEntries } from "./providerEntries.ts";
 import { metaSurfaceEntries } from "./surfaceEntries.ts";
-import type {
-  AgentSurfaceEntry,
-  AgentSurfaceExample,
-  CapabilityDeclaration,
-  IdempotencyDeclaration,
-} from "./types.ts";
 
 export type {
   AgentSurfaceCapability,
@@ -15,26 +12,7 @@ export type {
   AgentSurfaceEntry,
   AgentSurfaceExample,
   CapabilityDeclaration,
-  IdempotencyDeclaration,
 } from "./types.ts";
-
-const entry = <const E extends AgentSurfaceEntry & CapabilityDeclaration & IdempotencyDeclaration>(
-  value: E,
-) => ({
-  ...value,
-  path: `${value.resource}.${value.verb}` as `${E["resource"]}.${E["verb"]}`,
-  legacyNames: [value.name],
-  // Input resolves through Tool.getJsonSchema (including dynamic tools); outputs
-  // reference the named tool's schema slots. No server imports enter contracts.
-  schemaRefs: {
-    toolkit: value.toolkit as E["toolkit"],
-    tool: value.name as E["name"],
-    input: "input",
-    output: "successSchema",
-    failure: "failureSchema",
-  } as const,
-  examples: [] as ReadonlyArray<AgentSurfaceExample>,
-});
 
 export const agentSurfaceRegistry = {
   "decision.list": entry({
@@ -1163,6 +1141,7 @@ export const agentSurfaceRegistry = {
     verb: "create",
     name: "delegate_task",
     toolkit: "orchestrator",
+    operation: "task",
     summary: "Delegate a child task",
     description:
       "Needs an agent running inside a GOAT thread. Delegate one bounded task (a research lane, a review round, or one implementation slice) to a GOAT-owned child agent/subagent of THIS thread and run it with only the supplied task prompt, without copying parent conversation history. Children show under this thread in the sidebar only while they matter to it, and the user may promote one to a top-level thread, which ends the task here; work that owns a goal, runs a loop (HOTL, cxc-loop, repeated PABCD), or spans several cycles belongs in goat_thread_launch from the start, where the user can see, steer, and resume it. Choose providers and models from orchestrator_capabilities, which uses the same live catalog as the composer. Prefer native subagent tools for same-provider work only when they support the chosen model and no model options are requested or inherited. Use this for any model missing from the native tool, including same-provider work, for cross-provider work, or for explicitly GOAT-owned child tasks. For every GOAT delegated review round, call delegate_task again with the original brief, prior findings, responses, and unresolved objections in the task prompt. After each review round, record each finding and its accepted or rebutted decision with evidence using goat_review_findings_record. Track each round by its own taskId and use a distinct clientRequestId per round, stable across retries of that round. The childThreadId is backing storage, not the target for starting another delegated review round through goat_thread_send. Set isolation to worktree for a separate checkout based on the parent local commit, with project setup completed before the child starts. Uncommitted edits are not copied; omitted isolation shares the parent checkout. Use delegate_task when model options are requested or the child keeps the parent's provider instance and model with nonempty inheritedOptions from orchestrator_capabilities, even for native-supported models. Native subagents cannot reliably apply GOAT model options. Set target.options using advertised IDs: Claude {effort: 'max', fastMode: true}; Codex {reasoningEffort: 'max', serviceTier: 'priority'}. Check providerInstanceId, model, and options in the result. Provider/model and modes inherit unless overridden. Options inherit only for the same instance and model; explicit entries override individual values and [] or {} clears them. A requested runtimeMode must be one the target provider lists in orchestrator_capabilities runtimeModes; an inherited one steps down to the broadest mode it offers. Leave runtimeMode unset unless the user asks for a supervised child: approval-required and auto-accept-edits usually make the child wait for a person at each action that needs approval. Prefer mode='async' for long work; mode='wait' releases on completion, timeout, a pending approval, or a pending user-input question in its child thread; pendingRequestIds identifies questions to read and answer or forward, and question release is not waitTimedOut. If hasPendingQuestion, pass threadId=childThreadId to goat_pending_request_list, goat_pending_request_read (with requestId) and goat_pending_request_respond, or ask the user; the task's completion still wakes this thread. If pendingApproval is set, read the fresh full request in childThreadId before responding: the record can outlive its provider callback. It grants no approval authority; decisions remain with the child's existing approval holder, and pending request tools answer questions only. The child keeps running and its completion still wakes this thread. timeoutMs on mode=wait is only the parent's wait budget and does not cancel the child. waitTimedOut on that wait call means the timeout fired; keep that taskId and read status on later task_status. An async child's completion wakes this thread through a notification, steered into active turns where supported or queued otherwise, so end the turn instead of polling or spawning watchers; use task_status only when the result is needed mid-turn. An async child keeps running when this turn is interrupted or stopped; a mode='wait' child still waiting stops with the turn. task_cancel stops either. To delegate on another machine, pass target.host (SSH alias) and remote.cwd with optional remote.workspace. Needs a full-access/default caller. Models/options are checked on that host. Keep taskId; do not relaunch after an unknown launch outcome. childThreadId is host-qualified and may be null. Parent Stop does not cancel remote tasks; use task_cancel.",
@@ -2131,28 +2110,7 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
-  "thread.launch": entry({
-    resource: "thread",
-    verb: "launch",
-    name: "goat_thread_launch",
-    toolkit: "project",
-    summary:
-      "Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts.",
-    description:
-      'Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree, and for work that owns a goal, runs a loop (HOTL, cxc-loop, repeated PABCD), or spans several cycles, even when the user calls it a subagent: top-level threads appear in the sidebar, where the user can open, steer, and resume them. Use delegate_task for bounded child subagents that report back and end. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. To fetch and start from the base branch\'s remote, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a GOAT thread must pass projectId and gets the project\'s default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Pass clientRequestId to retry safely: a repeat with the same arguments returns the first launch instead of starting another. Retain threadId. A calling GOAT thread is woken with a message when the run of the new thread ends or waits on a question, so do not poll it with goat_thread_wait; notifyOnCompletion:false or goat_thread_unwatch stops run-end and host-outage reports. Only local user-input questions still arrive. SSH-host questions then need goat_thread_wait({host}) or goat_pending_request_list({scope:"launched", hosts}). Approvals are no longer reported; check goat_thread_read or tell the user the thread may be waiting. To link a thread for the user, write `[title](goat-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; GOAT shows the thread\'s current title. After errors or lost responses, inspect goat_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling GOAT thread\'s own modes, or the permission mode an outside agent was approved with. A cloud provider runs without creating a local worktree or running setup. Most cloud providers start from the published source branch and refuse an unavailable or unpublished source with a reason; providers that upload the project folder (such as Claude Cloud) start from its current branch, and local changes may be included. Choose a project repository; scratch is unavailable for cloud tasks. Follow-ups target the same cloud session when its capabilities permit them.',
-    effect: "destructive",
-    capability: "threads.launch",
-    hostRoutable: false,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: ["secret", "approval"],
-    annotations: {
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    idempotency: "key",
-    reconcile: "thread.list",
-  }),
+  "thread.launch": entry(launchSurfaceEntries.thread),
   "project.list": entry({
     resource: "project",
     verb: "list",
@@ -2466,6 +2424,7 @@ export const agentSurfaceRegistry = {
     verb: "host_prepare",
     name: "goat_ssh_host_prepare",
     toolkit: "ssh",
+    operation: "ssh_setup",
     summary: "Prepare an SSH host",
     description:
       "Prepare a pinned SSH host with key-only authentication, then diagnose providers there. Returns at the first real preparation phase. Complete terminal key registration on the origin machine, then retry. Setup continues on the host. Call goat_ssh_host_status for this operation until ready with setup.stage complete, failed, or providers_not_ready. Runtime ready with setup.stage diagnosis is still in progress. Follow the recovery for update_waiting, update_blocked or auth_failed.",
@@ -2630,28 +2589,7 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
-  "ssh.thread_launch": entry({
-    resource: "ssh",
-    verb: "thread_launch",
-    name: "goat_ssh_thread_launch",
-    toolkit: "ssh",
-    summary: "Start a thread on another machine",
-    description:
-      "Start a thread on ANOTHER machine, in that machine's own GOAT environment, over SSH. Use it when the user asks to run work on a different computer. Pick host from goat_ssh_host_list and cwd from goat_ssh_browse. A linked host from goat_host_link_list works too, without SSH: it cannot be browsed, so cwd must be the absolute folder of one of its existing projects (goat_project_list with that host lists them) and a worktree needs baseRef. For coding work pass workspace {type:\"worktree\",baseRef,branch} so the thread gets its own checkout. cwd must be a project folder: the filesystem root, the home directory, a folder above home, or another top-level folder is refused unless the user explicitly asked for it and allowBroadWorkspaceRoot is true. The folder becomes (or reuses) a project on the remote, then the thread starts in the folder or in a worktree per workspace, and its agent gets message. GOAT is launched on the remote if it is not running. Omitted modelSelection uses the calling thread's model, which the remote must also offer. Needs a full-access caller. The thread lives on the remote. A calling GOAT thread is woken with a message when its run ends, waits on a question, or the host stays unreachable, so do not poll it; read it with goat_thread_read and steer it with goat_thread_send, passing the same host and the returned threadId; the user can watch it by connecting to that host in Settings → Connections. Launched from a thread, the remote thread can also report progress, results and questions with goat_origin_report; they reach this thread per reportDelivery, and goat_ssh_reports lists what arrived. Pass clientRequestId to retry safely: a repeat with the same arguments returns the first launch instead of starting another. Without one, each call creates a new thread; after a lost response, check goat_thread_list with host before retrying. Attachments must be pending uploads in this environment: up to eight references from goat_attachment_prepare_upload, after their local byte uploads finish. Their bytes are uploaded to the destination before its thread starts; already-delivered thread attachments cannot be forwarded this way.",
-    effect: "destructive",
-    capability: "threads.remote",
-    hostRoutable: true,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: ["secret", "approval"],
-    annotations: {
-      title: "Start a thread on another machine",
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    idempotency: "key",
-    reconcile: "thread.list",
-  }),
+  "ssh.thread_launch": entry(launchSurfaceEntries.ssh),
   "ssh.thread_handoff": entry({
     resource: "ssh",
     verb: "thread_handoff",
@@ -3300,88 +3238,11 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { title: "Read browser diagnostics", idempotentHint: true, openWorldHint: true },
   }),
-  "provider.home_request": entry({
-    resource: "provider",
-    verb: "home_request",
-    name: "goat_provider_home_request",
-    toolkit: "provider",
-    summary: "Request approval for a Codex Home route",
-    description:
-      "Ask a person in this target environment's thread to approve connecting a Codex instance to OpenCodex Home, or disconnecting GOAT's override to use Codex's own settings. Link setup and unlinking remain with the person and OpenCodex. This creates an approval request and never grants an agent providers:manage or permission to approve itself. Host routing is unsupported; ask in a thread on the target environment.",
-    effect: "write",
-    capability: "none",
-    capabilityReason: "Creates an approval request; a person approves in the app.",
-    hostRoutable: false,
-    requires: "thread",
-    dryRun: "unsupported",
-    humanSteps: ["approval"],
-    annotations: { idempotentHint: false, openWorldHint: false },
-  }),
-  "provider.host_matrix": entry({
-    resource: "provider",
-    verb: "host_matrix",
-    name: "goat_provider_host_matrix",
-    toolkit: "provider",
-    summary: "Read which machines have each provider CLI",
-    description:
-      "Read the provider × host matrix: for this machine and each connected SSH host, which coding-agent CLIs (Codex, Claude, Cursor, Grok, OpenCode, Pi) are installed, their versions, whether they are signed in, and how GOAT would install and sign in to each there. The cloud field is present only when cloud:true is passed: Claude Cloud, Cursor Cloud, and Devin Cloud readiness from the same checks as goat_cloud_holders, which is slower because it diagnoses those three on every machine, and is not the same as the CLI being signed in. Pass hosts to choose machines; omit it for connected hosts and the aliases in ssh config. A host row with status update_runtime runs a GOAT too old to answer; tell the user to update GOAT there (goat_ssh_runtime_update). not_ready means its runtime is stopped; call goat_ssh_host_prepare first. versionMismatch means the host runs another GOAT build. Reading never installs, signs in, or starts a runtime, and never returns credentials.",
-    effect: "read",
-    hostRoutable: false,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: [],
-    annotations: { idempotentHint: true, openWorldHint: true },
-  }),
-  "provider.sync": entry({
-    resource: "provider",
-    verb: "sync",
-    name: "goat_provider_sync",
-    toolkit: "provider",
-    summary: "Install and sign in to a provider CLI on other machines",
-    description:
-      "Install a provider CLI on SSH hosts with the vendor's official installer (npm package or install script for that OS), pinned to this machine's version unless version is given, then start that provider's own sign-in on each host. A thread agent gets needs_human: a person approves in the thread, and the sync then runs under their session; call goat_provider_host_matrix afterwards to see the result. A person or providers:manage client gets started with a syncId; poll goat_provider_sync_status. Each host signs in on its own: a device code (url and userCode) or a vendor sign-in page is shown to the user, who signs in with their own account; a terminal command must be run on that host by a person. Never sign in for the user, never copy credential files between machines, and never use someone else's subscription; consumer subscriptions belong to one person. Results never contain tokens or installer output.",
-    effect: "write",
-    capability: "none",
-    capabilityReason:
-      "A thread agent only gets a person's approval request; an outside client needs providers:manage.",
-    hostRoutable: false,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: ["approval", "sign_in"],
-    annotations: { idempotentHint: false, openWorldHint: true },
-  }),
-  "provider.sync_status": entry({
-    resource: "provider",
-    verb: "sync_status",
-    name: "goat_provider_sync_status",
-    toolkit: "provider",
-    summary: "Read a provider sync's per-host progress",
-    description:
-      "Read the progress of a goat_provider_sync by syncId: per host phase (queued, installing, installed, signing_in, signed_in, failed, cancelled, update_runtime), installed version, a safe message, and the sign-in step a person must finish (device_code url and userCode, browser url, terminal command, or open_host instruction). done is true once every host has finished. Syncs are kept for two hours.",
-    effect: "read",
-    hostRoutable: false,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: [],
-    annotations: { idempotentHint: true, openWorldHint: false },
-  }),
-  "provider.sync_cancel": entry({
-    resource: "provider",
-    verb: "sync_cancel",
-    name: "goat_provider_sync_cancel",
-    toolkit: "provider",
-    summary: "Stop a provider sync",
-    description:
-      "Stop a goat_provider_sync by syncId: running installers and sign-ins stop on every host that has not finished. A finished install stays installed; remove it with the provider's own uninstaller if needed.",
-    effect: "write",
-    capability: "none",
-    capabilityReason: "Stops a sync the caller asked for; any other sync needs providers:manage.",
-    hostRoutable: false,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: [],
-    annotations: { idempotentHint: true, openWorldHint: true },
-  }),
+  "provider.home_request": entry(providerSurfaceEntries.home_request),
+  "provider.host_matrix": entry(providerSurfaceEntries.host_matrix),
+  "provider.sync": entry(providerSurfaceEntries.sync),
+  "provider.sync_status": entry(providerSurfaceEntries.sync_status),
+  "provider.sync_cancel": entry(providerSurfaceEntries.sync_cancel),
   "cloud_agent.holders": entry({
     resource: "cloud_agent",
     verb: "holders",
@@ -3465,21 +3326,7 @@ export const agentSurfaceRegistry = {
     annotations: { title: "Forget a cloud run", idempotentHint: true, openWorldHint: false },
   }),
 
-  "provider.diagnose": entry({
-    resource: "provider",
-    verb: "diagnose",
-    name: "goat_provider_diagnose",
-    toolkit: "provider",
-    summary: "Diagnose provider readiness",
-    description:
-      'Diagnose why a provider instance cannot run, without changing anything. Returns checks per instance; a failed check has a reason and a fix whose actor says who acts: agent (something you can do now, such as calling another tool) or human (a person must install or update a CLI, sign in, or approve a settings change; tell the user the instruction and never try to sign in or read credentials yourself). A fix with call names the GOAT tool and arguments that apply it: its actor is agent when this caller may manage providers, and otherwise calling it asks a person to approve that change. Cursor Cloud, Claude Cloud, and Devin Cloud appear automatically and follow their local Cursor, Claude, or Devin provider; sign in to or enable that provider. Custom cloud instances can still be added. If multiple Devin ACP providers qualify, choose one in Devin Cloud settings. Claude Cloud and Devin Cloud are checked live: sibling, executable, version, cloud support, and sign-in. Codex Home routes freshly check the selected endpoint health, readiness and models on the machine where Codex runs. Use goat_provider_home_request in that environment’s thread for a person’s approval to change the route; GOAT never stores link keys. Diagnosis never installs or starts an SSH runtime. Other providers report their readiness snapshot, refreshed first when instanceId is passed. Pass driver:"claudeCloud" or driver:"devinCloud" to diagnose an automatic cloud provider. Pass cwd to also check that project\'s repository remote. Pass host to diagnose providers on a ready SSH runtime. If it needs preparation, call goat_ssh_host_prepare, then goat_ssh_host_status until setup completes, and retry the diagnosis. Sign-in commands must run there. fix.path names the agent-surface step that starts the fix, such as provider.setup_open or provider.login_start; goat_provider_addable_list shows install and sign-in state for every driver.',
-    effect: "read",
-    hostRoutable: true,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: [],
-    annotations: { idempotentHint: true, openWorldHint: true },
-  }),
+  "provider.diagnose": entry(providerSurfaceEntries.diagnose),
   "note.list": entry(noteSurfaceEntries.list),
   "note.read": entry(noteSurfaceEntries.read),
   "note.write": entry(noteSurfaceEntries.write),
@@ -3487,92 +3334,18 @@ export const agentSurfaceRegistry = {
   "note.move": entry(noteSurfaceEntries.move),
   "surface.describe": entry(metaSurfaceEntries.describe),
   "surface.call": entry(metaSurfaceEntries.call),
-  "provider.addable_list": entry({
-    resource: "provider",
-    verb: "addable_list",
-    name: "goat_provider_addable_list",
-    toolkit: "provider",
-    summary: "List providers that can be added, with install and sign-in state",
-    description:
-      "List every provider driver this environment can add (Codex, Claude, Cursor, Grok, OpenCode, Antigravity, ACP Registry agents, and others), whether its CLI is installed and whether GOAT can install it in the app, how it signs in and whether that finishes in the app, the provider's own sign-in command when it cannot, and the instances already configured with their status and sign-in state. Never returns credentials or environment values. Lists this environment only; for another machine, use goat_provider_diagnose with host.",
-    effect: "read",
-    hostRoutable: false,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: [],
-    annotations: { idempotentHint: true, openWorldHint: false },
-  }),
-  "provider.setup_open": entry({
-    resource: "provider",
-    verb: "setup_open",
-    name: "goat_provider_setup_open",
-    toolkit: "provider",
-    summary: "Ask a person to add or sign in to a provider in the app",
-    description:
-      "Ask the person in this thread to set up a provider in GOAT's add-provider window. Pass driver to preselect a provider to add, or instanceId to open sign-in for an existing instance. Returns needs_human with a handoff: only a person allowed to manage providers can open it, and they install and sign in there. The provider's own CLI or service keeps the credentials; you never see them. Approving a handoff for an instanceId also enables that instance. After the person finishes, call goat_provider_addable_list to read the result. This never opens a window by itself. To change settings without a person, a caller allowed to manage providers uses goat_provider_update, goat_provider_add, goat_provider_link, and goat_provider_remove.",
-    effect: "write",
-    capability: "none",
-    capabilityReason: "Asks a person to add or sign in to a provider; the person acts in the app.",
-    hostRoutable: false,
-    requires: "thread",
-    dryRun: "unsupported",
-    humanSteps: ["approval", "sign_in"],
-    annotations: { idempotentHint: false, openWorldHint: false },
-  }),
-  "provider.login_start": entry({
-    resource: "provider",
-    verb: "login_start",
-    name: "goat_provider_login_start",
-    toolkit: "provider",
-    summary: "Start a provider sign-in",
-    description:
-      "Start signing in to a provider instance. A thread agent gets needs_human: a handoff the person opens in the app to sign in with the provider's own flow; then call goat_provider_addable_list. A client signed in with permission to manage providers starts the flow itself and gets kind flow: a device code and its verification URL to show the person, or continueIn:app when the step (browser, terminal, or form) must finish in GOAT. Follow it with goat_provider_login_status and stop it with goat_provider_login_cancel. Results never include tokens, authorization or callback URLs, terminal output, or entered keys. Providers that cannot sign in through GOAT return an error with the provider's own command.",
-    effect: "write",
-    capability: "none",
-    capabilityReason:
-      "A thread agent only gets a person's sign-in handoff; an outside client needs providers:manage.",
-    hostRoutable: false,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: ["sign_in"],
-    annotations: { idempotentHint: false, openWorldHint: true },
-  }),
-  "provider.login_status": entry({
-    resource: "provider",
-    verb: "login_status",
-    name: "goat_provider_login_status",
-    toolkit: "provider",
-    summary: "Read a sign-in flow this caller started",
-    description:
-      "Read the phase of a sign-in flow started by goat_provider_login_start with kind flow. Only the auth session that started a flow can read it; any other caller gets not_found. Returns the same redacted fields as login_start.",
-    effect: "read",
-    hostRoutable: false,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: [],
-    annotations: { idempotentHint: true, openWorldHint: false },
-  }),
-  "provider.login_cancel": entry({
-    resource: "provider",
-    verb: "login_cancel",
-    name: "goat_provider_login_cancel",
-    toolkit: "provider",
-    summary: "Cancel a sign-in flow this caller started",
-    description:
-      "Cancel a sign-in flow started by goat_provider_login_start with kind flow. Only the auth session that started it can cancel it.",
-    effect: "write",
-    capability: "none",
-    capabilityReason: "Cancels only a sign-in flow this caller started.",
-    hostRoutable: false,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: [],
-    annotations: { idempotentHint: true, openWorldHint: false },
-  }),
-  "provider.update": entry(providerSettingsSurfaceEntries.update),
-  "provider.add": entry(providerSettingsSurfaceEntries.add),
-  "provider.link": entry(providerSettingsSurfaceEntries.link),
-  "provider.remove": entry(providerSettingsSurfaceEntries.remove),
+  "operation.read": entry(operationSurfaceEntries.read),
+  "operation.wait": entry(operationSurfaceEntries.wait),
+  "operation.cancel": entry(operationSurfaceEntries.cancel),
+  "provider.addable_list": entry(providerSurfaceEntries.addable_list),
+  "provider.setup_open": entry(providerSurfaceEntries.setup_open),
+  "provider.login_start": entry(providerSurfaceEntries.login_start),
+  "provider.login_status": entry(providerSurfaceEntries.login_status),
+  "provider.login_cancel": entry(providerSurfaceEntries.login_cancel),
+  "provider.update": entry(providerSurfaceEntries.update),
+  "provider.add": entry(providerSurfaceEntries.add),
+  "provider.link": entry(providerSurfaceEntries.link),
+  "provider.remove": entry(providerSurfaceEntries.remove),
 } as const;
 
 export type AgentSurfacePath = keyof typeof agentSurfaceRegistry;

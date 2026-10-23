@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 
+import { OperationRef } from "./operation.ts";
+
 /**
  * One result shape for goat_call and the CLI's --json output (docs/internals/agent-surface.md,
  * "Result envelope"). Legacy tool names keep their own shapes; this classifies them after the
@@ -36,14 +38,16 @@ export const AgentSurfaceError = Schema.Struct({
 export type AgentSurfaceError = typeof AgentSurfaceError.Type;
 
 /**
- * Only fields something produces today. nextCursor, operation and deprecated join with the
- * rollout steps that emit them, so no agent learns to read a field that is never set.
+ * Only fields something produces today. nextCursor and deprecated join with the rollout steps
+ * that emit them, so no agent learns to read a field that is never set.
  */
 export const AgentSurfaceMeta = Schema.Struct({
   /** Where a routed call ran. */
   host: Schema.optionalKey(Schema.String),
   /** Non-text content blocks, such as screenshots, as the tool returned them. */
   content: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  /** Accepted work still running; an ok result without it is finished. */
+  operation: Schema.optionalKey(OperationRef),
 });
 export type AgentSurfaceMeta = typeof AgentSurfaceMeta.Type;
 
@@ -152,6 +156,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   storage_failed: c("internal"),
   // Handoffs (HandoffErrorReason) and provider host sync (ProviderHostSyncErrorCode)
   expired: before("expired"),
+  // Operations (OperationErrorReason): not_found and expired are classified above.
+  not_cancellable: before("failed_precondition"),
   unavailable: c("unavailable"),
   denied: before("permission_denied"),
   start_failed: c("internal"),

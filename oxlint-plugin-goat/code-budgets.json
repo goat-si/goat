@@ -685,7 +685,7 @@
   "packages/client-runtime/src/work-log/presentation.ts": { "nonNull": 7 },
   "packages/client-runtime/src/work-log/scrollAnchor.ts": { "nonNull": 1 },
   "packages/client-runtime/src/worktreeSetup.ts": { "nonNull": 1 },
-  "packages/contracts/src/agentSurface/registry.ts": { "lines": 3625 },
+  "packages/contracts/src/agentSurface/registry.ts": { "lines": 3388 },
   "packages/contracts/src/baseSchemas.ts": { "nonNull": 1 },
   "packages/contracts/src/chatAttachment.ts": { "nonNull": 1 },
   "packages/contracts/src/filesystem.ts": { "asAny": 1 },
