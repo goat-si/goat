@@ -77,7 +77,7 @@ const make = Effect.gen(function* () {
     "--base-dir",
     config.baseDir,
   ]);
-  // `t3 doctor --base-dir` repairs <baseDir>/userdata. A dev server without
+  // `goat doctor --base-dir` repairs <baseDir>/userdata. A dev server without
   // an explicit home keeps its state in <baseDir>/dev instead, so there the
   // command would target the live install; publish no status at all.
   const doctorTargetsThisDatabase =

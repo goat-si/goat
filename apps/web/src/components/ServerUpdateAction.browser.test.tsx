@@ -25,8 +25,8 @@ const testState = vi.hoisted(() => ({
 
 vi.mock(import("~/hooks/useCopyToClipboard"), async (original) => ({
   ...(await original()),
-  useCopyToClipboard: ((options: { onCopy: (context: { command: string }) => void }) => ({
-    copyToClipboard: (command: string, context: { command: string }) => {
+  useCopyToClipboard: ((options: { onCopy: (context: { instructions: string }) => void }) => ({
+    copyToClipboard: (command: string, context: { instructions: string }) => {
       testState.clipboard(command);
       options.onCopy(context);
     },
@@ -137,6 +137,39 @@ function renderAction(props: Partial<Parameters<typeof ServerUpdateAction>[0]> =
 }
 
 describe("ServerUpdateAction", () => {
+  it.each([
+    { installation: undefined, instructions: "goat update 0.0.31" },
+    ...(
+      [
+        { kind: "npm-global", prefix: "/opt/node" },
+        { kind: "npx" },
+        { kind: "pnpm-dlx" },
+        { kind: "bunx" },
+      ] as const
+    ).map((installation) => ({
+      installation,
+      instructions:
+        "Install GOAT 0.0.31 from https://github.com/goat-si/goat-releases/releases, then restart GOAT with your usual options.",
+    })),
+  ] as const)(
+    "copies instructions matching installation $installation",
+    async ({ installation, instructions }) => {
+      using _setup = setup();
+      await using screen = await renderAction({ selfUpdate: null, installation });
+      await click(screen, "Copy update instructions");
+      expect(testState.clipboard).toHaveBeenCalledWith(instructions);
+      expect(testState.toast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Update instructions copied",
+          description: installation
+            ? `On Test server: ${instructions}`
+            : "Run `goat update 0.0.31` on Test server, then restart GOAT with your usual options.",
+        }),
+      );
+      expect(testState.updateServer).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { serverUpdateScope: undefined, scopes: ["orchestration:operate"], allowed: true },
     { serverUpdateScope: undefined, scopes: ["orchestration:read"], allowed: false },

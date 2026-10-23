@@ -2598,7 +2598,7 @@ export const agentSurfaceRegistry = {
     toolkit: "ssh",
     summary: "List SSH hosts",
     description:
-      "List the SSH hosts this environment's machine knows from ~/.ssh/config and known_hosts. These are other machines you can browse with goat_ssh_browse and start threads on with goat_ssh_thread_launch. Set probe:true to try a key-based SSH login to each host (a few seconds; reports reachable and the error).",
+      "List the SSH hosts this environment's machine knows from ~/.ssh/config and known_hosts, plus the cloud machines it manages (source cloud-machine; their first use readies them and writes their SSH entry). These are other machines you can browse with goat_ssh_browse and start threads on with goat_ssh_thread_launch. Set probe:true to try a key-based SSH login to each SSH host (a few seconds; reports reachable and the error); cloud machines are never probed.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
