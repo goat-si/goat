@@ -58,8 +58,34 @@ describe("Claude approval of GOAT tools", () => {
         expect(decide(tool, readOnlySandbox).called, tool).toBe("ask");
   });
 
+  it("judges a goat_call spelled as MCP's {name, arguments}, or tool and input, as {path, args}", () => {
+    const decision = (toolInput: object) =>
+      claudeGoatToolDecision({
+        toolName: GOAT_CALL,
+        toolInput,
+        readOnlySandbox: true,
+        memory: undefined,
+      });
+    for (const [path, expected] of [
+      ["thread.list", "allow"],
+      ["goat_thread_send", "ask"],
+    ] as const) {
+      expect(decision({ path, args: {} }), path).toBe(expected);
+      expect(decision({ name: path, arguments: {} }), path).toBe(expected);
+      expect(decision({ tool: path, input: {} }), path).toBe(expected);
+    }
+    expect(decision({ resource: "thread", verb: "list" })).toBe("allow");
+  });
+
   it("asks for a goat_call it cannot resolve to a tool", () => {
-    for (const toolInput of [{ path: "thread.teleport" }, { path: "goat_call" }, {}, null])
+    for (const toolInput of [
+      { path: "thread.teleport" },
+      { path: "goat_call" },
+      {},
+      null,
+      // Fields that disagree about the target name none; the server refuses the call.
+      { path: "thread.list", name: "thread.send" },
+    ])
       expect(
         claudeGoatToolDecision({
           toolName: GOAT_CALL,

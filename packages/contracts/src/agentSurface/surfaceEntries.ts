@@ -28,9 +28,9 @@ export const metaSurfaceEntries = {
     listing: "core",
     summary: "Find GOAT capabilities and whether this caller can use them",
     description:
-      "Find GOAT capabilities and how to call them. query takes words or a tool name: exact names come first, then paths with every word, then paths sharing some, with matchedWords. total, truncated and nextCursor say what else matched; a short or partial result never means nothing else exists. path takes a resource for its paths, or a path or tool name for its schemas and availability for this caller.",
+      'Find GOAT capabilities and how to call them. query takes words or a tool name: exact names first, then paths with every word, then paths sharing some. total, truncated and nextCursor say what else matched; a short result never means nothing else exists. path takes a resource, or a path or tool name for its schemas and availability. Example: goat_describe {query:"send a message to a thread"}',
     guide:
-      "detail is names (path, name, summary), summary (the default: adds effect, requires, available and description) or full, for one path: input and output schema, guide, legacy names and human steps. limit is 1-50, default 10; pass nextCursor with the same query for the next page. coverage lists the fields and resources searched, the words ignored, and how many matches this server does not serve or this caller cannot use now; those are still returned, with available.now false. A query nothing matches returns the nearest paths. available.now reports only the static refusals the server is sure of; other checks run when the call is made. Call a path with goat_call.",
+      "Partial matches carry matchedWords and unmatchedWords. detail is names (path, name, summary), summary (the default: adds effect, requires, available and description) or full, for one path: input and output schema, guide, legacy names and human steps. limit is 1-50, default 10; pass nextCursor with the same query for the next page. coverage lists the fields and resources searched, the words ignored, and how many matches this server does not serve or this caller cannot use now; those are still returned, with available.now false. A query nothing matches returns the nearest paths. available.now reports only the static refusals the server is sure of for this caller; other checks run when the call is made. Call a path with goat_call.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -46,9 +46,9 @@ export const metaSurfaceEntries = {
     listing: "core",
     summary: "Call any GOAT capability by path and get one result shape",
     description:
-      "Call one GOAT capability by path, canonical name or legacy tool name, with args exactly as that tool takes them; it runs the same checks as a direct call and adds no permission. Returns status ok with value, error with code, reason and retryable, or needs_human with a handoff: a person must finish a step, so do not retry; read the handoff's state.",
+      'Call one GOAT capability by path or tool name, with args exactly as that tool takes them; it runs the same checks as a direct call and adds no permission. Returns status ok with value, error with code, reason and retryable, or needs_human with a handoff a person must finish, so do not retry. Example: goat_call {path:"thread.read", args:{threadId:"t1"}}',
     guide:
-      "Error codes: invalid_request, unauthenticated, permission_denied, not_found, conflict, unavailable, timeout, expired, cancelled, internal; each carries reason, message and retryable. goat_call cannot call itself or goat_eval. Find paths with goat_describe.",
+      "A path may be a canonical or legacy tool name. A needs_human handoff's state says what the person must do. Error codes: invalid_request, unauthenticated, permission_denied, not_found, conflict, unavailable, timeout, expired, cancelled, internal; each carries reason, message and retryable. goat_call cannot call itself or goat_eval. Find paths with goat_describe.",
     // Destructive so clients that prompt for destructive tools still prompt here; each call keeps its target's checks.
     effect: "destructive",
     capability: "none",

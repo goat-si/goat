@@ -1,4 +1,5 @@
 import { agentSurfaceRegistry, type AgentSurfacePath } from "@goat/contracts/agentSurface";
+import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import type { MemoryToolAvailability } from "@goat/provider-core/server/mcpSession";
 
@@ -79,9 +80,9 @@ const CLAUDE_GOAT_CALL = claude(listed("surface.call"));
  * and memory grants judge the target as they judge a direct call; otherwise the tool itself.
  */
 const claudeGoatCallTarget = (toolName: string, toolInput: unknown): string => {
-  if (toolName !== CLAUDE_GOAT_CALL || typeof toolInput !== "object" || toolInput === null)
-    return toolName;
-  const path = "path" in toolInput ? toolInput.path : undefined;
+  if (toolName !== CLAUDE_GOAT_CALL) return toolName;
+  // The server folds goat_call's aliases ({name, arguments}, tool, resource with verb) the same way.
+  const { path } = goatCallTarget(toolInput);
   const entry = typeof path === "string" ? resolveAgentSurfaceEntry(path) : undefined;
   return entry === undefined || entry.resource === "surface"
     ? toolName
