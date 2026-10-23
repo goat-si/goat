@@ -19,11 +19,14 @@ import {
   connectionProgressLabel,
   environmentMcpUrl,
   offlineSnapshotAgeLabel,
+  connectionRowShowsSnapshotAge,
+  connectionWaitsToRetry,
   connectionStatusText,
   connectionStatusTitle,
   presentEnvironmentConnection,
   presentConnectionState,
   reconcileSshConnectionPresentation,
+  type EnvironmentConnectionPresentation,
 } from "./presentation.ts";
 
 const TARGET = new BearerConnectionTarget({
@@ -311,6 +314,31 @@ describe("offlineSnapshotAgeLabel", () => {
     expect(offlineSnapshotAgeLabel("not a time", at(5))).toBeNull();
     // A clock behind the hub's must not read as a negative age.
     expect(offlineSnapshotAgeLabel(captured, at(-3))).toBe("last state just now");
+  });
+});
+
+describe("connection rows", () => {
+  const row = (connection: Partial<EnvironmentConnectionPresentation>) =>
+    connectionRowShowsSnapshotAge({ error: null, traceId: null, phase: "offline", ...connection });
+
+  it("name the snapshot age only while nothing is trying to connect", () => {
+    expect(row({ phase: "offline" })).toBe(true);
+    expect(row({ phase: "error" })).toBe(true);
+    expect(row({ phase: "unsupported" })).toBe(true);
+  });
+
+  it("leave a live attempt or retry countdown without a stale age beside it", () => {
+    expect(row({ phase: "connecting", stage: "opening" })).toBe(false);
+    expect(row({ phase: "reconnecting", retryAt: 3_000 })).toBe(false);
+    expect(row({ phase: "connected" })).toBe(false);
+  });
+
+  it("pulls forward only a retry that is waiting on its backoff", () => {
+    const base = { error: null, traceId: null } as const;
+    expect(connectionWaitsToRetry({ ...base, phase: "reconnecting", retryAt: 1 })).toBe(true);
+    expect(connectionWaitsToRetry({ ...base, phase: "reconnecting", retryAt: null })).toBe(false);
+    expect(connectionWaitsToRetry({ ...base, phase: "error" })).toBe(false);
+    expect(connectionWaitsToRetry({ ...base, phase: "connecting" })).toBe(false);
   });
 });
 

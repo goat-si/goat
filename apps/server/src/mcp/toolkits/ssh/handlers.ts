@@ -70,7 +70,7 @@ const toMcpFailure = (error: SshRemoteDispatch.SshRemoteDispatchError) =>
   });
 
 /** Names what a busy host is running, so a waiting update says what it waits for. */
-export const withUpdateBlockers = (
+const withUpdateBlockers = (
   result: SshHostSettledResult,
   blockers: ReadonlyArray<ServerActivityBlocker>,
 ): SshHostSettledResult => {

@@ -89,7 +89,7 @@ const workClaimMs = 600000;
 export const MEMORY_CONTINUATION_SCAN_INTERVAL_MS = 900_000;
 const continuationPageSize = 100;
 /** Outbox rows one retention statement examines; the pass yields to the event loop between pages. */
-export const MEMORY_RETENTION_PAGE_ROWS = 64;
+const MEMORY_RETENTION_PAGE_ROWS = 64;
 const isFailureCode = Schema.is(M.MemoryFailureCode);
 const safeCode = (error: unknown): M.MemoryFailureCode => {
   if (typeof error === "object" && error !== null) {

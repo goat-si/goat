@@ -140,7 +140,7 @@ export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) 
   ].join("\n");
 };
 
-export const platformScript = "uname -s 2>/dev/null\nprintf '\\n__goat_ocx_exit=%s\\n' \"$?\"\n";
+const platformScript = "uname -s 2>/dev/null\nprintf '\\n__goat_ocx_exit=%s\\n' \"$?\"\n";
 
 export const parseDeviceOutput = (stdout: string): OcxOutput | undefined => {
   const match = EXIT.exec(stdout);
