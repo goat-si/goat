@@ -1,0 +1,102 @@
+import { entry } from "../entry.ts";
+
+export const scheduleEntries = {
+  "schedule.create": entry({
+    resource: "schedule",
+    verb: "create",
+    name: "schedule_task",
+    toolkit: "orchestrator",
+    summary: "Schedule a recurring task",
+    description:
+      "Create persistent work in the app scheduler that runs even when no turn is active. Pass schedule as a STRUCTURED OBJECT, never JSON text. Timers: {type:'interval', everyMs:3600000} is hourly; {type:'fixed_time', timeOfDay:'09:00', weekdays:[1,2,3,4,5]} is weekday mornings; report the returned nextRunAt. Webhook dedupe accepts replayKey and coalesceKey templates with coalesceWindowSeconds (10–3600, default 120); replay keys expire after 7 days and coalescing keeps the latest payload in a window measured from its first delivery. Webhooks: {type:'webhook'} runs once per request to a generated URL. The run sees the request ONLY through prompt placeholders: {{body.path}} (e.g. {{body.action}}, {{body.release.tag_name}}), {{headers.name}}, {{query.name}}, {{body}}, or {{request}} (method, headers with credentials redacted, and body). Each value arrives framed as untrusted request data, and $skill, @file or /command mentions inside it do not act; without a signature, anyone with the URL can trigger a run. For a sender that signs requests, first call goat_handoff_create so the user enters the secret privately (never ask for it in chat or invent one), then set signature with the returned secretRef, e.g. GitHub: {type:'webhook', signature:{header:'x-hub-signature-256', encoding:'hex', prefix:'sha256=', secretRef}}. To run only for some requests, add filters, all of which must match, e.g. filters:[{path:'headers.x-github-event', op:'equals', value:'pull_request'}, {path:'body.action', op:'in', value:['opened','reopened']}]; ops are equals, notEquals, in, startsWith and exists. A path segment ending in [] fans out over an array: {path:'body.issue.labels[].name', op:'equals', value:'needs more info'} matches when any label has that name, and notEquals only when none does. The result's webhookUrl is the public URL to give the user; if it is absent, webhookUrlUnavailableReason says why and what the user should do (public URLs need GOAT Connect, which is coming soon; a sender that reaches the server directly can use the address in Settings → Scheduled Tasks); never share a path instead. A webhookUrl shows the tunnel is configured, not that it is running. Omit projectId for this thread's project. In this thread's project, runs post into THIS thread by default (bindToCurrentThread=true), which suits an orchestrator that sees every trigger, delegates work, and can dedupe against what is in flight; use false only when the user wants a fresh top-level thread per run. Elsewhere each run launches a fresh thread. Provider, model, and runtime settings inherit from this thread, or from the project default when there is no calling thread.",
+    effect: "destructive",
+    capability: "threads.launch",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: ["secret"],
+    annotations: {
+      title: "Schedule a recurring task",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "schedule.list": entry({
+    resource: "schedule",
+    verb: "list",
+    name: "list_scheduled_tasks",
+    toolkit: "orchestrator",
+    summary: "List scheduled tasks",
+    description:
+      "List recurring scheduled tasks in a project (omit projectId for the calling thread's project, or every project when there is no calling thread), including their id, schedule, prompt, enabled state, bound thread, next run time, and last run status. Use the returned scheduledTaskId with goat_schedule_update or goat_schedule_delete.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "List scheduled tasks",
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
+  "schedule.update": entry({
+    resource: "schedule",
+    verb: "update",
+    name: "update_scheduled_task",
+    toolkit: "orchestrator",
+    summary: "Update a scheduled task",
+    description:
+      "Update an existing scheduled task by scheduledTaskId (from goat_schedule_list). Webhook schedule dedupe accepts replayKey, coalesceKey, and coalesceWindowSeconds (10–3600, default 120) to suppress replays for 7 days and retain the latest payload in each fixed window. Only the provided fields change; omit a field to leave it as-is. Use enabled=false to pause a task without deleting it. Set bindToCurrentThread to move the task between posting into this thread and launching a fresh thread per run. A webhook schedule without filters keeps the stored filters; pass filters to replace them, or filters:[] to clear them.",
+    effect: "destructive",
+    capability: "threads.launch",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: ["secret"],
+    annotations: {
+      title: "Update a scheduled task",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "schedule.delete": entry({
+    resource: "schedule",
+    verb: "delete",
+    name: "delete_scheduled_task",
+    toolkit: "orchestrator",
+    summary: "Delete a scheduled task",
+    description:
+      "Permanently delete a scheduled task by scheduledTaskId (from goat_schedule_list). The task stops running immediately. To keep it but stop runs, use goat_schedule_update with enabled=false instead.",
+    effect: "destructive",
+    capability: "threads.launch",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Delete a scheduled task",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "schedule.run": entry({
+    resource: "schedule",
+    verb: "run",
+    name: "run_scheduled_task_now",
+    toolkit: "thread",
+    summary: "Run a scheduled task now through the existing scheduler.",
+    description:
+      "Run a scheduled task now through the existing scheduler. Requires a full-access/default caller. Returns the thread this run dispatched to, or null if dispatch failed. Each call is a new manual run; completion means dispatch/bookkeeping completed, not that the provider turn finished.",
+    effect: "destructive",
+    capability: "threads.launch",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+} as const;

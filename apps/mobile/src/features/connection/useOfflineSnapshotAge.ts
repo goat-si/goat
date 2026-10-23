@@ -6,16 +6,16 @@ import { useEffect, useState } from "react";
 import { environmentShell } from "../../state/shell";
 
 /**
- * "last state N min ago" for an environment that is not connected, when the threads shown for it
- * carry their capture time. Ticks once a minute only while it is shown.
+ * "last state N min ago" for an environment whose cached threads are shown (`hidden` false), when
+ * they carry their capture time. Ticks once a minute only while it is shown.
  */
 export function useOfflineSnapshotAge(
   environmentId: EnvironmentId,
-  connected: boolean,
+  hidden: boolean,
 ): string | null {
   const capturedAt = useAtomValue(environmentShell.offlineSnapshotAge(environmentId));
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const visible = !connected && capturedAt !== null;
+  const visible = !hidden && capturedAt !== null;
   useEffect(() => {
     if (!visible) return;
     // Refresh right away when the label appears, then once a minute while it stays.

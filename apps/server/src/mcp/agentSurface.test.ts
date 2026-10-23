@@ -492,7 +492,6 @@ const via = {
 };
 // legacy: the shipped name over HTTP /mcp, which resolves it to the listed tool before dispatch.
 type Route = keyof typeof via | "legacy";
-const RPC_INTERNAL_ERROR = 'rpc error: {"code":-32603';
 const ROUTES: ReadonlyArray<Route> = [
   ...(Object.keys(via) as ReadonlyArray<keyof typeof via>),
   "legacy",
@@ -510,7 +509,6 @@ describe("agent surface access", () => {
         const [legacy] = entry.legacyNames;
         for (const caller of Object.keys(callers) as ReadonlyArray<Caller>) {
           let directOutcome: Outcome | undefined;
-          let directDied = false;
           for (const route of ROUTES) {
             // goat_call refuses to call itself by design.
             if (route === "goat_call" && entry.path === "surface.call") continue;
@@ -545,18 +543,10 @@ describe("agent surface access", () => {
               ),
             );
             const classified = classify(entry.path, result);
-            if (route === "direct") directDied = textOf(result) === INERT_SERVICE_DEFECT;
-            // Over HTTP, an image tool that dies answers with JSON-RPC's internal error under any
-            // name; it is the same death the direct route caught on an inert service.
-            const diedOverHttp =
-              route === "legacy" && directDied && textOf(result).startsWith(RPC_INTERNAL_ERROR);
             // The envelope turns a refusal inside a successful value into an error; that is a
             // domain answer after access passed, so it still counts as reaching the handler.
             const outcome =
-              (route === "goat_call" &&
-                classified === "unexpected" &&
-                directOutcome === "reached") ||
-              diedOverHttp
+              route === "goat_call" && classified === "unexpected" && directOutcome === "reached"
                 ? "reached"
                 : classified;
             if (route === "direct") directOutcome = outcome;

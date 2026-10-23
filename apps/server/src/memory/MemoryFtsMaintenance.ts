@@ -15,7 +15,7 @@ import * as Quota from "./MemoryQuotaService.ts";
  */
 export const MEMORY_STORAGE_SAMPLE_INTERVAL_MS = 3_600_000;
 /** Resample interval while the store is over budget, so the admission brake releases promptly. */
-export const MEMORY_STORAGE_OVER_BUDGET_SAMPLE_INTERVAL_MS = 300_000;
+const MEMORY_STORAGE_OVER_BUDGET_SAMPLE_INTERVAL_MS = 300_000;
 
 /** Footprint areas for the size metric: what is injected, how it is found, and its machinery. */
 const storageArea = (table: M.MemoryStorageTable) => {
