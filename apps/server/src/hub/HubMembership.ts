@@ -100,6 +100,8 @@ interface Caller {
   readonly profile: string;
   readonly owner: boolean;
   readonly inbox: DecisionInbox.DecisionCaller;
+  /** GOAT itself, for a machine it created: only its own pinned key may stand in for consent. */
+  readonly provisioning?: true;
 }
 /** What the Home holds for a member: a Remote Link record, or a Hub client's data key id. */
 type Member =
@@ -135,6 +137,15 @@ export class HubMembership extends Context.Service<
       scope: McpInvocationScope,
       input: HubDeviceOperationInput,
       person?: HubPerson,
+    ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
+    /**
+     * Joins a cloud machine GOAT created as a Remote Link Child, with no person to ask. It links
+     * only when OpenCodex offers exactly the host key GOAT pinned from the provider's API, and
+     * fails otherwise; the hub being enabled is the owner's standing choice.
+     */
+    readonly joinProvisioned: (
+      scope: McpInvocationScope,
+      alias: string,
     ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
   }
 >()("goat/hub/HubMembership") {}
@@ -556,8 +567,15 @@ const make = Effect.gen(function* () {
     input: HubDeviceOperationInput,
     person?: HubPerson,
   ) {
+    return yield* joinAs(scope, input, yield* authorize(scope, input.deviceAlias, person));
+  });
+
+  const joinAs = Effect.fn("HubMembership.joinAs")(function* (
+    scope: McpInvocationScope,
+    input: HubDeviceOperationInput,
+    caller: Caller,
+  ) {
     const alias = input.deviceAlias;
-    const caller = yield* authorize(scope, alias, person);
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
       const status = yield* homeLinks();
@@ -618,6 +636,15 @@ const make = Effect.gen(function* () {
       });
       const pin = yield* ocx.pinnedFingerprint(alias);
       const binding = decisionBinding("join", alias, offered.fingerprint);
+      if (caller.provisioning && pin !== offered.fingerprint) {
+        const detail =
+          pin === undefined
+            ? "GOAT has no pinned host key for this machine."
+            : `GOAT's pinned key is ${pin}, which differs from the offered key.`;
+        steps.push({ step: "probe", outcome: "failed", detail });
+        yield* audit(caller, "hub.join", alias, "failed", undefined);
+        return result("join", alias, "failed", detail, steps, { transport });
+      }
       if (input.decisionId !== undefined)
         yield* consent.approved(caller, "join", input.decisionId, binding);
       else if (pin !== offered.fingerprint || !caller.owner) {
@@ -895,6 +922,22 @@ const make = Effect.gen(function* () {
     join: (scope, input, person) => permit.withPermits(1)(join(scope, input, person)),
     leave: (scope, input, person) => permit.withPermits(1)(leave(scope, input, person)),
     repair: (scope, input, person) => permit.withPermits(1)(repair(scope, input, person)),
+    joinProvisioned: (scope, alias) =>
+      SAFE_ALIAS.test(alias)
+        ? permit.withPermits(1)(
+            joinAs(
+              scope,
+              { deviceAlias: alias, transport: "remote-link" },
+              {
+                actor: "goat:cloud-machine",
+                profile: "hub",
+                owner: true,
+                inbox: { kind: "agent", scope },
+                provisioning: true,
+              },
+            ),
+          )
+        : Effect.fail(invalid("deviceAlias must be a plain SSH alias.")),
   });
 });
 

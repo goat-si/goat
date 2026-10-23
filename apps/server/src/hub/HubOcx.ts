@@ -14,6 +14,7 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { prepareScript, resolveOcx } from "../opencodex/childPrepare.ts";
 
 const MAX_BYTES = 256 * 1024;
 const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
@@ -85,6 +86,16 @@ export class HubOcx extends Context.Service<
     ) => Effect.Effect<HubClientHandoff, HubOcxError>;
     /** SHA256 fingerprint of GOAT's pinned host key for the alias, if GOAT pins one. */
     readonly pinnedFingerprint: (alias: string) => Effect.Effect<string | undefined>;
+    /**
+     * Makes the device ready to be a Child: installs `version` for this user when OpenCodex is
+     * missing or older than Remote Link supports, then starts it unless it already answers.
+     * Stdout carries the version that answers; the code is one of `PREPARE_EXIT`.
+     */
+    readonly prepareDevice: (
+      alias: string,
+      version: string,
+      timeoutMs: number,
+    ) => Effect.Effect<OcxOutput, HubOcxError>;
     /** False when `ssh -G` shows a jump chain or proxy command, or cannot resolve the alias. */
     readonly directAlias: (alias: string) => Effect.Effect<boolean>;
     /** Running turns on the device; undefined when it cannot be read. */
@@ -111,7 +122,6 @@ export const platformOf = (uname: string): DevicePlatform | undefined => {
 };
 
 /**
- * Resolves ocx in OpenCodex's remoteOcxArgv order: Desktop and system installs before PATH shims.
  * A pairing code goes to ocx's stdin through the shell's printf builtin, so it is never in argv.
  */
 export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) => {
@@ -125,14 +135,7 @@ export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) 
       ? `"$goat_ocx" ${quoted} </dev/null 2>/dev/null`
       : `printf '%s\\n' '${pairingCode}' | "$goat_ocx" ${quoted} 2>/dev/null`;
   return [
-    "goat_ocx=",
-    'for goat_candidate in "$HOME/.opencodex-desktop/bin/ocx" /Applications/OpenCodex.app/Contents/MacOS/ocx /usr/bin/ocx "/c/Program Files/OpenCodex/ocx"; do',
-    '  if [ -x "$goat_candidate" ]; then goat_ocx=$goat_candidate; break; fi',
-    "done",
-    'if [ -z "$goat_ocx" ]; then',
-    '  PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"',
-    "  goat_ocx=$(command -v ocx 2>/dev/null) || goat_ocx=",
-    "fi",
+    ...resolveOcx(),
     "if [ -z \"$goat_ocx\" ]; then printf '\\n__goat_ocx_exit=127\\n'; exit 0; fi",
     invoke,
     "printf '\\n__goat_ocx_exit=%s\\n' \"$?\"",
@@ -254,6 +257,8 @@ const make = Effect.gen(function* () {
   return HubOcx.of({
     home,
     device: (alias, args, timeoutMs) => runDevice(alias, deviceScript(args), timeoutMs),
+    prepareDevice: (alias, version, timeoutMs) =>
+      runDevice(alias, prepareScript(version), timeoutMs),
     devicePlatform: Effect.fn("HubOcx.devicePlatform")(
       function* (alias) {
         const result = yield* dispatch.runHostScript({

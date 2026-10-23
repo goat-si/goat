@@ -241,6 +241,7 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
                     };
               }),
             pinnedFingerprint: () => Effect.succeed(fixture.pin),
+            prepareDevice: () => Effect.die("unused"),
             directAlias: () => Effect.succeed(fixture.direct ?? true),
             runningTurns: () => Effect.succeed(fixture.running ?? 0),
             deviceHealth: (alias) =>
@@ -933,4 +934,37 @@ it.effect(
       expect(hub.calls.some((call) => call.includes("link add"))).toBe(false);
       expect(yield* hub.consumed).toEqual([]);
     }),
+);
+
+it.effect("GOAT joins a cloud machine it pinned, under any default profile, without asking", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, profile: "observer" });
+    const result = yield* hub.membership.joinProvisioned(scope, "boat-builder");
+    expect(result.state).toBe("child");
+    expect(hub.calls).toContain(`home link add boat-builder --expect-fingerprint ${PINNED} --json`);
+    expect((yield* hub.inboxItems).items).toEqual([]);
+    expect((yield* hub.audit).at(-1)).toMatchObject({ action: "hub.join", outcome: "child" });
+  }),
+);
+
+it.effect("GOAT refuses a cloud machine whose offered key is not the one it pinned", () =>
+  Effect.gen(function* () {
+    for (const pin of [OTHER, undefined]) {
+      const hub = yield* setup({ ...(pin === undefined ? {} : { pin }), offered: PINNED });
+      const result = yield* hub.membership.joinProvisioned(scope, "boat-builder");
+      expect(result.state).toBe("failed");
+      expect(hub.calls.some((call) => call.startsWith("home link add"))).toBe(false);
+      // No person is asked: a provisioning join never files a decision.
+      expect((yield* hub.inboxItems).items).toEqual([]);
+    }
+  }),
+);
+
+it.effect("GOAT joining a cloud machine that is already linked changes nothing", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, linked: ["boat-builder"] });
+    const result = yield* hub.membership.joinProvisioned(scope, "boat-builder");
+    expect(result.state).toBe("child");
+    expect(hub.calls).toEqual(["home link status --json", "verify boat-builder"]);
+  }),
 );

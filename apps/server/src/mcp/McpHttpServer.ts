@@ -56,6 +56,8 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
+import * as SshRemoteDispatchLive from "../sshRemote/SshRemoteDispatchLive.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import * as HubOcx from "../hub/HubOcx.ts";
@@ -1273,6 +1275,13 @@ const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
  * RemoteDispatchCoordinator are left to the caller, like `layer`.
  */
 export const layerHostStatusService = HostStatusMcpService.layer.pipe(
+  // The cloud machine service is the runtime's shared reference, so readiness reaches it.
+  Layer.provideMerge(
+    OpenCodexChildBootstrap.layer.pipe(
+      Layer.provide(HubOcx.layer),
+      Layer.provide(SshRemoteDispatchLive.layerCloudMachines),
+    ),
+  ),
   Layer.provideMerge(
     HubMembership.layer.pipe(Layer.provide(HubOcx.layer), Layer.provide(Profiles.layer)),
   ),

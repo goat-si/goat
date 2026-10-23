@@ -29,6 +29,7 @@ import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
 import * as DatabaseStorage from "../persistence/DatabaseStorage.ts";
@@ -126,13 +127,22 @@ const make = Effect.gen(function* () {
   const strays = yield* Effect.serviceOption(StrayProcesses.StrayProcesses);
   const pressureMonitor = yield* Effect.serviceOption(HostPressureMonitor.HostPressureMonitor);
   const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
-  /** This machine's view of whether its goatclaw policy reached the host. */
-  const withGoatclaw = (entry: HostStatusEntry) =>
-    Option.isNone(fleet) || entry.host === null
-      ? Effect.succeed(entry)
-      : fleet.value
-          .hostState(entry.host)
-          .pipe(Effect.map((goatclaw): HostStatusEntry => ({ ...entry, goatclaw })));
+  const childBootstrap = yield* Effect.serviceOption(
+    OpenCodexChildBootstrap.OpenCodexChildBootstrap,
+  );
+  /** This machine's view of the host: whether its goatclaw policy reached it, and its Child setup. */
+  const withGoatclaw = Effect.fn("HostStatus.withHostState")(function* (entry: HostStatusEntry) {
+    if (entry.host === null) return entry;
+    const goatclaw = Option.isSome(fleet) ? yield* fleet.value.hostState(entry.host) : undefined;
+    const child = Option.isSome(childBootstrap)
+      ? yield* childBootstrap.value.status(entry.host)
+      : undefined;
+    return {
+      ...entry,
+      ...(goatclaw === undefined ? {} : { goatclaw }),
+      ...(child === undefined ? {} : { opencodexChild: child }),
+    } satisfies HostStatusEntry;
+  });
   const clock = yield* Clock.Clock;
   // Optional so tests and builds without the driver keep reporting the rest.
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
