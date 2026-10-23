@@ -124,9 +124,9 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 ### `orchestrator-goat-modules` Orchestrator의 GOAT 명령 모듈
 
-- 커밋: #808 #809 #811 #813 #814 #815
+- 커밋: #808 #809 #811 #813 #814 #815 #870 #874
 - 경로: `apps/server/src/orchestration-v2/goat/`, `apps/server/src/orchestration-v2/Orchestrator.ts`
-- 정책: GOAT 전용 명령 처리는 `orchestration-v2/goat/`의 factory 모듈에 둔다: 원격 위임 작업, thread notice와 GOAT 봇 timeline 기록, 스레드 승격, human handoff, review ledger, 서버 drain admission. `Orchestrator.ts`에는 `makeOrchestrator` 안의 factory 호출, switch case, 오류 union 항목, import만 남긴다. upstream이 Orchestrator를 바꾸면 upstream을 받고 이 hook만 다시 얹는다. 새 GOAT 명령도 이 폴더에 둔다. 모듈은 `Orchestrator.ts`를 type으로만 import하고 오류 class와 closure를 인자로 받는다. 런타임 import 순환을 피하기 위해서다. `makeOrchestrator`에서 뒤에 선언되는 closure(`stopReachedRun`, `planDelegatedCompletionDelivery`)는 화살표 함수로 감싸 넘긴다. 바로 넘기면 TDZ에 걸린다. 사이클 261023에 `f054d1b` 대비 Orchestrator 차이가 +2114/−225에서 +1113/−230으로 줄었다.
+- 정책: GOAT 전용 명령 처리는 `orchestration-v2/goat/`의 factory 모듈에 둔다: 원격 위임 작업, thread notice와 GOAT 봇 timeline 기록, 스레드 승격, human handoff, review ledger, 서버 drain admission, PR 자동 watch, fleet fallback 전제 조건(`FallbackSelectionSource` 포함). `Orchestrator.ts`에는 `makeOrchestrator` 안의 factory 호출, switch case, 오류 union 항목, import만 남긴다. upstream이 Orchestrator를 바꾸면 upstream을 받고 이 hook만 다시 얹는다. 새 GOAT 명령도 이 폴더에 둔다. 모듈은 `Orchestrator.ts`를 type으로만 import하고 오류 class와 closure를 인자로 받는다. 런타임 import 순환을 피하기 위해서다. `makeOrchestrator`에서 뒤에 선언되는 closure(`stopReachedRun`, `planDelegatedCompletionDelivery`)는 화살표 함수로 감싸 넘긴다. 바로 넘기면 TDZ에 걸린다. 사이클 261023에 `f054d1b` 대비 Orchestrator 차이가 +2114/−225에서 +995/−230으로 줄었다.
 
 ### `pdf-viewer` PDF.js 파일 뷰어
 
