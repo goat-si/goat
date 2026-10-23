@@ -2,8 +2,9 @@
  * Answers to a user-input question arrive as option values, option labels, or free text: the
  * composers send values, agents relaying a person's pick through MCP often send the label, and
  * typed replies differ in case, spacing, or Unicode form (Hangul from macOS can arrive
- * decomposed). Each answer that names one offered option is mapped to that option's value, so the
- * provider receives what it offered and every path resolves the same way.
+ * decomposed). An exact value or label is mapped to that option's value everywhere. A looser
+ * match only counts when the question takes no custom answer: there the text can only mean an
+ * option, while elsewhere it may be the person's own wording and is passed on as written.
  *
  * @module userInputAnswers
  */
@@ -17,11 +18,11 @@ const loose = (text: string) => text.normalize("NFC").trim().toLocaleLowerCase()
 
 /**
  * The option `text` names. An exact value wins, because provider option ids are kept byte for
- * byte; then an exact label; then a label or value equal after trimming, case, and Unicode
- * normalization, when exactly one option matches.
+ * byte; then an exact label; then, for a question without custom answers, a label or value equal
+ * after trimming, case, and Unicode normalization, when exactly one option matches.
  */
 export function matchUserInputOption(
-  question: Pick<OrchestrationV2UserInputQuestion, "options">,
+  question: Pick<OrchestrationV2UserInputQuestion, "options" | "allowCustomAnswer">,
   text: string,
 ): UserInputOption | undefined {
   const byValue = question.options.find((option) => optionValue(option) === text);
@@ -29,7 +30,7 @@ export function matchUserInputOption(
   const byLabel = question.options.filter((option) => option.label === text);
   if (byLabel.length === 1) return byLabel[0];
   const wanted = loose(text);
-  if (wanted === "") return undefined;
+  if (wanted === "" || question.allowCustomAnswer !== false) return undefined;
   const near = question.options.filter(
     (option) => loose(option.label) === wanted || loose(optionValue(option)) === wanted,
   );
@@ -38,7 +39,9 @@ export function matchUserInputOption(
 
 /** Each answer naming an option becomes that option's value; free text stays as written. */
 export function canonicalUserInputAnswers(
-  questions: ReadonlyArray<Pick<OrchestrationV2UserInputQuestion, "id" | "options">>,
+  questions: ReadonlyArray<
+    Pick<OrchestrationV2UserInputQuestion, "id" | "options" | "allowCustomAnswer">
+  >,
   answers: Readonly<Record<string, UserInputAnswer>>,
 ): Record<string, UserInputAnswer> {
   const byId = new Map(questions.map((question) => [question.id, question]));
@@ -60,7 +63,7 @@ export function canonicalUserInputAnswers(
 
 /** An answer as an agent reads it back: option labels, comma-joined for several picks. */
 export function userInputAnswerText(
-  question: Pick<OrchestrationV2UserInputQuestion, "options">,
+  question: Pick<OrchestrationV2UserInputQuestion, "options" | "allowCustomAnswer">,
   answer: UserInputAnswer | undefined,
 ): string {
   if (answer === undefined) return "";

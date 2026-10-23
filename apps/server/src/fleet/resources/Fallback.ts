@@ -37,7 +37,7 @@ import * as Schema from "effect/Schema";
 
 import { isExhausted } from "../../channels/channelPlacement.ts";
 import * as ProviderSwitch from "../../orchestration-v2/ProviderSwitchService.ts";
-import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
+import { FallbackSelectionSource } from "../../orchestration-v2/goat/FallbackSelection.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
@@ -455,7 +455,7 @@ export const make = Effect.gen(function* () {
               modelSelection: target,
             })
             .pipe(
-              Effect.provideService(Orchestrator.FallbackSelectionSource, {
+              Effect.provideService(FallbackSelectionSource, {
                 runId,
                 modelSelection: current,
               }),

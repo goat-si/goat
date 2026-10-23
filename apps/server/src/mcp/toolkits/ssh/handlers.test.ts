@@ -1,6 +1,5 @@
 import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
-import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import { goatclawRoleTemplate } from "../../../goatclaw/RoleTemplates.ts";
 import * as PermissionSettings from "../../../serverSettings.ts";
@@ -66,6 +65,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as SshHandlers from "./handlers.ts";
+import { profileLayer, scope, threadId } from "./handlers.testkit.ts";
 import { SshToolkit } from "./tools.ts";
 
 const decodeSshHostResult = Schema.decodeUnknownEffect(Schema.toCodecJson(SshHostResult));
@@ -79,17 +79,6 @@ const decodedMcpFailure = (response: McpSchema.CallToolResult) =>
 type Registration = Parameters<LaunchWatchService.LaunchWatchServiceShape["register"]>[0];
 type ExternalWatch = Parameters<LaunchWatchService.LaunchWatchServiceShape["watchExternal"]>[0];
 type Route = Parameters<LaunchWatchService.LaunchWatchServiceShape["releaseRoute"]>[0];
-
-const profileLayer = (id?: string) => {
-  const base = Profiles.layer.pipe(
-    Layer.provide(
-      PermissionSettings.layerTest({
-        goatclaw: { enabled: id !== undefined, defaultProfile: id ?? "worker" },
-      }),
-    ),
-  );
-  return id === undefined ? base : base.pipe(Layer.provide(Sqlite.layerMemory));
-};
 
 type LaunchOptions = {
   readonly repository?: RepositoryLaunchSelection;
@@ -112,6 +101,8 @@ type LaunchOptions = {
   readonly registerInterrupted?: boolean;
   readonly goatclawRole?: "issue-sweeper";
   readonly references?: boolean;
+  readonly dispatchError?: SshRemoteDispatch.SshRemoteDispatchError;
+  readonly coordinationError?: RemoteDispatchCoordinator.RemoteDispatchError;
 };
 
 /** Calls goat_ssh_thread_launch over mocks; returns its last response and what it asked for. */
@@ -206,19 +197,36 @@ const launchRaw = (options: LaunchOptions = {}) =>
         validateLaunchAttachments: (requested) => Effect.succeed(requested),
         launchThread: (input, beforeLaunch) => {
           launchInputs.push(input);
-          return beforeLaunch.pipe(Effect.as(remoteResult));
+          const outcome: Effect.Effect<
+            typeof remoteResult,
+            SshRemoteDispatch.SshRemoteDispatchError
+          > =
+            options.dispatchError === undefined
+              ? Effect.succeed(remoteResult)
+              : Effect.fail(options.dispatchError);
+          return beforeLaunch.pipe(Effect.andThen(outcome));
         },
       }),
       // A calling thread launches through the report coordinator, which wraps the SSH launch.
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
-        launch: (input, beforeLaunch) =>
-          Effect.sync(() => {
+        launch: (input, beforeLaunch) => {
+          const failure = options.coordinationError ?? options.dispatchError;
+          const outcome: Effect.Effect<
+            { correlationId: string; launch: typeof remoteResult; reportsSupported: boolean },
+            RemoteDispatchCoordinator.RemoteDispatchError | SshRemoteDispatch.SshRemoteDispatchError
+          > =
+            failure === undefined
+              ? Effect.succeed({
+                  correlationId: "rr-test",
+                  launch: remoteResult,
+                  reportsSupported: true,
+                })
+              : Effect.fail(failure);
+          return Effect.sync(() => {
             deliveries.push(input.delivery);
             launchInputs.push(input.launch);
-          }).pipe(
-            Effect.andThen(beforeLaunch),
-            Effect.as({ correlationId: "rr-test", launch: remoteResult, reportsSupported: true }),
-          ),
+          }).pipe(Effect.andThen(beforeLaunch), Effect.andThen(outcome));
+        },
       }),
       Layer.mock(LaunchWatchService.LaunchWatchService)({
         register: (input) =>
@@ -327,6 +335,49 @@ it.effect("includes repository warnings in a successful SSH launch", () =>
     const result = yield* launchFromThread({ repository: { key: "github.com/owner/repo" } });
     expect(result.result.notes).toContain("Repository verified; dependency freshness unknown.");
     expect(result.launchInputs).toHaveLength(1);
+  }),
+);
+
+it.effect("keeps the dispatch reason and whether the launch may have started", () =>
+  Effect.gen(function* () {
+    const uncertain = new SshRemoteDispatch.SshRemoteDispatchError({
+      reason: "ssh_failed",
+      message: "Calling goat_thread_launch on box failed: connection reset",
+      launchMayHaveStarted: true,
+    });
+    // A calling thread launches through the report coordinator; an outside client directly.
+    for (const outsideClient of [false, true]) {
+      const { response } = yield* launchRaw({ dispatchError: uncertain, outsideClient });
+      expect(response, `outsideClient=${outsideClient}`).toMatchObject({
+        code: "orchestration_error",
+        message: uncertain.message,
+        reason: "ssh_failed",
+        mayHaveStarted: true,
+      });
+    }
+
+    const refused = yield* launchRaw({
+      dispatchError: new SshRemoteDispatch.SshRemoteDispatchError({
+        reason: "remote_refused",
+        message: "box refused: this credential cannot launch threads.",
+        remoteCode: "capability_denied",
+      }),
+    });
+    expect(refused.response).toMatchObject({
+      reason: "remote_refused",
+      remoteCode: "capability_denied",
+    });
+    expect(refused.response).not.toHaveProperty("mayHaveStarted");
+
+    // Recording the dispatch can fail after the remote accepted the launch.
+    const unrecorded = yield* launchRaw({
+      coordinationError: new RemoteDispatchCoordinator.RemoteDispatchError({ stage: "storage" }),
+    });
+    expect(unrecorded.response).toMatchObject({
+      code: "orchestration_error",
+      message: "SSH report coordination failed.",
+      mayHaveStarted: true,
+    });
   }),
 );
 
@@ -531,19 +582,6 @@ it.effect("returns the successful remote launch even when its watch cannot be sa
   }),
 );
 
-const threadId = ThreadId.make("ssh-caller");
-const scope: McpInvocationContext.McpInvocationScope = {
-  environmentId: EnvironmentId.make("environment:ssh-attachments"),
-  requestNamespace: "provider:ssh-attachments",
-  thread: {
-    threadId,
-    providerSessionId: "provider:ssh-attachments",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-  },
-  client: undefined,
-  capabilities: new Set(["orchestration"]),
-  issuedAt: 0,
-};
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
@@ -1190,121 +1228,6 @@ it.effect("an outside full-access client must name a thread and cannot exempt an
   }),
 );
 
-const cloudMachineView = {
-  alias: "boat-bx_23456789",
-  sandboxId: "bx_23456789",
-  label: "Build box",
-  provider: "boat",
-  type: "small",
-  ttlSeconds: 3600,
-  presence: "present",
-  state: "provisioning",
-  deletePending: false,
-  lastError: null,
-} as const;
-
-/** Calls goat_cloud_machine_create as a thread caller with the given settings grant. */
-const createCloudMachine = (grant: {
-  readonly profile?: string;
-  readonly tool?: "goat_cloud_machine_create" | "goat_cloud_machine_resume";
-  readonly readOnly?: boolean;
-  readonly grantedScopes?: ReadonlyArray<"settings:write" | "orchestration:read">;
-  readonly reauthorize?: "ok" | "fail";
-}) =>
-  Effect.gen(function* () {
-    const created: Array<unknown> = [];
-    const reauthorized: Array<ReadonlyArray<string>> = [];
-    const invocation: McpInvocationContext.McpInvocationScope = {
-      ...scope,
-      ...(grant.profile === undefined
-        ? {}
-        : {
-            thread: undefined,
-            client: { sessionId: "profile-client", label: "test", access: "full-access" as const },
-          }),
-      ...(grant.readOnly === undefined ? {} : { readOnly: grant.readOnly }),
-      ...(grant.grantedScopes === undefined ? {} : { grantedScopes: grant.grantedScopes }),
-      ...(grant.reauthorize === undefined
-        ? {}
-        : {
-            reauthorize: (required) =>
-              Effect.sync(() => void reauthorized.push(required)).pipe(
-                Effect.andThen(
-                  grant.reauthorize === "ok"
-                    ? Effect.void
-                    : Effect.fail(
-                        new EnvironmentAuthorizationError({
-                          message: "revoked",
-                          requiredScope: "settings:write",
-                        }),
-                      ),
-                ),
-              ),
-          }),
-    };
-    const dependencies = Layer.mergeAll(
-      profileLayer(grant.profile),
-      PermissionSettings.layerTest(),
-      NodeCrypto.layer,
-      Layer.succeed(McpInvocationContext.McpInvocationContext, invocation),
-      Layer.mock(ThreadManagementService.ThreadManagementService)({
-        getThreadShell: () => Effect.succeed(liveThreadShell(threadId)),
-      }),
-      Layer.mock(ServerEnvironment.ServerEnvironment)({}),
-      Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
-      Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
-      Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
-      Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
-      Layer.mock(SshHostSetup.SshHostSetup)({}),
-      Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
-      Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
-      Layer.mock(LaunchWatchService.LaunchWatchService)({}),
-      Layer.mock(CloudMachineService.CloudMachineService)({
-        create: (input) =>
-          Effect.sync(() => void created.push(input)).pipe(Effect.as(cloudMachineView)),
-        resume: (alias) =>
-          Effect.sync(() => void created.push(alias)).pipe(Effect.as(cloudMachineView)),
-      }),
-    );
-    const toolkit = yield* SshToolkit.pipe(
-      Effect.provide(
-        McpToolAccess.HandlersLayer.layer(SshHandlers.layer).pipe(Layer.provide(dependencies)),
-      ),
-    );
-    const responses = yield* toolkit
-      .handle(
-        grant.tool ?? "goat_cloud_machine_create",
-        grant.tool === "goat_cloud_machine_resume"
-          ? { alias: cloudMachineView.alias }
-          : { label: "Build box", type: "small", ttlSeconds: 3600 },
-      )
-      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
-    return { response: responses.at(-1)?.result, created, reauthorized };
-  });
-
-it.effect("creates a cloud machine only for a caller whose settings grant is reconfirmed", () =>
-  Effect.gen(function* () {
-    const granted = yield* createCloudMachine({
-      grantedScopes: ["settings:write"],
-      reauthorize: "ok",
-    });
-    expect(granted.response).toMatchObject({ alias: "boat-bx_23456789" });
-    expect(granted.created).toHaveLength(1);
-    expect(granted.reauthorized).toEqual([["settings:write"]]);
-
-    for (const grant of [
-      { grantedScopes: ["orchestration:read"] as const, reauthorize: "ok" as const },
-      { grantedScopes: ["settings:write"] as const },
-      { grantedScopes: ["settings:write"] as const, reauthorize: "ok" as const, readOnly: true },
-      { grantedScopes: ["settings:write"] as const, reauthorize: "fail" as const },
-    ]) {
-      const denied = yield* createCloudMachine(grant);
-      expect(denied.response, JSON.stringify(grant)).toMatchObject({ code: "capability_denied" });
-      expect(denied.created).toEqual([]);
-    }
-  }),
-);
-
 const runtimeStatus: SshHostResult = {
   kind: "ok",
   status: {
@@ -1918,28 +1841,5 @@ it.effect.each([false, true])(
             : "Review the change",
         ),
       ).toBe(true);
-    }),
-);
-
-it.effect.each(["goat_cloud_machine_create", "goat_cloud_machine_resume"] as const)(
-  "%s only starts Boat for owner",
-  (tool) =>
-    Effect.gen(function* () {
-      const denied = yield* createCloudMachine({
-        profile: "manager",
-        tool,
-        reauthorize: "ok",
-        grantedScopes: ["settings:write"],
-      });
-      expect(denied.response).toMatchObject({ code: "capability_denied" });
-      expect(denied.created).toHaveLength(0);
-      const allowed = yield* createCloudMachine({
-        profile: "owner",
-        tool,
-        reauthorize: "ok",
-        grantedScopes: ["settings:write"],
-      });
-      expect(allowed.response).toHaveProperty("alias");
-      expect(allowed.created).toHaveLength(1);
     }),
 );

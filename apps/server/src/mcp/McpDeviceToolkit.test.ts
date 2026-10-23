@@ -194,6 +194,34 @@ it.effect("registers the device tools and returns the screenshot as image conten
   ).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("tells an outside client why a screenshot was refused, not only that it failed", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const refused = yield* server
+      .callTool({ name: "device_screenshot", arguments: { deviceId: "UDID-1" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, {
+          ...invocation(["device"]),
+          thread: undefined,
+          client: { sessionId: "outside", label: "Outside agent", access: "full-access" },
+        }),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(refused.isError).toBe(true);
+    const text = refused.content[0]?.type === "text" ? refused.content[0].text : "";
+    expect(text).toContain("calling GOAT thread");
+    expect(refused.structuredContent).toEqual({
+      error: {
+        _tag: "OrchestratorMcpFailure",
+        operation: "screenshot",
+        failureCount: 1,
+        code: "thread_credential_required",
+        message: text,
+      },
+    });
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
 it.effect("rejects unavailable agent access before booting or opening a device", () => {
   const layerUnavailable = Layer.mock(DeviceService.DeviceService)({
     list: Effect.succeed(state),

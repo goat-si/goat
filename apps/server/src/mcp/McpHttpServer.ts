@@ -1,3 +1,12 @@
+import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
+import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
+import { ToolDispatch } from "./ToolDispatch.ts";
+import {
+  argumentKeys,
+  encodeReferenceRefusal,
+  refusalResult,
+  undeclaredArgumentsResult,
+} from "./toolRefusals.ts";
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
 import * as DecisionHandlers from "./toolkits/decision/handlers.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
@@ -67,6 +76,7 @@ import { validateRepositoryReferenceArguments } from "./repositoryReferenceArgum
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
+import { imageToolFailure, imageToolSuccess } from "./imageToolResult.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -761,65 +771,6 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
   });
 });
 
-interface ImageToolResult {
-  readonly screenshot: {
-    readonly mimeType: "image/png";
-    readonly data: string;
-    readonly width: number;
-    readonly height: number;
-  };
-  readonly [key: string]: unknown;
-}
-
-/**
- * Failures surface only their tag unless the tool describes them: the remote
- * message may carry renderer or device output the agent should not see, and the
- * tag is what it can act on.
- */
-const imageToolFailure =
-  <E>(toolName: string, operation: string, failureText: string | ((error: E) => string)) =>
-  (cause: Cause.Cause<E>) => {
-    if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
-      return Effect.failCause(cause).pipe(Effect.orDie);
-    }
-    const failures = cause.reasons.filter(Cause.isFailReason);
-    const firstFailure = failures[0]?.error;
-    const errorTag =
-      typeof firstFailure === "object" &&
-      firstFailure !== null &&
-      "_tag" in firstFailure &&
-      typeof firstFailure._tag === "string"
-        ? firstFailure._tag
-        : `${toolName}Error`;
-    const message =
-      typeof failureText === "string" || failures[0] === undefined
-        ? undefined
-        : failureText(failures[0].error);
-    const result = new McpSchema.CallToolResult({
-      isError: true,
-      structuredContent: {
-        error: {
-          _tag: errorTag,
-          operation,
-          failureCount: failures.length,
-          ...(message === undefined ? {} : { message }),
-        },
-      },
-      // Some clients show only the text content and others only structuredContent, so both carry it.
-      content: [
-        {
-          type: "text",
-          text: typeof failureText === "string" ? failureText : (message ?? `${toolName} failed.`),
-        },
-      ],
-    });
-    return Effect.logWarning(`${toolName} failed`, {
-      operation,
-      errorTag,
-      failureCount: failures.length,
-    }).pipe(Effect.as(result));
-  };
-
 /**
  * `McpServer.toolkit` serializes every result as JSON text, which is the wrong
  * shape for a screenshot: the model needs image content.
@@ -869,38 +820,8 @@ const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function*
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.matchCauseEffect({
             onFailure: imageToolFailure(tool.name, operation, failureText),
-            onSuccess: ({ encodedResult }) => {
-              const { screenshot, ...rest } = encodedResult as ImageToolResult;
-              const includeImage =
-                (payload as { readonly includeImage?: boolean } | undefined)?.includeImage !==
-                false;
-              const metadata = {
-                ...rest,
-                screenshot: {
-                  mimeType: screenshot.mimeType,
-                  width: screenshot.width,
-                  height: screenshot.height,
-                },
-              };
-              return Effect.succeed(
-                new McpSchema.CallToolResult({
-                  isError: false,
-                  structuredContent: metadata,
-                  content: [
-                    { type: "text", text: JSON.stringify(metadata) },
-                    ...(includeImage
-                      ? [
-                          {
-                            type: "image" as const,
-                            data: new Uint8Array(Buffer.from(screenshot.data, "base64")),
-                            mimeType: screenshot.mimeType,
-                          },
-                        ]
-                      : []),
-                  ],
-                }),
-              );
-            },
+            onSuccess: ({ encodedResult }) =>
+              Effect.succeed(imageToolSuccess(payload, encodedResult)),
           }),
         );
       }),
@@ -928,7 +849,6 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
 });
 
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
-
 const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(function* () {
   const htmlRender = yield* HtmlRender.HtmlRender;
   const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -952,37 +872,6 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
         : "HTML preview failed.",
   );
 });
-
-const encodeOrchestratorMcpFailure = Schema.encodeSync(OrchestratorMcpFailure);
-const encodeReferenceRefusal = Schema.encodeSync(Schema.fromJsonString(OrchestratorMcpFailure));
-
-const refusalResult = (failure: OrchestratorMcpFailure) =>
-  new McpSchema.CallToolResult({
-    isError: true,
-    content: [{ type: "text", text: JSON.stringify(encodeOrchestratorMcpFailure(failure)) }],
-  });
-
-const undeclaredArgumentsResult = (
-  tool: string,
-  undeclared: ReadonlyArray<string>,
-  declared: ReadonlyArray<string>,
-) => {
-  const accepted =
-    declared.length === 0 ? `${tool} takes no arguments.` : `It takes ${declared.join(", ")}.`;
-  const failure = new OrchestratorMcpFailure({
-    code: "invalid_request",
-    message: `${tool} does not take ${undeclared.join(", ")}, so nothing ran. ${accepted}`,
-  });
-  return new McpSchema.CallToolResult({
-    isError: true,
-    content: [{ type: "text", text: JSON.stringify(encodeOrchestratorMcpFailure(failure)) }],
-  });
-};
-
-const argumentKeys = (payload: unknown) =>
-  typeof payload === "object" && payload !== null && !Array.isArray(payload)
-    ? Object.keys(payload)
-    : [];
 
 /**
  * Runs tool registrations so that every tool they add refuses top-level
@@ -1312,6 +1201,21 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   return registered.pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
 };
 
+/**
+ * goat_call and goat_eval run tools through the server they are registered on,
+ * so a nested call takes the same path, checks and analytics as a direct one.
+ */
+const layerToolDispatch = Layer.effect(
+  ToolDispatch,
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    return ToolDispatch.of({
+      call: (name, args) => server.callTool({ name, arguments: args }),
+      served: (name) => server.tools.find(({ tool }) => tool.name === name)?.tool,
+    });
+  }),
+);
+
 const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, EX, RX>(
   register: Effect.Effect<A, E, R>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
@@ -1323,6 +1227,9 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
 /** The registration layers mounted by /mcp, including image and memory tools.
  * Kept separate from domain construction so catalog contracts can be checked without live state. */
 export const catalogRegistrations = {
+  agentSurface: toolkitRegistration(AgentSurfaceToolkit, AgentSurfaceHandlers.layer).pipe(
+    Layer.provide(layerToolDispatch),
+  ),
   decision: toolkitRegistration(DecisionToolkit, DecisionHandlers.layer),
   htmlRender: toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender),
   htmlPreview: imageToolRegistration(registerHtmlPreview(), HtmlHandlers.layerPreview),
@@ -1487,6 +1394,7 @@ export const layerMcpTransport = McpServer.layerHttp({
 }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 export const layer = Layer.mergeAll(
+  catalogRegistrations.agentSurface,
   catalogRegistrations.decision,
   layerPreviewToolkit,
   layerOrchestratorToolkit,

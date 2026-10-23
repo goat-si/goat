@@ -155,7 +155,7 @@ it.effect("resolves picked options to their offered values whatever form the pic
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const question = yield* askQuestion("picked-options", [
-      { ...pickQuestion, multiSelect: true },
+      { ...pickQuestion, multiSelect: true, allowCustomAnswer: false },
       { ...pickQuestion, id: "after", question: "And then?" },
       { id: "why", header: "Why", question: "Why?", options: [], required: false },
     ]);
@@ -164,7 +164,8 @@ it.effect("resolves picked options to their offered values whatever form the pic
       commandId: CommandId.make("picked-options-answer"),
       threadId: question.threadId,
       requestId: question.requestId,
-      // Decomposed Hangul with spaces, a differently cased label, and a relayed one-item list.
+      // On an options-only question: decomposed Hangul with spaces and a differently cased label.
+      // Elsewhere an exact label, relayed as a one-item list.
       answers: { next: [" 진행 ".normalize("NFD"), "STOP"], after: ["진행"] },
     });
     const answered = yield* orchestrator.getThreadProjection(question.threadId);
@@ -177,29 +178,31 @@ it.effect("resolves picked options to their offered values whatever form the pic
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("keeps a custom answer and an exact option id as written", () =>
+it.effect("keeps custom text, even text close to an option, and exact option ids as written", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const spaced = { label: "Spaced", description: "Id", value: " go " };
     const question = yield* askQuestion("custom-answer", [
       { ...pickQuestion, options: [...pickQuestion.options, spaced] },
       { ...pickQuestion, id: "after", question: "And then?" },
+      { ...pickQuestion, id: "again", question: "Again?" },
     ]);
     yield* orchestrator.dispatch({
       type: "runtime-request.respond",
       commandId: CommandId.make("custom-answer-answer"),
       threadId: question.threadId,
       requestId: question.requestId,
-      answers: { next: " go ", after: "다른 방법으로" },
+      answers: { next: " go ", after: "다른 방법으로", again: "STOP" },
     });
     const answered = yield* orchestrator.getThreadProjection(question.threadId);
     assert.deepEqual(answered.runtimeRequests[0]?.answers, {
       next: " go ",
       after: "다른 방법으로",
+      again: "STOP",
     });
     assert.deepEqual(
       answered.messages.map((message) => message.text),
-      ["What next?\nSpaced\n\nAnd then?\n다른 방법으로"],
+      ["What next?\nSpaced\n\nAnd then?\n다른 방법으로\n\nAgain?\nSTOP"],
     );
   }).pipe(Effect.provide(layerTest)),
 );

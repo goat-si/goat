@@ -4,7 +4,7 @@ import * as DateTime from "effect/DateTime";
 import { ThreadId, ProviderInstanceId, TurnItemId } from "@goat/contracts";
 import * as HomeRequests from "../../../provider/CodexHomeRequests.ts";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, OrchestratorMcpFailure } from "@goat/contracts";
+import { EnvironmentId, OrchestratorMcpFailure, ProviderHostSyncError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/ai";
@@ -13,6 +13,7 @@ import * as Invocation from "../../McpInvocationContext.ts";
 import * as Routing from "../../../provider/ProviderDiagnosisRouting.ts";
 import * as HostSync from "../../../provider/ProviderHostSync.ts";
 import * as CloudAgents from "../../../cloudAgents/CloudAgentService.ts";
+import * as Dispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import { liveThreadsLayer, layerPermissionProfilesOff } from "../../McpToolAccess.testkit.ts";
 import { ProviderToolkit } from "./tools.ts";
 import * as Handlers from "./handlers.ts";
@@ -287,5 +288,80 @@ it.effect.each([
     expect(result.isError).toBe(false);
     expect(calls).toEqual([{ request: { action, input: args }, caller: writer }]);
     expect(result.structuredContent).toMatchObject({ kind: "applied", action });
+  }),
+);
+
+/** Calls one provider tool against mocked services and returns the encoded failure. */
+const failureOf = (
+  name: "goat_provider_sync_status" | "goat_provider_diagnose",
+  services: {
+    readonly hostSync?: Partial<HostSync.ProviderHostSync["Service"]>;
+    readonly routing?: Partial<Routing.ProviderDiagnosisRouting["Service"]>;
+  },
+) =>
+  Effect.gen(function* () {
+    const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+      Layer.provide(layerPermissionProfilesOff),
+      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provide(liveThreadsLayer),
+      Layer.provide(Layer.mock(ProviderSettingsService.ProviderSettings)({})),
+      Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
+      Layer.provide(Layer.mock(HostSync.ProviderHostSync)(services.hostSync ?? {})),
+      Layer.provide(Layer.mock(Onboarding.ProviderOnboarding)({})),
+      Layer.provide(Layer.mock(CloudAgents.CloudAgentService)({})),
+      Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)(services.routing ?? {})),
+    );
+    const result = yield* McpServer.McpServer.pipe(
+      Effect.flatMap((server) =>
+        server.callTool({
+          name,
+          arguments: name === "goat_provider_diagnose" ? { host: "box" } : { handoffId: "h-1" },
+        }),
+      ),
+      Effect.provideService(Invocation.McpInvocationContext, scope),
+      Effect.provideService(McpSchema.McpServerClient, client),
+      Effect.provide(registered),
+    );
+    expect(result.isError).toBe(true);
+    const content = result.content[0];
+    return content?.type === "text" ? JSON.parse(content.text) : undefined;
+  });
+
+it.effect("keeps a host sync code as the failure's reason beside its legacy code", () =>
+  Effect.gen(function* () {
+    const declined = yield* failureOf("goat_provider_sync_status", {
+      hostSync: {
+        status: () =>
+          Effect.fail(new ProviderHostSyncError({ code: "declined", detail: "Declined." })),
+      },
+    });
+    expect(declined).toEqual({
+      _tag: "OrchestratorMcpFailure",
+      code: "conflict",
+      message: "Declined.",
+      reason: "declined",
+    });
+  }),
+);
+
+it.effect("keeps the dispatch reason when diagnosing an unreachable host", () =>
+  Effect.gen(function* () {
+    const unreachable = yield* failureOf("goat_provider_diagnose", {
+      routing: {
+        diagnose: () =>
+          Effect.fail(
+            new Dispatch.SshRemoteDispatchError({
+              reason: "host_unavailable",
+              message: "box did not answer.",
+            }),
+          ),
+      },
+    });
+    expect(unreachable).toEqual({
+      _tag: "OrchestratorMcpFailure",
+      code: "orchestration_error",
+      message: "box did not answer.",
+      reason: "host_unavailable",
+    });
   }),
 );

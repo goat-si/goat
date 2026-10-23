@@ -10,6 +10,8 @@ import { addDevice } from "./addDevice.ts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
 import {
   type CloudMachineError,
+  type EnvironmentAuthorizationError,
+  type HandoffError,
   OrchestratorMcpFailure,
   RunId,
   type ServerActivityBlocker,
@@ -34,6 +36,7 @@ import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpServ
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { dispatchFacts } from "../../hostFailure.ts";
 import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
 import { admitLaunch } from "../../pressureAdmission.ts";
 import { SshToolkit, SshThreadHandoffFailure } from "./tools.ts";
@@ -62,6 +65,7 @@ const toMcpFailure = (error: SshRemoteDispatch.SshRemoteDispatchError) =>
         ? "invalid_request"
         : "orchestration_error",
     message: Array.from(error.message).slice(0, 2000).join(""),
+    ...dispatchFacts(error),
   });
 
 /** Names what a busy host is running, so a waiting update says what it waits for. */
@@ -103,6 +107,26 @@ const readUpdateBlockers = Effect.fn("SshToolkit.readUpdateBlockers")(
   },
   (effect) => effect.pipe(Effect.orElseSucceed((): ReadonlyArray<ServerActivityBlocker> => [])),
 );
+
+/** Coordination fails after the remote accepted a launch only once it is recorded or reporting. */
+const toCoordinationFailure = (error: RemoteDispatchCoordinator.RemoteDispatchError) =>
+  new OrchestratorMcpFailure({
+    code: "orchestration_error",
+    message: "SSH report coordination failed.",
+    ...(error.reason === undefined ? {} : { reason: error.reason }),
+    ...(error.stage === "storage" || error.stage === "decode" || error.stage === "delivery"
+      ? { mayHaveStarted: true }
+      : {}),
+  });
+
+const toSetupFailure =
+  (fallback: OrchestratorMcpFailure["code"]) =>
+  (error: EnvironmentAuthorizationError | HandoffError) =>
+    new OrchestratorMcpFailure({
+      code: error._tag === "EnvironmentAuthorizationError" ? "capability_denied" : fallback,
+      message: error.message,
+      ...(error._tag === "HandoffError" ? { reason: error.reason } : {}),
+    });
 
 /** The server always provides it; a test layer without it has no links. */
 const linkedHostsService = Effect.serviceOption(LinkedHosts.LinkedHosts).pipe(
@@ -168,6 +192,7 @@ const toCloudFailure = (error: CloudMachineError) =>
   new OrchestratorMcpFailure({
     code: error.reason === "not_found" ? "invalid_request" : "orchestration_error",
     message: error.message,
+    reason: error.reason,
   });
 
 const toLinkFailure = (error: LinkedHosts.LinkedHostError) =>
@@ -179,6 +204,7 @@ const toLinkFailure = (error: LinkedHosts.LinkedHostError) =>
           ? "capability_denied"
           : "orchestration_error",
     message: Array.from(error.message).slice(0, 2000).join(""),
+    reason: error.reason,
   });
 
 export const layer = McpToolAccess.toLayer(SshToolkit, {
@@ -201,18 +227,9 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const setup = yield* SshHostSetup.SshHostSetup;
-      return yield* setup.prepare(input, { kind: "mcp", scope }).pipe(
-        Effect.mapError(
-          (error) =>
-            new OrchestratorMcpFailure({
-              code:
-                error._tag === "EnvironmentAuthorizationError"
-                  ? "capability_denied"
-                  : "orchestration_error",
-              message: error.message,
-            }),
-        ),
-      );
+      return yield* setup
+        .prepare(input, { kind: "mcp", scope })
+        .pipe(Effect.mapError(toSetupFailure("orchestration_error")));
     }),
   ),
   goat_ssh_host_forget: McpToolAccess.destructive(
@@ -220,18 +237,9 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const setup = yield* SshHostSetup.SshHostSetup;
-        return yield* setup.forget(input, { kind: "mcp", scope }).pipe(
-          Effect.mapError(
-            (error) =>
-              new OrchestratorMcpFailure({
-                code:
-                  error._tag === "EnvironmentAuthorizationError"
-                    ? "capability_denied"
-                    : "orchestration_error",
-                message: error.message,
-              }),
-          ),
-        );
+        return yield* setup
+          .forget(input, { kind: "mcp", scope })
+          .pipe(Effect.mapError(toSetupFailure("orchestration_error")));
       }),
     ),
   ),
@@ -241,12 +249,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
       const setup = yield* SshHostSetup.SshHostSetup;
       return yield* setup
         .update(input, { kind: "mcp", scope: caller.scope })
-        .pipe(
-          Effect.mapError(
-            (error) =>
-              new OrchestratorMcpFailure({ code: "capability_denied", message: error.message }),
-          ),
-        );
+        .pipe(Effect.mapError(toSetupFailure("capability_denied")));
     }),
   ),
   // Reading ~/.ssh/config changes nothing; probing logs in but runs only `true`.
@@ -505,10 +508,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                   error instanceof SshRemoteDispatch.SshRemoteDispatchError
                     ? toMcpFailure(error)
                     : isRemoteDispatchError(error)
-                      ? new OrchestratorMcpFailure({
-                          code: "orchestration_error",
-                          message: "SSH report coordination failed.",
-                        })
+                      ? toCoordinationFailure(error)
                       : error,
                 ),
               );

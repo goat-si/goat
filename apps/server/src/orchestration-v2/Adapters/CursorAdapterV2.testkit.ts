@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { ProviderAdapterDriverCreateError } from "@goat/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import type { OrchestratorV2ProviderReplayHarness } from "../testkit/ProviderReplayHarness.ts";
@@ -161,9 +162,23 @@ function normalizeContextHandoffText(value: string): string {
   return `${value.slice(0, headerEnd + 2)}<dynamic-summary>${value.slice(markerIndex)}`;
 }
 
+// GOAT now sends its development discipline with every first prompt; transcripts recorded
+// before it existed stay valid, as for Codex (effect-codex-app-server replay.ts).
+const DISCIPLINE_PREFIX = `<t3_code_orchestration_instructions>${GOAT_DEVELOPMENT_INSTRUCTIONS}</t3_code_orchestration_instructions>\n\n<user_request>\n`;
+const DISCIPLINE_SUFFIX = "\n</user_request>";
+
+function withoutDevelopmentDiscipline(value: string): string {
+  if (!value.startsWith(DISCIPLINE_PREFIX)) return value;
+  // The adapter appends its runtime context after the wrapped request.
+  const end = value.indexOf(DISCIPLINE_SUFFIX, DISCIPLINE_PREFIX.length);
+  return end === -1
+    ? value
+    : value.slice(DISCIPLINE_PREFIX.length, end) + value.slice(end + DISCIPLINE_SUFFIX.length);
+}
+
 function normalizeFrame(value: unknown): unknown {
   if (typeof value === "string") {
-    return normalizeContextHandoffText(value);
+    return normalizeContextHandoffText(withoutDevelopmentDiscipline(value));
   }
   if (Array.isArray(value)) {
     return value.map(normalizeFrame);

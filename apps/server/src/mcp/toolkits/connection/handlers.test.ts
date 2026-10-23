@@ -15,15 +15,14 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import { McpSchema, McpServer, Tool } from "effect/ai";
+import { Tool } from "effect/ai";
 import * as Schema from "effect/Schema";
 
 import * as Broker from "../../../connections/ConnectionCatalogBroker.ts";
 import * as HubNodes from "../../../hubNodes/HubNodes.ts";
-import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
-import { liveThreadsLayer, layerPermissionProfilesOff } from "../../McpToolAccess.testkit.ts";
+import { liveThreadsLayer } from "../../McpToolAccess.testkit.ts";
 import * as Handlers from "./handlers.ts";
 import { ConnectionToolkit } from "./tools.ts";
 
@@ -599,51 +598,3 @@ it("rejects labels beyond the hub contract before saving", () => {
     "build-host",
   );
 });
-
-it.effect("production registration refuses undeclared arguments before invoking the broker", () =>
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const result = yield* server
-      .callTool({ name: "goat_connection_list", arguments: { host: "wrong-machine" } })
-      .pipe(
-        Effect.provideService(
-          McpInvocationContext.McpInvocationContext,
-          outsideCaller("read-only"),
-        ),
-        Effect.provideService(
-          McpSchema.McpServerClient,
-          McpSchema.McpServerClient.of({
-            clientId: 1,
-            protocolVersion: "2025-06-18",
-            clientCapabilities: {},
-            clientInfo: { name: "connections", version: "1" },
-            initializePayload: {
-              protocolVersion: "2025-06-18",
-              capabilities: {},
-              clientInfo: { name: "connections", version: "1" },
-            },
-            getClient: Effect.die("unused"),
-          }),
-        ),
-      );
-    expect(result.isError).toBe(true);
-    expect(result.content).toMatchObject([
-      { type: "text", text: expect.stringContaining("invalid_request") },
-    ]);
-  }).pipe(
-    Effect.provide(
-      McpHttpServer.layerConnectionToolkit.pipe(
-        Layer.provide(layerPermissionProfilesOff),
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provideMerge(liveThreadsLayer),
-        Layer.provide(Layer.mock(HubNodes.HubNodes)({})),
-        Layer.provide(Layer.mock(SshDeviceAdd.SshDeviceAdd)({})),
-        Layer.provide(
-          Layer.mock(Broker.ConnectionCatalogBroker)({
-            invoke: () => Effect.die("Unknown arguments reached broker"),
-          }),
-        ),
-      ),
-    ),
-  ),
-);

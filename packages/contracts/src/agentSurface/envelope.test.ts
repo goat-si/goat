@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { OrchestratorMcpFailure } from "../orchestratorMcp.ts";
+import { OrchestratorMcpFailure } from "../orchestratorMcpFailure.ts";
 import { SecretRequestError } from "../secretRequest.ts";
 import { WorktreeMcpFailure } from "../worktreeMcp.ts";
 import {
@@ -151,6 +151,54 @@ describe("fromToolResult", () => {
     expect(failed(message, read).retryable).toBe(true);
   });
 
+  it("classifies a wrapped failure by the domain reason it kept, not its legacy code", () => {
+    const wrapped = (fields: Partial<ConstructorParameters<typeof OrchestratorMcpFailure>[0]>) =>
+      encodeOrchestratorFailure(
+        new OrchestratorMcpFailure({ code: "orchestration_error", message: "No.", ...fields }),
+      );
+    expect(failed(wrapped({ reason: "billing_required" }), write)).toEqual({
+      code: "failed_precondition",
+      reason: "billing_required",
+      message: "No.",
+      retryable: false,
+    });
+    // An unreachable host proves nothing ran only for a read.
+    expect(failed(wrapped({ reason: "host_unavailable" }), read)).toMatchObject({
+      code: "unavailable",
+      retryable: true,
+    });
+    // A remote refusal takes the class of the remote's own code when it is a known one.
+    expect(
+      failed(wrapped({ reason: "remote_refused", remoteCode: "thread_not_found" }), read),
+    ).toMatchObject({
+      code: "not_found",
+      reason: "remote_refused",
+      details: { remoteCode: "thread_not_found" },
+    });
+    // Prose in a reason field has no row, so the code still classifies it.
+    expect(
+      failed({ _tag: "ServerSettingsError", code: "thread_busy", reason: "Busy." }, read),
+    ).toMatchObject({ code: "conflict", reason: "thread_busy" });
+  });
+
+  it("returns unknown_outcome for a failure after a write may have started", () => {
+    const uncertain = encodeOrchestratorFailure(
+      new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        message: "Calling goat_thread_launch on box failed.",
+        reason: "ssh_failed",
+        mayHaveStarted: true,
+      }),
+    );
+    expect(failed(uncertain, keyedWrite)).toEqual({
+      code: "unknown_outcome",
+      reason: "ssh_failed",
+      message: "Calling goat_thread_launch on box failed.",
+      retryable: false,
+      details: { mayHaveStarted: true },
+    });
+  });
+
   it("reads image-tool failures from structured content", () => {
     const result = fromToolResult(
       {
@@ -170,6 +218,28 @@ describe("fromToolResult", () => {
       code: "not_found",
       reason: "PreviewAutomationTabNotFoundError",
       details: { operation: "snapshot", failureCount: 1 },
+    });
+    // A refusal keeps its code there, so a missing thread credential is not a device failure.
+    const refused = fromToolResult(
+      {
+        isError: true,
+        structuredContent: {
+          error: {
+            _tag: "OrchestratorMcpFailure",
+            operation: "screenshot",
+            failureCount: 1,
+            code: "thread_credential_required",
+            message: "This tool acts as the calling GOAT thread.",
+          },
+        },
+        content: [text("This tool acts as the calling GOAT thread.")],
+      },
+      read,
+    );
+    expect(errorOf(refused)).toMatchObject({
+      code: "unauthenticated",
+      reason: "thread_credential_required",
+      message: "This tool acts as the calling GOAT thread.",
     });
   });
 

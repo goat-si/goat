@@ -24,10 +24,6 @@ import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   type ChatAttachment,
   CommandId,
-  RuntimeRequestId,
-  UserInputRespondedBy,
-  ProviderApprovalDecision,
-  OrchestrationV2RuntimeRequest,
   describeUserInputResponder,
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
@@ -73,7 +69,6 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import { modelSelectionsEqual } from "@goat/shared/model";
-import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   derivePendingBackgroundWork,
   pendingBackgroundTurnItems,
@@ -97,6 +92,7 @@ import {
   SHARED_WORKSPACE_RESTORE_MESSAGE,
 } from "./CheckpointRestoreSafety.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
+import { makeFallbackSelection } from "./goat/FallbackSelection.ts";
 import {
   CommandPolicyCapabilityUnsupportedError,
   CommandPolicyV2,
@@ -107,6 +103,12 @@ import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
 import { makeReviewLedger, OrchestratorReviewLedgerError } from "./goat/ReviewLedger.ts";
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import { notificationTurnItem } from "@goat/provider-core/server/notification";
+import {
+  explicitPullRequestWatch,
+  makePullRequestAutoWatch,
+  newPullRequestWatch,
+  syncedPullRequestWatch,
+} from "./goat/PullRequestAutoWatch.ts";
 import {
   cancelledBeforeStart,
   isRestartContinuationSource,
@@ -160,6 +162,12 @@ import {
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import { makeThreadPromotion } from "./goat/ThreadPromotion.ts";
+import {
+  OrchestratorQuestionAlreadyAnsweredError,
+  questionAlreadyAnswered,
+} from "./goat/QuestionAnswers.ts";
+
+export { OrchestratorQuestionAlreadyAnsweredError };
 import { canonicalUserInputAnswers, userInputAnswerText } from "./userInputAnswers.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeTimelineRecords, OrchestratorChannelBotThreadError } from "./goat/TimelineRecords.ts";
@@ -301,28 +309,6 @@ function canReplayCommandReceipt(receiptThreadId: ThreadId, commandThreadId: Thr
   return receiptThreadId === commandThreadId;
 }
 
-export class OrchestratorQuestionAlreadyAnsweredError extends Schema.TaggedError<OrchestratorQuestionAlreadyAnsweredError>()(
-  "OrchestratorQuestionAlreadyAnsweredError",
-  {
-    commandId: CommandId,
-    requestId: RuntimeRequestId,
-    respondedBy: Schema.optional(UserInputRespondedBy),
-    resolvedAt: Schema.NullOr(Schema.DateTimeUtc),
-    decision: Schema.optional(ProviderApprovalDecision),
-    status: Schema.optional(OrchestrationV2RuntimeRequest.fields.status),
-  },
-) {
-  override get message(): string {
-    const description = describeUserInputResponder(this);
-    const time = this.resolvedAt === null ? "an unknown time" : DateTime.formatIso(this.resolvedAt);
-    if (this.status === "expired")
-      return `This question expired at ${time}, so it can no longer be answered.`;
-    if (this.decision === "cancel" || this.status === "cancelled")
-      return `This question was ${description} at ${time}, so it can no longer be answered.`;
-    return `This question was already answered by ${description} at ${time}.`;
-  }
-}
-
 export const OrchestratorV2Error = Schema.Union([
   RuntimeAdmission.ServerDrainingError,
   OrchestratorQuestionAlreadyAnsweredError,
@@ -345,17 +331,6 @@ export interface OrchestratorV2DispatchResult {
   readonly sequence: number;
   readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
 }
-
-/** Server-only precondition checked under the command lock before fallback changes a selection. */
-export const FallbackSelectionSource = Context.Reference<
-  | {
-      readonly runId: RunId;
-      readonly modelSelection: ModelSelection;
-    }
-  | undefined
->("goat/orchestration-v2/Orchestrator/FallbackSelectionSource", {
-  defaultValue: () => undefined,
-});
 
 export interface OrchestratorV2Shape {
   readonly resumeQueuedRuns: Effect.Effect<number, OrchestratorV2Error>;
@@ -691,49 +666,6 @@ function withPullRequestWatch(
   if (watch !== undefined) return { ...rest, watch };
   const ended = previous ?? endedWatch;
   return ended === undefined ? rest : { ...rest, endedWatch: ended };
-}
-
-/** A watch starting now. An automatic one wakes the agent but does not keep the thread working. */
-function newPullRequestWatch(
-  startedAt: string,
-  automatic: boolean,
-  ended: ThreadPullRequestWatch | undefined,
-): ThreadPullRequestWatch {
-  return {
-    startedAt,
-    headSha: null,
-    failedChecks: [],
-    passed: false,
-    passedChecks: [],
-    conflicting: false,
-    // Watching again must not repeat check or conflict news the last watch told.
-    ...(ended && {
-      headSha: ended.headSha,
-      failedChecks: ended.failedChecks,
-      passed: ended.passed,
-      passedChecks: ended.passedChecks,
-      conflicting: ended.conflicting,
-    }),
-    remarksThrough: startedAt,
-    remarkIds: [],
-    wakes: 0,
-    ...(automatic ? { automatic: true } : {}),
-  };
-}
-
-/** The same watch, now asked for: it keeps the thread working from here on. */
-function explicitPullRequestWatch(watch: ThreadPullRequestWatch): ThreadPullRequestWatch {
-  const { automatic: _automatic, ...rest } = watch;
-  return rest;
-}
-
-/** Recorded progress on the current watch, which keeps its own automatic flag. */
-function syncedPullRequestWatch(
-  current: ThreadPullRequestWatch,
-  observed: ThreadPullRequestWatch,
-): ThreadPullRequestWatch {
-  const progress = explicitPullRequestWatch(observed);
-  return current.automatic === true ? { ...progress, automatic: true } : progress;
 }
 
 function legacyPullRequestLink(
@@ -2873,6 +2805,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const { shouldAutoWatchPullRequest } = makePullRequestAutoWatch({
+    serverSettings,
+    projectionStore,
+    stopReachedRun: (command, threadId, runId) => stopReachedRun(command, threadId, runId),
+    mapDispatchError,
+  });
+
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
       OrchestrationV2ServerCommand,
@@ -2923,33 +2862,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} is deleted.`,
       });
     }
-    if (command.type === "thread.model-selection.set" || command.type === "provider.switch") {
-      const source = yield* FallbackSelectionSource;
-      if (source !== undefined) {
-        const { runs, runtimeRequests } = yield* projectionStore
-          .getThreadRecords(command.threadId, ["runs", "runtimeRequests"])
-          .pipe(mapDispatchError(command));
-        const latest = latestExecutedRun(runs);
-        const now = yield* DateTime.now;
-        if (
-          latest?.id !== source.runId ||
-          latest.status !== "failed" ||
-          !modelSelectionsEqual(thread.modelSelection, source.modelSelection) ||
-          (yield* stopReachedRun(command, command.threadId, source.runId)) ||
-          runs.some((run) => run.status === "queued") ||
-          runtimeRequests.some((request) => request.status === "pending") ||
-          thread.archivedAt !== null ||
-          thread.settledOverride === "settled" ||
-          (thread.snoozedUntil != null &&
-            DateTime.toEpochMillis(thread.snoozedUntil) > DateTime.toEpochMillis(now))
-        )
-          return yield* new OrchestratorDispatchError({
-            commandId: command.commandId,
-            commandType: command.type,
-            cause: "The fallback source changed before model selection.",
-          });
-      }
-    }
+    yield* refuseStaleFallbackSelection(command, thread);
     if (
       command.type === "thread.pull-request.watch" &&
       command.watching &&
@@ -3005,37 +2918,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
-    // A pull request the thread created, or its agent linked, is watched without a
-    // watch_pull_request call when the project's policy allows, under the limits an agent's
-    // watch has. A settings read that fails only skips the watch; the link still lands.
-    let autoWatch = false;
-    if (
-      command.type === "thread.pull-request.link" &&
-      (command.source === "created" || command.source === "agent") &&
-      thread.archivedAt === null &&
-      thread.settledOverride !== "settled" &&
-      thread.settledAt === null &&
-      !isProviderNativeSubagentThread(thread) &&
-      thread.lineage.relationshipToParent !== "subagent"
-    ) {
-      autoWatch = yield* serverSettings.getSettings.pipe(
-        Effect.map(
-          (settings) =>
-            resolveProjectSettings(settings, thread.projectId).settings.pullRequestWatchPolicy
-              .autoWatch,
-        ),
-        Effect.orElseSucceed(() => false),
-      );
-      if (autoWatch && command.source === "agent") {
-        const { runs } = yield* projectionStore
-          .getThreadRecords(command.threadId, ["runs"])
-          .pipe(mapDispatchError(command));
-        const latest = latestExecutedRun(runs);
-        if (latest !== null && (yield* stopReachedRun(command, command.threadId, latest.id))) {
-          autoWatch = false;
-        }
-      }
-    }
+    const autoWatch = yield* shouldAutoWatchPullRequest(command, thread);
     if (
       command.type === "thread.metadata.update" &&
       command.expectedWorktreePath !== undefined &&
@@ -5130,6 +5013,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ]);
   });
 
+  const { refuseStaleFallbackSelection, acceptStaleAutomatedContinuation } = makeFallbackSelection({
+    projectionStore,
+    emit,
+    stopReachedRun: (command, threadId, runId) => stopReachedRun(command, threadId, runId),
+    mapDispatchError,
+    OrchestratorDispatchError,
+  });
+
   const dispatchMessage = Effect.fn("Orchestrator.dispatchMessage")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -5215,36 +5106,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return;
       }
     }
-    if (command.automatedContinuationOfRunId !== undefined) {
-      const now = yield* DateTime.now;
-      const latest = latestExecutedRun(projection.runs);
-      if (
-        latest?.id !== command.automatedContinuationOfRunId ||
-        (yield* stopReachedRun(command, command.threadId, latest.id)) ||
-        (command.modelSelection !== undefined &&
-          !modelSelectionsEqual(command.modelSelection, projection.thread.modelSelection)) ||
-        latest.status !== "failed" ||
-        projection.runs.some((run) => run.status === "queued") ||
-        projection.thread.archivedAt !== null ||
-        projection.thread.deletedAt !== null ||
-        projection.thread.settledOverride === "settled" ||
-        projection.runtimeRequests.some((request) => request.status === "pending") ||
-        (projection.thread.snoozedUntil != null &&
-          DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now))
-      ) {
-        // Accepted without change, so a replayed delivery does not retry.
-        yield* emit(
-          events,
-          command,
-        )({
-          type: "thread.metadata-updated",
-          threadId: command.threadId,
-          occurredAt: now,
-          payload: projection.thread,
-        });
-        return;
-      }
-    }
+    if (yield* acceptStaleAutomatedContinuation(command, projection, events)) return;
 
     if (command.restartContinuationOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.restartContinuationOfRunId);
@@ -8211,16 +8073,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       if (runtimeRequest.status !== "pending") {
         if (runtimeRequest.kind === "user_input")
-          return yield* new OrchestratorQuestionAlreadyAnsweredError({
-            commandId: command.commandId,
-            requestId: command.requestId,
-            ...(runtimeRequest.respondedBy === undefined
-              ? {}
-              : { respondedBy: runtimeRequest.respondedBy }),
-            ...(runtimeRequest.decision === undefined ? {} : { decision: runtimeRequest.decision }),
-            status: runtimeRequest.status,
-            resolvedAt: runtimeRequest.resolvedAt,
-          });
+          return yield* questionAlreadyAnswered(command, runtimeRequest);
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -8489,14 +8342,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
         );
       if (request !== undefined && request.kind === "user_input" && request.status !== "pending") {
-        return yield* new OrchestratorQuestionAlreadyAnsweredError({
-          commandId: command.commandId,
-          requestId: command.requestId,
-          ...(request.respondedBy === undefined ? {} : { respondedBy: request.respondedBy }),
-          ...(request.decision === undefined ? {} : { decision: request.decision }),
-          status: request.status,
-          resolvedAt: request.resolvedAt,
-        });
+        return yield* questionAlreadyAnswered(command, request);
       }
       if (request === undefined || request.status !== "pending") {
         return yield* new OrchestratorDispatchError({
