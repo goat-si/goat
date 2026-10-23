@@ -6,7 +6,7 @@ import type { AcpSessionModeState } from "./runtimeModel.ts";
 export const ACP_SESSION_MODE_OPTION_ID = "_t3/session-mode";
 
 /**
- * Agents use it for a real choice (GitHub Copilot's default agent), but T3
+ * Agents use it for a real choice (GitHub Copilot's default agent), but GOAT
  * option IDs must be non-empty. The ACP adapter maps it back to `""` before
  * applying a selection.
  */

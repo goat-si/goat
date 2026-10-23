@@ -283,7 +283,7 @@ interface ThreadState {
   /**
    * Set when a turn ended here while OpenCode may still be running it: a Stop
    * that timed out, a prompt whose request failed without a clear answer, or a
-   * request T3 could not answer. Execution events carry only the session id,
+   * request GOAT could not answer. Execution events carry only the session id,
    * so the next execution end belongs to that run; it clears this and ends no turn.
    */
   unsettled: boolean;
@@ -400,8 +400,8 @@ export const cuaMcpServerName = Effect.fn("cuaMcpServerName")(function* (threadI
 });
 
 /**
- * The rules that keep T3's MCP servers to their own thread, after the mode's:
- * the last matching rule wins, so every thread's T3 server is denied and then
+ * The rules that keep GOAT's MCP servers to their own thread, after the mode's:
+ * the last matching rule wins, so every thread's GOAT server is denied and then
  * this thread's own is allowed again, in every mode. Cua Drivers are registered
  * per directory, so every turn denies all of them, including a turn excluded from
  * computer use (Plan, read-only) that would otherwise inherit full access's
@@ -620,7 +620,7 @@ type ModelRef = ReturnType<typeof Model.Ref.make>;
  * session with the item it already has, so a retried request never queues a second message, and a
  * turn knows the message fork and rollback cut at before OpenCode answers. The id is unique across
  * the whole server, which refuses it in any other session (409), so it names the session: another
- * T3 database or environment on the same server repeats thread ids and run ordinals, never session
+ * GOAT database or environment on the same server repeats thread ids and run ordinals, never session
  * ids.
  */
 const turnPromptId = (sessionId: string, attemptId: string) =>
@@ -1684,7 +1684,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             }),
       });
       // A subagent's session is its call's to settle: a turn there is runless,
-      // and T3 has no terminal to wait on.
+      // and GOAT has no terminal to wait on.
       if (state.subagent !== undefined) {
         const call = state.subagent.call;
         if (!call.background && terminal.status !== "completed") {
@@ -1748,7 +1748,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     });
 
     /**
-     * Ends the turn a request T3 could not answer would block, and stops the
+     * Ends the turn a request GOAT could not answer would block, and stops the
      * session: OpenCode waits on an unanswered request forever. The stopped
      * run's end is its own, not the next turn's.
      */
@@ -1779,7 +1779,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     });
 
     /**
-     * T3's own answers are only forgotten: the orchestrator already recorded them.
+     * GOAT's own answers are only forgotten: the orchestrator already recorded them.
      */
     const settleRequest = Effect.fnUntraced(function* (
       entry: PendingRequest,
@@ -1832,7 +1832,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     /**
      * Stops what a session still waits on when this runtime first loads it:
-     * T3 shows none of those requests (a restart or a closed session expired
+     * GOAT shows none of those requests (a restart or a closed session expired
      * them), and OpenCode would wait on them forever.
      */
     const stopLeftoverRequests = Effect.fnUntraced(function* (state: ThreadState) {
@@ -2750,7 +2750,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       client = next.client;
       currentScope = scope;
       yield* Scope.close(previous, Exit.void);
-      // A restarted server forgot T3's MCP servers; the next turn adds them again.
+      // A restarted server forgot GOAT's MCP servers; the next turn adds them again.
       for (const state of threads.values()) {
         state.mcp = undefined;
         state.cua = undefined;
@@ -2799,7 +2799,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     // Subscribed before any session or prompt call, so no event of theirs is missed.
     yield* follow(yield* connection.events).pipe(Effect.forkScoped);
 
-    // A server T3 did not start keeps running after T3 stops, so stop the turns
+    // A server GOAT did not start keeps running after GOAT stops, so stop the turns
     // it would otherwise finish unseen. A spawned server stops with its owner.
     if (connection.external) {
       yield* Effect.addFinalizer(() =>
@@ -2996,7 +2996,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     /**
      * Clears a staged revert and waits out the empty execution `clear` runs,
-     * which is no turn of T3's. 2.0.18 wakes the session after every clear,
+     * which is no turn of GOAT's. 2.0.18 wakes the session after every clear,
      * with or without a stage (seen live), so that execution always comes.
      */
     const clearRevert = Effect.fnUntraced(function* (sessionId: string) {
@@ -3015,7 +3015,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     /**
      * If either fails or is interrupted the stage is cleared, since OpenCode commits a staged
      * revert on the next prompt; a clear that fails too is tried again before that prompt. Files
-     * stay where they are: T3 restores its own checkpoint when the user asked for files, and a
+     * stay where they are: GOAT restores its own checkpoint when the user asked for files, and a
      * rewind without files must not touch them.
      */
     const rollBackTo = Effect.fnUntraced(function* (
@@ -3123,7 +3123,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     const promptFiles = Effect.fnUntraced(function* (attachments: ReadonlyArray<ChatAttachment>) {
       const files: Array<{ uri: string; name: string }> = [];
-      // An external server may not share T3's attachment directory.
+      // An external server may not share GOAT's attachment directory.
       if (connection.external) return files;
       for (const attachment of attachments) {
         if (!isProviderNativeImageAttachment(attachment)) continue;
@@ -3160,7 +3160,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const mcpSession = yield* mcpSessions.read(turnInput.threadId);
       const directory = turnInput.runtimePolicy.cwd ?? host.paths.cwd;
       const name = yield* mcpServerNameFor(turnInput.threadId);
-      // An external server may not reach T3's MCP endpoint, as with 1.x.
+      // An external server may not reach GOAT's MCP endpoint, as with 1.x.
       const wanted =
         mcpSession === undefined || connection.external
           ? undefined
@@ -3186,7 +3186,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           .pipe(Effect.timeout(INVENTORY_TIMEOUT));
         state.mcp = undefined;
       }
-      // Idle Location eviction drops runtime MCP servers without clearing T3's cache.
+      // Idle Location eviction drops runtime MCP servers without clearing GOAT's cache.
       // Re-adding an unchanged config keeps its existing connection.
       let mcpAvailable = false;
       if (wanted !== undefined) {
@@ -3557,7 +3557,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           Effect.orElseSucceed(() => []),
         );
         if (commands.some((entry) => entry.name === command.name)) {
-          // `session.command` takes no id of T3's and its answer carries none,
+          // `session.command` takes no id of GOAT's and its answer carries none,
           // so the turn remembers where the history stood before it.
           const newest = yield* client.message.list({ sessionID, order: "desc", limit: 1 });
           yield* markBefore(sessionId, newest.data[0]?.id ?? null);
@@ -3852,7 +3852,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (started === undefined) return;
           const { state, sessionId, turn } = started;
           yield* submit(sessionId, turnInput, state, turn).pipe(
-            // Deleted outside T3: the thread is broken, and forgetting it makes
+            // Deleted outside GOAT: the thread is broken, and forgetting it makes
             // the next turn resume, fail, and recreate it with a handoff.
             Effect.catchTags({
               SessionNotFoundError: () =>

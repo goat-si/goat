@@ -5,6 +5,7 @@
  *
  * Plan and reasons: devlog/_plan/261013_remove-t3-internals/000_plan.md.
  */
+import { INTERNAL_KEEP_RULES, INTERNAL_TEXT_RULES } from "./rules-internal.ts";
 import { isTest } from "./paths.ts";
 export { isTest } from "./paths.ts";
 
@@ -126,6 +127,7 @@ const LINT_RULE_IDS =
 export const TEXT_RULES: readonly TextRule[] = [
   ...VISIBLE_TEXT_RULES,
   ...WIRE_TEXT_RULES,
+  ...INTERNAL_TEXT_RULES,
   {
     id: "pull-request-context-tag",
     category: "local-names",
@@ -524,6 +526,7 @@ export const DROP_RULES: readonly DropRule[] = [
 export const KEEP_RULES: readonly KeepRule[] = [
   ...VISIBLE_KEEP_RULES,
   ...WIRE_KEEP_RULES,
+  ...INTERNAL_KEEP_RULES,
   {
     id: "legacy-server-error-reader",
     pattern: /T3 server WebSocket/g,

@@ -59,7 +59,7 @@ export interface GoatAcpInstructionState {
 }
 
 /**
- * ACP has no system/developer prompt field, so send T3-owned context in the
+ * ACP has no system/developer prompt field, so send GOAT-owned context in the
  * first user prompt and whenever the available tools or interaction mode change.
  * The development discipline goes with it whether or not GOAT MCP is attached.
  */

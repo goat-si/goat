@@ -65,7 +65,7 @@ export function environmentThemeDefinition(theme: EnvironmentTheme): ThemeDefini
 
 /**
  * Published palettes this client can render. Reserved ids are dropped here rather
- * than rendered: a published `t3-iris.json` would show this palette on its
+ * than rendered: a published `iris.json` would show this palette on its
  * card while "Use" resolved the built-in, and a published `dark.json` would
  * capture everyone whose stored preference is the stock `"dark"`.
  */

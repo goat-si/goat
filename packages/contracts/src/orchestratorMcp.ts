@@ -587,7 +587,7 @@ export const OrchestratorMcpThreadListResult = Schema.Struct({
   /** Null when several projects are listed. */
   projectId: Schema.NullOr(ProjectId),
   host: OrchestratorMcpResultHost,
-  /** The calling thread, or null when the caller is not a T3 thread. */
+  /** The calling thread, or null when the caller is not a GOAT thread. */
   currentThreadId: Schema.NullOr(ThreadId),
   threads: Schema.Array(OrchestratorMcpThreadListItem),
   nextCursor: Schema.NullOr(NonNegativeInt),
