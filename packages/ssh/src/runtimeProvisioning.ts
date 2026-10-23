@@ -19,6 +19,7 @@ import {
   decodeRemoteJsonOutput,
   isNodeScriptRunner,
   matchesSignals,
+  liveRuntimeBlocksUpdate,
   notifyRuntimePhase,
   REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
   requestedRuntime,
@@ -390,13 +391,8 @@ sh -c ${shellSingleQuote(installer)} -- --version
             requireInstalled: true,
             runner: { ...runner, archiveVersion: selectedVersion },
             retainedRunnerSha256: retained ? (from.retainedRunnerSha256 ?? null) : null,
-            // A newer live runtime is selected only when compatible, and this app never replaces
-            // it, so there is no update to block.
             ...(from.liveStatus === "live" &&
-            !(liveOrder !== undefined && liveOrder > 0) &&
-            (from.liveOwned !== true ||
-              liveOrder === undefined ||
-              (selectedVersion !== version && from.liveDrain !== true))
+            liveRuntimeBlocksUpdate(from, liveOrder, liveCompatible, selectedVersion === version)
               ? {
                   updateBlocked: `A GOAT server that this app didn't start or cannot replace is running on ${target.alias}. Stop it on the host, then reconnect.`,
                 }

@@ -63,6 +63,7 @@ import {
   decodeRemoteJsonOutput,
   isNodeScriptRunner,
   matchesSignals,
+  liveRuntimeBlocksUpdate,
   notifyRuntimePhase,
   REMOTE_ARCHIVE_CHECKSUMS_SECONDS,
   REMOTE_ARCHIVE_DOWNLOAD_SECONDS,
@@ -4351,14 +4352,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           { version: requestedVersion, commitTime: runner?.archiveCommitTime },
         );
         const compatible = matchesSignals(probe.liveSignals, requestedVersion);
-        // This app never replaces a newer runtime, so one that speaks its protocols just serves it.
-        const newerCompatible = compatible && order !== undefined && order > 0;
-        const blocked =
-          !newerCompatible &&
-          (probe.liveOwned !== true ||
-            order === undefined ||
-            order > 0 ||
-            (probe.liveVersion !== requestedVersion && probe.liveDrain !== true));
+        const runsRequested = probe.liveVersion === requestedVersion;
+        const blocked = liveRuntimeBlocksUpdate(probe, order, compatible, runsRequested);
         compatibleLive =
           compatible &&
           probe.identityAbsent !== true &&
