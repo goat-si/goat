@@ -99,6 +99,10 @@ it.effect("refuses two fields that name different targets, naming both, and unkn
         "input",
       ],
       ["goat_describe", { name: "thread.read", tool: "thread.send" }, "name", "tool"],
+      // A string and a non-string never name the same target, whatever they print as.
+      ["goat_call", { path: "null", name: null }, "path", "name"],
+      ["goat_call", { path: "42", name: 42 }, "path", "name"],
+      ["goat_call", { path: "{}", tool: {} }, "path", "tool"],
     ] as const) {
       const text = yield* refusal(tool, args);
       expect(text, JSON.stringify(args)).toContain("invalid_request");

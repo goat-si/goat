@@ -31,9 +31,11 @@ const canonical = (value: unknown): string =>
           .join(",")}}`
       : (JSON.stringify(value) ?? "undefined");
 
-// A path and a tool name for the same entry agree.
+// A path and a tool name for the same entry agree; the prefix keeps "null" apart from null.
 const pathTarget = (value: unknown) =>
-  typeof value === "string" ? (resolveAgentSurfaceEntry(value)?.path ?? value) : canonical(value);
+  typeof value === "string"
+    ? `path:${resolveAgentSurfaceEntry(value)?.path ?? value}`
+    : `value:${canonical(value)}`;
 
 /** The one value several keys carry, or the first two keys whose values differ. */
 const pick = (
