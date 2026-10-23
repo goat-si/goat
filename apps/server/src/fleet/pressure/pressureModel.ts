@@ -53,7 +53,7 @@ const GIB = 1024 ** 3;
  * Server stalls are a GOAT health signal counted over this window. A test run or build regularly
  * stalls the loop for two or three seconds once; only a repeat says the machine is struggling.
  */
-export const STALL_WINDOW_MS = 10 * 60_000;
+const STALL_WINDOW_MS = 10 * 60_000;
 /** Stalls of at least half criticalEventLoopDelayMs this many times in the window: elevated. */
 const REPEATED_STALLS = 3;
 /** Stalls of at least criticalEventLoopDelayMs this many times in the window: critical. */

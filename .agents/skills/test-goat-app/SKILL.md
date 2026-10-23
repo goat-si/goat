@@ -26,9 +26,11 @@ inspecting or seeding SQLite. Stop the test server before direct fixture writes.
 
 ## Use the Browser panel
 
-Call `preview_status`, then `preview_open` if the Browser panel is
-closed. Navigate to the complete startup pairing URL once with
-`preview_navigate`, then use `preview_snapshot` and GOAT's interaction tools.
+GOAT's browser tools run through `goat_call`. Call `goat_call {path:"preview.status"}`, then
+`goat_call {path:"preview.open"}` if the Browser panel is closed. Navigate to the complete
+startup pairing URL once with `goat_call {path:"preview.navigate", args:{url}}`, then use
+`goat_call {path:"preview.snapshot"}` and the other `preview.*` paths that
+`goat_describe {path:"preview"}` lists.
 If the token was consumed or expired, run `node apps/server/src/bin.ts pair`
 for a fresh one. Keep using the same tab.
 

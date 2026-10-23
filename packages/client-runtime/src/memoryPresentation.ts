@@ -20,7 +20,7 @@ import {
   type MemoryTaskGrantCeiling,
 } from "@goat/contracts";
 
-export const MEMORY_REVOCATION_NOTICE =
+const MEMORY_REVOCATION_NOTICE =
   "Removing a device applies to later requests and to results still on the hub.";
 export const MEMORY_FORGET_NOTICE =
   "The provider's original conversation stays, but forgotten content is never imported again.";
