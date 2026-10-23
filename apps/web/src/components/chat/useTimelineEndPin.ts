@@ -59,7 +59,10 @@ export function useTimelineEndPin({
       if (distance <= 1) released = false;
       if (released || !viewport) return;
       if (distance <= 1 || (smooth && distance <= viewportHeight)) return;
-      viewport.scrollTop = viewport.scrollHeight;
+      // Through the list, so its tracked offset moves too. LegendList's scroll adjustment
+      // aims at that offset; after a direct scrollTop write it pulls the view back up on a
+      // slow frame, and that correction reads as the user scrolling away.
+      void listRef.current?.scrollToEnd({ animated: false });
       // Its scroll event arrives later and coalesces with any user scroll in
       // between, so upward movement is measured from where the pin landed.
       scrolledUp = createUpwardScrollDetector(measuredPosition());
