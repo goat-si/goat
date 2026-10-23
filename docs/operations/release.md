@@ -2,9 +2,20 @@
 
 > For maintainers. Using GOAT? See [docs/user](../user/).
 
-This document covers the unified release workflow for stable and nightly desktop releases.
+GOAT releases use [the GOAT release channels](../internals/release-channels.md) and
+`.github/workflows/goat-nightly.yml`, publishing archives and checksums to
+[goat-si/goat-releases](https://github.com/goat-si/goat-releases/releases).
+Nightly builds `dev`; stable builds promoted `main`. The workflow's publication gates
+must be enabled before it publishes. Install and update GOAT from those archives
+or with `goat update <version>`.
 
-## What the workflow does
+The upstream workflow notes below are retained as a reference. They describe disabled
+`.github/workflows/release.yml` and upstream npm, relay, and Vercel infrastructure;
+they are not instructions for publishing or installing GOAT.
+
+<a id="what-the-workflow-does"></a>
+
+## What the upstream workflow does (disabled)
 
 - Workflow: `.github/workflows/release.yml`
 - Triggers:
@@ -14,7 +25,8 @@ This document covers the unified release workflow for stable and nightly desktop
   - push tag matching `v*.*.*` for a stable release of an explicit commit
   - scheduled nightly check every 30 minutes
   - manual `workflow_dispatch` with `channel=nightly`
-  - manual `workflow_dispatch` with `channel=preview`, the maintainers' test train. It exercises the whole release flow (build, sign, notarize, smoke, publish) for a commit that end users must never receive, which is how an unmerged branch or a risky change gets a real release run before it lands. It builds the triggering commit with nightly's versioning under the `preview` prerelease identifier (`0.0.41-preview.<date>.<run>`) and publishes a GitHub prerelease plus the npm packages under the `preview` dist-tag. Preview is not on the schedule, no default npm dist-tag points at it, its desktop builds carry no update feed, and no updater manifest (`latest*.yml`, `nightly*.yml`, blockmaps) is attached, so a stable or nightly install cannot be offered one. The only ways onto it are downloading the release by hand, `npx t3@preview`, `GOAT_CHANNEL=preview` for the install scripts, or `goat update --channel preview` from a terminal; each prints a warning, and the CLI asks for confirmation when the running build is not itself a preview. The release itself is named as a maintainer test build and its body is a warning rather than generated notes: a changelog of unmerged branch history is not a changelog, and nightly and stable notes are unaffected because each series resolves its previous tag within its own channel. The hosted web app, AUR, and Discord announcements are skipped. Keep it; it costs nothing when idle.
+  - upstream preview dispatches exercise its release pipeline. GOAT supports stable
+    and nightly through `goat-nightly.yml`; use its release gates and published assets.
 - A manual stable release builds the commit of the latest published nightly, not `main` HEAD.
   Nightly is the release candidate: verify the nightly, then promote it. Merges to `main` keep
   landing while you verify and never leak into the stable build.
@@ -38,19 +50,15 @@ This document covers the unified release workflow for stable and nightly desktop
   - Automatically generated release notes are pinned to the previous tag in the same channel, so stable compares to the previous stable tag and nightly compares to the previous nightly tag.
 - Includes Electron auto-update metadata (for example `latest*.yml`, `nightly*.yml`, and `*.blockmap`) in release assets.
 - Builds a self-contained CLI archive per platform (`goat-<version>-<platform>-<arch>.tar.gz`, `.zip` on Windows) in the same job as that target's desktop artifact and attaches them to the GitHub Release with a `goat-<version>-runtime.json` compatibility manifest and a `SHA256SUMS` file covering both, on every channel, for five targets: macOS arm64, Linux x64 and arm64, Windows x64 and arm64. Every archive is smoke-tested on hardware of its own architecture, and every one but the Windows archives is also built and signed there. There is no macOS x64 archive: Node single-executables are unsupported on x64 macOS (the SEA docs list macOS as arm64 only) and the binary segfaults on start; the x64 desktop app is Electron and unaffected.
-  - The archive holds the server as a Node single-executable (`scripts/build-cli-archive.ts`), so unpacking it needs neither Node, npm, nor a compiler. It is the only form in which GOAT manages a runtime: the desktop's SSH environments, the boot service, `goat update`, and the install scripts all download and verify this archive against `SHA256SUMS`. The `t3` npm package exists for people who run `npx t3` or `npm install -g t3` themselves, and it downloads this same archive too; nothing in the product installs from npm. The `curl | sh` installers are `scripts/install.sh` and `scripts/install.ps1`, plus `scripts/install-goat-server.sh`, which wraps `install.sh` for a server-only machine (service and pairing links) and is published to goat-releases beside them; the marketing site copies them into its `public/` at build time (`apps/marketing/scripts/stage-install-scripts.mjs`) and serves them at `t3.codes/install.sh` and `/install.ps1`.
+  - GOAT CLI archives and install scripts come from `goat-si/goat-releases` and are
+    verified against `SHA256SUMS`. The upstream `t3` npm launcher and `t3.codes`
+    installers are separate distribution channels.
   - The executable is built with a Node that supports `--build-sea` (`VP_NODE_VERSION=26.8.2`, kept in step with `SEA_NODE_VERSION` in `apps/server/vite.config.ts`), while the repo stays on `engines.node`.
   - macOS archives are signed with the Developer ID certificate and notarized when the Apple secrets are present (ad hoc otherwise, which still runs from `curl`/`tar` installs). Windows executables use the same Azure Trusted Signing setup as the installer. Every native addon in the macOS archive is signed too, since the hardened runtime refuses unsigned libraries.
   - Each archive is extracted and executed (`scripts/smoke-cli-archive.ts`) on its build runner, or on the `verify_runner` for Windows.
-- After the GitHub Release is published, publishes the `goat` npm package with OIDC trusted publishing from the same workflow file. It is only a launcher (`scripts/npm-launcher/goat.mjs`) that exposes both `goat` and `t3` bins: on first run it downloads its exact version's CLI archive from the GitHub Release, verifies it against `SHA256SUMS`, and unpacks it into `<GOAT home>/runtime/goat/versions/<version>`, the layout the install scripts and `goat update` share. The executables are not on npm. They used to be, as `@goat/cli-<platform>-<arch>` optional dependencies, but npm's publish-time scanning held those 80-250 MB packages back for up to an hour after the launcher was live, and every install in that window got a launcher with no executable. Those packages stay on npm at their old versions and get no new ones. Because the launcher reads from the release, `publish_cli` runs after `release`, never before.
-  - stable releases publish npm dist-tag `latest`
-  - nightly releases publish npm dist-tag `nightly`
-  - preview releases publish npm dist-tag `preview`, which nothing resolves unless asked for by name
-  - one-time setup: package `t3` needs a trusted publisher registered for this workflow file (see below).
-- Builds the hosted web app on Vercel while the desktop jobs run, and makes it live only after a release is published:
-  - stable releases are aliased to the `latest` hosted app channel
-  - nightly releases are aliased to the `nightly` hosted app channel
-- Signing is optional and auto-detected per platform from secrets.
+- Upstream publishes an npm launcher after its GitHub Release. GOAT's active
+  workflow publishes CLI archives directly; workspace package names and legacy bin
+  aliases do not establish npm ownership or publication.
 
 ## Pull request macOS previews
 
@@ -243,12 +251,12 @@ recover as described above.
 ### Disposable-host canary
 
 This test has not been run against a real Cloudflare account. Run it against a disposable relay
-stage, test Cloudflare account, disposable host, and disposable T3 home. Keep production cleanup at
+stage, test Cloudflare account, disposable host, and disposable GOAT home. Keep production cleanup at
 `off` or `dry-run` until it passes. Do not stop a daily-use GOAT server.
 
 1. Deploy the disposable stage with cleanup `dry-run`. Link a first disposable environment through
    web or mobile settings and confirm its tunnel is healthy and recovery is registered.
-2. Stop that host and restart the same T3 home on a different local port. Confirm the public
+2. Stop that host and restart the same GOAT home on a different local port. Confirm the public
    hostname reaches the new port and sends nothing to the old one.
 3. Link a second disposable environment with a server build that predates recovery registration.
    Capture its managed `cloudflared` child PID, confirm it belongs to that host, and pause only that
@@ -403,42 +411,23 @@ One-time Vercel dashboard setup:
   - `make_latest` is always `false`
 - Uses the next stable patch version as the nightly base. For example, `0.0.17` produces nightlies on `0.0.18-nightly.*`.
 - Publishes Electron auto-update metadata to the dedicated `nightly` updater channel, so desktop users can opt into that track independently from stable.
-- Publishes the `t3` npm launcher to the `nightly` npm dist-tag using the same nightly version.
+- Upstream also publishes an npm launcher. GOAT nightly artifacts come from `goat-nightly.yml`.
 - Does not commit version bumps back to `main`.
 
 ## Server self-update release invariant
 
-Connected servers update to the client's exact version, not to an npm dist-tag. Servers that update
-themselves download that version's CLI archive from the GitHub Release; servers run through npm are
-handed a `t3@<version>` command to run. Every released client version must therefore have its
-release archives, and then its npm launcher, available before users can receive that client.
+Connected GOAT servers update to the client's exact version. Publish that version's
+CLI archive and `SHA256SUMS` in `goat-si/goat-releases` before offering its client.
+Both `goat update <version>` and the desktop's remote runtime supply read those assets.
+An upstream npm launcher is not part of this ordering.
 
-The workflow enforces this ordering:
-
-1. `release` publishes the GitHub Release with the CLI archives and `SHA256SUMS`.
-2. `publish_cli` publishes the `t3@<version>` launcher, which downloads from that release, on every
-   channel.
-3. `deploy_web` depends on both before moving the hosted channel to the new client.
-   `build_web` builds that client earlier with `vercel deploy --prod --skip-domain`, which
-   leaves the custom domains alone but moves the project's own `*.vercel.app` production
-   hostname. That hostname is behind Vercel SSO, so users only get the client through the
-   custom domains.
-
-Desktop auto-update reads the GitHub Release directly, so a desktop client can see the new version
-a few minutes before `t3@<version>` is on npm. Only the copied manual command for npm-run servers
-depends on npm, and it works once `publish_cli` finishes.
-
-Preserve these dependencies when changing the release graph. Publishing a client first would leave
-the **Update server** action targeting a package version that does not exist yet.
-
-For a release smoke test, confirm `npm view t3@<version> version` returns the expected version, then
-connect the new client to a server on the previous version and verify that the update action
-reconnects to the matching server. When the release adds database migrations, verify that the
-remote update applies them and reconnects. A failed trial must restore the database snapshot and
-restart the previous server. If the installed launcher does not support the target protocol,
-verify that the update stops before restart and run `npx t3@<version> service update` once on the
-server machine. Also test the manual or desktop-managed guidance when those environments are
-available.
+For a release smoke test, verify the archive's checksum and reported version, then
+connect the new client to a server on the previous version and confirm the update
+reconnects to the matching server. If database migrations are included, confirm they
+apply and that a failed update restores the snapshot and previous server. If the
+installed launcher rejects the target protocol, verify it stops before restart,
+then use `goat update <version>` on the host. Use `goat service install` if service
+registration needs repair. Also check manual and desktop-managed update guidance.
 
 ## Desktop auto-update notes
 
@@ -507,41 +496,21 @@ NSIS differential packaging remains enabled. A sidecar layout transition can
 produce a larger one-time download; subsequent small releases retain their
 blockmaps, with a 60 MB maximum for a representative sidecar-to-sidecar update.
 
-## 0) npm OIDC trusted publishing setup (CLI)
+<a id="0-npm-oidc-trusted-publishing-setup-cli"></a>
 
-After the GitHub Release is published, the workflow runs `node scripts/build-npm-launcher.ts`, then
-`node apps/server/scripts/cli.ts publish --packages-dir npm-packages`, which runs `npm publish` on
-`goat.tgz`. That is the only package published per release.
+## 0) Upstream npm OIDC trusted publishing setup (disabled)
 
-Checklist:
-
-1. Confirm the npm org owns package `goat`.
-2. For `goat`, configure a Trusted Publisher in the npm package settings:
-   - Provider: GitHub Actions
-   - Repository: this repo
-   - Workflow file: `.github/workflows/release.yml`
-   - Environment (if used): match your npm trusted publishing config
-3. Ensure npm account and org policies allow trusted publishing for the package.
-4. Create release tag `vX.Y.Z` and push; the workflow publishes the GitHub Release and then the
-   launcher with npm dist-tag `latest`.
-5. Nightly runs publish with npm dist-tag `nightly`; preview runs with `preview`.
+The disabled upstream release workflow publishes an npm launcher using trusted
+publishing. Do not configure its `t3` package publisher for GOAT. GOAT's active
+workflow publishes verified archives to its release repository.
 
 ## 1) Release validation and unsigned builds
 
-There is no dry-run tag path. Pushing any accepted non-nightly tag, including
-`v0.0.0-test.1`, classifies the run as the stable channel. It publishes `t3` with npm dist-tag
-`latest`, creates a real GitHub Release, aliases the hosted app to `latest.app.t3.codes` and
-`app.t3.codes`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
-to validate the workflow.
-
-The workflow has no non-publishing `workflow_dispatch` mode. Use normal CI or local quality gates to
-validate checks and builds without shipping. To exercise the complete release graph at lower stable
-risk, manually dispatch `channel=nightly`; this still publishes a real nightly npm package, GitHub
-prerelease, desktop updater release, hosted nightly alias, and marketing site, but it does not update stable app aliases or
-commit a version bump to `main`. Only run it when a real nightly release is acceptable.
-
-Manual `channel=stable` is also a real stable-channel release. Omitting signing secrets only makes
-platform artifacts unsigned; it does not prevent publication.
+GOAT validation follows `goat-nightly.yml` and its explicit publication gates.
+Use CI or a build with publishing disabled to validate without shipping. A published
+nightly or stable build is a real release even when signing secrets are absent;
+unsigned artifacts do not imply a dry run. Do not use upstream test tags or npm
+publication as GOAT release validation.
 
 ## 2) Apple signing + notarization setup (macOS)
 

@@ -20,13 +20,16 @@ const MISMATCH_HINT =
   "Version mismatch. Try syncing the client and server to the same GOAT version.";
 
 describe("versionSkew", () => {
-  it("updates only the proven npm prefix and safely quotes its path", () => {
-    expect(manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/node" })).toBe(
-      "npm install --global --prefix '/opt/node' t3@0.0.45",
-    );
-    expect(
-      manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/maria's node" }),
-    ).toBe("npm install --global --prefix '/opt/maria'\\''s node' t3@0.0.45");
+  it("updates GOAT instead of installing the upstream npm package", () => {
+    for (const installation of [
+      undefined,
+      { kind: "npm-global", prefix: "/opt/maria's node" },
+      { kind: "pnpm-dlx" },
+      { kind: "bunx" },
+      { kind: "npx" },
+    ] as const) {
+      expect(manualServerUpdateCommand("0.0.45", installation)).toBe("goat update 0.0.45");
+    }
   });
   beforeEach(() => {
     branding.APP_VERSION = "0.0.34";

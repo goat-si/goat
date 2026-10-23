@@ -1,11 +1,8 @@
-/**
- * `TRIAGE_PLAYBOOK` must stay byte-identical to `.github/triage/PLAYBOOK.md`
- * (only backticks and backslashes are escaped here).
- */
+/** GOAT diagnostics follow this repository rather than upstream contribution policy. */
 
-export const TRIAGE_PLAYBOOK = `# T3 Code triage playbook
+export const TRIAGE_PLAYBOOK = `# GOAT triage playbook
 
-You are a support engineer for T3 Code (https://github.com/pingdotgg/t3code), working
+You are a support engineer for GOAT (https://github.com/goat-si/goat), working
 inside a coding-agent session on the machine of a user whose install is misbehaving:
 crashes, auth failures, broken setups, slow launches, or anything else. Your job is to
 find out what went wrong, unblock the user if you can, and turn what you learned into
@@ -28,16 +25,16 @@ the server process is currently running, and the exact paths for state, logs, an
 the database.
 
 Its triage CLI version (called "Installed version" in older context files) is only
-the version of the \`t3\` that ran \`t3 triage\`. It is often not the build the bug
-happened on: \`npx t3 triage\` runs whatever \`t3\` npm resolves, while the user may
-run the desktop app, the background service, or a nightly. The server process line
+the version of the \`goat\` that ran \`goat triage\`. It is often not the build the bug
+happened on: the desktop app, background service, and remote host may differ.
+The server process line
 gives the local server's version when the server recorded one.
 
 ## 3. Check for a newer playbook
 
-Fetch https://raw.githubusercontent.com/pingdotgg/t3code/main/.github/triage/PLAYBOOK.md.
-If it is reachable and its content differs from this text, follow that version
-instead of this one. The user may be on an old release with an old copy.
+Use the playbook bundled with the affected GOAT release. Its source is
+\`apps/server/src/cli/triagePrompt.ts\` in the GOAT repository at that release tag.
+The contribution-policy playbook in \`.github/triage\` belongs to upstream.
 
 ## 4. Get the source
 
@@ -53,7 +50,7 @@ such as \`v0.0.42\`), into the source cache directory named in the context file,
 one subdirectory per commit hash:
 
     git clone --depth 1 --filter=blob:none --branch <release-tag> \\
-      https://github.com/pingdotgg/t3code <source-cache-dir>/<hash>
+      https://github.com/goat-si/goat <source-cache-dir>/<hash>
 
 If the tag does not exist (nightly builds), clone \`main\` instead, and treat file
 and line references as approximate: the user's build may not match \`main\`
@@ -70,7 +67,7 @@ Diagnosis grounded in source beats guessing.
 First establish the shape of the install, because the same symptom points at
 different code depending on it:
 
-- How is T3 Code running on this machine: \`npx t3 serve\` in a terminal, the
+- How is GOAT running on this machine: \`goat serve\` in a terminal, the
   background service, or the desktop app?
 - Which surface is the user connecting from: the website (app.t3.codes), the
   desktop app against a local server, the desktop app against a remote server,
@@ -99,7 +96,7 @@ comes from this repo's \`main\` branch.
 
 ## 6. Check upstream
 
-Search existing issues in pingdotgg/t3code (use \`gh\`, or the public GitHub search
+Search existing issues in goat-si/goat (use \`gh\`, or the public GitHub search
 API if \`gh\` is missing or not logged in). Then check whether the problem is already
 fixed in a release newer than the version the bug happened on: compare versions,
 read release notes and recent commits touching the relevant code.
@@ -114,7 +111,7 @@ Present what you found and let the user choose: fix it now, file an issue, both,
 neither. For fixes: propose the exact commands, explain what they do, and run them
 only with the user's approval. Prefer configuration and service-level fixes.
 
-Do not patch the T3 Code source as a fix. A good issue with strong repro steps
+Do not patch the GOAT source as a fix. A good issue with strong repro steps
 helps every user; an ad-hoc local patch helps one machine until the next update.
 If the user explicitly insists on preparing a fix PR, use a separate clean clone
 of \`main\` for that work, never the tag-pinned diagnosis clone.
@@ -131,7 +128,7 @@ of \`main\` for that work, never the tag-pinned diagnosis clone.
   posting. Never post without it.
 - Note at the end of the issue which model and agent produced it.
 - If \`gh\` is not authenticated, offer \`gh auth login\`, or build a prefilled
-  https://github.com/pingdotgg/t3code/issues/new URL with title and body query
+  https://github.com/goat-si/goat/issues/new URL with title and body query
   parameters; print the URL, and open it in their browser only after they
   approve.
 - If the user pasted screenshots, remind them to drag the images into the issue
@@ -156,9 +153,9 @@ duplicate with fresh evidence is more useful than a second thread.
  * cmd.exe, which cannot carry a multiline, multi-kilobyte argv string.
  */
 export const buildTriageLaunchPrompt = (promptFilePath: string) =>
-  `Read the file "${promptFilePath}" and follow its instructions exactly: it is your T3 Code triage playbook, and it starts with asking the user what went wrong.`;
+  `Read the file "${promptFilePath}" and follow its instructions exactly: it is your GOAT triage playbook, and it starts with asking the user what went wrong.`;
 
-export const buildTriageSeedPrompt = (contextFilePath: string) => `A T3 Code user is \
+export const buildTriageSeedPrompt = (contextFilePath: string) => `A GOAT user is \
 having a problem with their install and started this session with \`goat triage\`.
 
 Machine facts (versions, OS, paths, server liveness) are in the triage context file:
@@ -194,16 +191,16 @@ export interface TriageContextInput {
   };
 }
 
-export const buildTriageContext = (input: TriageContextInput) => `# T3 Code triage context
+export const buildTriageContext = (input: TriageContextInput) => `# GOAT triage context
 
 Generated by \`goat triage\` at ${input.generatedAt}.
 
-- Triage CLI version: ${input.cliVersion} (the \`t3\` that ran this command; the bug may have happened on another build)
+- Triage CLI version: ${input.cliVersion} (the \`goat\` that ran this command; the bug may have happened on another build)
 - OS: ${input.os}
 - Node: ${input.nodeVersion}
 - CLI launched as: ${input.launchedAs}
 - Server process: ${input.server}
-- Repo: https://github.com/pingdotgg/t3code
+- Repo: https://github.com/goat-si/goat
 
 ## Paths
 

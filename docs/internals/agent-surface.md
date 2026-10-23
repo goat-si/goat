@@ -703,7 +703,7 @@ exit `1`, `waiting_human` exits `3`, `unknown` exits `5`, and a wait that
 times out while the work is still `queued` or `running` exits `6`.
 
 The npm package keeps its `goat` and `t3` bins, and bare `goat` keeps starting a
-server, so `npx t3` users see no change. The desktop launcher marks itself so that
+server. Use `goat serve` for GOAT; `npx t3` launches upstream T3 Code. The desktop launcher marks itself so that
 bare `goat` from it prints help instead of starting a second server. Linux
 packages gain `/usr/bin/goat`, and the welcome wizard offers the install once.
 

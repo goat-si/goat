@@ -12,7 +12,7 @@ export const GOAT_HOME_DIR_NAME = ".goat";
  * Builds before the GOAT rename kept their state in `.t3`. That directory stays in use
  * while it holds the state this run reads (`stateDirName`, such as `userdata` or `dev`)
  * and `.goat` does not, so existing data is never orphaned. Nothing is copied: upstream
- * T3 Code may be using `~/.t3` at the same time.
+ * T3 Code may be using `~/.t3` at the same time. // goat-rename: legacy
  */
 export const resolveGoatHome = (
   parent: string,

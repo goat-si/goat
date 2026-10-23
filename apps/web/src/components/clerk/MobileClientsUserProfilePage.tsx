@@ -94,7 +94,7 @@ function EmptyMobileClients() {
       <EmptyHeader>
         <EmptyTitle>No mobile clients</EmptyTitle>
         <EmptyDescription>
-          Install T3 Code on your phone and sign in to T3 Connect to get push notifications and Live
+          GOAT Connect is coming soon. Use direct pairing or Tailscale to connect your phone.
           Activities.
         </EmptyDescription>
       </EmptyHeader>
