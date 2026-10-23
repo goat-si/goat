@@ -268,7 +268,7 @@ it.effect(
       ).toMatchObject({ requiredScope: "orchestration:read" });
       const denied = yield* f.setup.prepare({ host: "box" }, caller).pipe(Effect.flip);
       expect(denied).toMatchObject({ requiredScope: "environment:maintain" });
-      expect(denied.message).toContain("goat_ssh_runtime_update");
+      expect(denied.message).toContain('goat_call {path:"ssh.runtime_update"}');
       expect(f.updates).toEqual([]);
       expect(seen).toEqual([["orchestration:read"]]);
 

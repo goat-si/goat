@@ -480,7 +480,7 @@ it.effect(
           `message:handoff-wake:${summary.handoffId}:completed`,
         ]);
         expect(sent[0]!.text).toContain(
-          'Call goat_provider_diagnose with {"instanceId":"cursor-2"} to settle it',
+          'Call goat_call {path:"provider.diagnose", args:{"instanceId":"cursor-2"}} to settle it',
         );
       }),
     ),

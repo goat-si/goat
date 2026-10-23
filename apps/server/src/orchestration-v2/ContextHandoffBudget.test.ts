@@ -587,7 +587,7 @@ describe("handoff delivery", () => {
       assert.equal(result.context, "");
       assert.isDefined(captured);
       assert.include(captured.context, "detailed coverage references omitted");
-      assert.include(captured.context, "goat_thread_read");
+      assert.include(captured.context, 'goat_call {path:"thread.read"');
       assert.include(captured.context, threadId);
       assert.isAtMost(historyCost(captured.messages, captured.context), 2_500);
       assert.isAbove(captured.messages.length, 0);

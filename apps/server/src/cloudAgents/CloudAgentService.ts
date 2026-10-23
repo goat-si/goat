@@ -63,6 +63,7 @@ import {
   holderFromCloudCell,
   holderFromDiagnoses,
 } from "./cloudHolders.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * Routes cloud agent launches to an environment that holds the provider's login, and tracks
@@ -525,7 +526,7 @@ const make = Effect.gen(function* () {
     if (project === undefined)
       return yield* failure(
         "invalid_request",
-        `No project here has origin ${repo}. Add it with goat_project_clone or goat_project_create on this holder first.`,
+        `No project here has origin ${repo}. Add it with ${goatCallText("project.clone")} or ${goatCallText("project.create")} on this holder first.`,
       );
     return project;
   });
@@ -559,7 +560,7 @@ const make = Effect.gen(function* () {
         if (effective.enabled)
           return yield* failure(
             "capability_denied",
-            "Remote cloud holders cannot yet preserve goatclaw lane accounting. Select a local holder, or launch a profiled thread on the holder with goat_ssh_thread_launch.",
+            `Remote cloud holders cannot yet preserve goatclaw lane accounting. Select a local holder, or launch a profiled thread on the holder with ${goatCallText("ssh.thread_launch")}.`,
           );
         const result = yield* hosts.writeOnHost(
           scope,
@@ -611,7 +612,7 @@ const make = Effect.gen(function* () {
           next: { after: "approval", call: "goat_cloud_launch" },
           holder,
           dryRun: false,
-          note: `A person must allow this launch in a GOAT app. Once approved, call goat_cloud_agent_launch again with the same arguments and handoffId "${consent.handoff.handoffId}". A different launch needs a new approval.`,
+          note: `A person must allow this launch in a GOAT app. Once approved, call ${goatCallText("cloud_agent.launch")} again with the same arguments and handoffId "${consent.handoff.handoffId}". A different launch needs a new approval.`,
         };
       const launched = yield* launches
         .launch(
@@ -637,7 +638,7 @@ const make = Effect.gen(function* () {
         holder,
         dryRun: false,
         threadId: launched.threadId,
-        note: `The cloud run starts in this thread from ${from}; goat_cloud_agent_run_list and goat_thread_status follow it.`,
+        note: `The cloud run starts in this thread from ${from}; ${goatCallText("cloud_agent.run_list")} and ${goatCallText("thread.status")} follow it.`,
       };
     },
   );
@@ -803,7 +804,9 @@ const make = Effect.gen(function* () {
                 : linkOnlyNote,
             }
           : tracking === "pending"
-            ? { note: "Still attaching; goat_cloud_agent_run_list shows the outcome." }
+            ? {
+                note: `Still attaching; ${goatCallText("cloud_agent.run_list")} shows the outcome.`,
+              }
             : { note: "GOAT follows this run and reports when it finishes." }),
       };
     },

@@ -4163,7 +4163,7 @@ it.effect("ready-only host tools never bootstrap or issue a session on a stopped
       expect(failure._tag).toBe("Failure");
       if (failure._tag === "Failure") {
         expect(failure.failure.reason).toBe("host_unavailable");
-        expect(failure.failure.message).toContain("goat_ssh_host_prepare");
+        expect(failure.failure.message).toContain('goat_call {path:"ssh.host_prepare"}');
       }
       expect([ensures, sessions]).toEqual([0, 0]);
     }).pipe(

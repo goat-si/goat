@@ -18,6 +18,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { clientRuntimeModeCeiling, type McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { goatclawRoleTemplate, missingRoleCapabilities, roleRefusal } from "./RoleTemplates.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 /** The goatclaw brief a delegated task starts with, reached through the profile service's module. */
 export { goatclawDelegatedTaskBrief as childBrief } from "./RoleTemplates.ts";
 
@@ -410,7 +411,7 @@ export const layer = Layer.effect(
             if (input.decisionId === undefined) {
               if (threadId === undefined || !(yield* personStartedRun(sql, threadId)))
                 return yield* refusal(
-                  'A cloud launch bills a paid account. Launch it in a turn a person started, or ask with goat_decision_request offering an option with id "approve" and pass decisionId once a person approves.',
+                  `A cloud launch bills a paid account. Launch it in a turn a person started, or ask with ${goatCallText("decision.request")} offering an option with id "approve" and pass decisionId once a person approves.`,
                 );
             } else {
               const decision = (yield* sql<{

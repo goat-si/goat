@@ -1050,7 +1050,7 @@ export const make = (
                   instruction:
                     revoked || expired
                       ? "Ask again and approve with a client that has permission."
-                      : `Call goat_ssh_host_prepare for ${host} to retry setup and diagnosis.`,
+                      : `Call goat_call {path:"ssh.host_prepare"} for ${host} to retry setup and diagnosis.`,
                 },
               });
               yield* Deferred.succeed(first, yield* status({ host }));
@@ -1135,7 +1135,7 @@ export const make = (
                 caller.kind === "mcp" && caller.scope.thread !== undefined
                   ? new EnvironmentAuthorizationError({
                       requiredScope: error.requiredScope,
-                      message: `${error.message} GOAT threads never hold it. Ask a person to prepare ${input.host} in Settings → Connections, or call goat_ssh_runtime_update: when_idle updates an idle host on its own, and now asks a person to approve.`,
+                      message: `${error.message} GOAT threads never hold it. Ask a person to prepare ${input.host} in Settings → Connections, or call goat_call {path:"ssh.runtime_update"}: when_idle updates an idle host on its own, and now asks a person to approve.`,
                     })
                   : error,
               ),

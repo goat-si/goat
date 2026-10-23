@@ -151,7 +151,7 @@ const missingInstance = (target: Target) =>
     `No provider instance ${target.instanceId} is configured on this environment.`,
     "instance_missing",
     agent(
-      "List the configured providers with provider.list (goat_provider_list) and use one of their instance ids.",
+      'List the configured providers with goat_call {path:"provider.list"} and use one of their instance ids.',
       { path: "provider.list" },
     ),
   );
@@ -1187,7 +1187,7 @@ export const diagnoseProviders = Effect.fn("ProviderDiagnosis.diagnose")(functio
                 "readiness",
                 "unknown",
                 options.checkedBy === "cli"
-                  ? `No saved status for ${nameOf(target)}. Start GOAT once, or call goat_provider_diagnose from a thread.`
+                  ? `No saved status for ${nameOf(target)}. Start GOAT once, or call goat_call {path:"provider.diagnose"} from a thread.`
                   : `${nameOf(target)} has no readiness snapshot yet.`,
                 "not_checked",
               ),

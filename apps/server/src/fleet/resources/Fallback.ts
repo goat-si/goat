@@ -48,6 +48,7 @@ import {
   stepKey,
   toSelection,
 } from "./fallbackPolicy.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 export type FallbackStep =
   | { readonly _tag: "SwitchInThread"; readonly selection: ModelSelection; readonly hop: number }
@@ -562,7 +563,7 @@ export const layerChains = Layer.effect(
                   message:
                     "Provider instance " +
                     step.instanceId +
-                    " is not configured here; goat_provider_list lists the instances.",
+                    ` is not configured here; ${goatCallText("provider.list")} lists the instances.`,
                 });
               if (
                 !provider.models.some(

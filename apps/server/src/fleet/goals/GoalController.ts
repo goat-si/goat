@@ -58,6 +58,7 @@ import {
   REMOTE_WORKERS_DISABLED,
   workerTitle,
 } from "./GoalWorkerRuntime.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 const SOON_MS = 5_000;
 const PULL_REQUESTS_PER_PASS = 60;
@@ -102,7 +103,7 @@ const renderPrompt = (goal: FleetGoal, worker: WorkerRecord, branch: string) => 
     worker.attempt +
     ") of GOAT goal " +
     goal.id +
-    ". When you finish, report with goat_thread_report_result, including any pull request you opened."
+    `. When you finish, report with ${goatCallText("thread.report_result")}, including any pull request you opened.`
   );
 };
 

@@ -710,7 +710,7 @@ function render(inventory: Inventory): string {
             ", " +
             at(
               "apps/server/src/mcp/completionWebhook.ts",
-              /secretRef comes from goat_handoff_create in a GOAT thread/,
+              /secretRef comes from .+ in a GOAT thread/,
             ),
         ],
         [

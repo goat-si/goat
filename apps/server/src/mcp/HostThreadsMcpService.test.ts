@@ -662,7 +662,7 @@ describe("HostThreadsMcpService", () => {
         expect(result._tag).toBe("Failure");
         if (result._tag !== "Failure") return;
         expect(result.failure.message).toContain("started from orchestrator-laptop");
-        expect(result.failure.message).toContain("goat_origin_report");
+        expect(result.failure.message).toContain('goat_call {path:"origin.report"}');
         expect(relays).toEqual([]);
       }),
   );
@@ -700,9 +700,9 @@ describe("HostThreadsMcpService", () => {
         expect(result.failure.message).toContain("is not in this machine's SSH config");
         if (mentionsOrigin) {
           expect(result.failure.message).toContain("started from orchestrator-laptop");
-          expect(result.failure.message).toContain("goat_origin_report");
+          expect(result.failure.message).toContain('goat_call {path:"origin.report"}');
         } else {
-          expect(result.failure.message).not.toContain("goat_origin_report");
+          expect(result.failure.message).not.toContain('path:"origin.report"');
         }
       }),
   );
@@ -904,7 +904,7 @@ it.effect("refuses a launch watch for a remote delegated task", () =>
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure") {
           expect(result.failure.code).toBe("invalid_request");
-          expect(result.failure.message).toContain("goat_task_read");
+          expect(result.failure.message).toContain('goat_call {path:"task.read"}');
         }
       }),
   ),

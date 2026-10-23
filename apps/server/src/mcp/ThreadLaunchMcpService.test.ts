@@ -321,7 +321,9 @@ it.effect(
       expect(model.message).toContain(
         "does not offer model nonexistent, even after refreshing its model list",
       );
-      expect(model.message).toContain('goat_provider_diagnose {instanceId:"fakeCloud"}');
+      expect(model.message).toContain(
+        'goat_call {path:"provider.diagnose", args:{instanceId:"fakeCloud"}}',
+      );
       const provider = yield* launch({
         instanceId: ProviderInstanceId.make("gone"),
         model: "fake",
