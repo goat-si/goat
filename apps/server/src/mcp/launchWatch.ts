@@ -618,7 +618,7 @@ export function outageWake(input: {
   const { watch, outage } = input;
   return {
     ...wakeIds(watch, `outage:${watch.incarnation}:${outage.episode}`),
-    text: `host_unavailable: GOAT cannot reach ${where(watch)} to follow ${named(watch, null).toLowerCase()} (${identity(watch)}). ${outage.failures} attempts failed, the last with: ${truncate(outage.lastError, 500)} It keeps retrying with backoff and reports the run once it reaches the host again; the thread itself may still be running there. ${watch.replica === undefined ? "No checkpoint copy is available." : `A checkpoint from ${watch.replica.capturedAt} (${watch.replica.bytes} bytes) is retained. Explicit recovery is available through ${call("thread.handoff_host", toolArgs(watch))}; the disconnected source can still produce external side effects.`} ${stopHint(watch)}`,
+    text: `host_unavailable: GOAT cannot reach ${where(watch)} to follow ${named(watch, null).toLowerCase()} (${identity(watch)}). ${outage.failures} attempts failed, the last with: ${truncate(outage.lastError, 500)} It keeps retrying with backoff and reports the run once it reaches the host again; the thread itself may still be running there. ${watch.replica === undefined ? "No checkpoint copy is available." : `A checkpoint from ${watch.replica.capturedAt} (${watch.replica.bytes} bytes) is retained. Explicit recovery is available through goat_call {path: "thread.handoff_host"}, whose arguments goat_describe lists; the disconnected source can still produce external side effects.`} ${stopHint(watch)}`,
     notification: {
       source: { kind: "background_task" },
       outcome: "unknown",

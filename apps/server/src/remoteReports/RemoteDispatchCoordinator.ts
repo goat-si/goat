@@ -512,7 +512,7 @@ const make = Effect.gen(function* () {
       });
     const uncertain = (reason: string) =>
       outcome(
-        "It may have been delivered. Check the target with goat_thread_read before sending it again.",
+        'It may have been delivered. Check the target with goat_call {path: "thread.read"} before sending it again.',
         true,
         { reason, message: send.message },
       );
@@ -863,7 +863,7 @@ const make = Effect.gen(function* () {
                   commandId: CommandId.make(`server:remote-task-outage:${id}`),
                   threadId: r.origin_thread_id,
                   messageId: MessageId.make(`message:remote-task-outage:${id}`),
-                  text: `GOAT cannot reach host ${r.host} to observe delegated task ${r.task_id}. The task remains running; use goat_task_read to follow it.`,
+                  text: `GOAT cannot reach host ${r.host} to observe delegated task ${r.task_id}. The task remains running; follow it with goat_call {path: "task.read", args: {taskId: "${r.task_id}"}}.`,
                   attachments: [],
                   createdBy: "agent",
                   creationSource: "server",
