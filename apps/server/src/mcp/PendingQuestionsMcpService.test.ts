@@ -184,10 +184,19 @@ const runService = <A, E>(
         reads.push({ threadId: id, filter });
         return records.get(id)!;
       }),
-    getProjectThreadRecords: (input) =>
-      Effect.succeed(
-        records.get(input.threadId) ?? idleThreadProjection(liveThreadShell(input.threadId)),
-      ),
+    // Applies the item type filter as the projection store does.
+    getProjectThreadRecords: (input, _fields, filter) =>
+      Effect.sync(() => {
+        const projection =
+          records.get(input.threadId) ?? idleThreadProjection(liveThreadShell(input.threadId));
+        const types = filter?.turnItemTypes;
+        return types === undefined
+          ? projection
+          : {
+              ...projection,
+              turnItems: projection.turnItems.filter((item) => types.includes(item.type)),
+            };
+      }),
     getLaunchedPendingQuestions: (input) =>
       Effect.suspend(() => {
         queries.push(input);

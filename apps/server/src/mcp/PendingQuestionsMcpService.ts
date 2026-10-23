@@ -129,7 +129,13 @@ const make = Effect.gen(function* () {
     resolver?: HumanStepResolver,
   ) =>
     Effect.gen(function* () {
-      const context = yield* readThread(input.threadId, ["runtimeRequests", "turnItems"]);
+      const context = yield* readThread(
+        input.threadId,
+        ["runtimeRequests", "turnItems"],
+        canApprove(scope, resolver)
+          ? ["user_input_request", "approval_request"]
+          : ["user_input_request"],
+      );
       const request = context.projection.runtimeRequests.find(
         (request) => request.id === input.requestId,
       );
