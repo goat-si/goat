@@ -88,6 +88,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import { OPENCODE_PROVIDER, openCodePermissionRequestKind } from "../adapter.ts";
 import { openCodeToolTurnItem } from "../toolItems.ts";
+import { goatRemoteMcpConfig } from "../goatMcpConfig.ts";
 
 const OpenCode2ProviderCapabilities = {
   sessions: {
@@ -3193,12 +3194,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           .add({
             server: name,
             location: { directory },
-            config: new Mcp.RemoteConfig({
-              type: "remote",
-              url: wanted.endpoint,
-              headers: { Authorization: wanted.credential },
-              oauth: false,
-            }),
+            config: new Mcp.RemoteConfig(
+              goatRemoteMcpConfig({
+                endpoint: wanted.endpoint,
+                authorizationHeader: wanted.credential,
+              }),
+            ),
           })
           .pipe(
             Effect.timeout(INVENTORY_TIMEOUT),
