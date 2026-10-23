@@ -35,8 +35,9 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import { forkParked } from "../serverActivation.ts";
 
 const RECONCILE_WINDOW_HOURS = 24;
-/** Fresh command ids a wake may use after earlier ones were rejected. */
-const MAX_ATTEMPTS = 20;
+/** Attempt n waits 2^n seconds after the resolution, at most this long between attempts. */
+const MAX_RETRY_DELAY_MS = 15 * 60 * 1000;
+const retryAfterMs = (attempt: number) => Math.min(2 ** attempt * 1000, MAX_RETRY_DELAY_MS);
 const ENDED: ReadonlySet<string> = new Set([
   "completed",
   "declined",
@@ -117,11 +118,14 @@ const make = Effect.gen(function* () {
     );
   /**
    * The message id is the delivery record and never changes. A command id the orchestrator once
-   * rejected (a transient planning failure) stays rejected, so a retry moves to the next attempt.
+   * rejected (a transient planning failure) stays rejected, so a retry moves to the next attempt
+   * id. Earlier rejected attempts are skipped on every tick; a fresh one waits out its backoff
+   * from the resolution, so a long failure retries ever more slowly but never stops retrying.
    */
   const dispatchWake = (
     threadId: ThreadId,
     wake: LaunchWatchWake,
+    resolvedAtMs: number,
     attempt = 0,
   ): Effect.Effect<
     void,
@@ -136,9 +140,13 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.asVoid,
       Effect.catchIf(
-        (error) =>
-          error._tag === "OrchestratorCommandPreviouslyRejectedError" && attempt + 1 < MAX_ATTEMPTS,
-        () => dispatchWake(threadId, wake, attempt + 1),
+        (error) => error._tag === "OrchestratorCommandPreviouslyRejectedError",
+        () =>
+          Effect.gen(function* () {
+            const now = DateTime.toEpochMillis(yield* DateTime.now);
+            if (now < resolvedAtMs + retryAfterMs(attempt + 1)) return;
+            yield* dispatchWake(threadId, wake, resolvedAtMs, attempt + 1);
+          }),
       ),
     );
 
@@ -153,7 +161,11 @@ const make = Effect.gen(function* () {
       const shell = yield* threads.getThreadShell(threadId);
       if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null) return;
       if (yield* delivered(wake.messageId)) return;
-      yield* dispatchWake(threadId, wake);
+      yield* dispatchWake(
+        threadId,
+        wake,
+        handoff.resolvedAt === undefined ? 0 : DateTime.toEpochMillis(handoff.resolvedAt),
+      );
     },
     // One delivery at a time, so the tail and a reconcile never race to a second attempt.
     permit.withPermits(1),
