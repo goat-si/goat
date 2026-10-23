@@ -3,7 +3,7 @@ import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { ScopedSwitch } from "./ScopedSwitch";
-import { AgentBrowserAccessSetting } from "./AgentToolsSettings";
+import { AgentBrowserAccessSetting, AgentToolsSettings } from "./AgentToolsSettings";
 import { DeviceHostsSettings } from "./DeviceHostsSettings";
 import { ComputerUseSettings } from "./ComputerUseSettings";
 import { useNavigate } from "@tanstack/react-router";
@@ -1613,6 +1613,7 @@ export function IntegrationsSettingsPanel() {
       </SettingsSection>
       <DeviceIntegrationSettings />
       <ComputerUseSettings />
+      <AgentToolsSettings />
       <GoatBotSettingsPointer />
     </SettingsPageContainer>
   );

@@ -827,6 +827,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow disable enable open drive preview tools sessions project override"],
   },
   {
+    id: "agent-tool-listing",
+    title: "GOAT tools agents see",
+    to: "/settings/integrations",
+    scope: "environment-defaults",
+    searchTerms: [
+      "agent tool listing core all full mcp tools list describe call prompt context size",
+    ],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",
