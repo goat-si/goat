@@ -145,7 +145,7 @@ const toolkitFixture = Effect.gen(function* () {
   return { ...f, call, launched };
 });
 
-it.live("both actual MCP launch tools refuse prefixed secret blobs without partial briefs", () =>
+it.effect("both actual MCP launch tools refuse prefixed secret blobs without partial briefs", () =>
   Effect.gen(function* () {
     const f = yield* toolkitFixture;
     for (const [index, text] of prefixedSecretAssignments.entries())
@@ -174,7 +174,7 @@ it.live("both actual MCP launch tools refuse prefixed secret blobs without parti
   }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live(
+it.effect(
   "actual read-only MCP reads committed text and rejects write/root/traversal attempts without touching source",
   () =>
     Effect.gen(function* () {
@@ -207,7 +207,7 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live(
+it.effect(
   "a launch delivers usable bounded snapshots to the worker without source paths or write grants",
   () =>
     Effect.gen(function* () {
@@ -231,7 +231,7 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live("a missing or newly unregistered source prevents launching a worker", () =>
+it.effect("a missing or newly unregistered source prevents launching a worker", () =>
   Effect.gen(function* () {
     const f = yield* toolkitFixture;
     f.unregister();
@@ -244,7 +244,7 @@ it.live("a missing or newly unregistered source prevents launching a worker", ()
   }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live(
+it.effect(
   "unavailable remote references fail closed before launching and do not broaden authority",
   () =>
     Effect.gen(function* () {
@@ -259,7 +259,7 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live(
+it.effect(
   "metadata-only or non-reauthorizable credentials cannot gain repository content access",
   () =>
     Effect.gen(function* () {
@@ -293,7 +293,7 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live("MCP launch rejects nested unsupported grants before capturing or launching", () =>
+it.effect("MCP launch rejects nested unsupported grants before capturing or launching", () =>
   Effect.gen(function* () {
     const f = yield* toolkitFixture;
     for (const extra of [
@@ -313,7 +313,7 @@ it.live("MCP launch rejects nested unsupported grants before capturing or launch
   }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live("credential content fails before worker launch", () =>
+it.effect("credential content fails before worker launch", () =>
   Effect.gen(function* () {
     const f = yield* toolkitFixture;
     yield* f.fs.writeFileString(f.repo + "/settings.ini", "password = exampleSecret123\n");
@@ -330,7 +330,7 @@ it.live("credential content fails before worker launch", () =>
   }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live(
+it.effect(
   "remote reads keep caller scope, require ready hosts, validate exact content and honor revocation",
   () =>
     Effect.gen(function* () {
@@ -413,7 +413,7 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live(
+it.effect(
   "SSH briefs resolve omitted source hosts on the destination and explicit null locally",
   () =>
     Effect.gen(function* () {

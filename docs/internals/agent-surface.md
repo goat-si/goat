@@ -139,6 +139,29 @@ has no `clientRequestId`.
 
 ### Idempotency
 
+**Now.** Writes the registry marks `idempotency: "key"` (thread and SSH thread
+launch, provider add, update, link and remove, worktree remove, project delete)
+reserve their key in `mcp_request_reservations` through
+[ToolAdmission.ts](../../apps/server/src/mcp/ToolAdmission.ts). The key is taken
+where the declaration admits the write, after every caller check, so direct calls
+and `goat_call` share it and a replay passes the checks again. A handler that
+authorizes inside its body (SSH launch's profile and role checks, the worktree
+credential) declares `admission: "handler"` and admits after them. Services also
+authorize inside (provider settings, lane claims), so the reservation records the
+caller's grant as the launch resolves it: its runtime and interaction modes, its
+goatclaw capabilities, ceiling and host allowlist (narrowed by a forwarded ceiling
+or a role's profile), and a client's scopes and read-only state. A replay is
+answered only while the caller still holds at least that grant, with a client's
+scopes reauthorized live. The
+reservation is its own statement, not part of each domain's transaction; the gap
+between it and the recorded outcome is what `unknown` covers. A transient
+refusal that ran nothing frees the key, other failures replay, and a failure that
+may have left effects, an interrupt, or a row an earlier server process left
+running stays `unknown` and never runs again; its refusal names the read that settles
+it, on the same host for a routed write. Only completed keys expire, after
+24 hours. Writes that already deduplicated in their own domain, such as
+`goat_thread_send` and `delegate_task`, keep those receipts for now.
+
 **Proposed.** A write that takes `clientRequestId` follows the rules payment APIs
 settled on ([Stripe](https://docs.stripe.com/api/idempotent_requests),
 [AIP-155](https://google.aip.dev/155)):
@@ -433,8 +456,8 @@ destructive, so a client that prompts before destructive tools still prompts bef
 target reached through it. The checked-handler wrapper records the original typed error,
 and `goat_call` uses it only to classify by a literal the envelope's table declares; the
 message is always the text the direct call shows, so free-text reasons the direct path
-scrubs never leave through it. Writes count as unkeyed until the registry gains
-`idempotency`, and routed calls set `meta.host`.
+scrubs never leave through it. A write the registry keys counts as deduplicated when it
+carries a `clientRequestId`, and routed calls set `meta.host`.
 
 **Now.** A direct `tools/call` by a legacy name runs the listed tool. The `/mcp` auth
 middleware swaps the name for the listed one before Effect's MCP core sees the request,
@@ -663,7 +686,9 @@ check.
 **Now.** Each MCP call records one anonymous `mcp.tool.invoked` analytics event
 with no ids or text. Orchestration receipts record commands. The decision inbox
 keeps an append-only audit of actor, profile, action, target, and outcome, and
-handoff transitions are events with actors.
+handoff transitions are events with actors. A keyed write's reservation records
+principal, profile id, ceiling, host, path, argument digest, receipt id, and
+outcome.
 
 **Proposed.** Analytics stays anonymous. Every write through the invocation
 function records principal, profile id, effective ceiling, host, path, argument
@@ -846,7 +871,7 @@ Each PR ships on its own and leaves `tools/list` unchanged until the flip.
 | 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774) |
 | 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                 |
 | 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                 |
-| 6   | Idempotency receipts with digest, unknown state, audit columns                | Proposed                                                                                                                                                                   |
+| 6   | Idempotency receipts with digest, unknown state, audit columns                | Started: eight high-risk writes keyed                                                                                                                                      |
 | 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup; then provider syncs and approved provider changes)                       |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
 | 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                 |
