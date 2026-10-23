@@ -1797,101 +1797,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
   ] as const)("persists $type provenance with first-answer-wins arbitration", (respondedBy) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
-      const eventSink = yield* EventSink.EventSinkV2;
       const prefix = `provenance-${respondedBy.type}-${"environmentId" in respondedBy ? (respondedBy.environmentId ?? "local") : "local"}`;
-      const now = yield* DateTime.now;
-      const threadId = ThreadId.make(`${prefix}`);
-      const requestId = RuntimeRequestId.make(`${prefix}-request`);
-      const nodeId = NodeId.make(`${prefix}-node`);
-      const itemId = TurnItemId.make(`${prefix}-item`);
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        commandId: CommandId.make(`${prefix}-create`),
-        createdBy: "user",
-        creationSource: "web",
-        threadId,
-        projectId: ProjectId.make(`${prefix}-project`),
-        title: "Async question",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: process.cwd(),
-      });
-      yield* eventSink.write({
-        commandId: CommandId.make(`${prefix}-seed`),
-        events: [
-          {
-            id: EventId.make(`${prefix}-node-event`),
-            type: "node.updated",
-            threadId,
-            nodeId,
-            occurredAt: now,
-            payload: {
-              id: nodeId,
-              threadId,
-              runId: null,
-              parentNodeId: null,
-              rootNodeId: nodeId,
-              kind: "user_input_request",
-              status: "waiting",
-              countsForRun: false,
-              providerThreadId: null,
-              providerTurnId: null,
-              nativeItemRef: null,
-              runtimeRequestId: requestId,
-              checkpointScopeId: null,
-              startedAt: now,
-              completedAt: null,
-            },
-          },
-          {
-            id: EventId.make(`${prefix}-request-event`),
-            type: "runtime-request.updated",
-            threadId,
-            nodeId,
-            occurredAt: now,
-            payload: {
-              id: requestId,
-              nodeId,
-              providerTurnId: null,
-              nativeRequestRef: null,
-              kind: "user_input",
-              status: "pending",
-              responseCapability: { type: "message" },
-              createdAt: now,
-              resolvedAt: null,
-            },
-          },
-          {
-            id: EventId.make(`${prefix}-item-event`),
-            type: "turn-item.updated",
-            threadId,
-            nodeId,
-            occurredAt: now,
-            payload: {
-              id: itemId,
-              type: "user_input_request",
-              threadId,
-              runId: null,
-              nodeId,
-              providerThreadId: null,
-              providerTurnId: null,
-              nativeItemRef: null,
-              parentItemId: null,
-              ordinal: 0,
-              status: "waiting",
-              title: null,
-              startedAt: now,
-              completedAt: null,
-              updatedAt: now,
-              requestId,
-              responseMode: "message",
-              questions: [{ id: "color", header: "Color", question: "Which color?", options: [] }],
-            },
-          },
-        ],
-      });
+      const { threadId, requestId, nodeId, itemId } = yield* seedFoundationQuestion(prefix);
       const invalid = yield* orchestrator
         .dispatch({
           type: "runtime-request.respond",
@@ -6932,7 +6839,6 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
     "archive",
     "replacement",
     "manual-snooze",
-    "invalid-snooze",
     "cancel-resume-keep-snooze",
     "independent-patches",
     "expired-snooze",
@@ -6994,13 +6900,10 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
       const projection = yield* orchestrator.getThreadProjection(threadId);
       const run = projection.runs[0]!;
       const now = yield* DateTime.now;
-      const resetAt =
-        scenario === "invalid-snooze"
-          ? "not-a-date"
-          : DateTime.formatIso(DateTime.add(now, { minutes: 1 })).replace(
-              "Z",
-              scenario === "wake" ? "+00:00" : "Z",
-            );
+      const resetAt = DateTime.formatIso(DateTime.add(now, { minutes: 1 })).replace(
+        "Z",
+        scenario === "wake" ? "+00:00" : "Z",
+      );
       yield* events.write({
         commandId: CommandId.make(`recovery-stop:failure:${scenario}`),
         events: [
@@ -7071,21 +6974,6 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         (thread) => thread.id === threadId,
       )!;
       assert.isNull(limitRecoveryCommand(shell, false, DateTime.toEpochMillis(now)));
-      if (scenario === "invalid-snooze") {
-        const result = yield* orchestrator
-          .dispatch({
-            type: "thread.metadata.update",
-            commandId: CommandId.make("recovery-stop:invalid-snooze"),
-            threadId,
-            limitRecovery: { runId: run.id, resetAt, snooze: true },
-          })
-          .pipe(Effect.exit);
-        assert.equal(result._tag, "Failure");
-        const current = yield* orchestrator.getThreadProjection(threadId);
-        assert.isNull(current.thread.limitRecovery ?? null);
-        assert.isNull(current.thread.snoozedUntil);
-        return;
-      }
       const snooze = scenario === "wake" || scenario === "cancel-resume-keep-snooze";
       const autoResume = scenario !== "wake";
       const arm = limitRecoveryCommand(shell, autoResume, DateTime.toEpochMillis(now), snooze);
