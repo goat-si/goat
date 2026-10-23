@@ -16,7 +16,7 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | Mutating tools that accept clientRequestId             | 20               |
 | Mutating tools whose clientRequestId GOAT deduplicates | 8                |
 | Input parameters with a description                    | 160 of 710 (23%) |
-| Tool descriptions with an example                      | 5 of 195         |
+| Tool descriptions with an example                      | 3 of 195         |
 | CLI commands, listed / unlisted                        | 58 / 19          |
 | CLI commands with usage examples                       | 0 of 77          |
 | Listed CLI leaf commands with --json                   | 11 of 45         |
@@ -149,16 +149,16 @@ One intent is spelled several ways (tool counts in parentheses):
 
 Only 23% of input parameters carry a description. 132 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `create_threads`, `delete_scheduled_task`, `device_close`, and 122 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
 
-5 of 195 tool descriptions include an example. 95 tools have no `Tool.Title`. Description length is uneven; the longest are:
+3 of 195 tool descriptions include an example. 95 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
-| Tool                      | Characters | Declared at                                                 |
-| ------------------------- | ---------- | ----------------------------------------------------------- |
-| `watch_pull_request`      | 1416       | packages/contracts/src/agentSurface/entries/pull_request.ts |
-| `goat_host_status`        | 1311       | packages/contracts/src/agentSurface/entries/host.ts         |
-| `goat_hub_device_join`    | 1275       | packages/contracts/src/agentSurface/entries/hub.ts          |
-| `goat_connection_add_ssh` | 1117       | packages/contracts/src/agentSurface/entries/connection.ts   |
-| `goat_worktree_handoff`   | 931        | packages/contracts/src/agentSurface/entries/worktree.ts     |
-| `goat_worktree_cleanup`   | 820        | packages/contracts/src/agentSurface/entries/worktree.ts     |
+| Tool                        | Characters | Declared at                                                       |
+| --------------------------- | ---------- | ----------------------------------------------------------------- |
+| `watch_pull_request`        | 1416       | packages/contracts/src/agentSurface/entries/pull_request.ts       |
+| `goat_host_status`          | 1311       | packages/contracts/src/agentSurface/entries/host.ts               |
+| `goat_hub_device_join`      | 1275       | packages/contracts/src/agentSurface/entries/hub.ts                |
+| `goat_connection_add_ssh`   | 1117       | packages/contracts/src/agentSurface/entries/connection.ts         |
+| `goat_hub_device_leave`     | 745        | packages/contracts/src/agentSurface/entries/hub.ts                |
+| `write_pull_request_guides` | 578        | packages/contracts/src/agentSurface/entries/pull_request_guide.ts |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
@@ -237,7 +237,7 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 9. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.
 10. **Give the CLI an agent face.** Add listed `goat tool list` and `goat tool call <name> --json` generated from the same registry, so shells and CI reach every MCP capability through one documented grammar. Today only the unlisted `acp-mcp-call` exists.
 11. **`--json` on every listed leaf command.** Only 11 of 45 offer it; agents parse human tables otherwise.
-12. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 5 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
+12. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 3 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
 13. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
 14. **Move routing policy out of tool descriptions.** The longest description is 1416 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
 15. **Group tools by resource.** Move queue and pending request tools out of the thread toolkit and thread launch out of the project toolkit, and give scheduled tasks one toolkit, so permissions, docs, and discovery follow the resource an agent is working on.
