@@ -73,7 +73,6 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import { modelSelectionsEqual } from "@goat/shared/model";
-import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   derivePendingBackgroundWork,
   pendingBackgroundTurnItems,
@@ -107,6 +106,12 @@ import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
 import { makeReviewLedger, OrchestratorReviewLedgerError } from "./goat/ReviewLedger.ts";
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import { notificationTurnItem } from "@goat/provider-core/server/notification";
+import {
+  explicitPullRequestWatch,
+  makePullRequestAutoWatch,
+  newPullRequestWatch,
+  syncedPullRequestWatch,
+} from "./goat/PullRequestAutoWatch.ts";
 import {
   cancelledBeforeStart,
   isRestartContinuationSource,
@@ -691,49 +696,6 @@ function withPullRequestWatch(
   if (watch !== undefined) return { ...rest, watch };
   const ended = previous ?? endedWatch;
   return ended === undefined ? rest : { ...rest, endedWatch: ended };
-}
-
-/** A watch starting now. An automatic one wakes the agent but does not keep the thread working. */
-function newPullRequestWatch(
-  startedAt: string,
-  automatic: boolean,
-  ended: ThreadPullRequestWatch | undefined,
-): ThreadPullRequestWatch {
-  return {
-    startedAt,
-    headSha: null,
-    failedChecks: [],
-    passed: false,
-    passedChecks: [],
-    conflicting: false,
-    // Watching again must not repeat check or conflict news the last watch told.
-    ...(ended && {
-      headSha: ended.headSha,
-      failedChecks: ended.failedChecks,
-      passed: ended.passed,
-      passedChecks: ended.passedChecks,
-      conflicting: ended.conflicting,
-    }),
-    remarksThrough: startedAt,
-    remarkIds: [],
-    wakes: 0,
-    ...(automatic ? { automatic: true } : {}),
-  };
-}
-
-/** The same watch, now asked for: it keeps the thread working from here on. */
-function explicitPullRequestWatch(watch: ThreadPullRequestWatch): ThreadPullRequestWatch {
-  const { automatic: _automatic, ...rest } = watch;
-  return rest;
-}
-
-/** Recorded progress on the current watch, which keeps its own automatic flag. */
-function syncedPullRequestWatch(
-  current: ThreadPullRequestWatch,
-  observed: ThreadPullRequestWatch,
-): ThreadPullRequestWatch {
-  const progress = explicitPullRequestWatch(observed);
-  return current.automatic === true ? { ...progress, automatic: true } : progress;
 }
 
 function legacyPullRequestLink(
@@ -2873,6 +2835,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const { shouldAutoWatchPullRequest } = makePullRequestAutoWatch({
+    serverSettings,
+    projectionStore,
+    stopReachedRun: (command, threadId, runId) => stopReachedRun(command, threadId, runId),
+    mapDispatchError,
+  });
+
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
       OrchestrationV2ServerCommand,
@@ -3005,37 +2974,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
-    // A pull request the thread created, or its agent linked, is watched without a
-    // watch_pull_request call when the project's policy allows, under the limits an agent's
-    // watch has. A settings read that fails only skips the watch; the link still lands.
-    let autoWatch = false;
-    if (
-      command.type === "thread.pull-request.link" &&
-      (command.source === "created" || command.source === "agent") &&
-      thread.archivedAt === null &&
-      thread.settledOverride !== "settled" &&
-      thread.settledAt === null &&
-      !isProviderNativeSubagentThread(thread) &&
-      thread.lineage.relationshipToParent !== "subagent"
-    ) {
-      autoWatch = yield* serverSettings.getSettings.pipe(
-        Effect.map(
-          (settings) =>
-            resolveProjectSettings(settings, thread.projectId).settings.pullRequestWatchPolicy
-              .autoWatch,
-        ),
-        Effect.orElseSucceed(() => false),
-      );
-      if (autoWatch && command.source === "agent") {
-        const { runs } = yield* projectionStore
-          .getThreadRecords(command.threadId, ["runs"])
-          .pipe(mapDispatchError(command));
-        const latest = latestExecutedRun(runs);
-        if (latest !== null && (yield* stopReachedRun(command, command.threadId, latest.id))) {
-          autoWatch = false;
-        }
-      }
-    }
+    const autoWatch = yield* shouldAutoWatchPullRequest(command, thread);
     if (
       command.type === "thread.metadata.update" &&
       command.expectedWorktreePath !== undefined &&
