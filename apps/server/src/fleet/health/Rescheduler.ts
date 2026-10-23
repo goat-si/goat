@@ -454,6 +454,14 @@ const make = Effect.gen(function* () {
             }
             // Confirmed absent: retry on the same host, where the branch name also guards a repeat.
             pinned = claim.targetHost;
+            // The pin outranks placement, so it must also pass the caller's allowlist.
+            if (request.allowedHosts !== undefined && !request.allowedHosts.includes(pinned))
+              return refused(
+                "not_allowed",
+                "An earlier attempt of this move was placed on " +
+                  pinned +
+                  ", which the caller's goatclaw profile does not allow; nothing is launched.",
+              );
           }
 
           if (request.attempt >= MAX_ATTEMPTS_PER_WORKER) {
