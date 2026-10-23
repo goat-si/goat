@@ -239,6 +239,28 @@ describe("WorktreeInventoryService", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.live("promises a recreated checkout only where turn start would recreate it", () =>
+    Effect.gen(function* () {
+      const { service, fs, root, addWorktree, setThreads } = yield* fixture;
+      const worktreesDir = yield* fs.realPath((yield* ServerConfig.ServerConfig).worktreesDir);
+      const placed = yield* addWorktree("placed", worktreesDir + "/repo/placed");
+      const outside = yield* addWorktree("outside", root + "/elsewhere/outside");
+      setThreads([
+        { id: "placed-thread", worktreePath: placed },
+        { id: "outside-thread", worktreePath: outside },
+      ]);
+
+      const recreatable = yield* service.remove({ path: placed });
+      expect(recreatable.notes).toEqual([
+        "Thread placed-thread still points at this path; it recreates the checkout from branch placed if it runs again.",
+      ]);
+      const unmanaged = yield* service.remove({ path: outside });
+      expect(unmanaged.notes).toHaveLength(1);
+      expect(unmanaged.notes[0]).toContain("outside-thread");
+      expect(unmanaged.notes[0]).toContain("will not recreate");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("accepts commits a merged pull request names after the remote branch is gone", () =>
     Effect.gen(function* () {
       const { service, fs, addWorktree, commit, setMergedPullRequest } = yield* fixture;
