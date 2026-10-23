@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import { RunAttemptId, RunId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
@@ -277,6 +278,79 @@ it.effect(
         expect(terminalOf(h)).not.toHaveProperty("resultText");
         expect(h.ledger.at(-1)?.summary).toContain("another prompt like this run's");
         expect(h.sessionReadTimes).toEqual([30_000, 90_000, 210_000]);
+      }),
+    ),
+);
+
+it.effect(
+  "a restart that cannot read the run's history keeps the saved reply instead of guessing",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const reply = "Own reply. " + "z".repeat(5000);
+        const h = yield* makeHarness();
+        h.historyUnreadable();
+        h.sessionReads(sessionAnswer("task", "The session's first reply."));
+        yield* h.runtime.resumeTurn!({
+          ...h.attach,
+          cloudTask: {
+            ...h.saved.cloudTask,
+            status: "succeeded",
+            progress: "Session replied (2 reads, $0.0128)",
+            summary: reply.slice(0, 3999) + "…",
+          },
+        });
+        yield* Deferred.await(h.terminal);
+        expect(terminalOf(h)).toMatchObject({ status: "completed" });
+        expect(terminalOf(h)).not.toHaveProperty("resultText");
+        expect(h.sessionReadTimes).toEqual([]);
+      }),
+    ),
+);
+
+it.effect(
+  "a repeated message completes with its own reply once an earlier read set the boundary",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const earlier = [
+          cloudPrompt("task", "1970-01-01T00:00:00.000Z"),
+          cloudAssistant({ type: "text", text: "First answer." }, "end_turn"),
+          cloudPrompt("continue", "1970-01-01T00:00:01.000Z"),
+          cloudAssistant({ type: "text", text: "Continued once." }, "end_turn"),
+        ];
+        h.sessionReads(
+          Effect.succeed({ transcript: teleportTranscript(earlier), costUsd: 0.0064 }),
+          Effect.succeed({
+            transcript: teleportTranscript([
+              ...earlier,
+              cloudPrompt("continue", "1970-01-01T00:01:00.000Z"),
+              cloudAssistant({ type: "text", text: "Continued twice." }, "end_turn"),
+            ]),
+            costUsd: 0.0064,
+          }),
+        );
+        const continueTurn = (ordinal: number) => ({
+          ...h.input,
+          runId: RunId.make("cloud-run-continue-" + ordinal),
+          attemptId: RunAttemptId.make("cloud-attempt-continue-" + ordinal),
+          runOrdinal: ordinal,
+          providerTurnOrdinal: ordinal,
+          message: { ...h.input.message, text: "continue" },
+        });
+        yield* h.runtime.startTurn({ ...continueTurn(2), providerThread: h.saved });
+        yield* Deferred.await(h.admitted);
+        yield* TestClock.adjust("30 seconds");
+        yield* Deferred.await(h.terminal);
+        expect(terminalOf(h)).toMatchObject({ resultText: "Continued once." });
+        yield* h.runtime.startTurn({ ...continueTurn(3), providerThread: h.saved });
+        yield* TestClock.adjust("30 seconds");
+        yield* Deferred.await(h.secondTerminal);
+        expect(h.events.findLast((event) => event.type === "turn.terminal")).toMatchObject({
+          status: "completed",
+          resultText: "Continued twice.",
+        });
       }),
     ),
 );

@@ -30,7 +30,6 @@ const Line = Schema.Struct({
   remoteSourced: Schema.optional(Schema.Boolean),
   isMeta: Schema.optional(Schema.Boolean),
   isApiErrorMessage: Schema.optional(Schema.Boolean),
-  timestamp: Schema.optional(Schema.String),
   message: Schema.optional(
     Schema.Struct({
       content: Schema.optional(Schema.Union([Schema.String, Schema.Array(Block)])),
@@ -44,8 +43,6 @@ const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Line));
 export interface ReplyAnchor {
   /** The text GOAT sent for this run. When known, only a cloud prompt that matches it counts. */
   readonly prompt?: string;
-  /** When this run started, in epoch milliseconds. */
-  readonly since: number;
   /**
    * How the run owns its prompt. "creation": GOAT created the session with it, so it is the
    * session's first prompt. "latest": the session was registered after its prompt was sent
@@ -53,14 +50,13 @@ export interface ReplyAnchor {
    * only when no other prompt could be it.
    */
   readonly ownership: "creation" | "latest" | "unique";
+  /**
+   * How many cloud prompts the session held at a read made before this run sent its prompt. The
+   * cloud appends prompts in order, so the run's own comes after them. Clocks never decide this:
+   * this machine's and the cloud's need not agree.
+   */
+  readonly after?: number;
 }
-
-/**
- * Prompts stamped up to this long before the run started still compete with the run's own, so
- * that a cloud clock behind this machine's cannot hide the run's prompt and an identical prompt
- * sent just before cannot pass for it.
- */
-const PROMPT_CLOCK_SKEW_MS = 60_000;
 
 type SessionReply =
   | { readonly state: "waiting" }
@@ -88,47 +84,43 @@ const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 /** Short prompts must match exactly; a longer one may arrive wrapped in context Claude adds. */
 const matches = (cloud: string, wanted: string) =>
   cloud === wanted || (wanted.length >= 16 && cloud.includes(wanted));
-
-/**
- * The reply to the run's prompt. A follow-up's prompt is the one cloud prompt with its text (or
- * any prompt, without text) stamped from shortly before the run started; a second such prompt,
- * from GOAT or claude.ai, or one without a stamp makes the run unattributable rather than guessed.
- * The turn is finished at the first assistant line after the prompt that stopped with end_turn;
- * until then a tool_use line, a tool result or a stop_sequence snapshot means the session is still
- * working. A prompt sent meanwhile is queued into the same turn, so it does not end it.
- */
-export function readSessionReply(transcript: string, anchor: ReplyAnchor): SessionReply {
-  const lines = transcript
+const cloudLines = (transcript: string) =>
+  transcript
     .split("\n")
     .flatMap((raw) => (raw.trim() ? Option.toArray(decodeLine(raw)) : []))
     .filter(
       (line) => line.remoteSourced === true && (line.type === "user" || line.type === "assistant"),
     );
-  const prompts = lines.flatMap((line, index) => {
-    if (!isPrompt(line)) return [];
-    const at = line.timestamp === undefined ? Number.NaN : Date.parse(line.timestamp);
-    return [{ index, at, text: normalize(textOf([line])) }];
-  });
+
+/** The number of cloud prompts in a transcript, the boundary for the session's next run. */
+export const countPrompts = (transcript: string) => cloudLines(transcript).filter(isPrompt).length;
+
+/**
+ * The reply to the run's prompt. A follow-up's prompt is the one cloud prompt with its text (or
+ * any prompt, without text) after the boundary; a second such prompt, from GOAT or claude.ai,
+ * makes the run unattributable rather than guessed.
+ * The turn is finished at the first assistant line after the prompt that stopped with end_turn;
+ * until then a tool_use line, a tool result or a stop_sequence snapshot means the session is still
+ * working. A prompt sent meanwhile is queued into the same turn, so it does not end it.
+ */
+export function readSessionReply(transcript: string, anchor: ReplyAnchor): SessionReply {
+  const lines = cloudLines(transcript);
+  const prompts = lines.flatMap((line, index) =>
+    isPrompt(line) ? [{ index, text: normalize(textOf([line])) }] : [],
+  );
   const wanted = anchor.prompt === undefined ? undefined : normalize(anchor.prompt);
   let start: number | undefined;
   if (anchor.ownership === "creation") start = prompts[0]?.index;
   else if (anchor.ownership === "latest") start = prompts.at(-1)?.index;
   else {
-    const candidates = prompts.filter(
-      (prompt) =>
-        (wanted === undefined || matches(prompt.text, wanted)) &&
-        (Number.isNaN(prompt.at) || prompt.at >= anchor.since - PROMPT_CLOCK_SKEW_MS),
-    );
-    if (candidates.some((prompt) => Number.isNaN(prompt.at)))
-      return {
-        state: "unattributable",
-        reason: "a cloud prompt has no time, so GOAT can't tell which one is this run's",
-      };
+    const candidates = prompts
+      .slice(anchor.after ?? 0)
+      .filter((prompt) => wanted === undefined || matches(prompt.text, wanted));
     if (candidates.length > 1)
       return {
         state: "unattributable",
         reason:
-          "the session got another prompt like this run's at about the same time, so GOAT can't tell which reply is this run's",
+          "the session has another prompt like this run's, so GOAT can't tell which reply is this run's",
       };
     start = candidates[0]?.index;
   }

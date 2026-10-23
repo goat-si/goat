@@ -31,7 +31,8 @@ import {
   observeCloudSession,
   recoverCloudReply,
   type Observation,
-  type RunAnchor,
+  runAnchor,
+  UNKNOWN_RUN,
 } from "./observe.ts";
 import {
   ClaudeCloudError,
@@ -405,27 +406,22 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
           });
         return yield* cli.readSession(login, yield* options.resolveReadRoot, ref.nativeId);
       });
+      const promptsSeen = new Map<string, number>();
       const anchor = Effect.fn("ClaudeCloudAdapter.anchor")(function* (
         i: Turn | Attach,
-        followUp: boolean,
-      ): Effect.fn.Return<RunAnchor, ClaudeCloudError> {
-        const startedAt = yield* options.runStartedAt(i);
+        followUp: boolean | undefined,
+      ) {
         const history = yield* options.runHistory(i).pipe(Effect.result);
-        const registered = current(i).cloudTask?.attach === "registered";
-        // A run is the session's first exactly when it is not a follow-up; the saved history,
-        // when readable, confirms it.
-        const first = history._tag === "Success" ? history.success.first : !followUp;
-        return {
-          startedAt,
+        const made = runAnchor({
+          startedAt: yield* options.runStartedAt(i),
+          history: history._tag === "Success" ? history.success : undefined,
           followUp,
-          ownership: !first ? "unique" : registered ? "latest" : "creation",
-          prompt:
-            "message" in i
-              ? i.message.text
-              : history._tag === "Success"
-                ? history.success.prompt
-                : undefined,
-        };
+          registered: current(i).cloudTask?.attach === "registered",
+          ...("message" in i ? { message: i.message.text } : {}),
+          seen: promptsSeen,
+          key: i.providerThread.id,
+        });
+        return made ?? (yield* new ClaudeCloudError({ detail: UNKNOWN_RUN, outcome: "uncertain" }));
       });
       const observe = Effect.fn("ClaudeCloudAdapter.follow")(function* (
         i: Turn | Attach,
@@ -927,7 +923,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                   );
                 // A crash between the result and its terminal kept only the cut summary.
                 const text = isShortenedReply(task)
-                  ? yield* anchor(i, false).pipe(
+                  ? yield* anchor(i, undefined).pipe(
                       Effect.flatMap((runAnchor) =>
                         recoverCloudReply({ ...runAnchor, readSession: () => readSession(i) }),
                       ),

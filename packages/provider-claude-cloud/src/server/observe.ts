@@ -3,7 +3,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import { ClaudeCloudError, isClaudeCloudError } from "./protocol.ts";
 import type { SessionRead } from "./sessionRead.ts";
-import { readSessionReply, type ReplyAnchor } from "./transcript.ts";
+import { countPrompts, readSessionReply, type ReplyAnchor } from "./transcript.ts";
 
 type Thread = OrchestrationV2ProviderThread;
 type Task = NonNullable<Thread["cloudTask"]>;
@@ -55,14 +55,49 @@ export interface RunAnchor {
   readonly followUp: boolean;
   /** How the run owns its cloud prompt; see ReplyAnchor. */
   readonly ownership: ReplyAnchor["ownership"];
-  /** The run's own message; without it only a prompt sent after the run started counts. */
+  /** The run's own message; without it any prompt after the boundary counts. */
   readonly prompt?: string | undefined;
+  /** Cloud prompts the session held before this run sent its own; see ReplyAnchor. */
+  readonly after: number;
+  /** Receives the prompt count of every transcript read, the boundary for the next run. */
+  readonly onRead: (prompts: number) => void;
 }
 const anchorOf = (input: RunAnchor): ReplyAnchor => ({
-  since: DateTime.toEpochMillis(input.startedAt),
   ownership: input.ownership,
+  after: input.after,
   ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
 });
+
+export const UNKNOWN_RUN =
+  "GOAT could not read this run's saved history, so it cannot tell which cloud reply is the run's.";
+
+/**
+ * How a run owns its cloud prompt. A run is the session's first exactly when it is not a
+ * follow-up; the saved history confirms it. `seen` holds, per thread, the prompts the session had
+ * at its latest read: a later run's prompt comes after them, and after a restart nothing is known
+ * so the whole transcript competes. Without history and without a known kind (`followUp`
+ * undefined) nothing is claimed.
+ */
+export const runAnchor = (input: {
+  readonly startedAt: DateTime.Utc;
+  readonly history: { readonly prompt: string | undefined; readonly first: boolean } | undefined;
+  readonly followUp: boolean | undefined;
+  readonly registered: boolean;
+  readonly message?: string;
+  readonly seen: Map<string, number>;
+  readonly key: string;
+}): RunAnchor | undefined => {
+  if (input.history === undefined && input.followUp === undefined) return undefined;
+  const first = input.history?.first ?? !input.followUp;
+  return {
+    startedAt: input.startedAt,
+    followUp: input.followUp ?? !first,
+    ownership: !first ? "unique" : input.registered ? "latest" : "creation",
+    after: input.seen.get(input.key) ?? 0,
+    onRead: (count) => input.seen.set(input.key, count),
+    prompt: input.message ?? input.history?.prompt,
+  };
+};
 
 /** The run's full reply from one more read, for a result whose saved summary was cut. */
 export const recoverCloudReply = Effect.fn("ClaudeCloudAdapter.recoverReply")(function* (
@@ -70,6 +105,7 @@ export const recoverCloudReply = Effect.fn("ClaudeCloudAdapter.recoverReply")(fu
 ) {
   const read = yield* input.readSession().pipe(Effect.result);
   if (read._tag === "Failure") return undefined;
+  input.onRead(countPrompts(read.success.transcript));
   const reply = readSessionReply(read.success.transcript, anchorOf(input));
   return reply.state === "replied" ? reply.text : undefined;
 });
@@ -181,6 +217,7 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
     const cost = result.success.costUsd;
     if (cost === null) costUnknown = true;
     else spent += cost;
+    input.onRead(countPrompts(result.success.transcript));
     const reply = readSessionReply(result.success.transcript, anchor);
     if (reply.state === "unattributable") return yield* failedRead(reply.reason);
     failures = 0;

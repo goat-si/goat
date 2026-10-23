@@ -116,11 +116,12 @@ export const makeHarness = Effect.fnUntraced(function* () {
   // marked as working, so PR-only tests keep today's PR completion.
   let sessionReplies: Array<Effect.Effect<SessionRead, ClaudeCloudError>> = [];
   let sessionWorking = false;
-  // What the saved thread says about the run: its message, earlier deliveries, first run or not.
+  // What the saved thread says about the run: its message and whether it is the first run.
   let history: {
     prompt: string | undefined;
     first: boolean;
   } = { prompt: "task", first: false };
+  let historyUnreadable = false;
   const sessionReadTimes: number[] = [];
   let startError: ClaudeCloudError | undefined;
   let observedSummary = "Changed behavior.";
@@ -219,7 +220,12 @@ export const makeHarness = Effect.fnUntraced(function* () {
       controlError ? Effect.fail(controlError) : Effect.succeed("/fixture/goat/control"),
     ),
     runStartedAt: () => Deferred.succeed(following, undefined).pipe(Effect.as(startedAt)),
-    runHistory: () => Effect.sync(() => history),
+    runHistory: () =>
+      historyUnreadable
+        ? Effect.fail(
+            new ClaudeCloudError({ detail: "Fixture history lost.", outcome: "uncertain" }),
+          )
+        : Effect.sync(() => history),
     resolveReadRoot: Effect.succeed("/fixture/goat/reads"),
     observe: (input) =>
       Effect.gen(function* () {
@@ -281,11 +287,16 @@ export const makeHarness = Effect.fnUntraced(function* () {
   const subscription = yield* runtime.subscribeEvents;
   const events: Adapter.ProviderAdapterV2Event[] = [];
   const terminal = yield* Deferred.make<void>();
+  // The second terminal, for tests that run two turns on one session.
+  const secondTerminal = yield* Deferred.make<void>();
   yield* subscription.events.pipe(
     Stream.runForEach((event) =>
       Effect.gen(function* () {
         events.push(event);
-        if (event.type === "turn.terminal") yield* Deferred.succeed(terminal, undefined);
+        if (event.type === "turn.terminal")
+          yield* (yield* Deferred.isDone(terminal))
+            ? Deferred.succeed(secondTerminal, undefined)
+            : Deferred.succeed(terminal, undefined);
       }),
     ),
     Effect.forkChild,
@@ -336,6 +347,7 @@ export const makeHarness = Effect.fnUntraced(function* () {
     sendReached,
     sendRelease,
     terminal,
+    secondTerminal,
     counts: () => ({ starts, sends, reads }),
     noMatch: () => {
       found = false;
@@ -386,6 +398,9 @@ export const makeHarness = Effect.fnUntraced(function* () {
     },
     history: (next: Partial<typeof history>) => {
       history = { ...history, ...next };
+    },
+    historyUnreadable: () => {
+      historyUnreadable = true;
     },
   };
 });
