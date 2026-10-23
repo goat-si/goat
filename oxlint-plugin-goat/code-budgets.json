@@ -200,7 +200,7 @@
   "apps/server/src/mcp/HostThreadsMcpService.test.ts": { "lines": 1171 },
   "apps/server/src/mcp/HostThreadsMcpService.ts": { "nonNull": 1 },
   "apps/server/src/mcp/LaunchWatchService.test.ts": { "lines": 2910 },
-  "apps/server/src/mcp/LaunchWatchService.ts": { "lines": 2111, "nonNull": 4 },
+  "apps/server/src/mcp/LaunchWatchService.ts": { "lines": 2101, "nonNull": 4 },
   "apps/server/src/mcp/McpHttpServer.test.ts": { "lines": 1323 },
   "apps/server/src/mcp/McpHttpServer.ts": { "lines": 1441 },
   "apps/server/src/mcp/McpSessionRegistry.ts": { "nonNull": 1 },
