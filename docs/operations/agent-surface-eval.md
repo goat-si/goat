@@ -1,14 +1,16 @@
-# Measuring `goat_eval`
+# Measuring the agent surface (D8)
 
 [D8](../internals/agent-surface.md#decision-log) builds `goat_eval` only if agents on
 providers without code execution need at least a third fewer model turns with it than with
-`goat_call` alone, with no rise in failed runs. This page explains how to run that
-measurement. The task set, runner, and report live in
+`goat_call` alone, with no rise in failed runs. The same runner checks the context diet's
+core listing against the full one and decides which tools stay resident
+([listing campaigns](#listing-campaigns)). This page explains how to run both
+measurements. The task set, runner, and report live in
 [scripts/agent-surface/eval](../../scripts/agent-surface/eval/). The reasons behind the method
 are in the [measurement protocol](../internals/agent-surface.md#measurement-protocol-draft), which
 follows aside-codemode's
 [paired runs](https://github.com/lidge-jun/aside-codemode/blob/b395d89/eval/paired-run.mjs).
-No campaign has run yet, so this page states no results.
+Results live beside their raw rows in [results](../../scripts/agent-surface/eval/results/).
 
 ## The task set
 
@@ -23,6 +25,7 @@ transcript has not passed.
 | `read-control`            | Report one thread's title                                              | no gain | automatic |
 | `wait-running`            | Wait for three just-started threads and report each final status       | fewer   | automatic |
 | `fan-out-review`          | Run one review each on three models as delegated tasks and report them | fewer   | automatic |
+| `launch-and-wait`         | Start one thread on a given model, wait for it, and report its status  | fewer   | automatic |
 | `provider-sync-all-hosts` | Make a provider ready on every connected host                          | fewer   | manual    |
 | `human-step-resume`       | Set up a provider when a person has to finish sign-in                  | fewer   | manual    |
 
@@ -46,6 +49,29 @@ file, or produced an item kind the runner cannot classify. Contaminated runs app
 report with their reason and are left out of every ratio, so a misconfigured arm cannot pass
 as a measurement.
 
+A campaign with one arm runs it alone, once per pair, and reports its numbers without a
+verdict. Use it for a baseline before the candidate exists.
+
+### Listing campaigns
+
+A campaign with `"gate": "listing"` compares what `tools/list` serves: `{ "mode": "full" }`
+against `{ "mode": "core", "resident": [...] }`, where the core always holds `goat_describe`
+and `goat_call` and `resident` names the tools under test. Each arm states its listing, and
+its `modelSelection` points at a provider instance whose `toolListing` setting serves it;
+the runner cannot change the listing itself. A harness can only call what it was listed, so a
+core arm that calls any other GOAT tool directly was not on the core listing, and the run is
+contaminated. Here the `no_gain` task is the single-call control and every other task counts
+as multi-step. The control passes when the candidate's median turns rise by at most one at
+either end of the range; a multi-step task passes when they do not rise at either end. Either
+fails when the candidate fails more often. Both ends are compared like for like, because both
+arms are counted the same way.
+
+A resident candidate can only show a saved turn on a task that calls it. `launch-and-wait`
+calls `goat_thread_launch` and `fan-out-review` calls `goat_task_create`. No task calls
+`goat_origin_report`, because a thread launched by the runner's client credential has no
+origin to report to, or `goat_preview_snapshot`, which needs a browser the dev server can
+start.
+
 ## What is counted
 
 GOAT does not record how many model requests a run made. Calls a model makes in one response
@@ -62,18 +88,27 @@ early would look cheap. Each task needs at least ten successful clean runs per a
 that failed and was retried is not a failed run: its extra turns stay in the counts, and the
 report shows failed calls per arm. The gate also fails if the control shows a gain.
 
-Tool calls, tool output size, and wall time are recorded but never decide the gate; the
-[protocol](../internals/agent-surface.md#measurement-protocol-draft) explains why.
+The runner measures the run it launched. A completion notice can wake the thread into a later
+run, and that run's items are left out.
+
+Tool calls, result bytes, and wall time are recorded but never decide the gate; the
+[protocol](../internals/agent-surface.md#measurement-protocol-draft) explains why. Result bytes
+are the compact JSON the server returned to the run's tool calls. In Codex code mode a script
+can keep a result out of the transcript, so there they count what was served, not what the
+model read. First-prompt bytes come from
+[context-budget.ts](../../scripts/agent-surface/context-budget.ts) run on the measured commit;
+pass its `--json` output to the report with `--budget`.
 
 ## Running a campaign
 
 Run campaigns only against a dev server with seeded data, started with `vp run dev` in a
 worktree, and never against the live install. Fixtures and runs launch real threads, and the
-runner does not delete them.
+runner does not delete them. The dev server restarts when files under `packages/` change, and
+typecheck and test runs write there, so run no checks in that worktree while a batch runs.
 
-1. Copy [campaign.example.json](../../scripts/agent-surface/eval/campaign.example.json) outside
-   the repository and fill in the project, the two arms, a cheap fixture model, and three review
-   models.
+1. Copy [campaign.example.json](../../scripts/agent-surface/eval/campaign.example.json) and fill
+   in the project, the arms, a cheap fixture model, and three review models. Mint the client
+   credential with `goat auth client create --base-dir <worktree>/.goat` outside any thread.
 2. Check it without contacting a server. This prints the ABBA schedule and every skipped task
    with its reason:
 
@@ -93,12 +128,14 @@ runner does not delete them.
 4. Build the report from the raw rows:
 
    ```sh
-   node scripts/agent-surface/eval/report.ts --campaign ../campaign.json ../runs.jsonl
+   node scripts/agent-surface/eval/report.ts --campaign ../campaign.json \
+     --budget ../context-budget.json ../runs.jsonl
    ```
 
-Keep campaign files, raw rows, and reports out of the repository, since they name machines,
-providers, and threads. Record the conclusion and a link to the evidence in the D8 entry of the
-decision log.
+Commit each campaign as `results/<yymmdd>-<name>/` with `campaign.json`, `runs.jsonl`,
+`context-budget.json`, and the generated `report.md`, so a disputed figure can be re-derived.
+They name dev-server threads and provider instances only; never commit a credential. Record the
+conclusion and a link to the evidence in the D8 entry of the decision log.
 
 The manual tasks need connected hosts and a person who approves or finishes sign-in, and the
 runner includes them only with `--include-manual`. D8 names provider sync, so the gate
@@ -109,6 +146,8 @@ cannot pass until those tasks have run.
 - No server lists `goat_eval` yet ([rollout](../internals/agent-surface.md#rollout) step 11),
   and none can hide it per provider instance. Until a prototype provides both, only the
   baseline arm can run. That yields baseline numbers but no verdict.
+- Until the per-instance `toolListing` setting merges, a listing campaign can run only its full
+  arm.
 - The checks for the manual tasks (`providerReadyOnEveryHost`, `oneApprovalPerSync`,
   `oneHandoffPerHumanStep`) are not written, so the runner refuses those tasks.
 - Model turns are a range until providers report requests per run.

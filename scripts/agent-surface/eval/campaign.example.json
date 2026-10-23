@@ -1,5 +1,5 @@
 {
-  "taskSetVersion": 1,
+  "taskSetVersion": 2,
   "projectId": "<project id on the eval server>",
   "pairs": 10,
   "baselineArm": "call-only",

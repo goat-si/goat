@@ -114,6 +114,8 @@ const asObjects = (value: Json | undefined): ReadonlyArray<JsonObject> =>
 
 const FIXTURES: Readonly<Record<string, (context: Context) => Promise<Fixture>>> = {
   none: async () => ({}),
+  // The "[eval" prefix keeps threads a run starts out of the read control's fixture.
+  titleTag: async ({ tag }) => ({ "fixture.title": "[eval-fixture] fx-" + tag }),
   static: async ({ task }) =>
     Object.fromEntries(
       Object.entries(task.fixture).flatMap(([key, value]) =>
@@ -168,6 +170,30 @@ const latestRun = async (client: Client, threadId: string) => {
 const CHECKS: Readonly<Record<string, (input: CheckInput) => Promise<ReadonlyArray<string>>>> = {
   answerTitle: async ({ answer, fixture }) =>
     answer["title"] === fixture["fixture.title"] ? [] : ["the title does not match the thread"],
+  threadLaunchedAsAsked: async ({ client, campaign, answer, fixture }) => {
+    const title = fixture["fixture.title"];
+    const listed = await client.call("goat_thread_list", {
+      projectId: campaign.projectId,
+      limit: 100,
+    });
+    const launched = asObjects(listed["threads"]).filter((thread) => thread["title"] === title);
+    // A second launch is a duplicated side effect even when the answer looks right.
+    if (launched.length !== 1)
+      return [launched.length + " threads titled " + title + ", expected 1"];
+    const threadId = String(launched[0]!["threadId"]);
+    if (answer["threadId"] !== threadId)
+      return ["reported " + JSON.stringify(answer["threadId"]) + ", launched " + threadId];
+    const run = await latestRun(client, threadId);
+    const failures: Array<string> = [];
+    const ranOn = String(run?.["providerInstanceId"]) + "/" + String(run?.["model"]);
+    const asked = campaign.fixtureModel.instanceId + "/" + campaign.fixtureModel.model;
+    if (ranOn !== asked) failures.push(threadId + " ran on " + ranOn + ", asked " + asked);
+    const status = String(run?.["status"]);
+    if (!TERMINAL.has(status)) failures.push(threadId + " is still " + status);
+    if (answer["status"] !== status)
+      failures.push("reported " + JSON.stringify(answer["status"]) + ", server says " + status);
+    return failures;
+  },
   answerMatchesFixtureThreads: async ({ client, answer, fixture }) => {
     const expected = (fixture["fixture.threadIds"] ?? "").split(",");
     const reported = asObjects(answer["threads"]);
@@ -228,7 +254,7 @@ const CHECKS: Readonly<Record<string, (input: CheckInput) => Promise<ReadonlyArr
   },
 };
 
-const readTimeline = async (client: Client, threadId: string) => {
+const readTimeline = async (client: Client, threadId: string, runId: string) => {
   const items: Array<TimelineItem> = [];
   let afterPosition: number | null = null;
   for (;;) {
@@ -240,13 +266,14 @@ const readTimeline = async (client: Client, threadId: string) => {
       ...(afterPosition === null ? {} : { afterPosition }),
     });
     for (const item of asObjects(page["items"]))
-      items.push({
-        itemId: String(item["itemId"]),
-        type: String(item["type"]),
-        status: String(item["status"]),
-        text: typeof item["text"] === "string" ? item["text"] : null,
-        textTruncated: item["textTruncated"] === true,
-      });
+      if (item["runId"] === runId)
+        items.push({
+          itemId: String(item["itemId"]),
+          type: String(item["type"]),
+          status: String(item["status"]),
+          text: typeof item["text"] === "string" ? item["text"] : null,
+          textTruncated: item["textTruncated"] === true,
+        });
     if (typeof page["nextPosition"] !== "number") return items;
     afterPosition = page["nextPosition"];
   }
@@ -258,6 +285,8 @@ const fullText = async (client: Client, threadId: string, item: TimelineItem) =>
   while (textOffset !== null) {
     const page = await client.call("goat_thread_read", {
       threadId,
+      // Offsets index the text the item was read with.
+      view: "activity",
       itemId: item.itemId,
       textOffset,
     });
@@ -268,6 +297,25 @@ const fullText = async (client: Client, threadId: string, item: TimelineItem) =>
   return text;
 };
 
+const rowHead = (
+  campaignId: string,
+  campaign: Campaign,
+  task: Task,
+  arm: Arm,
+  step: { readonly pair: number; readonly slot: number },
+) => ({
+  kind: "run" as const,
+  campaignId,
+  taskSetVersion: campaign.taskSetVersion,
+  task: task.id,
+  arm: arm.id,
+  providerInstanceId: arm.modelSelection.instanceId,
+  model: arm.modelSelection.model,
+  listing: arm.listing,
+  pair: step.pair,
+  slot: step.slot,
+});
+
 const runOnce = async (
   context: Context,
   arm: Arm,
@@ -275,15 +323,7 @@ const runOnce = async (
   campaignId: string,
 ): Promise<RunRow> => {
   const { client, campaign, task, tag } = context;
-  const row = {
-    kind: "run" as const,
-    campaignId,
-    taskSetVersion: campaign.taskSetVersion,
-    task: task.id,
-    arm: arm.id,
-    pair: step.pair,
-    slot: step.slot,
-  };
+  const row = rowHead(campaignId, campaign, task, arm, step);
   let fixture: Fixture;
   try {
     fixture = await FIXTURES[task.fixture.kind]!(context);
@@ -308,15 +348,20 @@ const runOnce = async (
     reviewModels: campaign.reviewModels
       .map((model) => model.instanceId + " / " + model.model)
       .join(", "),
+    fixtureModel: campaign.fixtureModel.instanceId + " / " + campaign.fixtureModel.model,
   };
   const launched = await client.call("goat_thread_launch", {
     title: "[eval] " + tag,
-    scratch: true,
+    // Scratch threads are refused where an environment disables them; the project is always
+    // there, and the "[eval" title prefix keeps these threads out of every fixture.
+    projectId: campaign.projectId,
     message: render(task.prompt, vars) + answerInstruction(task.answerKeys),
     modelSelection: { ...arm.modelSelection },
     notifyOnCompletion: false,
   });
   const threadId = String(launched["threadId"]);
+  // A completion notice can wake the thread into a later run, so the launched run is measured.
+  const runId = String(launched["runId"]);
   const failures: Array<string> = [];
   const deadline = Date.now() + task.deadlineMs;
   let ignoreRequestIds: Array<string> = [];
@@ -329,6 +374,7 @@ const runOnce = async (
     }
     const waited = await client.call("goat_thread_wait", {
       threadId,
+      runId,
       timeoutMs: Math.min(remaining, 300000),
       ignoreRequestIds,
     });
@@ -343,10 +389,17 @@ const runOnce = async (
     ignoreRequestIds = [...ignoreRequestIds, ...pending];
     if (waited["timedOut"] !== true && pending.length === 0) break;
   }
-  // A fresh thread holds exactly this run, so its whole timeline is the run's.
-  const items = await readTimeline(client, threadId);
+  const items: Array<TimelineItem> = [];
+  for (const item of await readTimeline(client, threadId, runId))
+    // Result bytes come from the whole result, not the activity view's first page.
+    items.push(
+      item.type === "dynamic_tool" && item.textTruncated
+        ? { ...item, text: await fullText(client, threadId, item), textTruncated: false }
+        : item,
+    );
   const metrics = runMetrics(items, arm);
-  const run = await latestRun(client, threadId);
+  const read = await client.call("goat_thread_read", { threadId, limit: 1, runLimit: 20 });
+  const run = asObjects(read["recentRuns"]).find((candidate) => candidate["runId"] === runId);
   const startedAt = Date.parse(String(run?.["startedAt"]));
   const completedAt = Date.parse(String(run?.["completedAt"]));
   if (run?.["status"] !== "completed") failures.push("the run ended " + String(run?.["status"]));
@@ -444,13 +497,7 @@ const main = async () => {
     const row = await runOnce({ client, campaign, task, tag }, arm, step, campaignId).catch(
       // A harness or transport error says nothing about the arm, so it is listed, not counted.
       (error: unknown): RunRow => ({
-        kind: "run",
-        campaignId,
-        taskSetVersion: campaign.taskSetVersion,
-        task: task.id,
-        arm: arm.id,
-        pair: step.pair,
-        slot: step.slot,
+        ...rowHead(campaignId, campaign, task, arm, step),
         threadId: null,
         ok: false,
         failures: [],

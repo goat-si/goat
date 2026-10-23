@@ -27,6 +27,7 @@ const callOnly: Arm = {
   modelSelection: { instanceId: "i", model: "m" },
   forbidTools: ["goat_eval"],
   forbidItemTypes: ["command_execution"],
+  listing: null,
 };
 const item = (
   type: string,
@@ -40,6 +41,13 @@ const item = (
   textTruncated: false,
 });
 const tool = (name: string) => item("dynamic_tool", JSON.stringify({ toolName: name, input: {} }));
+const coreArm: Arm = {
+  id: "core+report",
+  modelSelection: { instanceId: "i", model: "m" },
+  forbidTools: [],
+  forbidItemTypes: [],
+  listing: { mode: "core", resident: ["goat_origin_report"] },
+};
 
 describe("the committed task set", () => {
   it("validates with the example campaign and alternates who goes first", () => {
@@ -67,6 +75,32 @@ describe("the committed task set", () => {
     const withoutControl = { ...raw, tasks: raw.tasks.filter((task) => task.claim !== "no_gain") };
     expect(() => validateTaskSet(withoutControl, { fixtures: anyName, checks: anyName })).toThrow(
       CampaignError,
+    );
+  });
+
+  it("runs a one-arm campaign as a baseline, one run per pair", () => {
+    const taskSet = validateTaskSet(readJson("./tasks.json"), {
+      fixtures: anyName,
+      checks: anyName,
+    });
+    const example = readJson("./campaign.example.json") as Record<string, unknown>;
+    const campaign = validateCampaign(
+      {
+        ...example,
+        gate: "listing",
+        arms: [{ ...coreArm, listing: { mode: "full" } }],
+        baselineArm: "core+report",
+        candidateArm: undefined,
+      },
+      taskSet,
+      taskSet.tasks,
+    );
+    const steps = schedule([taskSet.tasks[0]!], campaign);
+    expect(steps.map((step) => [step.pair, step.slot])).toEqual(
+      Array.from({ length: campaign.pairs }, (_, pair) => [pair, 0]),
+    );
+    expect(() => validateCampaign({ ...example, gate: "listing" }, taskSet, taskSet.tasks)).toThrow(
+      /a listing campaign states each arm's listing/,
     );
   });
 });
@@ -116,6 +150,30 @@ describe("runMetrics", () => {
       "unclassified item type new_kind",
     ]);
   });
+
+  it("marks a core arm that called a GOAT tool its listing does not serve", () => {
+    const metrics = runMetrics(
+      [
+        tool("goat.goat_describe"),
+        tool("mcp__goat__goat_call"),
+        tool("goat.goat_origin_report"),
+        tool("other.read_file"),
+        tool("mcp__goat__goat_thread_read"),
+      ],
+      coreArm,
+    );
+    expect(metrics.violations).toEqual([
+      "mcp__goat__goat_thread_read is not in arm core+report's core listing",
+    ]);
+  });
+
+  it("counts result bytes as the compact result, not the pretty-printed activity text", () => {
+    const output = { thread: { title: "Quarterly retro notes" } };
+    const text = JSON.stringify({ toolName: "goat.goat_thread_read", input: {}, output }, null, 2);
+    expect(runMetrics([item("dynamic_tool", text)], callOnly).resultBytes).toBe(
+      JSON.stringify(output).length,
+    );
+  });
 });
 
 describe("extractAnswer", () => {
@@ -148,6 +206,9 @@ describe("summarizeTask", () => {
     taskSetVersion: 1,
     task: "t",
     arm,
+    providerInstanceId: "i",
+    model: "m",
+    listing: null,
     pair,
     slot: pair % 2 === (arm === "eval" ? 1 : 0) ? 0 : 1,
     threadId: null,
@@ -215,5 +276,38 @@ describe("summarizeTask", () => {
     );
     expect(gate([reduces, moved])).toEqual({ pass: false, notPassed: ["t: suspect"] });
     expect(gate([reduces, flat]).pass).toBe(true);
+  });
+
+  it("reports a one-arm campaign without a verdict", () => {
+    const summary = summarizeTask(task, runs("call-only", [3, 4]), {
+      baselineArm: "call-only",
+      candidateArm: null,
+    });
+    expect(summary).toMatchObject({ verdict: "baseline_only", candidate: null });
+    expect(gate([summary]).pass).toBe(false);
+  });
+
+  describe("on a listing campaign", () => {
+    const listing = { ...arms, gate: "listing" as const };
+    const control = { id: "t", claim: "no_gain" } as Task;
+
+    it("lets the control rise by one turn at each end and no more", () => {
+      const verdict = (turns: [number, number]) =>
+        summarizeTask(control, [...runs("call-only", [2, 2]), ...runs("eval", turns)], listing);
+      expect(verdict([3, 3]).verdict).toBe("as_expected");
+      expect(verdict([2, 4]).reasons).toEqual(["the candidate's median turns rose by more than 1"]);
+    });
+
+    it("fails a multi-step task whose median turns or failures rose", () => {
+      const compare = (candidate: ReadonlyArray<RunRow>) =>
+        summarizeTask(task, [...runs("call-only", [4, 6]), ...candidate], listing);
+      expect(compare(runs("eval", [4, 6])).verdict).toBe("pass");
+      expect(compare(runs("eval", [5, 6])).reasons).toEqual(["the candidate's median turns rose"]);
+      const oneFailed = [
+        ...runs("eval", [4, 6]),
+        row("eval", 10, [4, 6], { ok: false, failures: ["oracle"] }),
+      ];
+      expect(compare(oneFailed).reasons).toEqual(["the candidate failed more often"]);
+    });
   });
 });
