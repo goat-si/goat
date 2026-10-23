@@ -288,7 +288,7 @@ it.effect("wakes nothing before waking began, or resolved before it began", () =
 );
 
 it.effect(
-  "delivers on a fresh attempt when the orchestrator once rejected the wake's command",
+  "keeps retrying under fresh attempt ids, with backoff, after the orchestrator rejected earlier ones",
   () =>
     withWorld((world) =>
       Effect.gen(function* () {
@@ -298,11 +298,17 @@ it.effect(
           { threadId, handoffId: summary.handoffId, action: "completed" },
           person,
         );
-        // A transient planning failure leaves a rejected receipt under the first command id.
-        yield* world.sql`INSERT INTO orchestration_command_receipts
-        (command_id, aggregate_kind, aggregate_id, command_type, accepted_at, result_sequence, status, error)
-        VALUES (${`server:handoff-wake:${summary.handoffId}:completed`}, 'thread', ${threadId},
-        'message.dispatch', '2026-10-23T00:00:00.000Z', 0, 'rejected', 'adapter unavailable')`;
+        // A long planning failure left rejected receipts under the first 25 command ids.
+        const first = `server:handoff-wake:${summary.handoffId}:completed`;
+        for (let attempt = 0; attempt < 25; attempt++)
+          yield* world.sql`INSERT INTO orchestration_command_receipts
+          (command_id, aggregate_kind, aggregate_id, command_type, accepted_at, result_sequence, status, error)
+          VALUES (${attempt === 0 ? first : `${first}:attempt:${attempt}`}, 'thread', ${threadId},
+          'message.dispatch', '2026-10-23T00:00:00.000Z', 0, 'rejected', 'adapter unavailable')`;
+        // The next attempt waits out its backoff from the resolution, then delivers.
+        yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toEqual([]);
+        yield* TestClock.adjust("16 minutes");
         yield* world.reactor.reconcile;
         yield* world.reactor.reconcile;
         const sent = yield* wakes(world);
