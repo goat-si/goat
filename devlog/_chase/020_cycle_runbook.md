@@ -13,13 +13,15 @@ git config remote.upstream.tagopt --no-tags # upstream nightly 태그가 수천 
 ## 1. 스캔
 
 ```bash
-devlog/_chase/scan.sh --commits > /tmp/goat-chase-<YYMMDD>.txt
+devlog/_chase/scan.sh --commits --names > /tmp/goat-chase-<YYMMDD>.txt
 ```
 
 `upstream main`과 `origin`을 fetch한 뒤 기준선, trial merge 충돌 파일, 양쪽이 추가한 마이그레이션
 id와 겹침, upstream workflow 변경, `goat_*` 짝이 없는 upstream `t3_*` 도구, upstream이 추가한 `t3_*`
 줄, 커밋별 분류를 출력한다. 대상 브랜치는 마지막 인자로 바꾼다 (`scan.sh --no-fetch dev`). 출력
-전문은 커밋하지 않고 사이클 카드에 요약한다.
+전문은 커밋하지 않고 사이클 카드에 요약한다. `--names`는 임시 detached worktree의 upstream tip에 현재
+rename 규칙을 적용한 뒤 `--check`로 규칙 밖 이름의 총수와 앞부분을 출력하고 worktree를 제거한다.
+기본 스캔은 이 전처리를 하지 않는다. 전체 upstream 트리를 검사하므로 이전 사이클부터 남은 이름도 보인다.
 
 ## 2. 분류
 
@@ -38,6 +40,8 @@ id와 겹침, upstream workflow 변경, `goat_*` 짝이 없는 upstream `t3_*` �
 
 upstream과 GOAT는 T3↔GOAT 이름이 달라 그대로 머지하면 이름 차이가 충돌로 나온다. 머지 전에 양쪽 upstream 트리에
 같은 이름 규칙을 적용하고(rename 전처리), 그 둘과 dev를 3-way 머지한다.
+1번의 `scan.sh --names`가 보고한 규칙 밖 이름을 먼저 분류한다. upstream 전처리 결과에 남은 이름은
+머지 결과에서 처리해야 하며, CI의 `goat-scope` 이름 검사는 최종 GOAT 트리에서 exit 0이어야 한다.
 
 ```bash
 UP=<스캔한 upstream SHA>
@@ -74,8 +78,9 @@ git reset -q --soft "$MERGED"
 ## 5. 검증
 
 - 로컬: 충돌 파일의 focused test (`vp test run <files>`)와 바뀐 패키지 typecheck. `node scripts/goat-rename.ts --check`가 exit 0.
-  chase PR은 `--admin`으로 랜딩하므로 CI의 이름 검사에만 기대지 않는다.
-- 정본: 머지 head에서 손으로 돌린 goat-ci 전체 실행(`gh workflow run goat-ci.yml --ref <branch>`)의 check, typecheck, test, build가 모두 green. cancelled는 pass가 아니다.
+  chase PR은 `--admin`으로 랜딩하므로 CI의 이름 검사에만 기대지 않는다. `vp run check:changed`도
+  변경 파일 선택과 무관하게 같은 이름 검사를 실행한다.
+- 정본: 머지 head에서 손으로 돌린 goat-ci 전체 실행(`gh workflow run goat-ci.yml --ref <branch>`)의 이름 검사(`goat-scope`), check, typecheck, test, build와 `goat-ci-result`가 모두 green. cancelled는 pass가 아니다.
 
 ## 6. 랜딩
 

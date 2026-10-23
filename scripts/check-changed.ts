@@ -22,6 +22,15 @@ const git = (...args: Array<string>) =>
     .split("\n")
     .filter(Boolean);
 
+// This gate reads the whole tree even when the diff is empty or contains only docs.
+console.log("\n> node scripts/goat-rename.ts --check --limit 200");
+const renameCheck = NodeChildProcess.spawnSync(
+  process.execPath,
+  ["scripts/goat-rename.ts", "--check", "--limit", "200"],
+  { cwd: root, stdio: "inherit" },
+);
+if (renameCheck.status !== 0) process.exit(1);
+
 const ref = process.argv[2] ?? "origin/dev";
 const mergeBase = NodeChildProcess.spawnSync("git", ["merge-base", "HEAD", ref], {
   cwd: root,
