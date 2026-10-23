@@ -290,13 +290,18 @@ export interface ListedTool {
 export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
   scopes: Readonly<Record<string, McpInvocationScope>>,
   registrations: Layer.Layer<never, E, R>,
+  transport: Layer.Layer<
+    Layer.Success<typeof McpHttpServer.layerMcpTransport>,
+    Layer.Error<typeof McpHttpServer.layerMcpTransport>,
+    Layer.Services<typeof McpHttpServer.layerMcpTransport> | R
+  > = McpHttpServer.layerMcpTransport,
 ) {
   const scopeOf = new Map(
     Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
   );
   yield* HttpRouter.serve(
     registrations.pipe(
-      Layer.provideMerge(McpHttpServer.layerMcpTransport),
+      Layer.provideMerge(transport),
       Layer.provide(
         Layer.mock(McpSessionRegistry.McpSessionRegistry)({
           resolve: () => Effect.succeed(undefined),
@@ -399,7 +404,8 @@ export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(func
 const serveWith = <E, R>(
   scopes: Readonly<Record<string, McpInvocationScope>>,
   services: Layer.Layer<Layer.Success<typeof servicesOff>, E, R>,
-) => serveOverHttp(scopes, catalog.pipe(Layer.provide(services)));
+  transport?: Parameters<typeof serveOverHttp>[2],
+) => serveOverHttp(scopes, catalog.pipe(Layer.provide(services)), transport);
 
 /** Default settings, with the tool listing a test chooses; /mcp reads it for tools/list. */
 const settingsListing = (agentToolListing: AgentToolListing) =>
@@ -412,7 +418,15 @@ export const serveCatalogOverHttp = (
   agentToolListing: AgentToolListing = DEFAULT_AGENT_TOOL_LISTING,
 ) => serveWith(scopes, servicesOff).pipe(Effect.provide(settingsListing(agentToolListing)));
 
-/** serveCatalogOverHttp with goatclaw enforcing; see enforcingDependencies for what it needs. */
+/**
+ * serveCatalogOverHttp with goatclaw enforcing, in tools/list as in calls; see
+ * enforcingDependencies for what it needs.
+ */
 export const serveEnforcingCatalogOverHttp = (
   scopes: Readonly<Record<string, McpInvocationScope>>,
-) => serveWith(scopes, enforcingDependencies);
+) =>
+  serveWith(
+    scopes,
+    enforcingDependencies,
+    McpHttpServer.layerMcpTransport.pipe(Layer.provide(Profiles.layer)),
+  );

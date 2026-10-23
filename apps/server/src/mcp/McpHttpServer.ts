@@ -297,6 +297,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
   const listing = listingSetting(yield* Effect.serviceOption(Settings.ServerSettingsService));
+  const permissions = yield* Effect.serviceOption(Profiles.PermissionProfiles);
   return Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const authorization = request.headers.authorization;
@@ -355,7 +356,10 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
         message,
       });
     }
-    return yield* withCallerListing(listing)(withServedToolNames(httpEffect)).pipe(
+    return yield* withCallerListing(
+      listing,
+      permissions,
+    )(withServedToolNames(httpEffect)).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
       Effect.map(normalizeMcpHttpResponse),
     );
@@ -1362,18 +1366,27 @@ export const layerDeviceToolkit = Layer.mergeAll(
   layerDeviceScreenshotRegistration,
 );
 
-/** Tells connected clients to list tools again when the listing setting changes (MCP list_changed). */
+/**
+ * Tells connected clients to list tools again (MCP list_changed) when the listing setting or the
+ * goatclaw policy changes, since a thread's listing leaves out what its profile refuses.
+ */
 const layerListingChanges = Layer.effectDiscard(
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const settings = yield* Effect.serviceOption(Settings.ServerSettingsService);
     if (Option.isNone(settings)) return;
+    const policyOf = (current: { readonly goatclaw: unknown }) => JSON.stringify(current.goatclaw);
     // Changes carry no initial snapshot, so compare against the listing clients have now.
     let listed = yield* listingSetting(settings);
+    let policy = yield* settings.value.getSettings.pipe(
+      Effect.map(policyOf),
+      Effect.catch(() => Effect.succeed(undefined)),
+    );
     yield* settings.value.streamChanges.pipe(
       Stream.runForEach((current) => {
-        if (current.agentToolListing === listed) return Effect.void;
+        if (current.agentToolListing === listed && policyOf(current) === policy) return Effect.void;
         listed = current.agentToolListing;
+        policy = policyOf(current);
         return server.notifications["notifications/tools/list_changed"]({});
       }),
       Effect.forkScoped,
@@ -1425,7 +1438,8 @@ export const layer = Layer.mergeAll(
   Layer.provide(ThreadResultService.layer),
   // Every registration's goatclaw capability gate, and the handlers that check profiles.
   Layer.provide(Profiles.layer),
-  Layer.provideMerge(layerMcpTransport),
+  // tools/list leaves out what a thread's profile refuses, so the transport reads profiles too.
+  Layer.provideMerge(layerMcpTransport.pipe(Layer.provide(Profiles.layer))),
 );
 
 // L5 composes these after the domain and committed policy producers are ready.

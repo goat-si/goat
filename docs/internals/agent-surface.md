@@ -410,9 +410,12 @@ keeps large tool sets out of context
 **Now.** `goat_describe` answers at the three depths from the
 [registry](../../packages/contracts/src/agentSurface/registry.ts), reading input and output
 schemas from the tools this server actually serves, with `surfaceVersion` at the top.
-`available` reports only the static refusals the server is sure of (thread-only,
-client-only, read-only client, not served); goatclaw capabilities, lanes, `host`,
-examples, and related paths are not in it yet. `query` returns up to 20 paths whose path,
+`available` reports the refusals the server is sure of before a call: thread-only,
+client-only, read-only client, not served, and for a GOAT thread the goatclaw capability its
+effective profile lacks, judged as the call gate judges it. A profile that does not resolve
+reports its reason on every write that needs a capability. What depends on the call's
+arguments or the moment, such as a host allowlist, lanes left, and `host`, is still judged
+only when the call is made; examples and related paths are not in it yet. `query` returns up to 20 paths whose path,
 summary, or description contains every word, best first, and `truncated` when more match;
 with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
@@ -420,11 +423,12 @@ with a resource as `path` it searches only that resource. See
 **Now.** `tools/list` is filtered per caller around Effect's MCP core, which checks one
 visibility predicate for both `tools/list` and `tools/call` and so cannot hide a tool that stays
 callable ([toolListing.ts](../../apps/server/src/mcp/toolListing.ts)). Both listings hide what
-`available.now` refuses for the caller. The server setting `agentToolListing` picks `full` (every
+`available.now` refuses for the caller, except that a profile that does not resolve hides
+nothing, because a client keeps its listing for the session. The server setting `agentToolListing` picks `full` (every
 other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
 `_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. Every
 tool stays callable by each of its names. The default stays `full` until the context-diet flip,
-and a change to the setting sends `notifications/tools/list_changed`.
+and a change to the setting or to the goatclaw policy sends `notifications/tools/list_changed`.
 
 ## Calling: `goat_call`
 
