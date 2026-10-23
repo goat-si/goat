@@ -946,56 +946,54 @@ describe("ChannelLedger brief/outcome pairs", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect(
-    "scopes an export after a task move to the moved generation's answers and worker (#987)",
-    () =>
-      Effect.gen(function* () {
-        const taskId = yield* seed();
-        const ledger = yield* ChannelLedger.ChannelLedger;
-        const askAndAnswer = (questionId: string, answer: string) =>
-          Effect.gen(function* () {
-            yield* move(taskId, {
-              type: "task.question.opened",
-              payload: {
-                question: { questionId: questionId as never, text: "Which?", askedAt: NOW },
-              },
-            });
-            yield* move(taskId, {
-              type: "task.question.answered",
-              payload: { questionId: questionId as never, answer },
-            });
-          });
-        const bind = (generation: number) =>
-          move(taskId, {
-            type: "task.worker.bound",
+  it.effect("scopes an export after a task move to the new generation (#987)", () =>
+    Effect.gen(function* () {
+      const taskId = yield* seed();
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const askAndAnswer = (questionId: string, answer: string) =>
+        Effect.gen(function* () {
+          yield* move(taskId, {
+            type: "task.question.opened",
             payload: {
-              worker: {
-                environmentId: "env-1" as never,
-                threadId: ("worker-" + generation) as never,
-                runId: ("run-" + generation) as never,
-                generation,
-              },
+              question: { questionId: questionId as never, text: "Which?", askedAt: NOW },
             },
           });
-        yield* claim(taskId);
-        yield* bind(1);
-        yield* askAndAnswer("question-1", "dev");
-        yield* askAndAnswer("question-2", "main");
-        yield* move(taskId, {
-          type: "task.moved",
-          payload: { generation: 2, host: "mini", fromHost: "mac-studio", replicaCapturedAt: NOW },
+          yield* move(taskId, {
+            type: "task.question.answered",
+            payload: { questionId: questionId as never, answer },
+          });
         });
-        yield* claim(taskId, 2);
-        yield* bind(2);
-        yield* askAndAnswer("question-3", "release");
-        // A cancellation carries no generation, so the export has to derive it across the move.
-        yield* move(taskId, { type: "task.cancelled", payload: { reason: "Stop" } });
-        const line = decodePair((yield* ledger.exportTasks(range)).jsonl);
-        assert.strictEqual(line.generation, 2);
-        assert.strictEqual(line.reruns, 0);
-        assert.strictEqual(line.channelAnswers, 1);
-        assert.strictEqual(line.evidence?.threadId, "worker-2");
-        assert.lengthOf((yield* ledger.answerEventIdsThrough(taskId, line.sequence)).eventIds, 1);
-      }).pipe(Effect.provide(TestLayer)),
+      const bind = (generation: number) =>
+        move(taskId, {
+          type: "task.worker.bound",
+          payload: {
+            worker: {
+              environmentId: "env-1" as never,
+              threadId: ("worker-" + generation) as never,
+              runId: ("run-" + generation) as never,
+              generation,
+            },
+          },
+        });
+      yield* claim(taskId);
+      yield* bind(1);
+      yield* askAndAnswer("question-1", "dev");
+      yield* askAndAnswer("question-2", "main");
+      yield* move(taskId, {
+        type: "task.moved",
+        payload: { generation: 2, host: "mini", fromHost: "mac-studio", replicaCapturedAt: NOW },
+      });
+      yield* claim(taskId, 2);
+      yield* bind(2);
+      yield* askAndAnswer("question-3", "release");
+      // A cancellation carries no generation, so the export has to derive it across the move.
+      yield* move(taskId, { type: "task.cancelled", payload: { reason: "Stop" } });
+      const line = decodePair((yield* ledger.exportTasks(range)).jsonl);
+      assert.strictEqual(line.generation, 2);
+      assert.strictEqual(line.reruns, 0);
+      assert.strictEqual(line.channelAnswers, 1);
+      assert.strictEqual(line.evidence?.threadId, "worker-2");
+      assert.lengthOf((yield* ledger.answerEventIdsThrough(taskId, line.sequence)).eventIds, 1);
+    }).pipe(Effect.provide(TestLayer)),
   );
 });
