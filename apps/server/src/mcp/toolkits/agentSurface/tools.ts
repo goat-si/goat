@@ -36,6 +36,14 @@ export const DescribeResult = Schema.Union([
     entries: Schema.Array(EntrySummary),
   }),
   Schema.Struct({
+    depth: Schema.Literal("search"),
+    query: Schema.String,
+    /** Best matches first, at most SEARCH_LIMIT. */
+    entries: Schema.Array(EntrySummary),
+    /** More paths matched than were returned. */
+    truncated: Schema.Boolean,
+  }),
+  Schema.Struct({
     depth: Schema.Literal("path"),
     entry: Schema.Struct({
       ...EntrySummary.fields,
@@ -60,6 +68,12 @@ const DescribeTool = Tool.make(agentSurfaceRegistry["surface.describe"].name, {
       Schema.String.annotate({
         description:
           'A resource ("thread"), a path ("thread.send"), or a tool name. Omit to list resources.',
+      }),
+    ),
+    query: Schema.optional(
+      Schema.String.check(Schema.isMinLength(1)).annotate({
+        description:
+          "Words to find paths by, matched against paths, summaries and descriptions. With a resource as path, searches only that resource.",
       }),
     ),
   }),
