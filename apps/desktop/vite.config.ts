@@ -1,7 +1,6 @@
 import "vite-plus/test/config";
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
-import * as NodePath from "node:path";
 import { defaultInclude, defineConfig } from "vite-plus";
 
 import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-external-packages.ts";
@@ -181,7 +180,7 @@ export default defineConfig({
     alias: [
       {
         find: /^electron$/,
-        replacement: NodePath.join(import.meta.dirname, "src/testing/electronStub.ts"),
+        replacement: `${import.meta.dirname}/src/testing/electronStub.ts`,
       },
     ],
     // The Windows lane runs workspace suites concurrently; filesystem-heavy
