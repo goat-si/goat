@@ -6,6 +6,8 @@ import * as Effect from "effect/Effect";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as Handoffs from "../../../handoffs/Handoffs.ts";
+import { makeHandoffReader } from "../../operations/handoffReads.ts";
 import { makeOperationTokens } from "../../operations/OperationTokens.ts";
 import { ToolDispatch } from "../../ToolDispatch.ts";
 import { dispatchEnvelope, envelopeError } from "./dispatchEnvelope.ts";
@@ -51,7 +53,11 @@ export const layer = McpToolAccess.toLayer(
   AgentSurfaceToolkit,
   Effect.gen(function* () {
     const dispatch = yield* ToolDispatch;
-    const operations = makeOperations(dispatch, yield* makeOperationTokens);
+    const operations = makeOperations(
+      dispatch,
+      yield* makeOperationTokens,
+      makeHandoffReader(yield* Effect.serviceOption(Handoffs.Handoffs)),
+    );
 
     const summary = (entry: AgentSurfaceRegistryEntry, scope: Scope) => ({
       path: entry.path,
