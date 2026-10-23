@@ -161,8 +161,6 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   storage_failed: c("internal"),
   // Handoffs (HandoffErrorReason) and provider host sync (ProviderHostSyncErrorCode)
   expired: before("expired"),
-  apply_failed: c("failed_precondition"),
-  apply_unknown: c("unknown_outcome"),
   // Operations (OperationErrorReason): not_found and expired are classified above.
   not_cancellable: before("failed_precondition"),
   unavailable: c("unavailable"),

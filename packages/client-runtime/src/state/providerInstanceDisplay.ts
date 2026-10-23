@@ -154,8 +154,7 @@ const isHandoffError = Schema.is(HandoffError);
  * failed, or may have landed, says which, so nobody approves a half-applied change again.
  */
 export function handoffRespondErrorMessage(error: unknown): string {
-  return isHandoffError(error) &&
-    (error.reason === "apply_failed" || error.reason === "apply_unknown")
+  return isHandoffError(error) && error.outcome !== undefined
     ? error.message
     : "Could not update this handoff. It may already be resolved or expired.";
 }

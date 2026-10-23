@@ -53,9 +53,9 @@ export type ProviderSettingsOutcome = typeof ProviderSettingsOutcome.Type;
 export const approvalError = (outcome: ProviderSettingsOutcome | undefined) =>
   new HandoffError(
     outcome?.state === "failed"
-      ? { reason: "apply_failed", detail: outcome.message }
+      ? { reason: "invalid_request", outcome: "apply_failed", detail: outcome.message }
       : outcome?.state === "unknown_outcome"
-        ? { reason: "apply_unknown", detail: outcome.message }
+        ? { reason: "invalid_request", outcome: "apply_unknown", detail: outcome.message }
         : { reason: "invalid_request" },
   );
 

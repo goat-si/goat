@@ -172,24 +172,26 @@ export const HandoffErrorReason = Schema.Literals([
   "unavailable",
   "limit_reached",
   "invalid_request",
-  // A person approved a provider change and GOAT could not apply it, or cannot tell whether it did.
-  "apply_failed",
-  "apply_unknown",
 ]);
 export type HandoffErrorReason = typeof HandoffErrorReason.Type;
 
 export class HandoffError extends Schema.TaggedError<HandoffError>()("HandoffError", {
   reason: HandoffErrorReason,
-  /** The applied change's own message, for the apply_* reasons; built by the server. */
+  /**
+   * A person approved a provider change and GOAT could not apply it, or cannot tell whether it
+   * did. A field beside reason, so older clients still decode the error as invalid_request.
+   */
+  outcome: Schema.optionalKey(Schema.Literals(["apply_failed", "apply_unknown"])),
+  /** The change's own message, built by the server, for an outcome. */
   detail: Schema.optionalKey(Schema.String),
   cause: Schema.optionalKey(Schema.Defect()),
 }) {
   override get message() {
-    if (this.reason === "apply_failed")
+    if (this.outcome === "apply_failed")
       return this.detail === undefined
         ? "GOAT could not apply this change."
         : `GOAT could not apply this change: ${this.detail}`;
-    if (this.reason === "apply_unknown")
+    if (this.outcome === "apply_unknown")
       return `This change may have been applied${this.detail === undefined ? "" : ` (${this.detail})`}. Check the provider with Diagnose before you approve it again.`;
     return {
       not_found: "This handoff no longer exists.",

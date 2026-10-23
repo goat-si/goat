@@ -586,7 +586,8 @@ describe("provider setup request", () => {
       _tag: "Failure",
       cause: Cause.fail(
         new HandoffError({
-          reason: "apply_unknown",
+          reason: "invalid_request",
+          outcome: "apply_unknown",
           detail: "Calling goat_provider_add on box failed: connection reset",
         }),
       ),
