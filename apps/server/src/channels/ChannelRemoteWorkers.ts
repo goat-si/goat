@@ -80,6 +80,7 @@ import {
   remoteReportEventIdFor,
 } from "./channelIds.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
+import { decodeOffered, type OfferedProviders } from "./channelOfferedModels.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
@@ -319,25 +320,6 @@ const decodeProjects = Schema.decodeUnknownEffect(
 const decodeEnvironment = Schema.decodeUnknownEffect(
   Schema.Struct({ environmentId: EnvironmentId }),
 );
-/**
- * Only what the model check and placement need from orchestrator_capabilities, so newer fields
- * never break it. An older GOAT may omit driverKind or canRunChildTask; its accounts are then
- * never swapped.
- */
-const OfferedProviders = Schema.Struct({
-  providers: Schema.Array(
-    Schema.Struct({
-      providerInstanceId: Schema.String,
-      driverKind: Schema.optional(Schema.String),
-      displayName: Schema.optional(Schema.NullOr(Schema.String)),
-      /** False for an account that cannot run work now, such as one signed out or disabled. */
-      canRunChildTask: Schema.optional(Schema.Boolean),
-      models: Schema.Array(Schema.Struct({ id: Schema.String })),
-    }),
-  ),
-});
-type OfferedProviders = typeof OfferedProviders.Type;
-const decodeOffered = Schema.decodeUnknownEffect(OfferedProviders);
 const decodeProjectProviderDiagnosis = Schema.decodeUnknownEffect(
   Schema.Struct({
     diagnoses: Schema.Array(
