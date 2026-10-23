@@ -45,7 +45,6 @@ export type {
   CapabilityDeclaration,
 } from "./types.ts";
 
-/** Every entry, one file per resource under entries/. */
 export const agentSurfaceRegistry = {
   ...decisionEntries,
   ...permissionProfileEntries,
