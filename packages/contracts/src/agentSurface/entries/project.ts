@@ -8,7 +8,9 @@ export const projectEntries = {
     toolkit: "project",
     summary: "List registered projects in this environment.",
     description:
-      "List registered projects in this environment. Pages use the current project snapshot and may shift between calls. Pass host (an SSH alias from goat_ssh_host_list or a linked host from goat_host_link_list) for another machine's GOAT environment; its project ids belong to that machine, so pass the same host wherever you use them, such as goat_thread_list. That needs a caller allowed to use this machine's SSH keys. host_unavailable means the machine, SSH, or its GOAT server could not be reached.",
+      "Read a page of registered projects in this environment or on host. Pages may shift between calls. Remote project ids belong to that machine; keep passing the same host when using them.",
+    guide:
+      "Pages use the current project snapshot rather than a snapshot pinned across calls.\n\nPass host from goat_ssh_host_list or goat_host_link_list to use another machine's GOAT environment. Remote project ids belong to that machine; pass the same host with those ids, including to goat_thread_list. Host calls require a live caller permitted to reach other machines with this machine's credentials. host_unavailable means the machine, transport, or GOAT server cannot be reached.",
     effect: "read",
     hostRoutable: true,
     requires: "either",
@@ -27,7 +29,9 @@ export const projectEntries = {
     summary:
       "Read a registered project in this environment, including its workspace and saved scripts.",
     description:
-      "Read a registered project in this environment, including its workspace and saved scripts. Pass host (an SSH alias from goat_ssh_host_list or a linked host from goat_host_link_list) for another machine's GOAT environment; its project ids belong to that machine, so pass the same host wherever you use them, such as goat_thread_list. That needs a caller allowed to use this machine's SSH keys. host_unavailable means the machine, SSH, or its GOAT server could not be reached.",
+      "Read a registered project, including its workspace and saved scripts, locally or on host. Remote project ids belong to that machine; keep passing the same host when using them.",
+    guide:
+      "Pass host from goat_ssh_host_list or goat_host_link_list to use another machine's GOAT environment. Remote project ids belong to that machine; pass the same host with those ids, including to goat_thread_list. Host calls require a live caller permitted to reach other machines with this machine's credentials. host_unavailable means the machine, transport, or GOAT server cannot be reached.",
     effect: "read",
     hostRoutable: true,
     requires: "either",
@@ -45,7 +49,9 @@ export const projectEntries = {
     toolkit: "project",
     summary: "Register a project directory through the existing project service.",
     description:
-      "Register a project directory through the existing project service. Set createWorkspaceRootIfMissing to create a directory. Omit workspaceRoot to start a new project from just its title: the app makes a Git repository for it in its own projects folder, with a README, an icon, and a first commit (commitError says why a commit failed; the project exists either way). Each call creates a new request; an existing registered workspace is rejected. Clone separately with goat_project_clone when needed.",
+      "Register a project directory, optionally creating it. Omit workspaceRoot to create a Git repository from a title with a README, icon, and attempted first commit. Each call is a new request; commit failure still leaves the project registered.",
+    guide:
+      "Set createWorkspaceRootIfMissing to create a missing directory. With workspaceRoot omitted, supply only the title; GOAT creates the repository in its own projects folder. commitError explains a failed initial commit; the project exists either way.\n\nEach call creates a new request. An already registered workspace is rejected. Clone separately with goat_project_clone, then register the returned cwd with goat_project_create.\n\nRegistration goes through the existing project service, for an explicit workspace and for title-only creation alike.",
     effect: "destructive",
     capability: "settings.write",
     hostRoutable: false,
@@ -63,8 +69,9 @@ export const projectEntries = {
     name: "goat_project_update",
     toolkit: "project",
     summary: "Update a registered project's settings.",
-    description:
-      "Update a registered project's settings. Omitted fields are preserved. Uses the same project service as the app.",
+    description: "Update a registered project's settings. Omitted fields stay unchanged.",
+    guide:
+      "The handler uses ProjectService.update and supplies only the requested changes.\n\nUpdates go through the same project service as the app.",
     effect: "destructive",
     capability: "settings.write",
     hostRoutable: false,
@@ -83,7 +90,9 @@ export const projectEntries = {
     toolkit: "project",
     summary: "Delete a project using the existing project deletion lifecycle.",
     description:
-      "Delete a project using the existing project deletion lifecycle. Nonempty projects require force=true. This does not delete the repository directory or promise a deleted-thread count.",
+      "Delete a registered project and its threads. The repository directory stays on disk. Nonempty projects require force=true; the result does not promise a deleted-thread count.",
+    guide:
+      "Use force=true when the project contains active or archived threads. Deletion durably deletes child threads before deleting the project. The result is the project record, without a promised deleted-thread count.\n\nDeletion runs through the project deletion lifecycle.",
     effect: "destructive",
     capability: "settings.write",
     hostRoutable: false,
@@ -104,7 +113,9 @@ export const projectEntries = {
     toolkit: "project",
     summary: "Clone a repository using the app's source-control service.",
     description:
-      "Clone a repository using the app's source-control service. This only clones; register the returned cwd with goat_project_create. An existing destination is not adopted or removed on failure.",
+      "Clone a repository. Register the returned cwd with goat_project_create. This call does not adopt an existing checkout or remove the destination on failure.",
+    guide:
+      "The tool only clones; it does not register a project. An existing empty destination directory is allowed; a nonempty destination is rejected. The handler does not clean up the destination on failure.\n\nCloning uses the app's source-control service.",
     effect: "destructive",
     capability: "settings.write",
     hostRoutable: false,
