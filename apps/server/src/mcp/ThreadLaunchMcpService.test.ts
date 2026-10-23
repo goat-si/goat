@@ -387,7 +387,7 @@ it.effect.each(["worker", "owner"])(
         const refusal = unrequested._tag === "Failure" ? unrequested.failure.message : "";
         expect(refusal).toContain("bills a paid account");
         // The advice must name a route this tool's caller can take; this tool takes no decisionId.
-        expect(refusal).toContain("goat_cloud_launch");
+        expect(refusal).toContain('goat_call {path:"cloud_agent.launch"}');
         expect(refusal).not.toContain("decisionId");
         yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
         VALUES ('caller-run', ${callerId}, 1, 'codex', 'running', '2026-10-21', '{"userMessageId":"caller-message"}')`;
