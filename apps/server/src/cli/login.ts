@@ -54,7 +54,7 @@ const readStoredLogin = Effect.fn("cli.login.read")(function* (paths: Paths) {
     Effect.mapError(
       () =>
         new CliCredentialError({
-          reason: "not_logged_in",
+          reason: "login_unreadable",
           detail: `${file} is not a goat login. Run goat login again.`,
         }),
     ),
@@ -111,11 +111,39 @@ const withEnvironmentAuth = Effect.fn("cli.login.withEnvironmentAuth")(function*
 
 const decodeSessionId = Schema.decodeUnknownEffect(AuthSessionId);
 
-const revokeStored = (auth: EnvironmentAuth.EnvironmentAuth["Service"], login: CliLogin) =>
+const describeCause = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
+
+/** Revokes a stored session; a failure names the session, which is still valid. */
+const revokeStored = <E>(
+  revoke: (sessionId: AuthSessionId) => Effect.Effect<boolean, E>,
+  login: CliLogin,
+) =>
   decodeSessionId(login.sessionId).pipe(
-    Effect.flatMap(auth.revokeSession),
-    Effect.ignore({ log: true }),
+    Effect.flatMap(revoke),
+    Effect.mapError(
+      (cause) =>
+        new CliError.UserError({
+          cause,
+          userMessage: `Could not revoke session ${login.sessionId}, which is still valid: ${describeCause(cause)}`,
+        }),
+    ),
   );
+
+/**
+ * Revokes the stored login, then forgets it. When revocation fails the file stays: it is the only
+ * record of a session that still works, and goat logout can try again.
+ */
+export const signOut = Effect.fn("cli.login.signOut")(function* <E>(
+  revoke: (sessionId: AuthSessionId) => Effect.Effect<boolean, E>,
+  paths: Paths,
+) {
+  const login = yield* readStoredLogin(paths);
+  if (Option.isNone(login)) return "not_signed_in" as const;
+  const revoked = yield* revokeStored(revoke, login.value);
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.remove(yield* loginFilePath(paths), { force: true });
+  return revoked ? ("signed_out" as const) : ("already_ended" as const);
+});
 
 export const loginCommand = Command.make("login", {
   ...authLocationFlags,
@@ -159,7 +187,13 @@ export const loginCommand = Command.make("login", {
             Effect.andThen(fs.chmod(file, 0o600)),
             Effect.tapError(() => auth.revokeSession(issued.sessionId).pipe(Effect.ignore)),
           );
-          if (Option.isSome(previous)) yield* revokeStored(auth, previous.value);
+          if (Option.isSome(previous))
+            yield* revokeStored(auth.revokeSession, previous.value).pipe(
+              Effect.catchTags({
+                UserError: (error) =>
+                  Console.error(`${error.userMessage} Revoke it in Settings → Connections.`),
+              }),
+            );
           yield* Console.log(
             `Signed in as ${LOGIN_LABEL} (${flags.access}) until ${DateTime.formatIso(issued.expiresAt)}. goat logout or Settings → Connections revokes it.`,
           );
@@ -173,15 +207,21 @@ export const logoutCommand = Command.make("logout", { ...authLocationFlags }).pi
   Command.withDescription("Revoke this terminal's goat login and forget it."),
   Command.withHandler((flags) =>
     withEnvironmentAuth(flags, ({ auth, paths }) =>
-      Effect.gen(function* () {
-        const login = yield* readStoredLogin(paths).pipe(
-          Effect.orElseSucceed(() => Option.none<CliLogin>()),
-        );
-        const fs = yield* FileSystem.FileSystem;
-        if (Option.isSome(login)) yield* revokeStored(auth, login.value);
-        yield* fs.remove(yield* loginFilePath(paths), { force: true });
-        yield* Console.log(Option.isSome(login) ? "Signed out." : "Not signed in.");
-      }),
+      signOut(auth.revokeSession, paths).pipe(
+        Effect.flatMap((outcome) =>
+          Console.log(
+            outcome === "signed_out"
+              ? "Signed out."
+              : outcome === "already_ended"
+                ? "Signed out; the session had already ended."
+                : "Not signed in.",
+          ),
+        ),
+        Effect.catchTags({
+          CliCredentialError: (error) =>
+            Effect.fail(new CliError.UserError({ cause: error, userMessage: error.message })),
+        }),
+      ),
     ),
   ),
 );

@@ -6,6 +6,7 @@ import { CliError, Command } from "effect/cli";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as TestConsole from "effect/testing/TestConsole";
 import * as NodeFS from "node:fs";
@@ -13,6 +14,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { cli } from "../binCli.ts";
+import { signOut } from "./login.ts";
 import {
   type CliLogin,
   type StoredLogin,
@@ -82,6 +84,10 @@ describe("credential-minting commands", () => {
     }).pipe(Effect.scoped),
   );
 });
+
+class RevokeFailed extends Schema.TaggedError<RevokeFailed>()("RevokeFailed", {
+  detail: Schema.String,
+}) {}
 
 const login = (expiresAt: string): CliLogin => ({
   version: 1,
@@ -215,5 +221,28 @@ describe("goat login", () => {
         expect(NodeFS.existsSync(loginFile())).toBe(false);
         expect(yield* clients()).toEqual([]);
       }).pipe(Effect.scoped),
+  );
+  it.effect("keeps the login when revocation fails, so a valid session is never forgotten", () =>
+    Effect.gen(function* () {
+      const stateDir = yield* tempBaseDir;
+      const file = NodePath.join(stateDir, "cli-login.json");
+      NodeFS.writeFileSync(file, JSON.stringify(login("2030-01-01T00:00:00.000Z")));
+      const paths = {
+        stateDir,
+        serverRuntimeStatePath: NodePath.join(stateDir, "server-runtime.json"),
+      };
+
+      const failed = yield* signOut(
+        () => Effect.fail(new RevokeFailed({ detail: "database is locked" })),
+        paths,
+      ).pipe(Effect.flip);
+      assert.instanceOf(failed, CliError.UserError);
+      expect(failed.userMessage).toContain("still valid");
+      expect(NodeFS.existsSync(file)).toBe(true);
+
+      expect(yield* signOut(() => Effect.succeed(true), paths)).toBe("signed_out");
+      expect(NodeFS.existsSync(file)).toBe(false);
+      expect(yield* signOut(() => Effect.succeed(true), paths)).toBe("not_signed_in");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

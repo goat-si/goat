@@ -91,6 +91,7 @@ export class CliCredentialError extends Schema.TaggedError<CliCredentialError>()
       "thread_credential_invalid",
       "not_logged_in",
       "login_expired",
+      "login_unreadable",
       "server_not_running",
     ]),
     detail: Schema.String,
