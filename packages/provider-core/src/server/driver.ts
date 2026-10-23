@@ -82,16 +82,23 @@ export interface ProviderInstance {
       readonly providerId: string;
     }) => Effect.Effect<void, AcpRegistryOperationError>;
   };
-  /** A provider that asks to trust each folder it opens, and that GOAT can answer for. */
+  /** A provider that asks to trust each folder it opens, and that GOAT answers for. */
   readonly folderTrust?: {
-    /** One answer per folder, in order. */
+    /**
+     * One answer per folder, in order. Deprecated with the folder trust RPCs that read it; see
+     * apps/server/src/cloudAgents/CloudFolderTrust.ts.
+     */
     readonly states: (cwds: ReadonlyArray<string>) => Effect.Effect<
       ReadonlyArray<{
         readonly trusted: boolean | null;
         readonly acceptedByGoatAt: string | null;
       }>
     >;
-    readonly accept: (cwd: string) => Effect.Effect<void, ProviderDriverError>;
+    /**
+     * Trusts the folder when it is GOAT's to trust, at most once at a time per folder. A failure
+     * is logged, never returned.
+     */
+    readonly ensure: (cwd: string) => Effect.Effect<void>;
   };
 }
 
