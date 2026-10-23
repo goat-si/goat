@@ -163,6 +163,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.remoteLaunchesList]: AuthOrchestrationReadScope,
   [WS_METHODS.cloudMachinesList]: AuthOrchestrationReadScope,
   [WS_METHODS.cloudAgentsListRuns]: AuthOrchestrationReadScope,
+  // Deprecated folder trust RPCs, kept for older clients; remove in GOAT 0.2.0.
   [WS_METHODS.cloudAgentsListFolderTrust]: AuthOrchestrationReadScope,
   [WS_METHODS.cloudAgentsAcceptFolderTrust]: AuthSettingsWriteScope,
   [WS_METHODS.cloudMachinesConfigure]: AuthSettingsWriteScope,
