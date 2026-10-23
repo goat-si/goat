@@ -185,7 +185,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       .split("\n")
       .filter((line) => line.includes('button "delete"'));
     expect(buttons).toHaveLength(5);
-    await ServerBrowserPage.click(page, { locator: locators(buttons[4])[0]!, timeoutMs: 1_000 });
+    await ServerBrowserPage.click(page, { locator: locators(buttons[4])[0]! });
     expect(await page.locator("li").allTextContents()).toEqual([
       "row 1delete",
       "row 2delete",
@@ -203,7 +203,6 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     );
     await ServerBrowserPage.click(page, {
       locator: buttonLocator((await takeSnapshot()).accessibilityTree, "Confirm"),
-      timeoutMs: 1_000,
     });
     await (await dialog).accept();
     await expect.poll(() => page.locator("body").getAttribute("data-answer")).toBe("true");
@@ -373,12 +372,15 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     const waiting = ServerBrowserPage.waitFor(page, {
       locator: "#dialog",
       state,
-      timeoutMs: 1_000,
     });
     let finished = false;
-    void waiting.then(() => {
-      finished = true;
-    });
+    void waiting.then(
+      () => {
+        finished = true;
+      },
+      // A failure surfaces once, at the await below.
+      () => undefined,
+    );
     await page.evaluate("document.body.innerText");
     expect(finished).toBe(false);
     await page.evaluate(state === "hidden" ? 'dialog.style.display = "none"' : "dialog.remove()");
@@ -389,7 +391,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
 
   it("keeps legacy attachment waits for hidden and repeated matches", async () => {
     await page.setContent('<div class="match" hidden>one</div><div class="match" hidden>two</div>');
-    await ServerBrowserPage.waitFor(page, { selector: ".match", timeoutMs: 1_000 });
+    await ServerBrowserPage.waitFor(page, { selector: ".match" });
   });
 
   it("requires all conditions to hold together, including same-document URL changes", async () => {
@@ -405,15 +407,18 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       state: "visible",
       text: "Done",
       urlIncludes: "#done",
-      timeoutMs: 1_000,
     });
     await page.evaluate(
       'ready.hidden = true; document.body.append("Done"); history.pushState({}, "", "#done")',
     );
     let finished = false;
-    void waiting.then(() => {
-      finished = true;
-    });
+    void waiting.then(
+      () => {
+        finished = true;
+      },
+      // A failure surfaces once, at the await below.
+      () => undefined,
+    );
     // A round trip after every other condition holds must not finish a hidden-target wait.
     await page.evaluate("document.body.innerText");
     expect(finished).toBe(false);
@@ -439,12 +444,15 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       text: "New document",
       urlIncludes: "wait.test",
       loadState: "load",
-      timeoutMs: 1_000,
     });
     let finished = false;
-    void waiting.then(() => {
-      finished = true;
-    });
+    void waiting.then(
+      () => {
+        finished = true;
+      },
+      // A failure surfaces once, at the await below.
+      () => undefined,
+    );
     try {
       await page.goto("https://wait.test/", { waitUntil: "domcontentloaded" });
       await routed.promise;
@@ -471,7 +479,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     try {
       await page.goto("https://wait.test/", { waitUntil: "domcontentloaded" });
       await requested.promise;
-      await ServerBrowserPage.waitFor(page, { loadState: "domContentLoaded", timeoutMs: 1_000 });
+      await ServerBrowserPage.waitFor(page, { loadState: "domContentLoaded" });
       await expect(
         ServerBrowserPage.waitFor(page, { loadState: "load", timeoutMs: 100 }),
       ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
@@ -496,12 +504,12 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     try {
       await page.goto("https://wait.test/");
       await requested.promise;
-      await ServerBrowserPage.waitFor(page, { text: "Ready", timeoutMs: 1_000 });
+      await ServerBrowserPage.waitFor(page, { text: "Ready" });
       await expect(
         ServerBrowserPage.waitFor(page, { loadState: "networkIdle", timeoutMs: 100 }),
       ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
       release.resolve();
-      await ServerBrowserPage.waitFor(page, { loadState: "networkIdle", timeoutMs: 1_000 });
+      await ServerBrowserPage.waitFor(page, { loadState: "networkIdle" });
     } finally {
       release.resolve();
     }
