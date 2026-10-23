@@ -5,7 +5,7 @@ import * as NodeTty from "node:tty";
 import * as HostProcess from "@goat/shared/HostProcess";
 
 /**
- * Whether this process is the desktop app's `t3.cmd` running the CLI in a
+ * Whether this process is the desktop app's `goat.cmd` running the CLI in a
  * terminal with no stdin. The launcher runs the app's executable with
  * `ELECTRON_RUN_AS_NODE`, and Electron's Windows executable is a GUI program:
  * on start it points stdout and stderr at the parent's console but leaves
@@ -52,7 +52,7 @@ export function attachConsoleStdin(): number | undefined {
     stdoutIsConsole: NodeTty.isatty(1),
   });
   // The marker describes this process's own start; a server started here
-  // must not pass it on to the shells and `t3` runs it spawns.
+  // must not pass it on to the shells and `goat` runs it spawns.
   delete process.env.GOAT_DESKTOP_CLI_LAUNCHER;
   if (!needed) return undefined;
   let fd: number;

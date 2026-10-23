@@ -652,7 +652,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
 };
 
 /**
- * The T3 orchestration tool inventory, used to gate loose name matching on
+ * The GOAT orchestration tool inventory, used to gate loose name matching on
  * both the server (ACP MCP identity recovery) and the client (logo branding).
  */
 // Read-side only: persisted activity can retain names from before the GOAT rename.
@@ -784,7 +784,7 @@ function normalizeGoatMcpToolLabel(value: string): string {
 }
 
 /**
- * ACP agents disagree on how the injected T3 server prefixes its tools:
+ * ACP agents disagree on how the injected GOAT server prefixes its tools:
  * `mcp__goat__x` (Claude/Cursor), `goat.x` (Codex), plus single
  * underscore, colon, slash, dash, and space separators seen from registry
  * agents. The prefix match is deliberately loose because the display-name

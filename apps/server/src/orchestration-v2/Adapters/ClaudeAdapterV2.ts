@@ -341,7 +341,7 @@ const CLAUDE_GROUP_WATCH_SCRIPT = [
 export function spawnClaudeProcessGroup(options: ClaudeSpawnOptions): ClaudeSpawnedProcess {
   const child = NodeChildProcess.spawn(
     "/bin/sh",
-    ["-c", CLAUDE_GROUP_WATCH_SCRIPT, "t3-claude", options.command, ...options.args],
+    ["-c", CLAUDE_GROUP_WATCH_SCRIPT, "goat-claude", options.command, ...options.args],
     {
       cwd: options.cwd,
       env: options.env,
@@ -1514,7 +1514,7 @@ export const CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
 ];
 
 // Claude Code aborts an HTTP MCP call after 60 s ("The operation timed out.")
-// unless the server config sets `timeout`. T3's wait tools (goat_thread_wait,
+// unless the server config sets `timeout`. GOAT's wait tools (goat_thread_wait,
 // delegate_task mode=wait) legitimately block for up to an hour
 // (MAX_WAIT_TIMEOUT_MS in OrchestratorMcpService), so the budget sits just
 // above that and the server's own wait timeout is what ends a long call.

@@ -1,5 +1,5 @@
 /**
- * Do not import t3code modules from the string body. The Pi process resolves
+ * Do not import GOAT modules from the string body. The Pi process resolves
  * `@earendil-works/pi-coding-agent` and `typebox` from the user's pi install.
  */
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
@@ -437,7 +437,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     if (changed) return replacement;
   });
 
-  // Pi deliberately leaves permission policy to extensions. T3's injected
+  // Pi deliberately leaves permission policy to extensions. GOAT's injected
   // bridge uses Pi's public blocking tool hook so the shared runtime modes
   // keep their normal meaning without replacing or shadowing Pi's runtime.
   // Only Pi's own search is known to be read-only. An extension that replaces
@@ -451,7 +451,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     const extensionPath = env(EXTENSION_PATH_ENV);
     if (extensionPath === undefined || !readOnlyMcpTools.has(name) || typeof pi.getAllTools !== "function") return false;
     // A user extension may own the same name. Only our registered HTTP bridge
-    // may inherit the canonical T3 server's read-only annotation.
+    // may inherit the canonical GOAT server's read-only annotation.
     return pi.getAllTools().some((tool) => tool.name === name &&
       typeof tool.sourceInfo?.path === "string" &&
       NodePath.resolve(tool.sourceInfo.path) === NodePath.resolve(extensionPath));

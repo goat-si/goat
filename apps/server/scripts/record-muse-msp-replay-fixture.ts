@@ -58,7 +58,7 @@ if (fixture === undefined || variant === undefined) {
 }
 
 const museBinary = process.env.GOAT_MUSE_BIN ?? "muse";
-// Started as T3 starts it, so Windows needs no GOAT_MUSE_BIN for Muse's `muse.cmd` launcher.
+// Started as GOAT starts it, so Windows needs no GOAT_MUSE_BIN for Muse's `muse.cmd` launcher.
 const museStart = Effect.runSync(museLaunch(museBinary));
 const home = process.env.HOME ?? "";
 

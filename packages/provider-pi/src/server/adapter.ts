@@ -2479,7 +2479,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             // Resolved before the turn is installed: a failure here (an
             // unreadable attachment) must not leave `activeTurn` set, which
             // would reject every later turn as already active.
-            // Orchestration instructions reach pi through the T3 MCP
+            // Orchestration instructions reach pi through the GOAT MCP
             // extension's before_agent_start system-prompt hook, never by
             // wrapping the user text: a wrapped first message would no
             // longer start with "/" and slash commands would stop expanding.
@@ -3260,7 +3260,7 @@ function piForkEntry<E>(
 }
 
 /**
- * Pi shares the server clock. An adopted wake can precede its T3 turn, so search from the target
+ * Pi shares the server clock. An adopted wake can precede its GOAT turn, so search from the target
  * turn's end through the boundary turn's end. A boundary turn still running has no end yet, so
  * the window stays open through the tree read. At thread start, use the earlier of thread
  * creation and turn start to include adopted wakes while preserving inherited session history.

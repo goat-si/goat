@@ -255,7 +255,7 @@ const HTTP_ROUTER_CONFIG = {
 } as const;
 
 // Effect's default preemptive shutdown waits 20s before finalizing request scopes.
-// T3's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
+// GOAT's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
 // already closes the websocket gracefully.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
 const layerResourceAttribution = ResourceAttribution.layer;
@@ -1082,7 +1082,7 @@ const layerMakeRoutes = Layer.mergeAll(
 const layerMakeServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    // Before anything opens the database: one server per T3 home.
+    // Before anything opens the database: one server per GOAT home.
     const ownership = yield* ServerOwnership.acquireServerOwnership(config.serverRuntimeStatePath);
     const activation = yield* Deferred.make<void>();
     const awaitActivation = Deferred.await(activation);

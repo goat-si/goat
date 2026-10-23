@@ -296,7 +296,7 @@ export interface AcpAdapterV2Flavor {
     | undefined;
   /**
    * Grok's Auto mode only asks about what its own classifier refused, so those
-   * must reach the user instead of being approved by T3's policy.
+   * must reach the user instead of being approved by GOAT's policy.
    */
   readonly permissionDisposition?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
@@ -552,7 +552,7 @@ export const AcpProviderCapabilitiesV2 = {
     appCanCheckpointFilesystem: true,
     supportsNestedCheckpointScopes: true,
     // ACP defines no conversation truncation, so rollback resets the provider
-    // conversation: T3 restores checkpointed state and the next turn starts a
+    // conversation: GOAT restores checkpointed state and the next turn starts a
     // fresh agent session without the rolled-back context.
     providerCanRollbackConversation: true,
     providerRollbackReturnsSnapshot: true,
@@ -627,7 +627,7 @@ function acpMcpContext(
   // Agents that advertise optional http support still routinely fail to wire
   // injected http servers through to their backend (codex-acp 1.2.0 and pi-acp
   // both drop them), so every ACP session gets the `goat acp-mcp-bridge` stdio
-  // server, which forwards JSON-RPC to T3's authenticated MCP endpoint. The
+  // server, which forwards JSON-RPC to GOAT's authenticated MCP endpoint. The
   // managed Cua Driver is already a stdio server, so it is listed in both
   // forms: an agent with MCP-over-ACP receives only `acpServers`.
   const cua = McpProviderSession.cuaAcpMcpServers(session);
@@ -1584,7 +1584,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               agentTerminalsById.get(sessionScopedId(sessionId, terminalId))?.command;
             return command === undefined ? [] : [command];
           });
-        // Client terminals (Devin) run with the T3 server's privileges, so they
+        // Client terminals (Devin) run with the GOAT server's privileges, so they
         // are policy-checked against the active turn policy; a command the user
         // already approved satisfies an "ask" disposition.
         const clientPolicyGrants = makeAcpClientPolicyGrants();
