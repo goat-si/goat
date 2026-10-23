@@ -497,9 +497,12 @@ const make = Effect.gen(function* () {
       if (
         (handoff.expiresAt !== null &&
           DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)) ||
-        (handoff.kind === "approval" &&
-          !handoff.target.path.startsWith("ssh.") &&
-          !isClockedHandoffPath(handoff.target.path) &&
+        // Run-bound steps end with their run: a secret card nobody waits on any more, and
+        // approvals that are neither SSH nor clocked.
+        ((handoff.kind === "secret" ||
+          (handoff.kind === "approval" &&
+            !handoff.target.path.startsWith("ssh.") &&
+            !isClockedHandoffPath(handoff.target.path))) &&
           (runStatus === null || ThreadManagement.isTerminalRunStatus(runStatus)))
       ) {
         const input = yield* decodeAddress({

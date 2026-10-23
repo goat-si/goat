@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { HandoffSummary } from "./handoff.ts";
+import { needsHumanFields } from "./humanStepResult.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
 export const CuaDriverMcpConfiguration = Schema.Struct({
@@ -144,8 +144,7 @@ export const ComputerUseRequestResult = Schema.Union([
     message: Schema.String,
   }),
   Schema.Struct({
-    kind: Schema.Literal("needs_human"),
-    handoff: HandoffSummary,
+    ...needsHumanFields("approval", "goat_computer_use_request"),
     message: Schema.String,
   }),
   Schema.Struct({
