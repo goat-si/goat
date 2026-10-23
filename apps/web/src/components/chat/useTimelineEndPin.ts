@@ -46,6 +46,22 @@ export function useTimelineEndPin({
       }
       if (released && distanceFromEnd() <= 1) released = false;
     };
+    // LegendList corrects its anchor toward the offset it last saw, which can still predate a
+    // pin on a slow frame. That move is the list's own, so upward movement is measured from
+    // where it left the view. Its scrollBy runs inside the signal, before this microtask.
+    const listAdjusted = () =>
+      queueMicrotask(() => {
+        scrolledUp = createUpwardScrollDetector(measuredPosition());
+      });
+    // The pinned LegendList 3.3.5 emits these signals from ScrollAdjust; its public listener
+    // type leaves them out.
+    const listen = listRef.current?.getState().listen as
+      | ((signal: "scrollAdjust" | "scrollAdjustUserOffset", callback: () => void) => () => void)
+      | undefined;
+    const stopListening = [
+      listen?.("scrollAdjust", listAdjusted),
+      listen?.("scrollAdjustUserOffset", listAdjusted),
+    ];
     // Only growth after follow turns on is ours to correct: an explicit
     // animated scroll to the end must not be cut short by an immediate jump.
     let height = scrollNode.scrollHeight;
@@ -69,6 +85,7 @@ export function useTimelineEndPin({
     return () => {
       stopObserving();
       scrollNode.removeEventListener("scroll", onScroll);
+      for (const stop of stopListening) stop?.();
     };
   }, [enabled, listRef, scrollNode, smooth]);
 }
