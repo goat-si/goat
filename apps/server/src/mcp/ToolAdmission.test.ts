@@ -7,6 +7,8 @@ import {
   GoatclawRole,
   OrchestratorMcpFailure,
   PermissionProfile,
+  type ProviderInteractionMode,
+  type RuntimeMode,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
@@ -28,7 +30,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
-import { liveThreadsLayer } from "./McpToolAccess.testkit.ts";
+import { liveThreadShell } from "./McpToolAccess.testkit.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { argumentsDigest } from "./ToolAdmission.ts";
 
 /** What the keyed write did, so a test can tell a replay from a second run. */
@@ -82,7 +85,32 @@ const handlers = {
   ),
 } as unknown as McpToolAccess.Handlers<typeof ProbeToolkit.tools>;
 
-const served = (defaultProfile: string) =>
+/** The calling thread's modes, which its user may change between a call and its replay. */
+class ThreadModes extends Context.Service<
+  ThreadModes,
+  Ref.Ref<{ readonly runtimeMode: RuntimeMode; readonly interactionMode: ProviderInteractionMode }>
+>()("goat/mcp/ToolAdmission.test/ThreadModes") {}
+
+const threadsLayer = Layer.unwrap(
+  Effect.map(ThreadModes, (modes) =>
+    Layer.mock(ThreadManagement.ThreadManagementService)({
+      getThreadShell: (threadId) =>
+        Effect.map(Ref.get(modes), (current) => liveThreadShell(threadId, current)),
+    }),
+  ),
+).pipe(
+  Layer.provideMerge(
+    Layer.effect(
+      ThreadModes,
+      Ref.make({
+        runtimeMode: "full-access" as RuntimeMode,
+        interactionMode: "default" as ProviderInteractionMode,
+      }),
+    ),
+  ),
+);
+
+const served = (defaultProfile: string, enabled = true) =>
   Layer.mergeAll(
     McpHttpServer.toolkitRegistration(ProbeToolkit, McpToolAccess.toLayer(ProbeToolkit, handlers)),
     McpHttpServer.catalogRegistrations.agentSurface,
@@ -99,9 +127,9 @@ const served = (defaultProfile: string) =>
     ),
     Layer.provideMerge(Profiles.layer),
     Layer.provideMerge(McpServer.McpServer.layer),
-    Layer.provideMerge(liveThreadsLayer),
+    Layer.provideMerge(threadsLayer),
     Layer.provideMerge(Sqlite.layerMemory),
-    Layer.provideMerge(ServerSettings.layerTest({ goatclaw: { enabled: true, defaultProfile } })),
+    Layer.provideMerge(ServerSettings.layerTest({ goatclaw: { enabled, defaultProfile } })),
   );
 
 const mcpClient = McpSchema.McpServerClient.of({
@@ -221,7 +249,7 @@ it.effect(
       client_request_id, receipt_id, tool_name, args_digest, grant_json, state, boot_id, created_at,
       expires_at)
       VALUES ('environment', ${`thread:${caller}`}, ${keyed.path}, 'k', 'receipt:stopped',
-        ${keyed.name}, ${digest}, '{"goatclaw":null,"scopes":null,"readOnly":false}', 'running',
+        ${keyed.name}, ${digest}, '{"runtimeMode":"full-access","interactionMode":"default","goatclaw":null,"scopes":null,"readOnly":false}', 'running',
         'boot:stopped', '1970-01-01T00:00:00.000Z',
         '1970-01-02T00:00:00.000Z')`;
       expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toMatchObject({
@@ -429,24 +457,19 @@ it.effect("reserves the key as its declared schema decodes it and refuses any ot
   }).pipe(Effect.provide(served("owner"))),
 );
 
-const narrowProfile = (id: string, without: string) =>
+const changeProfile = (id: string, change: (profile: PermissionProfile) => PermissionProfile) =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
     const policy = (yield* settings.getSettings).goatclaw;
-    const profile = policy.profiles[id]!;
     yield* settings.updateSettings({
-      goatclaw: {
-        ...policy,
-        profiles: {
-          ...policy.profiles,
-          [id]: {
-            ...profile,
-            capabilities: profile.capabilities.filter((capability) => capability !== without),
-          },
-        },
-      },
+      goatclaw: { ...policy, profiles: { ...policy.profiles, [id]: change(policy.profiles[id]!) } },
     });
   });
+const narrowProfile = (id: string, without: string) =>
+  changeProfile(id, (profile) => ({
+    ...profile,
+    capabilities: profile.capabilities.filter((capability) => capability !== without),
+  }));
 
 it.effect("refuses a forwarded launch's replay once the destination's profile narrows", () =>
   Effect.gen(function* () {
@@ -481,4 +504,62 @@ it.effect("refuses a role launch's replay once the role's profile narrows", () =
     expect(yield* direct(launch)).toMatchObject({ code: "capability_denied" });
     expect(yield* runs).toBe(1);
   }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect("refuses a role launch's replay once the role's runtime ceiling drops", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const launch = { projectId: "a", clientRequestId: "k", goatclawRole: "merge-manager" };
+    expect(yield* direct(launch)).toEqual({ run: 1 });
+    yield* changeProfile("merge-manager", (profile) => ({
+      ...profile,
+      runtimeModeCeiling: "approval-required",
+    }));
+    expect(yield* direct(launch)).toMatchObject({ code: "capability_denied" });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect("refuses a replay once the profile's host allowlist narrows", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 1 });
+    yield* changeProfile("owner", (profile) => ({ ...profile, hosts: [] }));
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toMatchObject({
+      code: "capability_denied",
+    });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect("refuses an outside client's replay at a lower runtime ceiling with goatclaw off", () =>
+  Effect.gen(function* () {
+    const client = (access: "full-access" | "auto"): McpInvocationContext.McpInvocationScope => ({
+      environmentId: EnvironmentId.make("environment"),
+      requestNamespace: "client:session",
+      thread: undefined,
+      client: { sessionId: "session", label: "Outside agent", access },
+      capabilities: new Set(["orchestration"]),
+      issuedAt: 0,
+    });
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" }, client("full-access"))).toEqual({
+      run: 1,
+    });
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" }, client("auto"))).toMatchObject({
+      code: "capability_denied",
+    });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner", false))),
+);
+
+it.effect("refuses a thread's replay once its interaction mode drops to plan", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 1 });
+    yield* Ref.update(yield* ThreadModes, (modes) => ({ ...modes, interactionMode: "plan" }));
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toMatchObject({
+      code: "capability_denied",
+    });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner", false))),
 );

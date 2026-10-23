@@ -31,6 +31,7 @@ import {
   assertLiveCaller,
   assertTargetWithinLimits,
   type Caller,
+  type CallerLimits,
   loadCaller,
   readCaller,
   unavailable,
@@ -138,7 +139,7 @@ export class KeyedAdmission extends Context.Service<
      * Reserves the call's key, or ends the call with its recorded answer or a refusal and never
      * returns. `params` are the decoded arguments; their digest binds the key to this request.
      */
-    readonly admit: (params: unknown) => Effect.Effect<void>;
+    readonly admit: (params: unknown, limits: CallerLimits | undefined) => Effect.Effect<void>;
   }
 >()("goat/mcp/McpToolAccess/KeyedAdmission") {}
 
@@ -148,11 +149,23 @@ export class KeyedAdmission extends Context.Service<
  */
 export const admit = (params: unknown) =>
   Effect.flatMap(Effect.serviceOption(KeyedAdmission), (admission) =>
-    admission._tag === "Some" ? admission.value.admit(params) : Effect.void,
+    admission._tag === "Some"
+      ? Effect.flatMap(Effect.serviceOption(AdmittedLimits), (limits) =>
+          admission.value.admit(params, Option.getOrUndefined(limits)),
+        )
+      : Effect.void,
   );
 
-const admitted = <A, E, R>(params: unknown, run: Effect.Effect<A, E, R>) =>
-  Effect.andThen(admit(params), run);
+/** The modes the declaration resolved for this caller; a replay must still hold them. */
+class AdmittedLimits extends Context.Service<AdmittedLimits, CallerLimits>()(
+  "goat/mcp/McpToolAccess/AdmittedLimits",
+) {}
+
+const withLimits = <A, E, R>(limits: CallerLimits, run: Effect.Effect<A, E, R>) =>
+  Effect.provideService(run, AdmittedLimits, limits);
+
+const admitted = <A, E, R>(params: unknown, limits: CallerLimits, run: Effect.Effect<A, E, R>) =>
+  withLimits(limits, Effect.andThen(admit(params), run));
 
 type AdmissionOption = { readonly admission?: "handler" };
 
@@ -296,13 +309,15 @@ export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A,
   declare("write", (params: P) =>
     requireThreadCaller.pipe(
       Effect.flatMap(() => writingCaller),
-      Effect.flatMap(() => admitted(params, handle(params))),
+      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
     ),
   );
 
 export const writes = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("write", (params: P) =>
-    orchestratingCaller.pipe(Effect.flatMap(() => admitted(params, handle(params)))),
+    orchestratingCaller.pipe(
+      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
+    ),
   );
 
 /**
@@ -311,7 +326,7 @@ export const writes = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>
  */
 export const writesWithCapability = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("write", (params: P) =>
-    writingCaller.pipe(Effect.flatMap(() => admitted(params, handle(params)))),
+    writingCaller.pipe(Effect.flatMap((caller) => admitted(params, caller.limits, handle(params)))),
   );
 
 export const writesThreads = <P, A, E, R>(
@@ -344,7 +359,7 @@ export const writesThreads = <P, A, E, R>(
       // orchestrator checks again under the thread's lock and records its
       // refusal here, since handlers wrap dispatch errors their own way.
       const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
-      return yield* admitted(params, handle(params)).pipe(
+      return yield* admitted(params, caller.limits, handle(params)).pipe(
         Effect.provideService(DispatchModeLimit, { ...caller.limits, refused }),
         Effect.catch((error) =>
           Effect.flatMap(Ref.get(refused), (refusal) =>
@@ -389,7 +404,7 @@ export const startsThreads = <P, A, E, R>(
           requested.interactionMode,
         ),
       };
-      return yield* admitted(params, handle(params, started));
+      return yield* admitted(params, limits, handle(params, started));
     }),
   );
 
@@ -412,10 +427,10 @@ export const writesEnvironment = <P, A, E, R>(
   );
   return declare("write", (params: P) =>
     check.pipe(
-      Effect.flatMap(() =>
+      Effect.flatMap((caller) =>
         options.admission === "handler"
-          ? handle(params, check)
-          : admitted(params, handle(params, check)),
+          ? withLimits(caller.limits, handle(params, check))
+          : admitted(params, caller.limits, handle(params, check)),
       ),
     ),
   );
@@ -442,8 +457,10 @@ export const removesCheckouts = <P, A, E, R>(
     removes(params)
       ? orchestratingCaller.pipe(
           Effect.tap((caller) => assertFullAccess(caller, removesCheckoutsRequired)),
-          Effect.flatMap(() =>
-            options.admission === "handler" ? handle(params) : admitted(params, handle(params)),
+          Effect.flatMap((caller) =>
+            options.admission === "handler"
+              ? withLimits(caller.limits, handle(params))
+              : admitted(params, caller.limits, handle(params)),
           ),
         )
       : reachesHost(params)

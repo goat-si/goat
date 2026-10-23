@@ -7,6 +7,7 @@ import {
   GoatclawRole,
   OrchestratorMcpFailure,
   PermissionProfile,
+  ProviderInteractionMode,
   RuntimeMode,
 } from "@goat/contracts";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "@goat/contracts/agentSurface";
@@ -29,6 +30,7 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
+import type { CallerLimits } from "./threadAccess.ts";
 import { KeyedClientRequestId } from "./toolkits/keyedParameters.ts";
 import { refusalResult } from "./toolRefusals.ts";
 
@@ -95,8 +97,17 @@ const decodeRole = Schema.decodeUnknownOption(GoatclawRole);
  * goatclaw null means no profile applied; scopes null means a thread credential.
  */
 const Grant = Schema.Struct({
+  /** The caller's own modes, which an omitted mode inherits. */
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  /** The goatclaw profile in force, role-narrowed; null while goatclaw is off. */
   goatclaw: Schema.NullOr(
-    Schema.Struct({ capabilities: Schema.Array(Schema.String), runtimeMode: RuntimeMode }),
+    Schema.Struct({
+      capabilities: Schema.Array(Schema.String),
+      runtimeMode: RuntimeMode,
+      /** null allows every host. */
+      hosts: Schema.NullOr(Schema.Array(Schema.String)),
+    }),
   ),
   scopes: Schema.NullOr(Schema.Array(AuthEnvironmentScope)),
   readOnly: Schema.Boolean,
@@ -107,18 +118,25 @@ const encodeGrant = Schema.encodeEffect(GrantJson);
 const decodeGrant = Schema.decodeEffect(GrantJson);
 
 const rank = (mode: RuntimeMode) => RuntimeMode.literals.indexOf(mode);
+// plan cannot do what default does, so default is the broader interaction mode.
+const interactionRank = (mode: ProviderInteractionMode) => (mode === "default" ? 1 : 0);
 const holdsAll = (held: ReadonlyArray<string> | null, needed: ReadonlyArray<string> | null) =>
   (needed ?? []).every((item) => (held ?? []).includes(item));
+const allowsHosts = (held: ReadonlyArray<string> | null, needed: ReadonlyArray<string> | null) =>
+  held === null || (needed !== null && needed.every((host) => held.includes(host)));
 
 /** Whether `current` still holds everything `recorded` did. Turning goatclaw on narrows it. */
 const coversGrant = (current: Grant, recorded: Grant) =>
   (recorded.readOnly || !current.readOnly) &&
+  rank(current.runtimeMode) >= rank(recorded.runtimeMode) &&
+  interactionRank(current.interactionMode) >= interactionRank(recorded.interactionMode) &&
   holdsAll(current.scopes, recorded.scopes) &&
   (recorded.goatclaw === null
     ? current.goatclaw === null
     : current.goatclaw !== null &&
       holdsAll(current.goatclaw.capabilities, recorded.goatclaw.capabilities) &&
-      rank(current.goatclaw.runtimeMode) >= rank(recorded.goatclaw.runtimeMode));
+      rank(current.goatclaw.runtimeMode) >= rank(recorded.goatclaw.runtimeMode) &&
+      allowsHosts(current.goatclaw.hosts, recorded.goatclaw.hosts));
 
 /** Sorted object keys, array order kept, undefined dropped; null stays distinct from omitted. */
 const canonical = (value: unknown): unknown =>
@@ -295,6 +313,7 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
   const grantOf = Effect.fnUntraced(function* (
     scope: McpInvocationContext.McpInvocationScope,
     params: unknown,
+    limits: CallerLimits,
   ) {
     const readOnly = scope.readOnly === true || scope.client?.access === "read-only";
     const scopes = scope.grantedScopes ?? null;
@@ -316,17 +335,30 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
       role === undefined || !view.enabled || Option.isNone(settings)
         ? undefined
         : (yield* settings.value.getSettings).goatclaw.profiles[GOATCLAW_ROLE_PROFILES[role]];
-    const capabilities =
+    // What claim grants a role launch: the role's profile within the caller's.
+    const profile =
       role === undefined
-        ? view.profile.capabilities
+        ? view.profile
         : named === undefined
-          ? []
-          : Profiles.intersectProfiles(named, view.profile).capabilities;
+          ? { ...view.profile, capabilities: [], hosts: [] }
+          : Profiles.intersectProfiles(named, view.profile);
+    const profileMode =
+      rank(profile.runtimeModeCeiling) < rank(view.runtimeMode)
+        ? profile.runtimeModeCeiling
+        : view.runtimeMode;
     return {
       profileId: view.enabled ? view.profile.id : null,
       ceiling: view.runtimeMode,
       grant: {
-        goatclaw: view.enabled ? { capabilities, runtimeMode: view.runtimeMode } : null,
+        runtimeMode: limits.runtimeMode,
+        interactionMode: limits.interactionMode,
+        goatclaw: view.enabled
+          ? {
+              capabilities: profile.capabilities,
+              runtimeMode: role === undefined ? view.runtimeMode : profileMode,
+              hosts: profile.hosts ?? null,
+            }
+          : null,
         scopes,
         readOnly,
       } satisfies Grant,
@@ -372,10 +404,15 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
       const decide = (result: McpSchema.CallToolResult) =>
         Effect.andThen(Deferred.succeed(decided, result), Effect.never);
 
-      const reservationFor = Effect.fnUntraced(function* (params: unknown) {
+      const reservationFor = Effect.fnUntraced(function* (
+        params: unknown,
+        limits: CallerLimits | undefined,
+      ) {
         if (Option.isNone(store)) return { kind: "storage_failed" } as const;
+        // Every write declaration resolves the caller's modes first; without them, fail closed.
+        if (limits === undefined) return { kind: "storage_failed" } as const;
         const digest = yield* argumentsDigest(params);
-        const granted = yield* grantOf(scope, params).pipe(
+        const granted = yield* grantOf(scope, params, limits).pipe(
           Effect.catchTags({ OrchestratorMcpFailure: (failure) => Effect.succeed({ failure }) }),
         );
         if ("failure" in granted) return { kind: "refused", failure: granted.failure } as const;
@@ -403,13 +440,13 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
         return reservation;
       });
 
-      const admit = (params: unknown): Effect.Effect<void> =>
+      const admit = (params: unknown, limits: CallerLimits | undefined): Effect.Effect<void> =>
         Effect.flatMap(Ref.getAndSet(admittedOnce, true), (again) =>
           again
             ? Effect.void
             : // A reservation is held from the insert on, so an interrupt cannot strand it unrecorded.
               Effect.uninterruptibleMask((restore) =>
-                reservationFor(params).pipe(
+                reservationFor(params, limits).pipe(
                   Effect.catchCause((cause) =>
                     Effect.as(
                       Effect.logError("clientRequestId reservation failed", {
