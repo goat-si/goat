@@ -577,7 +577,13 @@ const make = Effect.gen(function* () {
       const started = yield* modes;
       const model = yield* modelFor(instanceId);
       const label = CLOUD_AGENT_LABELS[input.provider];
-      const from = input.branch ?? "the branch checked out in the project folder";
+      // With goatclaw on, the approval covers the branch checked out now, which the launch then pins.
+      const branch =
+        input.branch ??
+        (effective.enabled
+          ? yield* cloudConsent.checkedOutBranch(project.workspaceRoot)
+          : undefined);
+      const from = branch ?? "the branch checked out in the project folder";
       const consent = yield* cloudConsent.admit(scope, effective, {
         decisionId: input.decisionId,
         handoffId: input.handoffId,
@@ -585,7 +591,7 @@ const make = Effect.gen(function* () {
         binding: {
           provider: input.provider,
           repo: input.repo,
-          branch: input.branch ?? null,
+          branch: branch ?? null,
           prompt: input.prompt,
           title: input.title ?? null,
           notifyWebhook: input.notifyWebhook ?? null,
@@ -617,7 +623,7 @@ const make = Effect.gen(function* () {
             modelSelection: { instanceId, model },
             workspaceStrategy: {
               type: "root",
-              ...(input.branch === undefined ? {} : { branch: input.branch }),
+              ...(branch === undefined ? {} : { branch }),
             },
             message: input.prompt,
             standingInstructions: false,
@@ -631,7 +637,7 @@ const make = Effect.gen(function* () {
         holder,
         dryRun: false,
         threadId: launched.threadId,
-        note: `The cloud run starts in this thread from ${input.branch ?? "the branch checked out in the project folder"}; goat_cloud_run_list and goat_thread_status follow it.`,
+        note: `The cloud run starts in this thread from ${from}; goat_cloud_run_list and goat_thread_status follow it.`,
       };
     },
   );

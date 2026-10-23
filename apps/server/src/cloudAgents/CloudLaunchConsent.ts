@@ -23,6 +23,7 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
 import { consumeApproval } from "../handoffs/approvalConsumption.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 
 /** A person usually answers after the asking turn ends; an hour keeps the launch's context fresh. */
 const HANDOFF_TTL_MINUTES = 60;
@@ -73,10 +74,31 @@ export const makeCloudLaunchConsent = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
   const inbox = yield* DecisionInbox.DecisionInbox;
   const sql = yield* SqlClient.SqlClient;
+  const git = yield* GitVcsDriver.GitVcsDriver;
   const consume = (approvalId: string) =>
     consumeApproval(approvalId, "cloud.launch").pipe(
       Effect.provideService(SqlClient.SqlClient, sql),
     );
+
+  /**
+   * The branch a launch without one starts from: the one checked out in the project folder now.
+   * The approval binds it and the launch passes it explicitly, so switching the checkout after a
+   * person approved does not move the launch to a branch they never saw.
+   */
+  const checkedOutBranch = Effect.fn("CloudLaunchConsent.checkedOutBranch")(function* (
+    workspaceRoot: string,
+  ) {
+    const status = yield* git
+      .statusDetailsLocal(workspaceRoot, { includeDivergence: false })
+      .pipe(
+        Effect.mapError(() => invalid("Could not read the project folder's checked-out branch.")),
+      );
+    if (!status.isRepo || status.branch === null)
+      return yield* invalid(
+        "The project folder has no branch checked out. Pass branch to say which one to launch from.",
+      );
+    return status.branch;
+  });
 
   /** Asks a person: a handoff from a thread, otherwise a decision bound to this launch. */
   const ask = Effect.fn("CloudLaunchConsent.ask")(function* (
@@ -183,5 +205,5 @@ export const makeCloudLaunchConsent = Effect.gen(function* () {
     return { admitted: false, handoff: yield* ask(scope, digest, input.request) };
   });
 
-  return { admit };
+  return { admit, checkedOutBranch };
 });

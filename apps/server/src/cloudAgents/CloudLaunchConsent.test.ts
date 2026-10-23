@@ -17,6 +17,7 @@ import {
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { makeCloudLaunchConsent, type CloudLaunchBinding } from "./CloudLaunchConsent.ts";
 
 const fromThread: McpInvocationScope = {
@@ -86,6 +87,7 @@ const withConsent = <A, E>(
           DecisionInbox.layer.pipe(
             Layer.provide(Layer.mock(PendingQuestions.PendingQuestionsMcpService)({})),
             Layer.provideMerge(Profiles.layer),
+            Layer.provideMerge(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
             Layer.provide(
               Layer.mock(ServerEnvironment.ServerEnvironment)({
                 getEnvironmentId: Effect.succeed(EnvironmentId.make("origin")),
@@ -113,9 +115,10 @@ it.effect("a person's approval admits exactly the launch it was asked for, once"
       const handoffId = asked.handoff.handoffId;
       expect(yield* message(admit(launch, { handoffId }))).toContain("still open");
       yield* respond(handoffId, "completed");
-      expect(
-        yield* message(admit({ ...launch, prompt: "Delete the repo" }, { handoffId })),
-      ).toContain("does not cover");
+      for (const changed of [{ prompt: "Delete the repo" }, { branch: "feature" }])
+        expect(yield* message(admit({ ...launch, ...changed }, { handoffId }))).toContain(
+          "does not cover",
+        );
       expect(
         yield* message(
           admit(
