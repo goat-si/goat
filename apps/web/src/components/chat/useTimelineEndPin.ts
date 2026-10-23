@@ -40,8 +40,20 @@ export function useTimelineEndPin({
       height: scrollNode.scrollHeight,
     });
     let scrolledUp = createUpwardScrollDetector(measuredPosition());
+    // Input that can start a user scroll, seen since the last pin.
+    let userInput = false;
+    const onUserInput = () => {
+      userInput = true;
+    };
     const onScroll = () => {
-      if (scrolledUp(measuredPosition())) {
+      const position = measuredPosition();
+      // LegendList handles scroll events once a frame and corrects toward the offset it last
+      // saw, which can still predate a pin. A move onto that offset with no user input since
+      // the pin is the list adjusting, not the user leaving the end.
+      const tracked = listRef.current?.getState().scroll;
+      const programmatic =
+        !userInput && tracked !== undefined && Math.abs(position.top - tracked) <= 1;
+      if (scrolledUp({ ...position, programmatic })) {
         released = true;
       }
       if (released && distanceFromEnd() <= 1) released = false;
@@ -59,19 +71,24 @@ export function useTimelineEndPin({
       if (distance <= 1) released = false;
       if (released || !viewport) return;
       if (distance <= 1 || (smooth && distance <= viewportHeight)) return;
-      // Through the list, so its tracked offset moves too. LegendList's scroll adjustment
-      // aims at that offset; after a direct scrollTop write it pulls the view back up on a
-      // slow frame, and that correction reads as the user scrolling away.
-      void listRef.current?.scrollToEnd({ animated: false });
+      viewport.scrollTop = viewport.scrollHeight;
+      userInput = false;
       // Its scroll event arrives later and coalesces with any user scroll in
       // between, so upward movement is measured from where the pin landed.
       scrolledUp = createUpwardScrollDetector(measuredPosition());
     };
+    const inputEvents = ["wheel", "touchmove", "keydown", "pointerdown"] as const;
+    for (const type of inputEvents) {
+      scrollNode.addEventListener(type, onUserInput, { capture: true, passive: true });
+    }
     scrollNode.addEventListener("scroll", onScroll, { passive: true });
     const stopObserving = observeResize([scrollNode, content], pin);
     return () => {
       stopObserving();
       scrollNode.removeEventListener("scroll", onScroll);
+      for (const type of inputEvents) {
+        scrollNode.removeEventListener(type, onUserInput, { capture: true });
+      }
     };
   }, [enabled, listRef, scrollNode, smooth]);
 }
