@@ -9,6 +9,7 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as GoatProjectFileLoader from "./GoatProjectFileLoader.ts";
+import { runSetup, setupScript, projectId } from "./testkit/ProjectScriptRunnerHarness.ts";
 
 const layerTest = Layer.empty.pipe(
   Layer.provideMerge(GoatProjectFileLoader.layer),
@@ -33,6 +34,132 @@ const writeProjectFile = Effect.fn("writeProjectFile")(function* (
 });
 
 it.layer(layerTest)("GoatProjectFileLoader", (it) => {
+  it.effect("#904 runs the prepared checkout's setup when stored actions have no setup", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTempDir;
+      const checkout = yield* makeTempDir;
+      yield* writeProjectFile(
+        root,
+        JSON.stringify({
+          scripts: [{ name: "Root", command: "root-setup", runOnWorktreeCreate: true }],
+        }),
+      );
+      yield* writeProjectFile(
+        checkout,
+        JSON.stringify({
+          scripts: [
+            { name: "Branch", command: "branch-setup", runOnWorktreeCreate: true, async: false },
+          ],
+        }),
+      );
+      const { result, writes, opened } = yield* runSetup({
+        root,
+        checkout,
+        scripts: [{ ...setupScript, runOnWorktreeCreate: false }],
+      });
+      expect(result).toMatchObject({
+        status: "started",
+        scriptName: "Branch",
+        scriptCommand: "branch-setup",
+        async: false,
+        cwd: checkout,
+      });
+      expect(writes).toEqual([" branch-setup\r"]);
+      expect(opened).toEqual([checkout]);
+    }),
+  );
+
+  it.effect.each([
+    { name: "stored", scripts: [setupScript], settings: {}, command: "stored-setup" },
+    {
+      name: "environment",
+      scripts: [],
+      settings: { defaultProjectScripts: [setupScript] },
+      command: "stored-setup",
+    },
+    {
+      name: "project override",
+      scripts: [setupScript],
+      settings: {
+        projectSettingsOverrides: {
+          [projectId]: { defaultProjectScripts: [{ ...setupScript, command: "override-setup" }] },
+        },
+      },
+      command: "override-setup",
+    },
+    {
+      name: "legacy inheritance",
+      scripts: [setupScript],
+      settings: {
+        defaultProjectScripts: [{ ...setupScript, command: "default-setup" }],
+        projectScriptOverrides: { [projectId]: null },
+      },
+      command: "default-setup",
+    },
+    {
+      name: "folded settings",
+      scripts: [setupScript],
+      settings: { projectSettingsFolded: true },
+      command: "file-setup",
+    },
+  ])("keeps $name precedence when goat.json declares setup", ({ scripts, settings, command }) =>
+    Effect.gen(function* () {
+      const root = yield* makeTempDir;
+      yield* writeProjectFile(
+        root,
+        JSON.stringify({
+          scripts: [{ name: "File", command: "file-setup", runOnWorktreeCreate: true }],
+        }),
+      );
+      const { result, writes } = yield* runSetup({ root, checkout: root, scripts, settings });
+      expect(result).toMatchObject({ status: "started", scriptCommand: command, async: true });
+      expect(writes).toEqual([` ${command}\r`]);
+    }),
+  );
+
+  it.effect.each([
+    {
+      name: "missing branch file",
+      contents: null,
+      fileName: GOAT_PROJECT_FILE_NAME,
+      command: "root-setup",
+    },
+    {
+      name: "legacy branch file",
+      contents:
+        '{ "scripts": [{ "name": "Legacy", "command": "legacy-setup", "runOnWorktreeCreate": true }] }',
+      fileName: LEGACY_PROJECT_FILE_NAME,
+      command: "legacy-setup",
+    },
+    {
+      name: "invalid branch file",
+      contents: "{ invalid",
+      fileName: GOAT_PROJECT_FILE_NAME,
+      command: null,
+    },
+    {
+      name: "branch without setup",
+      contents: '{ "scripts": [] }',
+      fileName: GOAT_PROJECT_FILE_NAME,
+      command: null,
+    },
+  ])("resolves setup from the $name", ({ contents, fileName, command }) =>
+    Effect.gen(function* () {
+      const root = yield* makeTempDir;
+      const checkout = yield* makeTempDir;
+      yield* writeProjectFile(
+        root,
+        JSON.stringify({
+          scripts: [{ name: "Root", command: "root-setup", runOnWorktreeCreate: true }],
+        }),
+      );
+      if (contents !== null) yield* writeProjectFile(checkout, contents, fileName);
+      const { result, writes } = yield* runSetup({ root, checkout });
+      expect(result.status).toBe(command === null ? "no-script" : "started");
+      expect(writes).toEqual(command === null ? [] : [` ${command}\r`]);
+    }),
+  );
+
   describe("load", () => {
     it.effect("returns none when both project files are missing", () =>
       Effect.gen(function* () {

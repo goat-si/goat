@@ -625,8 +625,8 @@ const make = Effect.gen(function* () {
             {
               // A retry finds the branch and worktree an earlier failed attempt left behind.
               reuseExistingBranch: true,
-              // The setup stage below runs this script and shows its output.
-              skipSetupHook: project.scripts.some((script) => script.runOnWorktreeCreate),
+              // Only the prepared checkout can declare which setup the stage below will run.
+              skipSetupHook: true,
               progress: {
                 onWorktreeClaimed: (path) =>
                   Effect.sync(() => {

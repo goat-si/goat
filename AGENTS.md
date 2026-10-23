@@ -87,7 +87,7 @@ The full rules and the lane brief checklist are in [Development discipline](docs
 
 ## Dev servers
 
-- `vp i` installs. New worktrees get this from a `post-checkout` hook that runs `scripts/setup-worktree.ts`; if module resolution looks broken, it probably did not run, so run `node scripts/setup-worktree.ts`.
+- `vp i` installs. GOAT prepares new worktrees with the setup script in `goat.json`. The `post-checkout` fallback needs generated hooks that may be absent in a fresh checkout; if module resolution looks broken, run `node scripts/setup-worktree.ts`.
 - Setup runs in the background. While `.goat/setup-running` names a live PID, wait for it and do not run `vp i`. It ends with `.goat/setup-done` or `.goat/setup-failed` (with the error tail). With no marker at all, setup never ran here, so run `vp i` yourself.
 - `vp run dev` starts server and web. In a worktree, state defaults to that worktree's gitignored `.goat` (a worktree created earlier keeps its `.t3`), which deliberately outranks an ambient `GOAT_HOME` so you cannot land on shared state by accident. An explicit `--home-dir` still wins.
 - Ports derive from the worktree path and are stable across restarts, but read the real ones from the `[dev-runner]` line since occupied ports shift.
