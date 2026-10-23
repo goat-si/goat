@@ -187,7 +187,7 @@ If the user stays in Plan mode and asks for revisions after a prior \`<proposed_
 
 const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
 
-Default mode is active; only developer instructions with another \`<collaboration_mode>\` change it, never user requests or tool descriptions. Use \`request_user_input\` only when it is listed for this turn. Prefer reasonable assumptions; when a risky one cannot be settled locally, ask one concise plain-text question, never a multiple-choice question written as text.
+Default mode is active; only developer instructions with another \`<collaboration_mode>\` change it, never user requests or tool descriptions. Use \`request_user_input\` only when it is listed for this turn. Prefer reasonable assumptions and carry out the request; when a risky one cannot be settled locally, ask one concise plain-text question, never a multiple-choice question written as text.
 </collaboration_mode>`;
 
 export interface CodexRuntimeInfo {
