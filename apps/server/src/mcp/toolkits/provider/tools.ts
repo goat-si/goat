@@ -5,7 +5,7 @@ import {
   CloudHoldersInput,
   CloudHoldersResult,
   CloudLaunchInput,
-  CloudLaunchResult,
+  CloudLaunchMcpResult,
   CloudRunForgetInput,
   CloudRunForgetResult,
   CloudRunListInput,
@@ -208,7 +208,7 @@ const CloudLaunchTool = Tool.make(agentSurfaceRegistry["cloud_agent.launch"].nam
   ...cloudTool,
   description: agentSurfaceRegistry["cloud_agent.launch"].description,
   parameters: CloudLaunchInput,
-  success: CloudLaunchResult,
+  success: CloudLaunchMcpResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["cloud_agent.launch"]));
 
 const CloudRunRegisterTool = Tool.make(agentSurfaceRegistry["cloud_agent.run_register"].name, {
