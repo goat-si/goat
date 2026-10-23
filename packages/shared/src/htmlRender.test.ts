@@ -134,4 +134,25 @@ describe("htmlRenderFromToolItem", () => {
       expect(htmlRenderFromToolItem({ toolName, output })).toEqual(reference);
     }
   });
+
+  it("reads a page rendered through goat_call, whose result is goat_call's envelope", () => {
+    const output = { status: "ok", value: result };
+    for (const path of ["html.render", "goat_html_render", "html_render"])
+      expect(
+        htmlRenderFromToolItem({
+          toolName: "mcp__goat__goat_call",
+          input: { path, args: { title: "Chart" } },
+          output,
+        }),
+        path,
+      ).toEqual(reference);
+    // goat_call to another tool is not a page, whatever its result holds.
+    expect(
+      htmlRenderFromToolItem({
+        toolName: "mcp__goat__goat_call",
+        input: { path: "thread.send", args: {} },
+        output,
+      }),
+    ).toBeUndefined();
+  });
 });

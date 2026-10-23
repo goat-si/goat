@@ -60,6 +60,7 @@ it.effect("reports old, stopped, and mismatched hosts instead of failing the mat
     expect(byHost.local?.providers.map((provider) => provider.driver)).toContain("codex");
     expect(byHost.old?.status).toBe("update_runtime");
     expect(byHost.stopped?.status).toBe("not_ready");
+    expect(byHost.stopped?.message).toContain("no ready connection to GOAT on stopped");
     expect(byHost.box).toMatchObject({ status: "ok", versionMismatch: true });
     expect(result.rows.map((row) => row.host)).toEqual([null, "old", "stopped", "box"]);
   }).pipe(Effect.provide(layer));

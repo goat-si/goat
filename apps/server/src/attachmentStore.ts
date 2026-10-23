@@ -136,7 +136,11 @@ export function parseThreadSegmentFromAttachmentId(attachmentId: string): string
  */
 export function threadHtmlRenderAttachmentIds(
   threadId: string,
-  items: Iterable<{ readonly toolName: string | null | undefined; readonly output?: unknown }>,
+  items: Iterable<{
+    readonly toolName: string | null | undefined;
+    readonly input?: unknown;
+    readonly output?: unknown;
+  }>,
 ) {
   const segment = toSafeThreadAttachmentSegment(threadId);
   if (segment === null) return [];

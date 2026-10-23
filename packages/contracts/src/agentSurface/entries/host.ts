@@ -9,7 +9,9 @@ export const hostEntries = {
     summary:
       "Read version, load, memory, disk, thread counts, providers and quota for this machine and every connected or linked host.",
     description:
-      "Read host status for this machine and every SSH host this process is connected to and every linked host: GOAT version, CPU, memory, load average, disk free space, running/waiting/queued thread counts, every configured provider instance (providers), cached provider quota for those that report it (quotas), and the resource pressure each machine reports for itself (pressure: ok, elevated or critical, with reasons). Pass placement ({} or the providerInstanceId, driver or platform a new lane needs) to rank the reported hosts for that lane: placement.candidates lists eligible hosts best first, then skipped ones with why. Pass host (an SSH alias from goat_ssh_host_list or a linked host from goat_host_link_list) for one other machine. Pass local:true for this machine only. Reaching another machine needs a caller allowed to use this machine's SSH keys. An unreachable host keeps its last successful sample. A remote GOAT that does not offer this tool is reported as unsupported. compatibility says whether a reachable host works with this machine, from the protocols it serves: compatible (different GOAT versions are fine), incompatible (its message names which machine to update), or degraded (the host is too old to report its protocols; update it). versionMismatch:true only marks a different GOAT build.",
+      "Read capacity, thread activity, configured providers, quota and compatibility for this machine and connected or linked hosts, with optional placement ranking. Unreachable hosts may show stale metrics; different build versions alone do not mean incompatibility.",
+    guide:
+      "The call can target one SSH alias from goat_ssh_host_list or one linked name from goat_host_link_list, or return this machine alone. Remote reads require a live caller allowed to reach hosts with this machine's SSH keys; read-only MCP clients cannot make them. Metrics include GOAT version, CPU, memory, load averages, disk free space and running, waiting and queued thread counts; those three counts exclude archived, deleted and subagent threads. Providers include every configured instance; quotas include instances that report usage limits. Quota reads can refresh stale provider limits, at most once per minute. Hosts that report pressure supply an ok, elevated or critical level and reasons. Placement ranks eligible reported hosts first, best score first, then ineligible hosts with reasons. An empty placement request ranks without extra requirements; provider instance, driver and platform can constrain it. Unreachable entries retain metrics from the last successful sample when available, marked lastKnown. A remote without goat_host_status is unsupported. Compatibility compares served protocols: compatible permits different builds; incompatible names which machine needs updating; degraded means the host does not report its protocols. versionMismatch is also true when the remote omits its version.",
     effect: "read",
     hostRoutable: true,
     requires: "either",
@@ -27,7 +29,9 @@ export const hostEntries = {
     toolkit: "fleetHealth",
     summary: "Stop placing new goal work on a host",
     description:
-      'Cordon a host ("local" for this machine): goal controllers and goat_thread_reschedule stop placing new or moved work there. Threads already running on it are not touched. The cordon is saved and survives a restart; goat_host_uncordon lifts it, and goat_host_status shows a Cordoned condition. Needs a full-access caller.',
+      "Persistently exclude a host from new goal placements and goat_thread_reschedule targets. Existing threads keep running. Use goat_host_uncordon to allow placements again.",
+    guide:
+      "The local host is stored as local. The cordon survives server restarts because it is saved in the fleet database. goat_host_status reports a Cordoned condition. Cordoning an already draining host preserves its drain flag. Needs a live full-access/default calling thread or a full-access client, plus hub.manage for a GOAT thread when goatclaw is enabled.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,
@@ -46,7 +50,9 @@ export const hostEntries = {
     toolkit: "fleetHealth",
     summary: "Allow placements on a cordoned host again",
     description:
-      "Lift a cordon or drain from a host so goal controllers may place work there again. Work already moved off it stays where it is. Needs a full-access caller.",
+      "Clear a host's cordon and drain flags so goal placements can use it again. Previously moved work stays where it is.",
+    guide:
+      "Needs a live full-access/default calling thread or a full-access client, plus hub.manage for a GOAT thread when goatclaw is enabled.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,
@@ -63,9 +69,11 @@ export const hostEntries = {
     verb: "drain",
     name: "goat_host_drain",
     toolkit: "fleetHealth",
-    summary: "Cordon a host and move its goal attempts away between runs",
+    summary: "Cordon a host and mark it Draining",
     description:
-      "Drain a host: cordon it and mark it Draining, so the goal controller moves each goal attempt on it to another host once its current run ends, one slot per goal at a time. A running turn is never interrupted, and threads that no goal owns are never moved. goat_host_uncordon ends the drain. Needs a full-access caller.",
+      "Persistently cordon a host and mark it Draining, excluding it from new placements. Existing goal attempts are currently not moved automatically. Use goat_host_uncordon to clear both flags.",
+    guide:
+      "Needs a live full-access/default calling thread or a full-access client, plus hub.manage for a GOAT thread when goatclaw is enabled. The code contains a policy helper for moving idle attempts between runs, but the current goal controller does not call it or request drain reschedules. Its success message therefore promises evacuation that the controller does not implement.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,

@@ -1009,7 +1009,7 @@ const layerMakeRoutes = Layer.mergeAll(
     SshDeviceAdd.layer.pipe(
       Layer.provideMerge(
         SshHostSetup.layer.pipe(
-          Layer.provide(MaintenanceAudit.layer),
+          Layer.provide(Layer.mergeAll(MaintenanceAudit.layer, PermissionProfiles.layer)),
           Layer.provideMerge(
             ProviderHostSync.layer.pipe(
               Layer.provide(
