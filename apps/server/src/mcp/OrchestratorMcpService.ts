@@ -2488,7 +2488,9 @@ const make = Effect.gen(function* () {
           host,
           worktree: remote.workspace?.type === "worktree",
         });
-        if (admitted.enabled) yield* FleetSync.syncBeforeForwarding(fleet, host);
+        const ceilingAdvice = admitted.enabled
+          ? yield* FleetSync.syncBeforeForwarding(fleet, host)
+          : undefined;
         runtimeMode = admitted.runtimeMode;
         const register = Effect.gen(function* () {
           yield* permissions.recheck(scope, admitted, { host });
@@ -2655,7 +2657,8 @@ const make = Effect.gen(function* () {
             Effect.mapError(threadManagementFailure),
           );
         }
-        return yield* finishTaskWait(scope, taskId, key, input);
+        const delegated = yield* finishTaskWait(scope, taskId, key, input);
+        return ceilingAdvice === undefined ? delegated : { ...delegated, ceiling: ceilingAdvice };
       }
 
       const providers = yield* loadProviders;
