@@ -34,7 +34,7 @@ const writeProjectFile = Effect.fn("writeProjectFile")(function* (
 });
 
 it.layer(layerTest)("GoatProjectFileLoader", (it) => {
-  it.effect("#904 runs the prepared checkout's setup when stored actions have no setup", () =>
+  it.effect("#904 runs the prepared checkout's setup when no actions were configured", () =>
     Effect.gen(function* () {
       const root = yield* makeTempDir;
       const checkout = yield* makeTempDir;
@@ -55,7 +55,6 @@ it.layer(layerTest)("GoatProjectFileLoader", (it) => {
       const { result, writes, opened } = yield* runSetup({
         root,
         checkout,
-        scripts: [{ ...setupScript, runOnWorktreeCreate: false }],
       });
       expect(result).toMatchObject({
         status: "started",
@@ -66,6 +65,46 @@ it.layer(layerTest)("GoatProjectFileLoader", (it) => {
       });
       expect(writes).toEqual([" branch-setup\r"]);
       expect(opened).toEqual([checkout]);
+    }),
+  );
+
+  it.effect.each([
+    {
+      name: "unchecked stored actions",
+      settings: {},
+      scripts: [{ ...setupScript, runOnWorktreeCreate: false }],
+    },
+    {
+      name: "empty project override",
+      settings: { projectSettingsOverrides: { [projectId]: { defaultProjectScripts: [] } } },
+    },
+    {
+      name: "unchecked project override",
+      settings: {
+        projectSettingsOverrides: {
+          [projectId]: { defaultProjectScripts: [{ ...setupScript, runOnWorktreeCreate: false }] },
+        },
+      },
+    },
+    { name: "legacy reset", settings: { projectScriptOverrides: { [projectId]: null } } },
+    { name: "folded defaults", settings: { projectSettingsFolded: true } },
+    {
+      name: "unchecked defaults",
+      settings: { defaultProjectScripts: [{ ...setupScript, runOnWorktreeCreate: false }] },
+    },
+  ])("#997 preserves $name instead of re-enabling file setup", (choice) =>
+    Effect.gen(function* () {
+      const root = yield* makeTempDir;
+      yield* writeProjectFile(
+        root,
+        JSON.stringify({
+          scripts: [{ name: "File", command: "file-setup", runOnWorktreeCreate: true }],
+        }),
+      );
+      const { result, writes, opened } = yield* runSetup({ root, checkout: root, ...choice });
+      expect(result).toEqual({ status: "no-script" });
+      expect(writes).toEqual([]);
+      expect(opened).toEqual([]);
     }),
   );
 
@@ -99,8 +138,11 @@ it.layer(layerTest)("GoatProjectFileLoader", (it) => {
     {
       name: "folded settings",
       scripts: [setupScript],
-      settings: { projectSettingsFolded: true },
-      command: "file-setup",
+      settings: {
+        projectSettingsFolded: true,
+        defaultProjectScripts: [{ ...setupScript, command: "folded-setup" }],
+      },
+      command: "folded-setup",
     },
   ])("keeps $name precedence when goat.json declares setup", ({ scripts, settings, command }) =>
     Effect.gen(function* () {

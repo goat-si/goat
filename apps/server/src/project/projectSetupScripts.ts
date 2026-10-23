@@ -1,6 +1,6 @@
 import { GOAT_PROJECT_FILE_NAME, type ProjectScript, type ServerSettings } from "@goat/contracts";
 import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
-import { resolveProjectScripts, setupProjectScript } from "@goat/shared/projectScripts";
+import { resolveProjectScriptConfiguration } from "@goat/shared/projectScripts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -13,11 +13,13 @@ export const makeSetupScriptResolver = Effect.gen(function* () {
   const path = yield* Path.Path;
   return Effect.fn("resolveSetupProjectScripts")(function* (
     settings: ServerSettings,
-    project: Parameters<typeof resolveProjectScripts>[1] & { readonly workspaceRoot: string },
+    project: Parameters<typeof resolveProjectScriptConfiguration>[1] & {
+      readonly workspaceRoot: string;
+    },
     cwd: string,
   ) {
-    const scripts = resolveProjectScripts(settings, project);
-    if (setupProjectScript(scripts) !== null) return scripts;
+    const { scripts, source } = resolveProjectScriptConfiguration(settings, project);
+    if (source !== "unconfigured") return scripts;
     // An invalid branch file must not silently run the root checkout's different command.
     const hasCheckoutFile =
       cwd === project.workspaceRoot ||
