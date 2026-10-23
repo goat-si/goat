@@ -39,7 +39,7 @@ const reportLane = (report: InboxReport) =>
 const segments = (id: string, prefix: string) => id.slice(prefix.length).split(":");
 
 /** The lane a notice is about, or null when no notice producer wrote the id. */
-export function noticeLane(id: string): string | null {
+function noticeLane(id: string): string | null {
   if (id.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX)) {
     // launcher:host:thread, each URI-encoded, so none of them contains a colon.
     const [, host = "", thread = ""] = segments(id, LAUNCH_WATCH_MESSAGE_PREFIX);
@@ -52,8 +52,7 @@ export function noticeLane(id: string): string | null {
 }
 
 /** The lane key for a launched thread, shared by run-end notices and inbox reports. */
-export const threadLane = (host: string | null, threadId: string) =>
-  `thread:${host ?? ""}/${threadId}`;
+const threadLane = (host: string | null, threadId: string) => `thread:${host ?? ""}/${threadId}`;
 
 const isRunEnd = (id: string) =>
   id.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX) &&
@@ -118,7 +117,7 @@ export function renderNotices(notices: ReadonlyArray<Notice>): string {
 }
 
 /** The summary a client shows for a digest: how many notices, and the newest. */
-export function foldedNotification(
+function foldedNotification(
   count: number,
   newest: OrchestrationV2Notification,
 ): OrchestrationV2Notification {
