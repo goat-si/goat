@@ -46,6 +46,10 @@
     "./agentSurface/resolve": {
       "types": "./src/agentSurface/resolve.ts",
       "import": "./src/agentSurface/resolve.ts"
+    },
+    "./agentSurface/hosts": {
+      "types": "./src/agentSurface/hosts.ts",
+      "import": "./src/agentSurface/hosts.ts"
     }
   },
   "scripts": {
