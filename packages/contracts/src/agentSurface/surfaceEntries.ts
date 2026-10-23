@@ -1,5 +1,23 @@
 import type { AgentSurfaceEntry, CapabilityDeclaration } from "./types.ts";
 
+type Named = Pick<AgentSurfaceEntry, "resource" | "verb" | "name">;
+
+/** The name a path projects to: goat_<resource>_<verb>. */
+export const canonicalToolName = (entry: Pick<AgentSurfaceEntry, "resource" | "verb">) =>
+  `goat_${entry.resource}_${entry.verb}`;
+
+/** The name /mcp lists a tool under. The meta tools keep their short names. */
+export const listedToolName = (entry: Named) =>
+  entry.resource === "surface" ? entry.name : canonicalToolName(entry);
+
+/**
+ * Names a tool shipped under that /mcp still accepts in tools/call without listing them. The
+ * toolkit keeps registering the tool under its shipped name, so handlers and access
+ * declarations keep their keys; only the listing and the call route change.
+ */
+export const legacyToolNames = (entry: Named): ReadonlyArray<string> =>
+  listedToolName(entry) === entry.name ? [] : [entry.name];
+
 /** The meta tools that reach every other path, kept beside the registry like notes.ts. */
 export const metaSurfaceEntries = {
   describe: {

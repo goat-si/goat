@@ -149,7 +149,7 @@ const callTool = (name: string, args: Record<string, unknown>) =>
       );
   });
 
-const callSnapshot = (args: Record<string, unknown>) => callTool("preview_snapshot", args);
+const callSnapshot = (args: Record<string, unknown>) => callTool("goat_preview_snapshot", args);
 
 // Real tool definitions with handlers that record what they decoded.
 const layerRecordingTools = (calls: Array<unknown>) => {
@@ -219,7 +219,7 @@ it.effect.each([{}, { includeImage: false }])(
         yield* Effect.yieldNow;
 
         const snapshot = yield* server
-          .callTool({ name: "preview_snapshot", arguments: input })
+          .callTool({ name: "goat_preview_snapshot", arguments: input })
           .pipe(
             Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
             Effect.provideService(McpSchema.McpServerClient, client),
@@ -304,7 +304,7 @@ it.effect.each([
       for (const call of [1, 2, 3, 4, 5, 6]) {
         const snapshot = yield* server
           .callTool({
-            name: "preview_snapshot",
+            name: "goat_preview_snapshot",
             arguments: { ...input, tabId: alternateTabId },
           })
           .pipe(
@@ -342,7 +342,7 @@ it.effect.each([
 
       const nextDefault = yield* server
         .callTool({
-          name: "preview_snapshot",
+          name: "goat_preview_snapshot",
           arguments: { tabId: alternateTabId },
         })
         .pipe(
@@ -367,7 +367,7 @@ it.effect("refuses preview tools to a client outside a thread before they run", 
       client: { sessionId: "session-1", label: "Claude Code", access: "read-only" as const },
     };
     const click = yield* server
-      .callTool({ name: "preview_click", arguments: { locator: "text=Send" } })
+      .callTool({ name: "goat_preview_click", arguments: { locator: "text=Send" } })
       .pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, readOnly),
         Effect.provideService(McpSchema.McpServerClient, client),
@@ -435,8 +435,8 @@ it.effect("decodes null optional arguments the way it decodes omitted ones", () 
     const thread = { threadId: "thread-null-arguments" };
     yield* callTool("goat_thread_read", thread);
     yield* callTool("goat_thread_read", { ...thread, afterPosition: null, view: null });
-    yield* callTool("delegate_task", { task: "Inspect", target: {} });
-    yield* callTool("delegate_task", { task: "Inspect", title: null, target: { model: null } });
+    yield* callTool("goat_task_create", { task: "Inspect", target: {} });
+    yield* callTool("goat_task_create", { task: "Inspect", title: null, target: { model: null } });
     // A null the schema declares keeps its meaning: here it clears the project icon.
     yield* callTool("goat_project_update", { projectId: "project-1", projectIcon: null });
 
@@ -502,18 +502,18 @@ it.effect(
       const names = server.tools.map(({ tool }) => tool.name);
       expect(names).toEqual(
         expect.arrayContaining([
-          "link_pull_request",
-          "unlink_pull_request",
-          "list_thread_pull_requests",
+          "goat_pull_request_link",
+          "goat_pull_request_unlink",
+          "goat_pull_request_list",
         ]),
       );
-      const linkTool = server.tools.find(({ tool }) => tool.name === "link_pull_request");
+      const linkTool = server.tools.find(({ tool }) => tool.name === "goat_pull_request_link");
       expect(linkTool?.tool.annotations?.idempotentHint).toBe(true);
       expect(linkTool?.tool.annotations?.openWorldHint).toBe(false);
       expect(linkTool?.tool.description).toContain("Register every pull request you open");
 
       const denied = yield* server
-        .callTool({ name: "list_thread_pull_requests", arguments: {} })
+        .callTool({ name: "goat_pull_request_list", arguments: {} })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
@@ -825,17 +825,17 @@ it.effect("registers annotated tools and preserves authenticated request context
       }).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
 
-      const statusTool = server.tools.find(({ tool }) => tool.name === "preview_status");
+      const statusTool = server.tools.find(({ tool }) => tool.name === "goat_preview_status");
       expect(statusTool?.tool.annotations?.readOnlyHint).toBe(true);
       expect(statusTool?.tool.annotations?.idempotentHint).toBe(true);
       expect(statusTool?.tool.annotations?.destructiveHint).toBe(false);
 
-      const snapshotTool = server.tools.find(({ tool }) => tool.name === "preview_snapshot");
+      const snapshotTool = server.tools.find(({ tool }) => tool.name === "goat_preview_snapshot");
       expect(snapshotTool?.tool.annotations?.readOnlyHint).toBe(true);
       expect(snapshotTool?.tool.annotations?.idempotentHint).toBe(false);
       expect(snapshotTool?.tool.annotations?.openWorldHint).toBe(true);
 
-      const clickTool = server.tools.find(({ tool }) => tool.name === "preview_click");
+      const clickTool = server.tools.find(({ tool }) => tool.name === "goat_preview_click");
       expect(clickTool?.tool.annotations?.readOnlyHint).toBe(false);
       expect(clickTool?.tool.annotations?.destructiveHint).toBe(true);
       expect(clickTool?.tool.annotations?.openWorldHint).toBe(true);
@@ -845,12 +845,12 @@ it.effect("registers annotated tools and preserves authenticated request context
         description: "The preview action completed successfully.",
       });
 
-      const navigateTool = server.tools.find(({ tool }) => tool.name === "preview_navigate");
+      const navigateTool = server.tools.find(({ tool }) => tool.name === "goat_preview_navigate");
       expect(navigateTool?.tool.annotations?.destructiveHint).toBe(false);
       expect(navigateTool?.tool.annotations?.openWorldHint).toBe(true);
 
       const status = yield* server
-        .callTool({ name: "preview_status", arguments: {} })
+        .callTool({ name: "goat_preview_status", arguments: {} })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
@@ -861,7 +861,7 @@ it.effect("registers annotated tools and preserves authenticated request context
         tabId,
       });
 
-      const logsTool = server.tools.find(({ tool }) => tool.name === "preview_logs");
+      const logsTool = server.tools.find(({ tool }) => tool.name === "goat_preview_logs");
       expect(logsTool?.tool.annotations).toMatchObject({
         readOnlyHint: true,
         idempotentHint: true,
@@ -870,7 +870,7 @@ it.effect("registers annotated tools and preserves authenticated request context
       const beforeLogs = routedRequests.length;
       const logs = yield* server
         .callTool({
-          name: "preview_logs",
+          name: "goat_preview_logs",
           arguments: { tabId: alternateTabId, consoleLevels: ["warning"] },
         })
         .pipe(
@@ -886,7 +886,7 @@ it.effect("registers annotated tools and preserves authenticated request context
       expect(routedRequests.length).toBe(beforeLogs + 1);
 
       const malformed = yield* server
-        .callTool({ name: "preview_click", arguments: { selector: "" } })
+        .callTool({ name: "goat_preview_click", arguments: { selector: "" } })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
@@ -896,7 +896,7 @@ it.effect("registers annotated tools and preserves authenticated request context
 
       const snapshot = yield* server
         .callTool({
-          name: "preview_snapshot",
+          name: "goat_preview_snapshot",
           arguments: { tabId: alternateTabId, includeImage: true },
         })
         .pipe(
@@ -914,10 +914,10 @@ it.effect("registers annotated tools and preserves authenticated request context
 
       // Arrays and primitives are wrapped so structuredContent stays a JSON object.
       // Claude Code rejects the whole result otherwise.
-      const evaluateTool = server.tools.find(({ tool }) => tool.name === "preview_evaluate");
+      const evaluateTool = server.tools.find(({ tool }) => tool.name === "goat_preview_evaluate");
       expect(evaluateTool?.tool.outputSchema).toMatchObject({ type: "object" });
       const evaluated = yield* server
-        .callTool({ name: "preview_evaluate", arguments: { expression: "buttons()" } })
+        .callTool({ name: "goat_preview_evaluate", arguments: { expression: "buttons()" } })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
@@ -931,11 +931,11 @@ it.effect("registers annotated tools and preserves authenticated request context
       });
 
       const actionRequests = [
-        { name: "preview_click", arguments: { x: 10, y: 10 } },
-        { name: "preview_type", arguments: { text: "Hello" } },
-        { name: "preview_press", arguments: { key: "Enter" } },
-        { name: "preview_scroll", arguments: { deltaY: 100 } },
-        { name: "preview_wait_for", arguments: { text: "Example" } },
+        { name: "goat_preview_click", arguments: { x: 10, y: 10 } },
+        { name: "goat_preview_type", arguments: { text: "Hello" } },
+        { name: "goat_preview_press", arguments: { key: "Enter" } },
+        { name: "goat_preview_scroll", arguments: { deltaY: 100 } },
+        { name: "goat_preview_wait", arguments: { text: "Example" } },
       ];
       for (const request of actionRequests) {
         const result = yield* server

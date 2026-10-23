@@ -293,7 +293,7 @@ it.effect.each([
 
 /** Calls one provider tool against mocked services and returns the encoded failure. */
 const failureOf = (
-  name: "goat_provider_sync_status" | "goat_provider_diagnose",
+  name: "goat_provider_sync_read" | "goat_provider_diagnose",
   services: {
     readonly hostSync?: Partial<HostSync.ProviderHostSync["Service"]>;
     readonly routing?: Partial<Routing.ProviderDiagnosisRouting["Service"]>;
@@ -329,7 +329,7 @@ const failureOf = (
 
 it.effect("keeps a host sync code as the failure's reason beside its legacy code", () =>
   Effect.gen(function* () {
-    const declined = yield* failureOf("goat_provider_sync_status", {
+    const declined = yield* failureOf("goat_provider_sync_read", {
       hostSync: {
         status: () =>
           Effect.fail(new ProviderHostSyncError({ code: "declined", detail: "Declined." })),

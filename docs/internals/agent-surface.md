@@ -85,20 +85,21 @@ it running, as `cloud_agent.run_forget` does.
 A verb on a sub-resource names the sub-resource first: `channel.task_read`,
 `memory.settings_update`, `ssh.host_prepare`.
 
-**Now.** 74 shipped names are not the projection of their path
-([#781](https://github.com/goat-si/goat/issues/781)). They are still served and listed
-under those names, and `/mcp` also accepts each one's canonical
-`goat_<resource>_<verb>` name in `tools/call`, without listing it until the flip
+**Now.** `tools/list` shows every path as `goat_<resource>_<verb>`; the meta tools keep
+their short names, `goat_describe` and `goat_call`. 79 names a tool shipped under are
+not that projection ([#781](https://github.com/goat-si/goat/issues/781)). `/mcp` still
+accepts each of them in `tools/call` without listing it, runs the listed tool, and
+returns `_meta["goat/deprecated"]` naming the listed name
 ([ToolDispatch.ts](../../apps/server/src/mcp/ToolDispatch.ts) `withServedToolNames`).
-Their paths keep the resource and verb they shipped with, except three that used a
-synonym (D11): `memory.settings_read`, `memory.source_read`, and `preview.wait`. The
-meta tools keep their short names, `goat_describe` and `goat_call`.
-
-**Proposed.** On-grammar paths that use a near synonym of a standard verb, such as
-`decision.get`, `thread.configuration`, `provider.sync_status`, and
-`origin.reports_wait`, become `read`, `wait`, or a `list` on a sub-resource at the
-listing flip, and the old path stays as an alias. The registry and the audit page
-are the catalog; this page keeps the rules.
+Toolkits register under the shipped name, so access declarations, capability checks, and
+analytics keep that key whichever name a caller used; only the listing renames
+(`McpHttpServer` `withListedNames`). Paths that used a near synonym of a standard verb were
+normalized (D11): `decision.read`, `permission_profile.read`,
+`thread.configuration_read`, `provider.sync_read`, `origin.report_wait`,
+`memory.settings_read`, `memory.source_read`, and `preview.wait`. `goat_call` and
+`goat_describe` still accept the old paths, and `goat_call` then reports the current
+path in `meta.deprecated`. The registry and the audit page are the catalog; this page
+keeps the rules.
 
 Three projections come from a path:
 
@@ -430,13 +431,13 @@ message is always the text the direct call shows, so free-text reasons the direc
 scrubs never leave through it. Writes count as unkeyed until the registry gains
 `idempotency`, and routed calls set `meta.host`.
 
-**Now.** A direct `tools/call` by a canonical alias runs the served tool. The `/mcp`
-auth middleware swaps the name for the served one before Effect's MCP core sees the
-request, because the core checks one visibility predicate for both `tools/list` and
+**Now.** A direct `tools/call` by a legacy name runs the listed tool. The `/mcp` auth
+middleware swaps the name for the listed one before Effect's MCP core sees the request,
+because the core checks one visibility predicate for both `tools/list` and
 `tools/call` and cannot hide a tool that stays callable. The call therefore gets the
-served tool's argument refusal, access checks, and result, and analytics record it
-under the served name, so each tool keeps one series until the flip renames it.
-Remote hosts are still called by the names they shipped with.
+listed tool's argument refusal, access checks, and result, plus
+`_meta["goat/deprecated"]`. Analytics record every call under the shipped name the
+toolkit registers, whichever name the caller used, so each tool keeps one series.
 
 ## Composition: `goat_eval`
 
@@ -899,7 +900,7 @@ every gate runs per step (D7).
 | D17 | `needs_human` only with a handoff a person can act on; a block nobody can clear stays `error`                                                                     | A human status that does not hold makes agents hand back work no person can fix                                                                  | Inferring human steps from messages            |
 | D18 | The D8 gate is a written protocol with paired ABBA runs, an oracle per workload, and model turns as the primary metric                                            | Agent-level timing hid real gains behind per-turn cost in aside-codemode; fewer turns and bytes were the measurable effect                       | A wall-clock threshold                         |
 | D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                        | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                 | Renaming paths to match shipped names          |
-| D20 | Before the flip, canonical names are unlisted aliases resolved at `/mcp` to the served tool, whose checks, result and analytics name apply                        | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                           | Registering alias tools, which would list them |
+| D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                           | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                           | Registering alias tools, which would list them |
 
 ## Open questions
 

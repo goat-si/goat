@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
 import { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
-import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -111,7 +111,7 @@ const entryHelp = (entry: AgentSurfaceRegistryEntry) =>
     "",
     entry.description,
     "",
-    `Path: ${entry.path}   Tool: ${entry.name}   Effect: ${entry.effect}   Caller: ${entry.requires}`,
+    `Path: ${entry.path}   Tool: ${listedToolName(entry)}   Effect: ${entry.effect}   Caller: ${entry.requires}`,
     `Host-routable: ${entry.hostRoutable ? "yes" : "no"}   Dry run: ${entry.dryRun}`,
     `Arguments: goat describe ${entry.path} prints the input schema.`,
     "",

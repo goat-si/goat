@@ -270,21 +270,20 @@ type RpcMessage = {
 };
 
 /**
- * The catalog served over /mcp the way agents reach it: each caller sends its own bearer token
+ * Registrations served over /mcp the way agents reach it: each caller sends its own bearer token
  * and the auth middleware provides that caller's scope. Needs an HTTP server and client, such as
  * NodeHttpServer.layerTest, and a scope that keeps the server up.
  */
-const serveWith = Effect.fn("agentSurfaceTestkit.serveCatalogOverHttp")(function* <E, R>(
+/** Registrations served over /mcp the way agents reach it; see serveCatalogOverHttp. */
+export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
   scopes: Readonly<Record<string, McpInvocationScope>>,
-  // Settings come from the caller, so a test can change the goatclaw policy.
-  services: Layer.Layer<Layer.Success<typeof servicesOff>, E, R>,
+  registrations: Layer.Layer<never, E, R>,
 ) {
   const scopeOf = new Map(
     Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
   );
   yield* HttpRouter.serve(
-    catalog.pipe(
-      Layer.provide(services),
+    registrations.pipe(
       Layer.provideMerge(McpHttpServer.layerMcpTransport),
       Layer.provide(
         Layer.mock(McpSessionRegistry.McpSessionRegistry)({
@@ -370,6 +369,12 @@ const serveWith = Effect.fn("agentSurfaceTestkit.serveCatalogOverHttp")(function
     }),
   };
 });
+
+// Settings come from the caller, so a test can change the goatclaw policy.
+const serveWith = <E, R>(
+  scopes: Readonly<Record<string, McpInvocationScope>>,
+  services: Layer.Layer<Layer.Success<typeof servicesOff>, E, R>,
+) => serveOverHttp(scopes, catalog.pipe(Layer.provide(services)));
 
 export const serveCatalogOverHttp = (scopes: Readonly<Record<string, McpInvocationScope>>) =>
   serveWith(scopes, servicesOff).pipe(Effect.provide(settingsOff));

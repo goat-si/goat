@@ -19,8 +19,9 @@ import {
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
 import {
-  canonicalToolAliases,
   canonicalToolName,
+  legacyToolNameTargets,
+  listedToolName,
   resolveAgentSurfaceEntry,
 } from "@goat/contracts/agentSurface/resolve";
 import { type AgentSurfaceResult, FAILURE_CLASSES } from "@goat/contracts/agentSurface/envelope";
@@ -46,20 +47,24 @@ import {
   resolveGoatMcpToolPresentation,
 } from "@goat/shared/goatMcpToolPresentation";
 import { NodeHttpServer } from "@effect/platform-node";
-import { servedToolCallBody } from "./ToolDispatch.ts";
+import { DEPRECATED_META_KEY, listedToolCall } from "./ToolDispatch.ts";
 
 const registered = catalog.pipe(
   Layer.provide(dependencies),
   Layer.provideMerge(McpServer.McpServer.layer),
 );
 
-it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
+it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   expect(entries).toHaveLength(202); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, preparation retry, and operation tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
+  expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
+  // 74 shipped names off the path grammar plus five whose verb D11 normalized.
+  expect(entries.flatMap((entry) => entry.legacyNames)).toHaveLength(79);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
     expect(path).toMatch(/^[a-z][a-z_]*\.[a-z][a-z_]*$/);
-    expect(entry.legacyNames).toContain(entry.name);
+    // The shipped name is either the one listed or one still callable unlisted.
+    expect([listedToolName(entry), ...entry.legacyNames]).toContain(entry.name);
     const tools: Record<string, Tool.Any> = toolkits[entry.schemaRefs.toolkit].tools;
     const tool = tools[entry.schemaRefs.tool];
     expect(tool, path).toBeDefined();
@@ -89,10 +94,10 @@ it.effect(
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
       expect(server.tools.map(({ tool }) => tool.name).sort()).toEqual(
-        entries.map((entry) => entry.name).sort(),
+        entries.map(listedToolName).sort(),
       );
       for (const entry of entries) {
-        const tool = server.tools.find(({ tool }) => tool.name === entry.name)!.tool;
+        const tool = server.tools.find(({ tool }) => tool.name === listedToolName(entry))!.tool;
         expect(tool.annotations, entry.path).toMatchObject({
           readOnlyHint: entry.effect === "read",
           destructiveHint: entry.effect === "destructive",
@@ -103,8 +108,8 @@ it.effect(
         server.tools.find(({ tool }) => tool.name === name)!.tool.annotations;
       expect(hints("goat_ssh_browse")?.readOnlyHint).toBe(false);
       expect(hints("goat_thread_read")?.readOnlyHint).toBe(true);
-      expect(hints("preview_snapshot")?.readOnlyHint).toBe(true);
-      expect(hints("task_status")?.readOnlyHint).toBe(false);
+      expect(hints("goat_preview_snapshot")?.readOnlyHint).toBe(true);
+      expect(hints("goat_task_read")?.readOnlyHint).toBe(false);
       expect(hints("goat_review_findings_record")?.readOnlyHint).toBe(false);
       expect(hints("goat_review_findings_export")?.readOnlyHint).toBe(true);
       expect(hints("goat_worktree_cleanup")?.destructiveHint).toBe(true);
@@ -129,7 +134,9 @@ it.effect("publishes closed top-level schemas and refuses unknown keys for the w
 );
 
 type Entry = (typeof agentSurfaceRegistry)[keyof typeof agentSurfaceRegistry];
-const registeredNames = new Set<string>(entries.map((entry) => entry.name));
+const registeredNames = new Set<string>(
+  entries.flatMap((entry) => [entry.name, listedToolName(entry)]),
+);
 const toolOf = (entry: Entry): Tool.Any =>
   (toolkits[entry.schemaRefs.toolkit].tools as Record<string, Tool.Any>)[entry.schemaRefs.tool]!;
 
@@ -483,12 +490,12 @@ const via = {
       }),
     ),
 };
-// alias: the canonical name over HTTP /mcp, which resolves it to the served tool before dispatch.
-type Route = keyof typeof via | "alias";
+// legacy: the shipped name over HTTP /mcp, which resolves it to the listed tool before dispatch.
+type Route = keyof typeof via | "legacy";
 const RPC_INTERNAL_ERROR = 'rpc error: {"code":-32603';
 const ROUTES: ReadonlyArray<Route> = [
   ...(Object.keys(via) as ReadonlyArray<keyof typeof via>),
-  "alias",
+  "legacy",
 ];
 
 describe("agent surface access", () => {
@@ -500,22 +507,22 @@ describe("agent surface access", () => {
         // Memory access is a per-task grant its handlers check; toolkits/memory tests own it.
         if (entry.resource === "memory") continue;
         const args = yield* argumentsFor(entry);
-        const alias = canonicalToolName(entry);
+        const [legacy] = entry.legacyNames;
         for (const caller of Object.keys(callers) as ReadonlyArray<Caller>) {
           let directOutcome: Outcome | undefined;
           let directDied = false;
           for (const route of ROUTES) {
             // goat_call refuses to call itself by design.
             if (route === "goat_call" && entry.path === "surface.call") continue;
-            if (route === "alias" && !canonicalToolAliases.has(alias)) continue;
+            if (route === "legacy" && legacy === undefined) continue;
             const call: Effect.Effect<
               McpSchema.CallToolResult,
               McpSchema.InternalError | McpSchema.InvalidParams,
               McpServer.McpServer
             > =
-              route === "alias"
-                ? http.callTool(caller, alias, args)
-                : via[route](entry.name, args).pipe(
+              route === "legacy"
+                ? http.callTool(caller, legacy!, args)
+                : via[route](listedToolName(entry), args).pipe(
                     Effect.provideService(McpInvocationContext, callers[caller]),
                     Effect.provideService(McpSchema.McpServerClient, client),
                   );
@@ -542,7 +549,7 @@ describe("agent surface access", () => {
             // Over HTTP, an image tool that dies answers with JSON-RPC's internal error under any
             // name; it is the same death the direct route caught on an inert service.
             const diedOverHttp =
-              route === "alias" && directDied && textOf(result).startsWith(RPC_INTERNAL_ERROR);
+              route === "legacy" && directDied && textOf(result).startsWith(RPC_INTERNAL_ERROR);
             // The envelope turns a refusal inside a successful value into an error; that is a
             // domain answer after access passed, so it still counts as reaching the handler.
             const outcome =
@@ -714,24 +721,43 @@ it("resolves paths, canonical names and legacy names to one entry without collis
   expect(resolveAgentSurfaceEntry("orchestrator_capabilities")?.path).toBe("provider.list");
   expect(resolveAgentSurfaceEntry("goat_provider_list")?.path).toBe("provider.list");
   expect(resolveAgentSurfaceEntry("goat_permission_profile_sync")?.name).toBe("goat_goatclaw_sync");
+  expect(resolveAgentSurfaceEntry("decision.get")?.path).toBe("decision.read");
 });
 
-it.effect("keeps canonical aliases out of tools/list and passes served names through", () =>
+it.effect("lists canonical names and keeps legacy names callable, unlisted and deprecated", () =>
   Effect.gen(function* () {
     const http = yield* serveCatalogOverHttp(callers);
     const listed = yield* http.listToolNames("thread");
-    expect(listed.toSorted()).toEqual(entries.map((entry) => entry.name).sort());
-    // A call by a served name, legacy ones included, reaches the server exactly as sent.
-    for (const name of listed) {
-      const body = JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: { name },
-      });
-      expect(servedToolCallBody(body), name).toBeUndefined();
-    }
+    expect(listed.toSorted()).toEqual(entries.map(listedToolName).sort());
+    expect(listed).toContain("goat_task_create");
+    expect(listed).not.toContain("delegate_task");
+    const callBody = (name: string) =>
+      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name } });
+    // A call by a listed name reaches the server exactly as sent.
+    for (const name of listed) expect(listedToolCall(callBody(name)), name).toBeUndefined();
+    for (const [legacy, target] of legacyToolNameTargets)
+      expect(listedToolCall(callBody(legacy))?.listed, legacy).toBe(target);
+    // Both names run the same tool; only the legacy one carries the deprecation.
+    const byLegacy = yield* http.callTool("thread", "orchestrator_capabilities", {});
+    const byListed = yield* http.callTool("thread", "goat_provider_list", {});
+    expect(byLegacy._meta?.[DEPRECATED_META_KEY]).toBe("goat_provider_list");
+    expect(byListed._meta?.[DEPRECATED_META_KEY]).toBeUndefined();
+    expect(byLegacy.content).toEqual(byListed.content);
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("goat_call names the replacement for a deprecated name or path", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const run = asCaller(callerScope({ thread: true }));
+    const deprecated = (path: string) =>
+      run(viaCall(server, path, {})).pipe(Effect.map((result) => result.meta?.deprecated));
+    expect(yield* deprecated("orchestrator_capabilities")).toBe("provider.list");
+    expect(yield* deprecated("goat_permission_profile_get")).toBe("permission_profile.read");
+    expect(yield* deprecated("permission_profile.get")).toBe("permission_profile.read");
+    expect(yield* deprecated("goat_provider_list")).toBeUndefined();
+    expect(yield* deprecated("permission_profile.read")).toBeUndefined();
+  }).pipe(Effect.provide(registered)),
 );
 
 it.effect("goat_call returns ok values and refuses unknown or recursive paths", () =>
@@ -827,7 +853,7 @@ it.effect("goat_call never shows failure text a direct call hides", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const run = asCaller(callerScope({ thread: true }));
-    const direct = yield* run(server.callTool({ name: "device_screenshot", arguments: {} }));
+    const direct = yield* run(server.callTool({ name: "goat_device_screenshot", arguments: {} }));
     expect(direct.isError).toBe(true);
     expect(JSON.stringify(direct)).not.toContain(SECRET);
     const envelope = yield* run(viaCall(server, "device.screenshot", {}));
@@ -964,12 +990,11 @@ it.effect(
 );
 
 it("presents a call by canonical name as the tool it ran", () => {
-  const presented = [...canonicalToolAliases].filter(
-    ([, served]) => resolveGoatMcpToolDefinition(served) !== null,
-  );
+  const canonical = [...legacyToolNameTargets].map(([legacy, listed]) => [listed, legacy] as const);
+  const presented = canonical.filter(([, legacy]) => resolveGoatMcpToolDefinition(legacy) !== null);
   expect(GOAT_MCP_CANONICAL_TOOL_ALIASES).toEqual(Object.fromEntries(presented));
-  for (const [canonical, served] of canonicalToolAliases)
-    expect(resolveGoatMcpToolDefinition(`mcp__goat__${canonical}`), canonical).toBe(
-      resolveGoatMcpToolDefinition(served),
+  for (const [listed, legacy] of canonical)
+    expect(resolveGoatMcpToolDefinition(`mcp__goat__${listed}`), listed).toBe(
+      resolveGoatMcpToolDefinition(legacy),
     );
 });

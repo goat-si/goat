@@ -1,4 +1,5 @@
 import { agentSurfaceRegistry } from "./registry.ts";
+import { listedToolName } from "./surfaceEntries.ts";
 
 type Entry = (typeof agentSurfaceRegistry)[keyof typeof agentSurfaceRegistry];
 
@@ -40,7 +41,7 @@ const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const renderLine = (entry: Entry) => {
   const notes = [
     entry.effect,
-    entry.name,
+    listedToolName(entry),
     entry.hostRoutable ? "host-routable" : null,
     REQUIRES_FLAG[entry.requires],
   ].filter((note) => note !== null);

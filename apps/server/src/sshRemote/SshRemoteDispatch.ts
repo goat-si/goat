@@ -1,8 +1,7 @@
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
+import { advertisesMemoryTools } from "./remoteToolNames.ts";
 import {
-  MEMORY_MCP_TOOLS,
-  MEMORY_ADMINISTRATION_MCP_TOOLS,
   AttachmentCreateUploadUrlInput,
   AttachmentCreateUploadUrlResult,
   type AuthEnvironmentScope,
@@ -1088,11 +1087,7 @@ const make = Effect.gen(function* () {
       const declared = new Set(
         listed.value.find((tool) => tool.name === "goat_thread_launch")?.argumentNames ?? [],
       );
-      const advertisesMemory = listed.value.some((tool) =>
-        [...MEMORY_MCP_TOOLS, ...MEMORY_ADMINISTRATION_MCP_TOOLS].some(
-          (name) => tool.name === name,
-        ),
-      );
+      const advertisesMemory = advertisesMemoryTools(listed.value);
       if (advertisesMemory && !declared.has("memoryGrantCeiling"))
         return yield* memoryRefusal("Remote memory tools require explicit task ceiling admission.");
       const capabilities = { declared, advertisesMemory };

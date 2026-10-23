@@ -53,9 +53,9 @@ export const providerSurfaceEntries = {
     humanSteps: ["approval", "sign_in"],
     annotations: { idempotentHint: false, openWorldHint: true },
   },
-  sync_status: {
+  sync_read: {
     resource: "provider",
-    verb: "sync_status",
+    verb: "sync_read",
     name: "goat_provider_sync_status",
     toolkit: "provider",
     summary: "Read a provider sync's per-host progress",

@@ -30,9 +30,9 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { idempotentHint: false, openWorldHint: false },
   }),
-  "decision.get": entry({
+  "decision.read": entry({
     resource: "decision",
-    verb: "get",
+    verb: "read",
     name: "goat_decision_get",
     toolkit: "decision",
     summary: "Read one durable decision or projected pending question by id.",
@@ -80,9 +80,9 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { idempotentHint: false, openWorldHint: false },
   }),
-  "permission_profile.get": entry({
+  "permission_profile.read": entry({
     resource: "permission_profile",
-    verb: "get",
+    verb: "read",
     name: "goat_permission_profile_get",
     toolkit: "fleet",
     summary: "Read the caller's effective permission profile.",
@@ -2401,9 +2401,9 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
-  "origin.reports_wait": entry({
+  "origin.report_wait": entry({
     resource: "origin",
-    verb: "reports_wait",
+    verb: "report_wait",
     name: "goat_origin_reports_wait",
     toolkit: "remoteReport",
     summary: "Collect one origin correlation's reports using its read key.",
@@ -2856,9 +2856,9 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
-  "thread.configuration": entry({
+  "thread.configuration_read": entry({
     resource: "thread",
-    verb: "configuration",
+    verb: "configuration_read",
     name: "goat_thread_configuration",
     toolkit: "thread",
     summary: "Read a thread's provider/model selection and modes.",
@@ -3274,7 +3274,7 @@ export const agentSurfaceRegistry = {
   "provider.home_request": entry(providerSurfaceEntries.home_request),
   "provider.host_matrix": entry(providerSurfaceEntries.host_matrix),
   "provider.sync": entry(providerSurfaceEntries.sync),
-  "provider.sync_status": entry(providerSurfaceEntries.sync_status),
+  "provider.sync_read": entry(providerSurfaceEntries.sync_read),
   "provider.sync_cancel": entry(providerSurfaceEntries.sync_cancel),
   "cloud_agent.holders": entry({
     resource: "cloud_agent",

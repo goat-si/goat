@@ -1,6 +1,11 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
-import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import {
+  canonicalToolName,
+  deprecatedReplacement,
+  listedToolName,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
 
@@ -100,10 +105,10 @@ export const layer = McpToolAccess.toLayer(
 
     const summary = (entry: AgentSurfaceRegistryEntry, scope: Scope) => ({
       path: entry.path,
-      name: entry.name,
+      name: listedToolName(entry),
       summary: entry.summary,
       effect: entry.effect,
-      available: availability(entry, scope, dispatch.served(entry.name) !== undefined),
+      available: availability(entry, scope, dispatch.served(listedToolName(entry)) !== undefined),
     });
 
     const describe = Effect.fn("AgentSurface.describe")(function* (input: {
@@ -144,7 +149,7 @@ export const layer = McpToolAccess.toLayer(
       }
       const entry = resolveAgentSurfaceEntry(input.path);
       if (entry !== undefined) {
-        const tool = dispatch.served(entry.name);
+        const tool = dispatch.served(listedToolName(entry));
         return {
           depth: "path" as const,
           entry: {
@@ -187,18 +192,15 @@ export const layer = McpToolAccess.toLayer(
           "unknown_path",
           `GOAT has no capability named ${input.path}. Find paths with goat_describe.`,
         );
+      const name = listedToolName(entry);
       if (NOT_CALLABLE.has(entry.path))
         return envelopeError(
           "invalid_request",
           "not_callable",
-          `${entry.name} cannot run inside goat_call. Call it directly.`,
+          `${name} cannot run inside goat_call. Call it directly.`,
         );
-      if (dispatch.served(entry.name) === undefined)
-        return envelopeError(
-          "not_found",
-          "not_served",
-          `This GOAT server does not serve ${entry.name}.`,
-        );
+      if (dispatch.served(name) === undefined)
+        return envelopeError("not_found", "not_served", `This GOAT server does not serve ${name}.`);
       const args = input.args ?? {};
       const host = entry.hostRoutable && typeof args.host === "string" ? args.host : undefined;
       // Work that runs on needs a handle; without one, starting it would strand the caller (D1).
@@ -208,12 +210,16 @@ export const layer = McpToolAccess.toLayer(
           error: {
             code: "unavailable",
             reason: "operation_unavailable",
-            message: `GOAT could not prepare a handle for this work, so ${entry.name} did not run. Try again.`,
+            message: `GOAT could not prepare a handle for this work, so ${name} did not run. Try again.`,
             retryable: true,
           },
         } satisfies AgentSurfaceResult;
-      const result = yield* dispatchEnvelope(dispatch, entry.name, args, entry.effect, host);
-      return yield* operations.withOperation(entry, result);
+      const result = yield* dispatchEnvelope(dispatch, name, args, entry.effect, host);
+      const finished = yield* operations.withOperation(entry, result);
+      // The envelope names paths, so a deprecated name or path points at the current path.
+      return deprecatedReplacement(input.path) === undefined
+        ? finished
+        : { ...finished, meta: { ...finished.meta, deprecated: entry.path } };
     });
 
     return {
