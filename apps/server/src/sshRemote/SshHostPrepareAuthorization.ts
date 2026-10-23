@@ -43,13 +43,21 @@ export const make = Effect.gen(function* () {
       return yield* denied(
         "Preparing a host requires runtime mode full-access and interaction mode default.",
       );
-    const checked = yield* profiles
-      .check(scope, "hub.manage", { host })
-      .pipe(Effect.mapError((error) => denied(error.message)));
-    if (!checked.ok) return yield* denied(checked.reason);
-    if (!checked.effective.enabled)
-      return yield* denied(
-        "Thread preparation requires an enabled goatclaw permission profile with hub.manage.",
-      );
+    // The tool's own threads.remote gate runs only at admission, so the job-time pass repeats it.
+    for (const capability of ["threads.remote", "hub.manage"] as const) {
+      const checked = yield* profiles
+        .check(scope, capability, { host, runtimeMode: live.limits.runtimeMode })
+        .pipe(Effect.mapError((error) => denied(error.message)));
+      if (!checked.ok) return yield* denied(checked.reason);
+      if (!checked.effective.enabled)
+        return yield* denied(
+          "Thread preparation requires an enabled goatclaw permission profile with hub.manage.",
+        );
+      // The profile and any launch or parent ceiling narrow the thread's own mode.
+      if (checked.effective.runtimeMode !== "full-access")
+        return yield* denied(
+          `Profile ${checked.effective.profile.id} limits this thread to ${checked.effective.runtimeMode}; preparing a host requires full-access.`,
+        );
+    }
   });
 });

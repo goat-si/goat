@@ -27,6 +27,8 @@ import { stopped, invocation } from "./SshRuntimeUpdateFixture.ts";
 
 export const preparationRefusals = [
   ["capability", "hub.manage"],
+  ["remote-capability", "threads.remote"],
+  ["ceiling", "limits this thread to auto"],
   ["host", "does not allow host box"],
   ["approval-required", "full-access"],
   ["auto", "full-access"],
@@ -39,7 +41,11 @@ export const preparationRefusals = [
   ["credential", "revoked"],
   ["disabled", "goatclaw"],
 ] as const;
-type Reason = (typeof preparationRefusals)[number][0] | "revoke" | "revoke-credential";
+type Reason =
+  | (typeof preparationRefusals)[number][0]
+  | "revoke"
+  | "revoke-remote"
+  | "revoke-credential";
 
 export const preparePolicy = (reason?: Reason) =>
   Effect.gen(function* () {
@@ -56,12 +62,13 @@ export const preparePolicy = (reason?: Reason) =>
     const policy = (yield* settings.getSettings).goatclaw;
     const owner = policy.profiles.owner;
     if (owner === undefined) return yield* Effect.die("Missing builtin owner profile");
+    const revoked = reason === "revoke-remote" ? "threads.remote" : "hub.manage";
     const removeCapability = settings.updateSettings({
       goatclaw: {
         ...policy,
         profiles: {
           ...policy.profiles,
-          owner: { ...owner, capabilities: owner.capabilities.filter((c) => c !== "hub.manage") },
+          owner: { ...owner, capabilities: owner.capabilities.filter((c) => c !== revoked) },
         },
       },
     });
@@ -73,10 +80,13 @@ export const preparePolicy = (reason?: Reason) =>
           owner: {
             ...owner,
             hosts: [reason === "host" ? "other" : "box"],
+            ...(reason === "ceiling" ? { runtimeModeCeiling: "auto" as const } : {}),
             capabilities:
               reason === "capability"
                 ? owner.capabilities.filter((c) => c !== "hub.manage")
-                : owner.capabilities,
+                : reason === "remote-capability"
+                  ? owner.capabilities.filter((c) => c !== "threads.remote")
+                  : owner.capabilities,
           },
         },
       },
@@ -161,7 +171,8 @@ export const prepareFixture = (reason?: Reason) =>
               runtimeStatus: () => Effect.sync(() => snapshot),
               beginSetupOperation: () =>
                 Effect.gen(function* () {
-                  if (reason === "revoke") yield* removeCapability.pipe(Effect.orDie);
+                  if (reason === "revoke" || reason === "revoke-remote")
+                    yield* removeCapability.pipe(Effect.orDie);
                   credentialRevoked = reason === "revoke-credential";
                   return { operationId: "prepare", generation: 1, stage: "runtime" as const };
                 }),

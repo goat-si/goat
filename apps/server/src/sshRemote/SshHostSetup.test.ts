@@ -1939,7 +1939,7 @@ it.effect.each(preparationRefusals.map(([reason, requirement]) => ({ reason, req
     }),
 );
 
-it.effect.each(["revoke", "revoke-credential"] as const)(
+it.effect.each(["revoke", "revoke-remote", "revoke-credential"] as const)(
   "%s between admission and job execution stops preparation",
   (reason) =>
     Effect.gen(function* () {
@@ -1949,7 +1949,7 @@ it.effect.each(["revoke", "revoke-credential"] as const)(
         status: { state: "failed", failure: { reason: "authorization_revoked" } },
       });
       expect(result.status?.detail).toContain(
-        reason === "revoke" ? "hub.manage" : "Credential revoked",
+        { revoke: "hub.manage", "revoke-remote": "threads.remote" }[reason] ?? "Credential revoked",
       );
       expect(result.status?.failure?.fix.instruction).toContain("Retry on box");
       expect(f.preparations).toEqual([]);

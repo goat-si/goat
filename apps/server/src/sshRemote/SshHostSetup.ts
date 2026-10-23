@@ -1053,7 +1053,10 @@ export const make = (
                   actor: revoked || expired ? "human" : "agent",
                   instruction:
                     revoked || expired
-                      ? !update && revoked
+                      ? !update &&
+                        revoked &&
+                        caller.kind === "mcp" &&
+                        caller.scope.thread !== undefined
                         ? PrepareAuthorization.prepareRecovery(host)
                         : "Ask again and approve with a client that has permission."
                       : `Call goat_ssh_host_prepare for ${host} to retry setup and diagnosis.`,
