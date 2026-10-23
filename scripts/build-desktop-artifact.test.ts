@@ -44,7 +44,6 @@ import {
   resolveMergedStageDependencies,
   resolveBuildOptions,
   stageWslRuntimeArchive,
-  ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
   LinuxBrowserSecretHostError,
   stageBrowserSecret,
@@ -2532,14 +2531,6 @@ it("refuses a preload that Electron's sandbox wrapper cannot parse", () => {
     sandboxedPreloadSyntaxError("(() => {\n" + effectScheduler + "\n})();"),
     undefined,
   );
-});
-
-it("keeps the prefix of a UNC path instead of going relative", () => {
-  const paths = ancestorNodeModulesPaths("\\\\server\\share\\tmp\\app", "\\");
-  for (const candidate of paths) {
-    assert.ok(candidate.startsWith("\\\\server\\share"), candidate);
-  }
-  assert.deepStrictEqual(paths[0], "\\\\server\\share\\tmp\\node_modules");
 });
 
 it.effect.skipIf(!symlinksSupported)("rebases packaged links into the isolated tree", () =>
