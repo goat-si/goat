@@ -633,7 +633,8 @@ The origin checks the calling thread's capability before forwarding, plus
 as on cordon or SSH setup). This holds for writes that declare no capability of
 their own, such as `thread.watch`. A `host` that names something else, such as a
 git forge or the address of a machine being added, is not listed; a test pins
-which arguments are.
+which arguments are. A write that lets placement pick the machine, such as
+`thread.reschedule` without `targetHost`, picks only among the allowlist.
 A thread launched or sent with a forwarded ceiling is bound to it on the
 destination, so its own calls there are checked against it. Other host-routed writes
 arrive as the origin's dispatch session, and the destination relies on the origin's
