@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 3,
   "tasks": [
     {
       "id": "read-control",
@@ -39,6 +39,19 @@
       "answerKeys": ["reviews"],
       "checks": ["reviewsMatchRequestedModels"],
       "deadlineMs": 900000
+    },
+    {
+      "id": "launch-and-wait",
+      "claim": "reduces",
+      "falsifiedIf": "The candidate arm needs more model turns or fails more often, or a run launches the thread twice.",
+      "fixture": {
+        "kind": "titleTag",
+        "message": "Reply with the single word: done"
+      },
+      "prompt": "Start a new GOAT thread in project {{projectId}} titled \"{{fixture.title}}\" on {{fixtureModel}} (provider instance / model) with the message \"{{fixture.message}}\". Wait until its run finishes, then report the thread as threadId and the final status of its run as status.",
+      "answerKeys": ["threadId", "status"],
+      "checks": ["threadLaunchedAsAsked"],
+      "deadlineMs": 300000
     },
     {
       "id": "provider-sync-all-hosts",
