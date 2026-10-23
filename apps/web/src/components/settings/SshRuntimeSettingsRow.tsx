@@ -37,6 +37,8 @@ type SshRuntimeSettingsRowProps = {
   readonly preparationProgress?: Pick<DesktopSshPreparationProgress, "phase">;
   readonly originLabel?: string;
   readonly onRetry?: () => void;
+  /** Starts a connection retry that is waiting on its backoff, alongside the status refresh. */
+  readonly onRefreshConnection?: (() => void) | undefined;
   readonly onReviewTrust?: () => void;
   readonly onOpenApproval?: () => void;
 };
@@ -57,6 +59,7 @@ function SshRuntimeSettingsRowContent({
   environmentId,
   enabled,
   onRetry,
+  onRefreshConnection,
   originLabel,
   pendingAdd,
   connecting,
@@ -237,7 +240,10 @@ function SshRuntimeSettingsRowContent({
             variant="ghost"
             size="xs"
             disabled={!enabled || busy}
-            onClick={() => void sshRuntime.refresh.run(registry, input)}
+            onClick={() => {
+              void sshRuntime.refresh.run(registry, input);
+              onRefreshConnection?.();
+            }}
           >
             Refresh status
           </Button>

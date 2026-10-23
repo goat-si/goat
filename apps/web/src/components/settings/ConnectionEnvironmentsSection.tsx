@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import { HandoffReview } from "../chat/HandoffReview";
 import { desktopOwnsSshHostConfig } from "~/connection/platform";
 import { SshRuntimeSettingsRow } from "./SshRuntimeSettingsRow";
+import { useConnectionRowLiveState } from "./useConnectionRowLiveState";
 import { SshPreflightChecklist } from "./SshPreflightChecklist";
 import {
   parseDesktopSshTarget,
@@ -57,7 +58,6 @@ import {
   connectionRoutes,
   environmentMcpUrl,
   hasSavedBearerRoute,
-  offlineSnapshotAgeLabel,
 } from "@goat/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
@@ -66,8 +66,6 @@ import {
 import * as Option from "effect/Option";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useCopyConnectionDiagnostic } from "../../hooks/useCopyConnectionDiagnostic";
-import { useNowMinute } from "../../hooks/useNowMinute";
-import { useEnvironmentSnapshotCapturedAt } from "../../state/presentation";
 import { cn } from "../../lib/utils";
 import { SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -302,6 +300,9 @@ function SavedBackendListRow({
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
   const status = savedConnectionPresentation({ environment, runtimeStatus });
   const retryNow = useAtomCommand(environmentCatalog.retryNow);
+  const retry = () => void retryNow(environmentId);
+  const { connection } = environment;
+  const live = useConnectionRowLiveState({ environmentId, connection, enabled, retry });
   const {
     diagnosis: currentDiagnosis,
     state: connectionState,
@@ -340,12 +341,7 @@ function SavedBackendListRow({
     setLastRelayHttpBaseUrl(discoveredRelayHttpBaseUrl);
   }
   const prepared = usePreparedConnection(environmentId);
-  const snapshotCapturedAt = useEnvironmentSnapshotCapturedAt(environmentId);
-  const nowMinute = useNowMinute();
-  const snapshotAge =
-    isConnected || !enabled
-      ? null
-      : offlineSnapshotAgeLabel(snapshotCapturedAt, Date.parse(`${nowMinute}:59.999Z`));
+  const snapshotAge = live.snapshotAge;
   const connectedTarget = isConnected && prepared._tag === "Some" ? prepared.value.target : null;
   const mcpUrl = environmentMcpUrl({
     entry: environment.entry,
@@ -477,6 +473,8 @@ function SavedBackendListRow({
                 ? { preparationProgress: { phase: status.preparationPhase } }
                 : {})}
               onReviewTrust={() => onReviewTrust(environment)}
+              onRetry={retry}
+              onRefreshConnection={live.refreshConnection}
             />
           ) : serverUpdateState.status !== "idle" ? (
             <div className="mt-1 max-w-md">

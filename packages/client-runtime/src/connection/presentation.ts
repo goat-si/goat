@@ -249,6 +249,20 @@ export function offlineSnapshotAgeLabel(capturedAt: string | null, nowMs: number
   return `last state ${Math.floor(hours / 24)} d ago`;
 }
 
+/**
+ * Whether a connection row names its snapshot age. While an attempt runs or counts down to its
+ * retry, the row shows that live progress, and a cached-threads age beside it reads as if the
+ * status were stale.
+ */
+export function connectionRowShowsSnapshotAge(connection: EnvironmentConnectionPresentation) {
+  return connection.phase === "offline" || connection.phase === "error";
+}
+
+/** A retry waiting on its backoff, which opening or refreshing the connection may start now. */
+export function connectionWaitsToRetry(connection: EnvironmentConnectionPresentation): boolean {
+  return connection.phase === "reconnecting" && connection.retryAt != null;
+}
+
 function formatRetryDelay(seconds: number): string {
   return seconds < 60 ? `${seconds}s` : `${Math.ceil(seconds / 60)}m`;
 }
