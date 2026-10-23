@@ -518,7 +518,11 @@ describe("agent surface access", () => {
             // goat_call refuses to call itself by design.
             if (route === "goat_call" && entry.path === "surface.call") continue;
             if (route === "alias" && !canonicalToolAliases.has(alias)) continue;
-            const call =
+            const call: Effect.Effect<
+              McpSchema.CallToolResult,
+              McpSchema.InternalError | McpSchema.InvalidParams,
+              McpServer.McpServer
+            > =
               route === "alias"
                 ? http.callTool(caller, alias, args)
                 : via[route](entry.name, args).pipe(
@@ -571,7 +575,7 @@ describe("agent surface access", () => {
         }
       }
       expect(mismatches).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(registered), Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(registered, NodeHttpServer.layerTest))),
   );
 
   it("documents every access exception", () => {

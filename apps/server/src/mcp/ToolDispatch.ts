@@ -28,8 +28,8 @@ export class ToolDispatch extends Context.Service<
   }
 >()("goat/mcp/ToolDispatch") {}
 
-const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString);
-const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);

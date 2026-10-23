@@ -248,7 +248,9 @@ export const client = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 
-const decodeJson = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
+const jsonText = Schema.fromJsonString(Schema.Unknown);
+const decodeJson = Schema.decodeUnknownSync(jsonText);
+const encodeJson = Schema.encodeSync(jsonText);
 const decodeCallToolResult = Schema.decodeUnknownSync(McpSchema.CallToolResult);
 type RpcMessage = {
   readonly id?: number;
@@ -300,10 +302,7 @@ export const serveCatalogOverHttp = Effect.fn("agentSurfaceTestkit.serveCatalogO
             ? {}
             : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
         },
-        body: HttpBody.text(
-          JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-          "application/json",
-        ),
+        body: HttpBody.text(encodeJson({ jsonrpc: "2.0", id, method, params }), "application/json"),
       });
       const sessionId = response.headers["mcp-session-id"];
       if (session === undefined && sessionId !== undefined) sessions.set(caller, sessionId);
@@ -327,11 +326,13 @@ export const serveCatalogOverHttp = Effect.fn("agentSurfaceTestkit.serveCatalogO
       callTool: (caller: string, name: string, args: object) =>
         ensureSession(caller).pipe(
           Effect.andThen(post(caller, "tools/call", { name, arguments: args })),
+          // A transport failure is a broken harness, never an access outcome.
+          Effect.orDie,
           Effect.map((message) =>
             message.result === undefined
               ? new McpSchema.CallToolResult({
                   isError: true,
-                  content: [{ type: "text", text: `rpc error: ${JSON.stringify(message.error)}` }],
+                  content: [{ type: "text", text: `rpc error: ${encodeJson(message.error)}` }],
                 })
               : decodeCallToolResult(message.result),
           ),
