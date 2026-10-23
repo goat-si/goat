@@ -78,6 +78,15 @@ export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
 
 export const VISIBLE_KEEP_RULES: readonly KeepRule[] = [
   {
+    id: "legacy-desktop-display-name",
+    pattern: /T3 Code (?:<stage>|\(Alpha\))/g,
+    scope: (path) =>
+      ["apps/desktop/src/app/DesktopSafeStorageKeyMigration.ts", "structure/desktop.md"].includes(
+        path,
+      ),
+    reason: "ADR-0014: encryption-key migration recognizes the old display-name format.",
+  },
+  {
     id: "kde-capture-desktop-name",
     pattern: /Name=T3 Code SnapShots/g,
     scope: (path) => path === kdeCapturePath,

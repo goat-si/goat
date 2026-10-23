@@ -75,4 +75,19 @@ export const WIRE_KEEP_RULES: readonly KeepRule[] = [
     reason:
       "Existing device image-cache entries use this prefix; keep it until the cache reader supports legacy lookup (D-CACHE).",
   },
+  {
+    id: "wire-html-bridge-legacy-namespace",
+    // Only the two comments that describe the legacy namespace; a new t3/ writer must still fail.
+    pattern: /(?<=, and in )t3\/(?= to a client)|(?<=from then on; )t3\/(?= still)/g,
+    scope: (path) => path === "packages/shared/src/htmlRender.ts",
+    reason:
+      "Saved HTML pages and older clients still speak the t3/ bridge methods, so the bridge documents how it answers them (#944, #966).",
+  },
+  {
+    id: "wire-handoff-legacy-thread-read",
+    pattern: /\(\?:t3\|goat\)_thread_read/g,
+    scope: (path) => path === "apps/server/src/orchestration-v2/ContextHandoffDelivery.ts",
+    reason:
+      "Saved coverage records name t3_thread_read from before the MCP rename; delivery rewrites both spellings to goat_call (#1052).",
+  },
 ];

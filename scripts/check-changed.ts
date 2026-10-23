@@ -24,6 +24,16 @@ const git = (...args: Array<string>) =>
     .split("\n")
     .filter(Boolean);
 
+// This gate reads tracked and untracked source even for an empty or docs-only diff.
+// A failing name gate stops before task selection and all other checks.
+console.log("\n> node scripts/goat-rename.ts --check --limit 200");
+const renameCheck = NodeChildProcess.spawnSync(
+  process.execPath,
+  ["scripts/goat-rename.ts", "--check", "--limit", "200"],
+  { cwd: root, stdio: "inherit" },
+);
+if (renameCheck.status !== 0) process.exit(1);
+
 const ref = process.argv[2] ?? "origin/dev";
 const mergeBase = NodeChildProcess.spawnSync("git", ["merge-base", "HEAD", ref], {
   cwd: root,

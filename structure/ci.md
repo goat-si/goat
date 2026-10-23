@@ -41,7 +41,9 @@ updates the hash in the guard.
 goat-ci runs on pull requests and by hand. It does not run on push, so merging into `dev` starts
 nothing. On a pull request the `goat-scope` job diffs the merge commit against its base, and
 `.github/scripts/goat-ci-scope.cjs` picks the matrix tasks the changed files reach through the
-workspace dependencies in the `package.json` files. Documentation alone runs only `check`. A file
+workspace dependencies in the `package.json` files.
+`goat-scope` always runs `node scripts/goat-rename.ts --check` before task selection, so new upstream product names fail `goat-ci-result`.
+Documentation alone runs only `check`. A file
 the script cannot place, any `package.json`, a workflow, a script, or the lockfile runs everything.
 
 The two slow suites follow the static import graph that `.github/scripts/goat-ci-imports.cjs` reads
