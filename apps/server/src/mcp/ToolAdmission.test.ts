@@ -643,3 +643,49 @@ it.effect("reads a key unknown in this process once its outcome could not be sav
     expect(yield* runs).toBe(1);
   }).pipe(Effect.provide(served("owner"))),
 );
+
+const setGoatclaw = (enabled: boolean) =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const policy = (yield* settings.getSettings).goatclaw;
+    yield* settings.updateSettings({ goatclaw: { ...policy, enabled } });
+  });
+
+it.effect(
+  "replays a key recorded under goatclaw after goatclaw is turned off, without running again",
+  () =>
+    Effect.gen(function* () {
+      yield* seed;
+      expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 1 });
+      yield* setGoatclaw(false);
+      expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 1 });
+      expect(yield* viaGoatCall({ projectId: "a", clientRequestId: "k" })).toEqual({
+        status: "ok",
+        value: { run: 1 },
+      });
+      expect(yield* runs).toBe(1);
+    }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect("still refuses a key recorded with goatclaw off once goatclaw is on", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 1 });
+    yield* setGoatclaw(true);
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toMatchObject({
+      code: "capability_denied",
+    });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner", false))),
+);
+
+it.effect("still refuses a role launch's replay once goatclaw is turned off", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const launch = { projectId: "a", clientRequestId: "k", goatclawRole: "merge-manager" };
+    expect(yield* direct(launch)).toEqual({ run: 1 });
+    yield* setGoatclaw(false);
+    expect(yield* direct(launch)).toMatchObject({ code: "capability_denied" });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner"))),
+);

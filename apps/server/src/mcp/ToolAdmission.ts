@@ -133,7 +133,7 @@ const holdsAll = (held: ReadonlyArray<string> | null, needed: ReadonlyArray<stri
 const allowsHosts = (held: ReadonlyArray<string> | null, needed: ReadonlyArray<string> | null) =>
   held === null || (needed !== null && needed.every((host) => held.includes(host)));
 
-/** Whether `current` still holds everything `recorded` did. Turning goatclaw on narrows it. */
+/** Whether `current` still holds everything `recorded` did. */
 const coversProfile = (current: ProfileGrant | null, recorded: ProfileGrant | null) =>
   recorded === null
     ? current === null
@@ -147,7 +147,10 @@ const coversGrant = (current: Grant, recorded: Grant) =>
   rank(current.runtimeMode) >= rank(recorded.runtimeMode) &&
   interactionRank(current.interactionMode) >= interactionRank(recorded.interactionMode) &&
   holdsAll(current.scopes, recorded.scopes) &&
-  coversProfile(current.goatclaw, recorded.goatclaw) &&
+  // goatclaw off applies no profile, so it covers any profile recorded while it was on; turning
+  // it on narrows a key recorded while it was off.
+  (current.goatclaw === null || coversProfile(current.goatclaw, recorded.goatclaw)) &&
+  // A role launch needs goatclaw, so its grant must still be held as recorded.
   (recorded.role === null || coversProfile(current.role, recorded.role));
 
 /** Sorted object keys, array order kept, undefined dropped; null stays distinct from omitted. */
