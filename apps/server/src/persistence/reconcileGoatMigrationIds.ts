@@ -38,6 +38,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ThreadHistoryArchives",
   "PermissionProfiles",
   "DecisionInbox",
+  "HumanStepRecords",
 ]);
 
 type MigrationEntry<E> = readonly [

@@ -106,6 +106,27 @@ export const PROVIDER_HOST_SYNC_DRIVERS = Object.keys(
 
 export const recipeFor = (driver: ProviderHostSyncDriver) => RECIPES[driver];
 
+/** Safe summary of a failed installer; the raw output never leaves this process. */
+export function describeInstallFailure(exitCode: number | null, output: string): string {
+  if (exitCode === null) return "The installer did not finish within 10 minutes.";
+  if (/EACCES|permission denied/iu.test(output))
+    return "The installer could not write its install folder for this user. Fix npm's global prefix or install it once by hand.";
+  if (/ETARGET|notarget|No matching version/iu.test(output))
+    return "That version is not published. Pick another version or latest.";
+  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|Could not resolve host/iu.test(output))
+    return "The installer could not reach the network from this machine.";
+  return `The installer exited with code ${exitCode}.`;
+}
+
+/** `codex-cli 0.42.0` and `0.42.0 (Claude Code)` both pin to 0.42.0. */
+export function versionCore(version: string): string | null {
+  return (
+    /\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20}){0,4})?/u.exec(
+      version,
+    )?.[0] ?? null
+  );
+}
+
 export const hostPlatform = (platform: string): HostPlatform =>
   platform === "darwin" || platform === "linux" || platform === "win32" ? platform : "other";
 

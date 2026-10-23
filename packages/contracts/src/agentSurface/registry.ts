@@ -83,11 +83,11 @@ export const agentSurfaceRegistry = {
     summary:
       "Answer an open decision using optionId, or a projected pending question using answers or decision plus reason.",
     description:
-      "Answer an open decision using optionId, or a projected pending question using answers or decision plus reason. Requires the effective permission profile named by the item. Approvals and humanRequired items require a person in an authenticated GOAT client.",
+      "Answer an open decision using optionId, or a projected pending question using answers or decision plus reason. Requires the effective permission profile named by the item, except provider approvals. A provider approval takes a person in a GOAT client or an MCP client token holding orchestration:approve (under its own runtime ceiling), as with goat_pending_request_respond; other humanRequired items require a person in an authenticated GOAT client.",
     effect: "destructive",
     capability: "none",
     capabilityReason:
-      "Checked against the profile the decision names; approvals and humanRequired items need a person.",
+      "Checked against the profile the decision names; approvals need a person or an approve-scoped client.",
     hostRoutable: false,
     requires: "either",
     dryRun: "unsupported",
@@ -676,7 +676,7 @@ export const agentSurfaceRegistry = {
     toolkit: "hostStatus",
     summary: "Join a device to this OpenCodex Home as a Remote Link Child or Hub client.",
     description:
-      "Join a device SSH alias to this machine's OpenCodex Home, then verify P1–P8 parity and run repair steps 1–3 if it is not ok. The device must already have OpenCodex. A platform check runs first: Windows (Git Bash, MSYS, Cygwin) joins as a Hub-mode client because Remote Link refuses it; transport remote-link on Windows is refused before any link is made. Pass transport hub-client for a device GOAT reaches only by password. Remote Link: the alias must be direct (no ProxyJump or ProxyCommand), and the Home's offered SSH fingerprint must match GOAT's pin and is passed to ocx link add as --expect-fingerprint. Hub client: this machine must run OpenCodex in Hub mode with public data and management origins; GOAT runs ocx hub invite here and gives the single-use code to ocx connect --pairing-code-stdin on the device over SSH stdin. Needs hub.manage. Unless the caller's profile is owner, and whenever a Remote Link pin is missing or differs, the first call returns state needs_human with a decisionId; once a person approves it in the decision inbox, call again with that decisionId. GOAT never reads or stores link keys, data keys or pairing codes.",
+      "Join a device SSH alias to this machine's OpenCodex Home, then verify P1–P8 parity and run repair steps 1–3 if it is not ok. The device must already have OpenCodex. A platform check runs first: Windows (Git Bash, MSYS, Cygwin) joins as a Hub-mode client because Remote Link refuses it; transport remote-link on Windows is refused before any link is made. Pass transport hub-client for a device GOAT reaches only by password. Remote Link: the alias must be direct (no ProxyJump or ProxyCommand), and the Home's offered SSH fingerprint must match GOAT's pin and is passed to ocx link add as --expect-fingerprint. Hub client: this machine must run OpenCodex in Hub mode with public data and management origins; GOAT runs ocx hub invite here and gives the single-use code to ocx connect --pairing-code-stdin on the device over SSH stdin. Needs hub.manage. Unless the caller's profile is owner, and whenever a Remote Link pin is missing or differs, the first call returns state needs_human with a decisionId. From a thread it is also kind needs_human with a handoff whose id is that decisionId; outside a thread it is a decision-inbox item. Once a person approves it in a GOAT app, call again with that decisionId. GOAT never reads or stores link keys, data keys or pairing codes.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,
@@ -692,7 +692,7 @@ export const agentSurfaceRegistry = {
     toolkit: "hostStatus",
     summary: "Remove a Remote Link Child or Hub client from this OpenCodex Home.",
     description:
-      "Remove a device, device first: over SSH, ocx disconnect and ocx restart on the device until its /healthz answers as standalone. Then, for a Remote Link Child, ocx link revoke --force on this Home and a check that ocx link status and the Home's ssh -R tunnels no longer show the link; for a Hub client, ocx access key remove for its data key. If the device step fails, the hub's link or key is left in place and the call returns state needs_human with a decisionId for an owner to approve a force-revoke. Needs hub.manage; unless the caller's profile is owner, the first call also returns needs_human with a decisionId to approve. Call again with an approved decisionId to continue.",
+      "Remove a device, device first: over SSH, ocx disconnect and ocx restart on the device until its /healthz answers as standalone. Then, for a Remote Link Child, ocx link revoke --force on this Home and a check that ocx link status and the Home's ssh -R tunnels no longer show the link; for a Hub client, ocx access key remove for its data key. If the device step fails, the hub's link or key is left in place and the call returns state needs_human with a decisionId for a person to approve a force-revoke. Needs hub.manage; unless the caller's profile is owner, the first call also returns needs_human with a decisionId to approve. From a thread these carry a handoff whose id is the decisionId. Call again with an approved decisionId to continue.",
     effect: "destructive",
     capability: "hub.manage",
     hostRoutable: false,
@@ -708,7 +708,7 @@ export const agentSurfaceRegistry = {
     toolkit: "hostStatus",
     summary: "Repair a device's parity with this OpenCodex Home.",
     description:
-      "Verify a device and walk the repair ladder, re-verifying after each step and stopping once no check fails: 1. ocx sync on the device (P6, P7); 2. ocx restart on the device (P5), deferred while a turn runs there; 3. ocx link reconnect on this Home (P2, P3). Needs hub.manage. If the device is still failing, it returns state needs_human with a decisionId for step 4, re-linking (revoke, disconnect, join again), which briefly removes routing; after a person approves, call again with that decisionId.",
+      "Verify a device and walk the repair ladder, re-verifying after each step and stopping once no check fails: 1. ocx sync on the device (P6, P7); 2. ocx restart on the device (P5), deferred while a turn runs there; 3. ocx link reconnect on this Home (P2, P3). Needs hub.manage. If the device is still failing, it returns state needs_human with a decisionId (from a thread, also a handoff with that id) for step 4, re-linking (revoke, disconnect, join again), which briefly removes routing; after a person approves, call again with that decisionId.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,
@@ -1354,7 +1354,7 @@ export const agentSurfaceRegistry = {
     toolkit: "orchestrator",
     summary: "Request a secret from the user",
     description:
-      "Ask the user for a secret (a token, API key, signing secret, password) through a private card in this thread, and wait for them to answer. The value is kept by the app and NEVER returned to you or shown in the transcript. When saved, the result carries a secretRef: pass it to a tool that accepts one (e.g. schedule_task's signature.secretRef). It works once. Never ask for secrets in chat, and never invent one.",
+      "Ask the user for a secret (a token, API key, signing secret, password) through a private card in this thread, and wait for them to answer. With wait:false it returns needs_human (status pending) with the card's handoff at once; call again with the same clientRequestId before this turn ends to collect it. The value is kept by the app and NEVER returned to you or shown in the transcript. When saved, the result carries a secretRef: pass it to a tool that accepts one (e.g. schedule_task's signature.secretRef). It works once. Never ask for secrets in chat, and never invent one.",
     effect: "write",
     capability: "none",
     capabilityReason: "Asks a person for a secret; the person decides.",

@@ -270,18 +270,19 @@ Legacy tool names keep their current result shapes until they are removed.
 
 | Work                   | Handle                     | Observe                       | Stop                        | Survives restart |
 | ---------------------- | -------------------------- | ----------------------------- | --------------------------- | ---------------- |
-| Provider sync          | `handoffId`, then `syncId` | `goat_provider_sync_status`   | `goat_provider_sync_cancel` | No               |
+| Provider sync          | `handoffId`, then `syncId` | `goat_provider_sync_status`   | `goat_provider_sync_cancel` | Approved syncs   |
 | SSH prepare and update | host alias                 | `goat_ssh_host_status`        | `goat_ssh_host_forget`      | Yes              |
 | Delegated task         | `taskId`                   | `task_status`, wait mode      | `task_cancel`               | Yes              |
 | Thread or cloud launch | `threadId`                 | `goat_thread_status`, watches | `goat_thread_interrupt`     | Yes              |
 | Cloud machine create   | machine id once it answers | `goat_cloud_machine_list`     | `goat_cloud_machine_stop`   | Partly           |
 | Worktree cleanup       | none; blocks               | none                          | none                        | n/a              |
 
-Provider sync keeps its operations, pending approvals, and the mapping from
-handoff to sync in memory
-([ProviderHostSync.ts](../../apps/server/src/provider/ProviderHostSync.ts)). After
-a restart its status tool cannot tell an accepted sync from one that never
-existed, and an approval card can outlive the work it would start.
+An approved provider sync records its start, its syncId and its final per-host
+result in the approval handoff's continuation
+([approvedSyncs.ts](../../apps/server/src/provider/approvedSyncs.ts)). The intent is
+written before any work is registered, so after a restart a recorded start that no
+longer runs settles as failed and is never started again. A sync a person or outside
+client starts directly has no handoff and stays in memory.
 
 **Proposed.** One reference type and three verbs over the stores that already own
 the work:
@@ -549,14 +550,12 @@ Around it, a human step reaches an agent in several shapes:
 | Decisions                    | `DecisionItem` by id                              | agent or person, per item             | answer delivered as a thread message                 |
 | Cloud launch consent         | `capability_denied` text telling the agent to ask | person answering a decision `approve` | agent calls launch again with `decisionId`           |
 
-Three gaps follow. A handoff resolving does not wake the thread that asked; it
-only updates the card. Provider sync approvals live in memory. Approval policy
-differs by path: pending-question MCP lets an outside client holding
-`orchestration:approve` answer provider approvals
-([PendingQuestionsMcpService.ts](../../apps/server/src/mcp/PendingQuestionsMcpService.ts)),
-while the decision inbox treats every MCP caller as an agent and refuses it for
-human-required items, including the same approvals projected there
-([DecisionInbox.ts](../../apps/server/src/goatclaw/DecisionInbox.ts)).
+One gap follows. A handoff resolving does not wake the thread that asked; it
+only updates the card. Who may resolve a step is one predicate
+([HumanStepAuthority.ts](../../apps/server/src/handoffs/HumanStepAuthority.ts)),
+used by pending-question MCP, the decision inbox, and handoffs, so an outside
+client holding `orchestration:approve` answers a provider approval the same way
+through either path.
 
 **Proposed.**
 
