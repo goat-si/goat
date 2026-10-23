@@ -136,7 +136,7 @@ if (process.env.AGENT_DEVICE_DAEMON_BASE_URL) process.exit(2);`,
         yield* Effect.promise(() =>
           expect(
             exec(process.execPath, [path.join(shim, "agent-device-launcher.mjs"), ...args]),
-          ).rejects.toThrow("Call device_open first"),
+          ).rejects.toThrow("Call goat_device_open first"),
         );
       }
     }).pipe(
