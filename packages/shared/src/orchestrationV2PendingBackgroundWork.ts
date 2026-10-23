@@ -137,6 +137,7 @@ type PendingBackgroundWorkTurnItem = {
     readonly nativeId: string | null;
   } | null;
   readonly input?: unknown;
+  readonly toolName?: string | null;
   readonly prompt?: string | undefined;
   readonly childThreadId?: ThreadId | null;
 };
@@ -166,7 +167,7 @@ function descriptionFromTurnItem(item: PendingBackgroundWorkTurnItem): string | 
     return command.length > 0 ? command : undefined;
   }
   if (item.type === "dynamic_tool") {
-    const toolName = Reflect.get(item, "toolName");
+    const { toolName } = resolveGoatMcpItemCall({ toolName: item.toolName, input: item.input });
     if (typeof toolName === "string" && toolName.trim().length > 0) {
       return toolName.trim();
     }

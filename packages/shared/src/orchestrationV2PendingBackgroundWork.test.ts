@@ -222,6 +222,27 @@ describe("derivePendingBackgroundWork", () => {
     ]);
   });
 
+  it("describes running work started through goat_call by the tool it ran", () => {
+    const tasks = derivePendingBackgroundWork({
+      latestRun: { id: "run-1" as never, ordinal: 1, status: "completed" },
+      providerThreads: [{ id: "pt-1" as never }],
+      turnItems: [
+        {
+          id: "item-1" as never,
+          type: "dynamic_tool",
+          status: "running",
+          title: null,
+          toolName: "mcp__goat__goat_call",
+          nativeItemRef: { nativeId: "call-1" },
+          input: { path: "thread.wait", args: { threadId: "t2" } },
+        },
+      ],
+    });
+    expect(tasks).toEqual([
+      { taskId: "call-1", description: "goat_thread_wait", kind: "background_task" },
+    ]);
+  });
+
   it("returns empty when the latest run is rolled_back even with a nonempty roster", () => {
     const tasks = derivePendingBackgroundWork({
       latestRun: { id: "run-1" as never, ordinal: 1, status: "rolled_back" },
