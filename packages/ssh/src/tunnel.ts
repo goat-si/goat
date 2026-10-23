@@ -782,7 +782,7 @@ PID_FILE="$STATE_DIR/pid"
 MANAGED_FILE="$STATE_DIR/managed"
 LOG_FILE="$STATE_DIR/server.log"
 ownership_unverified() {
-  printf 'GOAT ownership could not be verified; process and ownership files were preserved.\\n' >&2; exit 1
+  printf 'GOAT ownership could not be verified; process and ownership files were preserved. The running server does not match the launch identity in %s/identity. If you started it by hand, stop it on the host and reconnect so GOAT starts its own.\\n' "$STATE_DIR" >&2; exit 1
 }
 @@GOAT_OWNED_IDENTITY@@
 @@GOAT_LEGACY_IDENTITY@@
@@ -875,7 +875,7 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   check_retained_runner
   if [ "$LEGACY_PENDING" = 1 ] && [ "$LEGACY_COMMITTED" = 0 ]; then
     verify_legacy_identity || ownership_unverified
-  else verify_owned_identity "$LIVE_PID" "$LIVE_PORT" || ownership_unverified; fi
+  else verify_owned_identity "$LIVE_PID" "$LIVE_PORT" || repair_owned_identity || ownership_unverified; fi
   UPGRADE_START="$(server_start "$UPGRADE_PID")" || ownership_unverified
   [ -n "$UPGRADE_START" ] || ownership_unverified
   if [ "$RECONCILING_DRAIN" != 1 ] && [ "$REPLACEMENT_REASON" != incompatible ] && [ "$DRAIN_FORCE" != 1 ]; then
