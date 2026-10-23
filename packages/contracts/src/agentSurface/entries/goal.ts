@@ -25,9 +25,10 @@ export const goalEntries = {
     name: "goat_goal_get",
     toolkit: "fleet",
     summary: "Read one of your fleet goals.",
-    description: "Read a fleet goal and its last 20 events without changing it.",
+    description:
+      "Read a fleet goal and its last 20 events without changing it. Another thread's goal reads as not found unless the caller is a full-access/default thread.",
     guide:
-      "The result includes spec, generation, owner and status: phase, observedGeneration, conditions, workers (attempt, host, thread, branch, model, state and pull request), usage and next pass.\n\nAnother thread's goal reads as not found unless the caller is a full-access/default thread.",
+      "The result includes spec, generation, owner and status: phase, observedGeneration, conditions, workers (attempt, host, thread, branch, model, state and pull request), usage and next pass.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
