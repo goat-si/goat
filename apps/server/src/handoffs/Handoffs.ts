@@ -63,6 +63,7 @@ export type SshProgressBinding = typeof SshProgressBinding.Type;
 /** Provider approvals whose approval the server applies, keeping their arguments until it does. */
 const PROVIDER_CONTINUATION_PATHS = [
   "provider.home_request",
+  "provider.host_sync",
   "provider.settings",
   "provider.setup",
 ] as const;
@@ -394,7 +395,15 @@ const make = Effect.gen(function* () {
       const payload = yield* loadPrivate(input.handoffId);
       if (payload === null || !("kind" in payload) || payload.kind !== "continuation")
         return yield* new HandoffError({ reason: "unavailable" });
-      yield* savePrivate(input.handoffId, { ...payload, approvedBySessionId: sessionId }, true);
+      // Approvals asked before a path became a continuation path carry no namespace yet.
+      const namespace = isProviderContinuationPath(record.target.path)
+        ? { namespace: record.target.path }
+        : {};
+      yield* savePrivate(
+        input.handoffId,
+        { ...payload, ...namespace, approvedBySessionId: sessionId },
+        true,
+      );
     }
     const result = yield* transition(input, input.action, { type: "client", label });
     if (isComputerUseGrant && Option.isSome(computerUseLeases))

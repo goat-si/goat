@@ -32,6 +32,7 @@ import type { LaunchWatchWake } from "../mcp/launchWatch.ts";
 import { wakeThread } from "../mcp/threadWake.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { HOST_SYNC_PATH, settledSyncWake } from "../provider/approvedSyncs.ts";
 import {
   ProviderSettingsProgress,
   type ProviderSettingsOutcome,
@@ -74,13 +75,22 @@ const appliedText = (outcome: ProviderSettingsOutcome | undefined) => {
   }
 };
 
-/** An applied provider change's outcome, or undefined for every other kind of handoff. */
-type Applied = { readonly outcome: ProviderSettingsOutcome | undefined };
+/** How a provider change GOAT applied after the approval ended, for the wake text and summary. */
+type Applied = { readonly text: string; readonly summary?: string };
+
+const appliedFrom = (path: string, progress: unknown): Applied => {
+  if (path === HOST_SYNC_PATH) return settledSyncWake(progress);
+  const outcome = Option.getOrUndefined(decodeProgress(progress))?.outcome;
+  return {
+    text: appliedText(outcome),
+    ...(outcome === undefined ? {} : { summary: outcome.state }),
+  };
+};
 
 const continuation = (handoff: Handoff, applied: Applied | undefined) => {
   if (handoff.state !== "completed")
     return "Nothing ran. Ask again only if the user still wants it.";
-  if (applied !== undefined) return appliedText(applied.outcome);
+  if (applied !== undefined) return applied.text;
   if (isHubDeviceHandoffPath(handoff.target.path))
     return `Call ${handoff.target.path === "hub.device_join" ? "goat_hub_device_join" : handoff.target.path === "hub.device_leave" ? "goat_hub_device_leave" : "goat_hub_device_repair"} again with decisionId "${handoff.handoffId}" to continue.`;
   if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
@@ -99,7 +109,7 @@ const handoffWake = (handoff: Handoff, applied?: Applied): LaunchWatchWake | und
   // The person's device label stays out of the agent's transcript.
   const by = handoff.actor.type === "server" ? "GOAT" : "a person";
   const key = `handoff-wake:${handoff.handoffId}:${state}`;
-  const summary = `${handoff.title}: ${applied?.outcome?.state ?? VERB[state]}`;
+  const summary = `${handoff.title}: ${applied?.summary ?? VERB[state]}`;
   return {
     commandId: CommandId.make(`server:${key}`),
     messageId: MessageId.make(`message:${key}`),
@@ -215,8 +225,8 @@ const make = Effect.gen(function* () {
       // each reconcile finds the wake still owed.
       const state = yield* handoffs.providerApplyState({ threadId, handoffId: handoff.handoffId });
       if (state.applying) return;
-      const outcome = Option.getOrUndefined(decodeProgress(state.progress))?.outcome;
-      yield* dispatchWake(threadId, handoffWake(handoff, { outcome }) ?? wake);
+      const applied = appliedFrom(handoff.target.path, state.progress);
+      yield* dispatchWake(threadId, handoffWake(handoff, applied) ?? wake);
     },
     // One delivery at a time, so the tail and a reconcile never race to a second attempt.
     permit.withPermits(1),

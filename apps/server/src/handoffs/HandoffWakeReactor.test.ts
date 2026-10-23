@@ -485,3 +485,43 @@ it.effect(
       }),
     ),
 );
+
+it.effect("wakes after an approved provider sync settles, with how each host ended", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "provider.host_sync");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      // Installing on the hosts: an idle thread woken now would see nothing installed yet.
+      yield* world.reactor.reconcile;
+      expect(yield* wakes(world)).toEqual([]);
+      yield* world.handoffs.finishProviderContinuation(
+        { threadId, handoffId: summary.handoffId },
+        {
+          syncId: "sync-1",
+          result: {
+            syncId: "sync-1",
+            driver: "codex",
+            version: null,
+            login: false,
+            startedAt: "2026-10-23T00:00:00.000Z",
+            done: true,
+            hosts: [
+              { host: null, phase: "installed", version: "0.163.0" },
+              { host: "box", phase: "failed", version: null, message: "The installer exited 1." },
+            ],
+          },
+        },
+      );
+      yield* world.reactor.reconcile;
+      const sent = yield* wakes(world);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.text).toContain(
+        "The sync finished on 1 of 2 host(s). box: failed (The installer exited 1.).",
+      );
+    }),
+  ),
+);
