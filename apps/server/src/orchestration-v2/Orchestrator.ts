@@ -24,10 +24,6 @@ import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   type ChatAttachment,
   CommandId,
-  RuntimeRequestId,
-  UserInputRespondedBy,
-  ProviderApprovalDecision,
-  OrchestrationV2RuntimeRequest,
   describeUserInputResponder,
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
@@ -166,6 +162,12 @@ import {
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import { makeThreadPromotion } from "./goat/ThreadPromotion.ts";
+import {
+  OrchestratorQuestionAlreadyAnsweredError,
+  questionAlreadyAnswered,
+} from "./goat/QuestionAnswers.ts";
+
+export { OrchestratorQuestionAlreadyAnsweredError };
 import { canonicalUserInputAnswers, userInputAnswerText } from "./userInputAnswers.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeTimelineRecords, OrchestratorChannelBotThreadError } from "./goat/TimelineRecords.ts";
@@ -305,28 +307,6 @@ export class OrchestratorCommandIdConflictError extends Schema.TaggedError<Orche
  */
 function canReplayCommandReceipt(receiptThreadId: ThreadId, commandThreadId: ThreadId): boolean {
   return receiptThreadId === commandThreadId;
-}
-
-export class OrchestratorQuestionAlreadyAnsweredError extends Schema.TaggedError<OrchestratorQuestionAlreadyAnsweredError>()(
-  "OrchestratorQuestionAlreadyAnsweredError",
-  {
-    commandId: CommandId,
-    requestId: RuntimeRequestId,
-    respondedBy: Schema.optional(UserInputRespondedBy),
-    resolvedAt: Schema.NullOr(Schema.DateTimeUtc),
-    decision: Schema.optional(ProviderApprovalDecision),
-    status: Schema.optional(OrchestrationV2RuntimeRequest.fields.status),
-  },
-) {
-  override get message(): string {
-    const description = describeUserInputResponder(this);
-    const time = this.resolvedAt === null ? "an unknown time" : DateTime.formatIso(this.resolvedAt);
-    if (this.status === "expired")
-      return `This question expired at ${time}, so it can no longer be answered.`;
-    if (this.decision === "cancel" || this.status === "cancelled")
-      return `This question was ${description} at ${time}, so it can no longer be answered.`;
-    return `This question was already answered by ${description} at ${time}.`;
-  }
 }
 
 export const OrchestratorV2Error = Schema.Union([
@@ -8093,16 +8073,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       if (runtimeRequest.status !== "pending") {
         if (runtimeRequest.kind === "user_input")
-          return yield* new OrchestratorQuestionAlreadyAnsweredError({
-            commandId: command.commandId,
-            requestId: command.requestId,
-            ...(runtimeRequest.respondedBy === undefined
-              ? {}
-              : { respondedBy: runtimeRequest.respondedBy }),
-            ...(runtimeRequest.decision === undefined ? {} : { decision: runtimeRequest.decision }),
-            status: runtimeRequest.status,
-            resolvedAt: runtimeRequest.resolvedAt,
-          });
+          return yield* questionAlreadyAnswered(command, runtimeRequest);
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -8371,14 +8342,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
         );
       if (request !== undefined && request.kind === "user_input" && request.status !== "pending") {
-        return yield* new OrchestratorQuestionAlreadyAnsweredError({
-          commandId: command.commandId,
-          requestId: command.requestId,
-          ...(request.respondedBy === undefined ? {} : { respondedBy: request.respondedBy }),
-          ...(request.decision === undefined ? {} : { decision: request.decision }),
-          status: request.status,
-          resolvedAt: request.resolvedAt,
-        });
+        return yield* questionAlreadyAnswered(command, request);
       }
       if (request === undefined || request.status !== "pending") {
         return yield* new OrchestratorDispatchError({
