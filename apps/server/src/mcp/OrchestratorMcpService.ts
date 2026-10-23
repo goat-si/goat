@@ -2476,19 +2476,15 @@ const make = Effect.gen(function* () {
         const commandId = stableCommandId({ scope, requestKey: key, operation: "delegate-task" });
         const taskId = derive.delegatedTaskNode({ commandId });
         const existing = parent.subagents.find((task) => task.id === taskId);
-        // A replay acknowledges the same ceiling-bearing launch, so it reports the host the same way.
         const acknowledge = (ceiling: GoatclawCeilingAdvice | undefined) =>
           finishTaskWait(scope, taskId, key, input).pipe(
             Effect.map((delegated) =>
               ceiling === undefined ? delegated : { ...delegated, ceiling },
             ),
           );
-        if (existing !== undefined)
-          return yield* acknowledge(
-            (yield* permissions.resolve(scope)).enabled
-              ? yield* FleetSync.syncBeforeForwarding(fleet, host)
-              : undefined,
-          );
+        // A replay forwards nothing, and whether the first call carried a ceiling is not recorded,
+        // so it says nothing about one; syncing here would also wake the host just to report.
+        if (existing !== undefined) return yield* acknowledge(undefined);
         yield* permissions.require(scope, "threads.launch", { host, runtimeMode });
         yield* permissions.require(scope, "threads.remote", { host, runtimeMode });
         const target = yield* resolveRemoteTarget(scope, parent, {
