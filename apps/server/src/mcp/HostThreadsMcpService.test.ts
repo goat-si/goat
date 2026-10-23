@@ -1107,7 +1107,7 @@ it.effect("forwards ready-only reads without changing ordinary host bootstrap po
 );
 
 it.effect(
-  "forwards the goatclaw ceiling with a remote send whatever the destination's sync state",
+  "forwards the goatclaw ceiling with a remote send whatever the destination's sync state, and says when it is unconfirmed",
   () =>
     Effect.gen(function* () {
       // Hub steering must not stall while sync is pending or the destination is too old to answer it.
@@ -1151,6 +1151,20 @@ it.effect(
             goatclawEnabled ? BUILTIN_PERMISSION_PROFILES.worker : undefined,
           );
           expect(settled).toEqual([true]);
+          // Delivery is never blocked; the result tells the caller the ceiling may not bind yet.
+          const sent = result._tag === "Success" ? result.success : undefined;
+          const confirmed = fleetReach?.enforcesCeilings === true;
+          expect(sent?.delivery).toBe("steered");
+          expect(sent !== undefined && "ceiling" in sent ? sent.ceiling : undefined).toEqual(
+            goatclawEnabled && !confirmed
+              ? {
+                  enforcement: "unconfirmed",
+                  host: "box",
+                  sync: fleetReach?.sync ?? { state: "pending" },
+                  message: expect.stringContaining("box has not confirmed"),
+                }
+              : undefined,
+          );
         }
       }
     }),

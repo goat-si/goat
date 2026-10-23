@@ -56,6 +56,11 @@ export interface RescheduleRequest {
   readonly project?: { readonly cwd: string; readonly canonicalKey: string | null };
   /** A person's choice of destination; otherwise placement chooses. */
   readonly targetHost?: string | null;
+  /**
+   * The caller's goatclaw host allowlist. When placement chooses, it chooses only among these,
+   * since the MCP gate can check only a host the arguments name.
+   */
+  readonly allowedHosts?: ReadonlyArray<string>;
   /** Skip only the wait for an unreachable host to be Lost. */
   readonly force?: boolean;
   /**
@@ -449,6 +454,14 @@ const make = Effect.gen(function* () {
             }
             // Confirmed absent: retry on the same host, where the branch name also guards a repeat.
             pinned = claim.targetHost;
+            // The pin outranks placement, so it must also pass the caller's allowlist.
+            if (request.allowedHosts !== undefined && !request.allowedHosts.includes(pinned))
+              return refused(
+                "not_allowed",
+                "An earlier attempt of this move was placed on " +
+                  pinned +
+                  ", which the caller's goatclaw profile does not allow; nothing is launched.",
+              );
           }
 
           if (request.attempt >= MAX_ATTEMPTS_PER_WORKER) {
@@ -468,12 +481,18 @@ const make = Effect.gen(function* () {
           }
 
           const requested = pinned ?? request.targetHost ?? null;
+          const allowed = requested === null ? request.allowedHosts : undefined;
           const placed = yield* placement.place({
             owner: request.owner,
             modelSelection: request.modelSelection,
             fallbackChain: null,
             // Moved work runs on another machine over SSH, never here or back on the old host.
-            hostSelector: requested === null ? { exclude: [null] } : { hosts: [requested] },
+            hostSelector:
+              requested !== null
+                ? { hosts: [requested] }
+                : allowed === undefined
+                  ? { exclude: [null] }
+                  : { hosts: allowed, exclude: [null] },
             project: { host: null, projectId: null, cwd: request.project?.cwd ?? null },
             avoidHosts: [request.ref.host],
           });
@@ -486,9 +505,15 @@ const make = Effect.gen(function* () {
                 : [];
             return refused(
               "no_capacity",
-              (requested === null
-                ? "No host can take the work"
-                : requested + " cannot take the work") +
+              (requested !== null
+                ? requested + " cannot take the work"
+                : allowed === undefined
+                  ? "No host can take the work"
+                  : allowed.length === 0
+                    ? "The caller's goatclaw profile allows no host to take the work"
+                    : "No host the caller's goatclaw profile allows (" +
+                      allowed.join(", ") +
+                      ") can take the work") +
                 (reasons.length === 0 ? "." : " (" + reasons.join("; ") + ")."),
             );
           }
