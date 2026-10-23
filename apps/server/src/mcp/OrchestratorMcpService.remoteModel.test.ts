@@ -198,6 +198,7 @@ const delegateWithRemote = (
           }),
       }),
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
+        get: () => Effect.succeed(null),
         launch: (input, register) =>
           register.pipe(
             Effect.tap(() =>

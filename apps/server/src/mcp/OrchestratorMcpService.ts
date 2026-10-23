@@ -106,7 +106,7 @@ import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoord
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun, cloudTaskView } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
-import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
+import { listCapabilityModels, readAdvertisedModel } from "./OrchestratorMcpCapabilities.ts";
 import { statusFromShell } from "./threadStatus.ts";
 
 import {
@@ -1734,7 +1734,17 @@ const make = Effect.gen(function* () {
     const model =
       target.model ??
       (instanceId === inherited.instanceId ? inherited.model : provider.models[0]?.id);
-    const advertised = provider.models.find((row) => row.id === model);
+    // The untargeted listing truncates, so a missing row is not conclusive: re-ask for the
+    // exact model before refusing. A model defaulted from provider.models[0] cannot be absent.
+    let advertised = provider.models.find((row) => row.id === model);
+    if (advertised === undefined && model !== undefined) {
+      const probed = yield* readAdvertisedModel(ssh, authorizeRemoteWrite(scope), {
+        host: target.host,
+        providerInstanceId: provider.providerInstanceId,
+        model,
+      });
+      if (Option.isSome(probed)) advertised = probed.value;
+    }
     if (advertised === undefined)
       return yield* failure(
         "model_unavailable",
