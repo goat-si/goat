@@ -7,6 +7,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { listedToolName } from "@goat/contracts/agentSurface/resolve";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -21,10 +22,13 @@ import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { liveThreadsLayer } from "./McpToolAccess.testkit.ts";
+import { serveOverHttp } from "./agentSurface.testkit.ts";
+import { DEPRECATED_META_KEY } from "./ToolDispatch.ts";
+import { NodeHttpServer } from "@effect/platform-node";
 
 const writes = (
   Object.values(agentSurfaceRegistry) as ReadonlyArray<
-    AgentSurfaceEntry & { readonly path: string }
+    AgentSurfaceEntry & { readonly path: string; readonly legacyNames: ReadonlyArray<string> }
   >
 ).filter((entry) => entry.effect !== "read");
 const entryAt = (path: string) => writes.find((entry) => entry.path === path)!;
@@ -187,12 +191,14 @@ it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
       let allowed = 0;
       for (const entry of writes) {
         const capability = entry.capability!;
-        const outcome = yield* call(entry.name, threadCaller(caller));
+        const outcome = yield* call(listedToolName(entry), threadCaller(caller));
         if (capability === "none" || profile.capabilities.includes(capability)) {
           expect(outcome, entry.path).toEqual({ ran: entry.name });
           allowed += 1;
         } else expect(outcome, entry.path).toMatchObject(refusedFor(capability));
-        expect(yield* call(entry.name, outside), entry.path).toEqual({ ran: entry.name });
+        expect(yield* call(listedToolName(entry), outside), entry.path).toEqual({
+          ran: entry.name,
+        });
       }
       expect(allowed).toBe(ALLOWED_WRITES[id]);
     }).pipe(Effect.provide(served({ enabled: true, defaultProfile: id }))),
@@ -201,7 +207,7 @@ it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
 it.effect("changes nothing with goatclaw off", () =>
   Effect.gen(function* () {
     for (const entry of writes)
-      expect(yield* call(entry.name, threadCaller(caller)), entry.path).toEqual({
+      expect(yield* call(listedToolName(entry), threadCaller(caller)), entry.path).toEqual({
         ran: entry.name,
       });
     expect(yield* call("unregistered_write", threadCaller(caller))).toEqual({
@@ -223,18 +229,20 @@ it.effect("needs threads.remote and an allowed host for a write that names a hos
     });
     const send = entryAt("thread.send");
     expect(send).toMatchObject({ hostRoutable: true, capability: "threads.launch" });
-    expect(yield* call(send.name, threadCaller(caller), { host: "box" })).toEqual({
+    expect(yield* call(listedToolName(send), threadCaller(caller), { host: "box" })).toEqual({
       ran: send.name,
     });
-    expect(yield* call(send.name, threadCaller(caller), { host: "other" })).toMatchObject({
+    expect(
+      yield* call(listedToolName(send), threadCaller(caller), { host: "other" }),
+    ).toMatchObject({
       code: "capability_denied",
       message: expect.stringContaining("host other"),
     });
     yield* settings.updateSettings({ goatclaw: { ...policy, defaultProfile: "worker" } });
-    expect(yield* call(send.name, threadCaller(caller), { host: "box" })).toMatchObject(
+    expect(yield* call(listedToolName(send), threadCaller(caller), { host: "box" })).toMatchObject(
       refusedFor("threads.remote"),
     );
-    expect(yield* call(send.name, threadCaller(caller))).toEqual({ ran: send.name });
+    expect(yield* call(listedToolName(send), threadCaller(caller))).toEqual({ ran: send.name });
   }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "manager" }))),
 );
 
@@ -252,11 +260,11 @@ it.effect("holds a thread launched with a forwarded ceiling to that ceiling", ()
     const launch = entryAt("thread.send");
     const settingsWrite = entryAt("environment.preferences_update");
     const remote = entryAt("ssh.thread_launch");
-    expect(yield* call(launch.name, threadCaller(child))).toEqual({ ran: launch.name });
-    expect(yield* call(settingsWrite.name, threadCaller(child))).toMatchObject(
+    expect(yield* call(listedToolName(launch), threadCaller(child))).toEqual({ ran: launch.name });
+    expect(yield* call(listedToolName(settingsWrite), threadCaller(child))).toMatchObject(
       refusedFor("settings.write"),
     );
-    expect(yield* call(remote.name, threadCaller(child))).toMatchObject(
+    expect(yield* call(listedToolName(remote), threadCaller(child))).toMatchObject(
       refusedFor("threads.remote"),
     );
   }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "manager" }))),
@@ -270,7 +278,7 @@ it.effect("refuses an unregistered write from a thread and passes a call without
       message: "unregistered_write declares no goatclaw capability.",
     });
     const destroy = entryAt("project.delete");
-    expect(yield* call(destroy.name, undefined)).toEqual({ ran: destroy.name });
+    expect(yield* call(listedToolName(destroy), undefined)).toEqual({ ran: destroy.name });
   }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "observer" }))),
 );
 
@@ -278,9 +286,40 @@ it.effect("refuses a nested call the same way as a direct one", () =>
   Effect.gen(function* () {
     yield* seed(caller);
     const destroy = entryAt("project.delete");
-    const direct = yield* call(destroy.name, threadCaller(caller));
+    const direct = yield* call(listedToolName(destroy), threadCaller(caller));
     expect(direct).toMatchObject(refusedFor("settings.write"));
-    const nested = yield* call("nested_call", threadCaller(caller), { tool: destroy.name });
+    const nested = yield* call("nested_call", threadCaller(caller), {
+      tool: listedToolName(destroy),
+    });
     expect("ran" in nested && JSON.parse(nested.ran)).toMatchObject(direct);
   }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "observer" }))),
+);
+
+it.effect("gates a legacy tool name over /mcp exactly as its listed name", () =>
+  Effect.gen(function* () {
+    const observer = BUILTIN_PERMISSION_PROFILES.observer!;
+    const entry = writes.find(
+      (candidate) =>
+        candidate.legacyNames.length > 0 &&
+        candidate.capability !== "none" &&
+        !observer.capabilities.includes(candidate.capability!),
+    )!;
+    const http = yield* serveOverHttp(
+      { thread: threadCaller(caller), outside },
+      Layer.effectDiscard(seed(caller)).pipe(
+        Layer.provideMerge(served({ enabled: true, defaultProfile: "observer" })),
+      ),
+    );
+    const outcome = (result: McpSchema.CallToolResult) => decodeOutcome(textOf(result.content));
+    const [legacy] = entry.legacyNames;
+    const byLegacy = yield* http.callTool("thread", legacy!, {});
+    const byListed = yield* http.callTool("thread", listedToolName(entry), {});
+    expect(yield* outcome(byListed), entry.path).toMatchObject(refusedFor(entry.capability!));
+    expect(yield* outcome(byLegacy), entry.path).toEqual(yield* outcome(byListed));
+    expect(byLegacy._meta?.[DEPRECATED_META_KEY]).toBe(listedToolName(entry));
+    // An outside client is bounded by its approved access, under either name.
+    expect(yield* outcome(yield* http.callTool("outside", legacy!, {}))).toEqual({
+      ran: entry.name,
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );

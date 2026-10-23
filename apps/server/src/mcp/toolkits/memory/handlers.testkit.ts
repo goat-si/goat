@@ -7,6 +7,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Schema from "effect/Schema";
 // eslint-disable-next-line goat/no-raw-mcp-registration -- Test harness calls only toolkits registered through McpHttpServer.toolkitRegistration.
 import { McpSchema, McpServer } from "effect/ai";
+import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import migration from "../../../persistence/Migrations/076_Memory.ts";
 import searchMigration from "../../../persistence/Migrations/078_MemorySearchCounters.ts";
 import hubMigration from "../../../persistence/Migrations/077_MemoryHubSync.ts";
@@ -192,10 +193,15 @@ export const upsert = (n = 3): M.MemoryUpsertInput => ({
   baseBoundary: null,
 });
 const json = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+/** Tests name memory tools by their grant names (MEMORY_MCP_TOOLS); /mcp lists them as goat_memory_*. */
+const listedName = (name: string) => {
+  const entry = resolveAgentSurfaceEntry(name);
+  return entry === undefined ? name : listedToolName(entry);
+};
 export const call = (name: string, input: object, invocation = scope()) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    const result = yield* server.callTool({ name, arguments: input });
+    const result = yield* server.callTool({ name: listedName(name), arguments: input });
     const body = yield* json(
       result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
     );

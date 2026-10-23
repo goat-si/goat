@@ -721,6 +721,8 @@ export const GOAT_MCP_CANONICAL_TOOL_ALIASES: Readonly<Record<string, string>> =
   goat_handoff_create: "request_secret",
   goat_html_preview: "html_preview",
   goat_html_render: "html_render",
+  goat_origin_report_wait: "goat_origin_reports_wait",
+  goat_permission_profile_read: "goat_permission_profile_get",
   goat_permission_profile_sync: "goat_goatclaw_sync",
   goat_preview_back: "preview_back",
   goat_preview_click: "preview_click",
@@ -746,6 +748,7 @@ export const GOAT_MCP_CANONICAL_TOOL_ALIASES: Readonly<Record<string, string>> =
   goat_preview_upload: "preview_upload",
   goat_preview_wait: "preview_wait_for",
   goat_provider_list: "orchestrator_capabilities",
+  goat_provider_sync_read: "goat_provider_sync_status",
   goat_pull_request_guide_read: "read_pull_request_guide",
   goat_pull_request_guide_update: "write_pull_request_guides",
   goat_pull_request_link: "link_pull_request",
@@ -761,6 +764,7 @@ export const GOAT_MCP_CANONICAL_TOOL_ALIASES: Readonly<Record<string, string>> =
   goat_task_cancel: "task_cancel",
   goat_task_create: "delegate_task",
   goat_task_read: "task_status",
+  goat_thread_configuration_read: "goat_thread_configuration",
   goat_thread_create_many: "create_threads",
 };
 
@@ -821,6 +825,16 @@ function resolveGoatMcpToolName(value: string): string | null {
 export function resolveGoatMcpToolId(toolName: string | null | undefined): string | null {
   const name = toolName == null ? null : resolveGoatMcpToolName(toolName);
   return name !== null && GOAT_MCP_TOOL_NAMES.has(name) ? name : null;
+}
+
+/**
+ * The shipped name of the GOAT tool a call ran, whether the agent named it by its listed
+ * canonical name or the name it shipped with. For code that recognizes a tool by name; identity
+ * shown to people keeps the spelling from resolveGoatMcpToolId.
+ */
+export function resolveGoatMcpShippedToolId(toolName: string | null | undefined): string | null {
+  const id = resolveGoatMcpToolId(toolName);
+  return id === null ? null : (GOAT_MCP_CANONICAL_TOOL_ALIASES[id] ?? id);
 }
 
 export function resolveGoatMcpToolDefinition(

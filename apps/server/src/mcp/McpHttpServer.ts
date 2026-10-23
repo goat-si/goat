@@ -1,6 +1,6 @@
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
-import { ToolDispatch, withServedToolNames } from "./ToolDispatch.ts";
+import { listedRegistration, ToolDispatch, withServedToolNames } from "./ToolDispatch.ts";
 import {
   argumentKeys,
   encodeReferenceRefusal,
@@ -17,7 +17,7 @@ import {
   type RunId,
   ThreadId,
 } from "@goat/contracts";
-import { type LlmsTxtCaller, renderLlmsTxt } from "@goat/contracts/agentSurface/llms";
+import { llmsTxtCaller, llmsTxtResponse } from "./llmsTxtResponse.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -353,18 +353,6 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
 const layerMcpAuthMiddleware = HttpRouter.middleware<{
   provides: McpInvocationContext.McpInvocationContext;
 }>()(makeMcpAuthMiddleware).layer;
-
-const llmsTxtCaller = (scope: McpInvocationContext.McpInvocationScope): LlmsTxtCaller =>
-  scope.client === undefined
-    ? { kind: "thread" }
-    : { kind: "client", readOnly: scope.client.access === "read-only" };
-
-const llmsTxtResponse = (caller: LlmsTxtCaller) =>
-  HttpServerResponse.text(renderLlmsTxt(caller), {
-    contentType: "text/plain; charset=utf-8",
-    // The body depends on the credential, so no shared cache may keep it.
-    headers: { "cache-control": "no-store", vary: "authorization" },
-  });
 
 /**
  * The registry index for agents. Without a credential it lists every path; a
@@ -1179,6 +1167,15 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/** Applied outside the access and analytics wrappers, which keep keying by the shipped name. */
+const withListedNames = <A, E, R>(registration: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(McpServer.McpServer, (server) =>
+    Effect.provideService(registration, McpServer.McpServer, {
+      ...server,
+      addTool: (options) => server.addTool(listedRegistration(options)),
+    }),
+  );
+
 /**
  * `McpServer.toolkit` asks for every service its tools declare when it
  * registers them, but the auth middleware provides `McpInvocationContext` to
@@ -1190,7 +1187,9 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) => {
   const registration = Layer.effectDiscard(
-    withToolAnalytics(applyToolContracts(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    withListedNames(
+      withToolAnalytics(applyToolContracts(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    ),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
   const registered = registration as Layer.Layer<
@@ -1220,7 +1219,7 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
   register: Effect.Effect<A, E, R>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) =>
-  Layer.effectDiscard(withToolAnalytics(applyToolContracts(register))).pipe(
+  Layer.effectDiscard(withListedNames(withToolAnalytics(applyToolContracts(register)))).pipe(
     Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)),
   );
 

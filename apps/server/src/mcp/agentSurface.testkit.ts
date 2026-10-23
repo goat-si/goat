@@ -259,97 +259,101 @@ type RpcMessage = {
 };
 
 /**
- * The catalog served over /mcp the way agents reach it: each caller sends its own bearer token
+ * Registrations served over /mcp the way agents reach it: each caller sends its own bearer token
  * and the auth middleware provides that caller's scope. Needs an HTTP server and client, such as
  * NodeHttpServer.layerTest, and a scope that keeps the server up.
  */
-export const serveCatalogOverHttp = Effect.fn("agentSurfaceTestkit.serveCatalogOverHttp")(
-  function* (scopes: Readonly<Record<string, McpInvocationScope>>) {
-    const scopeOf = new Map(
-      Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
+export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
+  scopes: Readonly<Record<string, McpInvocationScope>>,
+  registrations: Layer.Layer<never, E, R>,
+) {
+  const scopeOf = new Map(
+    Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
+  );
+  yield* HttpRouter.serve(
+    registrations.pipe(
+      Layer.provideMerge(McpHttpServer.layerMcpTransport),
+      Layer.provide(
+        Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+          resolve: () => Effect.succeed(undefined),
+          explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),
+          isRegistryToken: () => false,
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+          authenticate: (request) =>
+            Effect.succeed(scopeOf.get(request.headers.authorization ?? "")),
+        }),
+      ),
+    ),
+    { disableListenLog: true, disableLogger: true },
+  ).pipe(Layer.build);
+  const http = yield* HttpClient.HttpClient;
+  const sessions = new Map<string, string>();
+  let nextId = 0;
+  const post = Effect.fn(function* (caller: string, method: string, params: object) {
+    const id = ++nextId;
+    const session = sessions.get(caller);
+    const response = yield* http.post("/mcp", {
+      headers: {
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${caller}.token`,
+        ...(session === undefined
+          ? {}
+          : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
+      },
+      body: HttpBody.text(encodeJson({ jsonrpc: "2.0", id, method, params }), "application/json"),
+    });
+    const sessionId = response.headers["mcp-session-id"];
+    if (session === undefined && sessionId !== undefined) sessions.set(caller, sessionId);
+    const text = yield* response.text;
+    const lines = text.split(/\r?\n/).filter((line) => line.startsWith("data:"));
+    const messages = (lines.length > 0 ? lines.map((line) => line.slice(5)) : [text]).map(
+      (line) => decodeJson(line) as RpcMessage,
     );
-    yield* HttpRouter.serve(
-      catalog.pipe(
-        Layer.provide(dependencies),
-        Layer.provideMerge(McpHttpServer.layerMcpTransport),
-        Layer.provide(
-          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
-            resolve: () => Effect.succeed(undefined),
-            explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),
-            isRegistryToken: () => false,
-          }),
-        ),
-        Layer.provide(
-          Layer.succeed(McpHttpServer.McpClientAuthenticator, {
-            authenticate: (request) =>
-              Effect.succeed(scopeOf.get(request.headers.authorization ?? "")),
-          }),
+    return messages.find((message) => message.id === id) ?? { error: text };
+  });
+  const ensureSession = (caller: string) =>
+    sessions.has(caller)
+      ? Effect.void
+      : post(caller, "initialize", {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "agent-surface-http", version: "1" },
+        });
+  return {
+    /** tools/call as the caller; a JSON-RPC error comes back as an error result naming it. */
+    callTool: (caller: string, name: string, args: object) =>
+      ensureSession(caller).pipe(
+        Effect.andThen(post(caller, "tools/call", { name, arguments: args })),
+        // A transport failure is a broken harness, never an access outcome.
+        Effect.orDie,
+        Effect.map((message) =>
+          message.result === undefined
+            ? new McpSchema.CallToolResult({
+                isError: true,
+                content: [{ type: "text", text: `rpc error: ${encodeJson(message.error)}` }],
+              })
+            : decodeCallToolResult(message.result),
         ),
       ),
-      { disableListenLog: true, disableLogger: true },
-    ).pipe(Layer.build);
-    const http = yield* HttpClient.HttpClient;
-    const sessions = new Map<string, string>();
-    let nextId = 0;
-    const post = Effect.fn(function* (caller: string, method: string, params: object) {
-      const id = ++nextId;
-      const session = sessions.get(caller);
-      const response = yield* http.post("/mcp", {
-        headers: {
-          accept: "application/json, text/event-stream",
-          authorization: `Bearer ${caller}.token`,
-          ...(session === undefined
-            ? {}
-            : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
-        },
-        body: HttpBody.text(encodeJson({ jsonrpc: "2.0", id, method, params }), "application/json"),
-      });
-      const sessionId = response.headers["mcp-session-id"];
-      if (session === undefined && sessionId !== undefined) sessions.set(caller, sessionId);
-      const text = yield* response.text;
-      const lines = text.split(/\r?\n/).filter((line) => line.startsWith("data:"));
-      const messages = (lines.length > 0 ? lines.map((line) => line.slice(5)) : [text]).map(
-        (line) => decodeJson(line) as RpcMessage,
-      );
-      return messages.find((message) => message.id === id) ?? { error: text };
-    });
-    const ensureSession = (caller: string) =>
-      sessions.has(caller)
-        ? Effect.void
-        : post(caller, "initialize", {
-            protocolVersion: "2025-06-18",
-            capabilities: {},
-            clientInfo: { name: "agent-surface-http", version: "1" },
-          });
-    return {
-      /** tools/call as the caller; a JSON-RPC error comes back as an error result naming it. */
-      callTool: (caller: string, name: string, args: object) =>
-        ensureSession(caller).pipe(
-          Effect.andThen(post(caller, "tools/call", { name, arguments: args })),
-          // A transport failure is a broken harness, never an access outcome.
-          Effect.orDie,
-          Effect.map((message) =>
-            message.result === undefined
-              ? new McpSchema.CallToolResult({
-                  isError: true,
-                  content: [{ type: "text", text: `rpc error: ${encodeJson(message.error)}` }],
-                })
-              : decodeCallToolResult(message.result),
-          ),
-        ),
-      /** Every tool name tools/list shows the caller, across pages. */
-      listToolNames: Effect.fn(function* (caller: string) {
-        yield* ensureSession(caller);
-        const names: Array<string> = [];
-        let cursor: unknown;
-        do {
-          const page = (yield* post(caller, "tools/list", cursor === undefined ? {} : { cursor }))
-            .result as { tools: ReadonlyArray<{ name: string }>; nextCursor?: unknown };
-          names.push(...page.tools.map((tool) => tool.name));
-          cursor = page.nextCursor;
-        } while (cursor !== undefined && cursor !== null);
-        return names;
-      }),
-    };
-  },
-);
+    /** Every tool name tools/list shows the caller, across pages. */
+    listToolNames: Effect.fn(function* (caller: string) {
+      yield* ensureSession(caller);
+      const names: Array<string> = [];
+      let cursor: unknown;
+      do {
+        const page = (yield* post(caller, "tools/list", cursor === undefined ? {} : { cursor }))
+          .result as { tools: ReadonlyArray<{ name: string }>; nextCursor?: unknown };
+        names.push(...page.tools.map((tool) => tool.name));
+        cursor = page.nextCursor;
+      } while (cursor !== undefined && cursor !== null);
+      return names;
+    }),
+  };
+});
+
+/** The assembled catalog over inert services, served over /mcp. */
+export const serveCatalogOverHttp = (scopes: Readonly<Record<string, McpInvocationScope>>) =>
+  serveOverHttp(scopes, catalog.pipe(Layer.provide(dependencies)));

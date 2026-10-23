@@ -1,6 +1,11 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
-import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import {
+  canonicalToolName,
+  deprecatedReplacement,
+  listedToolName,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
 import {
   FAILURE_CLASSES,
   type AgentSurfaceResult,
@@ -99,9 +104,25 @@ const reclassified = (
 
 const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
 
-/** Where a routed call ran, so the agent can tell remote results from local ones. */
-const withHost = (result: AgentSurfaceResult, host: string | undefined): AgentSurfaceResult =>
-  host === undefined ? result : { ...result, meta: { ...result.meta, host } };
+/**
+ * Where a routed call ran, so the agent can tell remote results from local ones, and what to
+ * call instead when the caller named the path by a deprecated name.
+ */
+const withMeta = (
+  result: AgentSurfaceResult,
+  meta: { readonly host?: string | undefined; readonly deprecated?: string | undefined },
+): AgentSurfaceResult => ({
+  ...result,
+  ...(meta.host === undefined && meta.deprecated === undefined
+    ? {}
+    : {
+        meta: {
+          ...result.meta,
+          ...(meta.host === undefined ? {} : { host: meta.host }),
+          ...(meta.deprecated === undefined ? {} : { deprecated: meta.deprecated }),
+        },
+      }),
+});
 
 const envelopeError = (
   code: "invalid_request" | "not_found" | "internal",
@@ -116,10 +137,10 @@ export const layer = McpToolAccess.toLayer(
 
     const summary = (entry: AgentSurfaceRegistryEntry, scope: Scope) => ({
       path: entry.path,
-      name: entry.name,
+      name: listedToolName(entry),
       summary: entry.summary,
       effect: entry.effect,
-      available: availability(entry, scope, dispatch.served(entry.name) !== undefined),
+      available: availability(entry, scope, dispatch.served(listedToolName(entry)) !== undefined),
     });
 
     const describe = Effect.fn("AgentSurface.describe")(function* (input: {
@@ -141,7 +162,7 @@ export const layer = McpToolAccess.toLayer(
       }
       const entry = resolveAgentSurfaceEntry(input.path);
       if (entry !== undefined) {
-        const tool = dispatch.served(entry.name);
+        const tool = dispatch.served(listedToolName(entry));
         return {
           depth: "path" as const,
           entry: {
@@ -184,24 +205,23 @@ export const layer = McpToolAccess.toLayer(
           "unknown_path",
           `GOAT has no capability named ${input.path}. Find paths with goat_describe.`,
         );
+      const name = listedToolName(entry);
       if (NOT_CALLABLE.has(entry.path))
         return envelopeError(
           "invalid_request",
           "not_callable",
-          `${entry.name} cannot run inside goat_call. Call it directly.`,
+          `${name} cannot run inside goat_call. Call it directly.`,
         );
-      if (dispatch.served(entry.name) === undefined)
-        return envelopeError(
-          "not_found",
-          "not_served",
-          `This GOAT server does not serve ${entry.name}.`,
-        );
+      if (dispatch.served(name) === undefined)
+        return envelopeError("not_found", "not_served", `This GOAT server does not serve ${name}.`);
       const captured = yield* Ref.make<unknown>(undefined);
       // Writes count as unkeyed until the registry says which ones the server deduplicates.
       const context: CallContext = { effect: entry.effect, pathOf };
       const args = input.args ?? {};
       const host = entry.hostRoutable && typeof args.host === "string" ? args.host : undefined;
-      return yield* dispatch.call(entry.name, args).pipe(
+      // The envelope names paths, so a deprecated name or path points at the current path.
+      const deprecated = deprecatedReplacement(input.path) === undefined ? undefined : entry.path;
+      return yield* dispatch.call(name, args).pipe(
         Effect.provideService(McpToolAccess.CallFailureCapture, {
           record: (error) => Ref.set(captured, error),
         }),
@@ -212,7 +232,7 @@ export const layer = McpToolAccess.toLayer(
               )
             : Effect.succeed(fromToolResult(result, context)),
         ),
-        Effect.map((result) => withHost(result, host)),
+        Effect.map((result) => withMeta(result, { host })),
         // A dying target still gets an answer, with the same fixed text a direct call shows.
         Effect.catchDefect(() =>
           Effect.succeed(
@@ -228,6 +248,7 @@ export const layer = McpToolAccess.toLayer(
           InternalError: (error) =>
             Effect.succeed(envelopeError("internal", "internal_error", error.message)),
         }),
+        Effect.map((result) => withMeta(result, { deprecated })),
       );
     });
 

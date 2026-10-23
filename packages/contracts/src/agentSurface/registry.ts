@@ -1,6 +1,6 @@
 import { htmlPreviewDescription, htmlRenderDescription } from "./html.ts";
 import { noteSurfaceEntries } from "./notes.ts";
-import { metaSurfaceEntries } from "./surfaceEntries.ts";
+import { legacyToolNames, metaSurfaceEntries } from "./surfaceEntries.ts";
 import type { AgentSurfaceEntry, AgentSurfaceExample, CapabilityDeclaration } from "./types.ts";
 
 export type {
@@ -14,7 +14,7 @@ export type {
 const entry = <const E extends AgentSurfaceEntry & CapabilityDeclaration>(value: E) => ({
   ...value,
   path: `${value.resource}.${value.verb}` as `${E["resource"]}.${E["verb"]}`,
-  legacyNames: [value.name],
+  legacyNames: legacyToolNames(value),
   // Input resolves through Tool.getJsonSchema (including dynamic tools); outputs
   // reference the named tool's schema slots. No server imports enter contracts.
   schemaRefs: {
@@ -44,9 +44,9 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { idempotentHint: false, openWorldHint: false },
   }),
-  "decision.get": entry({
+  "decision.read": entry({
     resource: "decision",
-    verb: "get",
+    verb: "read",
     name: "goat_decision_get",
     toolkit: "decision",
     summary: "Read one durable decision or projected pending question by id.",
@@ -94,9 +94,9 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { idempotentHint: false, openWorldHint: false },
   }),
-  "permission_profile.get": entry({
+  "permission_profile.read": entry({
     resource: "permission_profile",
-    verb: "get",
+    verb: "read",
     name: "goat_permission_profile_get",
     toolkit: "fleet",
     summary: "Read the caller's effective permission profile.",
@@ -2417,9 +2417,9 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
-  "origin.reports_wait": entry({
+  "origin.report_wait": entry({
     resource: "origin",
-    verb: "reports_wait",
+    verb: "report_wait",
     name: "goat_origin_reports_wait",
     toolkit: "remoteReport",
     summary: "Collect one origin correlation's reports using its read key.",
@@ -2871,9 +2871,9 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
-  "thread.configuration": entry({
+  "thread.configuration_read": entry({
     resource: "thread",
-    verb: "configuration",
+    verb: "configuration_read",
     name: "goat_thread_configuration",
     toolkit: "thread",
     summary: "Read a thread's provider/model selection and modes.",
@@ -3336,9 +3336,9 @@ export const agentSurfaceRegistry = {
     humanSteps: ["approval", "sign_in"],
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
-  "provider.sync_status": entry({
+  "provider.sync_read": entry({
     resource: "provider",
-    verb: "sync_status",
+    verb: "sync_read",
     name: "goat_provider_sync_status",
     toolkit: "provider",
     summary: "Read a provider sync's per-host progress",

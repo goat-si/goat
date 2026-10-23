@@ -36,14 +36,19 @@ export const AgentSurfaceError = Schema.Struct({
 export type AgentSurfaceError = typeof AgentSurfaceError.Type;
 
 /**
- * Only fields something produces today. nextCursor, operation and deprecated join with the
- * rollout steps that emit them, so no agent learns to read a field that is never set.
+ * Only fields something produces today. nextCursor and operation join with the rollout steps
+ * that emit them, so no agent learns to read a field that is never set.
  */
 export const AgentSurfaceMeta = Schema.Struct({
   /** Where a routed call ran. */
   host: Schema.optionalKey(Schema.String),
   /** Non-text content blocks, such as screenshots, as the tool returned them. */
   content: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  /**
+   * Set when the call named a deprecated tool name or path: the current path to use instead.
+   * The call itself ran normally.
+   */
+  deprecated: Schema.optionalKey(Schema.String),
 });
 export type AgentSurfaceMeta = typeof AgentSurfaceMeta.Type;
 

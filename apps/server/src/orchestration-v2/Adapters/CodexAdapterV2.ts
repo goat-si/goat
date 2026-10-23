@@ -9,6 +9,7 @@ import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import { goatMemoryToolsWithout } from "./goatMcpToolNames.ts";
 import {
   mcpToolPresentation,
   type McpToolPresentation,
@@ -1499,13 +1500,7 @@ export function codexThreadRuntimeParams(input: {
 } {
   const { mcpSession } = input;
   const memory = McpProviderSession.memoryToolAvailability(mcpSession);
-  const disabledMemoryTools = [
-    ...(!memory.read
-      ? ["memory_list", "memory_search", "memory_read", "memory_history", "memory_sync_status"]
-      : []),
-    ...(!memory.source ? ["memory_read_source"] : []),
-    ...(!memory.write ? ["memory_upsert", "memory_forget", "memory_revert_resolution"] : []),
-  ];
+  const disabledMemoryTools = goatMemoryToolsWithout(memory);
   const cuaDriver = codexManagedCuaDriver(mcpSession, input.userCuaDriver === true);
   // Codex merges a dotted thread-config entry over the user's own `cua-driver`; disabling the
   // whole entry keeps theirs from running for an unattended turn without a lease.

@@ -24,9 +24,10 @@ same checks in-process (`apps/server/src/provider/ProviderDiagnosis.ts`).
 
 Tool names, descriptions, schema references and discovery metadata live in
 [`agentSurface/registry.ts`](../packages/contracts/src/agentSurface/registry.ts). Each entry has
-an explicit `resource.verb` path and retains its current MCP name, which `tools/list` shows. When
-that name is not the path's canonical `goat_<resource>_<verb>` projection, `/mcp` also accepts the
-canonical name in `tools/call` and runs the served tool, without listing it
+an explicit `resource.verb` path and the name its toolkit registers, which access declarations and
+analytics key on. `tools/list` shows the path's canonical `goat_<resource>_<verb>` projection
+instead (`layerListedToolNames`). When the registered name differs, `/mcp` still accepts it in
+`tools/call` without listing it and marks the result deprecated
 ([`ToolDispatch.ts`](../apps/server/src/mcp/ToolDispatch.ts) `withServedToolNames`). Schemas
 remain with their owning toolkit or contracts module.
 
@@ -68,7 +69,7 @@ launches that skip this one.
 
 The registered names include `goat_*` forms, unprefixed names, and `channel_*`, `preview_*`,
 `device_*`, `html_*`, and `memory_*` tools. Presentation of older `t3_*` tool names, when it exists, is display recovery for history.
-Registration uses the current names. Presentation also maps the unlisted canonical aliases to the
-tool they ran.
+Toolkits register the shipped names and `/mcp` lists the canonical ones. Presentation maps a
+canonical name to the shipped tool it ran.
 
 > Decision record: [ADR-0007](decisions/ADR-0007-mcp-tool-names.md)
