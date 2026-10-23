@@ -1,7 +1,10 @@
 // @effect-diagnostics globalTimers:off - electron-updater calls this synchronously from its request callbacks, outside an Effect runtime.
-/** The parts of Electron's net.ClientRequest a request deadline needs. */
-export interface TimedRequest {
-  readonly on: (event: string, listener: () => void) => unknown;
+/** The parts of Electron's net.ClientRequest and IncomingMessage a request deadline needs. */
+export interface TimedEmitter {
+  readonly on: (event: string, listener: (value?: unknown) => void) => unknown;
+}
+
+export interface TimedRequest extends TimedEmitter {
   readonly abort: () => void;
 }
 
@@ -12,21 +15,48 @@ const startNodeTimer: StartTimer = (run, delayMs) => {
   return () => clearTimeout(timer);
 };
 
+function isEmitter(value: unknown): value is TimedEmitter {
+  return (
+    typeof value === "object" && value !== null && typeof Reflect.get(value, "on") === "function"
+  );
+}
+
 /**
- * builder-util-runtime arms its request timeout on a "socket" event, which Electron's
- * net.ClientRequest never emits, so under Electron an updater request that stalls never
- * settles. This deadline runs on the request itself and ends once the response starts,
- * so a slow download keeps streaming while a request that never answers fails.
+ * builder-util-runtime gives each updater request an idle timeout through Node's
+ * socket.setTimeout, armed on a "socket" event that Electron's net.ClientRequest never
+ * emits, so under Electron a stalled request never settles. This restores that idle
+ * timeout on the request and its response: it fails the request when no data arrives for
+ * timeoutMs, before or during the response body, so a streaming download stays alive and
+ * a feed that stops sending fails. Request "close" is not an ending: Electron's request is
+ * a Writable that closes once its body is sent, before any response.
  */
-export function addResponseDeadline(
+export function addIdleDeadline(
   request: TimedRequest,
   fail: (error: Error) => void,
   timeoutMs: number,
   startTimer: StartTimer = startNodeTimer,
 ): void {
-  const cancel = startTimer(() => {
-    request.abort();
-    fail(new Error(`Request timed out after ${timeoutMs} ms without a response`));
-  }, timeoutMs);
-  for (const event of ["response", "error", "abort", "close"]) request.on(event, cancel);
+  let settled = false;
+  let cancel = () => {};
+  const settle = () => {
+    settled = true;
+    cancel();
+  };
+  const arm = () => {
+    cancel();
+    if (settled) return;
+    cancel = startTimer(() => {
+      settled = true;
+      request.abort();
+      fail(new Error(`Request timed out after ${timeoutMs} ms without data`));
+    }, timeoutMs);
+  };
+  arm();
+  request.on("response", (response) => {
+    arm();
+    if (!isEmitter(response)) return;
+    response.on("data", arm);
+    for (const event of ["end", "error", "aborted"]) response.on(event, settle);
+  });
+  for (const event of ["error", "abort"]) request.on(event, settle);
 }

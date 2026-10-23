@@ -6,7 +6,7 @@ import * as Scope from "effect/Scope";
 
 import { autoUpdater } from "electron-updater";
 
-import { addResponseDeadline, type TimedRequest } from "./electronRequestTimeout.ts";
+import { addIdleDeadline, type TimedRequest } from "./electronRequestTimeout.ts";
 
 type AutoUpdater = typeof autoUpdater;
 
@@ -177,14 +177,13 @@ interface UpdaterHttpExecutor {
 
 // electron-updater builds its HTTP executor with the updater and routes every feed request
 // and download through addTimeOutHandler, whose socket-based deadline never fires under
-// Electron (see addResponseDeadline). Without a working deadline one stalled request is
+// Electron (see addIdleDeadline). Without a working deadline one stalled request is
 // shared by every later check until the app restarts.
 function installRequestDeadlines(): void {
   const executor = (autoUpdater as unknown as { httpExecutor: UpdaterHttpExecutor | null })
     .httpExecutor;
   if (executor === null) return;
-  executor.addTimeOutHandler = (request, fail, timeout) =>
-    addResponseDeadline(request, fail, timeout);
+  executor.addTimeOutHandler = (request, fail, timeout) => addIdleDeadline(request, fail, timeout);
 }
 
 export const layer = Layer.sync(ElectronUpdater, () => {

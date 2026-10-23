@@ -1,54 +1,101 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off - The test drives Node's real Writable lifecycle, which Electron's ClientRequest extends.
+import * as NodeStream from "node:stream";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { addResponseDeadline, type StartTimer } from "./electronRequestTimeout.ts";
+import { addIdleDeadline, type StartTimer } from "./electronRequestTimeout.ts";
 
-function fakeRequest() {
-  const listeners = new Map<string, Array<() => void>>();
-  return {
-    abort: vi.fn(),
-    on: (event: string, listener: () => void) => {
-      listeners.set(event, [...(listeners.get(event) ?? []), listener]);
-    },
-    emit: (event: string) => {
-      for (const listener of listeners.get(event) ?? []) listener();
-    },
-  };
+// Electron's net.ClientRequest is a Writable with autoDestroy, so ending its body emits
+// "finish" and "close" before any response arrives.
+class FakeRequest extends NodeStream.Writable {
+  readonly abort = vi.fn();
+  constructor() {
+    super({ autoDestroy: true });
+  }
+  override _write(_chunk: unknown, _encoding: BufferEncoding, done: () => void) {
+    done();
+  }
+  emitResponse(response: FakeResponse) {
+    this.emit("response", response);
+  }
 }
 
-function manualTimer() {
-  let run: (() => void) | null = null;
-  const start: StartTimer = (callback) => {
-    run = callback;
+class FakeResponse {
+  private readonly listeners = new Map<string, Array<() => void>>();
+  on(event: string, listener: () => void) {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+  }
+  emit(event: string) {
+    for (const listener of this.listeners.get(event) ?? []) listener();
+  }
+}
+
+function fakeClock() {
+  let now = 0;
+  const timers = new Set<{ readonly at: number; readonly run: () => void }>();
+  const start: StartTimer = (run, delayMs) => {
+    const timer = { at: now + delayMs, run };
+    timers.add(timer);
     return () => {
-      run = null;
+      timers.delete(timer);
     };
   };
-  return { start, fire: () => run?.() };
+  const advance = (ms: number) => {
+    now += ms;
+    for (const timer of [...timers]) {
+      if (timer.at > now) continue;
+      timers.delete(timer);
+      timer.run();
+    }
+  };
+  return { start, advance };
 }
 
-describe("addResponseDeadline", () => {
-  it("regression: an updater request that never answers is aborted and fails", () => {
-    const request = fakeRequest();
-    const timer = manualTimer();
-    const fail = vi.fn();
-    addResponseDeadline(request, fail, 60_000, timer.start);
+function setup() {
+  const request = new FakeRequest();
+  const clock = fakeClock();
+  const fail = vi.fn();
+  addIdleDeadline(request, fail, 60_000, clock.start);
+  return { request, clock, fail };
+}
 
-    timer.fire();
+const timedOut = new Error("Request timed out after 60000 ms without data");
+
+describe("addIdleDeadline", () => {
+  it("regression: a request that sent its body but never gets a response fails at the deadline", async () => {
+    const { request, clock, fail } = setup();
+    const closed = new Promise<void>((resolve) => request.once("close", resolve));
+    request.end();
+    await closed;
+
+    clock.advance(60_000);
 
     expect(request.abort).toHaveBeenCalledTimes(1);
-    expect(fail).toHaveBeenCalledWith(
-      new Error("Request timed out after 60000 ms without a response"),
-    );
+    expect(fail).toHaveBeenCalledWith(timedOut);
   });
 
-  it("keeps a request alive once its response starts, so long downloads keep streaming", () => {
-    const request = fakeRequest();
-    const timer = manualTimer();
-    const fail = vi.fn();
-    addResponseDeadline(request, fail, 60_000, timer.start);
+  it("regression: a feed response that stops sending data fails at the deadline", () => {
+    const { request, clock, fail } = setup();
+    const response = new FakeResponse();
+    request.emitResponse(response);
+    response.emit("data");
 
-    request.emit("response");
-    timer.fire();
+    clock.advance(60_000);
+
+    expect(request.abort).toHaveBeenCalledTimes(1);
+    expect(fail).toHaveBeenCalledWith(timedOut);
+  });
+
+  it("keeps a download alive while data keeps arriving, and leaves a finished response alone", () => {
+    const { request, clock, fail } = setup();
+    const response = new FakeResponse();
+    request.emitResponse(response);
+    for (let chunk = 0; chunk < 5; chunk += 1) {
+      clock.advance(45_000);
+      response.emit("data");
+    }
+    response.emit("end");
+
+    clock.advance(600_000);
 
     expect(request.abort).not.toHaveBeenCalled();
     expect(fail).not.toHaveBeenCalled();
