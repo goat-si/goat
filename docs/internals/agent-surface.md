@@ -614,9 +614,11 @@ give the person a terminal route.
 host. Writes forward the caller's runtime ceiling. Since
 [#758](https://github.com/goat-si/goat/pull/758), a follow-up `thread.send` with
 `host` also forwards the caller's goatclaw ceiling as `permissionProfileCeiling`,
-and never falls back to the relay, which would deliver without one. A destination
-that has not shown it enforces ceilings still gets the launch or send, and the
-result's `ceiling` field says the ceiling is unconfirmed there. Remote
+and a send that carries one never falls back to the relay, which would deliver
+without it. A destination whose goatclaw sync is still pending or outdated still
+gets the launch or send, and the result's `ceiling` field says the ceiling is
+unconfirmed there; a launch to a destination that cannot accept a ceiling at all
+is still refused. Remote
 servers answer only to the tool names they shipped with
 ([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)).
 The origin checks the calling thread's capability before forwarding, plus
