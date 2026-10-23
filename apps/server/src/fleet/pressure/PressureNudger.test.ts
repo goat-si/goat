@@ -192,9 +192,10 @@ describe("PressureNudger.tick", () => {
         "person wake: Resource pressure: this machine is critical (since 1970-01-01T00:00:00.000Z).",
       ]);
       const text = woken?.type === "message.dispatch" ? woken.text : "";
-      expect(text).toContain('"vitest-lane" (threadId vitest-lane, started by this thread)');
-      expect(text).toContain("- macmini: load 0.1 per core, 0 threads running or queued");
-      expect(text).toContain("start the next ones on macmini with goat_ssh_thread_launch");
+      expect(text).toContain("started by this thread");
+      expect(text).toContain("macmini has room (load 0.1 per core, 0 threads running or queued)");
+      expect(text).toContain("start the next ones there with ssh.thread_launch");
+      expect(text.split("\n")).toHaveLength(3);
 
       yield* TestClock.adjust(MIN);
       yield* tick;

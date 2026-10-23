@@ -526,7 +526,7 @@ describe("LaunchWatchService", () => {
           yield* Queue.offer(world.waits, stillRunning(run1));
           const first = yield* Queue.take(world.delivered);
           expect(first.text).toContain("waiting on a user input request (question-1)");
-          expect(first.text).toContain("goat_pending_request_read");
+          expect(first.text).toContain("pending_request.read");
           expect(first.notification?.outcome).toBe("updated");
 
           // The same question at the next tick is not news; an approval is, and it says
@@ -1189,7 +1189,9 @@ describe("LaunchWatchService", () => {
             "Preparation log (last lines, redacted):\nFetching dev from its remote.\nReceiving objects:  45% (900/2000)",
           );
           expect(wake.text).toContain("Suggested action: Git on this machine was slow or stuck");
-          expect(wake.text).toContain('Retry with goat_thread_retry {threadId: "target"}');
+          expect(wake.text).toContain(
+            'Retry with goat_call {path: "thread.retry", args: {threadId: "target"}}',
+          );
           expect(wake.notification).toMatchObject({
             outcome: "failed",
             summary: 'Launched thread "Fix the flake" failed preparing its workspace',
@@ -1225,7 +1227,7 @@ describe("LaunchWatchService", () => {
           canRetry: true,
         },
       },
-      retry: 'Retry with goat_thread_retry {threadId: "target", host: "box"}',
+      retry: 'Retry with goat_call {path: "thread.retry", args: {threadId: "target", host: "box"}}',
     },
   ])("reports a remote run that failed preparing its workspace, from $host", (example) =>
     Effect.gen(function* () {

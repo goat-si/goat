@@ -32,7 +32,7 @@ type StreamEvent =
 export function overnightNoticeStream(lanes = 30): ReadonlyArray<StreamEvent> {
   const events: StreamEvent[] = [];
   for (let lane = 1; lane <= lanes; lane++) {
-    const host = HOSTS[lane % HOSTS.length]!;
+    const host = HOSTS[lane % HOSTS.length] ?? null;
     const correlationId = `corr-${lane}`;
     for (let step = 1; step <= 3; step++)
       events.push({
@@ -132,10 +132,11 @@ export function replayNoticeStream(events: ReadonlyArray<StreamEvent>): Readonly
     }
     const drained: string[] = [];
     let characters = 0;
-    while (inbox.length > 0 && drained.length < 20) {
-      const size = inbox[0]!.text.length + (drained.length === 0 ? 0 : 2);
+    for (let head = inbox[0]; head !== undefined && drained.length < 20; head = inbox[0]) {
+      const size = head.text.length + (drained.length === 0 ? 0 : 2);
       if (characters + size > 16_000) break;
-      drained.push(inbox.shift()!.text);
+      drained.push(head.text);
+      inbox.shift();
       characters += size;
     }
     turns.push(
