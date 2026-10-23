@@ -557,6 +557,11 @@ Around it, a human step reaches an agent in several shapes:
 | Decisions                    | `DecisionItem` by id                                                             | agent or person, per item                | answer delivered as a thread message                                                                                                                             |
 | Cloud launch consent         | `needs_human` from a thread; outside one, a refusal naming a decision GOAT filed | person approving the handoff or decision | agent calls launch again with the same arguments and `handoffId` or `decisionId`; the approval binds a digest of the launch and its holder and starts one launch |
 
+`delegate_task` and `goat_thread_launch` onto a cloud provider have no consent handoff and
+take no `decisionId`: they refuse a turn a person did not start and point to
+`goat_cloud_launch` on the machine that holds the account, since it does not take a remote
+holder while goatclaw is on.
+
 When a handoff resolves or expires, GOAT wakes the thread that asked with a
 queued message naming the next call
 ([HandoffWakeReactor.ts](../../apps/server/src/handoffs/HandoffWakeReactor.ts)).
@@ -633,7 +638,8 @@ The origin checks the calling thread's capability before forwarding, plus
 as on cordon or SSH setup). This holds for writes that declare no capability of
 their own, such as `thread.watch`. A `host` that names something else, such as a
 git forge or the address of a machine being added, is not listed; a test pins
-which arguments are.
+which arguments are. A write that lets placement pick the machine, such as
+`thread.reschedule` without `targetHost`, picks only among the allowlist.
 A thread launched or sent with a forwarded ceiling is bound to it on the
 destination, so its own calls there are checked against it. Other host-routed writes
 arrive as the origin's dispatch session, and the destination relies on the origin's

@@ -8,6 +8,7 @@
 import { isTest } from "./paths.ts";
 export { isTest } from "./paths.ts";
 
+import { WIRE_TEXT_RULES, WIRE_KEEP_RULES } from "./rules-wire.ts";
 import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
 import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 
@@ -124,6 +125,7 @@ const LINT_RULE_IDS =
 
 export const TEXT_RULES: readonly TextRule[] = [
   ...VISIBLE_TEXT_RULES,
+  ...WIRE_TEXT_RULES,
   {
     id: "pull-request-context-tag",
     category: "local-names",
@@ -521,6 +523,7 @@ export const DROP_RULES: readonly DropRule[] = [
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
   ...VISIBLE_KEEP_RULES,
+  ...WIRE_KEEP_RULES,
   {
     id: "legacy-server-error-reader",
     pattern: /T3 server WebSocket/g,
