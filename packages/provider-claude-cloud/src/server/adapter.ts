@@ -25,6 +25,16 @@ import {
 import * as Cli from "./cli.ts";
 import type { ClaudeCloudLogin } from "./cli.ts";
 import {
+  FOLLOW_UP_ACCEPTED,
+  isShortenedReply,
+  OBSERVATION_WINDOW_MS,
+  observeCloudSession,
+  recoverCloudReply,
+  type Observation,
+  runAnchor,
+  UNKNOWN_RUN,
+} from "./observe.ts";
+import {
   ClaudeCloudError,
   isClaudeCloudError,
   SESSION_ID,
@@ -33,17 +43,6 @@ import {
 } from "./protocol.ts";
 
 const DRIVER = ProviderDriverKind.make("claudeCloud");
-const OBSERVATION_WINDOW_MS = 2 * 60 * 60 * 1000;
-const OBSERVATION_INTERVAL_MS = 60_000;
-const RESULT_SUMMARY_LIMIT = 4000;
-const RESULT_LABEL = "Result PR found";
-const RESULT_CAVEAT = "PR presence does not confirm that the session stopped or its checks passed.";
-const resultSummary = (summary: string) =>
-  [
-    RESULT_LABEL,
-    summary.slice(0, RESULT_SUMMARY_LIMIT - RESULT_LABEL.length - RESULT_CAVEAT.length - 2),
-    RESULT_CAVEAT,
-  ].join("\n");
 const CANCEL_REASON =
   "Claude Cloud has no supported CLI cancellation command. Open the cloud session to stop it.";
 export const CLAUDE_CLOUD_CAPABILITIES: OrchestrationV2ProviderCapabilities = {
@@ -149,7 +148,20 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
   readonly instanceId: ProviderInstanceId;
   readonly resolveLogin: Effect.Effect<ClaudeCloudLogin, ClaudeCloudError>;
   readonly resolveControlCwd: Effect.Effect<string, ClaudeCloudError>;
+  /** Environment-owned folder under which each session read makes and removes its own folder. */
+  readonly resolveReadRoot: Effect.Effect<string, ClaudeCloudError>;
   readonly runStartedAt: (input: Turn | Attach) => Effect.Effect<DateTime.Utc, ClaudeCloudError>;
+  /**
+   * The run's own message, the messages earlier runs delivered to the same session, and whether
+   * this is the thread's first run on this instance, all from the saved thread.
+   */
+  readonly runHistory: (input: Turn | Attach) => Effect.Effect<
+    {
+      readonly prompt: string | undefined;
+      readonly first: boolean;
+    },
+    ClaudeCloudError
+  >;
   readonly observe: (input: {
     readonly projectId: ProjectId;
     readonly repository: string;
@@ -286,6 +298,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
       const settle = Effect.fn("ClaudeCloudAdapter.settle")(function* (
         i: Turn | Attach,
         error?: ClaudeCloudError,
+        resultText?: string,
       ) {
         const at = yield* DateTime.now;
         const turnId = ProviderTurnId.make(`claudeCloud:${options.instanceId}:${i.attemptId}`);
@@ -354,6 +367,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
             status: "completed",
             failure: null,
             threadDisposition: "reusable",
+            ...(resultText === undefined ? {} : { resultText }),
           });
       });
       const failObservation = Effect.fn("ClaudeCloudAdapter.failObservation")(function* (
@@ -381,57 +395,66 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
         if (error.outcome === "uncertain") yield* block(error.detail);
         yield* settle(i, error);
       });
-      const observe = Effect.fn("ClaudeCloudAdapter.observe")(function* (i: Turn | Attach) {
-        const thread = threads.get(i.providerThread.id) ?? i.providerThread;
-        const task = thread.cloudTask!;
-        const started = yield* options.runStartedAt(i);
-        const deadline = DateTime.toEpochMillis(started) + OBSERVATION_WINDOW_MS;
-        let lastReadError: string | undefined;
-        let lastReadCause: unknown;
-        while (true) {
-          const left = deadline - DateTime.toEpochMillis(yield* DateTime.now);
-          if (left <= 0)
-            return yield* new ClaudeCloudError({
-              outcome: "uncertain",
-              detail: `No session-linked PR was confirmed within two hours. The cloud session may still be running.${lastReadError ? ` ${lastReadError}` : ""}`,
-              ...(lastReadCause === undefined ? {} : { cause: lastReadCause }),
-            });
-          const result = yield* options
-            .observe({
-              projectId: i.appThread.projectId,
-              repository: task.source.repository,
-              sessionUrl: task.url!,
-            })
-            .pipe(Effect.timeout(left), Effect.result);
-          if (result._tag === "Success" && result.success !== null) {
-            const at = yield* DateTime.now;
-            const { error: _oldError, ...resultTask } = task;
-            const resultThread = {
-              ...thread,
-              status: "idle" as const,
-              updatedAt: at,
-              cloudTask: {
-                ...resultTask,
-                ...result.success,
-                status: "succeeded" as const,
-                tracking: "polled" as const,
-                progress: "Result PR found",
-                summary: resultSummary(result.success.summary),
-                updatedAt: DateTime.formatIso(at),
-              },
-            };
-            yield* commit(i, resultThread);
-            return;
-          }
-          if (result._tag === "Failure") {
-            lastReadError =
-              "GitHub observation was incomplete; check project source-control access.";
-            lastReadCause = result.failure;
-          }
-          const remaining = deadline - DateTime.toEpochMillis(yield* DateTime.now);
-          if (remaining > 0) yield* Effect.sleep(Math.min(OBSERVATION_INTERVAL_MS, remaining));
-        }
+      const current = (i: Turn | Attach) => threads.get(i.providerThread.id) ?? i.providerThread;
+      const readSession = Effect.fn("ClaudeCloudAdapter.readSession")(function* (i: Turn | Attach) {
+        const ref = current(i).nativeThreadRef;
+        const login = yield* options.resolveLogin;
+        if (!ref?.nativeId || ref.fingerprint !== login.binding)
+          return yield* new ClaudeCloudError({
+            detail: "The sibling Claude login changed, so GOAT will not read the session with it.",
+            outcome: "uncertain",
+          });
+        return yield* cli.readSession(login, yield* options.resolveReadRoot, ref.nativeId);
       });
+      const promptsSeen = new Map<string, number>();
+      const anchor = Effect.fn("ClaudeCloudAdapter.anchor")(function* (
+        i: Turn | Attach,
+        followUp: boolean | undefined,
+      ) {
+        const history = yield* options.runHistory(i).pipe(Effect.result);
+        const made = runAnchor({
+          startedAt: yield* options.runStartedAt(i),
+          history: history._tag === "Success" ? history.success : undefined,
+          followUp,
+          registered: current(i).cloudTask?.attach === "registered",
+          ...("message" in i ? { message: i.message.text } : {}),
+          seen: promptsSeen,
+          key: i.providerThread.id,
+        });
+        return made ?? (yield* new ClaudeCloudError({ detail: UNKNOWN_RUN, outcome: "uncertain" }));
+      });
+      const observe = Effect.fn("ClaudeCloudAdapter.follow")(function* (
+        i: Turn | Attach,
+        followUp: boolean,
+      ) {
+        return yield* observeCloudSession({
+          ...(yield* anchor(i, followUp)),
+          thread: () => current(i),
+          commit: (thread) => commit(i, thread),
+          findPullRequest: () => {
+            const task = current(i).cloudTask;
+            return task?.url
+              ? options.observe({
+                  projectId: i.appThread.projectId,
+                  repository: task.source.repository,
+                  sessionUrl: task.url,
+                })
+              : Effect.fail(
+                  new ClaudeCloudError({
+                    detail: "The saved cloud task has no session link.",
+                    outcome: "uncertain",
+                  }),
+                );
+          },
+          readSession: () => readSession(i),
+        });
+      });
+      const finish = (i: Turn | Attach, outcome: Observation) =>
+        outcome.kind === "replied"
+          ? settle(i, undefined, outcome.text)
+          : outcome.kind === "failed"
+            ? settle(i, outcome.error)
+            : settle(i);
       const run = Effect.fn("ClaudeCloudAdapter.run")(function* (i: Turn) {
         const previousTask = threads.get(i.providerThread.id)?.cloudTask;
         let thread = i.providerThread;
@@ -616,13 +639,14 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 ...reply.success,
                 status: "running",
                 tracking: "polled",
-                progress: "Follow-up accepted",
+                progress: FOLLOW_UP_ACCEPTED,
                 summary:
                   "Follow-up accepted. This receipt confirms message admission, not completed work.",
                 updatedAt: DateTime.formatIso(yield* DateTime.now),
               },
             };
             yield* commit(i, thread);
+            return yield* observe(i, true);
           } else {
             if (thread.cloudTask?.status === "submitting" && thread.cloudTask.taskId !== i.runId)
               return yield* new ClaudeCloudError({
@@ -755,12 +779,11 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 yield* handle.exited;
               }),
             );
-            yield* observe(i);
+            return yield* observe(i, false);
           }
-          return "deliver" as const;
         });
         yield* operation.pipe(
-          Effect.flatMap((result) => (result === "settled" ? Effect.void : settle(i))),
+          Effect.flatMap((result) => (result === "settled" ? Effect.void : finish(i, result))),
           Effect.catch((error) => {
             const observed = threads.get(thread.id);
             const saved =
@@ -888,29 +911,26 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 return;
               }
               if (task.status === "succeeded") {
-                if (!task.prUrl || !task.branch || !task.summary)
+                // A session reply has a summary; a PR result also has its PR and branch.
+                if (!task.summary || !task.prUrl !== !task.branch)
                   return yield* failObservation(
                     i,
                     thread,
                     new ClaudeCloudError({
                       outcome: "uncertain",
-                      detail: "Saved PR result is incomplete; open the session.",
+                      detail: "Saved cloud result is incomplete; open the session.",
                     }),
                   );
-                yield* settle(i);
-                return;
-              }
-              if (task.progress === "Follow-up accepted") {
-                if (!task.summary)
-                  yield* commit(i, {
-                    ...thread,
-                    cloudTask: {
-                      ...task,
-                      summary:
-                        "Follow-up accepted. This receipt confirms message admission, not completed work.",
-                    },
-                  });
-                yield* settle(i);
+                // A crash between the result and its terminal kept only the cut summary.
+                const text = isShortenedReply(task)
+                  ? yield* anchor(i, undefined).pipe(
+                      Effect.flatMap((runAnchor) =>
+                        recoverCloudReply({ ...runAnchor, readSession: () => readSession(i) }),
+                      ),
+                      Effect.orElseSucceed(() => undefined),
+                    )
+                  : undefined;
+                yield* settle(i, undefined, text);
                 return;
               }
               if (task.progress === "Follow-up rejected") {
@@ -931,8 +951,8 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 );
                 return;
               }
-              yield* observe(i).pipe(
-                Effect.andThen(settle(i)),
+              yield* observe(i, task.progress?.startsWith(FOLLOW_UP_ACCEPTED) === true).pipe(
+                Effect.flatMap((outcome) => finish(i, outcome)),
                 Effect.catch((error) =>
                   failObservation(i, threads.get(thread.id) ?? thread, error),
                 ),
