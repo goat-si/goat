@@ -495,6 +495,25 @@ describe("Rescheduler", () => {
     }),
   );
 
+  testScoped("lets placement choose only among the caller's allowed hosts", (world) =>
+    Effect.gen(function* () {
+      const rescheduler = yield* Rescheduler.Rescheduler;
+      world.reachable.C = true;
+      yield* loseA(world);
+      // B and C are equally free, and B comes first; a profile limited to C must not land on B.
+      const refused = yield* rescheduler.reschedule(request({ allowedHosts: ["A"] }));
+      expect(refused).toMatchObject({
+        _tag: "Refused",
+        reason: "no_capacity",
+        message: expect.stringContaining("goatclaw profile allows (A)"),
+      });
+      expect(world.launches).toEqual([]);
+      const moved = yield* rescheduler.reschedule(request({ allowedHosts: ["C"] }));
+      expect(moved).toMatchObject({ _tag: "Rescheduled", host: "C" });
+      expect(world.launches.map((launch) => launch.host)).toEqual(["C"]);
+    }),
+  );
+
   testScoped(
     "asks a host remembered as Lost again before moving, and interrupts it when it answers",
     (world) =>

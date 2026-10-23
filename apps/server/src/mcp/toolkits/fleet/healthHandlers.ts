@@ -5,6 +5,7 @@ import * as FleetHostStates from "../../../fleet/health/FleetHostStates.ts";
 import * as HostHealthMonitor from "../../../fleet/health/HostHealthMonitor.ts";
 import * as Rescheduler from "../../../fleet/health/Rescheduler.ts";
 import { attemptOfBranch, nextAttemptBranch } from "../../../fleet/health/reschedulePolicy.ts";
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { FleetHealthToolkit } from "./healthTools.ts";
 
@@ -82,6 +83,12 @@ export const layer = McpToolAccess.toLayer(FleetHealthToolkit, {
         });
       }
       const rescheduler = yield* Rescheduler.Rescheduler;
+      // An omitted targetHost lets placement choose, so the profile's allowlist must bound it.
+      const effective = yield* (yield* Profiles.PermissionProfiles).resolve(caller.scope);
+      const allowedHosts =
+        effective.enabled && effective.profile.hosts !== undefined
+          ? effective.profile.hosts
+          : undefined;
       // The caller is checked again after the move waits for its lock and before each remote write,
       // so a caller that ended or lost its modes meanwhile changes nothing.
       const services = yield* Effect.context<Effect.Services<typeof check>>();
@@ -110,6 +117,7 @@ export const layer = McpToolAccess.toLayer(FleetHealthToolkit, {
         clientRequestId: "manual:" + input.host + ":" + input.threadId + ":a" + (attempt + 1),
         project: { cwd: input.cwd, canonicalKey: null },
         targetHost: input.targetHost === undefined ? null : asHost(input.targetHost),
+        ...(allowedHosts === undefined ? {} : { allowedHosts }),
         force: input.force === true,
         authorize,
       });

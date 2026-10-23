@@ -858,7 +858,7 @@ export const agentSurfaceRegistry = {
     toolkit: "fleetHealth",
     summary: "Move a thread to another host from its pushed branch",
     description:
-      "Move a thread's work to another host by hand. host and threadId name its current thread, branch its pushed worktree branch and cwd its project folder. If the host answers, its running turn is interrupted first and the move happens on the next call; an unreachable host must be Lost (5 minutes) unless force is set. targetHost picks the destination, otherwise the least busy Ready, uncordoned host is chosen. The new thread starts on <branch>-a<n+1> from origin/<branch> with prompt (or a resume note). Calling again after a lost answer finds the thread already launched instead of starting a second one. Needs a full-access caller.",
+      "Move a thread's work to another host by hand. host and threadId name its current thread, branch its pushed worktree branch and cwd its project folder. If the host answers, its running turn is interrupted first and the move happens on the next call; an unreachable host must be Lost (5 minutes) unless force is set. targetHost picks the destination, otherwise the least busy Ready, uncordoned host is chosen, only among the hosts your goatclaw profile allows. The new thread starts on <branch>-a<n+1> from origin/<branch> with prompt (or a resume note). Calling again after a lost answer finds the thread already launched instead of starting a second one. Needs a full-access caller.",
     effect: "write",
     capability: "threads.remote",
     hostRoutable: false,
