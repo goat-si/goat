@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalConsole:off globalDate:off - a plain Node script that drives a GOAT server over MCP; no Effect runtime.
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalConsole:off globalDate:off globalTimers:off - a plain Node script that drives a GOAT server over MCP; no Effect runtime.
 /**
  * Runs the goat_eval measurement campaign (docs/operations/agent-surface-eval.md).
  *
@@ -17,26 +17,38 @@ import {
   type Arm,
   type Campaign,
   CampaignError,
+  type Cleanup,
   type Json,
   type JsonObject,
+  type ObservedListing,
   type RunMetrics,
   type RunRow,
   type Task,
   type TimelineItem,
   answerInstruction,
   extractAnswer,
+  listingMatches,
   pendingChecks,
   render,
   runMetrics,
+  sameModel,
   schedule,
+  sumMetrics,
   validateCampaign,
   validateTaskSet,
 } from "./core.ts";
 
 const TERMINAL = new Set(["completed", "failed", "interrupted", "cancelled", "rolled_back"]);
+/** Later runs of one eval thread a run may take to answer, after its launched run. */
+const MAX_FOLLOWUP_RUNS = 4;
+/** How long the runner watches a quiet thread for a run that a delivery is about to start. */
+const SETTLE_MS = 5000;
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface Client {
   readonly call: (name: string, args: JsonObject) => Promise<JsonObject>;
+  /** Tool names tools/list gives this client, under the server's current listing. */
+  readonly list: () => Promise<ReadonlyArray<string>>;
 }
 
 const connect = async (endpoint: string, authorization: string): Promise<Client> => {
@@ -93,6 +105,8 @@ const connect = async (endpoint: string, authorization: string): Promise<Client>
         (result["structuredContent"] as JsonObject | undefined) ?? (JSON.parse(text) as JsonObject)
       );
     },
+    list: async () =>
+      asObjects((await rpc("tools/list", {}))["tools"]).map((tool) => String(tool["name"])),
   };
 };
 
@@ -115,7 +129,10 @@ const asObjects = (value: Json | undefined): ReadonlyArray<JsonObject> =>
 const FIXTURES: Readonly<Record<string, (context: Context) => Promise<Fixture>>> = {
   none: async () => ({}),
   // The "[eval" prefix keeps threads a run starts out of the read control's fixture.
-  titleTag: async ({ tag }) => ({ "fixture.title": "[eval-fixture] fx-" + tag }),
+  titleTag: async ({ task, tag }) => ({
+    "fixture.title": "[eval-fixture] fx-" + tag,
+    "fixture.message": String(task.fixture["message"]),
+  }),
   static: async ({ task }) =>
     Object.fromEntries(
       Object.entries(task.fixture).flatMap(([key, value]) =>
@@ -185,6 +202,7 @@ const CHECKS: Readonly<Record<string, (input: CheckInput) => Promise<ReadonlyArr
     const title = fixture["fixture.title"];
     const listed = await client.call("goat_thread_list", {
       projectId: campaign.projectId,
+      titleContains: String(title),
       limit: 100,
     });
     const launched = asObjects(listed["threads"]).filter((thread) => thread["title"] === title);
@@ -195,8 +213,15 @@ const CHECKS: Readonly<Record<string, (input: CheckInput) => Promise<ReadonlyArr
     const threadId = String(only["threadId"]);
     if (answer["threadId"] !== threadId)
       return ["reported " + JSON.stringify(answer["threadId"]) + ", launched " + threadId];
-    const run = await latestRun(client, threadId);
+    // Its first run is the one the agent started; a later wake-up would be judged otherwise.
+    const read = await client.call("goat_thread_read", { threadId, limit: 1, runLimit: 20 });
+    const run = asObjects(read["recentRuns"]).find((candidate) => candidate["ordinal"] === 1);
     const failures: Array<string> = [];
+    const [first] = asObjects(
+      (await client.call("goat_thread_read", { threadId, view: "activity", limit: 1 }))["items"],
+    );
+    if (first?.["type"] !== "user_message" || first["text"] !== fixture["fixture.message"])
+      failures.push(threadId + " started with " + JSON.stringify(first?.["text"] ?? null));
     const ranOn = String(run?.["providerInstanceId"]) + "/" + String(run?.["model"]);
     const asked = campaign.fixtureModel.instanceId + "/" + campaign.fixtureModel.model;
     if (ranOn !== asked) failures.push(threadId + " ran on " + ranOn + ", asked " + asked);
@@ -246,7 +271,8 @@ const CHECKS: Readonly<Record<string, (input: CheckInput) => Promise<ReadonlyArr
       const childThreadId = String(review["childThreadId"]);
       if (run["status"] !== "completed")
         failures.push(childThreadId + " ended " + String(run["status"]) + ", not completed");
-      if (review["model"] !== run["model"])
+      const child = { instanceId: String(run["providerInstanceId"]), model: String(run["model"]) };
+      if (!sameModel(String(review["model"]), child))
         failures.push(
           childThreadId +
             " reported model " +
@@ -328,6 +354,123 @@ const rowHead = (
   slot: step.slot,
 });
 
+/** Item statuses after which a delegated child will not deliver anything more. */
+const SETTLED_ITEM = new Set(["completed", "failed", "cancelled", "interrupted", "declined"]);
+
+/** Delegated children of the thread that have not finished, from every run's activity. */
+const unfinishedTasks = async (client: Client, threadId: string) => {
+  const ids: Array<string> = [];
+  let afterPosition: number | null = null;
+  for (;;) {
+    const page = await client.call("goat_thread_read", {
+      threadId,
+      view: "activity",
+      limit: 100,
+      maxCharsPerItem: 1,
+      ...(afterPosition === null ? {} : { afterPosition }),
+    });
+    for (const item of asObjects(page["items"]))
+      if (item["type"] === "subagent" && !SETTLED_ITEM.has(String(item["status"])))
+        ids.push(String(item["subagentId"] ?? item["itemId"]));
+    if (typeof page["nextPosition"] !== "number") return ids;
+    afterPosition = page["nextPosition"];
+  }
+};
+
+/** Waits for one run to end. Returns why the run cannot count as finished, or null. */
+const waitForRun = async (
+  client: Client,
+  task: Task,
+  threadId: string,
+  runId: string,
+  deadline: number,
+): Promise<string | null> => {
+  const ignoreRequestIds: Array<string> = [];
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return "deadline of " + task.deadlineMs + " ms passed";
+    const waited = await client.call("goat_thread_wait", {
+      threadId,
+      runId,
+      timeoutMs: Math.min(remaining, 300000),
+      ignoreRequestIds,
+    });
+    const pending = Array.isArray(waited["pendingRequestIds"])
+      ? waited["pendingRequestIds"].map(String)
+      : [];
+    if (pending.length > 0 && !task.manual)
+      return "the agent asked a question in an automatic task";
+    ignoreRequestIds.push(...pending);
+    if (waited["timedOut"] !== true && pending.length === 0) return null;
+  }
+};
+
+/**
+ * The thread's next run after the ones already counted: one it has started or queued, or one a
+ * delegated child's delivery is about to start. Null once the thread is quiet with nothing
+ * pending, so no answer is coming; "deadline" when the task's time ran out first.
+ */
+const nextRun = async (
+  client: Client,
+  threadId: string,
+  counted: ReadonlySet<string>,
+  deadline: number,
+): Promise<string | null | "deadline"> => {
+  let quiet = 0;
+  for (;;) {
+    if (Date.now() >= deadline) return "deadline";
+    const status = await client.call("goat_thread_status", { threadId });
+    const runId = asObjects([status["run"] ?? null])[0]?.["runId"];
+    if (typeof runId === "string" && !counted.has(runId)) return runId;
+    if (typeof status["queuedRunId"] === "string") return status["queuedRunId"];
+    // A delivery lands a moment after its child settles, so quiet must hold for a while.
+    quiet = (await unfinishedTasks(client, threadId)).length > 0 ? 0 : quiet + 1;
+    if (quiet > 1) return null;
+    await pause(SETTLE_MS);
+  }
+};
+
+/**
+ * Stops the eval thread the way GOAT's Stop does: its queue is held and the tasks it delegated
+ * stop, so a later delivery cannot start a run nobody measures.
+ */
+const stopThread = async (client: Client, threadId: string): Promise<Cleanup> => {
+  const unfinished = await unfinishedTasks(client, threadId).catch(() => []);
+  try {
+    await client.call("goat_thread_interrupt", { threadId, stopCascade: true });
+    return { unfinishedTasks: unfinished, stopped: true, error: null };
+  } catch (error) {
+    return { unfinishedTasks: unfinished, stopped: false, error: String(error).slice(0, 300) };
+  }
+};
+
+/**
+ * Puts the server on the arm's listing when the campaign names its settings file, then reads
+ * tools/list as this client sees it. The server reloads the file on change, so the listing is
+ * read again until it matches or a few seconds pass.
+ */
+const applyListing = async (
+  client: Client,
+  campaign: Campaign,
+  arm: Arm,
+): Promise<{ readonly observed: ObservedListing; readonly matches: boolean }> => {
+  if (campaign.listingSettings !== null && arm.listing !== null) {
+    const path = campaign.listingSettings;
+    const current: unknown = JSON.parse(NodeFS.readFileSync(path, "utf8"));
+    const settings = typeof current === "object" && current !== null ? current : {};
+    const next = { ...settings, agentToolListing: arm.listing.mode };
+    NodeFS.writeFileSync(path + ".eval-tmp", JSON.stringify(next, null, 2) + "\n");
+    NodeFS.renameSync(path + ".eval-tmp", path);
+  }
+  for (let attempt = 0; ; attempt++) {
+    const names = await client.list();
+    const observed = { tools: names.length, names: names.length <= 12 ? names : null };
+    const matches = arm.listing === null || listingMatches(arm.listing, names);
+    if (matches || attempt >= 10) return { observed, matches };
+    await pause(1000);
+  }
+};
+
 const runOnce = async (
   context: Context,
   arm: Arm,
@@ -336,21 +479,30 @@ const runOnce = async (
 ): Promise<RunRow> => {
   const { client, campaign, task, tag } = context;
   const row = rowHead(campaignId, campaign, task, arm, step);
+  const unrun = (why: string): RunRow => ({
+    ...row,
+    threadId: null,
+    ok: false,
+    failures: [],
+    // The arm never ran, so this run says nothing about it.
+    contamination: [why],
+    metrics: null,
+    wallMs: null,
+    at: new Date().toISOString(),
+  });
+  const listing = await applyListing(client, campaign, arm);
+  if (!listing.matches)
+    return {
+      ...unrun(
+        "tools/list served " + listing.observed.tools + " tools, not arm " + arm.id + "'s listing",
+      ),
+      observedListing: listing.observed,
+    };
   let fixture: Fixture;
   try {
     fixture = await FIXTURES[task.fixture.kind]!(context);
   } catch (error) {
-    // The arm never ran, so this run says nothing about it.
-    return {
-      ...row,
-      threadId: null,
-      ok: false,
-      failures: [],
-      contamination: ["fixture: " + String(error)],
-      metrics: null,
-      wallMs: null,
-      at: new Date().toISOString(),
-    };
+    return unrun("fixture: " + String(error));
   }
   const vars = {
     ...campaign.values,
@@ -372,54 +524,60 @@ const runOnce = async (
     notifyOnCompletion: false,
   });
   const threadId = String(launched["threadId"]);
-  // A completion notice can wake the thread into a later run, so the launched run is measured.
-  const runId = String(launched["runId"]);
   const failures: Array<string> = [];
   const deadline = Date.now() + task.deadlineMs;
-  let ignoreRequestIds: Array<string> = [];
+  // An agent that delegates may end its run and answer in a later one, which a delegated
+  // child's delivery starts, so the run is the launched run and every later one until the answer.
+  const counted: Array<{ readonly runId: string; readonly items: Array<TimelineItem> }> = [];
+  let runId = String(launched["runId"]);
+  let answerText: string | null = null;
   for (;;) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      failures.push("deadline of " + task.deadlineMs + " ms passed");
-      await client.call("goat_thread_interrupt", { threadId }).catch(() => undefined);
+    const unfinished = await waitForRun(client, task, threadId, runId, deadline);
+    const items: Array<TimelineItem> = [];
+    for (const item of await readTimeline(client, threadId, runId))
+      // Result bytes come from the whole result, not the activity view's first page.
+      items.push(
+        item.type === "dynamic_tool" && item.textTruncated
+          ? { ...item, text: await fullText(client, threadId, item), textTruncated: false }
+          : item,
+      );
+    counted.push({ runId, items });
+    const final = items.filter((item) => item.type === "assistant_message").at(-1);
+    answerText = final === undefined ? null : await fullText(client, threadId, final);
+    if (unfinished !== null) {
+      failures.push(unfinished);
       break;
     }
-    const waited = await client.call("goat_thread_wait", {
+    if (answerText !== null && /^\s*EVAL_JSON /m.test(answerText)) break;
+    const next = await nextRun(
+      client,
       threadId,
-      runId,
-      timeoutMs: Math.min(remaining, 300000),
-      ignoreRequestIds,
-    });
-    const pending = Array.isArray(waited["pendingRequestIds"])
-      ? waited["pendingRequestIds"].map(String)
-      : [];
-    if (pending.length > 0 && !task.manual) {
-      failures.push("the agent asked a question in an automatic task");
-      await client.call("goat_thread_interrupt", { threadId }).catch(() => undefined);
+      new Set(counted.map((run) => run.runId)),
+      deadline,
+    );
+    if (next === null) break;
+    if (next === "deadline") {
+      failures.push("deadline of " + task.deadlineMs + " ms passed");
       break;
     }
-    ignoreRequestIds = [...ignoreRequestIds, ...pending];
-    if (waited["timedOut"] !== true && pending.length === 0) break;
+    if (counted.length > MAX_FOLLOWUP_RUNS) {
+      failures.push("followup_cap");
+      break;
+    }
+    runId = next;
   }
-  const items: Array<TimelineItem> = [];
-  for (const item of await readTimeline(client, threadId, runId))
-    // Result bytes come from the whole result, not the activity view's first page.
-    items.push(
-      item.type === "dynamic_tool" && item.textTruncated
-        ? { ...item, text: await fullText(client, threadId, item), textTruncated: false }
-        : item,
-    );
-  const metrics = runMetrics(items, arm);
+  const cleanup = await stopThread(client, threadId);
+  const metrics = sumMetrics(counted.map((run) => runMetrics(run.items, arm)));
   const read = await client.call("goat_thread_read", { threadId, limit: 1, runLimit: 20 });
-  const run = asObjects(read["recentRuns"]).find((candidate) => candidate["runId"] === runId);
-  const startedAt = Date.parse(String(run?.["startedAt"]));
-  const completedAt = Date.parse(String(run?.["completedAt"]));
-  if (run?.["status"] !== "completed") failures.push("the run ended " + String(run?.["status"]));
-  const final = items.filter((item) => item.type === "assistant_message").at(-1);
-  const answer = extractAnswer(
-    final === undefined ? null : await fullText(client, threadId, final),
-    task.answerKeys,
+  const runs = counted.map(({ runId: id }) =>
+    asObjects(read["recentRuns"]).find((candidate) => candidate["runId"] === id),
   );
+  for (const [index, run] of runs.entries())
+    if (run?.["status"] !== "completed")
+      failures.push("run " + (index + 1) + " ended " + String(run?.["status"]));
+  const startedAt = Date.parse(String(runs[0]?.["startedAt"]));
+  const completedAt = Date.parse(String(runs.at(-1)?.["completedAt"]));
+  const answer = extractAnswer(answerText, task.answerKeys);
   if (!answer.ok) failures.push(answer.why);
   else
     for (const check of task.checks)
@@ -438,6 +596,9 @@ const runOnce = async (
     metrics,
     wallMs: Number.isFinite(completedAt - startedAt) ? completedAt - startedAt : null,
     at: new Date().toISOString(),
+    followupRuns: counted.length - 1,
+    cleanup,
+    observedListing: listing.observed,
   };
 };
 

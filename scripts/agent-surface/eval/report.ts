@@ -22,6 +22,7 @@ import {
   validateCampaign,
   validateTaskSet,
 } from "./core.ts";
+import { checkRows, requiredTasks } from "./rows.ts";
 
 const cell = (value: number | null) => (value === null ? "-" : String(value));
 const percent = (value: number | null) => (value === null ? "-" : (value * 100).toFixed(0) + "%");
@@ -115,9 +116,19 @@ const main = () => {
     JSON.parse(NodeFS.readFileSync(new URL("./tasks.json", import.meta.url), "utf8")),
     { fixtures: anything, checks: anything },
   );
+  const rawCampaign: unknown = JSON.parse(NodeFS.readFileSync(campaignPath, "utf8"));
+  const campaignVersion =
+    typeof rawCampaign === "object" && rawCampaign !== null && "taskSetVersion" in rawCampaign
+      ? rawCampaign.taskSetVersion
+      : undefined;
+  // Rows from an older task set are still reported, scored by today's task ids and claims, but
+  // never judged: their prompts or checks differ from what a verdict would compare them with.
+  const current = campaignVersion === taskSet.version;
   const campaign = validateCampaign(
-    JSON.parse(NodeFS.readFileSync(campaignPath, "utf8")),
-    taskSet,
+    rawCampaign,
+    current || typeof campaignVersion !== "number"
+      ? taskSet
+      : { ...taskSet, version: campaignVersion },
     [],
   );
   const rows = files.flatMap((file) =>
@@ -128,29 +139,41 @@ const main = () => {
       .filter((row) => row.kind === "run"),
   );
   const versions = new Set(rows.map((row) => row.taskSetVersion));
-  if (versions.size > 1 || (versions.size === 1 && !versions.has(taskSet.version)))
+  if (versions.size > 1 || (versions.size === 1 && !versions.has(campaign.taskSetVersion)))
     throw new CampaignError(
-      "rows come from task set " + [...versions].join(", ") + ", not " + taskSet.version,
+      "rows come from task set " + [...versions].join(", ") + ", not " + campaign.taskSetVersion,
     );
-  const ran = new Set(rows.map((row) => row.task));
-  const summaries = taskSet.tasks
-    .filter((task) => ran.has(task.id))
-    .map((task) => summarizeTask(task, rows, campaign));
+  const { campaignIds } = checkRows(rows, campaign);
+  const paired = campaign.candidateArm !== null && current;
+  // Every task the gate needs is judged; one with no rows is not_run, so a partial file can't pass.
+  const summaries = requiredTasks(taskSet, campaign.gate).map((task) =>
+    summarizeTask(task, rows, campaign),
+  );
   const verdict = gate(summaries);
   const out: Array<string> = [
     campaign.gate === "listing" ? "# Listing measurement" : "# goat_eval measurement",
     "",
-    campaign.candidateArm === null
-      ? "Baseline only (arm " + campaign.baselineArm + "): numbers, no verdict."
-      : "Verdict: " +
-        (verdict.pass ? "**pass**" : "**not met** (" + verdict.notPassed.join("; ") + ")"),
+    paired
+      ? "Verdict: " +
+        (verdict.pass ? "**pass**" : "**not met** (" + verdict.notPassed.join("; ") + ")")
+      : "**Reference, not paired**: numbers, no verdict." +
+        (campaign.candidateArm === null ? " One arm (" + campaign.baselineArm + ")." : "") +
+        (current
+          ? ""
+          : " Task set " +
+            campaign.taskSetVersion +
+            "; the current set is " +
+            taskSet.version +
+            "."),
+    "",
+    "Campaign" + (campaignIds.length === 1 ? " " : "s ") + campaignIds.join(", ") + ".",
     "",
     [
       "Model turns are a range: tool rounds + 1 to tool calls + 1. Medians use successful clean " +
         "runs; a verdict needs " +
         MIN_CLEAN_RUNS +
         " of them per arm.",
-      ...(campaign.candidateArm === null ? [] : [RULES[campaign.gate]]),
+      ...(paired ? [RULES[campaign.gate]] : []),
       "Result bytes are the compact JSON the server returned to the run's tool calls.",
     ].join(" "),
   ];
@@ -192,6 +215,15 @@ const main = () => {
               row.metrics.resultBytes +
               " B") +
           (row.wallMs === null ? "" : ", " + seconds(row.wallMs)) +
+          (row.followupRuns === undefined || row.followupRuns === 0
+            ? ""
+            : ", " + row.followupRuns + " follow-up runs") +
+          (row.metrics?.failedCalls === undefined || row.metrics.failedCalls.length === 0
+            ? ""
+            : ", failed calls: " +
+              row.metrics.failedCalls
+                .map((call) => call.tool + " " + (call.code ?? "?"))
+                .join(", ")) +
           (row.threadId === null ? "" : ", " + row.threadId),
       );
   }

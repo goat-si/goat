@@ -49,18 +49,27 @@ file, or produced an item kind the runner cannot classify. Contaminated runs app
 report with their reason and are left out of every ratio, so a misconfigured arm cannot pass
 as a measurement.
 
-A campaign with one arm runs it alone, once per pair, and reports its numbers without a
-verdict. Use it for a baseline before the candidate exists.
+A verdict comes only from one campaign that ran both arms, because ABBA pairs runs within a
+campaign; the report refuses a verdict from rows of two campaigns and refuses a run that
+appears twice or ran something its arm does not state. A campaign with one arm, rows pooled
+from several campaigns, or rows from an older task set give reference numbers, and the report
+labels them "Reference, not paired".
 
 ### Listing campaigns
 
 A campaign with `"gate": "listing"` compares what `tools/list` serves: `{ "mode": "full" }`
 against `{ "mode": "core", "resident": [...] }`, where the core always holds `goat_describe`
-and `goat_call` and `resident` names the tools under test. Each arm states its listing, and
-its `modelSelection` points at a provider instance whose `toolListing` setting serves it;
-the runner cannot change the listing itself. A harness can only call what it was listed, so a
-core arm that calls any other GOAT tool directly was not on the core listing, and the run is
-contaminated. Here the `no_gain` task is the single-call control and every other task counts
+and `goat_call` and `resident` names the other tools the registry lists as core. The listing
+is the server setting `agentToolListing`, so both arms share one provider instance. With
+`listingSettings` set to the eval server's `settings.json`, the runner writes each run's
+listing there before launching it; the server reloads the file. Either way it then lists tools
+with its own client, records what it saw as `observedListing`, and marks the run contaminated
+when that is not the arm's listing. A harness can only call what it was listed, so a core arm
+that calls any other GOAT tool directly is contaminated too. Which tools are resident is the
+registry's `listing: "core"` field, so a "core plus one tool" arm needs a server built with
+that change; it is not a campaign setting.
+
+Here the `no_gain` task is the single-call control and every other task counts
 as multi-step. The control passes when the candidate's median turns rise by at most one at
 either end of the range; a multi-step task passes when they do not rise at either end. Either
 fails when the candidate fails more often. Both ends are compared like for like, because both
@@ -88,8 +97,17 @@ early would look cheap. Each task needs at least ten successful clean runs per a
 that failed and was retried is not a failed run: its extra turns stay in the counts, and the
 report shows failed calls per arm. The gate also fails if the control shows a gain.
 
-The runner measures the run it launched. A completion notice can wake the thread into a later
-run, and that run's items are left out.
+An agent that delegates may end its run and answer in a later one, started when a delegated
+child's delivery wakes the thread. A run therefore counts the launched run and each later run
+of the eval thread until the first `EVAL_JSON` answer, or until the thread is quiet with no
+unfinished delegated task, at most four later runs; past that it fails with `followup_cap`.
+Turns, calls, and result bytes are summed over the counted runs, and the row records
+`followupRuns`. Then the runner stops the thread the way GOAT's Stop does (`stopCascade`): its
+queue is held and its delegated tasks stop, so no wake-up run follows that nobody measures. The
+row's `cleanup` lists the delegated tasks that were still unfinished.
+
+Each failed tool call is recorded with its tool, error code, and message in `failedCalls`, so
+an argument the server refused can be told apart from a tool the agent could not find.
 
 Tool calls, result bytes, and wall time are recorded but never decide the gate; the
 [protocol](../internals/agent-surface.md#measurement-protocol-draft) explains why. Result bytes
@@ -136,6 +154,8 @@ Commit each campaign as `results/<yymmdd>-<name>/` with `campaign.json`, `runs.j
 `context-budget.json`, and the generated `report.md`, so a disputed figure can be re-derived.
 They name dev-server threads and provider instances only; never commit a credential. Record the
 conclusion and a link to the evidence in the D8 entry of the decision log.
+Raw rows are never edited: a row a later fix can judge again goes into a derived file beside
+it, with the command that made it, and a row it cannot is marked superseded.
 
 The manual tasks need connected hosts and a person who approves or finishes sign-in, and the
 runner includes them only with `--include-manual`. D8 names provider sync, so the gate
@@ -146,8 +166,7 @@ cannot pass until those tasks have run.
 - No server lists `goat_eval` yet ([rollout](../internals/agent-surface.md#rollout) step 11),
   and none can hide it per provider instance. Until a prototype provides both, only the
   baseline arm can run. That yields baseline numbers but no verdict.
-- Until the per-instance `toolListing` setting merges, a listing campaign can run only its full
-  arm.
+- Until the `agentToolListing` setting is on dev, a listing campaign can run only its full arm.
 - The checks for the manual tasks (`providerReadyOnEveryHost`, `oneApprovalPerSync`,
   `oneHandoffPerHumanStep`) are not written, so the runner refuses those tasks.
 - Model turns are a range until providers report requests per run.

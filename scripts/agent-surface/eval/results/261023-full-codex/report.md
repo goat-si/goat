@@ -1,6 +1,8 @@
 # Listing measurement
 
-Baseline only (arm codex-full): numbers, no verdict.
+**Reference, not paired**: numbers, no verdict. One arm (codex-full). Task set 2; the current set is 3.
+
+Campaigns cmvl23z8y, cmvl2v4qy.
 
 Model turns are a range: tool rounds + 1 to tool calls + 1. Medians use successful clean runs; a verdict needs 10 of them per arm. Result bytes are the compact JSON the server returned to the run's tool calls.
 

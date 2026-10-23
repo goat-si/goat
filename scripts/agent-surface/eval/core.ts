@@ -69,6 +69,11 @@ export interface Campaign {
   /** Null for a baseline-only campaign, which records numbers and reaches no verdict. */
   readonly candidateArm: string | null;
   readonly arms: readonly [Arm] | readonly [Arm, Arm];
+  /**
+   * The eval server's settings.json. When set, the runner writes each run's agentToolListing
+   * there before launching it; either way it checks tools/list against the arm.
+   */
+  readonly listingSettings: string | null;
   readonly fixtureModel: ModelSelection;
   readonly reviewModels: ReadonlyArray<ModelSelection>;
   readonly values: Readonly<Record<string, string>>;
@@ -254,6 +259,9 @@ export const validateCampaign = (
   const values = raw["values"] ?? {};
   if (!isObject(values) || !Object.values(values).every((value) => typeof value === "string"))
     throw new CampaignError("values maps placeholder names to strings");
+  const listingSettings = raw["listingSettings"] ?? null;
+  if (listingSettings !== null && !isText(listingSettings))
+    throw new CampaignError("listingSettings is the eval server's settings.json path");
   const reviewModels = Array.isArray(raw["reviewModels"])
     ? raw["reviewModels"].map((value: unknown, index) =>
         modelSelection(value, "reviewModels[" + index + "]"),
@@ -276,6 +284,7 @@ export const validateCampaign = (
     baselineArm,
     candidateArm: isText(candidateArm) ? candidateArm : null,
     arms: arms as [Arm] | [Arm, Arm],
+    listingSettings,
     fixtureModel: modelSelection(raw["fixtureModel"], "fixtureModel"),
     reviewModels,
     values: values as Record<string, string>,
@@ -359,6 +368,44 @@ const namesTool = (name: string, tool: string) =>
   name === tool || name.endsWith("." + tool) || name.endsWith("__" + tool);
 
 /**
+ * Whether a reported model names the run's model. Prompts list models as "<instance> / <model>",
+ * so agents report that, "<instance>/<model>", or the bare id; a model id may itself hold "/".
+ */
+export const sameModel = (
+  reported: string,
+  ran: { readonly instanceId: string; readonly model: string },
+) =>
+  [ran.model, ran.instanceId + " / " + ran.model, ran.instanceId + "/" + ran.model].includes(
+    reported.trim(),
+  );
+
+/** Why a tool call failed, so a search miss can be told from a rejected argument. */
+export interface FailedCall {
+  readonly tool: string;
+  readonly code: string | null;
+  readonly reason: string;
+}
+
+// A failed result is the server's error JSON, often escaped inside the item's text.
+const failedCallOf = (item: TimelineItem): FailedCall => {
+  // Only the output: the call's own input can hold a "message" field too.
+  let text = item.text ?? "";
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (isObject(parsed) && "output" in parsed) text = JSON.stringify(parsed["output"]) ?? "";
+  } catch {
+    // A truncated or plain-text item is read as it is.
+  }
+  const code = /\\?"code\\?":\s*\\?"([\w.-]+)/.exec(text)?.[1] ?? null;
+  const message = /\\?"message\\?":\s*\\?"(.*?)\\?"\s*[,}]/.exec(text)?.[1] ?? null;
+  return {
+    tool: toolNameOf(item) ?? item.type,
+    code,
+    reason: (message ?? text).replace(/\s+/g, " ").slice(0, 240),
+  };
+};
+
+/**
  * Bytes of the result the server returned, as compact JSON. The activity view pretty-prints the
  * call, so its length overstates the result. In code mode a script may keep the result out of
  * the transcript, so for Codex this is what was served, not what the model read.
@@ -384,6 +431,7 @@ export interface RunMetrics {
    */
   readonly modelTurns: { readonly min: number; readonly max: number };
   readonly failedToolCalls: number;
+  readonly failedCalls: ReadonlyArray<FailedCall>;
   readonly subagents: number;
   readonly humanSteps: number;
   /** Bytes of tool results served to the run; a lower bound when an item text was truncated. */
@@ -396,6 +444,7 @@ export const runMetrics = (items: ReadonlyArray<TimelineItem>, arm: Arm): RunMet
   let toolCalls = 0;
   let toolRounds = 0;
   let failedToolCalls = 0;
+  const failedCalls: Array<FailedCall> = [];
   let subagents = 0;
   let humanSteps = 0;
   let resultBytes = 0;
@@ -410,7 +459,10 @@ export const runMetrics = (items: ReadonlyArray<TimelineItem>, arm: Arm): RunMet
       toolCalls += 1;
       if (!inRound) toolRounds += 1;
       inRound = true;
-      if (item.status === "failed") failedToolCalls += 1;
+      if (item.status === "failed") {
+        failedToolCalls += 1;
+        failedCalls.push(failedCallOf(item));
+      }
       resultBytes += resultBytesOf(item);
       resultTruncated ||= item.textTruncated;
       if (arm.forbidItemTypes.includes(item.type))
@@ -447,12 +499,38 @@ export const runMetrics = (items: ReadonlyArray<TimelineItem>, arm: Arm): RunMet
     toolRounds,
     modelTurns: { min: toolRounds + 1, max: toolCalls + 1 },
     failedToolCalls,
+    failedCalls,
     subagents,
     humanSteps,
     resultBytes,
     resultTruncated,
     violations: [...violations],
   };
+};
+
+/** A run that took several runs of its thread to answer costs all of them. */
+export const sumMetrics = (runs: ReadonlyArray<RunMetrics>): RunMetrics => ({
+  toolCalls: runs.reduce((sum, run) => sum + run.toolCalls, 0),
+  toolRounds: runs.reduce((sum, run) => sum + run.toolRounds, 0),
+  modelTurns: {
+    min: runs.reduce((sum, run) => sum + run.modelTurns.min, 0),
+    max: runs.reduce((sum, run) => sum + run.modelTurns.max, 0),
+  },
+  failedToolCalls: runs.reduce((sum, run) => sum + run.failedToolCalls, 0),
+  failedCalls: runs.flatMap((run) => run.failedCalls),
+  subagents: runs.reduce((sum, run) => sum + run.subagents, 0),
+  humanSteps: runs.reduce((sum, run) => sum + run.humanSteps, 0),
+  resultBytes: runs.reduce((sum, run) => sum + run.resultBytes, 0),
+  resultTruncated: runs.some((run) => run.resultTruncated),
+  violations: [...new Set(runs.flatMap((run) => run.violations))],
+});
+
+/** Whether tools/list, as the runner's own client saw it, is the listing an arm states. */
+export const listingMatches = (listing: Listing, listed: ReadonlyArray<string>) => {
+  const core = new Set(listing.mode === "core" ? [...CORE_TOOLS, ...listing.resident] : []);
+  return listing.mode === "core"
+    ? listed.every((name) => core.has(name)) && CORE_TOOLS.every((name) => listed.includes(name))
+    : listed.some((name) => !CORE_TOOLS.includes(name));
 };
 
 type Verdict<A> =
@@ -504,6 +582,25 @@ export interface RunRow {
   readonly metrics: RunMetrics | null;
   readonly wallMs: number | null;
   readonly at: string;
+  /** Later runs of the eval thread counted into this run; absent in rows before task set 3. */
+  readonly followupRuns?: number;
+  /** What the runner stopped once it had the answer, so no unmeasured paid run followed. */
+  readonly cleanup?: Cleanup | null;
+  /** tools/list as the runner's client saw it just before launch. */
+  readonly observedListing?: ObservedListing | null;
+}
+
+export interface Cleanup {
+  /** Delegated children still unfinished when the runner stopped the thread. */
+  readonly unfinishedTasks: ReadonlyArray<string>;
+  readonly stopped: boolean;
+  readonly error: string | null;
+}
+
+export interface ObservedListing {
+  readonly tools: number;
+  /** Names only when few enough to read: the core listing. */
+  readonly names: ReadonlyArray<string> | null;
 }
 
 const median = (values: ReadonlyArray<number>): number | null => {

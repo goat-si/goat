@@ -12,8 +12,11 @@ import {
   type TimelineItem,
   extractAnswer,
   gate,
+  listingMatches,
   runMetrics,
+  sameModel,
   schedule,
+  sumMetrics,
   summarizeTask,
   validateCampaign,
   validateTaskSet,
@@ -309,5 +312,93 @@ describe("summarizeTask", () => {
       ];
       expect(compare(oneFailed).reasons).toEqual(["the candidate failed more often"]);
     });
+  });
+});
+
+describe("sameModel", () => {
+  const ran = { instanceId: "codex", model: "command-code/deepseek-deepseek-v4.1-flash-fast" };
+
+  it("accepts the instance / model form the prompt lists, the joined form, and the bare id", () => {
+    for (const reported of [
+      "codex / command-code/deepseek-deepseek-v4.1-flash-fast",
+      "codex/command-code/deepseek-deepseek-v4.1-flash-fast",
+      "command-code/deepseek-deepseek-v4.1-flash-fast",
+    ])
+      expect(sameModel(reported, ran)).toBe(true);
+  });
+
+  it("rejects another instance or model", () => {
+    expect(sameModel("claudeAgent / command-code/deepseek-deepseek-v4.1-flash-fast", ran)).toBe(
+      false,
+    );
+    expect(sameModel("codex / gpt-6-luna", ran)).toBe(false);
+  });
+});
+
+describe("failed calls", () => {
+  it("records the tool, error code, and message of each failed call", () => {
+    const failed = {
+      ...item(
+        "dynamic_tool",
+        JSON.stringify({
+          toolName: "goat.goat_thread_list",
+          input: { search: "fx", message: "the call's own input" },
+          output: {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  _tag: "OrchestratorMcpFailure",
+                  code: "invalid_request",
+                  message: "goat_thread_list does not take search, so nothing ran.",
+                }),
+              },
+            ],
+          },
+        }),
+      ),
+      status: "failed",
+    };
+    expect(runMetrics([failed], callOnly).failedCalls).toEqual([
+      {
+        tool: "goat.goat_thread_list",
+        code: "invalid_request",
+        reason: "goat_thread_list does not take search, so nothing ran.",
+      },
+    ]);
+  });
+});
+
+describe("a run that answers in a follow-up run", () => {
+  it("costs every counted run", () => {
+    const launched = runMetrics(
+      [item("user_message"), tool("goat.delegate_task"), item("assistant_message")],
+      callOnly,
+    );
+    const followUp = runMetrics(
+      [
+        item("notification"),
+        tool("goat.task_status"),
+        tool("goat.task_status"),
+        item("assistant_message"),
+      ],
+      callOnly,
+    );
+    expect(sumMetrics([launched, followUp])).toMatchObject({
+      toolCalls: 3,
+      modelTurns: { min: 4, max: 5 },
+    });
+  });
+});
+
+describe("listingMatches", () => {
+  it("tells the core listing from the full one", () => {
+    const core = { mode: "core" as const, resident: [] };
+    expect(listingMatches(core, ["goat_describe", "goat_call"])).toBe(true);
+    expect(listingMatches(core, ["goat_describe", "goat_call", "goat_thread_read"])).toBe(false);
+    expect(listingMatches({ mode: "full" }, ["goat_describe", "goat_call"])).toBe(false);
+    expect(
+      listingMatches({ mode: "full" }, ["goat_describe", "goat_call", "goat_thread_read"]),
+    ).toBe(true);
   });
 });
