@@ -13,6 +13,11 @@ Owner: program manager thread on mac-studio. Verifier: clisu-oracle. Design of r
 is folded into that page and deleted when the program finishes, per AGENTS.md "Plans and work
 artifacts".
 
+**Status: done.** Every harness gets the core listing by default (D21 in
+[agent-surface.md](../../../docs/internals/agent-surface.md#decision-log)), `goat-ci` fails a
+harness over its context budget (`vp run agent-surface:context-budget-check`), and D8's numbers
+are in [agent-surface.md](../../../docs/internals/agent-surface.md#measured-d8).
+
 ## Decision
 
 GOAT's agent surface becomes a search core for every harness, the way aside-codemode serves one
@@ -264,3 +269,9 @@ measures each merged step; its findings block until answered.
 The flip is on `dev` for every harness; `context-budget.ts` measures ≤ 12 KB always-injected per
 harness and fails above it; D8 numbers are recorded in `docs/internals/agent-surface.md`; and
 every row above is merged or filed as an issue.
+
+Met: the default is `core` in `packages/contracts/src/agentSurface/listing.ts`; under it every
+harness's first prompt is at most 8,125 B and each later turn at most 276 B, and
+`context-budget.ts --check` fails above 6 KiB of instructions, 6 KiB of listing, 12 KiB first
+prompt or 300 B per later turn in `goat-ci`; D8's campaign `cmvl7drv2` and the unpaired
+full-listing references are recorded under "Measured: D8".

@@ -155,6 +155,16 @@ redeliver from the sender, such as GitHub's **Recent Deliveries**, once it is
 back. Holding requests while the environment is offline is unavailable until
 GOAT Connect arrives.
 
+## GOAT tools agents see
+
+GOAT lists two tools to each agent: `goat_describe`, which finds GOAT's capabilities, and
+`goat_call`, which runs one by its path, such as `thread.read`. Every other capability stays
+available through them, so an agent starts with a small context instead of a long tool list.
+
+If an agent on one of your providers handles this badly, list every tool again: add
+`"agentToolListing": "full"` to the server's `settings.json` in its `userdata` directory.
+Connected agents are told that the list changed. Remove the line to go back to the two tools.
+
 ## Defaults and inheritance
 
 General contains the model and workspace for new threads. Integrations controls agent browser

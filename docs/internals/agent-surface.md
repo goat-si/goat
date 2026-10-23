@@ -8,7 +8,8 @@
 > `clientRequestId`는 인자 다이제스트와 함께 원자적으로 예약하고, 결과가 기록되기 전에 끊긴 키는 `unknown_outcome`으로 남겨 자동 재실행을 막는다.
 > `goat_call`은 직접 MCP 호출과 같은 단일 검사 경로를 쓰고, `goat_eval`은 측정으로 필요가 입증될 때까지 보류한다.
 > 런타임 승인은 사람의 클라이언트 세션 또는 `orchestration:operate`와 `orchestration:approve`를 모두 가진 외부 MCP 클라이언트만, 그 밖의 사람 단계는 사람의 클라이언트 세션만 해결한다.
-> 생성된 참조 문서는 저장소에 커밋하지 않고 실행 중인 서버가 제공한다. 결정 기록(D1–D20)과 선행 사례 비교를 끝에 둔다.
+> 모든 하네스의 기본 도구 목록은 core(`goat_describe`, `goat_call`)이고, `agentToolListing: "full"`이 되돌리는 길이다(D21).
+> 생성된 참조 문서는 저장소에 커밋하지 않고 실행 중인 서버가 제공한다. 결정 기록(D1–D21)과 선행 사례 비교를 끝에 둔다.
 
 This page uses two labels. **Now** describes `dev` as of 2026-10-23 with source
 paths. **Proposed** is design that does not exist yet. Unlabeled text in a Proposed
@@ -385,9 +386,9 @@ examples as tests.
 
 ## Discovery: `goat_describe`
 
-**Now.** An agent learns tools from `tools/list`: 191 names with long
-descriptions, all loaded into context. Whether a tool works for this caller is
-found out by calling it.
+**Now.** `tools/list` gives every caller the core listing by default: `goat_describe` and
+`goat_call` (D21). An agent finds every other capability with `goat_describe` and runs it
+through `goat_call`; each tool also stays callable by its own names.
 
 **Proposed.** `goat_describe { path?, query?, host? }` answers at three depths:
 
@@ -423,8 +424,37 @@ callable ([toolListing.ts](../../apps/server/src/mcp/toolListing.ts)). Both list
 `available.now` refuses for the caller. The server setting `agentToolListing` picks `full` (every
 other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
 `_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. Every
-tool stays callable by each of its names. The default stays `full` until the context-diet flip,
-and a change to the setting sends `notifications/tools/list_changed`.
+tool stays callable by each of its names. The default is `core` (D21), `full` is the rollback for
+a harness that regresses, and a change to the setting sends `notifications/tools/list_changed`.
+[context-budget.ts](../../scripts/agent-surface/context-budget.ts) measures what each harness
+receives under the default listing, and `goat-ci` fails when a harness goes over 6 KiB of
+instructions, 6 KiB of listing, 12 KiB for its first prompt, or 300 B on each later turn.
+
+### Measured: D8
+
+The paired campaign `cmvl7drv2` ([#1064](https://github.com/goat-si/goat/pull/1064)) ran 10 ABBA
+pairs of full against core on each of 4 tasks, 80 runs one at a time, on Codex code mode with
+`claude-opus-5-5`. Before each run the runner switched `agentToolListing` and read `tools/list`
+back: every core run saw only `goat_describe` and `goat_call`, and every full run saw 147 tools.
+
+| Task                       | Median model turns, full | Median model turns, core | Verdict                                           |
+| -------------------------- | ------------------------ | ------------------------ | ------------------------------------------------- |
+| read-control (single call) | 2–2                      | 2–5                      | fail: the control may rise by at most one turn    |
+| wait-running               | 2–6                      | 2–8                      | fail                                              |
+| fan-out-review             | 3–14                     | 3–13                     | fail: fewer than 10 clean successful runs per arm |
+| launch-and-wait            | 3–5                      | 3–6.5                    | fail                                              |
+
+No task's failure rate rose; only the upper end of the turn range did, since code mode batches
+calls. The recorded failed calls show the cause: first calls in MCP-style argument shapes.
+Agents called `goat_describe` with `name` 28 times and with `resource`, `verb` or `tool` 7
+times, and called `goat_call` with `name` and `arguments`, `input`, `tool`, or `resource` and
+`verb` 10 times. Each refusal named the right fields and the next call worked, so both meta
+tools now accept those shapes. Two core runs were excluded because the agent worked around the
+listing from the shell ([#1062](https://github.com/goat-si/goat/issues/1062)).
+
+Two full-listing sets are kept as references and are not paired with anything: Codex code mode
+(48 runs) and Claude on the MacBook Pro (rescored, original rows unchanged). The Claude arm of the
+paired campaign has not run.
 
 ## Calling: `goat_call`
 
@@ -862,21 +892,21 @@ per-flow `next.call` hints become the operation, so the agent waits on one handl
 
 ## Rollout
 
-Each PR ships on its own and leaves `tools/list` unchanged until the flip.
+Each PR shipped on its own and left `tools/list` unchanged until the flip (row 10).
 
-| #   | Ships                                                                         | State                                                                                                                                                                      |
-| --- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Registry and parity test                                                      | Shipped ([#211](https://github.com/goat-si/goat/pull/211))                                                                                                                 |
-| 2   | Handoff record, cards, SSH continuations                                      | Shipped ([#212](https://github.com/goat-si/goat/pull/212))                                                                                                                 |
-| 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774) |
-| 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                 |
-| 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                 |
-| 6   | Idempotency receipts with digest, unknown state, audit columns                | Started: eight high-risk writes keyed                                                                                                                                      |
-| 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup; then provider syncs and approved provider changes)                       |
-| 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
-| 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                 |
-| 10  | Listing flip, verb normalization, remote name translation                     | Shipped: aliases ([#906](https://github.com/goat-si/goat/pull/906)); flip, normalization, and translation (#781)                                                           |
-| 11  | `goat_eval`                                                                   | Gated on measurement                                                                                                                                                       |
+| #   | Ships                                                                         | State                                                                                                                                                                                                                     |
+| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Registry and parity test                                                      | Shipped ([#211](https://github.com/goat-si/goat/pull/211))                                                                                                                                                                |
+| 2   | Handoff record, cards, SSH continuations                                      | Shipped ([#212](https://github.com/goat-si/goat/pull/212))                                                                                                                                                                |
+| 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774)                                                |
+| 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                                                                |
+| 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                                                                |
+| 6   | Idempotency receipts with digest, unknown state, audit columns                | Started: eight high-risk writes keyed                                                                                                                                                                                     |
+| 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup; then provider syncs and approved provider changes)                                                                      |
+| 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                                                                  |
+| 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                                                                |
+| 10  | Listing flip, verb normalization, remote name translation                     | Shipped: aliases ([#906](https://github.com/goat-si/goat/pull/906)); core listing mode ([#1026](https://github.com/goat-si/goat/pull/1026)); core by default with a CI budget (D21); normalization and translation (#781) |
+| 11  | `goat_eval`                                                                   | Gated on measurement                                                                                                                                                                                                      |
 
 Testing follows the repository rules: focused tests per behavior, effect worker
 draining instead of sleeps, and one real-client pass for cards.
@@ -928,31 +958,31 @@ every gate runs per step (D7).
 
 ## Decision log
 
-| #   | Decision                                                                                                                                                          | Why                                                                                                                                              | Rejected                                       |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| D1  | Three statuses; unfinished work is `ok` with a required `meta.operation`                                                                                          | Accepting work succeeded; a fourth status splits every caller's branch; a required handle keeps "accepted" from reading as "done"                | A `running` status                             |
-| D2  | Add `resource_exhausted`, `failed_precondition`, `unknown_outcome`; compute `retryable` per call; keep reasons in handlers                                        | The surface already produces these; per-code retry flags would retry launches that may have started; a classifier cannot recover collapsed codes | Folding them into `unavailable` and `conflict` |
-| D3  | `clientRequestId` reserves atomically with an argument digest; unrecorded outcomes stay `unknown`                                                                 | Replaying a stored result for other arguments corrupts silently; redispatch after a crash duplicates side effects                                | "Same id returns the first result"             |
-| D4  | Opaque cursors; fan-out lists that cannot continue say `truncated`                                                                                                | One shape; no false continuation                                                                                                                 | Numeric offsets everywhere                     |
-| D5  | `operation.*` over existing stores with signed handles                                                                                                            | Smallest change giving one handle; a signature separates "issued but lost" from "never issued"                                                   | A new operations table first                   |
-| D6  | One invocation function for direct calls, `goat_call`, the CLI, and composition                                                                                   | Equivalence by construction; `readsAsCaller` would refuse outside clients                                                                        | Meta tools with their own access class         |
-| D7  | Gates apply per step; composition holds no lane or grant                                                                                                          | Lanes and ceilings are claimed by the work they bound                                                                                            | Pre-admitting a whole program                  |
-| D8  | Gate `goat_eval` on a stated measurement; if built: JSON, array refs, ordered `map`, fixed journal, no server-run programs                                        | Code-mode harnesses already compose; replay by call index after fresh reads can reuse a receipt for a different call                             | S-expression syntax; replay by index           |
-| D9  | Handoffs own continuations, the inbox owns decisions; all human steps return `needs_human`; one resolver predicate; wake on resolve                               | Nine contracts today; the two approval paths disagree; agents parse prose to learn a person must act                                             | A third store; leaving the paths inconsistent  |
-| D10 | `goat_describe` adds `query`, `surfaceVersion`, `host`, and availability per caller                                                                               | Progressive discovery; cache safety; remotes differ                                                                                              | Loading every schema                           |
-| D11 | `read` and `cancel` are standard verbs; synonyms normalize at the flip                                                                                            | `get` and `read` both exist today                                                                                                                | Renaming now                                   |
-| D12 | The CLI authenticates to the origin only and fails closed; `--host` is routing                                                                                    | Ceiling forwarding and lane admission happen at the origin                                                                                       | Local credentials for remotes                  |
-| D13 | Write receipts double as the audit; spans and `traceparent` across hosts                                                                                          | One record answers who, under which grant, and where                                                                                             | Ids in analytics                               |
-| D14 | Served reference (describe, `/llms.txt`, `--help`) instead of committed pages                                                                                     | The registry is the catalog; committed pages would be a second one                                                                               | `docs/reference/` pages                        |
-| D15 | Stay independent of MCP versions; `operation` can map to MCP tasks and `needs_human` to `input_required` later                                                    | MCP removed sessions and moved tasks in 2026-07-28; tracking each revision would churn the surface                                               | Adopting the tasks extension now               |
-| D16 | Every list and fan-out discloses loss in fields: read `limit + 1` before claiming more exists, and never report a request as complete when part of it was skipped | aside-codemode shipped the same silent-loss bug six times before writing the invariant                                                           | Loss text inside values                        |
-| D17 | `needs_human` only with a handoff a person can act on; a block nobody can clear stays `error`                                                                     | A human status that does not hold makes agents hand back work no person can fix                                                                  | Inferring human steps from messages            |
-| D18 | The D8 gate is a written protocol with paired ABBA runs, an oracle per workload, and model turns as the primary metric                                            | Agent-level timing hid real gains behind per-turn cost in aside-codemode; fewer turns and bytes were the measurable effect                       | A wall-clock threshold                         |
-| D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                        | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                 | Renaming paths to match shipped names          |
-| D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                           | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                           | Registering alias tools, which would list them |
+| #   | Decision                                                                                                                                                                      | Why                                                                                                                                                                               | Rejected                                           |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| D1  | Three statuses; unfinished work is `ok` with a required `meta.operation`                                                                                                      | Accepting work succeeded; a fourth status splits every caller's branch; a required handle keeps "accepted" from reading as "done"                                                 | A `running` status                                 |
+| D2  | Add `resource_exhausted`, `failed_precondition`, `unknown_outcome`; compute `retryable` per call; keep reasons in handlers                                                    | The surface already produces these; per-code retry flags would retry launches that may have started; a classifier cannot recover collapsed codes                                  | Folding them into `unavailable` and `conflict`     |
+| D3  | `clientRequestId` reserves atomically with an argument digest; unrecorded outcomes stay `unknown`                                                                             | Replaying a stored result for other arguments corrupts silently; redispatch after a crash duplicates side effects                                                                 | "Same id returns the first result"                 |
+| D4  | Opaque cursors; fan-out lists that cannot continue say `truncated`                                                                                                            | One shape; no false continuation                                                                                                                                                  | Numeric offsets everywhere                         |
+| D5  | `operation.*` over existing stores with signed handles                                                                                                                        | Smallest change giving one handle; a signature separates "issued but lost" from "never issued"                                                                                    | A new operations table first                       |
+| D6  | One invocation function for direct calls, `goat_call`, the CLI, and composition                                                                                               | Equivalence by construction; `readsAsCaller` would refuse outside clients                                                                                                         | Meta tools with their own access class             |
+| D7  | Gates apply per step; composition holds no lane or grant                                                                                                                      | Lanes and ceilings are claimed by the work they bound                                                                                                                             | Pre-admitting a whole program                      |
+| D8  | Gate `goat_eval` on a stated measurement; if built: JSON, array refs, ordered `map`, fixed journal, no server-run programs                                                    | Code-mode harnesses already compose; replay by call index after fresh reads can reuse a receipt for a different call                                                              | S-expression syntax; replay by index               |
+| D9  | Handoffs own continuations, the inbox owns decisions; all human steps return `needs_human`; one resolver predicate; wake on resolve                                           | Nine contracts today; the two approval paths disagree; agents parse prose to learn a person must act                                                                              | A third store; leaving the paths inconsistent      |
+| D10 | `goat_describe` adds `query`, `surfaceVersion`, `host`, and availability per caller                                                                                           | Progressive discovery; cache safety; remotes differ                                                                                                                               | Loading every schema                               |
+| D11 | `read` and `cancel` are standard verbs; synonyms normalize at the flip                                                                                                        | `get` and `read` both exist today                                                                                                                                                 | Renaming now                                       |
+| D12 | The CLI authenticates to the origin only and fails closed; `--host` is routing                                                                                                | Ceiling forwarding and lane admission happen at the origin                                                                                                                        | Local credentials for remotes                      |
+| D13 | Write receipts double as the audit; spans and `traceparent` across hosts                                                                                                      | One record answers who, under which grant, and where                                                                                                                              | Ids in analytics                                   |
+| D14 | Served reference (describe, `/llms.txt`, `--help`) instead of committed pages                                                                                                 | The registry is the catalog; committed pages would be a second one                                                                                                                | `docs/reference/` pages                            |
+| D15 | Stay independent of MCP versions; `operation` can map to MCP tasks and `needs_human` to `input_required` later                                                                | MCP removed sessions and moved tasks in 2026-07-28; tracking each revision would churn the surface                                                                                | Adopting the tasks extension now                   |
+| D16 | Every list and fan-out discloses loss in fields: read `limit + 1` before claiming more exists, and never report a request as complete when part of it was skipped             | aside-codemode shipped the same silent-loss bug six times before writing the invariant                                                                                            | Loss text inside values                            |
+| D17 | `needs_human` only with a handoff a person can act on; a block nobody can clear stays `error`                                                                                 | A human status that does not hold makes agents hand back work no person can fix                                                                                                   | Inferring human steps from messages                |
+| D18 | The D8 gate is a written protocol with paired ABBA runs, an oracle per workload, and model turns as the primary metric                                                        | Agent-level timing hid real gains behind per-turn cost in aside-codemode; fewer turns and bytes were the measurable effect                                                        | A wall-clock threshold                             |
+| D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                                    | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                                                  | Renaming paths to match shipped names              |
+| D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                                       | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                                                            | Registering alias tools, which would list them     |
+| D21 | Every caller gets the core listing by default (`goat_describe`, `goat_call`), with `agentToolListing: "full"` as the rollback, and CI fails a harness over its context budget | Supervisor decision, 2026-10-23: always-injected context falls from about 300 KB to under 12 KB per harness; D8 verifies the default and tunes the core set rather than gating it | Opt-in core, measured before it became the default |
 
 ## Open questions
 
 - Which providers the `goat_eval` measurement runs on, and who owns the task set.
-- Whether `tools/list` should move to the `core` profile by default.
 - How long a legacy name stays callable for SSH hosts that update rarely.
