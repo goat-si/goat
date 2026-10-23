@@ -16,7 +16,7 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | Mutating tools that accept clientRequestId             | 20               |
 | Mutating tools whose clientRequestId GOAT deduplicates | 8                |
 | Input parameters with a description                    | 160 of 710 (23%) |
-| Tool descriptions with an example                      | 12 of 195        |
+| Tool descriptions with an example                      | 11 of 195        |
 | CLI commands, listed / unlisted                        | 58 / 19          |
 | CLI commands with usage examples                       | 0 of 77          |
 | Listed CLI leaf commands with --json                   | 11 of 45         |
@@ -149,16 +149,16 @@ One intent is spelled several ways (tool counts in parentheses):
 
 Only 23% of input parameters carry a description. 132 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `create_threads`, `delete_scheduled_task`, `device_close`, and 122 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
 
-12 of 195 tool descriptions include an example. 95 tools have no `Tool.Title`. Description length is uneven; the longest are:
+11 of 195 tool descriptions include an example. 95 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
-| Tool                     | Characters | Declared at                                             |
-| ------------------------ | ---------- | ------------------------------------------------------- |
-| `delegate_task`          | 4551       | packages/contracts/src/agentSurface/entries/task.ts     |
-| `goat_thread_launch`     | 2833       | packages/contracts/src/agentSurface/entries/thread.ts   |
-| `schedule_task`          | 2659       | packages/contracts/src/agentSurface/entries/schedule.ts |
-| `goat_thread_send`       | 2449       | packages/contracts/src/agentSurface/entries/thread.ts   |
-| `goat_provider_diagnose` | 1917       | packages/contracts/src/agentSurface/providerEntries.ts  |
-| `goat_thread_read`       | 1565       | packages/contracts/src/agentSurface/entries/thread.ts   |
+| Tool                     | Characters | Declared at                                                 |
+| ------------------------ | ---------- | ----------------------------------------------------------- |
+| `schedule_task`          | 2659       | packages/contracts/src/agentSurface/entries/schedule.ts     |
+| `goat_provider_diagnose` | 1917       | packages/contracts/src/agentSurface/providerEntries.ts      |
+| `watch_pull_request`     | 1416       | packages/contracts/src/agentSurface/entries/pull_request.ts |
+| `goat_goal_apply`        | 1404       | packages/contracts/src/agentSurface/entries/goal.ts         |
+| `goat_host_status`       | 1311       | packages/contracts/src/agentSurface/entries/host.ts         |
+| `goat_hub_device_join`   | 1275       | packages/contracts/src/agentSurface/entries/hub.ts          |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
@@ -183,7 +183,7 @@ These are the steps GOAT cannot finish without a person today, and how an agent 
 | Add an SSH host                               | `goat_connection_add_ssh` exists; host key trust, passphrases, and MFA prompts are not modelled as a handoff.                                                                     | packages/contracts/src/agentSurface/entries/connection.ts                                                        |
 | Put `goat` on PATH                            | A desktop install writes a launcher under the GOAT home, off PATH; adding it to PATH is an opt-in desktop action.                                                                 | (not found), (not found)                                                                                         |
 
-Tools whose description or schema tells the agent to involve the user: `create_threads` (user approval), `delegate_task` (user approval, user answers a question), `goat_cloud_holders` (sign-in), `goat_cloud_launch` (user approval, sign-in), `goat_cloud_run_register` (sign-in), `goat_connection_add_ssh` (user approval), `goat_connection_remove` (user chooses in UI), `goat_decision_answer` (user approval, user answers a question), `goat_decision_get` (user answers a question), `goat_goal_apply` (user approval), `goat_goatclaw_sync` (user approval), `goat_host_link_create` (user approval, pairing), `goat_hub_device_join` (pairing), `goat_hub_device_leave` (user approval), `goat_origin_reports_wait` (user approval), `goat_pending_request_list` (user approval), `goat_pending_request_respond` (user approval), `goat_provider_add` (user approval, sign-in), `goat_provider_addable_list` (sign-in, user chooses in UI), `goat_provider_diagnose` (user approval, sign-in), `goat_provider_home_request` (user approval), `goat_provider_host_matrix` (sign-in), `goat_provider_link` (user approval, sign-in), `goat_provider_login_cancel` (sign-in), `goat_provider_login_start` (sign-in, user chooses in UI), `goat_provider_login_status` (sign-in), `goat_provider_remove` (user approval), `goat_provider_setup_open` (sign-in), `goat_provider_sync` (sign-in), `goat_provider_sync_status` (user approval, sign-in), `goat_provider_update` (sign-in, user chooses in UI), `goat_ssh_host_add` (user approval), `goat_ssh_host_list` (sign-in), `goat_ssh_runtime_update` (user approval), `goat_ssh_thread_handoff` (user approval), `goat_ssh_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_checkpoint_restore` (user approval), `goat_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_send` (user approval), `goat_thread_wait` (user answers a question), `request_secret` (secret entry, user approval), `schedule_task` (secret entry, user chooses in UI), `task_status` (user approval), `update_scheduled_task` (secret entry), `watch_pull_request` (user chooses in UI).
+Tools whose description or schema tells the agent to involve the user: `create_threads` (user approval), `delegate_task` (user approval), `goat_cloud_holders` (sign-in), `goat_cloud_launch` (user approval, sign-in), `goat_cloud_run_register` (sign-in), `goat_connection_add_ssh` (user approval), `goat_connection_remove` (user chooses in UI), `goat_decision_answer` (user approval, user answers a question), `goat_decision_get` (user answers a question), `goat_goal_apply` (user approval), `goat_goatclaw_sync` (user approval), `goat_host_link_create` (user approval, pairing), `goat_hub_device_join` (pairing), `goat_hub_device_leave` (user approval), `goat_origin_reports_wait` (user approval), `goat_pending_request_list` (user approval), `goat_pending_request_respond` (user approval), `goat_provider_add` (user approval, sign-in), `goat_provider_addable_list` (sign-in, user chooses in UI), `goat_provider_diagnose` (user approval, sign-in), `goat_provider_home_request` (user approval), `goat_provider_host_matrix` (sign-in), `goat_provider_link` (user approval, sign-in), `goat_provider_login_cancel` (sign-in), `goat_provider_login_start` (sign-in, user chooses in UI), `goat_provider_login_status` (sign-in), `goat_provider_remove` (user approval), `goat_provider_setup_open` (sign-in), `goat_provider_sync` (sign-in), `goat_provider_sync_status` (user approval, sign-in), `goat_provider_update` (sign-in, user chooses in UI), `goat_ssh_host_add` (user approval), `goat_ssh_host_list` (sign-in), `goat_ssh_runtime_update` (user approval), `goat_ssh_thread_handoff` (user approval), `goat_ssh_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_checkpoint_restore` (user approval), `goat_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_send` (user approval), `goat_thread_wait` (user answers a question), `request_secret` (secret entry, user approval), `schedule_task` (secret entry, user chooses in UI), `update_scheduled_task` (secret entry), `watch_pull_request` (user chooses in UI).
 
 There is no single handoff primitive. Each case has its own tool, error code, or CLI step, and none returns a resumable handle the agent can wait on.
 
@@ -237,7 +237,7 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 9. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.
 10. **Give the CLI an agent face.** Add listed `goat tool list` and `goat tool call <name> --json` generated from the same registry, so shells and CI reach every MCP capability through one documented grammar. Today only the unlisted `acp-mcp-call` exists.
 11. **`--json` on every listed leaf command.** Only 11 of 45 offer it; agents parse human tables otherwise.
-12. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 12 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
+12. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 11 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
 13. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
-14. **Move routing policy out of tool descriptions.** The longest description is 4551 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
+14. **Move routing policy out of tool descriptions.** The longest description is 2659 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
 15. **Group tools by resource.** Move queue and pending request tools out of the thread toolkit and thread launch out of the project toolkit, and give scheduled tasks one toolkit, so permissions, docs, and discovery follow the resource an agent is working on.
