@@ -24,6 +24,7 @@ const SESSION_READ_CADENCE_MS = [30_000, 60_000, 120_000, 240_000, 600_000] as c
 const READ_FAILURE_LIMIT = 3;
 export const FOLLOW_UP_ACCEPTED = "Follow-up accepted";
 const RUNNING = "Running in the cloud";
+const PR_WAITING = "Found a session-linked PR; waiting for the session to finish";
 const SUMMARY_LIMIT = 4000;
 const RESULT_LABEL = "Result PR found";
 const RESULT_CAVEAT = "PR presence does not confirm that the session stopped or its checks passed.";
@@ -130,7 +131,15 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
   const anchor = anchorOf(input);
   let base = input.followUp ? FOLLOW_UP_ACCEPTED : RUNNING;
   const clock = DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
-  let nextPullRequest = input.followUp ? Number.POSITIVE_INFINITY : yield* clock;
+  // A PR recorded before a restart still stands in if the session can't be read or time runs
+  // out. A follow-up's task drops any earlier run's PR when it is accepted, so it has none here.
+  const saved = input.thread().cloudTask;
+  let pullRequest: PullRequest | undefined =
+    !input.followUp && saved?.status === "running" && saved.prUrl && saved.branch
+      ? { prUrl: saved.prUrl, branch: saved.branch, summary: saved.summary ?? "" }
+      : undefined;
+  if (pullRequest) base = RUNNING + ". " + PR_WAITING;
+  let nextPullRequest = input.followUp || pullRequest ? Number.POSITIVE_INFINITY : yield* clock;
   let nextRead = (yield* clock) + SESSION_READ_CADENCE_MS[0];
   let reads = 0;
   let failures = 0;
@@ -138,7 +147,6 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
   let costUnknown = false;
   let readable = true;
   let unreadable = "";
-  let pullRequest: PullRequest | undefined;
   let pullRequestError: string | undefined;
   let pullRequestCause: unknown;
 
@@ -319,12 +327,14 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
         // stands as the result only if reading fails for good or the deadline passes.
         pullRequest = found.success;
         nextPullRequest = Number.POSITIVE_INFINITY;
-        base = RUNNING + ". Found a session-linked PR; waiting for the session to finish";
+        base = RUNNING + ". " + PR_WAITING;
         const recorded = found.success;
         yield* save((task) => ({
           ...task,
           prUrl: recorded.prUrl,
           branch: recorded.branch,
+          // Kept so the PR can still stand in for the reply after a restart.
+          summary: shorten(recorded.summary),
           progress: base + ".",
         }));
         nextRead = yield* clock;

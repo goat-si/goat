@@ -354,3 +354,35 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "a restart past the deadline lets the PR recorded before it stand, without looking it up again",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        h.noMatch();
+        yield* TestClock.adjust("121 minutes");
+        yield* h.runtime.resumeTurn!({
+          ...h.attach,
+          cloudTask: {
+            ...h.saved.cloudTask,
+            prUrl: "https://github.com/fixture/repository/pull/1",
+            branch: "claude/result",
+            summary: "Changed behavior.",
+            progress:
+              "Running in the cloud. Found a session-linked PR; waiting for the session to finish.",
+          },
+        });
+        yield* Deferred.await(h.terminal);
+        expect(terminalOf(h)).toMatchObject({ status: "completed" });
+        expect(h.ledger.at(-1)).toMatchObject({
+          status: "succeeded",
+          prUrl: "https://github.com/fixture/repository/pull/1",
+          progress: "Result PR found. The session had not finished its turn within two hours.",
+        });
+        expect(h.ledger.at(-1)?.summary).toContain("Changed behavior.");
+        expect(h.counts().reads).toBe(0);
+      }),
+    ),
+);
