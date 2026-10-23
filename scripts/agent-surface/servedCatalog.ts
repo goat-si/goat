@@ -35,8 +35,9 @@ export interface CallResult {
 export interface ServedCatalog {
   readonly tools: ReadonlyArray<ListedTool>;
   /**
-   * What tools/list sends a GOAT thread under an agentToolListing value, filtered by the server's
-   * own /mcp listing filter (apps/server/src/mcp/toolListing.ts) so a measurement cannot drift from it.
+   * What tools/list sends a GOAT thread under an agentToolListing value: the /mcp transport over
+   * HTTP, MCP protocol 2025-06-18, with the server's own listing filter, so a measurement cannot
+   * drift from what agents receive.
    */
   readonly listedAsThread: (listing: "full" | "core") => Promise<ReadonlyArray<ListedTool>>;
   /** tools/call as an agent inside a GOAT thread with every capability granted. */
@@ -59,6 +60,9 @@ export async function loadServedCatalog(): Promise<ServedCatalog> {
     readonly flatMap: <A>(f: (a: A) => Program) => (self: Program) => Program;
     readonly map: <A, B>(f: (a: A) => B) => (self: Program) => Program;
     readonly provideService: (tag: unknown, value: unknown) => (self: Program) => Program;
+    readonly provide: (layer: Layer) => (self: Program) => Program;
+    readonly scoped: (self: Program) => Program;
+    readonly runPromise: <A>(program: Program) => Promise<A>;
   }>("effect/Effect");
   const LayerModule = await fromServer<{
     readonly provide: (layer: Layer) => (self: Layer) => Layer;
@@ -78,16 +82,17 @@ export async function loadServedCatalog(): Promise<ServedCatalog> {
     readonly catalog: Layer;
     readonly dependencies: Layer;
     readonly client: unknown;
+    readonly serveCatalogOverHttp: (
+      scopes: Readonly<Record<string, unknown>>,
+      listing: string,
+    ) => Program;
   }>("apps/server/src/mcp/agentSurface.testkit.ts");
   const { McpInvocationContext } = await fromRepo<{ readonly McpInvocationContext: unknown }>(
     "apps/server/src/mcp/McpInvocationContext.ts",
   );
-  const { filterToolsListBody } = await fromRepo<{
-    readonly filterToolsListBody: (body: unknown, scope: unknown, listing: string) => Program;
-  }>("apps/server/src/mcp/toolListing.ts");
-  const { HttpBody } = await fromServer<{
-    readonly HttpBody: { readonly text: (body: string, contentType: string) => unknown };
-  }>("effect/http");
+  const { NodeHttpServer } = await fromServer<{
+    readonly NodeHttpServer: { readonly layerTest: Layer };
+  }>("@effect/platform-node");
   const runtime = ManagedRuntime.make(
     kit.catalog.pipe(
       LayerModule.provide(kit.dependencies),
@@ -118,16 +123,16 @@ export async function loadServedCatalog(): Promise<ServedCatalog> {
   const tools = await withServer((server) => server.tools.map(({ tool }) => tool));
   return {
     tools,
-    listedAsThread: async (listing) => {
-      const response = JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools } });
-      const body = HttpBody.text(response, "application/json");
-      const filtered = await runtime.runPromise<{ readonly body: Uint8Array }>(
-        filterToolsListBody(body, threadScope, listing),
-      );
-      const message: { readonly result: { readonly tools: ReadonlyArray<ListedTool> } } =
-        JSON.parse(new TextDecoder().decode(filtered.body));
-      return message.result.tools;
-    },
+    listedAsThread: (listing) =>
+      Effect.runPromise<ReadonlyArray<ListedTool>>(
+        kit.serveCatalogOverHttp({ thread: threadScope }, listing).pipe(
+          Effect.flatMap((http: { readonly listTools: (caller: string) => Program }) =>
+            http.listTools("thread"),
+          ),
+          Effect.scoped,
+          Effect.provide(NodeHttpServer.layerTest),
+        ),
+      ),
     callAsThread: (name, args) =>
       runtime.runPromise<CallResult>(
         McpServer.McpServer.pipe(
