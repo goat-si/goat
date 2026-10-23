@@ -612,13 +612,17 @@ instead of falling back to the relay, which would deliver without one. Remote
 servers answer only to the tool names they shipped with
 ([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)).
 The origin checks the calling thread's capability before forwarding, plus
-`threads.remote` and the profile's host allowlist for a host-routable write that
-names `host`.
+`threads.remote` and the profile's host allowlist for every machine a write names:
+`host` on a host-routable entry, and each argument listed for it in
+[`agentSurface/hosts.ts`](../../packages/contracts/src/agentSurface/hosts.ts) (`targetHost`, `destinationHost`, or a `host` that is not routing,
+as on cordon or SSH setup). This holds for writes that declare no capability of
+their own, such as `thread.watch`. A `host` that names something else, such as a
+git forge or the address of a machine being added, is not listed; a test pins
+which arguments are.
 A thread launched or sent with a forwarded ceiling is bound to it on the
 destination, so its own calls there are checked against it. Other host-routed writes
 arrive as the origin's dispatch session, and the destination relies on the origin's
-check. Writes that name their target machine in another argument (`targetHost`,
-`destinationHost`, an alias) get the capability check but not the host allowlist.
+check.
 
 **Proposed.**
 
@@ -703,7 +707,7 @@ exit `1`, `waiting_human` exits `3`, `unknown` exits `5`, and a wait that
 times out while the work is still `queued` or `running` exits `6`.
 
 The npm package keeps its `goat` and `t3` bins, and bare `goat` keeps starting a
-server, so `npx t3` users see no change. The desktop launcher marks itself so that
+server. Use `goat serve` for GOAT; `npx t3` launches upstream T3 Code. The desktop launcher marks itself so that
 bare `goat` from it prints help instead of starting a second server. Linux
 packages gain `/usr/bin/goat`, and the welcome wizard offers the install once.
 

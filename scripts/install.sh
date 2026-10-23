@@ -39,7 +39,7 @@ goat_home="${GOAT_HOME:-$HOME/.goat}"
 bin_dir="${GOAT_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 
 fail() {
-  printf '\nt3 install: %s\n' "$1" >&2
+  printf '\ngoat install: %s\n' "$1" >&2
   exit 1
 }
 
@@ -220,7 +220,7 @@ else
   fetch_status=0
   fetch "${base_url}/v${version}/SHA256SUMS" "${staging}/SHA256SUMS" || fetch_status=$?
   if [ "$fetch_status" -eq 44 ]; then
-    fail "goat ${version} has no release archive for ${platform}-${arch}; releases before the self-contained CLI can only be installed with \`npm install -g t3@${version}\`"
+    fail "goat ${version} has no release archive for ${platform}-${arch}; choose an available GOAT release at https://github.com/goat-si/goat-releases/releases"
   elif [ "$fetch_status" -ne 0 ]; then
     fail "could not download the release checksums"
   fi

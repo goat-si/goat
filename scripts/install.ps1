@@ -205,7 +205,7 @@ if ($cached) {
     } catch {
       $status = $_.Exception.Response.StatusCode.value__
       if ($status -eq 404) {
-        Fail "goat $version has no release archive for win32-$arch; releases before the self-contained CLI can only be installed with 'npm install -g t3@$version'"
+        Fail "goat $version has no release archive for win32-$arch; choose an available GOAT release at https://github.com/goat-si/goat-releases/releases"
       }
       throw
     }
