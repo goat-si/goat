@@ -22,7 +22,8 @@ const row = (armId: "full" | "core", pair: number, extra: Partial<RunRow> = {}):
   model: "m",
   listing: armId === "full" ? { mode: "full" } : { mode: "core", resident: [] },
   pair,
-  slot: 0,
+  // ABBA with arms [full, core]: full goes first in even pairs.
+  slot: (pair % 2 === 0) === (armId === "full") ? 0 : 1,
   threadId: armId + pair,
   ok: true,
   failures: [],
@@ -77,6 +78,30 @@ describe("checkRows", () => {
     expect(() => checkRows([row("core", 0, { model: "other" })], paired)).toThrow(
       /did not run what arm core states/,
     );
+  });
+
+  it("refuses a verdict from runs that were not paired", () => {
+    const rows = both(() => "c1");
+    // Another thread at a step already run: repeats could fill the minimum.
+    expect(() => checkRows([...rows, row("core", 0, { threadId: "other" })], paired)).toThrow(
+      /schedule step c1\|multi\|core\|0 has two runs/,
+    );
+    expect(() =>
+      checkRows(
+        rows.filter((r) => !(r.arm === "core" && r.pair === 3)),
+        paired,
+      ),
+    ).toThrow(/the two arms did not run the same pairs/);
+    expect(() =>
+      checkRows(
+        [
+          ...rows.filter((r) => r.pair !== 0),
+          row("core", 0, { slot: 0 }),
+          row("full", 0, { slot: 1 }),
+        ],
+        paired,
+      ),
+    ).toThrow(/ran in the wrong order/);
   });
 });
 

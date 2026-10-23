@@ -525,13 +525,37 @@ export const sumMetrics = (runs: ReadonlyArray<RunMetrics>): RunMetrics => ({
   violations: [...new Set(runs.flatMap((run) => run.violations))],
 });
 
-/** Whether tools/list, as the runner's own client saw it, is the listing an arm states. */
-export const listingMatches = (listing: Listing, listed: ReadonlyArray<string>) => {
-  const core = new Set(listing.mode === "core" ? [...CORE_TOOLS, ...listing.resident] : []);
+/**
+ * Whether tools/list, as the runner's own client saw it, is the listing an arm states. A core
+ * listing is exactly the core tools and the arm's residents; a full one holds every tool any
+ * core arm of the campaign lists and more, so no core variant passes for it.
+ */
+export const listingMatches = (
+  listing: Listing,
+  listed: ReadonlyArray<string>,
+  campaignResidents: ReadonlyArray<string>,
+) => {
+  const expected = new Set([
+    ...CORE_TOOLS,
+    ...(listing.mode === "core" ? listing.resident : campaignResidents),
+  ]);
+  const seen = new Set(listed);
+  const holdsExpected = [...expected].every((name) => seen.has(name));
   return listing.mode === "core"
-    ? listed.every((name) => core.has(name)) && CORE_TOOLS.every((name) => listed.includes(name))
-    : listed.some((name) => !CORE_TOOLS.includes(name));
+    ? holdsExpected && seen.size === expected.size
+    : holdsExpected && seen.size > expected.size;
 };
+
+/**
+ * The thread's next run to count: the earliest by ordinal not yet counted, so two runs that end
+ * between two looks are both measured, in order.
+ */
+export const nextUncountedRun = (
+  runs: ReadonlyArray<{ readonly runId: string; readonly ordinal: number }>,
+  counted: ReadonlySet<string>,
+): string | null =>
+  runs.filter((run) => !counted.has(run.runId)).toSorted((a, b) => a.ordinal - b.ordinal)[0]
+    ?.runId ?? null;
 
 type Verdict<A> =
   | { readonly ok: true; readonly value: A }

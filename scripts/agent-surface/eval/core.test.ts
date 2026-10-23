@@ -13,6 +13,7 @@ import {
   extractAnswer,
   gate,
   listingMatches,
+  nextUncountedRun,
   runMetrics,
   sameModel,
   schedule,
@@ -392,13 +393,41 @@ describe("a run that answers in a follow-up run", () => {
 });
 
 describe("listingMatches", () => {
-  it("tells the core listing from the full one", () => {
-    const core = { mode: "core" as const, resident: [] };
-    expect(listingMatches(core, ["goat_describe", "goat_call"])).toBe(true);
-    expect(listingMatches(core, ["goat_describe", "goat_call", "goat_thread_read"])).toBe(false);
-    expect(listingMatches({ mode: "full" }, ["goat_describe", "goat_call"])).toBe(false);
+  const meta = ["goat_describe", "goat_call"];
+  const withLaunch = { mode: "core" as const, resident: ["goat_thread_launch"] };
+
+  it("takes a core listing only when it is exactly the core tools and the arm's residents", () => {
+    expect(listingMatches(withLaunch, [...meta, "goat_thread_launch"], [])).toBe(true);
+    // Plain core passing for core plus a resident would measure the wrong arm.
+    expect(listingMatches(withLaunch, meta, [])).toBe(false);
     expect(
-      listingMatches({ mode: "full" }, ["goat_describe", "goat_call", "goat_thread_read"]),
+      listingMatches(withLaunch, [...meta, "goat_thread_launch", "goat_thread_read"], []),
+    ).toBe(false);
+  });
+
+  it("takes a full listing only when it holds more than any core arm of the campaign lists", () => {
+    const residents = ["goat_thread_launch"];
+    expect(listingMatches({ mode: "full" }, [...meta, "goat_thread_launch"], residents)).toBe(
+      false,
+    );
+    expect(
+      listingMatches(
+        { mode: "full" },
+        [...meta, "goat_thread_launch", "goat_thread_read"],
+        residents,
+      ),
     ).toBe(true);
+  });
+});
+
+describe("nextUncountedRun", () => {
+  it("takes the earliest uncounted run when two ended between looks", () => {
+    const runs = [
+      { runId: "run-3", ordinal: 3 },
+      { runId: "run-1", ordinal: 1 },
+      { runId: "run-2", ordinal: 2 },
+    ];
+    expect(nextUncountedRun(runs, new Set(["run-1"]))).toBe("run-2");
+    expect(nextUncountedRun(runs, new Set(["run-1", "run-2", "run-3"]))).toBeNull();
   });
 });

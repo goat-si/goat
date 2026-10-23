@@ -28,6 +28,7 @@ import {
   answerInstruction,
   extractAnswer,
   listingMatches,
+  nextUncountedRun,
   pendingChecks,
   render,
   runMetrics,
@@ -115,6 +116,7 @@ interface Context {
   readonly campaign: Campaign;
   readonly task: Task;
   readonly tag: string;
+  readonly residents: Residents;
 }
 type Fixture = Readonly<Record<string, string>>;
 
@@ -419,10 +421,18 @@ const nextRun = async (
   let quiet = 0;
   for (;;) {
     if (Date.now() >= deadline) return "deadline";
-    const status = await client.call("goat_thread_status", { threadId });
-    const runId = asObjects([status["run"] ?? null])[0]?.["runId"];
-    if (typeof runId === "string" && !counted.has(runId)) return runId;
-    if (typeof status["queuedRunId"] === "string") return status["queuedRunId"];
+    const read = await client.call("goat_thread_read", { threadId, limit: 1, runLimit: 20 });
+    const next = nextUncountedRun(
+      asObjects(read["recentRuns"]).flatMap((run) =>
+        typeof run["runId"] === "string" && typeof run["ordinal"] === "number"
+          ? [{ runId: run["runId"], ordinal: run["ordinal"] }]
+          : [],
+      ),
+      counted,
+    );
+    if (next !== null) return next;
+    const queued = (await client.call("goat_thread_status", { threadId }))["queuedRunId"];
+    if (typeof queued === "string" && !counted.has(queued)) return queued;
     // A delivery lands a moment after its child settles, so quiet must hold for a while.
     quiet = (await unfinishedTasks(client, threadId)).length > 0 ? 0 : quiet + 1;
     if (quiet > 1) return null;
@@ -449,11 +459,39 @@ const stopThread = async (client: Client, threadId: string): Promise<Cleanup> =>
  * tools/list as this client sees it. The server reloads the file on change, so the listing is
  * read again until it matches or a few seconds pass.
  */
+/**
+ * Resident tools the campaign's core arms name, and which of them the runner's own client cannot
+ * see: a tool that needs a calling thread is hidden from it in every listing, so an arm that
+ * names one cannot have its listing checked.
+ */
+interface Residents {
+  readonly visible: ReadonlyArray<string>;
+  readonly invisible: ReadonlyArray<string>;
+}
+
+const residentsOf = async (client: Client, campaign: Campaign): Promise<Residents> => {
+  const named = [
+    ...new Set(
+      campaign.arms.flatMap((arm) => (arm.listing?.mode === "core" ? arm.listing.resident : [])),
+    ),
+  ];
+  const visible: Array<string> = [];
+  const invisible: Array<string> = [];
+  for (const name of named) {
+    const described = await client.call("goat_describe", { path: name });
+    const entry = asObjects([described["entry"] ?? null])[0];
+    const available = asObjects([entry?.["available"] ?? null])[0];
+    (available?.["now"] === true ? visible : invisible).push(name);
+  }
+  return { visible, invisible };
+};
+
 const applyListing = async (
   client: Client,
   campaign: Campaign,
   arm: Arm,
-): Promise<{ readonly observed: ObservedListing; readonly matches: boolean }> => {
+  residents: Residents,
+): Promise<{ readonly observed: ObservedListing; readonly mismatch: string | null }> => {
   if (campaign.listingSettings !== null && arm.listing !== null) {
     const path = campaign.listingSettings;
     const current: unknown = JSON.parse(NodeFS.readFileSync(path, "utf8"));
@@ -465,71 +503,50 @@ const applyListing = async (
   for (let attempt = 0; ; attempt++) {
     const names = await client.list();
     const observed = { tools: names.length, names: names.length <= 12 ? names : null };
-    const matches = arm.listing === null || listingMatches(arm.listing, names);
-    if (matches || attempt >= 10) return { observed, matches };
+    const unseen =
+      arm.listing?.mode === "core"
+        ? arm.listing.resident.filter((name) => residents.invisible.includes(name))
+        : [];
+    if (unseen.length > 0)
+      return {
+        observed,
+        mismatch:
+          unseen.join(", ") +
+          " cannot be seen by the runner's client, so arm " +
+          arm.id +
+          "'s listing cannot be checked",
+      };
+    const matches = arm.listing === null || listingMatches(arm.listing, names, residents.visible);
+    if (matches) return { observed, mismatch: null };
+    if (attempt >= 10)
+      return {
+        observed,
+        mismatch: "tools/list served " + names.length + " tools, not arm " + arm.id + "'s listing",
+      };
     await pause(1000);
   }
 };
 
-const runOnce = async (
-  context: Context,
-  arm: Arm,
-  step: { readonly pair: number; readonly slot: number },
-  campaignId: string,
-): Promise<RunRow> => {
-  const { client, campaign, task, tag } = context;
-  const row = rowHead(campaignId, campaign, task, arm, step);
-  const unrun = (why: string): RunRow => ({
-    ...row,
-    threadId: null,
-    ok: false,
-    failures: [],
-    // The arm never ran, so this run says nothing about it.
-    contamination: [why],
-    metrics: null,
-    wallMs: null,
-    at: new Date().toISOString(),
-  });
-  const listing = await applyListing(client, campaign, arm);
-  if (!listing.matches)
-    return {
-      ...unrun(
-        "tools/list served " + listing.observed.tools + " tools, not arm " + arm.id + "'s listing",
-      ),
-      observedListing: listing.observed,
-    };
-  let fixture: Fixture;
-  try {
-    fixture = await FIXTURES[task.fixture.kind]!(context);
-  } catch (error) {
-    return unrun("fixture: " + String(error));
-  }
-  const vars = {
-    ...campaign.values,
-    ...fixture,
-    projectId: campaign.projectId,
-    tag,
-    reviewModels: campaign.reviewModels
-      .map((model) => model.instanceId + " / " + model.model)
-      .join(", "),
-    fixtureModel: campaign.fixtureModel.instanceId + " / " + campaign.fixtureModel.model,
-  };
-  const launched = await client.call("goat_thread_launch", {
-    title: "[eval] " + tag,
-    // Scratch threads are refused where an environment disables them; the project is always
-    // there, and the "[eval" title prefix keeps these threads out of every fixture.
-    projectId: campaign.projectId,
-    message: render(task.prompt, vars) + answerInstruction(task.answerKeys),
-    modelSelection: { ...arm.modelSelection },
-    notifyOnCompletion: false,
-  });
-  const threadId = String(launched["threadId"]);
+interface Followed {
+  readonly counted: ReadonlyArray<{ readonly runId: string; readonly items: Array<TimelineItem> }>;
+  readonly answerText: string | null;
+  readonly failures: ReadonlyArray<string>;
+}
+
+/**
+ * An agent that delegates may end its run and answer in a later one, which a delegated child's
+ * delivery starts, so a run is the launched run and every later one until the answer.
+ */
+const follow = async (
+  client: Client,
+  task: Task,
+  threadId: string,
+  launchedRunId: string,
+): Promise<Followed> => {
   const failures: Array<string> = [];
   const deadline = Date.now() + task.deadlineMs;
-  // An agent that delegates may end its run and answer in a later one, which a delegated
-  // child's delivery starts, so the run is the launched run and every later one until the answer.
   const counted: Array<{ readonly runId: string; readonly items: Array<TimelineItem> }> = [];
-  let runId = String(launched["runId"]);
+  let runId = launchedRunId;
   let answerText: string | null = null;
   for (;;) {
     const unfinished = await waitForRun(client, task, threadId, runId, deadline);
@@ -566,40 +583,116 @@ const runOnce = async (
     }
     runId = next;
   }
-  const cleanup = await stopThread(client, threadId);
-  const metrics = sumMetrics(counted.map((run) => runMetrics(run.items, arm)));
-  const read = await client.call("goat_thread_read", { threadId, limit: 1, runLimit: 20 });
-  const runs = counted.map(({ runId: id }) =>
-    asObjects(read["recentRuns"]).find((candidate) => candidate["runId"] === id),
+  return { counted, answerText, failures };
+};
+
+const runOnce = async (
+  context: Context,
+  arm: Arm,
+  step: { readonly pair: number; readonly slot: number },
+  campaignId: string,
+): Promise<RunRow> => {
+  const { client, campaign, task, tag } = context;
+  const row = rowHead(campaignId, campaign, task, arm, step);
+  const unrun = (why: string): RunRow => ({
+    ...row,
+    threadId: null,
+    ok: false,
+    failures: [],
+    // The arm never ran, so this run says nothing about it.
+    contamination: [why],
+    metrics: null,
+    wallMs: null,
+    at: new Date().toISOString(),
+  });
+  const listing = await applyListing(client, campaign, arm, context.residents);
+  if (listing.mismatch !== null)
+    return { ...unrun(listing.mismatch), observedListing: listing.observed };
+  let fixture: Fixture;
+  try {
+    fixture = await FIXTURES[task.fixture.kind]!(context);
+  } catch (error) {
+    return unrun("fixture: " + String(error));
+  }
+  const vars = {
+    ...campaign.values,
+    ...fixture,
+    projectId: campaign.projectId,
+    tag,
+    reviewModels: campaign.reviewModels
+      .map((model) => model.instanceId + " / " + model.model)
+      .join(", "),
+    fixtureModel: campaign.fixtureModel.instanceId + " / " + campaign.fixtureModel.model,
+  };
+  const launched = await client.call("goat_thread_launch", {
+    title: "[eval] " + tag,
+    // Scratch threads are refused where an environment disables them; the project is always
+    // there, and the "[eval" title prefix keeps these threads out of every fixture.
+    projectId: campaign.projectId,
+    message: render(task.prompt, vars) + answerInstruction(task.answerKeys),
+    modelSelection: { ...arm.modelSelection },
+    notifyOnCompletion: false,
+  });
+  const threadId = String(launched["threadId"]);
+  // Once the thread exists it is stopped whatever happens next, and its id stays in the row.
+  const followed = await follow(client, task, threadId, String(launched["runId"])).then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
   );
-  for (const [index, run] of runs.entries())
-    if (run?.["status"] !== "completed")
-      failures.push("run " + (index + 1) + " ended " + String(run?.["status"]));
-  const startedAt = Date.parse(String(runs[0]?.["startedAt"]));
-  const completedAt = Date.parse(String(runs.at(-1)?.["completedAt"]));
-  const answer = extractAnswer(answerText, task.answerKeys);
-  if (!answer.ok) failures.push(answer.why);
-  else
-    for (const check of task.checks)
-      // A check that cannot read what the answer points at is judging a wrong answer.
-      failures.push(
-        ...(await CHECKS[check]!({ ...context, answer: answer.value, fixture, metrics }).catch(
-          (error: unknown) => [check + ": " + String(error)],
-        )),
-      );
-  return {
+  const cleanup = await stopThread(client, threadId);
+  const broken = (error: unknown): RunRow => ({
     ...row,
     threadId,
-    ok: failures.length === 0,
-    failures,
-    contamination: metrics.violations,
-    metrics,
-    wallMs: Number.isFinite(completedAt - startedAt) ? completedAt - startedAt : null,
+    ok: false,
+    failures: [],
+    // A harness or transport error says nothing about the arm, so it is listed, not counted.
+    contamination: ["runner: " + String(error)],
+    metrics: null,
+    wallMs: null,
     at: new Date().toISOString(),
-    followupRuns: counted.length - 1,
     cleanup,
     observedListing: listing.observed,
-  };
+  });
+  if (!followed.ok) return broken(followed.error);
+  const { counted, answerText } = followed.value;
+  try {
+    const failures = [...followed.value.failures];
+    const metrics = sumMetrics(counted.map((run) => runMetrics(run.items, arm)));
+    const read = await client.call("goat_thread_read", { threadId, limit: 1, runLimit: 20 });
+    const runs = counted.map(({ runId: id }) =>
+      asObjects(read["recentRuns"]).find((candidate) => candidate["runId"] === id),
+    );
+    for (const [index, run] of runs.entries())
+      if (run?.["status"] !== "completed")
+        failures.push("run " + (index + 1) + " ended " + String(run?.["status"]));
+    const startedAt = Date.parse(String(runs[0]?.["startedAt"]));
+    const completedAt = Date.parse(String(runs.at(-1)?.["completedAt"]));
+    const answer = extractAnswer(answerText, task.answerKeys);
+    if (!answer.ok) failures.push(answer.why);
+    else
+      for (const check of task.checks)
+        // A check that cannot read what the answer points at is judging a wrong answer.
+        failures.push(
+          ...(await CHECKS[check]!({ ...context, answer: answer.value, fixture, metrics }).catch(
+            (error: unknown) => [check + ": " + String(error)],
+          )),
+        );
+    return {
+      ...row,
+      threadId,
+      ok: failures.length === 0,
+      failures,
+      contamination: metrics.violations,
+      metrics,
+      wallMs: Number.isFinite(completedAt - startedAt) ? completedAt - startedAt : null,
+      at: new Date().toISOString(),
+      followupRuns: counted.length - 1,
+      cleanup,
+      observedListing: listing.observed,
+    };
+  } catch (error) {
+    return broken(error);
+  }
 };
 
 const argument = (name: string) => {
@@ -663,11 +756,17 @@ const main = async () => {
   }
   const client = await connect(endpoint, authorization);
   const campaignId = "c" + Date.now().toString(36);
+  const residents = await residentsOf(client, campaign);
   for (const step of steps) {
     const task = selected.find((candidate) => candidate.id === step.taskId)!;
     const arm = campaign.arms.find((candidate) => candidate.id === step.armId)!;
     const tag = campaignId + "-" + task.id + "-" + step.pair + "-" + arm.id;
-    const row = await runOnce({ client, campaign, task, tag }, arm, step, campaignId).catch(
+    const row = await runOnce(
+      { client, campaign, task, tag, residents },
+      arm,
+      step,
+      campaignId,
+    ).catch(
       // A harness or transport error says nothing about the arm, so it is listed, not counted.
       (error: unknown): RunRow => ({
         ...rowHead(campaignId, campaign, task, arm, step),
@@ -681,6 +780,11 @@ const main = async () => {
       }),
     );
     console.log(JSON.stringify(row));
+    // A thread that may still be running would overlap the next run and its listing.
+    if (row.cleanup?.stopped === false) {
+      console.error("stopping the campaign: thread " + row.threadId + " could not be stopped");
+      return 1;
+    }
   }
   return 0;
 };
