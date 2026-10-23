@@ -101,11 +101,19 @@ export const HUB_DEVICE_HANDOFF_PATHS = {
 const HUB_PATHS: ReadonlySet<string> = new Set(Object.values(HUB_DEVICE_HANDOFF_PATHS));
 export const isHubDeviceHandoffPath = (path: string) => HUB_PATHS.has(path);
 
+/**
+ * A person allowing one cloud agent launch that bills a provider account. Its approval binds a
+ * digest of the launch's arguments and holder; the agent calls goat_cloud_launch again with the
+ * same arguments and this handoff's id.
+ */
+export const CLOUD_AGENT_LAUNCH_HANDOFF_PATH = "cloud_agent.launch";
+
 /** Handoffs that expire on their clock instead of when the requesting run ends. */
 export const isClockedHandoffPath = (path: string) =>
   isProviderHandoffPath(path) ||
   path === COMPUTER_USE_GRANT_HANDOFF_PATH ||
-  isHubDeviceHandoffPath(path);
+  isHubDeviceHandoffPath(path) ||
+  path === CLOUD_AGENT_LAUNCH_HANDOFF_PATH;
 
 /**
  * Steps that end with the run that asked: a secret card, whose caller collects it in that run,

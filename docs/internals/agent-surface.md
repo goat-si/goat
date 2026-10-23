@@ -538,20 +538,22 @@ authenticated client RPC. Agents get `HandoffSummary`.
 
 Around it, a human step reaches an agent in several shapes:
 
-| Flow                         | Agent sees                                        | Who resolves                          | What continues                                       |
-| ---------------------------- | ------------------------------------------------- | ------------------------------------- | ---------------------------------------------------- |
-| SSH trust, key, update       | `needs_human` with `next.call`                    | person with environment scopes        | server continues prepare and update; trust only pins |
-| Provider sync                | `needs_human` with `next.call`                    | person with `providers:manage`        | server runs the sync under the approver's session    |
-| Provider setup, Codex home   | `needs_human` with `next.call`                    | person with `providers:manage`        | person finishes in the app; agent calls again        |
-| Computer use                 | `needs_human` beside `available` and `refused`    | person with settings authority        | an admission lease; tools attach next turn           |
-| Sign-in by a managing client | `{kind: "flow"}` with `continueIn`                | the session that started it           | a server fiber, in memory                            |
-| Secrets                      | a blocking result with `secretRef`                | person in the thread                  | agent uses the ref in a later call                   |
-| Runtime approvals, questions | a pending request by `requestId`                  | person, or an outside approver client | the provider run                                     |
-| Decisions                    | `DecisionItem` by id                              | agent or person, per item             | answer delivered as a thread message                 |
-| Cloud launch consent         | `capability_denied` text telling the agent to ask | person answering a decision `approve` | agent calls launch again with `decisionId`           |
+| Flow                         | Agent sees                                                                       | Who resolves                             | What continues                                                                                                                                                   |
+| ---------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SSH trust, key, update       | `needs_human` with `next.call`                                                   | person with environment scopes           | server continues prepare and update; trust only pins                                                                                                             |
+| Provider sync                | `needs_human` with `next.call`                                                   | person with `providers:manage`           | server runs the sync under the approver's session                                                                                                                |
+| Provider setup, Codex home   | `needs_human` with `next.call`                                                   | person with `providers:manage`           | person finishes in the app; agent calls again                                                                                                                    |
+| Computer use                 | `needs_human` beside `available` and `refused`                                   | person with settings authority           | an admission lease; tools attach next turn                                                                                                                       |
+| Sign-in by a managing client | `{kind: "flow"}` with `continueIn`                                               | the session that started it              | a server fiber, in memory                                                                                                                                        |
+| Secrets                      | a blocking result with `secretRef`                                               | person in the thread                     | agent uses the ref in a later call                                                                                                                               |
+| Runtime approvals, questions | a pending request by `requestId`                                                 | person, or an outside approver client    | the provider run                                                                                                                                                 |
+| Decisions                    | `DecisionItem` by id                                                             | agent or person, per item                | answer delivered as a thread message                                                                                                                             |
+| Cloud launch consent         | `needs_human` from a thread; outside one, a refusal naming a decision GOAT filed | person approving the handoff or decision | agent calls launch again with the same arguments and `handoffId` or `decisionId`; the approval binds a digest of the launch and its holder and starts one launch |
 
-One gap follows. A handoff resolving does not wake the thread that asked; it
-only updates the card. Who may resolve a step is one predicate
+When a handoff resolves or expires, GOAT wakes the thread that asked with a
+queued message naming the next call
+([HandoffWakeReactor.ts](../../apps/server/src/handoffs/HandoffWakeReactor.ts)).
+Who may resolve a step is one predicate
 ([HumanStepAuthority.ts](../../apps/server/src/handoffs/HumanStepAuthority.ts)),
 used by pending-question MCP, the decision inbox, and handoffs, so an outside
 client holding `orchestration:approve` answers a provider approval the same way

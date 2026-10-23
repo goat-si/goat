@@ -29,6 +29,6 @@ export const consumeApproval = Effect.fn("ApprovalConsumption.consume")(function
   if (inserted.length === 0)
     return yield* new OrchestratorMcpFailure({
       code: "invalid_request",
-      message: "That decision was already used.",
+      message: "That approval was already used.",
     });
 });

@@ -3394,13 +3394,13 @@ export const agentSurfaceRegistry = {
     toolkit: "provider",
     summary: "Launch a cloud agent on a credential holder",
     description:
-      'Start a Claude Cloud, Cursor Cloud, or Devin Cloud run on the environment that holds that login, without signing in here. The holder is your preference (holder:"local" or an SSH alias), else a ready holder with the fewest active cloud runs, this environment first on a tie. The run starts in a new thread on the holder, in its project whose origin is repo, from that project\'s pushed branch (or branch). Returns the holder and threadId; follow it with goat_cloud_run_list or goat_thread_status (pass host for a remote holder). dryRun:true only names the holder. Cloud runs bill the provider account; launch only when the user asked. Needs a full-access caller.',
+      'Start a Claude Cloud, Cursor Cloud, or Devin Cloud run on the environment that holds that login, without signing in here. The holder is your preference (holder:"local" or an SSH alias), else a ready holder with the fewest active cloud runs, this environment first on a tie. The run starts in a new thread on the holder, in its project whose origin is repo, from that project\'s pushed branch (or branch). Returns the holder and threadId; follow it with goat_cloud_run_list or goat_thread_status (pass host for a remote holder). dryRun:true only names the holder. Cloud runs bill the provider account; launch only when the user asked. With goatclaw on, a launch a person did not start in this turn returns needs_human with a handoff (from a thread) or names a decision GOAT filed (outside one); once a person allows it, call again with the same arguments and handoffId or decisionId. Needs a full-access caller.',
     effect: "write",
     capability: "cloud.launch",
     hostRoutable: false,
     requires: "either",
     dryRun: "supported",
-    humanSteps: [],
+    humanSteps: ["approval"],
     annotations: { title: "Launch a cloud agent", idempotentHint: false, openWorldHint: true },
   }),
   "cloud_agent.run_register": entry({
