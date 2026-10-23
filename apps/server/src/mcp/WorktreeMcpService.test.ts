@@ -33,6 +33,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
+import { makeSetupHookFixture } from "../project/testkit/SetupHookFixture.ts";
 
 const environmentId = EnvironmentId.make("environment-worktree-test");
 const threadId = ThreadId.make("thread-worktree-test");
@@ -87,6 +88,7 @@ const project: Project = {
 } as Project;
 
 interface HarnessOptions {
+  readonly runSetup?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
   readonly git?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
   readonly thread?: ThreadFixture | null;
   readonly threadReadError?: "projection" | "dispatch";
@@ -217,7 +219,10 @@ const makeHarness = (options: HarnessOptions = {}) => {
         : Effect.succeed({ commitSha: "abc123", remoteRefName: "origin/dev" }),
   );
   const createWorktree = vi.fn(
-    (input: { readonly newRefName?: string | undefined; readonly path: string | null }) =>
+    (
+      input: { readonly newRefName?: string | undefined; readonly path: string | null },
+      _options?: GitVcsDriver.CreateWorktreeOptions,
+    ) =>
       options.createWorktreeFails
         ? (Effect.fail("simulated worktree creation failure") as never)
         : (options.createWorktreeGate ?? Effect.void).pipe(
@@ -312,7 +317,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
           ...options.git,
         } satisfies Partial<GitWorkflowService.GitWorkflowService["Service"]>),
         Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
-          runForThread,
+          runForThread: options.runSetup ?? runForThread,
         } satisfies Partial<ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]>),
         Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
           refreshStatus,
@@ -374,6 +379,40 @@ const runStatus = (harness: ReturnType<typeof makeHarness>) =>
 const decodeHandoffInput = Schema.decodeUnknownEffect(WorktreeMcpHandoffInput);
 
 describe("goat_worktree_handoff", () => {
+  it.effect.each([true, false])("#997 runs setup once with server setup=%s", (runSetupScript) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const git = yield* GitVcsDriver.GitVcsDriver;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "handoff-single-setup-" });
+      const cwd = `${directory}/repo`;
+      yield* fs.makeDirectory(cwd);
+      const command = (args: string[]) =>
+        git.execute({ operation: "handoff-setup-test", cwd, args });
+      yield* command(["init", "-b", "main"]);
+      yield* command(["config", "user.name", "Test"]);
+      yield* command(["config", "user.email", "test@example.test"]);
+      yield* command(["commit", "--allow-empty", "-m", "initial"]);
+      const setup = yield* makeSetupHookFixture(cwd);
+      yield* command(["config", "core.hooksPath", setup.hooksDirectory]);
+      const harness = makeHarness({
+        git: {
+          createWorktree: (input, options) =>
+            git.createWorktree({ ...input, cwd, path: `${directory}/worktree` }, options),
+        },
+        runSetup: () => setup.recordServerSetup.pipe(Effect.as({ status: "no-script" as const })),
+      });
+      yield* runHandoff(harness, { branch: "feature/setup-once", baseRef: "main", runSetupScript });
+      expect(yield* setup.starts).toEqual([runSetupScript ? "server" : "hook"]);
+    }).pipe(
+      Effect.provide(
+        GitVcsDriver.layer.pipe(
+          Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "handoff-setup-git-" })),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("reports a continuation failure without failing the handoff", () => {
     const harness = makeHarness({ continuation: "fails" });
     return Effect.gen(function* () {
@@ -519,6 +558,7 @@ describe("goat_worktree_handoff", () => {
       });
       expect(harness.createWorktree).toHaveBeenCalledWith(
         expect.objectContaining({ refName: "dev", baseRefName: "dev" }),
+        { skipSetupHook: true },
       );
       expect(result.startedFromOrigin).toBe(false);
     });
@@ -617,7 +657,9 @@ describe("goat_worktree_handoff", () => {
         path: "/home/user/.ssh/checkout",
       });
       const result = yield* runHandoff(harness, input);
-      expect(harness.createWorktree).toHaveBeenCalledWith(expect.objectContaining({ path: null }));
+      expect(harness.createWorktree).toHaveBeenCalledWith(expect.objectContaining({ path: null }), {
+        skipSetupHook: true,
+      });
       expect(result.worktreePath).toBe("/worktrees/project/feature/elsewhere");
     });
   });
