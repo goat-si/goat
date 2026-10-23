@@ -11,6 +11,7 @@ import {
   CloudMachineAlias,
   CloudMachinesCreateInput,
   CloudMachinesListResult,
+  GoatclawCeilingAdvice,
   HostPressureAdvice,
   ModelSelection,
   ProjectId,
@@ -47,6 +48,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 import { McpAttachmentInput } from "../attachment/input.ts";
 import { NotifyTargetInput } from "../../completionWebhook.ts";
+import { KeyedClientRequestId } from "../keyedParameters.ts";
 
 const shared = {
   failure: OrchestratorMcpFailure,
@@ -224,6 +226,7 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
       description:
         "An SSH host alias from goat_ssh_host_list, or a linked host name from goat_host_link_list.",
     }),
+    clientRequestId: Schema.optional(KeyedClientRequestId),
     cwd: TrimmedNonEmptyString.annotate({
       description: "Absolute path (or ~/path) of the folder on the remote machine.",
     }),
@@ -293,6 +296,8 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     notes: Schema.Array(Schema.String),
     /** Set when that host was under resource pressure at its last status read. */
     pressure: Schema.optional(HostPressureAdvice),
+    /** Set when that host has not confirmed it enforces the forwarded goatclaw ceiling. */
+    ceiling: Schema.optional(GoatclawCeilingAdvice),
   }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.thread_launch"]));
 

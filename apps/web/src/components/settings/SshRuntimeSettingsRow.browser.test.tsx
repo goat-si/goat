@@ -102,6 +102,35 @@ async function settle() {
 }
 
 describe("saved SSH runtime row", () => {
+  it("reads the runtime status again when a retried connection attempt ends", async () => {
+    const onRetry = vi.fn();
+    const show = (connecting: boolean) =>
+      act(async () =>
+        root.render(
+          <RegistryContext value={registry}>
+            <SshRuntimeSettingsRow {...input} enabled connecting={connecting} onRetry={onRetry} />
+          </RegistryContext>,
+        ),
+      );
+    reply = {
+      kind: "ok",
+      status: {
+        ...base,
+        state: "failed",
+        failure: { reason: "start_timeout", fix: { actor: "agent", instruction: "Try again" } },
+      },
+    };
+    await show(false);
+    await settle();
+    expect(button("Retry")).toBeDefined();
+    reply = { kind: "ok", status: { ...base, state: "ready", runtimeVersion: "0.4.3" } };
+    await show(true);
+    await show(false);
+    await act(async () => {
+      await vi.waitFor(() => expect(button("Retry")).toBeUndefined());
+    });
+    expect(container.textContent).not.toContain("didn't start");
+  });
   it("hides runtime updates for the current ready version", async () => {
     await render({ ...base, state: "ready", runtimeVersion: "0.4.3" });
     expect(container.textContent).not.toContain("Runtime 0.4.3");

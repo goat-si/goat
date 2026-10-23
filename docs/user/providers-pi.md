@@ -67,7 +67,7 @@ Changing the mode restarts the Pi provider session and resumes the same native c
 policy covers Pi tool calls; it is not an operating-system sandbox, and code that a trusted Pi
 extension runs outside a tool call remains governed by Pi's own extension trust model.
 
-GOAT's `goat_task_create` tool creates durable child threads in the shared subagent UI. If the user
+GOAT's `task.create` path creates durable child threads in the shared subagent UI. If the user
 installs Pi's example `subagent` extension, GOAT also shows its task progress and results in that
 UI. Pi runs those children without a session, so they cannot be opened or resumed as GOAT
 threads.

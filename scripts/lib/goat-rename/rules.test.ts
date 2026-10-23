@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { applyPathRules, applyTextRules, findResidue, isDropped } from "./engine.ts";
+import { WIRE_TEXT_RULES } from "./rules-wire.ts";
 import { DROP_RULES, TEXT_RULES, KEEP_RULES, PATH_RULES, isExempt } from "./rules.ts";
 
 const server = (source: string) => applyTextRules("apps/server/src/x.ts", source, TEXT_RULES).text;
@@ -61,6 +62,21 @@ describe("env names", () => {
     const kept =
       "T3CODE_RELAY_URL VITE_T3CODE_RELAY_URL T3CODE_CLERK_PUBLISHABLE_KEY T3_ARCHIVE_VERSION T3_LOCK uint32_t";
     expect(rename(kept)).toBe(kept);
+  });
+
+  it("renames upstream SSH auth while protecting the legacy runtime handoff line", () => {
+    expect(
+      applyTextRules(
+        "packages/ssh/src/auth.ts",
+        "if ($null -ne $env:T3_SSH_AUTH_SECRET) {",
+        TEXT_RULES,
+      ).text,
+    ).toBe("if ($null -ne $env:GOAT_SSH_AUTH_SECRET) {");
+    const legacy =
+      "GOAT_SPAWN_ENV='T3CODE_NO_BROWSER=1' # goat-rename: legacy: older SSH runtime handoff";
+    expect(
+      applyTextRules("packages/ssh/src/runtimeOwnershipScripts.ts", legacy, TEXT_RULES).text,
+    ).toBe(legacy);
   });
 
   it("leaves the SSH runner untouched", () => {
@@ -632,4 +648,98 @@ describe("visible GOAT copy", () => {
       "T3 Connect: t3ConnectTroubleshootingUrl #the-host-runs-an-older-t3-code `npx t3 unknown`";
     expect(server(source)).toBe(source);
   });
+});
+
+describe("wire rename boundaries", () => {
+  it("rewrites upstream context, counter, opaque ids and ephemeral world labels", () => {
+    const cases = [
+      [
+        "apps/server/src/provider/CodexDeveloperInstructions.ts",
+        "t3_code_development t3_code_runtime",
+        "goat_code_development goat_code_runtime",
+      ],
+      [
+        "apps/mobile/src/features/development/render-counter.ts",
+        "__t3RenderCounterStart",
+        "__goatRenderCounterStart",
+      ],
+      [
+        "apps/mobile/scripts/measure-renders.mts",
+        'Flag.withDefault("t3code-dev")',
+        'Flag.withDefault("goat-dev")',
+      ],
+      [
+        "apps/server/src/preview/ServerBrowser.ts",
+        '"t3-preview-clipboard"',
+        '"goat-preview-clipboard"',
+      ],
+      [
+        "apps/server/src/preview/ServerBrowserPage.ts",
+        '"t3-preview-metrics"',
+        '"goat-preview-metrics"',
+      ],
+      [
+        "apps/server/src/mcp/AcpMcpStdioBridge.ts",
+        "`t3-cli-${nextId++}`",
+        "`goat-cli-${nextId++}`",
+      ],
+    ] as const;
+    for (const [path, input, output] of cases) {
+      const renamed = applyTextRules(path, input, TEXT_RULES).text;
+      expect(renamed).toBe(output);
+      expect(applyTextRules(path, renamed, TEXT_RULES).text).toBe(output);
+    }
+  });
+
+  it("leaves hand-owned HTML bridge declarations unchanged", () => {
+    const input = 'const KEY_DOWN_METHOD = "t3/notifications/keydown";';
+    expect(applyTextRules("packages/shared/src/htmlRender.ts", input, TEXT_RULES).text).toBe(input);
+  });
+
+  it("keeps relay help, ACP sentinels and cached attachment keys with precise reasons", () => {
+    for (const [path, text] of [
+      ["packages/client-runtime/src/connection/diagnosis.ts", "t3ConnectTroubleshootingUrl"],
+      [
+        "packages/contracts/src/environmentHttp.ts",
+        "t3ConnectTroubleshootingUrl T3ConnectTroubleshootingSection",
+      ],
+      ["packages/provider-acp/src/server/sessionConfig.ts", '"_t3/empty" "_t3/session-mode"'],
+      ["packages/shared/src/htmlRender.ts", '"t3-theme"'],
+      ["apps/mobile/src/lib/assetImageSource.ts", '"t3-attachment:"'],
+    ]) {
+      expect(applyTextRules(path!, text!, TEXT_RULES).text).toBe(text);
+      expect(findResidue(path!, text!, KEEP_RULES)).toEqual([]);
+    }
+    expect(
+      findResidue("apps/web/src/unrelated.ts", "t3ConnectTroubleshootingUrl", KEEP_RULES),
+    ).not.toEqual([]);
+  });
+});
+
+it("wire rules exclude tests, protected paths and every line containing the product phrase", () => {
+  const input = 't3_code_development __t3RenderCounterStart "t3-preview" `t3-cli-1`';
+  for (const path of [
+    "apps/server/src/provider/CodexDeveloperInstructions.test.ts",
+    "packages/ssh/src/runtimeOwnershipScripts.ts",
+    "apps/server/src/sshRemote/runtime.ts",
+    "apps/server/src/orchestration-v2/Orchestrator.ts",
+    "AGENTS.md",
+    "apps/marketing/page.ts",
+    ".repos/example.ts",
+    "devlog/example.md",
+  ]) {
+    expect(applyTextRules(path, input, WIRE_TEXT_RULES).text).toBe(input);
+  }
+  for (const [path, name] of [
+    ["apps/server/src/provider/CodexDeveloperInstructions.ts", "t3_code_runtime"],
+    ["apps/mobile/src/features/development/render-counter.ts", "__t3RenderCounterStart"],
+    ["apps/server/src/preview/ServerBrowser.ts", '"t3-preview-clipboard"'],
+    ["apps/server/src/mcp/AcpMcpStdioBridge.ts", "`t3-cli-1`"],
+  ]) {
+    for (const text of [`T3 Code ${name}`, `${name} T3 Code`])
+      expect(applyTextRules(path!, text, WIRE_TEXT_RULES).text).toBe(text);
+  }
+  expect(
+    applyTextRules("packages/ssh/src/auth.ts", '"T3CODE_SSH_AUTH_SECRET"', TEXT_RULES).text,
+  ).toBe('"GOAT_SSH_AUTH_SECRET"');
 });
