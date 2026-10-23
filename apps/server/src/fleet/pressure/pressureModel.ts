@@ -786,7 +786,7 @@ export function pressureNudgeText(input: PressureTextInput): {
         ")" +
         (level === "critical"
           ? "; start the next ones there" +
-            (target.host === null ? "." : " with ssh.thread_launch.")
+            (target.host === null ? "." : ' with goat_call {path: "ssh.thread_launch"}.')
           : ".");
   return {
     summary: where + " is under " + level + " resource pressure",
@@ -801,7 +801,7 @@ export function pressureNudgeText(input: PressureTextInput): {
           ? "Pause or queue new heavy lanes there and let running ones finish. "
           : "Avoid starting more heavy lanes there. ") +
         next,
-      'goat_call {path: "host.status", args: {placement: {}}} ranks hosts and lists what runs on each.',
+      'goat_call {path: "host.status", args: {placement: {}}} ranks hosts; goat_call {path: "thread.watch_list"} lists the threads this thread started.',
     ].join("\n"),
   };
 }

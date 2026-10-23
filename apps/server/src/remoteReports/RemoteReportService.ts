@@ -326,7 +326,7 @@ const make = Effect.gen(function* () {
           commandId: CommandId.make(`server:${key}`),
           threadId: launcherId,
           messageId: MessageId.make(`message:${key}`),
-          text: `${text}\nRead the thread with goat_call {path: "thread.read", args: {threadId: "${threadId}"}} and answer it with thread.send.`,
+          text: `${text}\nRead the thread with goat_call {path: "thread.read", args: {threadId: "${threadId}"}} and answer it with goat_call {path: "thread.send"}.`,
           attachments: [],
           createdBy: "agent",
           creationSource: "server",

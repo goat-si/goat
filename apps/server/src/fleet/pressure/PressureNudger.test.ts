@@ -194,7 +194,9 @@ describe("PressureNudger.tick", () => {
       const text = woken?.type === "message.dispatch" ? woken.text : "";
       expect(text).toContain("started by this thread");
       expect(text).toContain("macmini has room (load 0.1 per core, 0 threads running or queued)");
-      expect(text).toContain("start the next ones there with ssh.thread_launch");
+      expect(text).toContain(
+        'start the next ones there with goat_call {path: "ssh.thread_launch"}',
+      );
       expect(text.split("\n")).toHaveLength(3);
 
       yield* TestClock.adjust(MIN);

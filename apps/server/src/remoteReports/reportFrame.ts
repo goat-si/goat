@@ -82,4 +82,4 @@ export const remoteTaskQuestionNotice = (input: {
   readonly threadId: string;
   readonly requestId: string;
 }) =>
-  `Delegated task ${input.taskId} on ${input.host} is waiting on a question. Read it with goat_call {path: "pending_request.read", args: {host: "${input.host}", threadId: "${input.threadId}", requestId: "${input.requestId}"}} and answer with pending_request.respond using the same host, threadId, and requestId (reason required) if you can decide, or forward it to the user.`;
+  `Delegated task ${input.taskId} on ${input.host} is waiting on a question. Read it with goat_call {path: "pending_request.read", args: {host: "${input.host}", threadId: "${input.threadId}", requestId: "${input.requestId}"}} and answer with goat_call {path: "pending_request.respond"} using the same host, threadId, and requestId plus a reason if you can decide, or forward it to the user.`;

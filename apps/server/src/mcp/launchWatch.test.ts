@@ -200,7 +200,7 @@ it.effect("question messages give concrete local and remote pending-tool argumen
       'goat_call {path: "pending_request.read", args: {host: "box", threadId: "target-thread", requestId: "request-1"}}',
     );
     expect(question("box").text).toContain(
-      "pending_request.respond using the same host, threadId, and requestId (reason required)",
+      'goat_call {path: "pending_request.respond", args: {host, threadId, requestId, reason}}',
     );
     expect(question("box").text).toContain("forward it to the user");
     for (const host of [null, "box"]) {
