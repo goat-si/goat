@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "./registry.ts";
+import { canonicalToolAliases } from "./resolve.ts";
 
 type Entry = (typeof agentSurfaceRegistry)[keyof typeof agentSurfaceRegistry];
 const entries: ReadonlyArray<Entry> = Object.values(agentSurfaceRegistry);
@@ -139,6 +140,16 @@ describe("agent surface grammar", () => {
         owner.set(name, entry.path);
       }
     }
+  });
+
+  it("aliases exactly the off-grammar names by their canonical names, shadowing no served name", () => {
+    const served = new Set<string>(entries.map((entry) => entry.name));
+    for (const legacy of OFF_GRAMMAR_NAMES) {
+      const owner = entries.find((entry) => entry.legacyNames.includes(legacy))!;
+      expect(canonicalToolAliases.get(mcpName(owner)), legacy).toBe(owner.name);
+    }
+    expect(canonicalToolAliases.size).toBe(OFF_GRAMMAR_NAMES.length);
+    for (const alias of canonicalToolAliases.keys()) expect(served.has(alias), alias).toBe(false);
   });
 });
 

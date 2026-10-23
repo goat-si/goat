@@ -6,9 +6,8 @@ export const canonicalToolName = (entry: Pick<AgentSurfaceEntry, "resource" | "v
   `goat_${entry.resource}_${entry.verb}`;
 
 const byName = new Map<string, AgentSurfaceRegistryEntry>();
-for (const value of Object.values(
-  agentSurfaceRegistry,
-) as ReadonlyArray<AgentSurfaceRegistryEntry>) {
+const entries = Object.values(agentSurfaceRegistry) as ReadonlyArray<AgentSurfaceRegistryEntry>;
+for (const value of entries) {
   byName.set(value.path, value);
   byName.set(canonicalToolName(value), value);
   for (const legacy of value.legacyNames) byName.set(legacy, value);
@@ -18,3 +17,14 @@ for (const value of Object.values(
 export const resolveAgentSurfaceEntry = (
   pathOrName: string,
 ): AgentSurfaceRegistryEntry | undefined => byName.get(pathOrName);
+
+/**
+ * Canonical names a served tool also answers to, mapped to the name it is served under. /mcp
+ * accepts them in tools/call and leaves them out of tools/list until the listing flip
+ * (docs/internals/agent-surface.md#rollout, step 10). The meta tools keep their short names.
+ */
+export const canonicalToolAliases: ReadonlyMap<string, string> = new Map(
+  entries
+    .filter((entry) => entry.resource !== "surface" && canonicalToolName(entry) !== entry.name)
+    .map((entry) => [canonicalToolName(entry), entry.name] as const),
+);

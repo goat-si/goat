@@ -109,6 +109,7 @@ export * from "./clientRpcPermissions.ts";
 export * from "./memory.ts";
 
 export * from "./handoff.ts";
+export * from "./humanStepResult.ts";
 
 export * from "./permissionProfiles.ts";
 export * from "./goatclawLanes.ts";

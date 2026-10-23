@@ -315,6 +315,21 @@ describe("fromToolResult", () => {
         write,
       ),
     ).toEqual({ status: "needs_human", handoff });
+    // request_secret with wait:false: the agent calls again once the person entered the value.
+    expect(
+      fromToolResult(
+        {
+          structuredContent: {
+            kind: "needs_human",
+            status: "pending",
+            handoff,
+            next: { after: "input", call: "request_secret" },
+          },
+          content: [],
+        },
+        write,
+      ),
+    ).toEqual({ status: "needs_human", handoff, next: { after: "input", path: "request_secret" } });
   });
 
   it("keeps a needs_human-looking value without a valid handoff as ok", () => {
