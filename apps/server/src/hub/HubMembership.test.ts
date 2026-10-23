@@ -306,6 +306,7 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
         };
       }),
     inboxItems: inbox.list(owner, {}),
+    consumed: sql<{ readonly approval_id: string }>`SELECT approval_id FROM approval_consumptions`,
     offer: (fingerprint: string) => {
       offered = fingerprint;
     },
@@ -904,5 +905,32 @@ it.effect(
         .join(scope, { deviceAlias: "lidge-ts", decisionId: asked.decisionId! })
         .pipe(Effect.flip);
       expect(refused.message).toContain("answered by an agent");
+    }),
+);
+
+it.effect(
+  "a decision an agent filed itself does not approve a hub change, even when a person answers it",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ profile: "hub-admin" });
+      const lookalike = yield* hub.inbox.create(
+        { kind: "agent", scope },
+        {
+          title: "Join lidge-ts to the hub",
+          context: `Looks routine.\n\n${HubMembership.decisionBinding("join", "lidge-ts", PINNED)}`,
+          options: [
+            { id: "approve", label: "Approve", consequence: "Joins." },
+            { id: "decline", label: "Decline", consequence: "Nothing changes." },
+          ],
+          requiredProfile: "owner",
+        },
+      );
+      yield* hub.approve(lookalike.id);
+      const refused = yield* hub.membership
+        .join(scope, { deviceAlias: "lidge-ts", decisionId: lookalike.id })
+        .pipe(Effect.flip);
+      expect(refused.message).toContain("not asked by GOAT");
+      expect(hub.calls.some((call) => call.includes("link add"))).toBe(false);
+      expect(yield* hub.consumed).toEqual([]);
     }),
 );
