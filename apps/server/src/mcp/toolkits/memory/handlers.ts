@@ -1,7 +1,6 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as MemoryAccess from "../../../memory/MemoryAccess.ts";
 import * as MemoryService from "../../../memory/MemoryService.ts";
 import * as MemorySyncService from "../../../memory/MemorySyncService.ts";
@@ -9,7 +8,6 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { MemoryToolkit } from "./tools.ts";
 
-const isProfileError = Schema.is(M.OrchestratorMcpFailure);
 const isMemoryError = Schema.is(M.MemoryRpcError);
 const isCapacityDimension = Schema.is(M.MemoryCapacityDimension);
 const isCapacity = Schema.is(M.MemoryCapacityExceeded);
@@ -109,113 +107,103 @@ const callerThread = Effect.gen(function* () {
     ? { environmentId: caller.environmentId, threadId: caller.thread.threadId }
     : undefined;
 });
-const makeHandlers = Effect.gen(function* () {
-  const profiles = yield* Profiles.PermissionProfiles;
-  const writePermit = Effect.gen(function* () {
-    const scope = yield* McpInvocationContext.McpInvocationContext;
-    // threads.launch is the baseline worker capability; memory still needs its own write grant.
-    if (scope.thread !== undefined) yield* profiles.require(scope, "threads.launch");
-    return yield* invocationPermit("write");
-  });
-  const writeError = (error: unknown) => (isProfileError(error) ? error : memoryError(error));
-  return {
-    memory_search: McpToolAccess.reads((input) =>
+const handlers = {
+  memory_search: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryService.MemoryService;
+      return yield* service.search(
+        yield* decodeSearch(input),
+        yield* invocationPermit("read"),
+        yield* callerThread,
+      );
+    }).pipe(Effect.mapError(memoryError)),
+  ),
+  memory_list: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryService.MemoryService;
+      return yield* service.list(
+        yield* decodeList(input),
+        yield* invocationPermit("read"),
+        yield* callerThread,
+      );
+    }).pipe(Effect.mapError(memoryError)),
+  ),
+  memory_read: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryService.MemoryService;
+      return yield* service.read(
+        yield* decodeRead(input),
+        yield* invocationPermit("read"),
+        yield* callerThread,
+      );
+    }).pipe(Effect.mapError(memoryError)),
+  ),
+  memory_read_source: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryService.MemoryService;
+      return yield* service.readSource(
+        yield* decodeReadSource(input),
+        yield* invocationPermit("source"),
+        yield* callerThread,
+      );
+    }).pipe(Effect.mapError(memoryError)),
+  ),
+  memory_history: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryService.MemoryService;
+      return yield* service.history(
+        yield* decodeHistory(input),
+        yield* invocationPermit("read"),
+        yield* callerThread,
+      );
+    }).pipe(Effect.mapError(memoryError)),
+  ),
+  memory_sync_status: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemorySyncService.MemorySyncService;
+      // Agents read the JSON directly, so they always get the generation hold.
+      return yield* service.syncStatus(
+        { ...(yield* decodeSyncStatus(input)), includeGenerationHold: true },
+        yield* invocationPermit("read"),
+      );
+    }).pipe(Effect.mapError(memoryError)),
+  ),
+  memory_upsert: McpToolAccess.writesWithCapability((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryService.MemoryService;
+      const caller = yield* McpInvocationContext.McpInvocationContext;
+      return yield* service
+        .upsert(
+          yield* decodeUpsert(input),
+          yield* invocationPermit("write"),
+          caller.thread
+            ? { environmentId: caller.environmentId, threadId: caller.thread.threadId }
+            : undefined,
+        )
+        .pipe(Effect.flatMap((stored) => receipt(stored.receipt)));
+    }).pipe(Effect.mapError(memoryError)),
+  ),
+  memory_forget: McpToolAccess.destructive(
+    McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
         const service = yield* MemoryService.MemoryService;
-        return yield* service.search(
-          yield* decodeSearch(input),
-          yield* invocationPermit("read"),
-          yield* callerThread,
-        );
-      }).pipe(Effect.mapError(memoryError)),
-    ),
-    memory_list: McpToolAccess.reads((input) =>
-      Effect.gen(function* () {
-        const service = yield* MemoryService.MemoryService;
-        return yield* service.list(
-          yield* decodeList(input),
-          yield* invocationPermit("read"),
-          yield* callerThread,
-        );
-      }).pipe(Effect.mapError(memoryError)),
-    ),
-    memory_read: McpToolAccess.reads((input) =>
-      Effect.gen(function* () {
-        const service = yield* MemoryService.MemoryService;
-        return yield* service.read(
-          yield* decodeRead(input),
-          yield* invocationPermit("read"),
-          yield* callerThread,
-        );
-      }).pipe(Effect.mapError(memoryError)),
-    ),
-    memory_read_source: McpToolAccess.reads((input) =>
-      Effect.gen(function* () {
-        const service = yield* MemoryService.MemoryService;
-        return yield* service.readSource(
-          yield* decodeReadSource(input),
-          yield* invocationPermit("source"),
-          yield* callerThread,
-        );
-      }).pipe(Effect.mapError(memoryError)),
-    ),
-    memory_history: McpToolAccess.reads((input) =>
-      Effect.gen(function* () {
-        const service = yield* MemoryService.MemoryService;
-        return yield* service.history(
-          yield* decodeHistory(input),
-          yield* invocationPermit("read"),
-          yield* callerThread,
-        );
-      }).pipe(Effect.mapError(memoryError)),
-    ),
-    memory_sync_status: McpToolAccess.reads((input) =>
-      Effect.gen(function* () {
-        const service = yield* MemorySyncService.MemorySyncService;
-        // Agents read the JSON directly, so they always get the generation hold.
-        return yield* service.syncStatus(
-          { ...(yield* decodeSyncStatus(input)), includeGenerationHold: true },
-          yield* invocationPermit("read"),
-        );
-      }).pipe(Effect.mapError(memoryError)),
-    ),
-    memory_upsert: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const service = yield* MemoryService.MemoryService;
-        const caller = yield* McpInvocationContext.McpInvocationContext;
         return yield* service
-          .upsert(
-            yield* decodeUpsert(input),
-            yield* writePermit,
-            caller.thread
-              ? { environmentId: caller.environmentId, threadId: caller.thread.threadId }
-              : undefined,
-          )
+          .forget(yield* decodeForget(input), yield* invocationPermit("write"))
           .pipe(Effect.flatMap((stored) => receipt(stored.receipt)));
-      }).pipe(Effect.mapError(writeError)),
+      }).pipe(Effect.mapError(memoryError)),
     ),
-    memory_forget: McpToolAccess.destructive(
-      McpToolAccess.writesWithCapability((input) =>
-        Effect.gen(function* () {
-          const service = yield* MemoryService.MemoryService;
-          return yield* service
-            .forget(yield* decodeForget(input), yield* writePermit)
-            .pipe(Effect.flatMap((stored) => receipt(stored.receipt)));
-        }).pipe(Effect.mapError(writeError)),
-      ),
+  ),
+  memory_revert_resolution: McpToolAccess.destructive(
+    McpToolAccess.writesWithCapability((input) =>
+      Effect.gen(function* () {
+        const service = yield* MemoryService.MemoryService;
+        return yield* service.revertResolution(
+          yield* decodeRevertResolution(input),
+          yield* invocationPermit("write"),
+          yield* callerThread,
+        );
+      }).pipe(Effect.mapError(memoryError)),
     ),
-    memory_revert_resolution: McpToolAccess.destructive(
-      McpToolAccess.writesWithCapability((input) =>
-        Effect.gen(function* () {
-          const service = yield* MemoryService.MemoryService;
-          return yield* service.revertResolution(
-            yield* decodeRevertResolution(input),
-            yield* writePermit,
-            yield* callerThread,
-          );
-        }).pipe(Effect.mapError(writeError)),
-      ),
-    ),
-  } satisfies McpToolAccess.Handlers<typeof MemoryToolkit.tools>;
-});
-export const layer = McpToolAccess.toLayer(MemoryToolkit, makeHandlers);
+  ),
+} satisfies McpToolAccess.Handlers<typeof MemoryToolkit.tools>;
+export const layer = McpToolAccess.toLayer(MemoryToolkit, handlers);
