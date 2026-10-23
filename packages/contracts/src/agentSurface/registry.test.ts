@@ -143,7 +143,7 @@ describe("agent surface grammar", () => {
   });
 
   it("aliases exactly the off-grammar names by their canonical names, shadowing no served name", () => {
-    const served = new Set(entries.map((entry) => entry.name));
+    const served = new Set<string>(entries.map((entry) => entry.name));
     for (const legacy of OFF_GRAMMAR_NAMES) {
       const owner = entries.find((entry) => entry.legacyNames.includes(legacy))!;
       expect(canonicalToolAliases.get(mcpName(owner)), legacy).toBe(owner.name);
