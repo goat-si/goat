@@ -8,7 +8,9 @@ export const environmentEntries = {
     toolkit: "environment",
     summary: "Read this server's identity and selected environment preferences.",
     description:
-      "Read this server's identity and selected environment preferences. Provider/model availability is exposed by goat_provider_list. Writing instructions are limited to 4,000 characters. standingInstructions is the policy GOAT prepends to the first message of every thread an agent launches here (goat_thread_launch, and goat_ssh_thread_launch from other machines); projectStandingInstructions replaces it for those projects.",
+      "Read this server's identity and selected environment preferences, including standing instructions and project overrides. Custom instructions over 4,000 characters come back truncated. Use goat_provider_list for provider and model availability.",
+    guide:
+      "Returned source-control customInstructions is truncated to 4,000 Unicode characters; truncated indicates whether text was cut.\n\nGOAT prepends standingInstructions to the first message of agent-launched threads by default, through goat_thread_launch and goat_ssh_thread_launch from other machines. A launch can disable this with standingInstructions:false. Project standing instructions replace the environment policy for that project.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -27,7 +29,9 @@ export const environmentEntries = {
     summary:
       "Update selected environment-wide preferences through normal settings persistence and notifications.",
     description:
-      "Update selected environment-wide preferences through normal settings persistence and notifications. Requires a live full-access/default calling thread. Omitted fields are preserved; empty customInstructions clears them. Empty standingInstructions clears them. In projectStandingInstructions, a project's text replaces the environment's for threads launched in that project (empty turns them off there) and null removes the override.",
+      "Update selected environment-wide preferences, including standing instructions and their project overrides.",
+    guide:
+      "Use a live full-access/default calling thread or a full-access client. Omitted fields stay unchanged. Empty customInstructions or standingInstructions clears that text.\n\nIn projectStandingInstructions, project text replaces the environment policy for launches in that project. An empty string disables it there; null removes the override and restores inheritance.\n\nUpdates go through normal settings persistence and change notifications.",
     effect: "destructive",
     capability: "settings.write",
     hostRoutable: false,
