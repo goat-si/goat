@@ -106,8 +106,10 @@ export const withCallerListing = (listing: Effect.Effect<AgentToolListing>) =>
     if (request.method !== "POST") return yield* httpEffect;
     // The body is read once and cached, so the MCP server reads this same text afterwards.
     const body = yield* Effect.option(request.text);
-    // A cheap guard only: JSON may escape the slash ("tools\/list"), so the decoded method decides.
-    if (Option.isNone(body) || !body.value.includes("tools")) return yield* httpEffect;
+    // A cheap guard only, so it must pass every spelling of the method: JSON writes "tools" either
+    // literally or with \u escapes ("to\u006fls"), and the decoded method then decides.
+    if (Option.isNone(body) || !(body.value.includes("tools") || body.value.includes("\\u")))
+      return yield* httpEffect;
     const call = Option.getOrUndefined(decodeJson(body.value));
     if (!isRecord(call) || call.method !== "tools/list") return yield* httpEffect;
     const scope = yield* McpInvocationContext.McpInvocationContext;

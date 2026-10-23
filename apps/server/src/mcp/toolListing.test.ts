@@ -160,3 +160,15 @@ it.effect("filters a tools/list answer sent as SSE, buffered or streamed", () =>
     }
   }),
 );
+
+it.effect("filters a tools/list whose method JSON spells with unicode escapes", () =>
+  Effect.gen(function* () {
+    const http = yield* serveCatalogOverHttp(callers, "core");
+    const escaped = yield* http.listTools("thread", (body) =>
+      body.replace('"tools/list"', '"to\\u006fls\\u002flist"'),
+    );
+    expect(names(escaped)).toEqual(
+      listed((entry) => "listing" in entry && entry.listing === "core"),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
