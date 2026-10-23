@@ -31,7 +31,7 @@ import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
-  getDesktopUpdateDisabledReason,
+  getDesktopUpdateIdleDescription,
   getDesktopUpdateStatusText,
   getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
@@ -292,7 +292,7 @@ function AboutVersionSection() {
     updateState?.installationNotice ??
     (action === "download" || action === "install"
       ? "Update available."
-      : (getDesktopUpdateDisabledReason(updateState) ?? "Current version of the application."));
+      : getDesktopUpdateIdleDescription(updateState));
 
   return (
     <>

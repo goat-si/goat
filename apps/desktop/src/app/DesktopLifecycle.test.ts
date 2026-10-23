@@ -14,6 +14,7 @@ import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+import { UPDATE_CHECK_SETTLE_WAIT } from "../updates/updateFailures.ts";
 import { createInitialDesktopUpdateState } from "../updates/updateMachine.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
@@ -129,9 +130,9 @@ function layerUpdates(input: Partial<DesktopUpdates.DesktopUpdates["Service"]> =
 }
 
 describe("DesktopLifecycle", () => {
-  it.effect(
-    "serializes install-on-quit and waits for updater-controlled quit without shutdown",
-    () =>
+  it.effect.each(["install-on-quit", "restart-when-idle"] as const)(
+    "installs a downloaded update on quit under %s and waits for updater-controlled quit without shutdown",
+    (installPolicy) =>
       Effect.gen(function* () {
         const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
         const installationStarted = yield* Deferred.make<void>();
@@ -140,16 +141,18 @@ describe("DesktopLifecycle", () => {
         const events: string[] = [];
         const updateState = {
           ...initialUpdateState,
-          installPolicy: "install-on-quit" as const,
+          installPolicy,
           downloadedVersion: "1.2.4",
         };
         const layer = DesktopLifecycle.layer.pipe(
           Layer.provideMerge(
             layerUpdates({
               getState: Effect.succeed(updateState),
-              installPrepared: (version) =>
+              installPrepared: (version, options) =>
                 Effect.gen(function* () {
                   assert.equal(version, "1.2.4");
+                  assert.isTrue(options?.waitForCheck);
+                  assert.strictEqual(options?.checkWait, UPDATE_CHECK_SETTLE_WAIT);
                   events.push("install");
                   yield* Deferred.succeed(installationStarted, undefined);
                   yield* Deferred.await(allowInstallation);

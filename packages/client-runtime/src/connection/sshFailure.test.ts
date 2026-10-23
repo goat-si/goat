@@ -51,7 +51,7 @@ describe("sshPreparationFailure", () => {
   });
 
   it.each([
-    "mbp runs a newer GOAT (0.3.0). Update this app from the update button above Settings.",
+    "mbp runs a newer GOAT (0.3.0). Update this app from the update button next to Settings.",
     "Live GOAT PID=812 port=3773 is incompatible; it was left running. Upgrade with the owning client or reconnect.",
     "Remote runtime GOAT 0.1.0-dev.abc cannot be ordered against this app (GOAT 0.1.0-dev.def); it was left running. Stop it on the remote host when its work is done, then reconnect.",
     "Cannot verify remote version ordering; process was preserved.",

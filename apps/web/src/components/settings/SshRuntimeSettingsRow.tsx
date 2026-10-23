@@ -16,6 +16,7 @@ import {
 import { useContext, useEffect, useRef, useState } from "react";
 
 import { sshRuntime } from "~/state/sshRuntime";
+import { useCheckForUpdateWhenHostIsNewer } from "../sidebar/newerHostUpdateCheck";
 import { Button } from "../ui/button";
 import {
   AlertDialog,
@@ -73,6 +74,7 @@ function SshRuntimeSettingsRowContent({
   const [input] = useState(() => ({ environmentId, target: { alias, hostname, username, port } }));
   const result = useAtomValue(sshRuntime.statusAtom(input));
   const status = result?.status;
+  useCheckForUpdateWhenHostIsNewer([status?.runtimeVersion]);
   const phase =
     preparationProgress !== undefined
       ? preparationProgress.phase
