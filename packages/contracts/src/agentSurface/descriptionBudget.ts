@@ -62,8 +62,6 @@ export const DESCRIPTIONS_OVER_BUDGET: Readonly<Record<string, number>> = {
   "ssh.runtime_update": 644,
   "ssh.thread_handoff": 684,
   "ssh.thread_launch": 2028,
-  "surface.call": 573,
-  "surface.describe": 602,
   "task.cancel": 847,
   "task.create": 4551,
   "task.read": 1541,
