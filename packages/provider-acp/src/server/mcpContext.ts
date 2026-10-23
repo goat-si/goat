@@ -28,7 +28,7 @@ export function acpMcpContext(
   // Agents that advertise optional http support still routinely fail to wire
   // injected http servers through to their backend (codex-acp 1.2.0 and pi-acp
   // both drop them), so every ACP session gets the `goat acp-mcp-bridge` stdio
-  // server, which forwards JSON-RPC to T3's authenticated MCP endpoint. The
+  // server, which forwards JSON-RPC to GOAT's authenticated MCP endpoint. The
   // managed Cua Driver is already a stdio server, so it is listed in both
   // forms: an agent with MCP-over-ACP receives only `acpServers`.
   const cua = McpProviderSession.cuaAcpMcpServers(session);

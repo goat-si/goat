@@ -2768,7 +2768,7 @@ describe("OpenCodeAdapterV2", () => {
         yield* harness.startTurn("ordinary after command");
         assert.equal(refreshes, 1);
         assert.include(prompts[0]?.system ?? "", memoryContextText(wp4Snapshot()));
-        assert.include(prompts[0]?.system ?? "", `read=${change === "replace"}`);
+        assert.equal(/tools: read=true/.test(prompts[0]?.system ?? ""), change === "replace");
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),

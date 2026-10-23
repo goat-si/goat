@@ -1447,9 +1447,9 @@ describe("OrchestratorMcpService provider resolution", () => {
             assert.match(command.task, /runtime mode auto \(ceiling: auto\)/);
             assert.match(command.task, /shared lane limit of the thread that started/);
             assert.match(command.task, /cannot widen/);
-            assert.match(command.task, /goat_thread_report_result/);
-            assert.match(command.task, /goat_origin_report reaches it/);
-            assert.match(command.task, /goat_decision_request/);
+            assert.include(command.task, 'goat_call {path:"thread.report_result"}');
+            assert.include(command.task, 'goat_call {path:"origin.report"} reaches it');
+            assert.include(command.task, 'goat_call {path:"decision.request"}');
             assert.deepEqual(yield* sql`SELECT profile_id FROM goatclaw_thread_profiles`, [
               { profile_id: "worker" },
             ]);
@@ -4144,7 +4144,7 @@ describe("OrchestratorMcpService thread interrupt", () => {
             .retryThread(scope, { threadId: childThreadId })
             .pipe(Effect.flip);
           assert.equal(error.code, "invalid_request");
-          assert.include(error.message, "goat_thread_send");
+          assert.include(error.message, 'goat_call {path:"thread.send"}');
           assert.equal(retries.length, 0);
         }),
       ),

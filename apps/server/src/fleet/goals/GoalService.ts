@@ -1,4 +1,5 @@
 import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 /**
  * The goal tools' service (docs/internals/agentic-k8s.md, "Agent and client surface" and
  * "Authority and safety"). A goal acts as the thread that declares it, so applying is where
@@ -70,7 +71,7 @@ const storeFailure = (error: GoalStoreError) =>
 const notFound = (id: string) =>
   new OrchestratorMcpFailure({
     code: "not_found",
-    message: "No goal " + id + ". goat_goal_list shows yours.",
+    message: "No goal " + id + `. ${goatCallText("goal.list")} shows yours.`,
   });
 
 const encodeSpec = Schema.encodeSync(FleetGoalSpec);

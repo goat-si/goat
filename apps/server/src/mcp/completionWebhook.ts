@@ -25,6 +25,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { backoffMs, type LaunchWatch, type LaunchWatchWebhookTarget } from "./launchWatch.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * Posts launch watch reports to a webhook, so an agent outside GOAT hears what
@@ -574,7 +575,7 @@ export const make = Effect.gen(function* () {
       }
       if (input.projectId === null) {
         return yield* refuse(
-          "secretRef comes from goat_handoff_create in a GOAT thread; call from one.",
+          `secretRef comes from ${goatCallText("handoff.create")} in a GOAT thread; call from one.`,
         );
       }
       const value = yield* secretRequests

@@ -1,5 +1,7 @@
 import * as NodeAssert from "node:assert/strict";
 
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { listedToolName } from "@goat/contracts/agentSurface/resolve";
 import {
   GOAT_ORCHESTRATION_INSTRUCTIONS,
   GOAT_ORCHESTRATION_SECTIONS,
@@ -68,6 +70,26 @@ describe("buildCodexAdditionalContext", () => {
       kind: "application",
       value: GOAT_DEVELOPMENT_INSTRUCTIONS,
     });
+  });
+
+  it("names only tools and paths the GOAT registry has", () => {
+    const entries = Object.values(agentSurfaceRegistry);
+    const listed = new Set(entries.map(listedToolName));
+    const paths = new Set<string>(entries.map((entry) => entry.path));
+    const context = buildCodexAdditionalContext(
+      { model: "gpt-5.3-codex", reasoningEffort: "high" },
+      { browser: true, device: true, computerUse: true },
+    );
+    for (const [key, entry] of Object.entries(context)) {
+      for (const name of entry.value.match(/\bgoat_[a-z_]+\b/g) ?? []) {
+        NodeAssert.ok(listed.has(name), `${key} names ${name}, which no GOAT tool is listed as`);
+      }
+      // Any quoted resource.verb is meant as a path, so a misspelled resource fails too.
+      // `tools.<name>` is Codex code mode's tool namespace, not a GOAT path.
+      for (const [, path] of entry.value.matchAll(/`((?!tools\.)[a-z_]+\.[a-z_]+)`/g)) {
+        NodeAssert.ok(paths.has(path!), `${key} names ${path}, which is not a GOAT path`);
+      }
+    }
   });
 });
 

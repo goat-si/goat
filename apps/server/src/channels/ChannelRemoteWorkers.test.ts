@@ -2878,7 +2878,7 @@ describe("what a worker on another machine is told", () => {
         assert.include(message, '<goat_bot_skill name="deploy-staging">\n# Deploy staging');
         assert.notInclude(message, "Unrelated");
         assert.include(message, "ask first: show the draft or plan in a needs_input report.");
-        assert.include(message, "goat_origin_report with status progress");
+        assert.include(message, 'goat_call {path:"origin.report"} with status progress');
         // The home machine's paths mean nothing over there.
         assert.notInclude(message, files.notes);
         const ledger = yield* ChannelLedger.ChannelLedger;

@@ -410,13 +410,13 @@ function briefExcerpt(text: string): { readonly text: string; readonly cut: bool
  * replayed after a crash between dispatch and the state write is a receipt
  * replay, not a second message.
  */
-const wakeIds = (watch: LaunchWatch, event: string) => {
-  const key = `launch-watch:${watch.id}:${event}`;
-  return {
-    commandId: CommandId.make(`server:${key}`),
-    messageId: MessageId.make(`message:${key}`),
-  };
-};
+/** Every launch-watch wake's message id starts here; TurnDigest reads the lane from it. */
+export const LAUNCH_WATCH_MESSAGE_PREFIX = "message:launch-watch:";
+
+const wakeIds = (watch: LaunchWatch, event: string) => ({
+  commandId: CommandId.make(`server:launch-watch:${watch.id}:${event}`),
+  messageId: MessageId.make(`${LAUNCH_WATCH_MESSAGE_PREFIX}${watch.id}:${event}`),
+});
 
 export function finishedWake(input: {
   readonly watch: LaunchWatch;

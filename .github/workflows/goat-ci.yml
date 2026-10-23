@@ -83,6 +83,10 @@ jobs:
           # The scope script only needs Node.
           run-install: false
 
+      # Source names are a whole-tree gate, independent of the affected-file matrix and lane.
+      - name: Check upstream name recurrence
+        run: node scripts/goat-rename.ts --check --limit 200
+
       - name: Select tasks
         id: scope
         env:
@@ -305,7 +309,7 @@ jobs:
         if: matrix.task == 'test'
         run: >-
           node --test .github/scripts/pr-screenshot-gate.test.cjs .github/scripts/goat-ci-scope.test.cjs
-          .github/scripts/goat-ci-imports.test.cjs
+          .github/scripts/goat-ci-imports.test.cjs .github/scripts/goat-rename-gate.test.cjs
 
       # Plain shell, so the check still runs when a runner's node cannot load TypeScript.
       # A leftover goat-test-* sandbox means a test worker died before its file finished.

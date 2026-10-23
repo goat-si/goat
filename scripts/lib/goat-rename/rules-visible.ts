@@ -43,18 +43,49 @@ export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
   {
     id: "visible-cli-command",
     category: "visible-copy",
-    // Only executable subcommands registered by binCli.ts; connect is gated and
-    // its onboarding guidance needs an explicit decision rather than a rename.
-    // "t3 project cli" is a session label; pinnedRuntime documents legacy launchers.
+    // Executable subcommands registered by binCli.ts. "t3 project cli" is a session label;
+    // connect onboarding stays gated, while the runtime comments below describe existing calls.
     find: /\b(?:npx )?t3 (?!project cli\b)(?=(?:serve|start|pair|doctor|theme|triage|project|auth|browser|service|update|uninstall|trace|provider|thread|imessage|app|help)\b)/g,
     replace: "goat ",
     scope: (path) =>
-      (isCopySurface(path) && path !== "apps/server/src/cloud/pinnedRuntime.ts") ||
+      isCopySurface(path) ||
+      path === "packages/contracts/src/settings.ts" ||
       path === ".agents/skills/contribution-triage/SKILL.md",
+  },
+  {
+    id: "visible-cli-launcher-comment",
+    category: "visible-copy",
+    find: /(?<=^[ \t]*(?:\/\/|\/\*\*?|\*)[^\n]*`)t3(?=(?:\.cmd)?`)/g,
+    replace: "goat",
+    scope: (path) =>
+      [
+        "apps/server/src/cli/consoleStdin.ts",
+        "apps/server/src/cloud/pinnedRuntime.ts",
+        "apps/server/src/persistence/DatabaseStorage.ts",
+        "apps/server/src/serverRuntimeStartup.ts",
+      ].includes(path),
+  },
+  {
+    id: "visible-cli-connect-comment",
+    category: "visible-copy",
+    find: /(?<=^[ \t]*\/\/[^\n]*`)t3(?= connect\b)/g,
+    replace: "goat",
+    scope: (path) =>
+      path === "apps/server/src/environment/ServerEnvironment.ts" ||
+      path === "apps/server/src/relay/AgentAwarenessRelay.ts",
   },
 ];
 
 export const VISIBLE_KEEP_RULES: readonly KeepRule[] = [
+  {
+    id: "legacy-desktop-display-name",
+    pattern: /T3 Code (?:<stage>|\(Alpha\))/g,
+    scope: (path) =>
+      ["apps/desktop/src/app/DesktopSafeStorageKeyMigration.ts", "structure/desktop.md"].includes(
+        path,
+      ),
+    reason: "ADR-0014: encryption-key migration recognizes the old display-name format.",
+  },
   {
     id: "kde-capture-desktop-name",
     pattern: /Name=T3 Code SnapShots/g,

@@ -2,6 +2,7 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import Migration0063 from "../persistence/Migrations/070_RemoteDispatches.ts";
 import Migration0065 from "../persistence/Migrations/072_RemoteDispatchQuestions.ts";
+import Migration0101 from "../persistence/Migrations/101_RemoteReportInboxRunId.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { framePendingReports } from "../remoteReports/reportFrame.ts";
 import { assert, it } from "@effect/vitest";
@@ -3563,8 +3564,7 @@ it.effect.each(["accepted", "rejected", "skipped", "compact"] as const)(
   (scenario) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* Migration0063;
-      yield* Migration0065;
+      for (const migration of [Migration0063, Migration0065, Migration0101]) yield* migration;
       const ids = backgroundScenarioIds(`remote-inbox-${scenario}`);
       const instanceId = ProviderInstanceId.make("codex");
       const seen = yield* Ref.make<ReadonlyArray<string>>([]);

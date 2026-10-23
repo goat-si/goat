@@ -7,6 +7,7 @@ import type {
   PullRequestWatchWakeMode,
   ThreadPullRequestWatch,
 } from "@goat/contracts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * Wakes in a row that bring only comments. Check, conflict, or push news resets the count, so
@@ -262,8 +263,8 @@ function pullRequestWatchMessage(input: {
     ),
     "",
     exhausted
-      ? `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row. Call goat_pull_request_watch to watch it again.`
-      : "Look into each item and act on it as your task requires. GOAT keeps watching and wakes you on the next change, so end your turn when you are done. When you hand the work back to the user, call goat_pull_request_unwatch first so the thread returns to their inbox.",
+      ? `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row. Call ${goatCallText("pull_request.watch")} to watch it again.`
+      : `Look into each item and act on it as your task requires. GOAT keeps watching and wakes you on the next change, so end your turn when you are done. When you hand the work back to the user, call ${goatCallText("pull_request.unwatch")} first so the thread returns to their inbox.`,
   ].join("\n");
   const failed = changes.some(
     (change) => change.kind === "checks-failed" || change.kind === "conflicting",

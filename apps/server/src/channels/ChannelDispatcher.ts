@@ -147,7 +147,7 @@ const turnInstruction = (task: ChannelTask, files: ChannelBotFiles, supervisor: 
     "You are GOAT Bot handling this message yourself. Your summary is your answer to the person: write it in the language of their request, not your default language, short and outcome first.",
     "Look things up directly: read and search files, read GOAT Bot's notes (" +
       files.notes +
-      "), use GOAT memory, and use the channel_task_* and goat_thread_* tools to check the work GOAT Bot started and its threads.",
+      "), use GOAT memory, and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads.",
     GOAT_BOT_ROUTING_RULE,
     GOAT_BOT_READ_ONLY_RULE,
     GOAT_BOT_DISPATCH_RULE,

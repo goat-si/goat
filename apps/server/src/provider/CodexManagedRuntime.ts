@@ -95,7 +95,7 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
           }),
       ),
     );
-    // Ambient CLI overrides cannot redirect a T3-owned token to a different provider.
+    // Ambient CLI overrides cannot redirect a GOAT-owned token to a different provider.
     const environment: NodeJS.ProcessEnv = {
       ...options.environment,
       ACCESS_TOKEN: credentials.accessToken,

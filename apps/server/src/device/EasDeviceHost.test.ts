@@ -88,7 +88,7 @@ const fakeExpo = (
       expect(request.headers.authorization).toBe("Bearer expo-token");
       const operation = /(?:query|mutation) (\w+)/.exec(body.query)?.[1] ?? "unknown";
       calls.push({ operation, variables: body.variables });
-      if (operation === "T3CreateEasSimulatorSession") {
+      if (operation === "GoatCreateEasSimulatorSession") {
         createdName = body.variables.input?.name ?? "";
         if (options.createGate) {
           yield* Deferred.succeed(options.createGate.requested, undefined);
@@ -102,21 +102,21 @@ const fakeExpo = (
             Response.json({ errors: [{ message: "Not allowed" }] }),
           );
       }
-      if (operation === "T3StopEasSimulatorSession" && options.failStop?.()) {
+      if (operation === "GoatStopEasSimulatorSession" && options.failStop?.()) {
         return HttpClientResponse.fromWeb(request, new Response("bad gateway", { status: 502 }));
       }
-      if (operation === "T3ActiveEasSimulatorSessions" && options.failList?.()) {
+      if (operation === "GoatActiveEasSimulatorSessions" && options.failList?.()) {
         return HttpClientResponse.fromWeb(request, new Response("bad gateway", { status: 502 }));
       }
       const sessionGate =
-        operation === "T3EasSimulatorSession" ? options.sessionGate?.() : undefined;
+        operation === "GoatEasSimulatorSession" ? options.sessionGate?.() : undefined;
       if (sessionGate && !sessionGated) {
         sessionGated = true;
         yield* Deferred.succeed(sessionGate.requested, undefined);
         yield* Deferred.await(sessionGate.release);
       }
       const data =
-        operation === "T3EasSimulatorAvailability"
+        operation === "GoatEasSimulatorAvailability"
           ? {
               app: {
                 byId: {
@@ -127,9 +127,9 @@ const fakeExpo = (
                 },
               },
             }
-          : operation === "T3CreateEasSimulatorSession"
+          : operation === "GoatCreateEasSimulatorSession"
             ? { deviceRunSession: { createDeviceRunSession: { id: `session-${++created}` } } }
-            : operation === "T3ActiveEasSimulatorSessions"
+            : operation === "GoatActiveEasSimulatorSessions"
               ? {
                   app: {
                     byId: {
@@ -162,7 +162,7 @@ const fakeExpo = (
                     },
                   },
                 }
-              : operation === "T3EasSimulatorSession"
+              : operation === "GoatEasSimulatorSession"
                 ? {
                     deviceRunSessions: {
                       byId: {
@@ -187,7 +187,7 @@ const fakeExpo = (
     }),
   );
   const named = (operation: string) => calls.filter((call) => call.operation === operation);
-  const stopped = () => named("T3StopEasSimulatorSession").map((call) => call.variables.id);
+  const stopped = () => named("GoatStopEasSimulatorSession").map((call) => call.variables.id);
   const allowPreview = () => {
     previewFails = false;
   };
@@ -223,7 +223,7 @@ describe("EAS Simulator host", () => {
       expect(catalog.map((device) => [device.id, device.booted])).toEqual([["eas-ios", false]]);
 
       expect(yield* ready.devices.boot(catalog[0]!)).toBe("session-1");
-      expect(expo.named("T3CreateEasSimulatorSession")[0]?.variables.input).toMatchObject({
+      expect(expo.named("GoatCreateEasSimulatorSession")[0]?.variables.input).toMatchObject({
         appId: APP_ID,
         platform: "IOS",
         type: "AGENT_DEVICE",
@@ -259,7 +259,7 @@ describe("EAS Simulator host", () => {
       ).toBeNull();
 
       yield* Scope.close(scope, Exit.void);
-      expect(expo.named("T3StopEasSimulatorSession").map((call) => call.variables.id)).toEqual([
+      expect(expo.named("GoatStopEasSimulatorSession").map((call) => call.variables.id)).toEqual([
         "session-1",
       ]);
     }).pipe(Effect.scoped, Effect.provide(layer)),
@@ -276,7 +276,7 @@ describe("EAS Simulator host", () => {
       expect(refused.message).toBe(
         "EAS Simulator is unavailable: EAS Simulator is limited to 1 running session. Close one in the Device panel first.",
       );
-      expect(expo.named("T3CreateEasSimulatorSession")).toHaveLength(1);
+      expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(1);
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
@@ -402,7 +402,7 @@ describe("EAS Simulator host", () => {
       const [catalogDevice] = (yield* ready.devices.list).devices;
       const failure = yield* ready.devices.boot(catalogDevice!).pipe(Effect.flip);
       expect(failure.message).toContain("could not be read");
-      expect(expo.named("T3CreateEasSimulatorSession")).toHaveLength(0);
+      expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(0);
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
@@ -451,7 +451,7 @@ describe("EAS Simulator host", () => {
       const [catalogDevice] = (yield* ready.devices.list).devices;
       const failure = yield* ready.devices.boot(catalogDevice!).pipe(Effect.flip);
       expect(failure.message).toContain("Choose one for this host in Settings");
-      expect(expo.named("T3CreateEasSimulatorSession")).toHaveLength(0);
+      expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(0);
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 

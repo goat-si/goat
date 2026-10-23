@@ -13,8 +13,8 @@ const CONTINUATION_MESSAGE_TEXT = "Background task completed.";
 function delegatedCompletionText(taskIds: ReadonlyArray<string>): string {
   const taskList = taskIds.join(", ");
   return taskIds.length === 1
-    ? `Delegated task ${taskList} reached a terminal state. Use goat_task_read with taskId ${taskList} to read the result.`
-    : `Delegated tasks ${taskList} reached terminal states. Use goat_task_read with each taskId to read the results.`;
+    ? `Delegated task ${taskList} reached a terminal state. Read the result with goat_call {path: "task.read", args: {taskId: "${taskList}"}}.`
+    : `Delegated tasks ${taskList} reached terminal states. Read each result with goat_call {path: "task.read", args: {taskId}}.`;
 }
 
 function currentDelegatedCompletionDelivery(
