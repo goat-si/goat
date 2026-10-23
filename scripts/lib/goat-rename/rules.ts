@@ -526,8 +526,8 @@ export const DROP_RULES: readonly DropRule[] = [
 
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
-  ...RESIDUE_KEEP_RULES,
   ...EXTERNAL_KEEP_RULES,
+  ...RESIDUE_KEEP_RULES,
   ...VISIBLE_KEEP_RULES,
   ...WIRE_KEEP_RULES,
   ...INTERNAL_KEEP_RULES,

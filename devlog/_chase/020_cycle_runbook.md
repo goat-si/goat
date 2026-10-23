@@ -49,9 +49,9 @@ BASE=$(git merge-base origin/dev "$UP")
 git switch -c chase/t3-<YYMMDD> origin/dev
 for side in base:"$BASE" up:"$UP"; do
   name=${side%%:*}; sha=${side#*:}
-  git worktree add --detach "../chase-rename-$name" "$sha"
+  GOAT_WORKTREE_SETUP=0 git -c core.hooksPath=/dev/null worktree add --detach "../chase-rename-$name" "$sha"
   node scripts/goat-rename.ts --apply --root "../chase-rename-$name"
-  git -C "../chase-rename-$name" commit -qam "chore(rename): [script] upstream $name $(git rev-parse --short "$sha")"
+  git -c core.hooksPath=/dev/null -C "../chase-rename-$name" commit --no-verify -qam "chore(rename): [script] upstream $name $(git rev-parse --short "$sha")"
 done
 node scripts/goat-rename.ts --check --root ../chase-rename-up --limit 100000 > /tmp/goat-chase-<YYMMDD>-names.txt
 git merge-recursive "$(git -C ../chase-rename-base rev-parse HEAD)" -- HEAD "$(git -C ../chase-rename-up rev-parse HEAD)"

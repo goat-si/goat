@@ -66,3 +66,50 @@ it("checks a source tree without node_modules, returns failure for new names and
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it("checks untracked source locally, excludes ignored files and keeps explicit roots tracked-only", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-name-untracked-"));
+  try {
+    fs.mkdirSync(path.join(dir, "scripts/lib"), { recursive: true });
+    fs.cpSync(
+      path.join(root, "scripts/lib/goat-rename"),
+      path.join(dir, "scripts/lib/goat-rename"),
+      { recursive: true },
+    );
+    for (const script of ["goat-rename.ts", "check-changed.ts"]) {
+      fs.copyFileSync(path.join(root, "scripts", script), path.join(dir, "scripts", script));
+    }
+    fs.mkdirSync(path.join(dir, ".github/scripts"), { recursive: true });
+    fs.copyFileSync(
+      path.join(root, ".github/scripts/ci-changes.cjs"),
+      path.join(dir, ".github/scripts/ci-changes.cjs"),
+    );
+    fs.writeFileSync(path.join(dir, "package.json"), '{"type":"module"}\n');
+    fs.writeFileSync(path.join(dir, ".gitignore"), "ignored/\n");
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    execFileSync("git", ["add", "."], { cwd: dir });
+    const file = path.join(dir, "apps/web/src/untracked.ts");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '"T3 Code is ready";\n');
+    fs.mkdirSync(path.join(dir, "ignored"));
+    fs.writeFileSync(path.join(dir, "ignored/copy.ts"), '"T3 Code is ready";\n');
+    const run = (script, args = []) =>
+      spawnSync(process.execPath, [script, ...args], { cwd: dir, encoding: "utf8" });
+    const local = run("scripts/goat-rename.ts", ["--check"]);
+    assert.equal(local.status, 1, local.stdout + local.stderr);
+    assert.match(local.stdout, /apps\/web\/src\/untracked.ts:1:/);
+    assert.match(local.stdout, /1 lines with T3 residue in 1 files, 0 dropped paths/);
+    const explicit = run("scripts/goat-rename.ts", ["--check", "--root", dir]);
+    assert.equal(explicit.status, 0, explicit.stdout + explicit.stderr);
+    const changed = run("scripts/check-changed.ts", ["missing-ref"]);
+    assert.equal(changed.status, 1, changed.stdout + changed.stderr);
+    assert.match(changed.stdout, /apps\/web\/src\/untracked.ts:1:/);
+    assert.doesNotMatch(changed.stdout + changed.stderr, /no merge base|> vp/);
+    fs.unlinkSync(file);
+    const ignored = run("scripts/goat-rename.ts", ["--check"]);
+    assert.equal(ignored.status, 0, ignored.stdout + ignored.stderr);
+    assert.match(ignored.stdout, /0 lines with T3 residue in 0 files, 0 dropped paths/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -18,9 +18,7 @@ gh pr merge <pr> --admin --squash --match-head-commit <head-sha>
 ```
 
 `mergeStateStatus` `CLEAN` or `UNSTABLE` (behind `dev`) is fine. `--match-head-commit` makes the
-merge fail if someone pushed after you read the checks.
-The always-run name check in `goat-scope` (`node scripts/goat-rename.ts --check --limit 200`) must succeed, including for upstream chases.
-Read `goat-ci-result` only; it is the one
+merge fail if someone pushed after you read the checks. Read `goat-ci-result` only; it is the one
 check that covers every selected task ([CI](../../structure/ci.md#when-goat-ci-runs)).
 
 A failure that also happens identically on `dev` does not block the merge. Record it in the pull

@@ -22,7 +22,8 @@ const git = (...args: Array<string>) =>
     .split("\n")
     .filter(Boolean);
 
-// This gate reads the whole tree even when the diff is empty or contains only docs.
+// This gate reads tracked and untracked source even for an empty or docs-only diff.
+// A failing name gate stops before task selection and all other checks.
 console.log("\n> node scripts/goat-rename.ts --check --limit 200");
 const renameCheck = NodeChildProcess.spawnSync(
   process.execPath,
