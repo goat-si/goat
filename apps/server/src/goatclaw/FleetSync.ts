@@ -102,7 +102,7 @@ export const syncBeforeForwarding = Effect.fn("GoatclawFleetSync.syncBeforeForwa
     enforcement: "unconfirmed",
     host,
     sync: reach.sync,
-    message: `${host} has not confirmed it enforces goatclaw ceilings (sync ${reach.sync.state}), so the forwarded ceiling may not apply there yet. The call was delivered.`,
+    message: `${host} has not confirmed it enforces goatclaw ceilings (sync ${reach.sync.state}), so the forwarded ceiling may not apply there yet.`,
   };
 });
 
