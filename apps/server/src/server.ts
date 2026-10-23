@@ -577,7 +577,6 @@ export const {
   layerMemoryImport,
   layerMemorySnapshot,
   provideMemorySnapshot,
-  layerMemoryHubAdministration,
   layerMemoryToolkits,
 } = memoryApplicationLayers;
 const {

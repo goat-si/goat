@@ -7,8 +7,6 @@ import {
   isProviderDriverKind,
   matchesMemorySourceReadRevokeAck,
   MEMORY_HUB_MAX_MEMBERS,
-  type MemoryHubDisableInput,
-  type MemoryHubDisableResult,
   MemoryHubError,
   type MemoryHubForbiddenError,
   MemoryHubSettings,
@@ -388,17 +386,6 @@ const makeMemoryProviderPolicy = Effect.gen(function* () {
   } satisfies MemoryProviderCommittedPolicy["Service"];
   return { publish, service };
 });
-
-/** Disable-only administration seam. Credential installation remains in Sync's existing service. */
-export class MemoryHubAdministration extends Context.Service<
-  MemoryHubAdministration,
-  {
-    readonly disableHub: (
-      input: MemoryHubDisableInput,
-      permit: import("./memory/MemoryAccess.ts").MemoryPermit,
-    ) => Effect.Effect<MemoryHubDisableResult, MemoryRpcError>;
-  }
->()("goat/serverSettings/MemoryHubAdministration") {}
 
 export interface MemoryOwnerSourceReadCommitted {
   readonly policy: MemoryOwnerSourceReadPolicy;
