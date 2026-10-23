@@ -162,7 +162,7 @@ Long descriptions carry routing policy (when to use another tool, what to tell t
 
 - `orchestration_error` is raised from 85 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:192, apps/server/src/mcp/HostThreadsMcpService.ts:119, apps/server/src/mcp/HostThreadsMcpService.ts:149, apps/server/src/mcp/HostThreadsMcpService.ts:419. The code does not say whether to retry, fix the input, or ask the user.
 - `invalid_request` is raised from 138 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:275, apps/server/src/mcp/HostStatusMcpService.ts:330, apps/server/src/mcp/HostStatusMcpService.ts:333, apps/server/src/mcp/HostThreadsMcpService.ts:310. The code does not say whether to retry, fix the input, or ask the user.
-- `OrchestratorMcpFailure` has only `code` and `message` (packages/contracts/src/orchestratorMcpFailure.ts:100): no retry hint, offending field, or next action. Recovery advice, where it exists, lives in message text.
+- `OrchestratorMcpFailure` has only `code` and `message` (packages/contracts/src/orchestratorMcpFailure.ts:104): no retry hint, offending field, or next action. Recovery advice, where it exists, lives in message text.
 
 ## Where a human is required
 
@@ -221,7 +221,7 @@ Names that look like tools but are not in the registry:
 | `goat_pull_request_list`      | packages/provider-core/src/server/runtimeInstructions.ts:2                                                                                                                                                    |
 | `goat_pull_request_watch`     | packages/provider-core/src/server/runtimeInstructions.ts:2, AGENTS.md:157                                                                                                                                     |
 | `goat_pull_request_unwatch`   | packages/provider-core/src/server/runtimeInstructions.ts:2                                                                                                                                                    |
-| `goat_eval`                   | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:438, docs/internals/agent-surface.md:817 (+1)                                                                                              |
+| `goat_eval`                   | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:438, docs/internals/agent-surface.md:820 (+1)                                                                                              |
 | `goat_host_cordon`            | docs/internals/agentic-k8s.md:955                                                                                                                                                                             |
 | `goat_thread_reschedule`      | docs/internals/agentic-k8s.md:955                                                                                                                                                                             |
 | `goat_scheduler_status`       | docs/internals/agentic-k8s.md:958                                                                                                                                                                             |

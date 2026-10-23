@@ -613,7 +613,7 @@ const make = Effect.gen(function* () {
           error.reason === "invalid_request" || error.reason === "host_unknown"
             ? "invalid_request"
             : "orchestration_error",
-          error.reason === "remote_refused" && error.remoteCode === undefined
+          Dispatch.refusedByRemote(error.reason) && error.remoteCode === undefined
             ? `${host} refused ${TOOLS[request.action]}: ${error.message} Update GOAT there if it does not have this tool yet.`
             : error.message,
         )
