@@ -37,6 +37,14 @@ device can reach, such as behind Tailscale Serve. GOAT creates a single-use
 invite on the hub and redeems it on the device; you never see or copy the code.
 Agents can request the same for a device GOAT reaches only by password.
 
+A cloud machine this hub creates joins by itself. The first time it is used,
+GOAT installs this hub's OpenCodex release there with npm, starts it, and
+links it as a Remote Link Child, using the host key it pinned when it created
+the machine. It does this once per machine; use **Repair** if the link breaks
+later. Machines you add over SSH are never joined automatically. The machine's
+`goat_host_status` entry shows the progress, or why it stopped, for example
+when the machine has no npm.
+
 **Repair** walks the fixes for failing checks in order: sync the device's
 settings, restart its OpenCodex once nothing runs there, and reconnect the link.
 **Leave** disconnects the device and returns it to its own sign-ins, then revokes

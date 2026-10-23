@@ -136,6 +136,12 @@ export class CloudMachineService extends Context.Service<
     readonly onAliasInvalidated: (
       listener: (alias: string, cause: CloudAliasInvalidation) => Effect.Effect<void>,
     ) => Effect.Effect<void>;
+    /**
+     * Runs `listener` each time a machine was readied and its SSH entry written, not for an
+     * answer served from the recent-readiness cache. It runs under the alias lock, so it must not
+     * wait on the machine; fork the work.
+     */
+    readonly onReady: (listener: (alias: string) => Effect.Effect<void>) => Effect.Effect<void>;
   }
 >()("goat/cloudMachines/CloudMachineService") {}
 
@@ -160,6 +166,7 @@ const make = Effect.gen(function* () {
   const lastErrors = new Map<string, CloudMachineErrorReason>();
   const listeners: Array<(alias: string, cause: CloudAliasInvalidation) => Effect.Effect<void>> =
     [];
+  const readyListeners: Array<(alias: string) => Effect.Effect<void>> = [];
 
   const readCatalog = fs.exists(catalogPath).pipe(
     Effect.flatMap((exists) =>
@@ -391,6 +398,7 @@ const make = Effect.gen(function* () {
           readyAt.set(alias, now);
           if (options.wake) wakeGenerations.set(alias, (wakeGenerations.get(alias) ?? 0) + 1);
           lastErrors.delete(alias);
+          yield* Effect.forEach(readyListeners, (listener) => listener(alias), { discard: true });
           return { alias, endpointChanged: changed };
         }).pipe(
           Effect.tapError((error) =>
@@ -582,6 +590,7 @@ const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => false),
       ),
     onAliasInvalidated: (listener) => Effect.sync(() => void listeners.push(listener)),
+    onReady: (listener) => Effect.sync(() => void readyListeners.push(listener)),
   });
 });
 
