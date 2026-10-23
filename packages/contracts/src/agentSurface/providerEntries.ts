@@ -26,7 +26,7 @@ export const providerSurfaceEntries = {
     toolkit: "provider",
     summary: "Read which machines have each provider CLI",
     description:
-      "Read the provider × host matrix: for this machine and each connected SSH host, which coding-agent CLIs (Codex, Claude, Cursor, Grok, OpenCode, Pi) are installed, their versions, whether they are signed in, and how GOAT would install and sign in to each there. The cloud field is present only when cloud:true is passed: Claude Cloud, Cursor Cloud, and Devin Cloud readiness from the same checks as goat_cloud_holders, which is slower because it diagnoses those three on every machine, and is not the same as the CLI being signed in. Pass hosts to choose machines; omit it for connected hosts and the aliases in ssh config. A host row with status update_runtime runs a GOAT too old to answer; tell the user to update GOAT there (goat_ssh_runtime_update). not_ready means its runtime is stopped; call goat_ssh_host_prepare first. versionMismatch means the host runs another GOAT build. Reading never installs, signs in, or starts a runtime, and never returns credentials.",
+      "Read the provider × host matrix: for this machine and each connected SSH host, which coding-agent CLIs (Codex, Claude, Cursor, Grok, OpenCode, Pi) are installed, their versions, whether they are signed in, and how GOAT would install and sign in to each there. The cloud field is present only when cloud:true is passed: Claude Cloud, Cursor Cloud, and Devin Cloud readiness from the same checks as goat_cloud_agent_holders, which is slower because it diagnoses those three on every machine, and is not the same as the CLI being signed in. Pass hosts to choose machines; omit it for connected hosts and the aliases in ssh config. A host row with status update_runtime runs a GOAT too old to answer; tell the user to update GOAT there (goat_ssh_runtime_update). not_ready means its runtime is stopped; call goat_ssh_host_prepare first. versionMismatch means the host runs another GOAT build. Reading never installs, signs in, or starts a runtime, and never returns credentials.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -39,9 +39,10 @@ export const providerSurfaceEntries = {
     verb: "sync",
     name: "goat_provider_sync",
     toolkit: "provider",
+    operation: "provider_sync",
     summary: "Install and sign in to a provider CLI on other machines",
     description:
-      "Install a provider CLI on SSH hosts with the vendor's official installer (npm package or install script for that OS), pinned to this machine's version unless version is given, then start that provider's own sign-in on each host. A thread agent gets needs_human: a person approves in the thread, and the sync then runs under their session; call goat_provider_host_matrix afterwards to see the result. A person or providers:manage client gets started with a syncId; poll goat_provider_sync_status. Each host signs in on its own: a device code (url and userCode) or a vendor sign-in page is shown to the user, who signs in with their own account; a terminal command must be run on that host by a person. Never sign in for the user, never copy credential files between machines, and never use someone else's subscription; consumer subscriptions belong to one person. Results never contain tokens or installer output.",
+      "Install a provider CLI on SSH hosts with the vendor's official installer (npm package or install script for that OS), pinned to this machine's version unless version is given, then start that provider's own sign-in on each host. A thread agent gets needs_human: a person approves in the thread, and the sync then runs under their session; call goat_provider_host_matrix afterwards to see the result. A person or providers:manage client gets started with a syncId; poll goat_provider_sync_read. Each host signs in on its own: a device code (url and userCode) or a vendor sign-in page is shown to the user, who signs in with their own account; a terminal command must be run on that host by a person. Never sign in for the user, never copy credential files between machines, and never use someone else's subscription; consumer subscriptions belong to one person. Results never contain tokens or installer output.",
     effect: "write",
     capability: "none",
     capabilityReason:
@@ -52,9 +53,9 @@ export const providerSurfaceEntries = {
     humanSteps: ["approval", "sign_in"],
     annotations: { idempotentHint: false, openWorldHint: true },
   },
-  sync_status: {
+  sync_read: {
     resource: "provider",
-    verb: "sync_status",
+    verb: "sync_read",
     name: "goat_provider_sync_status",
     toolkit: "provider",
     summary: "Read a provider sync's per-host progress",
@@ -186,6 +187,7 @@ export const providerSurfaceEntries = {
     verb: "update",
     name: "goat_provider_update",
     toolkit: "provider",
+    operation: "handoff",
     summary: "Change a provider instance's settings",
     description:
       "Change a provider instance on this environment, or on an SSH host with host, the way Settings → Providers does: enable or disable it, rename it, set its accent color, merge driver settings (binary path, home, custom models, a cloud provider's login source), set environment variables, make one of its models the default for new threads, or install an ACP Registry agent with install:true. A caller allowed to manage providers gets kind applied: a client holding providers:manage, or a live full-access thread whose goatclaw permission profile includes providers.manage (any full-access thread while goatclaw is off). Any other thread agent gets needs_human: a person approves that exact change in the thread and GOAT applies it then; call goat_provider_diagnose afterwards. Every change is audited and shows in Settings at once. Results name environment variables and config keys, never their values. Signing in stays with goat_provider_login_start.",
@@ -202,6 +204,7 @@ export const providerSurfaceEntries = {
     verb: "add",
     name: "goat_provider_add",
     toolkit: "provider",
+    operation: "handoff",
     summary: "Add a provider instance",
     description:
       'Add a provider instance of any driver goat_provider_addable_list shows, on this environment or an SSH host with host. For an ACP Registry agent pass acpAgentId, such as "devin"; GOAT downloads it with its in-app installer unless install is false. Pass linkTo to make a Cursor Cloud, Claude Cloud, or Devin Cloud instance use the new instance\'s executable and sign-in, which is how Devin Cloud gets its Devin ACP instance. Same permission and approval rules as goat_provider_update. Sign in afterwards with goat_provider_login_start.',
@@ -218,6 +221,7 @@ export const providerSurfaceEntries = {
     verb: "link",
     name: "goat_provider_link",
     toolkit: "provider",
+    operation: "handoff",
     summary: "Choose the local instance a cloud provider uses",
     description:
       "Set which local instance a cloud provider uses for its executable and sign-in: a Cursor instance for Cursor Cloud, a Claude instance for Claude Cloud, an ACP Registry Devin instance for Devin Cloud. Adds and enables the automatic cloud instance when Settings has no entry for it yet. Same permission and approval rules as goat_provider_update.",
@@ -234,6 +238,7 @@ export const providerSurfaceEntries = {
     verb: "remove",
     name: "goat_provider_remove",
     toolkit: "provider",
+    operation: "handoff",
     summary: "Remove a provider instance",
     description:
       "Remove a provider instance from Settings, or reset a built-in default instance to its defaults. Threads keep their history, but new turns cannot use a removed instance. Same permission and approval rules as goat_provider_update.",

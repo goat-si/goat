@@ -173,7 +173,7 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
         }),
         secretRef: Schema.optional(SecretRef).annotate({
           description:
-            "A secret the user entered through request_secret, used instead of secret. It is consumed by this save.",
+            "A secret the user entered through goat_handoff_create, used instead of secret. It is consumed by this save.",
         }),
       }),
     ),

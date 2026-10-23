@@ -5,12 +5,9 @@ import {
   type RuntimeMode,
   type ThreadId,
 } from "@goat/contracts";
-import {
-  type AgentSurfaceEffect,
-  type AgentSurfaceEntry,
-  agentSurfaceRegistry,
-} from "@goat/contracts/agentSurface";
+import type { AgentSurfaceEffect, AgentSurfaceEntry } from "@goat/contracts/agentSurface";
 import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
+import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -132,15 +129,6 @@ const requireThreadCaller = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((scope) => McpInvocationContext.requireThreadScope(scope, "This tool")),
 );
 
-// Keyed by the served legacy names and by path.
-const declaredEntries: ReadonlyMap<string, AgentSurfaceEntry & { readonly path: string }> = new Map(
-  Object.values(agentSurfaceRegistry).flatMap((entry) =>
-    [...entry.legacyNames, entry.path].map(
-      (name) => [name, entry as AgentSurfaceEntry & { readonly path: string }] as const,
-    ),
-  ),
-);
-
 const stringArgument = (args: unknown, key: string) => {
   const value =
     typeof args === "object" && args !== null ? (args as Record<string, unknown>)[key] : undefined;
@@ -192,7 +180,9 @@ export const requireDeclaredCapability = (
   declaredEffect: AgentSurfaceEffect,
   args: unknown,
 ): Effect.Effect<void, OrchestratorMcpFailure> => {
-  const entry = declaredEntries.get(tool);
+  // Any name or path of the entry: the toolkit's shipped name, the listed name, or a legacy one.
+  const entry: (AgentSurfaceEntry & { readonly path: string }) | undefined =
+    resolveAgentSurfaceEntry(tool);
   const capability = entry?.capability;
   // A mismatch between the registry and the handler's declaration fails closed below.
   const reads = declaredEffect === "read" && (entry?.effect ?? "read") === "read";

@@ -28,7 +28,7 @@ export const goatclawDelegatedTaskBrief = (
     ? [
         "goatclaw delegated task:",
         `You are a delegated child of thread ${parentThreadId}, running under profile ${admitted.profile.id} in runtime mode ${admitted.runtimeMode} (ceiling: ${admitted.profile.runtimeModeCeiling}).`,
-        `Your lanes, including delegate_task and goat_thread_launch, count against the shared lane limit of the thread that started this delegation (maxLanes: ${admitted.profile.maxLanes}). You cannot widen the permission profile or runtime ceiling you were given.`,
+        `Your lanes, including goat_task_create and goat_thread_launch, count against the shared lane limit of the thread that started this delegation (maxLanes: ${admitted.profile.maxLanes}). You cannot widen the permission profile or runtime ceiling you were given.`,
         "Your origin is the thread that delegated you: goat_origin_report reaches it, needs_input wakes it, and it reports to its own origin. Finish with goat_thread_report_result and your final answer. Raise decisions you may not make through goat_decision_request.",
         "Task:",
         task,
@@ -98,7 +98,7 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
       requires: ["pr.open"],
       preamble: [
         "You are a goatclaw domain manager. You own one goal and see it through.",
-        "Plan the goal into lanes and run them with delegate_task, goat_thread_launch, or goat_ssh_thread_launch on a host with room (goat_host_status with placement). Stay within your profile's lane limit and queue the rest. Keep each lane to one problem and one pull request, and read each lane's result with goat_thread_read instead of parsing chat.",
+        "Plan the goal into lanes and run them with goat_task_create, goat_thread_launch, or goat_ssh_thread_launch on a host with room (goat_host_status with placement). Stay within your profile's lane limit and queue the rest. Keep each lane to one problem and one pull request, and read each lane's result with goat_thread_read instead of parsing chat.",
         "Open pull requests to dev and do not merge them yourself; ask the supervisor, or the person through goat_decision_request, for a merge manager.",
       ].join("\n"),
     },

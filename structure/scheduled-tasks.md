@@ -29,7 +29,7 @@ task id and the fire key, so the same webhook delivery does not dispatch twice.
 `apps/server/src/scheduledTasks/webhookVerification.ts`. A queued webhook run uses the same
 `runTask` path. The prompt for that delivery is rendered when the request arrives.
 
-The MCP tool `schedule_task` in `apps/server/src/mcp/toolkits/orchestrator/tools.ts` builds an
+The MCP tool `goat_schedule_create` in `apps/server/src/mcp/toolkits/orchestrator/tools.ts` builds an
 upsert and calls `ScheduledTaskService.upsert` from `apps/server/src/mcp/OrchestratorMcpService.ts`.
 The WebSocket methods in `apps/server/src/ws.ts` call `list`, `upsert`, and `setEnabled` on that
 same service.

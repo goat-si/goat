@@ -566,7 +566,7 @@ export const DeviceToolOpenInput = Schema.Struct({
   deviceId: Schema.optional(
     DeviceId.annotate({
       description:
-        "Simulator udid or emulator serial from device_list. Omit to use the booted device for the platform, or the most recently used one.",
+        "Simulator udid or emulator serial from goat_device_list. Omit to use the booted device for the platform, or the most recently used one.",
     }),
   ),
   platform: Schema.optional(
@@ -575,7 +575,7 @@ export const DeviceToolOpenInput = Schema.Struct({
     }),
   ),
   hostId: Schema.optional(
-    DeviceHostId.annotate({ description: "Device host from device_list. Defaults to local." }),
+    DeviceHostId.annotate({ description: "Device host from goat_device_list. Defaults to local." }),
   ),
 }).annotate({
   description:
@@ -597,7 +597,7 @@ export const DeviceToolTargetInput = Schema.Struct({
   deviceId: Schema.optional(
     DeviceId.annotate({
       description:
-        "Device from device_list. Omit to use the device most recently opened in this thread.",
+        "Device from goat_device_list. Omit to use the device most recently opened in this thread.",
     }),
   ),
   hostId: Schema.optional(DeviceHostId),
