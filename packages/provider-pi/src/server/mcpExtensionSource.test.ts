@@ -188,7 +188,12 @@ describe("Pi MCP tool exposure", () => {
     assert.equal(bridge.tools.length, 4);
     assert.equal(bridge.registrations.length, 4);
     assert.equal(new Set(bridge.registrations).size, 4);
-    assert.deepEqual(bridge.getActiveTools(), ["read", "tool_search"]);
+    assert.deepEqual(bridge.getActiveTools(), [
+      "read",
+      "tool_search",
+      "mcp__goat__goat_describe",
+      "mcp__goat__goat_call",
+    ]);
     assert.deepEqual(
       bridge.tools
         .filter((tool) => tool.exposure !== "hidden")
@@ -264,6 +269,20 @@ describe("Pi MCP tool exposure", () => {
       "deferred",
     );
     assert.include(bridge.getActiveTools(), "mcp__goat__goat_preview_snapshot");
+  });
+
+  it("brings the always-load tools back after a tree restore drops them on any model", async () => {
+    const bridge = await loadMcpBridge({ modern: true, toolSearchAvailable: true });
+    const event = { systemPrompt: "" };
+    await bridge.handlers.get("session_start")!(event, discoveryContext);
+    bridge.restoreActiveTools(["read"]);
+    await bridge.handlers.get("session_tree")!(event, discoveryContext);
+    assert.deepEqual(bridge.getActiveTools(), [
+      "read",
+      "tool_search",
+      "mcp__goat__goat_describe",
+      "mcp__goat__goat_call",
+    ]);
   });
 
   it.each(["legacy Pi", "disabled tool search"])(

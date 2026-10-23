@@ -616,11 +616,14 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     // in history or guidance. Eagerly load GOAT schemas, including after tree
     // restores, while retaining deferred exposure for Pi's allowlist rules.
     // Pi still applies --tools/--exclude-tools to this active loadout.
-    const required = [
+    // A restored loadout can also drop the always-load tools, and tool_search never finds a
+    // direct tool, so they come back on every model.
+    const required = new Set([
       ...(hasToolSearch ? ["tool_search"] : []),
+      ...catalog.filter((tool) => tool._meta?.[ALWAYS_LOAD_META_KEY] === true).map((tool) => "mcp__goat__" + tool.name),
       ...(ctx.model?.api === "openai-completions" ? catalog.map((tool) => "mcp__goat__" + tool.name) : []),
-    ];
-    const missing = required.filter((name) => !active.includes(name));
+    ]);
+    const missing = [...required].filter((name) => !active.includes(name));
     if (missing.length > 0) pi.setActiveTools([...active, ...missing]);
   };
 
