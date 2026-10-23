@@ -467,9 +467,13 @@ const stopThreads = async (
     stopped,
     error,
   });
+  // Each thread gets its interrupt even when another's fails, so none is left running.
+  const refused: Array<string> = [];
+  for (const id of threads)
+    await client
+      .call("goat_thread_interrupt", { threadId: id, stopCascade: true })
+      .catch((error: unknown) => refused.push(id + ": " + String(error).slice(0, 200)));
   try {
-    for (const id of threads)
-      await client.call("goat_thread_interrupt", { threadId: id, stopCascade: true });
     const until = Date.now() + STOP_CONFIRM_MS;
     for (;;) {
       const running: Array<string> = [];
@@ -478,12 +482,22 @@ const stopThreads = async (
           running.push(id);
       if (threadId !== null && (await unfinishedTasks(client, threadId)).length > 0)
         running.push(threadId + " (delegated tasks)");
-      if (running.length === 0) return result(true, null);
-      if (Date.now() >= until) return result(false, "still running: " + running.join(", "));
+      if (running.length === 0)
+        return refused.length === 0
+          ? result(true, null)
+          : result(false, "interrupt refused: " + refused.join("; "));
+      if (Date.now() >= until)
+        return result(
+          false,
+          [
+            "still running: " + running.join(", "),
+            ...refused.map((why) => "interrupt refused: " + why),
+          ].join("; "),
+        );
       await pause(2000);
     }
   } catch (error) {
-    return result(false, String(error).slice(0, 300));
+    return result(false, [String(error).slice(0, 300), ...refused].join("; "));
   }
 };
 
