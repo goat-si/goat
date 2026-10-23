@@ -249,7 +249,7 @@ it.effect(
       client_request_id, receipt_id, tool_name, args_digest, grant_json, state, boot_id, created_at,
       expires_at)
       VALUES ('environment', ${`thread:${caller}`}, ${keyed.path}, 'k', 'receipt:stopped',
-        ${keyed.name}, ${digest}, '{"runtimeMode":"full-access","interactionMode":"default","goatclaw":null,"scopes":null,"readOnly":false}', 'running',
+        ${keyed.name}, ${digest}, '{"runtimeMode":"full-access","interactionMode":"default","goatclaw":null,"role":null,"scopes":null,"readOnly":false}', 'running',
         'boot:stopped', '1970-01-01T00:00:00.000Z',
         '1970-01-02T00:00:00.000Z')`;
       expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toMatchObject({
@@ -565,4 +565,16 @@ it.effect("refuses a thread's replay once its interaction mode drops to plan", (
     });
     expect(yield* runs).toBe(1);
   }).pipe(Effect.provide(served("owner", false))),
+);
+
+it.effect("refuses a role launch's replay once the caller's own profile narrows", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    // merge-manager never holds cloud.launch, so only the caller's own profile shows the loss.
+    const launch = { projectId: "a", clientRequestId: "k", goatclawRole: "merge-manager" };
+    expect(yield* direct(launch)).toEqual({ run: 1 });
+    yield* narrowProfile("owner", "cloud.launch");
+    expect(yield* direct(launch)).toMatchObject({ code: "capability_denied" });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner"))),
 );

@@ -96,19 +96,21 @@ const decodeRole = Schema.decodeUnknownOption(GoatclawRole);
  * narrowed where a handler or service checks it, not only at the capability gate, is refused.
  * goatclaw null means no profile applied; scopes null means a thread credential.
  */
+const ProfileGrant = Schema.Struct({
+  capabilities: Schema.Array(Schema.String),
+  runtimeMode: RuntimeMode,
+  /** null allows every host. */
+  hosts: Schema.NullOr(Schema.Array(Schema.String)),
+});
+type ProfileGrant = typeof ProfileGrant.Type;
 const Grant = Schema.Struct({
   /** The caller's own modes, which an omitted mode inherits. */
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
-  /** The goatclaw profile in force, role-narrowed; null while goatclaw is off. */
-  goatclaw: Schema.NullOr(
-    Schema.Struct({
-      capabilities: Schema.Array(Schema.String),
-      runtimeMode: RuntimeMode,
-      /** null allows every host. */
-      hosts: Schema.NullOr(Schema.Array(Schema.String)),
-    }),
-  ),
+  /** The caller's goatclaw profile; null while goatclaw is off. */
+  goatclaw: Schema.NullOr(ProfileGrant),
+  /** For a role launch, what the child gets: the role's profile within the caller's. */
+  role: Schema.NullOr(ProfileGrant),
   scopes: Schema.NullOr(Schema.Array(AuthEnvironmentScope)),
   readOnly: Schema.Boolean,
 });
@@ -126,17 +128,21 @@ const allowsHosts = (held: ReadonlyArray<string> | null, needed: ReadonlyArray<s
   held === null || (needed !== null && needed.every((host) => held.includes(host)));
 
 /** Whether `current` still holds everything `recorded` did. Turning goatclaw on narrows it. */
+const coversProfile = (current: ProfileGrant | null, recorded: ProfileGrant | null) =>
+  recorded === null
+    ? current === null
+    : current !== null &&
+      holdsAll(current.capabilities, recorded.capabilities) &&
+      rank(current.runtimeMode) >= rank(recorded.runtimeMode) &&
+      allowsHosts(current.hosts, recorded.hosts);
+
 const coversGrant = (current: Grant, recorded: Grant) =>
   (recorded.readOnly || !current.readOnly) &&
   rank(current.runtimeMode) >= rank(recorded.runtimeMode) &&
   interactionRank(current.interactionMode) >= interactionRank(recorded.interactionMode) &&
   holdsAll(current.scopes, recorded.scopes) &&
-  (recorded.goatclaw === null
-    ? current.goatclaw === null
-    : current.goatclaw !== null &&
-      holdsAll(current.goatclaw.capabilities, recorded.goatclaw.capabilities) &&
-      rank(current.goatclaw.runtimeMode) >= rank(recorded.goatclaw.runtimeMode) &&
-      allowsHosts(current.goatclaw.hosts, recorded.goatclaw.hosts));
+  coversProfile(current.goatclaw, recorded.goatclaw) &&
+  (recorded.role === null || coversProfile(current.role, recorded.role));
 
 /** Sorted object keys, array order kept, undefined dropped; null stays distinct from omitted. */
 const canonical = (value: unknown): unknown =>
@@ -336,16 +342,12 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
         ? undefined
         : (yield* settings.value.getSettings).goatclaw.profiles[GOATCLAW_ROLE_PROFILES[role]];
     // What claim grants a role launch: the role's profile within the caller's.
-    const profile =
-      role === undefined
-        ? view.profile
+    const roleProfile =
+      role === undefined || !view.enabled
+        ? undefined
         : named === undefined
           ? { ...view.profile, capabilities: [], hosts: [] }
           : Profiles.intersectProfiles(named, view.profile);
-    const profileMode =
-      rank(profile.runtimeModeCeiling) < rank(view.runtimeMode)
-        ? profile.runtimeModeCeiling
-        : view.runtimeMode;
     return {
       profileId: view.enabled ? view.profile.id : null,
       ceiling: view.runtimeMode,
@@ -354,11 +356,22 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
         interactionMode: limits.interactionMode,
         goatclaw: view.enabled
           ? {
-              capabilities: profile.capabilities,
-              runtimeMode: role === undefined ? view.runtimeMode : profileMode,
-              hosts: profile.hosts ?? null,
+              capabilities: view.profile.capabilities,
+              runtimeMode: view.runtimeMode,
+              hosts: view.profile.hosts ?? null,
             }
           : null,
+        role:
+          roleProfile === undefined
+            ? null
+            : {
+                capabilities: roleProfile.capabilities,
+                runtimeMode:
+                  rank(roleProfile.runtimeModeCeiling) < rank(view.runtimeMode)
+                    ? roleProfile.runtimeModeCeiling
+                    : view.runtimeMode,
+                hosts: roleProfile.hosts ?? null,
+              },
         scopes,
         readOnly,
       } satisfies Grant,
