@@ -141,12 +141,12 @@ and create one without `orchestration:approve`.
 ## Cloud agents from any machine
 
 Claude Cloud, Cursor Cloud and Devin Cloud runs only need one environment that is signed in to
-that service. An agent can call `goat_cloud_holders` to see which connected environments hold a
-login, and `goat_cloud_launch` to start a run there. Add `dryRun: true` to see which environment
+that service. An agent can call `goat_cloud_agent_holders` to see which connected environments hold a
+login, and `goat_cloud_agent_launch` to start a run there. Add `dryRun: true` to see which environment
 would run it. The environment needs a project for the repository, and the run starts from that
 project's pushed branch. Launching needs **Full access**.
 
-A bot that starts cloud runs on its own can show them in GOAT with `goat_cloud_run_register`:
+A bot that starts cloud runs on its own can show them in GOAT with `goat_cloud_agent_run_register`:
 
 ```json
 {
@@ -163,7 +163,7 @@ environment signed in to the same account can see the run, GOAT follows it and r
 ends. Otherwise it keeps only the link and says so (`tracking: "link-only"`), and never posts `run.completed` for it. Devin Cloud sessions
 started outside GOAT are always link-only. **Stop** on a registered run's thread only stops
 following it: the run keeps going, and you cancel it from its page in the provider.
-`goat_cloud_run_forget` removes a registered run from GOAT; the cloud run itself keeps going.
+`goat_cloud_agent_run_forget` removes a registered run from GOAT; the cloud run itself keeps going.
 
 ## Scripts on the host
 

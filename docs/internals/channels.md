@@ -279,7 +279,7 @@ receipt that hit a rate limit still arrives before the result.
 All MCP callers share the `mcp` connection, so the gateway scopes an agent's conversation key and
 retry key by its request namespace: two agents that send the same `clientRequestId` stay two
 inputs in two conversations. Agents cannot start work. Their replies are not pushed anywhere; the
-outbox marks them delivered and the agent reads them with `channel_input_get`, which shows only
+outbox marks them delivered and the agent reads them with `goat_channel_input_read`, which shows only
 inputs from the caller's own namespace.
 
 ## Workers on other machines
@@ -290,7 +290,7 @@ worker there through [`SshRemoteDispatch`](../../apps/server/src/sshRemote/SshRe
 the path `goat_ssh_thread_launch` uses, with an origin report binding. The remote server is not
 changed: the worker files `goat_origin_report` there, and
 [`ChannelRemoteWorkers`](../../apps/server/src/channels/ChannelRemoteWorkers.ts) long-polls
-`goat_origin_reports_wait` and turns reports and the remote run's end into ledger events.
+`goat_origin_report_wait` and turns reports and the remote run's end into ledger events.
 
 - **One thread per generation.** The binding id derives from the task and its generation, and the
   remote stores it before it creates the thread and refuses a duplicate. A launch whose answer was
@@ -309,7 +309,7 @@ changed: the worker files `goat_origin_report` there, and
   channel path does not need `goat_ssh_thread_launch`'s full-access caller: the dispatcher chooses
   the host and folder from validated lists, not an agent.
 - **Models are checked there first.** The SSH launch does not say why a remote refused, so the
-  dispatcher reads that machine's `orchestrator_capabilities` before launching. A Slack
+  dispatcher reads that machine's `goat_provider_list` before launching. A Slack
   connection's model is only a preference: if that machine does not offer it, or cannot list its
   models, the remote project's model (or this machine's default) runs the work. If the model to
   run is listed as missing, the requester is asked to pick one for the project there. If the

@@ -611,7 +611,7 @@ const make = Effect.gen(function* () {
           next: { after: "approval", call: "goat_cloud_launch" },
           holder,
           dryRun: false,
-          note: `A person must allow this launch in a GOAT app. Once approved, call goat_cloud_launch again with the same arguments and handoffId "${consent.handoff.handoffId}". A different launch needs a new approval.`,
+          note: `A person must allow this launch in a GOAT app. Once approved, call goat_cloud_agent_launch again with the same arguments and handoffId "${consent.handoff.handoffId}". A different launch needs a new approval.`,
         };
       const launched = yield* launches
         .launch(
@@ -637,7 +637,7 @@ const make = Effect.gen(function* () {
         holder,
         dryRun: false,
         threadId: launched.threadId,
-        note: `The cloud run starts in this thread from ${from}; goat_cloud_run_list and goat_thread_status follow it.`,
+        note: `The cloud run starts in this thread from ${from}; goat_cloud_agent_run_list and goat_thread_status follow it.`,
       };
     },
   );
@@ -803,7 +803,7 @@ const make = Effect.gen(function* () {
                 : linkOnlyNote,
             }
           : tracking === "pending"
-            ? { note: "Still attaching; goat_cloud_run_list shows the outcome." }
+            ? { note: "Still attaching; goat_cloud_agent_run_list shows the outcome." }
             : { note: "GOAT follows this run and reports when it finishes." }),
       };
     },

@@ -438,7 +438,7 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   const { accessibilityTree, ...withoutTree } = metadata;
   const ariaTree = typeof accessibilityTree === "string" ? accessibilityTree : undefined;
   if (accessibilityTree !== undefined && ariaTree === undefined) {
-    omitted.push("accessibilityTree (use interactiveElements locators or preview_evaluate)");
+    omitted.push("accessibilityTree (use interactiveElements locators or goat_preview_evaluate)");
   }
   const tail = <A>(entries: ReadonlyArray<A>, label: string) => {
     if (entries.length > MAX_SNAPSHOT_LOG_ENTRIES) {
@@ -538,7 +538,7 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   }
   if (visibleTextChars < metadata.visibleText.length) {
     omitted.push(
-      `visibleText after ${visibleTextChars} characters (use preview_evaluate for more)`,
+      `visibleText after ${visibleTextChars} characters (use goat_preview_evaluate for more)`,
     );
   }
   if (ariaTree !== undefined && ariaTreeChars < ariaTree.length) {

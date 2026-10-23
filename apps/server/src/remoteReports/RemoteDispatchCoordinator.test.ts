@@ -2097,7 +2097,7 @@ it.effect("refuses a relayed send to a finished review owned by another thread",
       assert.equal(notice.type, "message.dispatch");
       if (notice.type === "message.dispatch") {
         assert.include(notice.text, "Not delivered.");
-        assert.include(notice.text, "delegate_task");
+        assert.include(notice.text, "goat_task_create");
       }
       yield* Queue.take(f.commits);
       const next = yield* Queue.take(f.calls);
@@ -2155,7 +2155,7 @@ it.effect(
         const refused = yield* f.sql<{
           text: string;
         }>`SELECT text FROM remote_report_inbox ORDER BY id DESC LIMIT 1`;
-        assert.include(refused[0]!.text, "delegate_task");
+        assert.include(refused[0]!.text, "goat_task_create");
         assert.lengthOf(f.rearms, 1);
       }).pipe(Effect.provide(f.layer));
     }).pipe(Effect.provide(database)),

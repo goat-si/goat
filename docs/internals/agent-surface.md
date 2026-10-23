@@ -271,9 +271,9 @@ Legacy tool names keep their current result shapes until they are removed.
 
 | Work                   | Handle                     | Observe                       | Stop                        | Survives restart |
 | ---------------------- | -------------------------- | ----------------------------- | --------------------------- | ---------------- |
-| Provider sync          | `handoffId`, then `syncId` | `goat_provider_sync_status`   | `goat_provider_sync_cancel` | Approved syncs   |
+| Provider sync          | `handoffId`, then `syncId` | `goat_provider_sync_read`     | `goat_provider_sync_cancel` | Approved syncs   |
 | SSH prepare and update | host alias                 | `goat_ssh_host_status`        | `goat_ssh_host_forget`      | Yes              |
-| Delegated task         | `taskId`                   | `task_status`, wait mode      | `task_cancel`               | Yes              |
+| Delegated task         | `taskId`                   | `goat_task_read`, wait mode   | `goat_task_cancel`          | Yes              |
 | Thread or cloud launch | `threadId`                 | `goat_thread_status`, watches | `goat_thread_interrupt`     | Yes              |
 | Cloud machine create   | machine id once it answers | `goat_cloud_machine_list`     | `goat_cloud_machine_stop`   | Partly           |
 | Worktree cleanup       | none; blocks               | none                          | none                        | n/a              |
@@ -306,7 +306,7 @@ type OperationRef = {
   through the invocation function. Each verb therefore runs exactly the checks of
   the tool it replaces: cancel is a write and needs the domain's write
   authorization, runtime mode, and profile, the same as `goat_provider_sync_cancel`
-  or `task_cancel` today.
+  or `goat_task_cancel` today.
 - A valid token whose store has no record reports `unknown`: the server issued it,
   so the work may have happened. A token that fails verification is `not_found`.
   A token older than its kind's retention is `expired`. Kinds with in-memory stores
