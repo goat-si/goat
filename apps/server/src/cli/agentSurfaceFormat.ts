@@ -57,6 +57,7 @@ export const formatDescribe = (value: unknown): string => {
       String(entry.summary),
       "",
       String(entry.description),
+      ...(typeof entry.guide === "string" ? ["", entry.guide] : []),
       "",
       "Input schema:",
       JSON.stringify(entry.inputSchema, null, 2),

@@ -1,5 +1,9 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
-import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
+import {
+  type AgentSurfaceEntry,
+  agentSurfaceRegistry,
+  type AgentSurfaceRegistryEntry,
+} from "@goat/contracts/agentSurface";
 import {
   canonicalToolName,
   deprecatedReplacement,
@@ -20,12 +24,13 @@ import { makeOperations } from "./operations.ts";
 import { AgentSurfaceToolkit, type DescribeResult } from "./tools.ts";
 
 const entries: ReadonlyArray<AgentSurfaceRegistryEntry> = Object.values(agentSurfaceRegistry);
+const guideOf = (entry: AgentSurfaceEntry) => entry.guide;
 
 // FNV-1a over what an agent relies on; stable across processes, unlike object identity.
 const surfaceVersion = (() => {
   let hash = 0x811c9dc5;
   for (const entry of entries)
-    for (const char of `${entry.path}|${entry.name}|${entry.effect}|${entry.requires}|${entry.description}\n`) {
+    for (const char of `${entry.path}|${entry.name}|${entry.effect}|${entry.requires}|${entry.description}|${guideOf(entry) ?? ""}\n`) {
       hash ^= char.charCodeAt(0);
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
@@ -157,6 +162,7 @@ export const layer = McpToolAccess.toLayer(
             canonicalName: canonicalToolName(entry),
             legacyNames: entry.legacyNames,
             description: entry.description,
+            ...(guideOf(entry) === undefined ? {} : { guide: guideOf(entry) }),
             hostRoutable: entry.hostRoutable,
             requires: entry.requires,
             dryRun: entry.dryRun,
