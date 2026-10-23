@@ -217,7 +217,7 @@ owned_identity_repairable() {
   [ "$LIVE_STATUS" = live ] && [ "$LIVE_OWNED" = 1 ] && valid_version "$LIVE_VERSION" || return 1
   [ -f "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ] || return 1
   repair_dir="$HOME/.goat/runtime/goat/versions/$LIVE_VERSION"
-  [ -d "$repair_dir" ] && [ ! -L "$repair_dir" ] && [ -x "$repair_dir/goat" ] &&
+  [ -d "$repair_dir" ] && [ ! -L "$repair_dir" ] && [ -x "$repair_dir/goat" ] && [ ! -L "$repair_dir/goat" ] &&
     [ "$(cat "$repair_dir/.install-complete" 2>/dev/null)" = "$LIVE_VERSION" ] || return 1
   repair_identity="$repair_dir/goat serve --host 127.0.0.1 --port $LIVE_PORT --base-dir $DEFAULT_SERVER_HOME"
   repair_uid="$(server_uid "$LIVE_PID")" || return 1

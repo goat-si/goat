@@ -186,5 +186,25 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.notInclude(events, "stop");
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
+
+    it.live("a hand-written identity is not repaired when the installed goat is a symlink", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({ ...compatible, kind: "managed" });
+        yield* f.fs.writeFileString(`${f.state}/identity`, handWrittenIdentity(f));
+        // A developer build linked into the install is not an archive GOAT verified.
+        yield* f.fs.rename(`${f.old}/goat`, `${f.home}/dev-goat`);
+        yield* f.fs.symlink(`${f.home}/dev-goat`, `${f.old}/goat`);
+        const before = yield* f.snapshot;
+        const result = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.deepEqual(yield* f.snapshot, before);
+        assert.isFalse(yield* f.fs.exists(`${f.state}/identity.unverified`));
+        const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
+        assert.notInclude(events, "drain");
+        assert.notInclude(events, "stop");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
   },
 );
