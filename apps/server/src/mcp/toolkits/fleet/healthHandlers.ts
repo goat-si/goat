@@ -11,6 +11,14 @@ import { FleetHealthToolkit } from "./healthTools.ts";
 
 const asHost = (host: string) => (host === FleetHostStates.LOCAL_HOST ? null : host);
 
+/** Whether a host allowlist (undefined allows every host) is narrower now than when it was read. */
+const hostsNarrowed = (
+  initial: ReadonlyArray<string> | undefined,
+  current: ReadonlyArray<string> | undefined,
+) =>
+  current !== undefined &&
+  (initial === undefined || initial.some((host) => !current.includes(host)));
+
 /** Cordons and moves change where everyone's work runs, so each needs a full-access caller. */
 const hostResult = (host: string, message: string) =>
   Effect.gen(function* () {
@@ -84,15 +92,30 @@ export const layer = McpToolAccess.toLayer(FleetHealthToolkit, {
       }
       const rescheduler = yield* Rescheduler.Rescheduler;
       // An omitted targetHost lets placement choose, so the profile's allowlist must bound it.
-      const effective = yield* (yield* Profiles.PermissionProfiles).resolve(caller.scope);
-      const allowedHosts =
-        effective.enabled && effective.profile.hosts !== undefined
-          ? effective.profile.hosts
-          : undefined;
+      const permissions = yield* Profiles.PermissionProfiles;
+      const hostsOf = Effect.map(permissions.resolve(caller.scope), (effective) =>
+        effective.enabled ? effective.profile.hosts : undefined,
+      );
+      const allowedHosts = yield* hostsOf;
       // The caller is checked again after the move waits for its lock and before each remote write,
-      // so a caller that ended or lost its modes meanwhile changes nothing.
+      // so a caller that ended, lost its modes, or had its host allowlist narrowed changes nothing.
       const services = yield* Effect.context<Effect.Services<typeof check>>();
       const authorize = check.pipe(
+        Effect.tap(() =>
+          hostsOf.pipe(
+            Effect.flatMap((current) =>
+              hostsNarrowed(allowedHosts, current)
+                ? Effect.fail(
+                    new OrchestratorMcpFailure({
+                      code: "capability_denied",
+                      message:
+                        "The goatclaw host allowlist narrowed while this move was waiting; call again.",
+                    }),
+                  )
+                : Effect.void,
+            ),
+          ),
+        ),
         Effect.map((current) => current.limits.runtimeMode),
         Effect.mapError(
           (error) => new Rescheduler.RescheduleNotAllowed({ message: error.message }),
