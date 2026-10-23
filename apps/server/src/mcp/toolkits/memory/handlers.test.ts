@@ -20,6 +20,7 @@ import * as Store from "../../../memory/MemoryStore.ts";
 import { MemoryToolkit } from "./tools.ts";
 import { memoryError } from "./handlers.ts";
 import * as Fixture from "./handlers.testkit.ts";
+import * as Settings from "../../../serverSettings.ts";
 
 const decodeReceipt = Schema.decodeUnknownEffect(M.MemoryMutationReceipt);
 const decodePage = Schema.decodeUnknownEffect(M.MemoryPage);
@@ -551,4 +552,155 @@ it.effect(
         ),
       ),
     ),
+);
+
+it.effect.each([
+  { profile: "observer", enabled: true, denied: true },
+  { profile: "worker", enabled: true, denied: false },
+  { profile: "manager", enabled: true, denied: false },
+  { profile: "observer", enabled: false, denied: false },
+])("memory writes respect the effective goatclaw profile: %j", ({ profile, enabled, denied }) =>
+  Effect.gen(function* () {
+    const caller = yield* Fixture.bindProfile(profile);
+    if (!enabled) {
+      const settings = yield* Settings.ServerSettingsService;
+      yield* settings.updateSettings({ goatclaw: { enabled: false } });
+    }
+    const service = yield* MemoryService.MemoryService;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const readInput = { memorySpaceId: Fixture.space, memoryId: Fixture.memoryId };
+    const read = yield* Fixture.call("memory_read", readInput, caller);
+    expect(read.result.isError).not.toBe(true);
+    expect(read.body).toMatchObject({ status: "active" });
+    const stored = yield* service.read(readInput, Effect.void);
+    const store = yield* Store.MemoryStore;
+    const before = yield* store.loadAggregate(Fixture.space, Fixture.memoryId);
+    const expectedHeads = stored.status === "active" ? [stored.revision.revisionId] : [];
+    const update = yield* Fixture.call(
+      "memory_upsert",
+      {
+        ...Fixture.upsert(4),
+        expectedHeads,
+        payload: { text: "updated synthetic memory", evidence: [], derivedFromMemoryRevisions: [] },
+      },
+      caller,
+    );
+    if (!denied) expect(update.result.isError).not.toBe(true);
+    const latest = yield* service.read(readInput, Effect.void);
+    const forgotten = yield* Fixture.call(
+      "memory_forget",
+      {
+        ...readInput,
+        operationId: M.MemoryOperationId.make(Fixture.id(8)),
+        expectedHeads: latest.status === "active" ? [latest.revision.revisionId] : [],
+      },
+      caller,
+    );
+    if (denied) {
+      expect(forgotten.body).toMatchObject({ code: "capability_denied" });
+      expect(update.body).toMatchObject({ code: "capability_denied" });
+      const reverted = yield* Fixture.call(
+        "memory_revert_resolution",
+        {
+          ...readInput,
+          operationId: M.MemoryOperationId.make(Fixture.id(5)),
+          resolutionId: M.MemoryResolutionId.make(Fixture.id(6)),
+          restoredRevisionId: M.MemoryRevisionId.make(Fixture.id(7)),
+          expectedHeads,
+        },
+        caller,
+      );
+      expect(reverted.body).toMatchObject({ code: "capability_denied" });
+      expect(yield* service.read(readInput, Effect.void)).toEqual(stored);
+      expect(yield* store.loadAggregate(Fixture.space, Fixture.memoryId)).toEqual(before);
+      for (const operation of [4, 5, 8])
+        expect(
+          yield* store.receipt(Fixture.space, M.MemoryOperationId.make(Fixture.id(operation))),
+        ).toBeFalsy();
+    } else {
+      expect(forgotten.result.isError).not.toBe(true);
+      expect(yield* service.read(readInput, Effect.void)).toMatchObject({ status: "forgotten" });
+    }
+  }).pipe(Effect.provide(Fixture.layerWithProfiles)),
+);
+
+it.effect.each(["live", "ceiling", "missing"] as const)(
+  "memory write admission respects %s profile authority",
+  (change) =>
+    Effect.gen(function* () {
+      const settings = yield* Settings.ServerSettingsService;
+      const policy = (yield* settings.getSettings).goatclaw;
+      const worker = policy.profiles.worker!;
+      const narrowed = { ...worker, capabilities: [] };
+      if (change === "ceiling")
+        yield* settings.updateSettings({
+          goatclaw: { profiles: { ...policy.profiles, worker: narrowed } },
+        });
+      const caller = yield* Fixture.bindProfile("worker");
+      const service = yield* MemoryService.MemoryService;
+      yield* service.upsert(Fixture.upsert(), Effect.void);
+      if (change === "live") {
+        const initial = yield* service.read(
+          { memorySpaceId: Fixture.space, memoryId: Fixture.memoryId },
+          Effect.void,
+        );
+        expect(
+          (yield* Fixture.call(
+            "memory_upsert",
+            {
+              ...Fixture.upsert(9),
+              expectedHeads: initial.status === "active" ? [initial.revision.revisionId] : [],
+            },
+            caller,
+          )).result.isError,
+        ).not.toBe(true);
+        yield* settings.updateSettings({
+          goatclaw: { profiles: { ...policy.profiles, worker: narrowed } },
+        });
+      } else if (change === "ceiling") {
+        yield* settings.updateSettings({ goatclaw: { profiles: policy.profiles } });
+      } else {
+        const { worker: _worker, ...remaining } = policy.profiles;
+        yield* settings.updateSettings({
+          goatclaw: { defaultProfile: "observer", profiles: remaining },
+        });
+      }
+      const input = { memorySpaceId: Fixture.space, memoryId: Fixture.memoryId };
+      const before = yield* service.read(input, Effect.void);
+      const result = yield* Fixture.call(
+        "memory_forget",
+        {
+          ...input,
+          operationId: M.MemoryOperationId.make(Fixture.id(4)),
+          expectedHeads: before.status === "active" ? [before.revision.revisionId] : [],
+        },
+        caller,
+      );
+      expect(result.result.isError).toBe(true);
+      expect(result.body).toMatchObject({ code: "capability_denied" });
+      expect((yield* Fixture.call("memory_read", input, caller)).body).toEqual(before);
+    }).pipe(Effect.provide(Fixture.layerWithProfiles)),
+);
+
+it.effect(
+  "outside memory clients retain their grants with goatclaw's default observer profile",
+  () =>
+    Effect.gen(function* () {
+      const settings = yield* Settings.ServerSettingsService;
+      yield* settings.updateSettings({ goatclaw: { defaultProfile: "observer" } });
+      expect((yield* Fixture.call("memory_upsert", Fixture.upsert())).result.isError).not.toBe(
+        true,
+      );
+      const service = yield* MemoryService.MemoryService;
+      const input = { memorySpaceId: Fixture.space, memoryId: Fixture.memoryId };
+      const before = yield* service.read(input, Effect.void);
+      expect(
+        (yield* Fixture.call("memory_forget", {
+          ...input,
+          operationId: M.MemoryOperationId.make(Fixture.id(4)),
+          expectedHeads: before.status === "active" ? [before.revision.revisionId] : [],
+        })).result.isError,
+      ).not.toBe(true);
+      expect(yield* service.read(input, Effect.void)).toMatchObject({ status: "forgotten" });
+    }).pipe(Effect.provide(Fixture.layerWithProfiles)),
 );
