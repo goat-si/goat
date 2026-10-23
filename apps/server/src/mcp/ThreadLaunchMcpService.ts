@@ -47,6 +47,7 @@ import {
   resolveProjectId,
   unavailable,
 } from "./threadAccess.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 type Modes = {
   readonly runtimeMode: RuntimeMode;
@@ -88,19 +89,18 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
   if (!worktrees.includes(yield* real(worktreePath)))
     return yield* new OrchestratorMcpFailure({
       code: "invalid_request",
-      message:
-        "worktreePath must be one of the project's git worktrees. goat_worktree_list shows them.",
+      message: `worktreePath must be one of the project's git worktrees. ${goatCallText("worktree.list")} shows them.`,
     });
 });
 
 /** The refusal plus the step that gets the caller a folder to launch into. */
 function workspaceMissingMessage(error: ThreadLaunch.ThreadLaunchWorkspaceMissingError) {
   if (error.kind === "worktree")
-    return `${error.message} Pick a current checkout from goat_worktree_list, or launch with workspaceStrategy {type:"worktree"} to create one.`;
-  const relocate = `or point the project at an existing checkout with goat_project_update {projectId:"${error.projectId}", workspaceRoot}`;
+    return `${error.message} Pick a current checkout from ${goatCallText("worktree.list")}, or launch with workspaceStrategy {type:"worktree"} to create one.`;
+  const relocate = `or point the project at an existing checkout with ${goatCallText("project.update", `{projectId:"${error.projectId}", workspaceRoot}`)}`;
   return error.remoteUrl === null
-    ? `${error.message} Restore the checkout at that path (goat_project_clone clones it when you know its repository), ${relocate}, then launch again.`
-    : `${error.message} Clone it back with goat_project_clone {remoteUrl:"${error.remoteUrl}", destinationPath:"${error.path}"}, ${relocate}, then launch again.`;
+    ? `${error.message} Restore the checkout at that path (${goatCallText("project.clone")} clones it when you know its repository), ${relocate}, then launch again.`
+    : `${error.message} Clone it back with ${goatCallText("project.clone", `{remoteUrl:"${error.remoteUrl}", destinationPath:"${error.path}"}`)}, ${relocate}, then launch again.`;
 }
 
 /** Forwarded metadata only lowers authenticated authority, including live reauthorization. */
@@ -174,7 +174,7 @@ const make = Effect.gen(function* () {
         code: "invalid_request",
         message: `This GOAT has no provider instance ${selection.instanceId}; it has ${
           providers.map((entry) => entry.instanceId).join(", ") || "none"
-        }. goat_provider_list lists providers and models.`,
+        }. ${goatCallText("provider.list")} lists providers and models.`,
       });
     const misses = (candidate: typeof provider) =>
       requested &&
@@ -187,7 +187,7 @@ const make = Effect.gen(function* () {
     if (misses(provider))
       return yield* new OrchestratorMcpFailure({
         code: "invalid_request",
-        message: `Provider ${selection.instanceId} here does not offer model ${selection.model}, even after refreshing its model list. Pick one goat_provider_list lists for it, or fix the provider's catalog and check it with goat_provider_diagnose {instanceId:"${selection.instanceId}"}.`,
+        message: `Provider ${selection.instanceId} here does not offer model ${selection.model}, even after refreshing its model list. Pick one ${goatCallText("provider.list")} lists for it, or fix the provider's catalog and check it with ${goatCallText("provider.diagnose", `{instanceId:"${selection.instanceId}"}`)}.`,
       });
   });
   return ThreadLaunchMcpService.of({
@@ -355,8 +355,7 @@ const make = Effect.gen(function* () {
         if (modelSelection === undefined)
           return yield* new OrchestratorMcpFailure({
             code: "invalid_request",
-            message:
-              "Pass modelSelection: the project has no default model. goat_provider_list lists providers and models.",
+            message: `Pass modelSelection: the project has no default model. ${goatCallText("provider.list")} lists providers and models.`,
           });
         const startedRuntimeMode =
           projectDefaults !== undefined && input.runtimeMode === undefined

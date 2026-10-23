@@ -465,7 +465,7 @@ describe("GoalController", () => {
         {
           actionId: "goal:goal_follow:s0:a1:run:9:followup",
           message:
-            "Report your result with goat_thread_report_result: outcome, summary, and any pull request.",
+            'Report your result with goat_call {path:"thread.report_result"}: outcome, summary, and any pull request.',
         },
       ]);
     }).pipe(Effect.provide(layerFor(fake)));

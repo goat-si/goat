@@ -117,7 +117,7 @@ it.effect("local retries use stable launch receipts and append one thread link",
     assert.strictEqual(launched[0]!.createdBy, "user");
     assert.strictEqual(launched[0]!.runtimeMode, defaults.defaultRuntimeMode);
     assert.deepStrictEqual(launched[0]!.modelSelection, modelSelection);
-    assert.include(launched[0]!.initialMessage!.text, "goat_thread_report_result");
+    assert.include(launched[0]!.initialMessage!.text, 'goat_call {path:"thread.report_result"}');
     const second = yield* work.startWork({ ...input, requestId: "attempt-2" }, "mobile");
     assert.notStrictEqual(first.threadId, second.threadId);
     assert.strictEqual(second.note.threads.length, 2);

@@ -281,6 +281,24 @@ it.effect("wakes the asking thread once when a person answers, even while its ru
   ),
 );
 
+it.effect("tells the agent to continue an approved hub change through goat_call", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_join");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      const sent = yield* wakes(world);
+      expect(sent[0]!.text).toContain(
+        `Call goat_call {path:"hub.device_join"} again with decisionId "${summary.handoffId}"`,
+      );
+    }),
+  ),
+);
+
 it.effect(
   "stays quiet when an approval expires with its run, so the agent does not ask again",
   () =>
@@ -480,7 +498,7 @@ it.effect(
           `message:handoff-wake:${summary.handoffId}:completed`,
         ]);
         expect(sent[0]!.text).toContain(
-          'Call goat_provider_diagnose with {"instanceId":"cursor-2"} to settle it',
+          'Call goat_call {path:"provider.diagnose", args:{"instanceId":"cursor-2"}} to settle it',
         );
       }),
     ),

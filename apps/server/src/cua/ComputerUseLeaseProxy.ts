@@ -27,12 +27,12 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 export type LeaseEnd = "expired" | "revoked" | "disabled" | "lost";
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
-  expired:
-    "Computer use for this thread ended at its approved time. Ask again with goat_computer_use_request if the work needs more time.",
+  expired: `Computer use for this thread ended at its approved time. Ask again with ${goatCallText("computer_use.request")} if the work needs more time.`,
   revoked: "A person ended computer use for this thread.",
   disabled: "Computer use was turned off on this host.",
   lost: "GOAT could not confirm this thread's computer use approval, so computer use stopped.",

@@ -57,6 +57,7 @@ import {
   reauthorizationFailure,
 } from "./threadAccess.ts";
 import { boundedStatus, statusFromRead } from "./threadStatus.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * Routes the thread tools by host. A thread id belongs to the environment that
@@ -376,7 +377,7 @@ const make = Effect.gen(function* () {
                 ? hostFailure(error)
                 : failure(
                     "invalid_request",
-                    `${error.message} This thread was started from ${origin.originLabel}, which may reach ${host}. To have it delivered from there, call goat_origin_report with status progress, naming host ${host}, the thread, and the message; the origin can forward it.`,
+                    `${error.message} This thread was started from ${origin.originLabel}, which may reach ${host}. To have it delivered from there, call ${goatCallText("origin.report")} with status progress, naming host ${host}, the thread, and the message; the origin can forward it.`,
                   ),
             ),
       ),
@@ -509,7 +510,7 @@ const make = Effect.gen(function* () {
           ? Effect.fail(
               failure(
                 "invalid_request",
-                `GOAT on ${host} is too old to list every project; update GOAT there or pass one of its projectIds, which goat_project_list with this host lists.`,
+                `GOAT on ${host} is too old to list every project; update GOAT there or pass one of its projectIds, which ${goatCallText("project.list")} with this host lists.`,
               ),
             )
           : Effect.fail(error),
@@ -631,7 +632,7 @@ const make = Effect.gen(function* () {
     ) {
       return yield* failure(
         "invalid_request",
-        "This remote thread backs a delegated task. Use goat_task_read and goat_task_cancel; its completion is already delivered to its parent.",
+        `This remote thread backs a delegated task. Use ${goatCallText("task.read")} and ${goatCallText("task.cancel")}; its completion is already delivered to its parent.`,
       );
     }
     // Reading the thread checks the caller may see it, here or on the host.

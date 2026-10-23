@@ -26,6 +26,7 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { makeHubConsent } from "./HubConsent.ts";
 import * as HubParity from "./HubParity.ts";
 import { HubOcx, HubOcxError, SAFE_ALIAS, type OcxOutput } from "./HubOcx.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // OpenCodex's own enrollment deadline is 360 seconds; leave room for its cleanup.
 const LINK_ADD_TIMEOUT_MS = 420_000;
@@ -576,7 +577,7 @@ const make = Effect.gen(function* () {
           "join",
           alias,
           finalState(verified),
-          `${alias} is already linked; nothing was changed. Use goat_hub_device_repair if checks fail.`,
+          `${alias} is already linked; nothing was changed. Use ${goatCallText("hub.device_repair")} if checks fail.`,
           steps,
           { parity: verified, transport: "remote-link" },
         );

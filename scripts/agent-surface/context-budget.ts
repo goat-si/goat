@@ -3,10 +3,11 @@
  * What GOAT puts into each harness's context: the served tool listing, the instruction block,
  * what a later turn adds, and (with --db) the wake messages GOAT writes into threads.
  *
- *   node scripts/agent-surface/context-budget.ts [--json] [--db <copy of statev2.sqlite>]
+ *   node scripts/agent-surface/context-budget.ts [--json] [--listing full|core] [--db <copy>]
  *
  * The listing comes from servedCatalog.ts: the registrations /mcp mounts, built in-process at the
- * checked-out commit.
+ * checked-out commit, and passes through the server's own tools/list filter as a GOAT thread
+ * receives it under agentToolListing --listing (default full).
  * Instruction text comes from the exported builders. Adapters compose those builders inline, so
  * each harness below names the source that composes it and a fragment that source must still
  * contain; the script exits 1 when one is missing instead of reporting a stale composition.
@@ -256,6 +257,12 @@ const git = (args: ReadonlyArray<string>) =>
 const argv = process.argv.slice(2);
 const dbIndex = argv.indexOf("--db");
 const dbPath = dbIndex === -1 ? undefined : argv[dbIndex + 1];
+const listingIndex = argv.indexOf("--listing");
+const listingMode = listingIndex === -1 ? "full" : argv[listingIndex + 1];
+if (listingMode !== "full" && listingMode !== "core") {
+  console.error("--listing takes full or core");
+  process.exit(1);
+}
 
 const stale = harnesses.flatMap((harness) => {
   const source = NodeFS.readFileSync(NodePath.join(repoRoot, harness.composedIn), "utf8");
@@ -277,12 +284,13 @@ if (stale.length > 0) {
 
 const builders = await loadBuilders();
 const catalog = await loadServedCatalog();
-const listed = catalog.tools;
+const listed = await catalog.listedAsThread(listingMode);
 await catalog.dispose();
 const perTool = listed
   .map((tool) => ({ name: tool.name, bytes: modelFacing(tool) }))
   .toSorted((a, b) => b.bytes - a.bytes);
 const listing = {
+  mode: listingMode,
   tools: listed.length,
   modelFacingBytes: perTool.reduce((sum, tool) => sum + tool.bytes, 0),
   descriptionBytes: listed.reduce((sum, tool) => sum + bytes(tool.description ?? ""), 0),
@@ -323,7 +331,9 @@ if (argv.includes("--json")) {
       (report.dirty ? " (dirty)" : "") +
       "; tokens estimated as UTF-8 bytes / 4.",
     "",
-    "Served listing: " +
+    "Served listing (agentToolListing " +
+      listing.mode +
+      "): " +
       listing.tools +
       " tools, " +
       kb(listing.modelFacingBytes) +

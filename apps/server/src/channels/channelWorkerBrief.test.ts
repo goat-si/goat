@@ -22,8 +22,8 @@ describe("channel worker brief", () => {
       lines.find((line) => line.startsWith("Before anything sent under the person's name")) ?? "";
     assert.include(askFirst(local), "waiting_input question");
     assert.include(askFirst(remote), "needs_input report");
-    assert.include(remote.join("\n"), "goat_origin_report with status progress");
-    assert.include(remote.join("\n"), "goat_thread_report_result");
+    assert.include(remote.join("\n"), 'goat_call {path:"origin.report"} with status progress');
+    assert.include(remote.join("\n"), 'goat_call {path:"thread.report_result"}');
     assert.strictEqual(local.length, remote.length);
   });
 
@@ -74,7 +74,7 @@ describe("channel worker brief", () => {
       context,
     );
     assert.notInclude(tooLong, "goat_bot");
-    assert.include(tooLong, "goat_thread_report_result");
+    assert.include(tooLong, 'goat_call {path:"thread.report_result"}');
   });
 
   it("matches skills the instruction names as whole words", () => {

@@ -21,6 +21,7 @@ import * as DateTime from "effect/DateTime";
 
 import type { ThreadHealth } from "../health/Health.ts";
 import { type LaunchClaim, NOT_SENT, publicWorker, type WorkerRecord } from "./GoalStore.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 export const LAUNCH_GRACE_MS = 300_000;
 export const MAX_ACTIONS_PER_GOAL = 3;
@@ -501,14 +502,14 @@ export function planGoal(
     if (kinds.has("pull_requests_merged") && prTargets.length === 0 && prNumber === null)
       return {
         ...followUp(
-          "Open a pull request for your work, then report it with goat_thread_report_result.",
+          `Open a pull request for your work, then report it with ${goatCallText("thread.report_result")}.`,
         ),
         state: "running",
       };
     if (kinds.has("thread_reported_result") && !reported)
       return {
         ...followUp(
-          "Report your result with goat_thread_report_result: outcome, summary, and any pull request.",
+          `Report your result with ${goatCallText("thread.report_result")}: outcome, summary, and any pull request.`,
         ),
         state: "running",
       };

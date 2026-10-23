@@ -35,6 +35,7 @@ import {
   type SshHostCaller,
 } from "./SshHostAuthorization.ts";
 import * as Setup from "./SshHostSetup.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 export const SshDeviceAddInput = Schema.Struct({
   host: Schema.optional(TrimmedNonEmptyString),
@@ -154,7 +155,7 @@ const make = Effect.gen(function* () {
       // The grant name alone does not tell an agent what to do next.
       const nextStep = (scope: string) =>
         scope === "settings:write"
-          ? " A person must approve this host's key: ask them to add it in Settings → Connections → Add device → SSH, or call goat_ssh_host_add from a running GOAT thread so they can approve it there."
+          ? ` A person must approve this host's key: ask them to add it in Settings → Connections → Add device → SSH, or call ${goatCallText("ssh.host_add")} from a running GOAT thread so they can approve it there.`
           : scope === "environment:maintain"
             ? " Ask the person to connect it in Settings → Connections, or use a caller allowed to maintain environments."
             : "";

@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 
 import { targetConnectionKey } from "./command.ts";
 import { SshLaunchError } from "./errors.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 export interface RequestTicket {
   readonly key: string;
@@ -54,7 +55,7 @@ export function makeTargetAdmission(targetLocks: KeyedLock.KeyedLock<string>) {
     );
   const notReady = (target: DesktopSshEnvironmentTarget) =>
     new SshLaunchError({
-      message: `Call goat_ssh_host_prepare for ${target.alias}, then call goat_ssh_host_status until setup completes; retry goat_provider_diagnose.`,
+      message: `Call ${goatCallText("ssh.host_prepare")} for ${target.alias}, then call ${goatCallText("ssh.host_status")} until setup completes; retry ${goatCallText("provider.diagnose")}.`,
       stdout: "",
     });
   const withIdleTargetLock = <A, E, R>(

@@ -8,12 +8,18 @@ import {
   renderHistory,
   selectHistory,
 } from "@goat/provider-core/server/handoffBudget";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
-// Coverage saved before the MCP rename tells the provider to call t3_thread_read,
-// which no longer exists. The recovery instruction is app-generated, so point it
-// at the current tool when delivering; the stored record stays unchanged.
+// Saved coverage names the thread read tool directly (t3_thread_read before the MCP rename,
+// goat_thread_read after it), which a harness cannot call under the core listing. The recovery
+// instruction is app-generated, so name it through goat_call when delivering; the stored record
+// stays unchanged.
 const refreshRecoveryToolName = (coverage: string) =>
-  coverage.replace(/\bt3_thread_read\b/gu, "goat_thread_read");
+  coverage
+    .replace(/\b(?:t3|goat)_thread_read\((\{[^()]*\})\)/gu, (_, args: string) =>
+      goatCallText("thread.read", args),
+    )
+    .replace(/\b(?:t3|goat)_thread_read\b/gu, goatCallText("thread.read"));
 
 /**
  * Persist before/after injection: an ambiguous pending delivery requires a fresh native thread.
@@ -49,13 +55,13 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
             (handoff.history?.coverage === undefined
               ? undefined
               : refreshRecoveryToolName(handoff.history.coverage)) ??
-            `From thread ${handoff.threadId}, runs ${handoff.coveredRunOrdinals.from}-${handoff.coveredRunOrdinals.to}. Recover history with goat_thread_read, view=activity; paginate with afterPosition, and use itemId/textOffset for long items.`
+            `From thread ${handoff.threadId}, runs ${handoff.coveredRunOrdinals.from}-${handoff.coveredRunOrdinals.to}. Recover history with ${goatCallText("thread.read")}, view=activity; paginate with afterPosition, and use itemId/textOffset for long items.`
           }`,
       )
       .join("\n");
     if (historyCost([], coverage) > Math.min(4_000, budget / 2)) {
       const strategies = Array.from(new Set(pending.map((handoff) => handoff.strategy)));
-      coverage = `Context handoff (${strategies.join(", ")}). ${pending.length} handoff records; detailed coverage references omitted. Recover history with goat_thread_read({threadId:"${input.providerThread.appThreadId ?? pending[0]!.threadId}",view:"activity",limit:20,maxCharsPerItem:4000}); paginate with afterPosition=nextPosition. Follow fork/handoff source references in activity. For long items use itemId and textOffset=nextTextOffset until null.`;
+      coverage = `Context handoff (${strategies.join(", ")}). ${pending.length} handoff records; detailed coverage references omitted. Recover history with ${goatCallText("thread.read", `{threadId:"${input.providerThread.appThreadId ?? pending[0]!.threadId}",view:"activity",limit:20,maxCharsPerItem:4000}`)}; paginate with afterPosition=nextPosition. Follow fork/handoff source references in activity. For long items use itemId and textOffset=nextTextOffset until null.`;
     }
     const seen = new Set(input.alreadyDeliveredItemIds);
     const messages = pending
