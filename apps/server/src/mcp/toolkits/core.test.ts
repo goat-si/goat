@@ -446,7 +446,7 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
     const server = yield* McpServer.McpServer;
     const result = yield* server
       .callTool({
-        name: "html_render",
+        name: "goat_html_render",
         arguments: { html: "<p>Revenue</p>", title: "Revenue", height: 240 },
       })
       .pipe(
@@ -816,7 +816,7 @@ it.effect("a read-only client reads threads and is refused every write before it
           Effect.provideService(McpSchema.McpServerClient, client),
         );
 
-    const configuration = yield* call("goat_thread_configuration", {
+    const configuration = yield* call("goat_thread_configuration_read", {
       threadId: "other-project-thread",
     });
     expect(configuration.isError).toBe(false);
@@ -877,7 +877,7 @@ it.effect("refuses act-as-caller tools to a client caller", () =>
     const server = yield* McpServer.McpServer;
     const result = yield* server
       .callTool({
-        name: "delegate_task",
+        name: "goat_task_create",
         arguments: { task: "Review", mode: "async" },
       })
       .pipe(
@@ -926,14 +926,14 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
           Effect.provideService(McpInvocationContext.McpInvocationContext, clientScope("auto")),
           Effect.provideService(McpSchema.McpServerClient, client),
         );
-    const update = yield* call("update_scheduled_task", {
+    const update = yield* call("goat_schedule_update", {
       scheduledTaskId: "task-full-access",
       prompt: "Run something else",
     });
     expect(declaredFailure(update)).toMatchObject({ code: "runtime_mode_escalation_denied" });
-    const remove = yield* call("delete_scheduled_task", { scheduledTaskId: "task-full-access" });
+    const remove = yield* call("goat_schedule_delete", { scheduledTaskId: "task-full-access" });
     expect(declaredFailure(remove)).toMatchObject({ code: "runtime_mode_escalation_denied" });
-    const allowed = yield* call("update_scheduled_task", {
+    const allowed = yield* call("goat_schedule_update", {
       scheduledTaskId: "task-auto",
       enabled: false,
     });

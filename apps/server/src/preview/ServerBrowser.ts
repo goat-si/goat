@@ -1256,7 +1256,7 @@ const make = Effect.gen(function* () {
   const assertTabCapacity = (agentSessionId: string) => {
     if (atTabLimit(agentSessionId))
       throw new BrowserControlInterrupted(
-        `Too many server browser tabs are open (${AGENT_TAB_LIMIT} per agent session, ${SERVER_TAB_LIMIT} per server). Close one with goat_preview_close or reuse one from preview_status tabs.`,
+        `Too many server browser tabs are open (${AGENT_TAB_LIMIT} per agent session, ${SERVER_TAB_LIMIT} per server). Close one with goat_preview_close or reuse one from goat_preview_status tabs.`,
         "tabLimit",
       );
   };
@@ -1432,7 +1432,7 @@ const make = Effect.gen(function* () {
       if (message.includes("Download is starting")) {
         throw new ServerBrowserPage.ServerBrowserOperationError(
           "PreviewAutomationExecutionError",
-          `${url} is a file this browser cannot show, so it was downloaded instead. preview_status lists it under downloads.`,
+          `${url} is a file this browser cannot show, so it was downloaded instead. goat_preview_status lists it under downloads.`,
         );
       }
       if (/ERR_[A-Z_]+/.test(message)) {
@@ -1668,7 +1668,7 @@ const make = Effect.gen(function* () {
     );
     if (!request.tabIdExplicit && owned.length > 1)
       throw new BrowserControlInterrupted(
-        "Multiple tabs belong to this agent session. Pass a tabId from preview_open or preview_status tabs.",
+        "Multiple tabs belong to this agent session. Pass a tabId from goat_preview_open or goat_preview_status tabs.",
         "tabRequired",
       );
     const tab =
@@ -1680,7 +1680,7 @@ const make = Effect.gen(function* () {
     if (!tab) {
       throw new ServerBrowserPage.ServerBrowserOperationError(
         "PreviewAutomationTabNotFoundError",
-        "No server preview tab is open for this thread. Call preview_open first.",
+        "No server preview tab is open for this thread. Call goat_preview_open first.",
       );
     }
     if (!READ_OPERATIONS.has(request.operation) && !tab.control.agentMayAct(request.agentSessionId))
@@ -1788,7 +1788,7 @@ const make = Effect.gen(function* () {
           ));
         if (existing?.dialog)
           throw new BrowserControlInterrupted(
-            "A browser dialog is pending. Read preview_status and use preview_dialog first.",
+            "A browser dialog is pending. Read goat_preview_status and use goat_preview_dialog first.",
             "dialogPending",
           );
         return tab.control.agent(
@@ -1796,7 +1796,7 @@ const make = Effect.gen(function* () {
           async () => {
             if (tab.dialog)
               throw new BrowserControlInterrupted(
-                "A browser dialog is pending. Read preview_status and use preview_dialog first.",
+                "A browser dialog is pending. Read goat_preview_status and use goat_preview_dialog first.",
                 "dialogPending",
               );
             if (existing) {
@@ -1834,7 +1834,7 @@ const make = Effect.gen(function* () {
           ).length > 1
         )
           throw new BrowserControlInterrupted(
-            "Multiple tabs belong to this agent session. Pass a tabId from preview_open or preview_status tabs.",
+            "Multiple tabs belong to this agent session. Pass a tabId from goat_preview_open or goat_preview_status tabs.",
             "tabRequired",
           );
         const recordings = [...tabs.values()].filter(
@@ -1892,7 +1892,7 @@ const make = Effect.gen(function* () {
       return tab.control.observe(async () => {
         if (tab.dialog)
           throw new BrowserControlInterrupted(
-            "A browser dialog is pending. Read preview_status.",
+            "A browser dialog is pending. Read goat_preview_status.",
             "dialogPending",
           );
         return executeTabOperation(tab, request);
@@ -1903,7 +1903,7 @@ const make = Effect.gen(function* () {
       async (signal) => {
         if (tab.dialog)
           throw new BrowserControlInterrupted(
-            "A browser dialog is pending. Read preview_status and use preview_dialog first.",
+            "A browser dialog is pending. Read goat_preview_status and use goat_preview_dialog first.",
             "dialogPending",
           );
         const generation = tab.control.generation;

@@ -26,8 +26,8 @@ const SECRET_REQUEST_FAILURE_MESSAGES = {
   invalid_ref: "That secretRef is not valid.",
   read_failed: "Could not read the secret.",
   ref_unavailable:
-    "That secretRef was already used or does not exist. Ask the user again with request_secret.",
-  ref_expired: "That secretRef expired. Ask the user again with request_secret.",
+    "That secretRef was already used or does not exist. Ask the user again with goat_handoff_create.",
+  ref_expired: "That secretRef expired. Ask the user again with goat_handoff_create.",
   consume_failed: "Could not use that secretRef. Try again.",
 } as const;
 

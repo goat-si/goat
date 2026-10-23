@@ -713,7 +713,7 @@ function delegatedCompletionWakeDetail(
           return detail;
         }
       }
-      return `${label}. Use task_status with taskId ${taskId} to read the result.`;
+      return `${label}. Use goat_task_read with taskId ${taskId} to read the result.`;
     })
     .join("\n\n");
 }

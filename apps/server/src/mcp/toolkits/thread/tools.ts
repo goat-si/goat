@@ -155,9 +155,9 @@ const PendingRequestRespondTool = Tool.make(agentSurfaceRegistry["pending_reques
   success: OrchestratorMcpPendingRequestRespondResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pending_request.respond"]));
 
-const ThreadConfigurationTool = Tool.make(agentSurfaceRegistry["thread.configuration"].name, {
+const ThreadConfigurationTool = Tool.make(agentSurfaceRegistry["thread.configuration_read"].name, {
   ...commandTool,
-  description: agentSurfaceRegistry["thread.configuration"].description,
+  description: agentSurfaceRegistry["thread.configuration_read"].description,
   parameters: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
   success: Schema.Struct({
     threadId: ThreadId,
@@ -165,7 +165,7 @@ const ThreadConfigurationTool = Tool.make(agentSurfaceRegistry["thread.configura
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
   }),
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.configuration"]));
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.configuration_read"]));
 const ThreadConfigureTool = Tool.make(agentSurfaceRegistry["thread.configure"].name, {
   ...commandTool,
   description: agentSurfaceRegistry["thread.configure"].description,

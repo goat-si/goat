@@ -2154,7 +2154,7 @@ it.effect.each([
           issuedAt: 0,
         };
         const result = yield* (yield* McpServer.McpServer)
-          .callTool({ name: "task_cancel", arguments: { taskId, clientRequestId: "stop-child" } })
+          .callTool({ name: "goat_task_cancel", arguments: { taskId, clientRequestId: "stop" } })
           .pipe(
             Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
             Effect.provideService(McpSchema.McpServerClient, cloudMcpClient),
@@ -2354,7 +2354,7 @@ it.effect.each([
         const readResult = yield* invoke("goat_thread_read", { threadId: childId });
         assert.isFalse(readResult.isError === true, JSON.stringify(readResult.content));
         const readView = yield* decodeThreadRead(readResult.structuredContent);
-        const taskResult = yield* invoke("task_status", { taskId });
+        const taskResult = yield* invoke("goat_task_read", { taskId });
         assert.isFalse(taskResult.isError === true, JSON.stringify(taskResult.content));
         const taskView = yield* decodeTaskStatus(taskResult.structuredContent);
         for (const view of [statusView, readView, taskView]) {
@@ -3066,7 +3066,7 @@ it.effect.each([
         };
         const cancelled = yield* (yield* McpServer.McpServer)
           .callTool({
-            name: "task_cancel",
+            name: "goat_task_cancel",
             arguments: { taskId: task.id, clientRequestId: "stop-untracked" },
           })
           .pipe(
