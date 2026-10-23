@@ -1126,15 +1126,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             result.success.selectedRuntime.updateBlocked,
             ordinary.success.selectedRuntime.updateBlocked,
           );
-
-          assert.isString(result.success.selectedRuntime.updateBlocked);
-          assert.isUndefined(result.success.selectedRuntime.reconnectProbe);
+          // A compatible newer runtime is an ordinary kept selection with nothing to block.
+          assert.isUndefined(result.success.selectedRuntime.updateBlocked);
+          assert.isString(result.success.selectedRuntime.reconnectProbe);
         }
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
     it.live(
-      "a host change between folded probe and launch falls back without replacing anything",
+      "an identity rewritten between folded probe and launch falls back and replaces nothing",
       () =>
         Effect.gen(function* () {
           const f = yield* fixture;
@@ -1153,7 +1153,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     `);
           const before = f.remoteCommands.length;
           const result = yield* Effect.result(launch(f, first.selectedRuntime));
-          assert.equal(result._tag, "Failure");
+          assert.equal(result._tag, "Success"); // The fallback launch repairs the identity (#970).
           assert.equal(f.remoteCommands.length - before, 3);
           const events = yield* f.fs.readFileString(`${f.test}/events`);
           assert.notInclude(events, '"type":"drain"');

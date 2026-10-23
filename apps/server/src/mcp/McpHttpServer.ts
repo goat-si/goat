@@ -1,3 +1,6 @@
+import { listingSetting, withCallerListing } from "./toolListing.ts";
+import * as Settings from "../serverSettings.ts";
+import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
 import {
@@ -10,7 +13,6 @@ import {
   argumentKeys,
   encodeReferenceRefusal,
   keepingRefusalCode,
-  refusalResult,
   undeclaredArgumentsResult,
 } from "./toolRefusals.ts";
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
@@ -23,7 +25,6 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { llmsTxtCaller, llmsTxtResponse } from "./llmsTxtResponse.ts";
-import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -85,6 +86,7 @@ import { imageToolFailure, imageToolSuccess, previewSnapshotFailure } from "./im
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
+import * as ToolAdmission from "./ToolAdmission.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PendingQuestionsMcpService from "./PendingQuestionsMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -290,6 +292,7 @@ const refusedToolCallId = (request: HttpServerRequest.HttpServerRequest) =>
 const makeMcpAuthMiddleware = Effect.gen(function* () {
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
+  const listing = listingSetting(yield* Effect.serviceOption(Settings.ServerSettingsService));
   return Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const authorization = request.headers.authorization;
@@ -348,7 +351,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
         message,
       });
     }
-    return yield* withServedToolNames(httpEffect).pipe(
+    return yield* withCallerListing(listing)(withServedToolNames(httpEffect)).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
       Effect.map(normalizeMcpHttpResponse),
     );
@@ -843,7 +846,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const effects = yield* McpToolAccess.ToolEffects;
-    const permissions = yield* Profiles.PermissionProfiles;
+    const admit = yield* ToolAdmission.make();
     return yield* register.pipe(
       Effect.provideService(
         McpServer.McpServer,
@@ -871,20 +874,10 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                 Context.add(Tool.Destructive, effect === "destructive"),
               ),
             };
-            // Arguments never decode for a caller whose goatclaw profile refuses the tool.
+            // Every call reaches the handler through the admission gate, direct or through goat_call.
             const handle = keepingRefusalCode(registration.handle);
             const gated = (payload: unknown) =>
-              McpToolAccess.requireDeclaredCapability(
-                permissions,
-                registration.tool.name,
-                effect,
-                payload,
-              ).pipe(
-                Effect.matchEffect({
-                  onFailure: (failure) => Effect.succeed(refusalResult(failure)),
-                  onSuccess: () => handle(payload),
-                }),
-              );
+              admit(registration.tool.name, effect, payload, handle);
             const inputSchema = registration.tool.inputSchema;
             // A parameter schema with an index signature declares its own extra keys.
             if (typeof inputSchema.additionalProperties === "object")
@@ -1140,7 +1133,8 @@ const withListedNames = <A, E, R>(registration: Effect.Effect<A, E, R>) =>
   Effect.flatMap(McpServer.McpServer, (server) =>
     Effect.provideService(registration, McpServer.McpServer, {
       ...server,
-      addTool: (options) => server.addTool(listedRegistration(options)),
+      addTool: (options) =>
+        server.addTool(forwardedContentRegistration(listedRegistration(options))),
     }),
   );
 
@@ -1329,7 +1323,7 @@ const layerProjectRegistration = catalogRegistrations.project.pipe(
   Layer.provide(OrchestratorMcpService.layer),
 );
 
-export const layerConnectionToolkit = catalogRegistrations.connection;
+const layerConnectionToolkit = catalogRegistrations.connection;
 
 const layerRemoteReportRegistration = catalogRegistrations.remoteReport;
 
@@ -1352,6 +1346,25 @@ const layerDeviceScreenshotRegistration = catalogRegistrations.deviceScreenshot;
 export const layerDeviceToolkit = Layer.mergeAll(
   layerDeviceStandardToolkitRegistration,
   layerDeviceScreenshotRegistration,
+);
+
+/** Tells connected clients to list tools again when the listing setting changes (MCP list_changed). */
+const layerListingChanges = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const settings = yield* Effect.serviceOption(Settings.ServerSettingsService);
+    if (Option.isNone(settings)) return;
+    // Changes carry no initial snapshot, so compare against the listing clients have now.
+    let listed = yield* listingSetting(settings);
+    yield* settings.value.streamChanges.pipe(
+      Stream.runForEach((current) => {
+        if (current.agentToolListing === listed) return Effect.void;
+        listed = current.agentToolListing;
+        return server.notifications["notifications/tools/list_changed"]({});
+      }),
+      Effect.forkScoped,
+    );
+  }),
 );
 
 export const layerMcpTransport = McpServer.layerHttp({
@@ -1386,6 +1399,7 @@ export const layer = Layer.mergeAll(
   layerConnectionToolkit,
   layerRemoteReportRegistration,
   layerLlmsTxtRoute,
+  layerListingChanges,
 ).pipe(
   // LaunchWatchService and RemoteDispatchCoordinator are left to the caller:
   // the server provides one of each for these tools and the remote-launch

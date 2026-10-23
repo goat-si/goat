@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { MediaImagePreview } from "./MediaImagePreview";
 
-const first = "https://example.com/photo.heic?signature=first";
-const second = "https://example.com/photo.heic?signature=second";
+// A decodable image from the test server: with a remote URL the browser's own load can fail
+// the retried <img> and remove it before an assertion reads it.
+const first = new URL("/favicon-16x16.png?signature=first", location.origin).href;
+const second = new URL("/favicon-16x16.png?signature=second", location.origin).href;
 
 describe("HEIC and HEIF image previews", () => {
   let container: HTMLDivElement;

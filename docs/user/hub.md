@@ -65,7 +65,8 @@ made it. The row lists each host as **applied**, **waiting** (not reached yet) o
 **needs a GOAT update**; a host on an older GOAT cannot take the setting, and
 agents cannot launch new threads on it while profiles are on. Follow-up messages
 to threads already running there are still delivered, as they are to a host that
-is still **waiting**, so your agents can keep steering their work.
+is still **waiting**, so your agents can keep steering their work. The agent is told
+each time its limits may not apply on that host yet.
 
 ## Read a device
 

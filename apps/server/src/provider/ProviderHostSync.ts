@@ -118,7 +118,7 @@ type RemoteFailure = {
 const classify = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailure => {
   const message = error.message;
   if (error._tag !== "SshRemoteDispatchError") return { status: "refused", message };
-  if (error.reason === "remote_refused" && message.includes(" does not have "))
+  if (Dispatch.refusedByRemote(error.reason) && message.includes(" does not have "))
     return { status: "update_runtime", message };
   if (error.reason === "host_unavailable" && message.includes("goat_ssh_host_prepare"))
     return { status: "not_ready", message };
@@ -445,7 +445,7 @@ const make = Effect.gen(function* () {
           // People read this in Settings; the status tells agents which tool to call.
           message:
             failure.status === "not_ready"
-              ? `GOAT is not running on ${host}. Prepare the host in Hosts, then refresh.`
+              ? `This machine has no ready connection to GOAT on ${host}. Connect it in Settings → Connections, then refresh.`
               : failure.message,
           providers: [],
         }),

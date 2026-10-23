@@ -25,6 +25,9 @@ export type CloudAgentProvider = typeof CloudAgentProvider.Type;
 /**
  * Claude Cloud starts from a project folder, and Claude Code asks once per folder whether to
  * trust it. GOAT answers that prompt itself for its own projects; this is what a person sees.
+ *
+ * Deprecated since GOAT 0.1.2, which trusts folders on its own and no longer shows them. Kept for
+ * Fleet in older clients; remove with the folder trust RPCs in GOAT 0.2.0.
  */
 export const CloudFolderTrust = Schema.Struct({
   instanceId: ProviderInstanceId,

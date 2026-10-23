@@ -10,6 +10,8 @@ import {
   CLAUDE_MEMORY_WRITE_TOOLS,
   CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS,
   claudeAllowedToolName,
+  claudeGoatCallMemoryTool,
+  claudeGoatToolDecision,
   claudeGoatToolName,
   claudeGoatMemoryTool,
 } from "./goatMcpToolNames.ts";
@@ -1606,7 +1608,6 @@ export function claudeMcpQueryOverrides(input: {
       ...cuaServers,
       ...blockedServers,
     },
-    // Only the proxy exemption travels in the environment; the credential stays in the header.
     mcpEnvironment: claudeMcpProxyBypassEnvironment(session.endpoint, input.environment),
   };
 }
@@ -9056,36 +9057,26 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 } satisfies PermissionResult);
           }
 
-          const memoryTool = claudeGoatMemoryTool(toolName);
-          if (memoryTool !== undefined) {
-            const availability = McpProviderSession.memoryToolAvailability(
-              yield* readMcpSession(context.input.threadId),
-            );
-            const write = CLAUDE_MEMORY_WRITE_TOOLS.some((name) => name === memoryTool);
-            if (
-              !availability.read ||
-              (write &&
-                (!availability.write ||
-                  sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) ===
-                    "readOnly")) ||
-              (memoryTool === CLAUDE_MEMORY_SOURCE_TOOL && !availability.source)
-            ) {
-              return {
-                behavior: "deny",
-                message: "GOAT memory tool unavailable for this credential.",
-                toolUseID: callbackOptions.toolUseID,
-              } satisfies PermissionResult;
-            }
-          }
-
-          // allowedTools is fixed at query creation. Recover the same read-only
-          // preapproval here using live authority without replacing the query.
-          if (
-            CLAUDE_MEMORY_READ_TOOLS.some((name) => name === memoryTool) &&
-            sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) === "readOnly"
-          ) {
+          const goatDecision = claudeGoatToolDecision({
+            toolName,
+            toolInput,
+            readOnlySandbox:
+              sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) === "readOnly",
+            memory:
+              claudeGoatCallMemoryTool(toolName, toolInput) === undefined
+                ? undefined
+                : McpProviderSession.memoryToolAvailability(
+                    yield* readMcpSession(context.input.threadId),
+                  ),
+          });
+          if (goatDecision === "deny")
+            return {
+              behavior: "deny",
+              message: "GOAT memory tool unavailable for this credential.",
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          if (goatDecision === "allow")
             return { behavior: "allow", updatedInput: toolInput } satisfies PermissionResult;
-          }
 
           const nativeRequestId = callbackOptions.toolUseID;
           const nativeToolInput = claudeNativeToolInputFromRecord(toolInput);
@@ -9584,7 +9575,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             attachmentsDir,
             settings: adapterOptions.settings,
             environment: claudeQueryEnvironment(
-              { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+              McpProviderSession.withThreadMcpEnvironment(
+                { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+                mcpSession,
+              ),
               turnInput.appThread,
               turnInput.appThread.lineage.relationshipToParent === "subagent"
                 ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)

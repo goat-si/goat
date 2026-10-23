@@ -153,7 +153,7 @@ const elementsOf = (value: unknown): ReadonlyArray<unknown> => {
  * the bot mention is stripped like it is from `text`. Broadcasts and unknown elements are left
  * out. Adapted from cli-jaw's src/slack/events.ts (MIT).
  */
-export function slackRichText(blocks: unknown): string {
+function slackRichText(blocks: unknown): string {
   if (!Array.isArray(blocks)) return "";
   const lines: Array<string> = [];
   let nodes = 0;

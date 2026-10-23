@@ -1,5 +1,10 @@
 // Measures React renders in a running GOAT Dev client. See
 // docs/internals/mobile-development.md#measuring-renders.
+import {
+  isRenderCounterApp,
+  renderCounterScheme,
+  renderCounterCall,
+} from "../src/features/development/render-counter-protocol.ts";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -64,7 +69,7 @@ interface Options {
   readonly server: string;
   readonly token: string;
   readonly metro: string;
-  readonly scheme: string;
+  readonly scheme: string | undefined;
   readonly runs: number;
   readonly windowSeconds: number;
   readonly provider: string;
@@ -81,12 +86,15 @@ const median = (values: ReadonlyArray<number>) => {
 };
 
 /** One Hermes inspector session, reached through Metro's inspector proxy. */
-const connectInspector = Effect.fn("measure.connectInspector")(function* (metro: string) {
+const connectInspector = Effect.fn("measure.connectInspector")(function* (
+  metro: string,
+  schemeOverride?: string,
+) {
   const http = yield* HttpClient.HttpClient;
   const targets = yield* http
     .get(`${metro}/json/list`)
     .pipe(Effect.flatMap(HttpClientResponse.schemaBodyJson(InspectorTargets)));
-  const target = targets.find((entry) => entry.appId.startsWith("com.t3tools.t3code"));
+  const target = targets.find((entry) => isRenderCounterApp(entry.appId));
   if (!target)
     return yield* new MeasureError({ message: `No GOAT app is attached to Metro at ${metro}.` });
   // Expo terminates inspector sockets whose Origin differs from the URL Metro
@@ -98,7 +106,7 @@ const connectInspector = Effect.fn("measure.connectInspector")(function* (metro:
   const writer = yield* socket.writer;
   const reader = yield* socket.reader;
   let nextId = 0;
-  return Effect.fn("measure.evaluate")(function* (expression: string) {
+  const evaluate = Effect.fn("measure.evaluate")(function* (expression: string) {
     const id = ++nextId;
     yield* writer.write(
       encodeJson({ id, method: "Runtime.evaluate", params: { expression, returnByValue: true } }),
@@ -116,6 +124,7 @@ const connectInspector = Effect.fn("measure.connectInspector")(function* (metro:
       }
     }
   });
+  return { evaluate, scheme: renderCounterScheme(target.appId, schemeOverride) };
 });
 
 const connectServer = Effect.fn("measure.connectServer")(function* (options: Options) {
@@ -190,7 +199,7 @@ const measureStreamReply = Effect.fn("measure.streamReply")(function* (
   route: Option.Option<string>,
 ) {
   if (Option.isSome(route)) yield* reloadAndOpen(options, route.value);
-  const evaluate = yield* connectInspector(options.metro);
+  const { evaluate, scheme } = yield* connectInspector(options.metro, options.scheme);
   const { client, environmentId, projectId } = yield* connectServer(options);
   const threadId = ThreadId.make(yield* uuid);
   yield* client["orchestration.launchThread"]({
@@ -225,9 +234,7 @@ const measureStreamReply = Effect.fn("measure.streamReply")(function* (
     }).pipe(Effect.ignore),
   );
   if (Option.isNone(route))
-    yield* evaluate(
-      `__t3RenderCounterOpen(${encodeJson(`${options.scheme}://threads/${environmentId}/${threadId}`)})`,
-    );
+    yield* evaluate(renderCounterCall("open", `${scheme}://threads/${environmentId}/${threadId}`));
   const projectionOf = (item: { kind: string; projection?: OrchestrationV2ThreadProjection }) =>
     item.kind === "snapshot" && item.projection
       ? Effect.succeed(item.projection)
@@ -240,9 +247,11 @@ const measureStreamReply = Effect.fn("measure.streamReply")(function* (
   );
   if (Option.isNone(streaming))
     return yield* new MeasureError({ message: `Run ${run}: the reply never started streaming.` });
-  yield* evaluate("__t3RenderCounterStart()");
+  yield* evaluate(renderCounterCall("start"));
   yield* Effect.sleep(`${options.windowSeconds} seconds`);
-  const report = yield* decodeReport(yield* evaluate("JSON.stringify(__t3RenderCounterStop())"));
+  const report = yield* decodeReport(
+    yield* evaluate(`JSON.stringify(${renderCounterCall("stop")})`),
+  );
   // React commits on every streamed delta, so an empty window means the app is not on the thread.
   // A thread streaming out of view may rightly commit nothing.
   if (report.commits === 0 && Option.isNone(route))
@@ -253,8 +262,8 @@ const measureStreamReply = Effect.fn("measure.streamReply")(function* (
   return { report, stillStreaming: streamingItem(after) !== undefined };
 }, Effect.scoped);
 
-const appLink = (options: Options, route: string) =>
-  `__t3RenderCounterOpen(${encodeJson(`${options.scheme}://${route.replace(/^\//, "")}`)})`;
+const appLink = (scheme: string, route: string) =>
+  renderCounterCall("open", `${scheme}://${route.replace(/^\//, "")}`);
 
 /** Reloads onto Home, then opens `route` and lets it settle; `/` stays on Home. */
 const reloadAndOpen = Effect.fn("measure.reloadAndOpen")(function* (
@@ -263,15 +272,15 @@ const reloadAndOpen = Effect.fn("measure.reloadAndOpen")(function* (
 ) {
   // A link to an already-open screen only refocuses it, so each run starts from a reload.
   yield* Effect.scoped(
-    Effect.flatMap(connectInspector(options.metro), (evaluate) =>
-      evaluate("__t3RenderCounterReload()"),
+    Effect.flatMap(connectInspector(options.metro, options.scheme), ({ evaluate }) =>
+      evaluate(renderCounterCall("reload")),
     ),
   );
   yield* Effect.sleep("15 seconds");
   if (route === "/" || route === "") return;
   yield* Effect.scoped(
-    Effect.flatMap(connectInspector(options.metro), (evaluate) =>
-      evaluate(appLink(options, route)),
+    Effect.flatMap(connectInspector(options.metro, options.scheme), ({ evaluate, scheme }) =>
+      evaluate(appLink(scheme, route)),
     ),
   );
   yield* Effect.sleep("5 seconds");
@@ -284,16 +293,18 @@ const measureRouteOpen = Effect.fn("measure.routeOpen")(function* (
   run: number,
 ) {
   yield* Effect.scoped(
-    Effect.flatMap(connectInspector(options.metro), (evaluate) =>
-      evaluate("__t3RenderCounterReload()"),
+    Effect.flatMap(connectInspector(options.metro, options.scheme), ({ evaluate }) =>
+      evaluate(renderCounterCall("reload")),
     ),
   );
   yield* Effect.sleep("15 seconds");
-  const evaluate = yield* connectInspector(options.metro);
-  yield* evaluate("__t3RenderCounterStart()");
-  yield* evaluate(appLink(options, route));
+  const { evaluate, scheme } = yield* connectInspector(options.metro, options.scheme);
+  yield* evaluate(renderCounterCall("start"));
+  yield* evaluate(appLink(scheme, route));
   yield* Effect.sleep(`${options.windowSeconds} seconds`);
-  const report = yield* decodeReport(yield* evaluate("JSON.stringify(__t3RenderCounterStop())"));
+  const report = yield* decodeReport(
+    yield* evaluate(`JSON.stringify(${renderCounterCall("stop")})`),
+  );
   if (report.commits === 0)
     return yield* new MeasureError({
       message: `Run ${run}: no React commits in the window. Check that ${route} is a valid app path.`,
@@ -359,7 +370,7 @@ const command = Command.make(
       Flag.optional,
     ),
     metro: Flag.String("metro").pipe(Flag.withDefault("http://127.0.0.1:8081")),
-    scheme: Flag.String("scheme").pipe(Flag.withDefault("t3code-dev")),
+    scheme: Flag.String("scheme").pipe(Flag.optional),
     runs: Flag.Int("runs").pipe(Flag.withDefault(3)),
     window: Flag.Int("window").pipe(
       Flag.withDescription("Seconds to record; defaults to 12 for a reply and 6 for --route."),
@@ -376,6 +387,7 @@ const command = Command.make(
     const route = flags.route;
     const options: Options = {
       ...flags,
+      scheme: Option.getOrUndefined(flags.scheme),
       windowSeconds: Option.getOrElse(flags.window, () =>
         Option.isSome(route) && !flags.server ? 6 : 12,
       ),

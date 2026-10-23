@@ -294,6 +294,33 @@ const make = Effect.gen(function* () {
         Effect.succeed("approval-required"),
       ),
     );
+  /** The newest needs_input report wakes the origin on its own, so it carries the data notice. */
+  const wakeWithReport = (r: Row, key: string, report: RemoteReport, source: "agent" | "runtime") =>
+    threads
+      .dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`server:remote-report:${r.correlation_id}:${key}`),
+        threadId: r.origin_thread_id,
+        messageId: MessageId.make(`message:remote-report:${r.correlation_id}:${key}`),
+        text: frameRemoteReport({
+          host: r.host,
+          correlationId: r.correlation_id,
+          kind: report.kind,
+          summary: report.summary,
+          source,
+          standalone: true,
+        }),
+        attachments: [],
+        createdBy: "agent",
+        creationSource: "server",
+        notification: {
+          source: { kind: "monitor" },
+          outcome: "updated",
+          summary: `${r.host}: ${report.kind}`,
+        },
+        dispatchMode: { type: "queue_after_active" },
+      })
+      .pipe(Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })));
   const taskEffect = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.provideService(SqlClient.SqlClient, sql),
@@ -339,32 +366,7 @@ const make = Effect.gen(function* () {
               }),
             );
           if (needsInput && r.delivery === "wake" && report === latestNeedsInput)
-            yield* threads
-              .dispatch({
-                type: "message.dispatch",
-                commandId: CommandId.make(`server:remote-report:${id}:seq:${report.sequence}`),
-                threadId: r.origin_thread_id,
-                messageId: MessageId.make(`message:remote-report:${id}:seq:${report.sequence}`),
-                text: frameRemoteReport({
-                  host: r.host,
-                  correlationId: id,
-                  kind: report.kind,
-                  summary: report.summary,
-                  source: "agent",
-                }),
-                attachments: [],
-                createdBy: "agent",
-                creationSource: "server",
-                notification: {
-                  source: { kind: "monitor" },
-                  outcome: "updated",
-                  summary: `${r.host}: needs_input`,
-                },
-                dispatchMode: { type: "queue_after_active" },
-              })
-              .pipe(
-                Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })),
-              );
+            yield* wakeWithReport(r, `seq:${report.sequence}`, report, "agent");
         }
         // The launched run's open questions, when the host reports them; a finished run has none.
         const questions =
@@ -510,7 +512,7 @@ const make = Effect.gen(function* () {
       });
     const uncertain = (reason: string) =>
       outcome(
-        "It may have been delivered. Check the target with goat_thread_read before sending it again.",
+        'It may have been delivered. Check the target with goat_call {path: "thread.read"} before sending it again.',
         true,
         { reason, message: send.message },
       );
@@ -597,9 +599,9 @@ const make = Effect.gen(function* () {
         // Refused before anything was sent, or by the target with a reason of its own.
         // A lost answer, or a target that failed after accepting it, may still have it.
         const refusedBeforeSending =
-          error.reason === "host_unknown" ||
-          error.reason === "invalid_request" ||
-          error.reason === "caller_changed" ||
+          ["host_unknown", "invalid_request", "caller_changed", "remote_outdated"].includes(
+            error.reason,
+          ) ||
           (error.reason === "remote_refused" &&
             error.remoteCode !== undefined &&
             error.remoteCode !== "orchestration_error");
@@ -671,28 +673,9 @@ const make = Effect.gen(function* () {
             summary: entry.report.summary,
             source: entry.source,
           });
-          if (r.delivery === "wake" && entry === latestNeedsInput) {
-            yield* threads
-              .dispatch({
-                type: "message.dispatch",
-                commandId: CommandId.make(`server:remote-report:${id}:${entry.key}`),
-                threadId: r.origin_thread_id,
-                messageId: MessageId.make(`message:remote-report:${id}:${entry.key}`),
-                text,
-                attachments: [],
-                createdBy: "agent",
-                creationSource: "server",
-                notification: {
-                  source: { kind: "monitor" },
-                  outcome: "updated",
-                  summary: `${r.host}: ${entry.report.kind}`,
-                },
-                dispatchMode: { type: "queue_after_active" },
-              })
-              .pipe(
-                Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })),
-              );
-          } else if (r.delivery !== "notify_only") inbox.push({ kind: entry.report.kind, text });
+          if (r.delivery === "wake" && entry === latestNeedsInput)
+            yield* wakeWithReport(r, entry.key, entry.report, entry.source);
+          else if (r.delivery !== "notify_only") inbox.push({ kind: entry.report.kind, text });
         }
         // Only a binding this machine declared relaySend for carries relays.
         for (const report of forced === undefined ? fresh : []) {
@@ -880,7 +863,7 @@ const make = Effect.gen(function* () {
                   commandId: CommandId.make(`server:remote-task-outage:${id}`),
                   threadId: r.origin_thread_id,
                   messageId: MessageId.make(`message:remote-task-outage:${id}`),
-                  text: `GOAT cannot reach host ${r.host} to observe delegated task ${r.task_id}. The task remains running; use goat_task_read to follow it.`,
+                  text: `GOAT cannot reach host ${r.host} to observe delegated task ${r.task_id}. The task remains running; follow it with goat_call {path: "task.read", args: {taskId: "${r.task_id}"}}.`,
                   attachments: [],
                   createdBy: "agent",
                   creationSource: "server",
@@ -1090,9 +1073,8 @@ const make = Effect.gen(function* () {
               const registered = yield* Deferred.isDone(owner);
               const refused =
                 (error instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-                  ["remote_refused", "invalid_request", "host_unknown", "caller_changed"].includes(
-                    error.reason,
-                  )) ||
+                  // Every reason except a transport failure, after which the send may have landed.
+                  !["ssh_failed", "host_unavailable"].includes(error.reason)) ||
                 (isOrchestratorMcpFailure(error) && !registered);
               if ((input.kind === "task" && !registered) || (input.kind === "thread" && refused)) {
                 yield* db(sql`DELETE FROM remote_dispatches WHERE correlation_id = ${id}`);
