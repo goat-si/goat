@@ -12,13 +12,17 @@ const PROMPT_TEXT =
 const REPLAY_DIR = "apps/server/src/orchestration-v2/testkit";
 const REPLAY_SUITE = /Replay.*\.integration\.test\.ts$/;
 
-const git = (root: string, args: ReadonlyArray<string>) =>
-  NodeChildProcess.spawnSync("git", args, {
-    cwd: root,
-    encoding: "utf8",
-  })
-    .stdout.split("\n")
-    .filter(Boolean);
+/** A failed lookup would silently drop suites, so anything but a clean answer throws. */
+const git = (root: string, args: ReadonlyArray<string>) => {
+  const result = NodeChildProcess.spawnSync("git", args, { cwd: root, encoding: "utf8" });
+  // git grep exits 1 when nothing matches.
+  if (result.status === 1 && args[0] === "grep") return [];
+  if (result.status !== 0)
+    throw new Error(`git ${args[0]} failed in ${root}: ${result.stderr || result.error}`);
+  return result.stdout.split("\n").filter(Boolean);
+};
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Prompt text reaches recorded provider payloads through adapters and the replay harness, so the
@@ -27,7 +31,7 @@ const git = (root: string, args: ReadonlyArray<string>) =>
  * a testkit.
  */
 function promptTextTests(root: string): ReadonlyArray<string> {
-  const moduleName = (path: string) => NodePath.basename(path).replace(CODE, "");
+  const moduleName = (path: string) => escapeRegExp(NodePath.basename(path).replace(CODE, ""));
   const importing = (module: string) =>
     git(root, [
       "grep",
@@ -45,6 +49,10 @@ function promptTextTests(root: string): ReadonlyArray<string> {
   const direct = importing(modules.map(moduleName).join("|"));
   const testkits = direct.filter((path) => path.endsWith(".testkit.ts"));
   const viaTestkit = testkits.length === 0 ? [] : importing(testkits.map(moduleName).join("|"));
+  if (!NodeFS.existsSync(NodePath.join(root, REPLAY_DIR)))
+    throw new Error(
+      `${REPLAY_DIR} is not in this checkout, so the replay suites for prompt text cannot run here.`,
+    );
   const replay = NodeFS.readdirSync(NodePath.join(root, REPLAY_DIR))
     .filter((entry) => REPLAY_SUITE.test(entry))
     .map((entry) => NodePath.join(REPLAY_DIR, entry));
