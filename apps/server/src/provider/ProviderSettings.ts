@@ -127,7 +127,7 @@ const targetOf = (request: ProviderSettingsRequest) => {
   return `${subject}@${request.input.host ?? "local"}`;
 };
 
-export const mergeConfig = (base: unknown, patch: Readonly<Record<string, unknown>> = {}) => {
+const mergeConfig = (base: unknown, patch: Readonly<Record<string, unknown>> = {}) => {
   const next: Record<string, unknown> = isRecord(base) ? { ...base } : {};
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) delete next[key];
@@ -136,7 +136,7 @@ export const mergeConfig = (base: unknown, patch: Readonly<Record<string, unknow
   return next;
 };
 
-export const mergeEnvironment = (
+const mergeEnvironment = (
   base: ProviderInstanceConfig["environment"],
   patch: ProviderUpdateInput["environment"],
 ): ProviderInstanceConfig["environment"] => {
@@ -156,7 +156,7 @@ export const mergeEnvironment = (
   return [...byName.values()];
 };
 
-export const summarize = (
+const summarize = (
   instanceId: ProviderInstanceId,
   instance: ProviderInstanceConfig,
 ): ProviderInstanceSummary => ({
@@ -169,7 +169,7 @@ export const summarize = (
 });
 
 /** What the person is asked to approve. Built from ids and keys only, never agent text or values. */
-export const describeRequest = (request: ProviderSettingsRequest): string => {
+const describeRequest = (request: ProviderSettingsRequest): string => {
   switch (request.action) {
     case "update": {
       const input = request.input;
