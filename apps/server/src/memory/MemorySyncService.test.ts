@@ -47,6 +47,7 @@ import searchMigration from "../persistence/Migrations/078_MemorySearchCounters.
 import lineageMigration from "../persistence/Migrations/080_MemoryImportLineage.ts";
 import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
 import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
+import { migrationManifest } from "../persistence/Migrations.ts";
 import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
 import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
 import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
@@ -2170,21 +2171,11 @@ it.effect.each([
             assert.isEmpty(
               yield* sql`SELECT name FROM sqlite_master WHERE name='memory_last_ready_space'`,
             );
-            assert.deepStrictEqual(yield* runMigrations(), [
-              [86, "MemoryLastReadySpace"],
-              [87, "MemoryHubAdministered"],
-              [88, "MemoryCheckpointLifecycle"],
-              [89, "FleetGoals"],
-              [90, "FleetHealth"],
-              [91, "ThreadRunObservedChecks"],
-              [92, "RemoteDispatchObservation"],
-              [93, "MemoryRevisionCheckpointSize"],
-              [94, "HubNodes"],
-              [95, "MemorySummaryWorkThreadIndex"],
-              [96, "ThreadHistoryArchives"],
-              [97, "PermissionProfiles"],
-              [98, "DecisionInbox"],
-            ]);
+            // Every migration from 086 on runs once against the earlier schema.
+            assert.deepStrictEqual(
+              yield* runMigrations(),
+              migrationManifest.filter(([id]) => id >= 86),
+            );
             const adapter = yield* statusRuntime;
             const result = yield* Effect.scoped(
               Effect.gen(function* () {
