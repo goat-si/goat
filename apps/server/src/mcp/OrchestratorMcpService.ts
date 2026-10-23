@@ -2422,7 +2422,8 @@ const make = Effect.gen(function* () {
   });
 
   return OrchestratorMcpService.of({
-    permissionProfile: (scope) => permissions.resolve(scope),
+    permissionProfile: (scope) =>
+      permissions.resolve(scope).pipe(Effect.map(({ narrowing: _narrowing, ...view }) => view)),
     admitRemoteSend: Effect.fn("OrchestratorMcpService.admitRemoteSend")(function* (scope, input) {
       const effective = yield* permissions.resolve(scope);
       if (!effective.enabled) return { ceiling: undefined, settle: () => Effect.void };
