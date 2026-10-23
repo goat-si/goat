@@ -84,7 +84,7 @@ import {
 } from "../textGeneration/TextGenerationPresets.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import { makePullRequestSetup } from "./pullRequestSetup.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import { detachStackFrame } from "./detachStackFrame.ts";
@@ -721,7 +721,7 @@ export const make = Effect.gen(function* () {
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
-  const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+  const runPullRequestSetup = yield* makePullRequestSetup;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -2758,26 +2758,6 @@ export const make = Effect.gen(function* () {
   const preparePullRequestThread: GitManager["Service"]["preparePullRequestThread"] = Effect.fn(
     "preparePullRequestThread",
   )(function* (input) {
-    const maybeRunSetupScript = (worktreePath: string) => {
-      if (!input.threadId) {
-        return Effect.void;
-      }
-      return projectSetupScriptRunner
-        .runForThread({
-          threadId: input.threadId,
-          projectCwd: input.cwd,
-          worktreePath,
-        })
-        .pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("GitManager.preparePullRequestThread setup script failed", {
-              threadId: input.threadId,
-              worktreePath,
-              cause: error,
-            }).pipe(Effect.asVoid),
-          ),
-        );
-    };
     return yield* Effect.gen(function* () {
       const normalizedReference = normalizePullRequestReference(input.reference);
       const rootWorktreePath = yield* canonicalizeExistingPath(input.cwd);
@@ -2914,7 +2894,7 @@ export const make = Effect.gen(function* () {
         // Only when the checkout actually moved: another thread may be running in this worktree,
         // and re-running the setup script under it buys nothing when the code did not change.
         if (refreshed.moved) {
-          yield* maybeRunSetupScript(worktreePath);
+          yield* runPullRequestSetup(input, worktreePath);
         }
 
         return {
@@ -3017,6 +2997,7 @@ export const make = Effect.gen(function* () {
         },
         {
           worktreesDirectory: yield* readWorktreesDirectory,
+          skipSetupHook: input.threadId !== undefined,
           submodules: yield* projectSettingsFor(input).pipe(
             Effect.map(({ settings }) => settings.worktreeSubmodules),
             Effect.orElseSucceed(() => null),
@@ -3024,7 +3005,7 @@ export const make = Effect.gen(function* () {
         },
       );
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
-      yield* maybeRunSetupScript(worktree.worktree.path);
+      yield* runPullRequestSetup(input, worktree.worktree.path);
 
       return {
         pullRequest,

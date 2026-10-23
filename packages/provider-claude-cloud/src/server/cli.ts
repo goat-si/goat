@@ -35,6 +35,11 @@ export interface ClaudeCloudLogin {
  */
 export interface ClaudeCloudTrust {
   readonly onAccepted: () => void;
+  /**
+   * Answers the trust prompt after a refusal in place of opening Claude here, so the caller can
+   * keep one answer per folder in flight.
+   */
+  readonly accept?: Effect.Effect<void, ClaudeCloudError>;
 }
 const LIMIT = 64 * 1024;
 const unknownSubmission = (cause?: unknown) =>
@@ -633,7 +638,7 @@ const make = Effect.gen(function* () {
         first.failure.outcome !== "rejected"
       )
         return yield* first.failure;
-      yield* acceptTrust(login, cwd);
+      yield* trust.accept ?? acceptTrust(login, cwd);
       trust.onAccepted();
       return yield* startOnce(login, cwd, prompt, trust).pipe(
         Effect.mapError((error) =>
