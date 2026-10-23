@@ -1,3 +1,12 @@
+import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
+import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
+import { ToolDispatch } from "./ToolDispatch.ts";
+import {
+  argumentKeys,
+  encodeReferenceRefusal,
+  refusalResult,
+  undeclaredArgumentsResult,
+} from "./toolRefusals.ts";
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
 import * as DecisionHandlers from "./toolkits/decision/handlers.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
@@ -864,37 +873,6 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
   );
 });
 
-const encodeOrchestratorMcpFailure = Schema.encodeSync(OrchestratorMcpFailure);
-const encodeReferenceRefusal = Schema.encodeSync(Schema.fromJsonString(OrchestratorMcpFailure));
-
-const refusalResult = (failure: OrchestratorMcpFailure) =>
-  new McpSchema.CallToolResult({
-    isError: true,
-    content: [{ type: "text", text: JSON.stringify(encodeOrchestratorMcpFailure(failure)) }],
-  });
-
-const undeclaredArgumentsResult = (
-  tool: string,
-  undeclared: ReadonlyArray<string>,
-  declared: ReadonlyArray<string>,
-) => {
-  const accepted =
-    declared.length === 0 ? `${tool} takes no arguments.` : `It takes ${declared.join(", ")}.`;
-  const failure = new OrchestratorMcpFailure({
-    code: "invalid_request",
-    message: `${tool} does not take ${undeclared.join(", ")}, so nothing ran. ${accepted}`,
-  });
-  return new McpSchema.CallToolResult({
-    isError: true,
-    content: [{ type: "text", text: JSON.stringify(encodeOrchestratorMcpFailure(failure)) }],
-  });
-};
-
-const argumentKeys = (payload: unknown) =>
-  typeof payload === "object" && payload !== null && !Array.isArray(payload)
-    ? Object.keys(payload)
-    : [];
-
 /**
  * Runs tool registrations so that every tool they add refuses top-level
  * arguments it does not declare, before it runs.
@@ -1223,6 +1201,21 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   return registered.pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
 };
 
+/**
+ * goat_call and goat_eval run tools through the server they are registered on,
+ * so a nested call takes the same path, checks and analytics as a direct one.
+ */
+const layerToolDispatch = Layer.effect(
+  ToolDispatch,
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    return ToolDispatch.of({
+      call: (name, args) => server.callTool({ name, arguments: args }),
+      served: (name) => server.tools.find(({ tool }) => tool.name === name)?.tool,
+    });
+  }),
+);
+
 const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, EX, RX>(
   register: Effect.Effect<A, E, R>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
@@ -1234,6 +1227,9 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
 /** The registration layers mounted by /mcp, including image and memory tools.
  * Kept separate from domain construction so catalog contracts can be checked without live state. */
 export const catalogRegistrations = {
+  agentSurface: toolkitRegistration(AgentSurfaceToolkit, AgentSurfaceHandlers.layer).pipe(
+    Layer.provide(layerToolDispatch),
+  ),
   decision: toolkitRegistration(DecisionToolkit, DecisionHandlers.layer),
   htmlRender: toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender),
   htmlPreview: imageToolRegistration(registerHtmlPreview(), HtmlHandlers.layerPreview),
@@ -1398,6 +1394,7 @@ export const layerMcpTransport = McpServer.layerHttp({
 }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 export const layer = Layer.mergeAll(
+  catalogRegistrations.agentSurface,
   catalogRegistrations.decision,
   layerPreviewToolkit,
   layerOrchestratorToolkit,

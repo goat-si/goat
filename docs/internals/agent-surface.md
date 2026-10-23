@@ -367,6 +367,14 @@ keeps large tool sets out of context
 `host` describes a remote's registry, which may be older. The same function backs
 `goat describe` and `goat <resource> <verb> --help`.
 
+**Now.** `goat_describe` answers at the three depths from the
+[registry](../../packages/contracts/src/agentSurface/registry.ts), reading input and output
+schemas from the tools this server actually serves, with `surfaceVersion` at the top.
+`available` reports only the static refusals the server is sure of (thread-only,
+client-only, read-only client, not served); goatclaw capabilities, lanes, `query`,
+`host`, examples, and related paths are not in it yet. See
+[handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
+
 **Proposed (later).** A `core` listing profile shows only the meta tools, the
 operation verbs, and the most used tools. It is opt-in per provider instance and
 measured against the full listing before it becomes a default.
@@ -390,6 +398,18 @@ directly, and it narrows nothing
 
 A test calls every registry entry directly and through `goat_call` with the same
 caller and asserts identical refusals.
+
+**Now.** `goat_call` resolves a path, a canonical `goat_<resource>_<verb>` name, or a
+legacy name, and runs the tool through the same registered handle `/mcp` serves
+(`ToolDispatch`, built in `McpHttpServer`). Argument refusal, the tool's
+`McpToolAccess` declaration, domain admission inside the handler, host routing, and
+analytics therefore run as for a direct call. It adds no gate of its own and is declared
+destructive, so a client that prompts before destructive tools still prompts before any
+target reached through it. The checked-handler wrapper records the original typed error,
+and `goat_call` uses it only to classify by a literal the envelope's table declares; the
+message is always the text the direct call shows, so free-text reasons the direct path
+scrubs never leave through it. Writes count as unkeyed until the registry gains
+`idempotency`, and routed calls set `meta.host`.
 
 ## Composition: `goat_eval`
 
@@ -751,7 +771,7 @@ Each PR ships on its own and leaves `tools/list` unchanged until the flip.
 | 2   | Handoff record, cards, SSH continuations                                      | Shipped ([#212](https://github.com/goat-si/goat/pull/212))                                                                                                                 |
 | 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774) |
 | 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                 |
-| 5   | One invocation function, `goat_call`, `goat_describe`                         | Proposed                                                                                                                                                                   |
+| 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                 |
 | 6   | Idempotency receipts with digest, unknown state, audit columns                | Proposed                                                                                                                                                                   |
 | 7   | Operations over existing stores; durable provider sync                        | Proposed                                                                                                                                                                   |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |

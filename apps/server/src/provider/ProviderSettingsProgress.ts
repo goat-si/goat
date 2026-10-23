@@ -14,6 +14,7 @@ import {
   ProviderInstanceSummary,
   ProviderManageResult,
 } from "@goat/contracts";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
 const ProviderSettingsEffect = Schema.Literals(["install", "save", "link", "remote"]);
@@ -69,3 +70,27 @@ export type ProviderSettingsProgress = typeof ProviderSettingsProgress.Type;
 const ProgressJson = Schema.toCodecJson(ProviderSettingsProgress);
 export const encodeProgress = Schema.encodeEffect(ProgressJson);
 export const decodeProgress = Schema.decodeUnknownEffect(ProgressJson);
+const encodeProgressSync = Schema.encodeSync(ProgressJson);
+
+/**
+ * What a setup approval did, kept so the asking thread hears it: the instance it turned on, or
+ * that it could not. Nothing is kept when there was nothing for GOAT to turn on.
+ */
+export const setupProgress = (outcome: Exit.Exit<ProviderManageResult | undefined, unknown>) =>
+  Exit.isSuccess(outcome)
+    ? outcome.value === undefined
+      ? undefined
+      : encodeProgressSync({
+          version: 1,
+          effects: {},
+          outcome: { state: "applied", result: outcome.value },
+        })
+    : encodeProgressSync({
+        version: 1,
+        effects: {},
+        outcome: {
+          state: "failed",
+          reason: "invalid_request",
+          message: "GOAT could not turn the provider instance on.",
+        },
+      });

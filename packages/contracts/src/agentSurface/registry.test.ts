@@ -90,6 +90,10 @@ const OFF_GRAMMAR_NAMES = [
   "write_pull_request_guides",
 ] as const;
 
+// The two meta tools keep the short names the design gives them (agent-surface.md, Discovery and
+// Calling); they are how an agent reaches every path, so they are not themselves a resource.
+const META_TOOL_NAMES = ["goat_describe", "goat_call"] as const;
+
 describe("agent surface grammar", () => {
   it("keeps paths, resources and verbs in lower snake case", () => {
     for (const [key, entry] of Object.entries(agentSurfaceRegistry)) {
@@ -107,7 +111,7 @@ describe("agent surface grammar", () => {
   });
 
   it("names every new tool by its path", () => {
-    const listed = new Set<string>(OFF_GRAMMAR_NAMES);
+    const listed = new Set<string>([...OFF_GRAMMAR_NAMES, ...META_TOOL_NAMES]);
     const offGrammar = entries.filter((entry) => entry.name !== mcpName(entry));
     expect(
       offGrammar.filter((entry) => !listed.has(entry.name)).map((entry) => entry.path),
