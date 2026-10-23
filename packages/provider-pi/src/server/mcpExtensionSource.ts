@@ -3,6 +3,7 @@
  * `@earendil-works/pi-coding-agent` and `typebox` from the user's pi install.
  */
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
 import {
   canonicalToolName,
   legacyAgentSurfacePaths,
@@ -31,12 +32,6 @@ export const GOAT_CUA_GATE_ENV = "GOAT_CUA_GATE";
  * Auto-accept edits skips them; the adapter keys the approval kind off them.
  */
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
-
-/**
- * The tools/list `_meta` flag GOAT sets on each resident tool. It is Claude Code's own key for a
- * tool that must never be deferred, so one flag serves every harness that defers tools.
- */
-export const ALWAYS_LOAD_META_KEY = "anthropic/alwaysLoad";
 
 /**
  * Every path and name goat_call resolves to a read, by the resolver goat_call itself uses.

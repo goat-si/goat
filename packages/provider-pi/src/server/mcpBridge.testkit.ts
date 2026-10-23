@@ -2,7 +2,8 @@
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeVM from "node:vm";
-import { ALWAYS_LOAD_META_KEY, PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
+import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
+import { PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
 
 interface RegisteredTool {
   readonly name: string;

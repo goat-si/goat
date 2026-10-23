@@ -12,7 +12,8 @@ import {
   resolveAgentSurfaceEntry,
 } from "@goat/contracts/agentSurface/resolve";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
-import { ALWAYS_LOAD_META_KEY, PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
+import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
+import { PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
 
 type RequestHook = (
