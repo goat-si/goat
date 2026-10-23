@@ -552,14 +552,13 @@ Around it, a human step reaches an agent in several shapes:
 | Decisions                    | `DecisionItem` by id                              | agent or person, per item             | answer delivered as a thread message                 |
 | Cloud launch consent         | `capability_denied` text telling the agent to ask | person answering a decision `approve` | agent calls launch again with `decisionId`           |
 
-Three gaps follow. A handoff resolving does not wake the thread that asked; it
-only updates the card. Provider sync approvals live in memory. Approval policy
-differs by path: pending-question MCP lets an outside client holding
-`orchestration:approve` answer provider approvals
-([PendingQuestionsMcpService.ts](../../apps/server/src/mcp/PendingQuestionsMcpService.ts)),
-while the decision inbox treats every MCP caller as an agent and refuses it for
-human-required items, including the same approvals projected there
-([DecisionInbox.ts](../../apps/server/src/goatclaw/DecisionInbox.ts)).
+Two gaps follow. A handoff resolving does not wake the thread that asked; it
+only updates the card. Provider sync approvals live in memory. Who may resolve a
+step is one predicate
+([HumanStepAuthority.ts](../../apps/server/src/handoffs/HumanStepAuthority.ts)),
+used by pending-question MCP, the decision inbox, and handoffs, so an outside
+client holding `orchestration:approve` answers a provider approval the same way
+through either path.
 
 **Proposed.**
 
