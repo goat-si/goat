@@ -354,8 +354,11 @@ hosts call writes on each other as outside clients, so their approved access lev
 and scopes bound them, and the launch, goal and hub handlers still apply the default
 profile to them.
 
-**Proposed.** Add the `idempotency`, `pagination`, and `operation` fields, and run
-each entry's examples as tests.
+An entry's `operation` names the kind its accepted work becomes, and `goat_call`
+returns that work's handle in `meta.operation`.
+
+**Proposed.** Add the `idempotency` and `pagination` fields, and run each entry's
+examples as tests.
 
 ## Discovery: `goat_describe`
 
@@ -717,8 +720,9 @@ packages gain `/usr/bin/goat`, and the welcome wizard offers the install once.
 The CLI resolves a credential for the origin server only:
 
 1. `GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`, which GOAT sets for
-   agent subprocesses and terminals, so `goat` inside a thread has exactly that
-   thread's grant. When they are present and invalid, the CLI fails; it never falls
+   ACP agents' processes, so `goat` inside such a thread has exactly that thread's
+   grant. Other providers do not get them yet
+   ([#934](https://github.com/goat-si/goat/issues/934)). When they are present and invalid, the CLI fails; it never falls
    back to a stored login, which could carry more authority.
 2. A session from `goat login`, which pairs with the local server and must yield an
    `mcp-client` credential, the only outside subject `/mcp` accepts
@@ -797,7 +801,7 @@ Each PR ships on its own and leaves `tools/list` unchanged until the flip.
 | 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                 |
 | 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                 |
 | 6   | Idempotency receipts with digest, unknown state, audit columns                | Proposed                                                                                                                                                                   |
-| 7   | Operations over existing stores; durable provider sync                        | Proposed                                                                                                                                                                   |
+| 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup)                                                                          |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
 | 9   | Registry-generated CLI commands and credentials                               | Proposed                                                                                                                                                                   |
 | 10  | Listing flip, verb normalization, remote name translation                     | Started: canonical names callable as unlisted aliases ([#906](https://github.com/goat-si/goat/pull/906))                                                                   |

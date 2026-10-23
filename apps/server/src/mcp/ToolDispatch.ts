@@ -94,6 +94,9 @@ const listedNames: ReadonlyMap<string, string> = new Map(
   Object.values(agentSurfaceRegistry).map((entry) => [entry.name, listedToolName(entry)]),
 );
 
+/** The name /mcp registers a tool under, given the name it shipped with or the listed one. */
+export const registeredToolName = (name: string) => listedNames.get(name) ?? name;
+
 /** Adds the deprecation to a result when this request named the tool by a legacy name. */
 const markDeprecated = (listed: string) =>
   Effect.fnUntraced(function* (result: McpSchema.CallToolResult | McpSchema.InputRequired) {

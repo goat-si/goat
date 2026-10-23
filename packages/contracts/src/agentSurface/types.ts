@@ -1,4 +1,5 @@
 import type { PermissionCapability } from "../permissionProfiles.ts";
+import type { OperationKind } from "./operation.ts";
 
 /** Metadata only: schemas and handlers remain with their owning toolkit. */
 export type AgentSurfaceEffect = "read" | "write" | "destructive";
@@ -28,6 +29,8 @@ export interface AgentSurfaceEntry {
   >;
   readonly capability?: AgentSurfaceCapability;
   readonly capabilityReason?: string;
+  /** The kind of operation this path's accepted work becomes; goat_call returns its handle. */
+  readonly operation?: OperationKind;
   readonly annotations: {
     readonly title?: string;
     readonly idempotentHint: boolean;

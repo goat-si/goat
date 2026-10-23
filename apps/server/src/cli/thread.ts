@@ -16,21 +16,18 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as References from "effect/References";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
 import { Argument, Command, Flag, GlobalFlag } from "effect/cli";
 
-import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
-import * as ServerConfig from "../config.ts";
 import { mcpToolSession, type McpToolSession } from "../mcp/AcpMcpStdioBridge.ts";
-import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import { CliCredentialError } from "./cliCredential.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { resolveShellCredential } from "./login.ts";
 
 /**
  * Short enough that a run which stops to ask the user something is noticed
@@ -39,16 +36,6 @@ import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 const WAIT_SLICE_MS = 15_000;
 const READ_PAGE_LIMIT = 100;
 const TITLE_MAX_CHARS = 80;
-
-export class ThreadServerNotRunningError extends Schema.TaggedError<ThreadServerNotRunningError>()(
-  "ThreadServerNotRunningError",
-  { baseDir: Schema.String },
-) {
-  override readonly [Runtime.errorReported] = false;
-  override get message(): string {
-    return `No running GOAT server uses ${this.baseDir}. Start GOAT, then retry.`;
-  }
-}
 
 export class ThreadServerUnreachableError extends Schema.TaggedError<ThreadServerUnreachableError>()(
   "ThreadServerUnreachableError",
@@ -115,7 +102,7 @@ export class ThreadRunEndedError extends Schema.TaggedError<ThreadRunEndedError>
 }
 
 const ThreadCliError = Schema.Union([
-  ThreadServerNotRunningError,
+  CliCredentialError,
   ThreadServerUnreachableError,
   ThreadToolFailedError,
   ThreadUsageError,
@@ -199,48 +186,24 @@ const makeThreadTools = (session: McpToolSession, origin: string) => {
 export type ThreadTools = ReturnType<typeof makeThreadTools>;
 
 /**
- * Signs in as a short-lived MCP client of the running server, the same way an
- * outside agent does, and revokes that session when the command ends.
+ * Runs with this shell's credential: inside a thread exactly that thread's grant, otherwise the
+ * `goat login` session. It never mints a broader one (#933).
  */
 const withThreadTools = Effect.fn("cli.thread.withThreadTools")(function* <A, E, R>(
   flags: { readonly baseDir: Option.Option<string> },
   run: (tools: ThreadTools) => Effect.Effect<A, E, R>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
-  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  const credential = yield* resolveShellCredential(resolveCliAuthConfig(flags, logLevel));
+  const origin = new URL(credential.endpoint).origin;
   return yield* Effect.gen(function* () {
-    const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
-    if (Option.isNone(runtimeState)) {
-      return yield* new ThreadServerNotRunningError({ baseDir: config.baseDir });
-    }
-    const origin = runtimeState.value.origin;
-    const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const issued = yield* Effect.acquireRelease(
-      environmentAuth.issueMcpClientSession({
-        label: "goat thread cli",
-        // The CLI runs as the machine's owner. New threads still start at
-        // the project's default mode, never at this ceiling by default.
-        access: "full-access",
-        client: { deviceType: "bot" },
-      }),
-      (session) =>
-        environmentAuth.revokeSession(session.sessionId).pipe(Effect.ignore({ log: true })),
-    );
     const session = yield* mcpToolSession({
-      endpoint: new URL("/mcp", origin).href,
-      authorization: `Bearer ${issued.token}`,
+      endpoint: credential.endpoint,
+      authorization: credential.authorization,
       clientName: "goat-thread-cli",
     }).pipe(Effect.mapError((cause) => new ThreadServerUnreachableError({ origin, cause })));
     return yield* run(makeThreadTools(session, origin));
-  }).pipe(
-    Effect.scoped,
-    Effect.provide(
-      EnvironmentAuth.layerRuntime.pipe(
-        Layer.provide(ServerConfig.layer(config)),
-        Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
-      ),
-    ),
-  );
+  }).pipe(Effect.scoped);
 });
 
 const readMessageArgument = Effect.fn("cli.thread.readMessage")(function* (argument: string) {
