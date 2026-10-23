@@ -196,7 +196,7 @@ export function chooseHolder(
     if (wanted === undefined)
       return {
         ok: false,
-        message: `${preference} is not a connected holder for ${label}. goat_cloud_holders lists them.`,
+        message: `${preference} is not a connected holder for ${label}. goat_cloud_agent_holders lists them.`,
       };
     if (wanted.runtime === "update_required")
       return {

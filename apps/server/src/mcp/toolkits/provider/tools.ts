@@ -5,7 +5,7 @@ import {
   CloudHoldersInput,
   CloudHoldersResult,
   CloudLaunchInput,
-  CloudLaunchResult,
+  CloudLaunchMcpResult,
   CloudRunForgetInput,
   CloudRunForgetResult,
   CloudRunListInput,
@@ -27,6 +27,7 @@ import {
   ProviderSyncStatusInput,
   ProviderLoginFlowInput,
   ProviderLoginResultJson,
+  ProviderLoginFlowResultJson,
   ProviderLoginStartInput,
   ProviderSetupOpenInput,
   ProviderSetupOpenResultJson,
@@ -94,14 +95,14 @@ const ProviderSyncTool = Tool.make(agentSurfaceRegistry["provider.sync"].name, {
   failureMode: "return" as const,
   dependencies: hostSyncDependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.sync"]));
-const ProviderSyncStatusTool = Tool.make(agentSurfaceRegistry["provider.sync_status"].name, {
-  description: agentSurfaceRegistry["provider.sync_status"].description,
+const ProviderSyncStatusTool = Tool.make(agentSurfaceRegistry["provider.sync_read"].name, {
+  description: agentSurfaceRegistry["provider.sync_read"].description,
   parameters: ProviderSyncStatusInput,
   success: ProviderSyncState,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
   dependencies: hostSyncDependencies,
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.sync_status"]));
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.sync_read"]));
 const ProviderSyncCancelTool = Tool.make(agentSurfaceRegistry["provider.sync_cancel"].name, {
   description: agentSurfaceRegistry["provider.sync_cancel"].description,
   parameters: ProviderSyncCancelInput,
@@ -143,7 +144,7 @@ const ProviderLoginStartTool = Tool.make(agentSurfaceRegistry["provider.login_st
 const ProviderLoginStatusTool = Tool.make(agentSurfaceRegistry["provider.login_status"].name, {
   description: agentSurfaceRegistry["provider.login_status"].description,
   parameters: ProviderLoginFlowInput,
-  success: ProviderLoginResultJson,
+  success: ProviderLoginFlowResultJson,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
   dependencies: onboardingDependencies,
@@ -151,7 +152,7 @@ const ProviderLoginStatusTool = Tool.make(agentSurfaceRegistry["provider.login_s
 const ProviderLoginCancelTool = Tool.make(agentSurfaceRegistry["provider.login_cancel"].name, {
   description: agentSurfaceRegistry["provider.login_cancel"].description,
   parameters: ProviderLoginFlowInput,
-  success: ProviderLoginResultJson,
+  success: ProviderLoginFlowResultJson,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
   dependencies: onboardingDependencies,
@@ -207,7 +208,7 @@ const CloudLaunchTool = Tool.make(agentSurfaceRegistry["cloud_agent.launch"].nam
   ...cloudTool,
   description: agentSurfaceRegistry["cloud_agent.launch"].description,
   parameters: CloudLaunchInput,
-  success: CloudLaunchResult,
+  success: CloudLaunchMcpResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["cloud_agent.launch"]));
 
 const CloudRunRegisterTool = Tool.make(agentSurfaceRegistry["cloud_agent.run_register"].name, {

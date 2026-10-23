@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 
-import { PixelText } from "./pixel-text";
-
 const backdropClassNames = {
   pairing:
     "absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-emerald-500)_14%,transparent),transparent)]",
@@ -61,8 +59,8 @@ export function StandalonePageHeader({
 }) {
   return (
     <>
-      <p className="text-muted-foreground">
-        <PixelText size="label">{eyebrow}</PixelText>
+      <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+        {eyebrow}
       </p>
       <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h1>
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{description}</p>

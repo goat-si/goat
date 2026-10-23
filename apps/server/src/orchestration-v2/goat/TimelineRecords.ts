@@ -30,7 +30,7 @@ export class OrchestratorChannelBotThreadError extends Schema.TaggedError<Orches
   { commandId: CommandId, threadId: ThreadId },
 ) {
   override get message(): string {
-    return "This thread is the GOAT bot. Send it messages through the GOAT bot chat or channel_ingest.";
+    return "This thread is the GOAT bot. Send it messages through the GOAT bot chat or goat_channel_ingest.";
   }
 }
 

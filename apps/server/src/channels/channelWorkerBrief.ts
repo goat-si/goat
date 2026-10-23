@@ -68,9 +68,9 @@ export const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "in
 export const channelWorkerRules = (reporting: "local" | "remote") =>
   reporting === "local"
     ? [
-        'For progress on long work, call channel_task_report with status "running" at meaningful milestones.',
+        'For progress on long work, call goat_channel_task_report with status "running" at meaningful milestones.',
         ASK_FIRST + "a waiting_input question.",
-        'If you need a decision from the person who asked, call channel_task_report with this taskId and generation, status "waiting_input", a new eventId, and your question, then stop.',
+        'If you need a decision from the person who asked, call goat_channel_task_report with this taskId and generation, status "waiting_input", a new eventId, and your question, then stop.',
         REPORT_RESULT,
         FINISH,
       ]
@@ -95,14 +95,14 @@ export const GOAT_BOT_READ_ONLY_RULE =
  * comes back into the same conversation.
  */
 export const GOAT_BOT_ROUTING_RULE =
-  "Route what this needs one of three ways. Small lookups you settle yourself: read the files, notes, memory, or task status that answer it, and reply. Investigations that take several steps or parallel searching go to a bounded subagent with delegate_task: wait for it and fold what it found into your answer; never paste its output raw. Work that changes anything goes to a coding thread: goat_thread_launch here or goat_ssh_thread_launch on another machine, always with a worktree workspace; when GOAT tells you that thread ended, report its result back into this conversation. Follow-ups from the person arrive while you work: acknowledge each one, answer what you can between waits on children, and fold the rest in when the child completes.";
+  "Route what this needs one of three ways. Small lookups you settle yourself: read the files, notes, memory, or task status that answer it, and reply. Investigations that take several steps or parallel searching go to a bounded subagent with goat_task_create: wait for it and fold what it found into your answer; never paste its output raw. Work that changes anything goes to a coding thread: goat_thread_launch here or goat_ssh_thread_launch on another machine, always with a worktree workspace; when GOAT tells you that thread ended, report its result back into this conversation. Follow-ups from the person arrive while you work: acknowledge each one, answer what you can between waits on children, and fold the rest in when the child completes.";
 
 /**
  * GOAT Bot hands work to the machines that have room for it; the general placement guidance is in
  * the GOAT orchestration instructions every agent gets.
  */
 export const GOAT_BOT_DISPATCH_RULE =
-  "When more than one machine is connected, spread work instead of doing it all here: check goat_host_status and the host lists, then start each lane on a machine that has what it needs and room to spare, with delegate_task here or goat_ssh_thread_launch on another machine. Put the read-only rule in every brief you send, never start a Boat cloud machine unless the person asked, rely on GOAT's notifications instead of polling, and say in your answer which machine ran what.";
+  "When more than one machine is connected, spread work instead of doing it all here: check goat_host_status and the host lists, then start each lane on a machine that has what it needs and room to spare, with goat_task_create here or goat_ssh_thread_launch on another machine. Put the read-only rule in every brief you send, never start a Boat cloud machine unless the person asked, rely on GOAT's notifications instead of polling, and say in your answer which machine ran what.";
 
 /**
  * With goatclaw on, GOAT Bot fronts the supervisor (design §8.4): it plans and launches managers,

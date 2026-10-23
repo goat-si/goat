@@ -1,20 +1,22 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
-import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import {
-  FAILURE_CLASSES,
-  type AgentSurfaceResult,
-  type CallContext,
-  fromFailure,
-  fromInvalidParams,
-  fromToolResult,
-} from "@goat/contracts/agentSurface/envelope";
+  canonicalToolName,
+  deprecatedReplacement,
+  listedToolName,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
+import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
-import * as Ref from "effect/Ref";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as Handoffs from "../../../handoffs/Handoffs.ts";
+import { makeHandoffReader } from "../../operations/handoffReads.ts";
+import { makeOperationTokens } from "../../operations/OperationTokens.ts";
 import { ToolDispatch } from "../../ToolDispatch.ts";
+import { dispatchEnvelope, envelopeError } from "./dispatchEnvelope.ts";
+import { makeOperations } from "./operations.ts";
 import { AgentSurfaceToolkit, type DescribeResult } from "./tools.ts";
 
 const entries: ReadonlyArray<AgentSurfaceRegistryEntry> = Object.values(agentSurfaceRegistry);
@@ -31,6 +33,45 @@ const surfaceVersion = (() => {
 })();
 // Calling these through goat_call would only nest the same checks, or recurse.
 const NOT_CALLABLE: ReadonlySet<string> = new Set(["surface.call", "surface.eval"]);
+
+/** goat_describe's query returns this many paths and reads one more to say whether others match. */
+const SEARCH_LIMIT = 20;
+
+/**
+ * Every word must appear in the path, summary or description; a word in the path counts most.
+ * Ties keep registry order by path, so the same query always answers the same way.
+ */
+const search = (candidates: ReadonlyArray<AgentSurfaceRegistryEntry>, query: string) => {
+  const words = query
+    .toLowerCase()
+    .split(/\s+/u)
+    .filter((word) => word !== "");
+  const scored: Array<{ readonly entry: AgentSurfaceRegistryEntry; readonly score: number }> = [];
+  for (const entry of candidates) {
+    const path = `${entry.path} ${entry.name}`.toLowerCase();
+    const summary = entry.summary.toLowerCase();
+    const description = entry.description.toLowerCase();
+    let score = 0;
+    for (const word of words) {
+      const points = path.includes(word)
+        ? 3
+        : summary.includes(word)
+          ? 2
+          : description.includes(word)
+            ? 1
+            : 0;
+      if (points === 0) {
+        score = 0;
+        break;
+      }
+      score += points;
+    }
+    if (score > 0) scored.push({ entry, score });
+  }
+  return scored
+    .toSorted((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path))
+    .map(({ entry }) => entry);
+};
 
 type Availability = { readonly now: boolean; readonly reason?: string };
 type Scope = McpInvocationContext.McpInvocationScope;
@@ -52,80 +93,47 @@ const availability = (
   return { now: true };
 };
 
-const stringField = (value: unknown, key: string) => {
-  const field =
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)[key]
-      : undefined;
-  return typeof field === "string" && field !== "" ? field : undefined;
-};
-
-/**
- * The declared domain literal behind a failure, which the MCP layer may have flattened to text.
- * Only literals the classification table names count: an undeclared failure is one the direct
- * call deliberately scrubs, so goat_call must not reveal even its tag. Free text such as a
- * reason string or a computed message never leaves through here.
- */
-const declaredLiteral = (
-  error: unknown,
-): { readonly _tag: string; readonly code?: string } | undefined => {
-  const tag = stringField(error, "_tag");
-  if (tag === undefined) return undefined;
-  const literal = (["code", "reason", "failureCode"] as const)
-    .map((key) => stringField(error, key))
-    .find((value) => value !== undefined && FAILURE_CLASSES[value] !== undefined);
-  if (literal !== undefined) return { _tag: tag, code: literal };
-  return FAILURE_CLASSES[tag] === undefined ? undefined : { _tag: tag };
-};
-
-/** Reclassifies a direct failure by its declared literal; the text stays what a direct call shows. */
-const reclassified = (
-  direct: AgentSurfaceResult,
-  error: unknown,
-  context: CallContext,
-): AgentSurfaceResult => {
-  const declared = declaredLiteral(error);
-  if (direct.status !== "error" || declared === undefined) return direct;
-  const classified = fromFailure({ ...declared, message: direct.error.message }, context);
-  if (classified.status !== "error") return direct;
-  return {
-    ...direct,
-    error: {
-      ...classified.error,
-      ...(direct.error.details === undefined ? {} : { details: direct.error.details }),
-    },
-  };
-};
-
-const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
-
-/** Where a routed call ran, so the agent can tell remote results from local ones. */
-const withHost = (result: AgentSurfaceResult, host: string | undefined): AgentSurfaceResult =>
-  host === undefined ? result : { ...result, meta: { ...result.meta, host } };
-
-const envelopeError = (
-  code: "invalid_request" | "not_found" | "internal",
-  reason: string,
-  message: string,
-): AgentSurfaceResult => ({ status: "error", error: { code, reason, message, retryable: false } });
-
 export const layer = McpToolAccess.toLayer(
   AgentSurfaceToolkit,
   Effect.gen(function* () {
     const dispatch = yield* ToolDispatch;
+    const operations = makeOperations(
+      dispatch,
+      yield* makeOperationTokens,
+      makeHandoffReader(yield* Effect.serviceOption(Handoffs.Handoffs)),
+    );
 
     const summary = (entry: AgentSurfaceRegistryEntry, scope: Scope) => ({
       path: entry.path,
-      name: entry.name,
+      name: listedToolName(entry),
       summary: entry.summary,
       effect: entry.effect,
-      available: availability(entry, scope, dispatch.served(entry.name) !== undefined),
+      available: availability(entry, scope, dispatch.served(listedToolName(entry)) !== undefined),
     });
 
     const describe = Effect.fn("AgentSurface.describe")(function* (input: {
       readonly path?: string | undefined;
+      readonly query?: string | undefined;
     }) {
       const scope = yield* McpInvocationContext.McpInvocationContext;
+      if (input.query !== undefined) {
+        const within =
+          input.path === undefined
+            ? entries
+            : entries.filter((candidate) => candidate.resource === input.path);
+        if (within.length === 0)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: `query searches every path or one resource, and GOAT has no resource named ${input.path}.`,
+          });
+        const matches = search(within, input.query);
+        return {
+          depth: "search" as const,
+          query: input.query,
+          entries: matches.slice(0, SEARCH_LIMIT).map((entry) => summary(entry, scope)),
+          truncated: matches.length > SEARCH_LIMIT,
+        } satisfies DescribeResult;
+      }
       if (input.path === undefined) {
         const resources = new Map<string, Array<string>>();
         for (const entry of entries)
@@ -141,7 +149,7 @@ export const layer = McpToolAccess.toLayer(
       }
       const entry = resolveAgentSurfaceEntry(input.path);
       if (entry !== undefined) {
-        const tool = dispatch.served(entry.name);
+        const tool = dispatch.served(listedToolName(entry));
         return {
           depth: "path" as const,
           entry: {
@@ -184,57 +192,44 @@ export const layer = McpToolAccess.toLayer(
           "unknown_path",
           `GOAT has no capability named ${input.path}. Find paths with goat_describe.`,
         );
+      const name = listedToolName(entry);
       if (NOT_CALLABLE.has(entry.path))
         return envelopeError(
           "invalid_request",
           "not_callable",
-          `${entry.name} cannot run inside goat_call. Call it directly.`,
+          `${name} cannot run inside goat_call. Call it directly.`,
         );
-      if (dispatch.served(entry.name) === undefined)
-        return envelopeError(
-          "not_found",
-          "not_served",
-          `This GOAT server does not serve ${entry.name}.`,
-        );
-      const captured = yield* Ref.make<unknown>(undefined);
-      // Writes count as unkeyed until the registry says which ones the server deduplicates.
-      const context: CallContext = { effect: entry.effect, pathOf };
+      if (dispatch.served(name) === undefined)
+        return envelopeError("not_found", "not_served", `This GOAT server does not serve ${name}.`);
       const args = input.args ?? {};
       const host = entry.hostRoutable && typeof args.host === "string" ? args.host : undefined;
-      return yield* dispatch.call(entry.name, args).pipe(
-        Effect.provideService(McpToolAccess.CallFailureCapture, {
-          record: (error) => Ref.set(captured, error),
-        }),
-        Effect.flatMap((result) =>
-          result.isError === true
-            ? Effect.map(Ref.get(captured), (error) =>
-                reclassified(fromToolResult(result, context), error, context),
-              )
-            : Effect.succeed(fromToolResult(result, context)),
-        ),
-        Effect.map((result) => withHost(result, host)),
-        // A dying target still gets an answer, with the same fixed text a direct call shows.
-        Effect.catchDefect(() =>
-          Effect.succeed(
-            envelopeError(
-              "internal",
-              "tool_error",
-              "Tool execution failed due to an internal server error.",
-            ),
-          ),
-        ),
-        Effect.catchTags({
-          InvalidParams: (error) => Effect.succeed(fromInvalidParams(error.message)),
-          InternalError: (error) =>
-            Effect.succeed(envelopeError("internal", "internal_error", error.message)),
-        }),
-      );
+      // Work that runs on needs a handle; without one, starting it would strand the caller (D1).
+      if (yield* operations.unready(entry))
+        return {
+          status: "error",
+          error: {
+            code: "unavailable",
+            reason: "operation_unavailable",
+            message: `GOAT could not prepare a handle for this work, so ${name} did not run. Try again.`,
+            retryable: true,
+          },
+        } satisfies AgentSurfaceResult;
+      const result = yield* dispatchEnvelope(dispatch, name, args, entry.effect, host);
+      const finished = yield* operations.withOperation(entry, result);
+      // The envelope names paths, so a deprecated name or path points at the current path.
+      return deprecatedReplacement(input.path) === undefined
+        ? finished
+        : { ...finished, meta: { ...finished.meta, deprecated: entry.path } };
     });
 
     return {
       goat_describe: McpToolAccess.reads(describe),
       // Destructive so clients that prompt on destructive tools still prompt for the targets that are.
       goat_call: McpToolAccess.destructive(McpToolAccess.dispatches(call)),
+      goat_operation_read: McpToolAccess.reads(operations.read),
+      goat_operation_wait: McpToolAccess.reads(operations.wait),
+      // The kind's own cancel tool holds the checks, as goat_call's targets do.
+      goat_operation_cancel: McpToolAccess.destructive(McpToolAccess.dispatches(operations.cancel)),
     };
   }),
 );

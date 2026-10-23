@@ -10,7 +10,7 @@ import type {
 import { isOrchestrationV2WorkActive } from "@goat/contracts";
 import * as Predicate from "effect/Predicate";
 
-import { resolveGoatMcpToolId } from "./goatMcpToolPresentation.ts";
+import { resolveGoatMcpShippedToolId } from "./goatMcpToolPresentation.ts";
 import { threadPullRequestKeyOf } from "./threadPullRequests.ts";
 
 const BACKGROUND_TURN_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
@@ -77,7 +77,7 @@ export function deriveBlockedOnThreadWait(input: {
       continue;
     }
     if (item.type !== "dynamic_tool") return false;
-    const tool = resolveGoatMcpToolId(item.toolName);
+    const tool = resolveGoatMcpShippedToolId(item.toolName);
     if (
       tool !== "goat_thread_wait" &&
       tool !== "t3_thread_wait" &&

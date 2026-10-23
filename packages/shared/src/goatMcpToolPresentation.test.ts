@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   GOAT_MCP_TOOL_NAMES,
+  resolveGoatMcpShippedToolId,
   resolveGoatMcpToolDefinition,
   resolveGoatMcpToolId,
   resolveGoatMcpToolPresentation,
@@ -77,6 +78,15 @@ describe("resolveGoatMcpToolPresentation", () => {
     }
     expect(resolveGoatMcpToolPresentation(`mcp__another-server__${legacy}`)).toBeNull();
     expect(resolveGoatMcpToolPresentation(`mcp__another-server__${current}`)).toBeNull();
+  });
+
+  it("recognizes a call by its listed canonical name as the tool it shipped as", () => {
+    expect(resolveGoatMcpShippedToolId("mcp__goat__goat_html_render")).toBe("html_render");
+    expect(resolveGoatMcpShippedToolId("mcp__goat__goat_task_create")).toBe("delegate_task");
+    expect(resolveGoatMcpShippedToolId("mcp__goat__html_render")).toBe("html_render");
+    expect(resolveGoatMcpShippedToolId("mcp__goat__goat_thread_send")).toBe("goat_thread_send");
+    // People still see the spelling the provider used.
+    expect(resolveGoatMcpToolId("mcp__goat__goat_html_render")).toBe("goat_html_render");
   });
 
   it("does not infer an alias for an unknown prefixed tool", () => {

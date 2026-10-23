@@ -90,6 +90,18 @@ const layerAdapterTest = Layer.mergeAll(
 );
 
 const replayTranscriptJson = Schema.fromJsonString(CodexReplay.CodexAppServerReplayTranscript);
+// Every memory tool by the name /mcp lists, which is what Codex disables.
+const GOAT_MEMORY_TOOLS = [
+  "goat_memory_list",
+  "goat_memory_search",
+  "goat_memory_read",
+  "goat_memory_history",
+  "goat_memory_sync_status",
+  "goat_memory_source_read",
+  "goat_memory_upsert",
+  "goat_memory_forget",
+  "goat_memory_revert_resolution",
+];
 const encodeReplayTranscriptJson = Schema.encodeEffect(replayTranscriptJson);
 const decodeReplayTranscriptJson = Schema.decodeUnknownEffect(replayTranscriptJson);
 const encodeStringJson = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
@@ -1288,15 +1300,19 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             )(requests[0]);
             const server = request.config["mcp_servers.goat"];
             assert.equal(server.http_headers.Authorization, credential);
-            for (const name of ["memory_upsert", "memory_forget", "memory_revert_resolution"])
+            for (const name of [
+              "goat_memory_upsert",
+              "goat_memory_forget",
+              "goat_memory_revert_resolution",
+            ])
               assert.equal(server.disabled_tools.includes(name), index === 1 || index === 2);
             for (const name of [
-              "memory_list",
-              "memory_search",
-              "memory_read",
-              "memory_history",
-              "memory_sync_status",
-              "memory_read_source",
+              "goat_memory_list",
+              "goat_memory_search",
+              "goat_memory_read",
+              "goat_memory_history",
+              "goat_memory_sync_status",
+              "goat_memory_source_read",
             ])
               assert.equal(server.disabled_tools.includes(name), index === 1);
           }),
@@ -2129,17 +2145,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             });
           if (mode === "availability") {
             yield* turn(3, 1);
-            resume(4, stale, undefined, [
-              "memory_list",
-              "memory_search",
-              "memory_read",
-              "memory_history",
-              "memory_sync_status",
-              "memory_read_source",
-              "memory_upsert",
-              "memory_forget",
-              "memory_revert_resolution",
-            ]);
+            resume(4, stale, undefined, GOAT_MEMORY_TOOLS);
             yield* turn(5, 2);
             resume(6, config);
             yield* turn(7, 3);
@@ -2251,17 +2257,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               mcp_optional_startup_grace_ms: 10_000,
               "mcp_servers.goat": {
                 url: config.endpoint,
-                disabled_tools: [
-                  "memory_list",
-                  "memory_search",
-                  "memory_read",
-                  "memory_history",
-                  "memory_sync_status",
-                  "memory_read_source",
-                  "memory_upsert",
-                  "memory_forget",
-                  "memory_revert_resolution",
-                ],
+                disabled_tools: GOAT_MEMORY_TOOLS,
                 tool_timeout_sec: 3900,
                 http_headers: { Authorization: config.authorizationHeader },
               },
@@ -3085,7 +3081,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         });
         assert.include(
           params.additionalContext?.t3_code_orchestration_01?.value ?? "",
-          "delegate_task",
+          "goat_task_create",
         );
         const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
         const transcript = makeCodexReplayTranscript({
@@ -8558,17 +8554,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             mcp_optional_startup_grace_ms: 10_000,
             "mcp_servers.goat": {
               url: "http://127.0.0.1:43123/mcp",
-              disabled_tools: [
-                "memory_list",
-                "memory_search",
-                "memory_read",
-                "memory_history",
-                "memory_sync_status",
-                "memory_read_source",
-                "memory_upsert",
-                "memory_forget",
-                "memory_revert_resolution",
-              ],
+              disabled_tools: GOAT_MEMORY_TOOLS,
               tool_timeout_sec: 3_900,
               http_headers: { Authorization: "Bearer secret-codex-token" },
             },

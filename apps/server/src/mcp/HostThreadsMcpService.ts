@@ -631,7 +631,7 @@ const make = Effect.gen(function* () {
     ) {
       return yield* failure(
         "invalid_request",
-        "This remote thread backs a delegated task. Use task_status and task_cancel; its completion is already delivered to its parent.",
+        "This remote thread backs a delegated task. Use goat_task_read and goat_task_cancel; its completion is already delivered to its parent.",
       );
     }
     // Reading the thread checks the caller may see it, here or on the host.
@@ -821,8 +821,8 @@ const make = Effect.gen(function* () {
             return result;
           }
         }
-        // With goatclaw on, the send takes a lane here and carries the caller's ceiling, which the
-        // destination enforces. A destination that cannot is refused before anything is sent.
+        // With goatclaw on, the send takes a lane here and carries the caller's ceiling, admitted by
+        // the same rule as the launch that started the thread.
         const admission =
           host === undefined
             ? undefined
@@ -834,18 +834,8 @@ const make = Effect.gen(function* () {
                   : { clientRequestId: input.clientRequestId }),
               });
         const ceiling = admission?.ceiling;
-        if (host !== undefined && admission !== undefined && ceiling !== undefined) {
-          const reach = yield* fleet.ensure(host);
-          if (!reach.enforcesCeilings) {
-            yield* admission.settle(false);
-            return yield* failure(
-              "capability_denied",
-              reach.sync.state === "outdated"
-                ? `GOAT on ${host} is too old to enforce goatclaw permission ceilings, so this send was not delivered. Update GOAT on ${host}.`
-                : `Could not confirm that GOAT on ${host} enforces goatclaw permission ceilings, so this send was not delivered${reach.sync.message === undefined ? "." : `: ${reach.sync.message}`}`,
-            );
-          }
-        }
+        if (host !== undefined && ceiling !== undefined)
+          yield* FleetSync.syncBeforeForwarding(fleet, host);
         const forwarded = ceiling === undefined ? {} : { permissionProfileCeiling: ceiling };
         const result = yield* (
           host === undefined

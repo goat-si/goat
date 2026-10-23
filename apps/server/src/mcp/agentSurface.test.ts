@@ -5,6 +5,7 @@ import {
   DeviceSession,
   EnvironmentId,
   HandoffSummary,
+  ProviderHostSyncError,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
@@ -16,31 +17,54 @@ import {
   type McpInvocationScope,
 } from "./McpInvocationContext.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
+import {
+  canonicalToolName,
+  legacyToolNameTargets,
+  listedToolName,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
 import { type AgentSurfaceResult, FAILURE_CLASSES } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/ai";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 
-import { catalog, client, dependencies, entries, toolkits } from "./agentSurface.testkit.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ProviderHostSync from "../provider/ProviderHostSync.ts";
+import { makeOperationTokens } from "./operations/OperationTokens.ts";
 import {
+  catalog,
+  client,
+  dependencies,
+  entries,
+  serveCatalogOverHttp,
+  toolkits,
+} from "./agentSurface.testkit.ts";
+import {
+  GOAT_MCP_CANONICAL_TOOL_ALIASES,
   resolveGoatMcpToolDefinition,
   resolveGoatMcpToolPresentation,
 } from "@goat/shared/goatMcpToolPresentation";
+import { NodeHttpServer } from "@effect/platform-node";
+import { DEPRECATED_META_KEY, listedToolCall } from "./ToolDispatch.ts";
 
 const registered = catalog.pipe(
   Layer.provide(dependencies),
   Layer.provideMerge(McpServer.McpServer.layer),
 );
 
-it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(199); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, and preparation retry tools.
+it("gives every entry a unique path, listed name and resolvable schema reference", () => {
+  expect(entries).toHaveLength(202); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, preparation retry, and operation tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
+  expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
+  // 74 shipped names off the path grammar plus five whose verb D11 normalized.
+  expect(entries.flatMap((entry) => entry.legacyNames)).toHaveLength(79);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
     expect(path).toMatch(/^[a-z][a-z_]*\.[a-z][a-z_]*$/);
-    expect(entry.legacyNames).toContain(entry.name);
+    // The shipped name is either the one listed or one still callable unlisted.
+    expect([listedToolName(entry), ...entry.legacyNames]).toContain(entry.name);
     const tools: Record<string, Tool.Any> = toolkits[entry.schemaRefs.toolkit].tools;
     const tool = tools[entry.schemaRefs.tool];
     expect(tool, path).toBeDefined();
@@ -70,10 +94,10 @@ it.effect(
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
       expect(server.tools.map(({ tool }) => tool.name).sort()).toEqual(
-        entries.map((entry) => entry.name).sort(),
+        entries.map(listedToolName).sort(),
       );
       for (const entry of entries) {
-        const tool = server.tools.find(({ tool }) => tool.name === entry.name)!.tool;
+        const tool = server.tools.find(({ tool }) => tool.name === listedToolName(entry))!.tool;
         expect(tool.annotations, entry.path).toMatchObject({
           readOnlyHint: entry.effect === "read",
           destructiveHint: entry.effect === "destructive",
@@ -84,8 +108,8 @@ it.effect(
         server.tools.find(({ tool }) => tool.name === name)!.tool.annotations;
       expect(hints("goat_ssh_browse")?.readOnlyHint).toBe(false);
       expect(hints("goat_thread_read")?.readOnlyHint).toBe(true);
-      expect(hints("preview_snapshot")?.readOnlyHint).toBe(true);
-      expect(hints("task_status")?.readOnlyHint).toBe(false);
+      expect(hints("goat_preview_snapshot")?.readOnlyHint).toBe(true);
+      expect(hints("goat_task_read")?.readOnlyHint).toBe(false);
       expect(hints("goat_review_findings_record")?.readOnlyHint).toBe(false);
       expect(hints("goat_review_findings_export")?.readOnlyHint).toBe(true);
       expect(hints("goat_worktree_cleanup")?.destructiveHint).toBe(true);
@@ -110,7 +134,9 @@ it.effect("publishes closed top-level schemas and refuses unknown keys for the w
 );
 
 type Entry = (typeof agentSurfaceRegistry)[keyof typeof agentSurfaceRegistry];
-const registeredNames = new Set<string>(entries.map((entry) => entry.name));
+const registeredNames = new Set<string>(
+  entries.flatMap((entry) => [entry.name, listedToolName(entry)]),
+);
 const toolOf = (entry: Entry): Tool.Any =>
   (toolkits[entry.schemaRefs.toolkit].tools as Record<string, Tool.Any>)[entry.schemaRefs.tool]!;
 
@@ -146,6 +172,28 @@ const propertiesOf = (node: unknown, definitions: JsonSchema): JsonSchema => {
   const resolved = resolve(node, definitions);
   return isObject(resolved) && isObject(resolved["properties"]) ? resolved["properties"] : {};
 };
+
+// Writes whose `host` names something other than a fleet machine the call acts on.
+const NOT_A_FLEET_HOST: Readonly<Record<string, string>> = {
+  "connection.add_ssh": "the address of a machine being added, gated by hub.manage",
+  "ssh.host_add": "the address of a machine being added, gated by hub.manage",
+  "pull_request.link": "the git forge's host",
+  "pull_request.unlink": "the git forge's host",
+  "pull_request.watch": "the git forge's host",
+  "pull_request.unwatch": "the git forge's host",
+};
+
+it("declares every write argument that names a host, so the goatclaw host allowlist checks it", () => {
+  for (const entry of entries) {
+    if (entry.effect === "read" || entry.path in NOT_A_FLEET_HOST) continue;
+    const document = Schema.toJsonSchemaDocument(toolOf(entry).parametersSchema);
+    const named = Object.keys(propertiesOf(document.schema, document.definitions)).filter(
+      (key) => key === "host" || key.endsWith("Host") || key.endsWith("Alias"),
+    );
+    expect(hostArgumentsOf(entry).toSorted(), entry.path).toEqual(named.toSorted());
+  }
+});
+
 /** Every object schema reachable from a result schema whose kind is the literal needs_human. */
 const needsHumanArms = (document: { schema: unknown; definitions: JsonSchema }) => {
   const arms: Array<JsonSchema> = [];
@@ -186,23 +234,8 @@ describe("agent surface schemas", () => {
   });
 });
 
-// quarantine: #782 computer_use.request returns needs_human without next, so agents cannot tell what to call after approval.
-const NEEDS_HUMAN_WITHOUT_NEXT = new Set(["computer_use.request"]);
-// quarantine: #782 hub devices ask through the decision inbox: state needs_human with a decisionId, no handoff.
-const DECISION_INBOX_NEEDS_HUMAN = new Set([
-  "hub.device_join",
-  "hub.device_leave",
-  "hub.device_repair",
-]);
-// quarantine: #782 these share a result union with their siblings, so their schema offers a needs_human they never return.
 // goat_call returns the envelope, whose needs_human is a status rather than a kind; checked below.
 const ENVELOPE_NEEDS_HUMAN = new Set(["surface.call"]);
-const SHARED_RESULT_NEEDS_HUMAN = new Set([
-  "ssh.host_forget",
-  "ssh.host_status",
-  "provider.login_status",
-  "provider.login_cancel",
-]);
 
 describe("agent surface needs_human results", () => {
   it("hands work to a person only through the shared handoff summary and a registered next call", () => {
@@ -211,8 +244,7 @@ describe("agent surface needs_human results", () => {
     for (const entry of entries) {
       const document = resultDocument(entry);
       for (const arm of needsHumanArms(document)) {
-        if (entry.humanSteps.length === 0 && !SHARED_RESULT_NEEDS_HUMAN.has(entry.path))
-          problems.push(`${entry.path}: no humanSteps`);
+        if (entry.humanSteps.length === 0) problems.push(`${entry.path}: no humanSteps`);
         const required = Array.isArray(arm["required"]) ? arm["required"] : [];
         if (!required.includes("handoff")) problems.push(`${entry.path}: handoff not required`);
         const properties = arm["properties"] as JsonSchema;
@@ -221,7 +253,6 @@ describe("agent surface needs_human results", () => {
         ).sort();
         if (handoffKeys.join() !== summaryKeys.join())
           problems.push(`${entry.path}: handoff fields ${handoffKeys.join(",")}`);
-        if (NEEDS_HUMAN_WITHOUT_NEXT.has(entry.path)) continue;
         const next = propertiesOf(properties["next"], document.definitions);
         const calls = literals(resolve(next["call"], document.definitions));
         if (calls.length === 0) problems.push(`${entry.path}: no next.call`);
@@ -237,7 +268,6 @@ describe("agent surface needs_human results", () => {
     const missing = entries.filter(
       (entry) =>
         entry.description.includes("needs_human") &&
-        !DECISION_INBOX_NEEDS_HUMAN.has(entry.path) &&
         !ENVELOPE_NEEDS_HUMAN.has(entry.path) &&
         needsHumanArms(resultDocument(entry)).length === 0,
     );
@@ -311,7 +341,15 @@ const TARGET_THREAD = "thread:conformance-target";
  * unexpected and defect never match an expectation, so a wrong argument or a crash before the
  * handler cannot pass as access granted.
  */
-type Outcome = "thread_required" | "read_only" | "denied" | "reached" | "unexpected" | "defect";
+type Outcome =
+  | "thread_required"
+  | "read_only"
+  | "ssh_read_only"
+  | "denied"
+  | "uncoded"
+  | "reached"
+  | "unexpected"
+  | "defect";
 const INERT_SERVICE_DEFECT = "inert service";
 // The tool-level wrapper's text when a handler dies on an inert service.
 const HANDLER_DIED = "Tool execution failed due to an internal server error.";
@@ -324,19 +362,27 @@ const HANDLER_VALIDATION: Readonly<Record<string, string>> = {
   "project.create": "A project made from a title takes no other settings.",
 };
 const IMAGE_TOOL_FAILURE = /^(Preview snapshot|Device screenshot) failed/;
+const OPERATION_NOT_ISSUED = "No operation with that id was issued here to this caller.";
+// Read from the text alone: Pi and other text-only clients never see structuredContent.
+const refusalCode = (text: string) => /"code":"([a-z_]+)"/.exec(text)?.[1];
 const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
   const content = result.content[0];
   const text = content?.type === "text" ? content.text : "";
   if (!result.isError) return "reached";
   if (text === INERT_SERVICE_DEFECT || text === HANDLER_DIED) return "reached";
   if (text.startsWith("defect:")) return "defect";
+  const code = refusalCode(text);
+  // An agent tells a refusal from a failure by its code, so a refusal without one fails the case.
+  const refused = (outcome: Outcome) => (code === undefined ? "uncoded" : outcome);
   if (/thread_credential_required|acts as the calling GOAT thread/.test(text))
-    return "thread_required";
-  // Some toolkits (pull requests, images) return the refusal message without its code.
-  if (/approved for read-only access/.test(text)) return "read_only";
-  if (/"code":"capability_denied"/.test(text)) return "denied";
+    return refused("thread_required");
+  if (/reaches other machines with this machine's SSH keys/.test(text))
+    return refused("ssh_read_only");
+  if (/approved for read-only access/.test(text)) return refused("read_only");
+  if (code === "capability_denied") return "denied";
+  // Operation verbs refuse a sampled handle in their handler, after access passed.
+  if (path.startsWith("operation.") && text.includes(OPERATION_NOT_ISSUED)) return "reached";
   if (IMAGE_TOOL_FAILURE.test(text)) return "reached";
-  const code = /"code":"([a-z_]+)"/.exec(text)?.[1];
   if (code === "invalid_request" && path in HANDLER_VALIDATION) return "reached";
   return code !== undefined && HANDLER_CODES.has(code) ? "reached" : "unexpected";
 };
@@ -356,8 +402,6 @@ const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
 };
 
 const REASONS = {
-  serviceThreadCheck: "Requires a thread inside its service, after the access layer.",
-  imageTool: "preview_snapshot reports refusals as text without a code (McpHttpServer.ts).",
   sshFanOut:
     "Reaches other machines with this machine's SSH keys, which read-only clients may not use.",
   dryRunDefault: "Defaults to a dry run, which reads.",
@@ -366,47 +410,15 @@ const REASONS = {
   dispatches: "Runs other tools, each under its own declaration, and adds no gate of its own.",
 } as const;
 // Where the runtime outcome differs from what requires and effect alone predict, and why.
-// The service checks, SSH refusal wording and codeless refusals are tracked in #791.
 const ACCESS_EXCEPTIONS: Readonly<
   Record<string, { readonly reason: keyof typeof REASONS } & Partial<Record<Caller, Outcome>>>
 > = {
-  "goal.apply": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "goal.pause": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "goal.resume": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "goal.delete": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "provider.home_request": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "provider.setup_open": {
-    reason: "serviceThreadCheck",
-    readOnlyClient: "read_only",
-    fullClient: "reached",
-  },
-  "preview.snapshot": { reason: "imageTool", readOnlyClient: "reached", fullClient: "reached" },
-  "scheduler.status": { reason: "sshFanOut", readOnlyClient: "read_only" },
-  "pending_request.list": { reason: "sshFanOut", readOnlyClient: "read_only" },
-  "provider.host_matrix": { reason: "sshFanOut", readOnlyClient: "read_only" },
-  "hub.device_verify": { reason: "sshFanOut", readOnlyClient: "read_only" },
-  "host.status": { reason: "sshFanOut", readOnlyClient: "read_only" },
-  "cloud_agent.holders": { reason: "sshFanOut", readOnlyClient: "read_only" },
+  "scheduler.status": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
+  "pending_request.list": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
+  "provider.host_matrix": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
+  "hub.device_verify": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
+  "host.status": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
+  "cloud_agent.holders": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
   "worktree.cleanup": { reason: "dryRunDefault", readOnlyClient: "reached" },
   "permission_profile.sync": { reason: "clientOnly", thread: "denied", fullClient: "denied" },
   "channel.task_move": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
@@ -414,13 +426,12 @@ const ACCESS_EXCEPTIONS: Readonly<
   "cloud_machine.stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.resume": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "surface.call": { reason: "dispatches", readOnlyClient: "reached" },
+  "operation.cancel": { reason: "dispatches", readOnlyClient: "reached" },
 };
 
-const expectedOutcome = (entry: Entry, caller: Caller, route: Route): Outcome => {
+const expectedOutcome = (entry: Entry, caller: Caller): Outcome => {
   const exception = ACCESS_EXCEPTIONS[entry.path];
-  // goat_call reports the refusal an image tool's own text hides.
-  const applies = !(route === "goat_call" && exception?.reason === "imageTool");
-  if (applies && exception?.[caller] !== undefined) return exception[caller];
+  if (exception?.[caller] !== undefined) return exception[caller];
   if (caller === "thread") return entry.requires === "client" ? "denied" : "reached";
   if (entry.requires === "thread") return "thread_required";
   if (caller === "readOnlyClient" && entry.effect !== "read") return "read_only";
@@ -479,25 +490,43 @@ const via = {
       }),
     ),
 };
-type Route = keyof typeof via;
+// legacy: the shipped name over HTTP /mcp, which resolves it to the listed tool before dispatch.
+type Route = keyof typeof via | "legacy";
+const RPC_INTERNAL_ERROR = 'rpc error: {"code":-32603';
+const ROUTES: ReadonlyArray<Route> = [
+  ...(Object.keys(via) as ReadonlyArray<keyof typeof via>),
+  "legacy",
+];
 
 describe("agent surface access", () => {
   it.effect("refuses each caller exactly where the registry's requires and effect say", () =>
     Effect.gen(function* () {
+      const http = yield* serveCatalogOverHttp(callers);
       const mismatches: Array<string> = [];
       for (const entry of entries) {
         // Memory access is a per-task grant its handlers check; toolkits/memory tests own it.
         if (entry.resource === "memory") continue;
         const args = yield* argumentsFor(entry);
+        const [legacy] = entry.legacyNames;
         for (const caller of Object.keys(callers) as ReadonlyArray<Caller>) {
           let directOutcome: Outcome | undefined;
-          for (const route of Object.keys(via) as ReadonlyArray<Route>) {
+          let directDied = false;
+          for (const route of ROUTES) {
             // goat_call refuses to call itself by design.
             if (route === "goat_call" && entry.path === "surface.call") continue;
-            const call = via[route];
-            const result = yield* call(entry.name, args).pipe(
-              Effect.provideService(McpInvocationContext, callers[caller]),
-              Effect.provideService(McpSchema.McpServerClient, client),
+            if (route === "legacy" && legacy === undefined) continue;
+            const call: Effect.Effect<
+              McpSchema.CallToolResult,
+              McpSchema.InternalError | McpSchema.InvalidParams,
+              McpServer.McpServer
+            > =
+              route === "legacy"
+                ? http.callTool(caller, legacy!, args)
+                : via[route](listedToolName(entry), args).pipe(
+                    Effect.provideService(McpInvocationContext, callers[caller]),
+                    Effect.provideService(McpSchema.McpServerClient, client),
+                  );
+            const result = yield* call.pipe(
               // An inert service dies after the access layer ran; any other defect fails the case.
               Effect.catchDefect((defect) =>
                 Effect.succeed(
@@ -516,14 +545,22 @@ describe("agent surface access", () => {
               ),
             );
             const classified = classify(entry.path, result);
+            if (route === "direct") directDied = textOf(result) === INERT_SERVICE_DEFECT;
+            // Over HTTP, an image tool that dies answers with JSON-RPC's internal error under any
+            // name; it is the same death the direct route caught on an inert service.
+            const diedOverHttp =
+              route === "legacy" && directDied && textOf(result).startsWith(RPC_INTERNAL_ERROR);
             // The envelope turns a refusal inside a successful value into an error; that is a
             // domain answer after access passed, so it still counts as reaching the handler.
             const outcome =
-              route === "goat_call" && classified === "unexpected" && directOutcome === "reached"
+              (route === "goat_call" &&
+                classified === "unexpected" &&
+                directOutcome === "reached") ||
+              diedOverHttp
                 ? "reached"
                 : classified;
             if (route === "direct") directOutcome = outcome;
-            const expected = expectedOutcome(entry, caller, route);
+            const expected = expectedOutcome(entry, caller);
             if (outcome !== expected) {
               const content = result.content[0];
               const detail = content?.type === "text" ? content.text.slice(0, 160) : "";
@@ -535,7 +572,7 @@ describe("agent surface access", () => {
         }
       }
       expect(mismatches).toEqual([]);
-    }).pipe(Effect.provide(registered)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(registered, NodeHttpServer.layerTest))),
   );
 
   it("documents every access exception", () => {
@@ -684,7 +721,44 @@ it("resolves paths, canonical names and legacy names to one entry without collis
   expect(resolveAgentSurfaceEntry("orchestrator_capabilities")?.path).toBe("provider.list");
   expect(resolveAgentSurfaceEntry("goat_provider_list")?.path).toBe("provider.list");
   expect(resolveAgentSurfaceEntry("goat_permission_profile_sync")?.name).toBe("goat_goatclaw_sync");
+  expect(resolveAgentSurfaceEntry("decision.get")?.path).toBe("decision.read");
 });
+
+it.effect("lists canonical names and keeps legacy names callable, unlisted and deprecated", () =>
+  Effect.gen(function* () {
+    const http = yield* serveCatalogOverHttp(callers);
+    const listed = yield* http.listToolNames("thread");
+    expect(listed.toSorted()).toEqual(entries.map(listedToolName).sort());
+    expect(listed).toContain("goat_task_create");
+    expect(listed).not.toContain("delegate_task");
+    const callBody = (name: string) =>
+      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name } });
+    // A call by a listed name reaches the server exactly as sent.
+    for (const name of listed) expect(listedToolCall(callBody(name)), name).toBeUndefined();
+    for (const [legacy, target] of legacyToolNameTargets)
+      expect(listedToolCall(callBody(legacy))?.listed, legacy).toBe(target);
+    // Both names run the same tool; only the legacy one carries the deprecation.
+    const byLegacy = yield* http.callTool("thread", "orchestrator_capabilities", {});
+    const byListed = yield* http.callTool("thread", "goat_provider_list", {});
+    expect(byLegacy._meta?.[DEPRECATED_META_KEY]).toBe("goat_provider_list");
+    expect(byListed._meta?.[DEPRECATED_META_KEY]).toBeUndefined();
+    expect(byLegacy.content).toEqual(byListed.content);
+  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("goat_call names the replacement for a deprecated name or path", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const run = asCaller(callerScope({ thread: true }));
+    const deprecated = (path: string) =>
+      run(viaCall(server, path, {})).pipe(Effect.map((result) => result.meta?.deprecated));
+    expect(yield* deprecated("orchestrator_capabilities")).toBe("provider.list");
+    expect(yield* deprecated("goat_permission_profile_get")).toBe("permission_profile.read");
+    expect(yield* deprecated("permission_profile.get")).toBe("permission_profile.read");
+    expect(yield* deprecated("goat_provider_list")).toBeUndefined();
+    expect(yield* deprecated("permission_profile.read")).toBeUndefined();
+  }).pipe(Effect.provide(registered)),
+);
 
 it.effect("goat_call returns ok values and refuses unknown or recursive paths", () =>
   Effect.gen(function* () {
@@ -779,7 +853,7 @@ it.effect("goat_call never shows failure text a direct call hides", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const run = asCaller(callerScope({ thread: true }));
-    const direct = yield* run(server.callTool({ name: "device_screenshot", arguments: {} }));
+    const direct = yield* run(server.callTool({ name: "goat_device_screenshot", arguments: {} }));
     expect(direct.isError).toBe(true);
     expect(JSON.stringify(direct)).not.toContain(SECRET);
     const envelope = yield* run(viaCall(server, "device.screenshot", {}));
@@ -810,4 +884,117 @@ it("gives goat_describe and goat_call a tool presentation", () => {
       "t3-code",
     );
   }
+});
+const OPERATION_KEY = new Uint8Array(32).fill(7);
+const operationKey = Layer.mock(ServerSecretStore.ServerSecretStore)({
+  getOrCreateRandom: () => Effect.succeed(OPERATION_KEY),
+});
+const registeredWithOperationKey = catalog.pipe(
+  Layer.provide(Layer.mergeAll(dependencies, operationKey)),
+  Layer.provideMerge(McpServer.McpServer.layer),
+);
+
+it.effect("goat_operation_cancel meets exactly the refusals of the kind's own cancel tool", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const tokens = yield* makeOperationTokens.pipe(Effect.provide(operationKey));
+    for (const scope of [callerScope({ client: "read-only" }), callerScope({ thread: true })]) {
+      const run = asCaller(scope);
+      const operationId = yield* tokens.issue("task", "task:conformance", scope);
+      const direct = yield* run(viaCall(server, "task.cancel", { taskId: "task:conformance" }));
+      const viaOperation = yield* run(
+        server.callTool({ name: "goat_operation_cancel", arguments: { operationId } }),
+      );
+      expect(viaOperation.isError, textOf(viaOperation)).toBe(false);
+      const { result } = viaOperation.structuredContent as {
+        readonly result: AgentSurfaceResult;
+      };
+      // The verb returns the cancel tool's own answer, as goat_call would: same refusal and text.
+      expect(direct.status, scope.requestNamespace).toBe("error");
+      expect(result).toEqual(direct);
+    }
+  }).pipe(Effect.provide(registeredWithOperationKey)),
+);
+it.effect("goat_call starts no long work it could not hand back a handle for", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const run = asCaller(callerScope({ thread: true }));
+    const envelope = yield* run(viaCall(server, "task.create", { task: "Review the change." }));
+    // An inert orchestrator would have died here had delegate_task run.
+    expect(envelope).toMatchObject({
+      status: "error",
+      error: { code: "unavailable", reason: "operation_unavailable", retryable: true },
+    });
+  }).pipe(
+    Effect.provide(
+      catalog.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            dependencies,
+            Layer.mock(ServerSecretStore.ServerSecretStore)({
+              getOrCreateRandom: (name) =>
+                Effect.fail(
+                  new ServerSecretStore.SecretStoreReadError({ resource: name, cause: "disk" }),
+                ),
+            }),
+          ),
+        ),
+        Layer.provideMerge(McpServer.McpServer.layer),
+      ),
+    ),
+  ),
+);
+it.effect(
+  "classifies a wrapped provider sync refusal by its domain reason, for goat_call and operations",
+  () =>
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const scope = callerScope({ thread: true });
+      const run = asCaller(scope);
+      const envelope = yield* run(viaCall(server, "provider.sync_status", { syncId: "sync_1" }));
+      // The handler wraps it with the legacy code conflict; the declared reason still decides.
+      expect(envelope).toMatchObject({
+        status: "error",
+        error: { code: "cancelled", reason: "declined" },
+      });
+      const tokens = yield* makeOperationTokens.pipe(Effect.provide(dependencies));
+      const operationId = yield* tokens.issue("provider_sync", "sync:sync_1", scope);
+      const read = yield* run(
+        server.callTool({ name: "goat_operation_read", arguments: { operationId } }),
+      );
+      expect(read.structuredContent).toMatchObject({
+        operation: { kind: "provider_sync", state: "cancelled" },
+        result: { status: "error", error: { reason: "declined" } },
+      });
+    }).pipe(
+      Effect.provide(
+        catalog.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              dependencies,
+              Layer.mock(ProviderHostSync.ProviderHostSync)({
+                status: () =>
+                  Effect.fail(
+                    new ProviderHostSyncError({
+                      code: "declined",
+                      detail: "The person declined this sync, so it will not run.",
+                    }),
+                  ),
+              }),
+            ),
+          ),
+          Layer.provideMerge(McpServer.McpServer.layer),
+        ),
+      ),
+    ),
+);
+
+it("presents a call by canonical name as the tool it ran", () => {
+  const canonical = [...legacyToolNameTargets].map(([legacy, listed]) => [listed, legacy] as const);
+  const presented = canonical.filter(([, legacy]) => resolveGoatMcpToolDefinition(legacy) !== null);
+  expect(GOAT_MCP_CANONICAL_TOOL_ALIASES).toEqual(Object.fromEntries(presented));
+  for (const [listed, legacy] of canonical)
+    expect(resolveGoatMcpToolDefinition(`mcp__goat__${listed}`), listed).toBe(
+      resolveGoatMcpToolDefinition(legacy),
+    );
 });

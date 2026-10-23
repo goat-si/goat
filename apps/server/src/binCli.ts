@@ -14,12 +14,18 @@ import * as CliError from "effect/cli/CliError";
 
 import * as NetService from "@goat/shared/Net";
 import packageJson from "../package.json" with { type: "json" };
-import { acpMcpBridgeCommand, acpMcpCallCommand } from "./cli/acpMcpBridge.ts";
+import {
+  acpMcpBridgeCommand,
+  acpMcpCallCommand,
+  callCommand,
+  describeCommand,
+} from "./cli/acpMcpBridge.ts";
 import { authCommand } from "./cli/auth.ts";
 import { appCommand } from "./cli/app.ts";
 import { browserCommand } from "./cli/browser.ts";
 import { connectCommand } from "./cli/connect.ts";
 import { pairCommand } from "./cli/pair.ts";
+import { loginCommand, logoutCommand, whoamiCommand } from "./cli/login.ts";
 import { imessageCommand } from "./cli/imessage.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { extendConnectionAttemptTimeout, keepOutboundFetchOnHttp1 } from "./outboundHttp.ts";
@@ -95,12 +101,17 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       ),
       acpMcpBridgeCommand,
       acpMcpCallCommand,
+      callCommand,
+      describeCommand,
       startCommand,
       serveCommand,
       appCommand,
       pairCommand,
       imessageCommand,
       authCommand,
+      loginCommand,
+      logoutCommand,
+      whoamiCommand,
       browserCommand,
       projectCommand,
       providerCommand,

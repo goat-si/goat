@@ -57,24 +57,24 @@ Then choose what the agent may do:
 ## Claude Code
 
 ```sh
-claude mcp add --transport http t3 https://<environment-address>/mcp
-claude mcp login t3
+claude mcp add --transport http goat https://<environment-address>/mcp
+claude mcp login goat
 ```
 
 `claude mcp login` opens the sign-in page in your browser. On a machine
 without a browser, add `--no-browser`, open the printed URL elsewhere, and
-paste the final URL back when asked. `claude mcp list` shows `t3` as connected
+paste the final URL back when asked. `claude mcp list` shows `goat` as connected
 once you approve.
 
 ## Codex
 
 ```sh
-codex mcp add t3 --url https://<environment-address>/mcp
-codex mcp login t3
+codex mcp add goat --url https://<environment-address>/mcp
+codex mcp login goat
 ```
 
 `codex mcp login --no-browser` prints the sign-in URL instead of opening it.
-`codex mcp list` shows `t3` with OAuth once you approve.
+`codex mcp list` shows `goat` with OAuth once you approve.
 
 ## ChatGPT
 
@@ -141,12 +141,12 @@ and create one without `orchestration:approve`.
 ## Cloud agents from any machine
 
 Claude Cloud, Cursor Cloud and Devin Cloud runs only need one environment that is signed in to
-that service. An agent can call `goat_cloud_holders` to see which connected environments hold a
-login, and `goat_cloud_launch` to start a run there. Add `dryRun: true` to see which environment
+that service. An agent can call `goat_cloud_agent_holders` to see which connected environments hold a
+login, and `goat_cloud_agent_launch` to start a run there. Add `dryRun: true` to see which environment
 would run it. The environment needs a project for the repository, and the run starts from that
 project's pushed branch. Launching needs **Full access**.
 
-A bot that starts cloud runs on its own can show them in GOAT with `goat_cloud_run_register`:
+A bot that starts cloud runs on its own can show them in GOAT with `goat_cloud_agent_run_register`:
 
 ```json
 {
@@ -163,14 +163,15 @@ environment signed in to the same account can see the run, GOAT follows it and r
 ends. Otherwise it keeps only the link and says so (`tracking: "link-only"`), and never posts `run.completed` for it. Devin Cloud sessions
 started outside GOAT are always link-only. **Stop** on a registered run's thread only stops
 following it: the run keeps going, and you cancel it from its page in the provider.
-`goat_cloud_run_forget` removes a registered run from GOAT; the cloud run itself keeps going.
+`goat_cloud_agent_run_forget` removes a registered run from GOAT; the cloud run itself keeps going.
 
 ## Scripts on the host
 
-On the machine that runs the environment, `goat thread` uses the same tools
-without a sign-in:
+On the machine that runs the environment, sign the terminal in once with
+`goat login`, and `goat thread` then uses the same tools:
 
 ```sh
+goat login
 id=$(goat thread start . "Find why the tests are slow")
 goat thread send "$id" "Now fix it" --wait
 goat thread show "$id"
@@ -186,6 +187,25 @@ the message to read it from stdin.
 `--wait` prints the agent's reply. It exits 1 when the run fails or stops, and
 2 when the agent waits for an answer you give in the app. Add `--json` for a
 result that always includes the thread id.
+
+Every other capability is a command too. `goat describe` lists them, `goat describe thread`
+shows one resource, and `goat describe thread.read` prints its arguments. Run one as
+`goat thread read -f threadId=$id` or `goat call thread.read '{"threadId":"…"}'`: `-f key=value`
+passes a string and `-F key=value` passes `true`, `false`, `null`, or a whole number. `--json` prints
+a result with `status` `ok`, `error`, or `needs_human`. The exit code is 0 for ok, 1 for an
+error, 2 for a mistyped command, 3 when you need to act in the app, 4 when retrying is safe, and 5
+when a change may have happened, so check before retrying. Work that keeps running after the
+command returns prints an operation id; `goat operation wait <id>` follows it and exits 0 when it
+succeeded, 1 when it failed or was cancelled, 3 when it waits for you, and 6 when it is still
+running at the deadline.
+
+`goat login` stores a client session for this environment that lasts 30 days. It
+appears under **Settings → Connections** as "goat CLI", and threads it starts or
+changes run at most `approval-required` unless you pass `--access`. `goat whoami`
+shows which credential the terminal uses, and `goat logout` revokes it. Inside a
+GOAT thread whose agent has a GOAT credential in its environment, `goat` uses
+that thread's own access instead, and `goat login`, `goat pair`, and the
+`goat auth` commands that create credentials refuse to run.
 
 ## Remove an agent
 

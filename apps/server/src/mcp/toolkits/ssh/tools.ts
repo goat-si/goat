@@ -29,6 +29,7 @@ import {
   SshHostStatusInput,
   SshRuntimeUpdateInput,
   SshHostResult,
+  SshHostSettledResult,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -65,7 +66,7 @@ const shared = {
 
 const SshHost = Schema.Struct({
   alias: Schema.String,
-  source: Schema.Literals(["ssh-config", "known-hosts"]),
+  source: Schema.Literals(["ssh-config", "known-hosts", "cloud-machine"]),
   reachable: Schema.optional(Schema.Boolean),
   probeError: Schema.optional(Schema.String),
 });
@@ -87,7 +88,7 @@ const RemoteEntry = Schema.Struct({
 
 const HostAlias = TrimmedNonEmptyString.annotate({
   description:
-    "An SSH host alias from goat_ssh_host_list (this machine's ~/.ssh/config or known_hosts).",
+    "An SSH host alias from goat_ssh_host_list (this machine's ~/.ssh/config, known_hosts, or a cloud machine it manages).",
 });
 
 const SshHostListTool = Tool.make(agentSurfaceRegistry["ssh.host_list"].name, {
@@ -147,12 +148,13 @@ const HostLinkRemoveTool = Tool.make(agentSurfaceRegistry["host_link.remove"].na
 // HandoffSummary contains DateTime.Utc. MCP structuredContent accepts JSON values,
 // so encode the domain result through its JSON codec before CallToolResult validates it.
 const SshHostResultJson = Schema.toCodecJson(SshHostResult);
+const SshHostSettledResultJson = Schema.toCodecJson(SshHostSettledResult);
 
 const SshHostStatusTool = Tool.make(agentSurfaceRegistry["ssh.host_status"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.host_status"].description,
   parameters: SshHostStatusInput,
-  success: SshHostResultJson,
+  success: SshHostSettledResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_status"]));
 
 const SshHostAddTool = Tool.make(agentSurfaceRegistry["ssh.host_add"].name, {
@@ -172,7 +174,7 @@ const SshHostForgetTool = Tool.make(agentSurfaceRegistry["ssh.host_forget"].name
   ...shared,
   description: agentSurfaceRegistry["ssh.host_forget"].description,
   parameters: SshHostForgetInput,
-  success: SshHostResultJson,
+  success: SshHostSettledResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_forget"]));
 const SshRuntimeUpdateTool = Tool.make(agentSurfaceRegistry["ssh.runtime_update"].name, {
   ...shared,
@@ -270,7 +272,7 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     notifyTarget: Schema.optional(
       NotifyTargetInput.annotate({
         description:
-          "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in this machine's server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from request_secret and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, a url that resolves to a loopback, private, or link-local address (a local receiver needs a named target), or webhooks switched off in settings refuse the launch before any thread is created.",
+          "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in this machine's server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from goat_handoff_create and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, a url that resolves to a loopback, private, or link-local address (a local receiver needs a named target), or webhooks switched off in settings refuse the launch before any thread is created.",
       }),
     ),
   }),

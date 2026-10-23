@@ -13,6 +13,7 @@ import * as ProviderSettings from "../../../provider/ProviderSettings.ts";
 import { dispatchFacts } from "../../hostFailure.ts";
 import * as McpInvocation from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { settled } from "../settled.ts";
 import { ProviderToolkit } from "./tools.ts";
 
 const LEGACY_SYNC_CODES: Partial<
@@ -103,17 +104,21 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
     withHostSync((service, caller) => service.cancel(input, caller)),
   ),
   goat_provider_addable_list: McpToolAccess.reads(() => onboarding((service) => service.list)),
-  goat_provider_setup_open: McpToolAccess.writes((input) =>
+  goat_provider_setup_open: McpToolAccess.writesAsCaller((input) =>
     onboarding((service, scope) => service.setupOpen(input, scope)),
   ),
   goat_provider_login_start: McpToolAccess.writes((input) =>
     onboarding((service, scope) => service.loginStart(input, scope)),
   ),
   goat_provider_login_status: McpToolAccess.reads((input) =>
-    onboarding((service, scope) => service.loginStatus(input, scope)),
+    onboarding((service, scope) =>
+      service.loginStatus(input, scope).pipe(Effect.flatMap(settled("goat_provider_login_status"))),
+    ),
   ),
   goat_provider_login_cancel: McpToolAccess.writes((input) =>
-    onboarding((service, scope) => service.loginCancel(input, scope)),
+    onboarding((service, scope) =>
+      service.loginCancel(input, scope).pipe(Effect.flatMap(settled("goat_provider_login_cancel"))),
+    ),
   ),
   // The service decides between applying and asking a person, so these need no thread control.
   goat_provider_update: McpToolAccess.writesWithCapability((input) =>
@@ -146,7 +151,7 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
   goat_cloud_run_forget: McpToolAccess.destructive(
     McpToolAccess.writesEnvironment((input) => cloud((service) => service.forget(input))),
   ),
-  goat_provider_home_request: McpToolAccess.writes((input) =>
+  goat_provider_home_request: McpToolAccess.writesAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocation.McpInvocationContext;
       const requests = yield* HomeRequests.CodexHomeRequests;

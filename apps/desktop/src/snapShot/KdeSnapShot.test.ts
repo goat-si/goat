@@ -95,6 +95,7 @@ it("repairs the old semicolon permission entry without replacing unrelated regis
   await setup.perform("install-kde-helper");
   const { desktop } = kdeCapturePaths(paths);
   const installed = await NodeFSP.readFile(desktop, "utf8");
+  expect(installed.split("\n")).toContain("Name=T3 Code SnapShots");
   const permission = "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2";
   expect(installed.split("\n")).toContain(permission);
   await NodeFSP.writeFile(desktop, installed.replace(`${permission}\n`, `${permission};\n`));

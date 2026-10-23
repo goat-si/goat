@@ -73,7 +73,7 @@ Two callers launch this way:
 
 - `goat_ssh_thread_launch`, when the MCP caller has a thread scope, calls `coordinator.launch`
   with `kind: "thread"`. Without a thread scope it calls `SshRemoteDispatch.launchThread` directly.
-- `delegate_task` with `target.host` and a remote cwd calls `coordinator.launch` with
+- `goat_task_create` with `target.host` and a remote cwd calls `coordinator.launch` with
   `kind: "task"` from `apps/server/src/mcp/OrchestratorMcpService.ts`.
 
 The remote agent reports with `goat_origin_report` (`apps/server/src/mcp/toolkits/remoteReport/tools.ts`).
@@ -130,7 +130,8 @@ placement limits and fallback chains do not exist yet; the controller reaches th
 
 ## Permission profiles
 
-With `goatclaw.enabled`, `apps/server/src/goatclaw/PermissionProfiles.ts` admits agent launches
+goatclaw is open by default: `enabled` decodes to false and `defaultProfile` to the widest
+built-in, `owner`. With `goatclaw.enabled`, `apps/server/src/goatclaw/PermissionProfiles.ts` admits agent launches
 under the profiles in `packages/contracts/src/permissionProfiles.ts`. Current named settings
 intersect the inherited launch snapshot and the caller's runtime ceiling; changing the default
 does not reassign a child. Unknown stored profile ids refuse actions. Disabled policy keeps the
@@ -139,13 +140,13 @@ existing paths.
 `apps/server/src/persistence/Migrations/097_PermissionProfiles.ts` stores bindings and lane
 reservations outside the orchestration event log. Admission commits before launch; pending and
 uncertain reservations retain capacity across restart. Local run projections and durable remote
-dispatches determine completion, so removing a launch watch grants no capacity. SSH requires
-a destination that accepts and enforces the inherited ceiling. goatclaw is on or off fleet-wide:
+dispatches determine completion, so removing a launch watch grants no capacity. An SSH launch requires
+a destination that accepts the inherited ceiling. goatclaw is on or off fleet-wide:
 `apps/server/src/goatclaw/FleetSync.ts` exchanges the policy with every connected host through
-`goat_goatclaw_sync` and keeps the newest change, and launches and follow-up sends sync their
-destination first. A remote follow-up send forwards the caller's ceiling and takes a lane that
-rides the target thread's dispatch; it is refused only when the destination has not shown it
-enforces ceilings. Bulk creation and remote cloud-holder forwarding refuse while enabled until
+`goat_permission_profile_sync` and keeps the newest change. Launches and follow-up sends go through one rule,
+`syncBeforeForwarding`: sync the destination first and never refuse because that sync is pending or
+outdated, so hub steering cannot stall on it. A remote follow-up send forwards the caller's ceiling
+and takes a lane that rides the target thread's dispatch. Bulk creation and remote cloud-holder forwarding refuse while enabled until
 they preserve the same policy and accounting. Provider-native limits are outside this admission
 service.
 

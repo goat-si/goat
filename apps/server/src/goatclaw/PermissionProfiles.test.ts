@@ -807,3 +807,63 @@ it.effect("refuses cyclic delegation ancestry without admitting another lane", (
     expect(yield* sql`SELECT id FROM goatclaw_lane_reservations`).toEqual([]);
   }).pipe(Effect.provide(fixture())),
 );
+
+// #855: the profile a thread is bound under may allow what its launch ceiling does not.
+it.effect("names the ceiling that refused, not the stored profile it narrowed", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    yield* profiles.claim(outside, {
+      id: "forwarded",
+      childThreadId: ThreadId.make("forwarded"),
+      runtimeMode: "full-access",
+      forwarded: BUILTIN_PERMISSION_PROFILES.worker!,
+    });
+    yield* seed("forwarded");
+    expect(yield* profiles.check(threadScope("forwarded"), "threads.remote")).toEqual({
+      ok: false,
+      reason: "Ceiling worker (narrowing manager) does not allow threads.remote.",
+    });
+    yield* seed("unbound");
+    expect(yield* profiles.check(threadScope("unbound"), "hub.manage")).toEqual({
+      ok: false,
+      reason: "Profile manager does not allow hub.manage.",
+    });
+    const view = yield* profiles.resolve(threadScope("forwarded"));
+    expect(view.profile.id).toBe("manager");
+  }).pipe(Effect.provide(fixture("manager"))),
+);
+
+// A ceiling that allows what the snapshot refuses, wholly or for that field, must not be blamed.
+it.effect.each([
+  { name: "wider", forwarded: BUILTIN_PERMISSION_PROFILES.owner! },
+  { name: "mixed", forwarded: { ...BUILTIN_PERMISSION_PROFILES.owner!, maxLanes: 3 } },
+])(
+  "blames the launch snapshot, not a $name forwarded ceiling, once the profile widens",
+  ({ name, forwarded }) =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* profiles.claim(outside, {
+        id: name,
+        childThreadId: ThreadId.make(name),
+        runtimeMode: "full-access",
+        forwarded,
+      });
+      const policy = (yield* settings.getSettings).goatclaw;
+      const manager = policy.profiles.manager!;
+      yield* settings.updateSettings({
+        goatclaw: {
+          ...policy,
+          profiles: {
+            ...policy.profiles,
+            manager: { ...manager, capabilities: [...manager.capabilities, "hub.manage"] },
+          },
+        },
+      });
+      yield* seed(name);
+      expect(yield* profiles.check(threadScope(name), "hub.manage")).toEqual({
+        ok: false,
+        reason: "Profile manager as this thread was launched with it does not allow hub.manage.",
+      });
+    }).pipe(Effect.provide(fixture("manager"))),
+);

@@ -48,6 +48,7 @@ import {
 } from "../startupAccess.ts";
 import { authScopesFlag } from "./authScopes.ts";
 import { baseDirFlag, DurationFromString } from "./config.ts";
+import { refuseInThread } from "./cliCredential.ts";
 
 const WELL_KNOWN_ENVIRONMENT_PATH = GOAT_ENVIRONMENT_PATH;
 const PAIR_PROBE_TIMEOUT = Duration.millis(2_500);
@@ -77,7 +78,7 @@ export class NoRunningServerError extends Schema.TaggedError<NoRunningServerErro
         ? ["In a linked worktree, pass --base-dir to pair with a server outside it."]
         : []),
       isGoatConnectEnabled()
-        ? "Start one with `npx t3 serve`, or connect this machine with T3 Connect: `npx t3 connect`."
+        ? "Start GOAT with `goat serve`, then pair this device with `goat pair`. For remote access, use `goat pair --tailscale`."
         : "Start one with `goat serve`.",
     ].join("\n");
   }
@@ -513,6 +514,7 @@ export const pairCommand = Command.make("pair", {
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
+      yield* refuseInThread("goat pair");
       const cliLogLevel = yield* GlobalFlag.LogLevel;
       const logLevel = Option.getOrElse(cliLogLevel, () => "Warn" as const);
 

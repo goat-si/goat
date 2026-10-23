@@ -132,7 +132,7 @@ export const GoatProjectFile = Schema.Struct({
 }).annotate({
   title: "GOAT project file",
   description:
-    "Checked-in project configuration for GOAT (goat.json at the repository root). See https://t3.codes for documentation.",
+    "Checked-in project configuration for GOAT (goat.json at the repository root). See GOAT documentation for project settings.",
 });
 export type GoatProjectFile = typeof GoatProjectFile.Type;
 

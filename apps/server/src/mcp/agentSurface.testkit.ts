@@ -63,6 +63,7 @@ import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { layerPermissionProfilesOff, liveThreadsLayer } from "./McpToolAccess.testkit.ts";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -99,6 +100,10 @@ import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as McpSessionRegistry from "./McpSessionRegistry.ts";
+import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import * as Schema from "effect/Schema";
+import { HttpBody, HttpClient, HttpRouter, HttpServer } from "effect/http";
 
 // The assembled /mcp catalog over inert services: registration and early refusals run, domain
 // handlers do not touch live state.
@@ -136,10 +141,8 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
-export const dependencies = Layer.mergeAll(
+const inertDependencies = Layer.mergeAll(
   Layer.mock(DecisionInbox.DecisionInbox)({}),
-  // goatclaw off: the capability gate admits every call, so handlers decide access.
-  layerPermissionProfilesOff,
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
@@ -153,7 +156,10 @@ export const dependencies = Layer.mergeAll(
     Layer.provide(Path.layer),
     Layer.provide(FileSystem.layerNoop({ makeDirectory: () => Effect.void })),
   ),
-  Layer.mock(ServerSecretStore.ServerSecretStore)({}),
+  // A real server always has its secret store; goat_call loads the handle key before work starts.
+  Layer.mock(ServerSecretStore.ServerSecretStore)({
+    getOrCreateRandom: () => Effect.succeed(new Uint8Array(32).fill(1)),
+  }),
   FileSystem.layerNoop({ makeDirectory: () => Effect.void }),
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),
@@ -167,7 +173,6 @@ export const dependencies = Layer.mergeAll(
   Layer.mock(DeviceService.DeviceService)({}),
   Path.layer,
   Layer.mock(ServerEnvironment.ServerEnvironment)({}),
-  Layer.mock(Settings.ServerSettingsService)({}),
   Layer.mock(ThreadCommandExecutor.ThreadCommandExecutor)({}),
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
   Layer.mock(HubParity.HubParity)({}),
@@ -231,6 +236,16 @@ export const dependencies = Layer.mergeAll(
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   NodeCrypto.layer,
 );
+// goatclaw off: the capability gate admits every call, so handlers decide access.
+const servicesOff = Layer.mergeAll(layerPermissionProfilesOff, inertDependencies);
+const settingsOff = Layer.mock(Settings.ServerSettingsService)({});
+export const dependencies = Layer.mergeAll(servicesOff, settingsOff);
+/**
+ * The same inert services with goatclaw on, so the capability gate holds threads to their
+ * profiles. The caller provides SqlClient (with the calling thread seeded) and the
+ * ServerSettingsService both the gate and the handlers read, and can change the policy through it.
+ */
+const enforcingDependencies = Layer.mergeAll(Profiles.layer, inertDependencies);
 export const client = McpSchema.McpServerClient.of({
   clientId: 1,
   clientCapabilities: {},
@@ -243,3 +258,128 @@ export const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
+
+const jsonText = Schema.fromJsonString(Schema.Unknown);
+const decodeJson = Schema.decodeUnknownSync(jsonText);
+const encodeJson = Schema.encodeSync(jsonText);
+const decodeCallToolResult = Schema.decodeUnknownSync(McpSchema.CallToolResult);
+type RpcMessage = {
+  readonly id?: number;
+  readonly result?: Record<string, unknown>;
+  readonly error?: unknown;
+};
+
+/**
+ * Registrations served over /mcp the way agents reach it: each caller sends its own bearer token
+ * and the auth middleware provides that caller's scope. Needs an HTTP server and client, such as
+ * NodeHttpServer.layerTest, and a scope that keeps the server up.
+ */
+/** Registrations served over /mcp the way agents reach it; see serveCatalogOverHttp. */
+export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
+  scopes: Readonly<Record<string, McpInvocationScope>>,
+  registrations: Layer.Layer<never, E, R>,
+) {
+  const scopeOf = new Map(
+    Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
+  );
+  yield* HttpRouter.serve(
+    registrations.pipe(
+      Layer.provideMerge(McpHttpServer.layerMcpTransport),
+      Layer.provide(
+        Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+          resolve: () => Effect.succeed(undefined),
+          explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),
+          isRegistryToken: () => false,
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+          authenticate: (request) =>
+            Effect.succeed(scopeOf.get(request.headers.authorization ?? "")),
+        }),
+      ),
+    ),
+    { disableListenLog: true, disableLogger: true },
+  ).pipe(Layer.build);
+  const http = yield* HttpClient.HttpClient;
+  const sessions = new Map<string, string>();
+  let nextId = 0;
+  const post = Effect.fn(function* (caller: string, method: string, params: object) {
+    const id = ++nextId;
+    const session = sessions.get(caller);
+    const response = yield* http.post("/mcp", {
+      headers: {
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${caller}.token`,
+        ...(session === undefined
+          ? {}
+          : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
+      },
+      body: HttpBody.text(encodeJson({ jsonrpc: "2.0", id, method, params }), "application/json"),
+    });
+    const sessionId = response.headers["mcp-session-id"];
+    if (session === undefined && sessionId !== undefined) sessions.set(caller, sessionId);
+    const text = yield* response.text;
+    const lines = text.split(/\r?\n/).filter((line) => line.startsWith("data:"));
+    const messages = (lines.length > 0 ? lines.map((line) => line.slice(5)) : [text]).map(
+      (line) => decodeJson(line) as RpcMessage,
+    );
+    return messages.find((message) => message.id === id) ?? { error: text };
+  });
+  const ensureSession = (caller: string) =>
+    sessions.has(caller)
+      ? Effect.void
+      : post(caller, "initialize", {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "agent-surface-http", version: "1" },
+        });
+  const address = (yield* HttpServer.HttpServer).address;
+  return {
+    /** Where /mcp listens, for clients that bring their own HTTP stack, such as the CLI. */
+    endpoint:
+      address._tag === "UnixPathAddress" ? "unix-socket" : `http://127.0.0.1:${address.port}/mcp`,
+    /** tools/call as the caller; a JSON-RPC error comes back as an error result naming it. */
+    callTool: (caller: string, name: string, args: object) =>
+      ensureSession(caller).pipe(
+        Effect.andThen(post(caller, "tools/call", { name, arguments: args })),
+        // A transport failure is a broken harness, never an access outcome.
+        Effect.orDie,
+        Effect.map((message) =>
+          message.result === undefined
+            ? new McpSchema.CallToolResult({
+                isError: true,
+                content: [{ type: "text", text: `rpc error: ${encodeJson(message.error)}` }],
+              })
+            : decodeCallToolResult(message.result),
+        ),
+      ),
+    /** Every tool name tools/list shows the caller, across pages. */
+    listToolNames: Effect.fn(function* (caller: string) {
+      yield* ensureSession(caller);
+      const names: Array<string> = [];
+      let cursor: unknown;
+      do {
+        const page = (yield* post(caller, "tools/list", cursor === undefined ? {} : { cursor }))
+          .result as { tools: ReadonlyArray<{ name: string }>; nextCursor?: unknown };
+        names.push(...page.tools.map((tool) => tool.name));
+        cursor = page.nextCursor;
+      } while (cursor !== undefined && cursor !== null);
+      return names;
+    }),
+  };
+});
+
+// Settings come from the caller, so a test can change the goatclaw policy.
+const serveWith = <E, R>(
+  scopes: Readonly<Record<string, McpInvocationScope>>,
+  services: Layer.Layer<Layer.Success<typeof servicesOff>, E, R>,
+) => serveOverHttp(scopes, catalog.pipe(Layer.provide(services)));
+
+export const serveCatalogOverHttp = (scopes: Readonly<Record<string, McpInvocationScope>>) =>
+  serveWith(scopes, servicesOff).pipe(Effect.provide(settingsOff));
+
+/** serveCatalogOverHttp with goatclaw enforcing; see enforcingDependencies for what it needs. */
+export const serveEnforcingCatalogOverHttp = (
+  scopes: Readonly<Record<string, McpInvocationScope>>,
+) => serveWith(scopes, enforcingDependencies);

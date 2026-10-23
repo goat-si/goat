@@ -600,7 +600,7 @@ describe("orchestrator MCP toolkit", () => {
 
           const delegationStartSequence =
             yield* orchestrator.getThreadEventSequence(parentThreadId);
-          const delegatedCall = yield* invoke("delegate_task", {
+          const delegatedCall = yield* invoke("goat_task_create", {
             task: delegatedPrompt,
             target: {
               providerInstanceId: codexInstanceId,
@@ -634,7 +634,7 @@ describe("orchestrator MCP toolkit", () => {
                 }),
               ),
             );
-          const delegatedStatusCall = yield* invoke("task_status", {
+          const delegatedStatusCall = yield* invoke("goat_task_read", {
             taskId: delegatedStart.taskId,
           });
           const delegated = yield* decodeDelegateTaskResult(
@@ -712,7 +712,7 @@ describe("orchestrator MCP toolkit", () => {
             ),
           ).toBe(true);
 
-          const pendingStatusCall = yield* invoke("task_status", {
+          const pendingStatusCall = yield* invoke("goat_task_read", {
             taskId: delegated.taskId,
           });
           const pendingStatus = yield* decodeDelegateTaskResult(
@@ -818,7 +818,7 @@ describe("orchestrator MCP toolkit", () => {
             finishedParent.subagents.find((task) => task.id === followupTasks[0]!.id)
               ?.completionDelivery?.state,
           ).toBe("claimed");
-          const finalStatusCall = yield* invoke("task_status", {
+          const finalStatusCall = yield* invoke("goat_task_read", {
             taskId: delegated.taskId,
           });
           const finalStatus = yield* decodeDelegateTaskResult(
@@ -1098,7 +1098,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
               Effect.provideService(McpSchema.McpServerClient, client),
             );
 
-        const call = yield* invoke("delegate_task", {
+        const call = yield* invoke("goat_task_create", {
           task: "Ask before deciding.",
           mode: "wait",
           timeoutMs: 10_000,

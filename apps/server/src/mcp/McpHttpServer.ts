@@ -1,9 +1,15 @@
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
-import { ToolDispatch } from "./ToolDispatch.ts";
+import {
+  listedRegistration,
+  registeredToolName,
+  ToolDispatch,
+  withServedToolNames,
+} from "./ToolDispatch.ts";
 import {
   argumentKeys,
   encodeReferenceRefusal,
+  keepingRefusalCode,
   refusalResult,
   undeclaredArgumentsResult,
 } from "./toolRefusals.ts";
@@ -12,12 +18,11 @@ import * as DecisionHandlers from "./toolkits/decision/handlers.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   OrchestratorMcpFailure,
-  PreviewAutomationError,
   type PreviewAutomationSnapshot,
   type RunId,
   ThreadId,
 } from "@goat/contracts";
-import { type LlmsTxtCaller, renderLlmsTxt } from "@goat/contracts/agentSurface/llms";
+import { llmsTxtCaller, llmsTxtResponse } from "./llmsTxtResponse.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -76,7 +81,7 @@ import { validateRepositoryReferenceArguments } from "./repositoryReferenceArgum
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
-import { imageToolFailure, imageToolSuccess } from "./imageToolResult.ts";
+import { imageToolFailure, imageToolSuccess, previewSnapshotFailure } from "./imageToolResult.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -343,7 +348,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
         message,
       });
     }
-    return yield* httpEffect.pipe(
+    return yield* withServedToolNames(httpEffect).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
       Effect.map(normalizeMcpHttpResponse),
     );
@@ -353,18 +358,6 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
 const layerMcpAuthMiddleware = HttpRouter.middleware<{
   provides: McpInvocationContext.McpInvocationContext;
 }>()(makeMcpAuthMiddleware).layer;
-
-const llmsTxtCaller = (scope: McpInvocationContext.McpInvocationScope): LlmsTxtCaller =>
-  scope.client === undefined
-    ? { kind: "thread" }
-    : { kind: "client", readOnly: scope.client.access === "read-only" };
-
-const llmsTxtResponse = (caller: LlmsTxtCaller) =>
-  HttpServerResponse.text(renderLlmsTxt(caller), {
-    contentType: "text/plain; charset=utf-8",
-    // The body depends on the credential, so no shared cache may keep it.
-    headers: { "cache-control": "no-store", vary: "authorization" },
-  });
 
 /**
  * The registry index for agents. Without a credential it lists every path; a
@@ -445,7 +438,7 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   const { accessibilityTree, ...withoutTree } = metadata;
   const ariaTree = typeof accessibilityTree === "string" ? accessibilityTree : undefined;
   if (accessibilityTree !== undefined && ariaTree === undefined) {
-    omitted.push("accessibilityTree (use interactiveElements locators or preview_evaluate)");
+    omitted.push("accessibilityTree (use interactiveElements locators or goat_preview_evaluate)");
   }
   const tail = <A>(entries: ReadonlyArray<A>, label: string) => {
     if (entries.length > MAX_SNAPSHOT_LOG_ENTRIES) {
@@ -545,7 +538,7 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   }
   if (visibleTextChars < metadata.visibleText.length) {
     omitted.push(
-      `visibleText after ${visibleTextChars} characters (use preview_evaluate for more)`,
+      `visibleText after ${visibleTextChars} characters (use goat_preview_evaluate for more)`,
     );
   }
   if (ariaTree !== undefined && ariaTreeChars < ariaTree.length) {
@@ -622,44 +615,6 @@ const decodeAsAdvertised = <Tools extends Record<string, Tool.Any>>(
         : tool.setParameters(Schema.toCodecJson(tool.parametersSchema)),
     ),
   ) as unknown as Toolkit.Toolkit<Tools>;
-
-const isPreviewAutomationError = Schema.is(PreviewAutomationError);
-
-const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
-  if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
-    return Effect.failCause(cause).pipe(Effect.orDie);
-  }
-  const failures = cause.reasons.filter(Cause.isFailReason);
-  const firstFailure = failures[0]?.error;
-  const errorTag =
-    typeof firstFailure === "object" &&
-    firstFailure !== null &&
-    "_tag" in firstFailure &&
-    typeof firstFailure._tag === "string"
-      ? firstFailure._tag
-      : "PreviewSnapshotError";
-  // Preview errors build their message on the server, never from page output,
-  // and it tells the agent what to do next, such as falling back to a shell browser.
-  const message = isPreviewAutomationError(firstFailure) ? firstFailure.message : undefined;
-  const result = new McpSchema.CallToolResult({
-    isError: true,
-    structuredContent: {
-      error: {
-        _tag: errorTag,
-        operation: "snapshot",
-        failureCount: failures.length,
-        ...(message === undefined ? {} : { message }),
-      },
-    },
-    // Some clients show only the text content and others only structuredContent, so both carry it.
-    content: [{ type: "text", text: `Preview snapshot failed: ${message ?? `${errorTag}.`}` }],
-  });
-  return Effect.logWarning("preview snapshot failed", {
-    operation: "snapshot",
-    errorTag,
-    failureCount: failures.length,
-  }).pipe(Effect.as(result));
-};
 
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
@@ -917,6 +872,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
               ),
             };
             // Arguments never decode for a caller whose goatclaw profile refuses the tool.
+            const handle = keepingRefusalCode(registration.handle);
             const gated = (payload: unknown) =>
               McpToolAccess.requireDeclaredCapability(
                 permissions,
@@ -926,7 +882,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
               ).pipe(
                 Effect.matchEffect({
                   onFailure: (failure) => Effect.succeed(refusalResult(failure)),
-                  onSuccess: () => registration.handle(payload),
+                  onSuccess: () => handle(payload),
                 }),
               );
             const inputSchema = registration.tool.inputSchema;
@@ -1179,6 +1135,15 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/** Applied outside the access and analytics wrappers, which keep keying by the shipped name. */
+const withListedNames = <A, E, R>(registration: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(McpServer.McpServer, (server) =>
+    Effect.provideService(registration, McpServer.McpServer, {
+      ...server,
+      addTool: (options) => server.addTool(listedRegistration(options)),
+    }),
+  );
+
 /**
  * `McpServer.toolkit` asks for every service its tools declare when it
  * registers them, but the auth middleware provides `McpInvocationContext` to
@@ -1190,7 +1155,9 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) => {
   const registration = Layer.effectDiscard(
-    withToolAnalytics(applyToolContracts(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    withListedNames(
+      withToolAnalytics(applyToolContracts(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    ),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
   const registered = registration as Layer.Layer<
@@ -1210,8 +1177,10 @@ const layerToolDispatch = Layer.effect(
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     return ToolDispatch.of({
-      call: (name, args) => server.callTool({ name, arguments: args }),
-      served: (name) => server.tools.find(({ tool }) => tool.name === name)?.tool,
+      // Callers may name a tool as it shipped; the server registers it under its listed name.
+      call: (name, args) => server.callTool({ name: registeredToolName(name), arguments: args }),
+      served: (name) =>
+        server.tools.find(({ tool }) => tool.name === registeredToolName(name))?.tool,
     });
   }),
 );
@@ -1220,7 +1189,7 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
   register: Effect.Effect<A, E, R>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) =>
-  Layer.effectDiscard(withToolAnalytics(applyToolContracts(register))).pipe(
+  Layer.effectDiscard(withListedNames(withToolAnalytics(applyToolContracts(register)))).pipe(
     Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)),
   );
 

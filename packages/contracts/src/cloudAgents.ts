@@ -8,6 +8,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { OrchestrationV2CloudTask } from "./orchestrationV2.ts";
+import { needsHumanFields } from "./humanStepResult.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 /**
@@ -131,7 +132,7 @@ export const CloudLaunchInput = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
   holder: Schema.optional(CloudHolderName).annotate({
     description:
-      'Run on this holder: "local" or an SSH host alias from goat_cloud_holders. Omit to pick a ready holder.',
+      'Run on this holder: "local" or an SSH host alias from goat_cloud_agent_holders. Omit to pick a ready holder.',
   }),
   dryRun: Schema.optional(Schema.Boolean).annotate({
     description: "Only say which holder would launch it. Starts nothing.",
@@ -141,7 +142,11 @@ export const CloudLaunchInput = Schema.Struct({
   }),
   decisionId: Schema.optional(TrimmedNonEmptyString).annotate({
     description:
-      'With goatclaw on, a launch the person did not ask for in this turn needs their approval: open a decision with goat_decision_request offering an option with id "approve", and pass its id once a person chose it. Each approval starts one launch.',
+      "Outside a thread only: with goatclaw on, a refused launch names a decision GOAT filed for exactly this launch; pass its id once a person approved it. Each approval starts one launch. From a thread, use handoffId.",
+  }),
+  handoffId: Schema.optional(TrimmedNonEmptyString).annotate({
+    description:
+      "From a thread: with goatclaw on, a launch the person did not start in this turn returns needs_human with a handoff. Once a person approves it, call again with the same arguments and this id. A different launch needs a new approval.",
   }),
 });
 export type CloudLaunchInput = typeof CloudLaunchInput.Type;
@@ -157,6 +162,17 @@ export const CloudLaunchResult = Schema.Struct({
   note: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
 });
 export type CloudLaunchResult = typeof CloudLaunchResult.Type;
+/** What goat_cloud_launch returns: a launch, or a handoff asking a person to allow it. */
+export const CloudLaunchMcpResult = Schema.Union([
+  Schema.Struct({
+    ...needsHumanFields("approval", "goat_cloud_launch"),
+    holder: CloudHolder,
+    dryRun: Schema.Literal(false),
+    note: Schema.String.check(Schema.isMaxLength(1000)),
+  }),
+  CloudLaunchResult,
+]);
+export type CloudLaunchMcpResult = typeof CloudLaunchMcpResult.Type;
 
 export const CloudRunRegisterInput = Schema.Struct({
   provider: CloudAgentProvider,

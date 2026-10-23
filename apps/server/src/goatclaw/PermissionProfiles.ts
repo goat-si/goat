@@ -82,8 +82,17 @@ interface ClaimInput {
    */
   readonly remoteThreadId?: string | undefined;
 }
+/**
+ * The stored profile a thread runs under and the ceilings that narrowed it, so a refusal names
+ * whichever one refused. Server-side only: strip it before a view leaves this process.
+ */
+export interface ProfileNarrowing {
+  readonly named: PermissionProfile;
+  readonly ceilings: ReadonlyArray<PermissionProfile>;
+}
+export type EffectiveProfile = PermissionProfileView & { readonly narrowing?: ProfileNarrowing };
 export type CheckResult =
-  | { readonly ok: true; readonly effective: PermissionProfileView }
+  | { readonly ok: true; readonly effective: EffectiveProfile }
   | { readonly ok: false; readonly reason: string };
 interface CloudApprovalInput {
   readonly decisionId?: string | undefined;
@@ -98,7 +107,7 @@ export class PermissionProfiles extends Context.Service<
       scope: McpInvocationScope,
       runtimeMode?: RuntimeMode,
       forwarded?: PermissionProfile,
-    ) => Effect.Effect<PermissionProfileView, OrchestratorMcpFailure>;
+    ) => Effect.Effect<EffectiveProfile, OrchestratorMcpFailure>;
     readonly check: (
       scope: McpInvocationScope,
       capability: PermissionCapability,
@@ -108,7 +117,7 @@ export class PermissionProfiles extends Context.Service<
       scope: McpInvocationScope,
       capability: PermissionCapability,
       context?: CheckContext,
-    ) => Effect.Effect<PermissionProfileView, OrchestratorMcpFailure>;
+    ) => Effect.Effect<EffectiveProfile, OrchestratorMcpFailure>;
     readonly assertTarget: (
       scope: McpInvocationScope,
       threadId: ThreadId,
@@ -185,25 +194,39 @@ const ownerOf = (scope: McpInvocationScope) =>
 const encodeProfile = Schema.encodeSync(Schema.fromJsonString(PermissionProfile));
 const decodeProfile = Schema.decodeUnknownEffect(Schema.fromJsonString(PermissionProfile));
 
+/** Names the stored profile when it refuses, else the first ceiling that narrowed it to refusal. */
+const refuser = (effective: EffectiveProfile, refuses: (profile: PermissionProfile) => boolean) => {
+  const named = effective.narrowing?.named ?? effective.profile;
+  if (refuses(named)) return `Profile ${named.id}`;
+  const ceiling = effective.narrowing?.ceilings.find(refuses);
+  if (ceiling === undefined) return `Profile ${effective.profile.id}`;
+  return ceiling.id === named.id
+    ? `Profile ${named.id} as this thread was launched with it`
+    : `Ceiling ${ceiling.id} (narrowing ${named.id})`;
+};
+
 export const checkProfile = (
-  effective: PermissionProfileView,
+  effective: EffectiveProfile,
   capability: PermissionCapability,
   context: CheckContext,
 ): CheckResult => {
   if (!effective.enabled) return { ok: true, effective };
   const { profile } = effective;
   if (!profile.capabilities.includes(capability))
-    return { ok: false, reason: `Profile ${profile.id} does not allow ${capability}.` };
-  if (
-    context.host !== undefined &&
-    profile.hosts !== undefined &&
-    !profile.hosts.includes(context.host)
-  )
-    return { ok: false, reason: `Profile ${profile.id} does not allow host ${context.host}.` };
-  if (context.lanesRunning !== undefined && context.lanesRunning >= profile.maxLanes)
     return {
       ok: false,
-      reason: `Profile ${profile.id} permits at most ${profile.maxLanes} running lanes.`,
+      reason: `${refuser(effective, (p) => !p.capabilities.includes(capability))} does not allow ${capability}.`,
+    };
+  const { host, lanesRunning } = context;
+  if (host !== undefined && profile.hosts !== undefined && !profile.hosts.includes(host))
+    return {
+      ok: false,
+      reason: `${refuser(effective, (p) => p.hosts !== undefined && !p.hosts.includes(host))} does not allow host ${host}.`,
+    };
+  if (lanesRunning !== undefined && lanesRunning >= profile.maxLanes)
+    return {
+      ok: false,
+      reason: `${refuser(effective, (p) => lanesRunning >= p.maxLanes)} permits at most ${profile.maxLanes} running lanes.`,
     };
   return { ok: true, effective };
 };
@@ -235,12 +258,14 @@ export const layer = Layer.effect(
       const named = policy.profiles[profileId];
       if (named === undefined)
         return yield* refusal(`Permission profile ${profileId} no longer exists.`);
-      return binding === undefined
-        ? named
-        : intersectProfiles(
-            named,
-            yield* decodeProfile(binding.ceiling_json).pipe(Effect.mapError(storageFailure)),
-          );
+      if (binding === undefined) return { profile: named, narrowing: { named, ceilings: [] } };
+      const ceiling = yield* decodeProfile(binding.ceiling_json).pipe(
+        Effect.mapError(storageFailure),
+      );
+      return {
+        profile: intersectProfiles(named, ceiling),
+        narrowing: { named, ceilings: [ceiling] },
+      };
     });
     const resolve = Effect.fn("PermissionProfiles.resolve")(function* (
       scope: McpInvocationScope,
@@ -266,8 +291,16 @@ export const layer = Layer.effect(
         };
       }
       const sql = yield* sqlEffect;
-      let profile = yield* threadProfile(policy, threadId);
-      if (forwarded !== undefined) profile = intersectProfiles(profile, forwarded);
+      const bound = yield* threadProfile(policy, threadId);
+      const profile =
+        forwarded === undefined ? bound.profile : intersectProfiles(bound.profile, forwarded);
+      const narrowing: ProfileNarrowing = {
+        named: bound.narrowing.named,
+        ceilings:
+          forwarded === undefined
+            ? bound.narrowing.ceilings
+            : [...bound.narrowing.ceilings, forwarded],
+      };
       let callerMode =
         runtimeMode === undefined
           ? clientRuntimeModeCeiling(scope.client)
@@ -287,6 +320,7 @@ export const layer = Layer.effect(
         enabled: true,
         profile: { ...profile, runtimeModeCeiling: narrowed },
         runtimeMode: narrowed,
+        narrowing,
       };
     });
     const check = Effect.fn("PermissionProfiles.check")(function* (
@@ -423,6 +457,8 @@ export const layer = Layer.effect(
         return effective;
       }
       let granted = effective;
+      // The profile the child is bound under before any ceiling narrows it.
+      let base = effective.narrowing?.named ?? effective.profile;
       if (input.role !== undefined) {
         const { profileId } = goatclawRoleTemplate(input.role);
         const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
@@ -434,6 +470,7 @@ export const layer = Layer.effect(
         const missing = missingRoleCapabilities(input.role, profile);
         if (missing.length > 0) return yield* roleRefusal(input.role, missing);
         granted = { ...effective, profile, runtimeMode: profile.runtimeModeCeiling };
+        base = named;
       }
       const sql = yield* sqlEffect;
       return yield* sql
@@ -511,6 +548,10 @@ export const layer = Layer.effect(
                       ...effective.profile,
                       maxLanes: Math.min(effective.profile.maxLanes, rootProfile.profile.maxLanes),
                     },
+                    narrowing: {
+                      named: effective.narrowing?.named ?? effective.profile,
+                      ceilings: [...(effective.narrowing?.ceilings ?? []), rootProfile.profile],
+                    },
                   },
                   "threads.launch",
                   {
@@ -526,9 +567,26 @@ export const layer = Layer.effect(
                 profile_id: string;
                 ceiling_json: string;
               }>`SELECT profile_id, ceiling_json FROM goatclaw_thread_profiles WHERE thread_id = ${input.childThreadId}`)[0];
+              // A first binding's snapshot carries the id of what narrowed it, so the child's
+              // refusals name that ceiling rather than the profile it is bound under. The
+              // snapshot holds one id for every field, so a source is named only when it is
+              // within the base and every other source: then whatever the snapshot refuses,
+              // that source refuses too.
+              const sources = [
+                ...(effective.narrowing?.ceilings ?? []),
+                ...(input.role === undefined ? [] : [effective.profile]),
+              ];
+              const withinAll = (source: PermissionProfile) =>
+                [base, ...sources].every(
+                  (other) =>
+                    encodeProfile(intersectProfiles(source, other)) === encodeProfile(source),
+                );
+              const narrower = sources.findLast(
+                (source) => source.id !== granted.profile.id && withinAll(source),
+              );
               const inherited =
                 previous === undefined
-                  ? granted.profile
+                  ? { ...granted.profile, ...(narrower === undefined ? {} : { id: narrower.id }) }
                   : intersectProfiles(
                       yield* decodeProfile(previous.ceiling_json).pipe(
                         Effect.mapError(storageFailure),
@@ -609,7 +667,7 @@ export const layer = Layer.effect(
       const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
       if (!policy.enabled) return undefined;
       return yield* threadProfile(policy, threadId).pipe(
-        Effect.map((profile) => profile.maxLanes),
+        Effect.map(({ profile }) => profile.maxLanes),
         Effect.catchIf(
           (error) => error.code === "capability_denied",
           () => Effect.succeed(0),

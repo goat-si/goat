@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 
+import { OperationRef } from "./operation.ts";
+
 /**
  * One result shape for goat_call and the CLI's --json output (docs/internals/agent-surface.md,
  * "Result envelope"). Legacy tool names keep their own shapes; this classifies them after the
@@ -36,14 +38,21 @@ export const AgentSurfaceError = Schema.Struct({
 export type AgentSurfaceError = typeof AgentSurfaceError.Type;
 
 /**
- * Only fields something produces today. nextCursor, operation and deprecated join with the
- * rollout steps that emit them, so no agent learns to read a field that is never set.
+ * Only fields something produces today. nextCursor joins with the rollout step
+ * that emits it, so no agent learns to read a field that is never set.
  */
 export const AgentSurfaceMeta = Schema.Struct({
   /** Where a routed call ran. */
   host: Schema.optionalKey(Schema.String),
   /** Non-text content blocks, such as screenshots, as the tool returned them. */
   content: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  /** Accepted work still running; an ok result without it is finished. */
+  operation: Schema.optionalKey(OperationRef),
+  /**
+   * Set when the call named a deprecated tool name or path: the current path to use instead.
+   * The call itself ran normally.
+   */
+  deprecated: Schema.optionalKey(Schema.String),
 });
 export type AgentSurfaceMeta = typeof AgentSurfaceMeta.Type;
 
@@ -60,7 +69,7 @@ export type AgentSurfaceHandoff = typeof AgentSurfaceHandoff.Type;
 
 /** What the agent calls after the person acts, when the server does not continue by itself. */
 export const AgentSurfaceNextCall = Schema.Struct({
-  after: Schema.Literals(["approval", "terminal"]),
+  after: Schema.Literals(["approval", "terminal", "input"]),
   path: Schema.String,
   args: Schema.optionalKey(Schema.Unknown),
 });
@@ -152,6 +161,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   storage_failed: c("internal"),
   // Handoffs (HandoffErrorReason) and provider host sync (ProviderHostSyncErrorCode)
   expired: before("expired"),
+  // Operations (OperationErrorReason): not_found and expired are classified above.
+  not_cancellable: before("failed_precondition"),
   unavailable: c("unavailable"),
   denied: before("permission_denied"),
   start_failed: c("internal"),
@@ -361,7 +372,7 @@ export const fromFailure = (fields: Fields, context: CallContext): AgentSurfaceR
 };
 
 const isHandoff = Schema.is(AgentSurfaceHandoff);
-const AFTER: ReadonlySet<string> = new Set(["approval", "terminal"]);
+const AFTER: ReadonlySet<string> = new Set(["approval", "terminal", "input"]);
 
 /** Today's next hints name a tool (`call`); the envelope names its registry path. */
 const nextCall = (value: unknown, context: CallContext): AgentSurfaceNextCall | undefined => {

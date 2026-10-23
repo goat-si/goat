@@ -904,7 +904,7 @@ it.effect("refuses a launch watch for a remote delegated task", () =>
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure") {
           expect(result.failure.code).toBe("invalid_request");
-          expect(result.failure.message).toContain("task_status");
+          expect(result.failure.message).toContain("goat_task_read");
         }
       }),
   ),
@@ -992,7 +992,7 @@ it.effect("refuses a finished remote review before forwarding or relaying", () =
     expect(result._tag).toBe("Failure");
     if (result._tag !== "Failure") return;
     expect(result.failure).toMatchObject({ code: "thread_not_sendable" });
-    expect(result.failure.message).toContain("delegate_task");
+    expect(result.failure.message).toContain("goat_task_create");
     expect(calls).toHaveLength(0);
     expect(relays).toHaveLength(0);
   }),
@@ -1106,66 +1106,52 @@ it.effect("forwards ready-only reads without changing ordinary host bootstrap po
   ),
 );
 
-it.effect("forwards the caller's goatclaw ceiling with a remote send and keeps its lane", () =>
-  Effect.gen(function* () {
-    const settled: Array<boolean> = [];
-    const { result, calls } = yield* runService(
-      {
-        interactionMode: "default",
-        goatclawEnabled: true,
-        fleetReach: { sync: { state: "applied" }, enforcesCeilings: true },
-        onSettle: (sent) => settled.push(sent),
-        hostCall: () =>
-          Effect.succeed({
-            threadId: "remote",
-            messageId: "message-1",
-            runId: "run-1",
-            status: "running",
-            delivery: "steered",
-          }),
-      },
-      (service) =>
-        service.sendToThread(scope, {
-          host: "box",
-          threadId: ThreadId.make("remote"),
-          message: "Continue",
-        }),
-    );
-    expect(result._tag).toBe("Success");
-    expect(calls[0]?.tool).toBe("goat_thread_send");
-    expect(calls[0]?.arguments.permissionProfileCeiling).toEqual(
-      BUILTIN_PERMISSION_PROFILES.worker,
-    );
-    expect(settled).toEqual([true]);
-  }),
-);
-
-it.effect("refuses a profiled remote send to a GOAT too old to enforce its ceiling", () =>
-  Effect.gen(function* () {
-    const settled: Array<boolean> = [];
-    for (const fleetReach of [
-      { sync: { state: "outdated" as const }, enforcesCeilings: false },
-      { sync: { state: "pending" as const, message: "box is offline." }, enforcesCeilings: false },
-      undefined,
-    ]) {
-      const { result, calls } = yield* runService(
+it.effect(
+  "forwards the goatclaw ceiling with a remote send whatever the destination's sync state",
+  () =>
+    Effect.gen(function* () {
+      // Hub steering must not stall while sync is pending or the destination is too old to answer it.
+      const reaches = [
+        { sync: { state: "applied" as const }, enforcesCeilings: true },
+        { sync: { state: "outdated" as const }, enforcesCeilings: false },
         {
-          interactionMode: "default",
-          goatclawEnabled: true,
-          ...(fleetReach === undefined ? {} : { fleetReach }),
-          onSettle: (sent) => settled.push(sent),
-          hostCall: () => Effect.die("Remote send must be refused"),
+          sync: { state: "pending" as const, message: "box is offline." },
+          enforcesCeilings: false,
         },
-        (service) =>
-          service.sendToThread(scope, {
-            host: "box",
-            threadId: ThreadId.make("remote"),
-            message: "Continue",
-          }),
-      );
-      expect(result).toMatchObject({ _tag: "Failure", failure: { code: "capability_denied" } });
-      expect(calls).toHaveLength(0);
-    }
-    expect(settled).toEqual([false, false, false]);
-  }),
+        undefined,
+      ];
+      for (const goatclawEnabled of [true, false]) {
+        for (const fleetReach of reaches) {
+          const settled: Array<boolean> = [];
+          const { result, calls } = yield* runService(
+            {
+              interactionMode: "default",
+              goatclawEnabled,
+              ...(fleetReach === undefined ? {} : { fleetReach }),
+              onSettle: (sent) => settled.push(sent),
+              hostCall: () =>
+                Effect.succeed({
+                  threadId: "remote",
+                  messageId: "message-1",
+                  runId: "run-1",
+                  status: "running",
+                  delivery: "steered",
+                }),
+            },
+            (service) =>
+              service.sendToThread(scope, {
+                host: "box",
+                threadId: ThreadId.make("remote"),
+                message: "Continue",
+              }),
+          );
+          expect(result._tag).toBe("Success");
+          expect(calls[0]?.tool).toBe("goat_thread_send");
+          expect(calls[0]?.arguments.permissionProfileCeiling).toEqual(
+            goatclawEnabled ? BUILTIN_PERMISSION_PROFILES.worker : undefined,
+          );
+          expect(settled).toEqual([true]);
+        }
+      }
+    }),
 );

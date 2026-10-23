@@ -41,7 +41,7 @@ export function agentDeviceQuickStart(
     )
     .join(" ");
   const platformNotes = cloud
-    ? "This is an EAS Simulator session in the cloud. It bills the Expo account per minute until it stops, so call device_close with shutdown: true when you are done. It starts with no apps installed: install-from-source <url> installs a build from a URL (iOS needs a .tar.gz containing a .app), and install uploads one from this machine."
+    ? "This is an EAS Simulator session in the cloud. It bills the Expo account per minute until it stops, so call goat_device_close with shutdown: true when you are done. It starts with no apps installed: install-from-source <url> installs a build from a URL (iOS needs a .tar.gz containing a .app), and install uploads one from this machine."
     : device.platform === "ios"
       ? "First use builds an XCTest runner and can take a couple of minutes; later commands are fast."
       : "The Android snapshot helper installs itself on first use.";
@@ -53,7 +53,7 @@ export function agentDeviceQuickStart(
     `  ${executable} snapshot -i ${target}                     # accessibility tree with @eN refs`,
     `  ${executable} click @e3 ${target}`,
     `  ${executable} fill @e5 "text" ${target}`,
-    `  ${executable} screenshot /tmp/shot.png ${target}        # or call device_screenshot`,
+    `  ${executable} screenshot /tmp/shot.png ${target}        # or call goat_device_screenshot`,
     `  ${executable} install <app> <path-to-.app-or-.apk> ${target}`,
     `Prefer snapshot refs over coordinates. Run ${executable} help for workflow guides and ${executable} <command> --help for flags.`,
     "Prefer agent-device for driving this device. simctl, adb, and xcrun remain available for anything it does not cover.",
@@ -87,7 +87,7 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
     );
     if (match) return match;
     return yield* new DeviceToolUnavailableError({
-      reason: `No device ${input.deviceId} on host ${hostId}. Call device_list for current ids.`,
+      reason: `No device ${input.deviceId} on host ${hostId}. Call goat_device_list for current ids.`,
     });
   }
   const candidates = devices.filter(
@@ -99,8 +99,8 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
     return yield* new DeviceToolUnavailableError({
       reason:
         input.platform === undefined
-          ? "No simulators or emulators were found. Call device_list to see why."
-          : `No ${input.platform} devices were found on host ${hostId}. Call device_list to see why.`,
+          ? "No simulators or emulators were found. Call goat_device_list to see why."
+          : `No ${input.platform} devices were found on host ${hostId}. Call goat_device_list to see why.`,
     });
   }
   const platforms = new Set(candidates.map((device) => device.platform));
@@ -232,8 +232,8 @@ const handlers = {
         return yield* new DeviceToolUnavailableError({
           reason:
             input.deviceId === undefined
-              ? "No device is open in this thread. Call device_open first."
-              : `Device ${input.deviceId} on host ${hostId} is not open in this thread. Call device_open first.`,
+              ? "No device is open in this thread. Call goat_device_open first."
+              : `Device ${input.deviceId} on host ${hostId} is not open in this thread. Call goat_device_open first.`,
         });
       }
       const shot = yield* devices.screenshot(target);

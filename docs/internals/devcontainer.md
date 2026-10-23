@@ -28,5 +28,5 @@ Two named volumes keep rebuilds fast and installs off the slow macOS/Windows bin
 Container creation from scratch does a full `vp i` plus toolchain installs, which is worth prebuilding. Codespaces prebuilds are configured in repo settings, not files, and pick this config up as-is: the heavy steps live in `onCreateCommand` and `updateContentCommand`, which prebuilds bake in. Restrict prebuilds to one region and one retained version; storage bills per region per version. Note that prebuild snapshots exclude the caching volumes, so a prebuild-first workflow may prefer dropping the mounts. Outside Codespaces, the Dev Container CLI can push a prebuilt image:
 
 ```bash
-devcontainer build --workspace-folder . --push true --image-name <registry>/t3code-devcontainer:latest
+devcontainer build --workspace-folder . --push true --image-name <registry>/goat-devcontainer:latest
 ```
