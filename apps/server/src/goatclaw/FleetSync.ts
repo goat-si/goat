@@ -172,7 +172,7 @@ export const make = Effect.gen(function* () {
   const classify = (host: string, error: unknown): HostReach => {
     if (error instanceof SshRemoteDispatch.SshRemoteDispatchError) {
       if (
-        error.reason === "remote_refused" &&
+        (error.reason === "remote_refused" || error.reason === "remote_outdated") &&
         error.message.startsWith(`GOAT on ${host} does not have ${SYNC_TOOL}`)
       )
         return { sync: { state: "outdated", message: error.message }, enforcesCeilings: false };

@@ -65,6 +65,7 @@ import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Settings from "../serverSettings.ts";
 import { authorizeApprovalRequest } from "../sshRemote/SshHostAuthorization.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { mayHaveReached, remoteFailure } from "./providerSettingsRemote.ts";
 import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
 import { instanceFingerprint } from "./CodexRouteService.ts";
 import {
@@ -607,37 +608,13 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const remoteFailure = (request: ProviderSettingsRequest, host: string) => (error: unknown) =>
-    error instanceof Dispatch.SshRemoteDispatchError
-      ? failure(
-          error.reason === "invalid_request" || error.reason === "host_unknown"
-            ? "invalid_request"
-            : "orchestration_error",
-          error.reason === "remote_refused" && error.remoteCode === undefined
-            ? `${host} refused ${TOOLS[request.action]}: ${error.message} Update GOAT there if it does not have this tool yet.`
-            : error.message,
-        )
-      : isMcpFailure(error)
-        ? error
-        : failure("orchestration_error", `Could not reach ${host}.`);
-
-  /**
-   * The remote may have applied the change: the call failed after its request could have
-   * arrived, so nothing proves it did not run there.
-   */
-  const mayHaveReached = (error: unknown): error is Dispatch.SshRemoteDispatchError =>
-    error instanceof Dispatch.SshRemoteDispatchError &&
-    (error.launchMayHaveStarted === true ||
-      error.reason === "ssh_failed" ||
-      error.reason === "host_unavailable");
-
   const forward = Effect.fn("ProviderSettings.forward")(function* (
     request: ProviderSettingsRequest,
     host: string,
     authorize: Effect.Effect<RuntimeMode, OrchestratorMcpFailure>,
   ) {
     const raw = yield* dispatchRemote(request, host, authorize).pipe(
-      Effect.mapError(remoteFailure(request, host)),
+      Effect.mapError(remoteFailure(TOOLS[request.action], host)),
     );
     const result = yield* decodeRemote(raw).pipe(
       Effect.mapError(() =>
@@ -869,7 +846,7 @@ const make = Effect.gen(function* () {
       if (Exit.isFailure(sent)) {
         const error = Cause.squash(sent.cause);
         if (mayHaveReached(error)) return yield* unknown("remote", error.reason, error.message);
-        const mapped = remoteFailure(request, host)(error);
+        const mapped = remoteFailure(TOOLS[request.action], host)(error);
         return yield* settle({
           state: "failed",
           effect: "remote",
