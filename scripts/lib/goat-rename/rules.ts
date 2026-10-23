@@ -111,9 +111,12 @@ export const ENV_NAME = new RegExp(
   "g",
 );
 
-/** The SSH runner and the fixtures that pin its bytes (plan D17). */
+/**
+ * The SSH runner and the fixtures that pin its bytes (plan D17). The ownership scripts are
+ * uploaded byte for byte and hand T3CODE_ names to older runtimes, so a marker would change them.
+ */
 const outsideSshRunner = (path: string) =>
-  !/^packages\/ssh\/src\/(tunnel[^/]*|fixtures\/.*)$/.test(path);
+  !/^packages\/ssh\/src\/(tunnel[^/]*|runtimeOwnershipScripts\.ts|fixtures\/.*)$/.test(path);
 
 /** Lint rule ids are listed so that unrelated `t3code/...` paths and branch names stay. */
 const LINT_RULE_IDS =

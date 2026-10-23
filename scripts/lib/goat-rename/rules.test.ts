@@ -17,7 +17,7 @@ describe("server service keys", () => {
   });
 
   it("keeps SSH runner environment handoffs", () => {
-    const source = "T3CODE_NO_BROWSER=1 # goat-rename: legacy";
+    const source = "GOAT_SPAWN_ENV='T3CODE_NO_BROWSER=1'";
     expect(
       applyTextRules("packages/ssh/src/runtimeOwnershipScripts.ts", source, TEXT_RULES).text,
     ).toBe(source);
