@@ -131,5 +131,108 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.notInclude(events, "stop");
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
+
+    // A person restarting the runtime by hand on Windows recorded PowerShell's CommandLine for
+    // the same process; every launch then refused the host until the file was fixed by hand.
+    const handWrittenIdentity = (f: { old: string; port: number; home: string }) =>
+      `"${f.old}/goat.exe"  "serve" "--host" "127.0.0.1" "--port" "${f.port}" "--base-dir" "${f.home}/.goat" \n`;
+
+    it.live("a hand-written identity for GOAT's own serve is rewritten and the host attaches", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({ ...compatible, kind: "managed" });
+        const written = handWrittenIdentity(f);
+        yield* f.fs.writeFileString(`${f.state}/identity`, written);
+        const result = yield* f.run("launch");
+        assert.isTrue(Result.isSuccess(result), String(Result.isFailure(result) && result.failure));
+        if (Result.isSuccess(result)) {
+          assert.equal(result.success.version, "1.2.2");
+          assert.equal(result.success.port, f.port);
+        }
+        const after = yield* f.snapshot;
+        assert.equal(
+          after.identity,
+          `${f.old}/goat serve --host 127.0.0.1 --port ${f.port} --base-dir ${f.home}/.goat\n`,
+        );
+        assert.equal(after.pid, `${f.pid}\n`);
+        assert.equal(after.managed, "managed\n");
+        assert.equal(yield* f.fs.readFileString(`${f.state}/identity.unverified`), written);
+        const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
+        assert.notInclude(events, "drain");
+        assert.notInclude(events, "stop");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("a mismatched identity for any other process is refused with the next step", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({ ...compatible, kind: "managed" });
+        yield* f.fs.writeFileString(`${f.state}/identity`, handWrittenIdentity(f));
+        yield* f.fs.writeFileString(
+          `${f.home}/.test/foreign-command`,
+          "/bin/tail -f /unrelated/log\n",
+        );
+        const before = yield* f.snapshot;
+        const result = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+        });
+        assert.isTrue(Result.isFailure(result));
+        if (Result.isFailure(result)) {
+          assert.include(String(result.failure), "ownership could not be verified");
+          assert.include(String(result.failure), "stop it on the host and reconnect");
+        }
+        assert.deepEqual(yield* f.snapshot, before);
+        assert.isFalse(yield* f.fs.exists(`${f.state}/identity.unverified`));
+        const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
+        assert.notInclude(events, "drain");
+        assert.notInclude(events, "stop");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("a hand-written identity is not repaired when the installed goat is a symlink", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({ ...compatible, kind: "managed" });
+        yield* f.fs.writeFileString(`${f.state}/identity`, handWrittenIdentity(f));
+        // A developer build linked into the install is not an archive GOAT verified.
+        yield* f.fs.rename(`${f.old}/goat`, `${f.home}/dev-goat`);
+        yield* f.fs.symlink(`${f.home}/dev-goat`, `${f.old}/goat`);
+        const before = yield* f.snapshot;
+        const result = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.deepEqual(yield* f.snapshot, before);
+        assert.isFalse(yield* f.fs.exists(`${f.state}/identity.unverified`));
+        const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
+        assert.notInclude(events, "drain");
+        assert.notInclude(events, "stop");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live.each([
+      // The same serve command run by someone else is not this user's runtime.
+      { name: "another user runs it", change: "uid" },
+      // A completion marker that does not name the version means GOAT never finished installing it.
+      { name: "its install never completed", change: "install" },
+    ] as const)("a hand-written identity is not repaired when $name", ({ change }) =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({ ...compatible, kind: "managed" });
+        yield* f.fs.writeFileString(`${f.state}/identity`, handWrittenIdentity(f));
+        if (change === "uid")
+          yield* f.fs.writeFileString(
+            `${f.test}/foreign-uid`,
+            `${(process.getuid?.() ?? 0) + 1}\n`,
+          );
+        else yield* f.fs.writeFileString(`${f.old}/.install-complete`, "");
+        const before = yield* f.snapshot;
+        const result = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.deepEqual(yield* f.snapshot, before);
+        assert.isFalse(yield* f.fs.exists(`${f.state}/identity.unverified`));
+        const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
+        assert.notInclude(events, "drain");
+        assert.notInclude(events, "stop");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
   },
 );

@@ -4,7 +4,11 @@ import { isGoatConnectOnlyEnvironment } from "./environmentSections";
 import * as Dialog from "../../components/ui/Dialog";
 import { ConnectionTraceId } from "./ConnectionTraceId";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { hasSavedBearerRoute, hostFreezeNotice } from "@goat/client-runtime/connection";
+import {
+  connectionRowShowsSnapshotAge,
+  hasSavedBearerRoute,
+  hostFreezeNotice,
+} from "@goat/client-runtime/connection";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
 import { type EnvironmentId, resolveEnvironmentMachineKind } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
@@ -75,7 +79,7 @@ export function ConnectionEnvironmentRow(props: {
   const enabled = props.environment.isEnabled && !unsupported;
   const snapshotAge = useOfflineSnapshotAge(
     props.environment.environmentId,
-    !enabled || props.environment.connectionState === "connected",
+    !enabled || presentation === null || !connectionRowShowsSnapshotAge(presentation.connection),
   );
   const baseStatusLabel = connectUnavailable
     ? `${GOAT_CONNECT_COMING_SOON.title} · ${GOAT_CONNECT_COMING_SOON.status}. ${GOAT_CONNECT_COMING_SOON.description}`

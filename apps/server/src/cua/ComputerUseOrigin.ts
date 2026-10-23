@@ -21,7 +21,7 @@ export class ComputerUseOriginError extends Schema.TaggedError<ComputerUseOrigin
 ) {}
 
 /** Wraps a read's own failure; classification treats any failure as unattended. */
-export const originRead = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+const originRead = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.mapError((cause) => new ComputerUseOriginError({ cause })));
 
 export type UnattendedReason =

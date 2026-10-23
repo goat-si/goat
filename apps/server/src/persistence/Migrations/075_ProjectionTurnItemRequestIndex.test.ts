@@ -56,6 +56,7 @@ it.effect(
         [97, "PermissionProfiles"],
         [98, "DecisionInbox"],
         [99, "HumanStepRecords"],
+        [100, "McpRequestReservations"],
       ]);
       yield* ProjectionTurnItemRequestIndex;
       assert.deepStrictEqual(yield* runMigrations(), []);

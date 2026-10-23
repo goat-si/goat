@@ -66,6 +66,7 @@ it.effect(
         [97, "PermissionProfiles"],
         [98, "DecisionInbox"],
         [99, "HumanStepRecords"],
+        [100, "McpRequestReservations"],
       ]);
       yield* assertUsageCounters;
       assert.deepStrictEqual(yield* runMigrations(), []);

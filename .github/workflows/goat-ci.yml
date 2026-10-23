@@ -190,6 +190,12 @@ jobs:
         if: matrix.task == 'check'
         run: vp run agent-surface:check
 
+      # `check:changed` runs the same knip check before every push, so an unused file, export or
+      # dependency that reaches dev fails it on every branch, whatever that branch changed.
+      - name: Check unused code
+        if: matrix.task == 'check'
+        run: vp run knip:check
+
       - name: Typecheck
         if: matrix.task == 'typecheck'
         run: vpr typecheck

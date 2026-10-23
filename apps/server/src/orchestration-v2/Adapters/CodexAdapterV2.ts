@@ -1429,12 +1429,23 @@ export class CodexAppServerClientFactory extends Context.Service<
   CodexAppServerClientFactoryShape
 >()("goat/orchestration-v2/Adapters/CodexAdapterV2/CodexAppServerClientFactory") {}
 
+// One app-server hosts many threads, so its process must never carry a thread credential.
+const codexThreadMcpEnvironment = (
+  session: McpProviderSession.McpProviderSessionConfig | undefined,
+) =>
+  Object.fromEntries(
+    Object.entries(McpProviderSession.withThreadMcpEnvironment({}, session)).map(
+      ([name, value]) => [`shell_environment_policy.set.${name}`, value ?? ""],
+    ),
+  );
+
 /**
  * Codex waits this long for MCP servers before the first model request and
  *   leaves out any server still starting (default 1 s, too short for cold
  *   `npx`/`uvx` servers).
  */
 export const CODEX_THREAD_CONFIG = {
+  ...codexThreadMcpEnvironment(undefined),
   "tools.update_plan.enabled": true,
   mcp_optional_startup_grace_ms: 10_000,
 } as const;
@@ -1523,6 +1534,7 @@ export function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      ...codexThreadMcpEnvironment(mcpSession),
       ...codexNativeSubagentConfig(mcpSession?.nativeSubagentLimit, input.codexVersion).config,
       ...(mcpSession === undefined
         ? {}
@@ -1991,7 +2003,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: routeInput.execution.environment,
+          environment: McpProviderSession.withThreadMcpEnvironment(
+            routeInput.execution.environment,
+            undefined,
+          ),
           routeArgs,
         });
         const memoryByThread = new Map<

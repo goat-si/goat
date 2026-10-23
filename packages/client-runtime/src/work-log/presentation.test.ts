@@ -102,6 +102,61 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("resolveWorkEntryToolPresentation", () => {
+  const toolEntry = (
+    toolName: string,
+    input: unknown,
+    output: unknown,
+  ): WorkLogPresentationEntry => ({
+    id: toolName,
+    createdAt: "2026-10-24T00:00:00.000Z",
+    tone: "tool",
+    label: toolName,
+    toolLifecycleStatus: "completed",
+    itemType: "dynamic_tool",
+    toolData: { input, output },
+    structuredPayload: {
+      ...commandItem(),
+      type: "dynamic_tool",
+      title: null,
+      toolName,
+      input,
+      output,
+    } as OrchestrationV2TurnItem,
+  });
+
+  it.each([
+    [
+      "pull_request.link",
+      "goat.link_pull_request",
+      { url: "https://github.com/goat-si/goat/pull/1041" },
+      {},
+      "PR #1041",
+    ],
+    [
+      "ssh.thread_launch",
+      "goat.goat_ssh_thread_launch",
+      { host: "worker-a", message: "go" },
+      { threadId: "t1" },
+      "worker-a",
+    ],
+  ])(
+    "labels and summarizes a goat_call to %s as the direct call",
+    (path, direct, args, value, detail) => {
+      const wrapped = toolEntry("goat.goat_call", { path, args }, { status: "ok", value });
+      const plain = toolEntry(direct, args, value);
+      expect(resolveWorkEntryToolPresentation(wrapped)).toEqual(
+        resolveWorkEntryToolPresentation(plain),
+      );
+      expect(summarizeToolGroup([wrapped])).toEqual(summarizeToolGroup([plain]));
+      expect(
+        [
+          resolveWorkEntryToolPresentation(wrapped)?.displayName,
+          summarizeToolGroup([wrapped]).summary,
+        ].join(" "),
+      ).toContain(detail);
+    },
+  );
+
   it("shows returned MCP errors as failures even in the live activity row", () => {
     const entry: WorkLogPresentationEntry = {
       id: "clone",

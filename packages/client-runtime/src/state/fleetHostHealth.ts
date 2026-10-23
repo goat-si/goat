@@ -23,11 +23,11 @@ export const SLOW_ANSWER_MS = 10_000;
  * History at this share of its budget is approaching it: the host's tooltip says so before it
  * alerts. Memory approaches at MEMORY_STORE_TARGET_BYTES, where its own warning starts.
  */
-export const STORAGE_APPROACHING_RATIO = 0.75;
+const STORAGE_APPROACHING_RATIO = 0.75;
 /** History this many times its budget slows the host down. */
-export const STORAGE_CRITICAL_RATIO = 3;
+const STORAGE_CRITICAL_RATIO = 3;
 /** A reported stall stays the likely cause this long after it happened. */
-export const RECENT_STALL_MS = 10 * 60_000;
+const RECENT_STALL_MS = 10 * 60_000;
 
 /** "8s", "1m 12s", "3h 4m", "2d 3h". */
 export function formatHealthDuration(ms: number): string {

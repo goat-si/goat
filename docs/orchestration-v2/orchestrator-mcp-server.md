@@ -422,7 +422,8 @@ Pass the task in `message`. Project, model, and modes inherit when omitted;
 workspace does not. `scratch: true` launches without a project, in a folder of
 its own under the environment's Scratch project. For stacked PRs, use the parent branch as `baseRef` with
 `startFromOrigin: false`. The new thread may not run with broader runtime or
-interaction modes than the caller. Launch has no retry key, so inspect existing threads after a failed or lost response before
+interaction modes than the caller. Pass an optional `clientRequestId` to retry a launch safely: a repeat with the same
+arguments returns the first launch. Without one, inspect existing threads after a failed or lost response before
 launching again. `goat_thread_create_many` remains the batch option for a shared checkout.
 
 ### SSH launches and reports
