@@ -45,6 +45,7 @@ import {
 } from "@goat/contracts";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
 import { appendGeneratedImageMarkdown } from "./CodexGeneratedImageMarkdown.ts";
+import { makeCodexSessionEvents } from "./CodexAppServerExit.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
@@ -1617,47 +1618,6 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   });
 });
 
-const layerCodexAppServerClientFactoryCommand = (
-  options: CodexClient.CodexAppServerClientOptions & {
-    readonly command: string;
-    readonly args?: ReadonlyArray<string>;
-    readonly cwd?: string;
-    readonly env?: NodeJS.ProcessEnv;
-  },
-): Layer.Layer<CodexAppServerClientFactory, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  Layer.effect(
-    CodexAppServerClientFactory,
-    Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      return CodexAppServerClientFactory.of({
-        open: Effect.fn("CodexAdapterV2.open")(function* (input) {
-          const scope = yield* Scope.Scope;
-          const command = yield* makeCodexAppServerSpawnCommand({
-            command: options.command,
-            args: [...(options.args ?? [])],
-            ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-            ...(options.env === undefined ? {} : { env: options.env, extendEnv: true }),
-          });
-          const handle = yield* spawner.spawn(command).pipe(
-            Effect.provideService(Scope.Scope, scope),
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapter.ProviderAdapterOpenSessionError({
-                  driver: CODEX_PROVIDER,
-                  providerSessionId: input.providerSessionId,
-                  cause,
-                }),
-            ),
-          );
-          const context = yield* Layer.build(CodexClient.layerChildProcess(handle, options));
-          return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
-            Effect.provide(context),
-          );
-        }),
-      });
-    }),
-  );
-
 export function makeCodexAppServerProtocolLogger(input: {
   readonly nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger | undefined;
   readonly threadId: ThreadId;
@@ -2355,7 +2315,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           model: input.modelSelection.model,
           now,
         });
-        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        const events = yield* makeCodexSessionEvents(client, input.providerSessionId);
         const rateLimitSnapshot = yield* Ref.make<CodexRateLimitSnapshot | undefined>(undefined);
         const limitedTurnItems = yield* Ref.make(
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
