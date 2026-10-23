@@ -101,17 +101,13 @@ export function supportsServerUpdateThreadContinuation(
   return serverConfig?.environment.capabilities.serverUpdateThreadContinuation === true;
 }
 
-export function manualServerUpdateCommand(
+export function manualServerUpdateInstructions(
   targetVersion: string,
   installation?: ServerInstallation,
 ): string {
-  if (installation?.kind === "npm-global") {
-    const prefix = `'${installation.prefix.replaceAll("'", "'\\''")}'`;
-    return `npm install --global --prefix ${prefix} t3@${targetVersion}`;
-  }
-  const runner =
-    installation?.kind === "pnpm-dlx" ? "pnpm dlx" : installation?.kind === "bunx" ? "bunx" : "npx";
-  return `${runner} t3@${targetVersion}`;
+  return installation
+    ? `Install GOAT ${targetVersion} from https://github.com/goat-si/goat-releases/releases, then restart GOAT with your usual options.`
+    : `goat update ${targetVersion}`;
 }
 
 export function serverUpdateGuidance(capability: ServerSelfUpdateCapability): string {

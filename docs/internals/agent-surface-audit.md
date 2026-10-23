@@ -139,7 +139,7 @@ One intent is spelled several ways (tool counts in parentheses):
 - **Idempotency.** 12 tools accept `clientRequestId`: `channel_ingest`, `create_threads`, `delegate_task`, `goat_goal_apply`, `goat_review_findings_record`, `goat_thread_interrupt`, `goat_thread_retry`, `goat_thread_send`, `goat_thread_update`, `request_secret`, and 2 more. The other 112 mutating tools have no retry key, including the destructive `delete_scheduled_task`, `device_close`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_call`, `goat_cloud_run_forget`, `goat_connection_remove`, `goat_decision_answer`, `goat_environment_preferences_update`, `goat_goal_delete`, and 41 more.
 - **Pagination.** 10 tools use `cursor/nextCursor` (`channel_task_export`, `channel_task_list`, `goat_goal_list`, `goat_preview_list`, and 6 more); 9 tools use `limit only` (`goat_cloud_run_list`, `goat_decision_list`, `goat_ssh_browse`, `goat_ssh_reports`, and 5 more); 1 tool uses `afterSequence/hasMore` (`goat_origin_reports_wait`); 1 tool uses `limit/hasMore` (`goat_thread_read`). List tools with no page control: `device_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`.
 - **Hints that disagree with enforcement.** The handler's `McpToolAccess` declaration is what the server enforces; the MCP `readOnlyHint` is what clients see. They disagree for no tools. Reads declared `actsAsCaller` without a read-only hint: `task_status`.
-- **Image results.** `preview_snapshot`, `device_screenshot`, and `html_preview` are registered by hand to return image content (apps/server/src/mcp/McpHttpServer.ts:1218), outside the toolkit path every other tool uses.
+- **Image results.** `preview_snapshot`, `device_screenshot`, and `html_preview` are registered by hand to return image content (apps/server/src/mcp/McpHttpServer.ts:1181), outside the toolkit path every other tool uses.
 
 ## Descriptions and examples
 
@@ -202,7 +202,7 @@ Names that look like tools but are not in the registry:
 | Name             | Where                                                                                                                    |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `update_runtime` | packages/provider-core/src/server/orchestrationInstructions.ts:45                                                        |
-| `goat_eval`      | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:438, docs/internals/agent-surface.md:819 (+1)         |
+| `goat_eval`      | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:438, docs/internals/agent-surface.md:823 (+1)         |
 | `run_steps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144 |
 | `run_script`     | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145 |
 | `list_apps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                              |
@@ -215,7 +215,7 @@ CLI invocations in the docs that do not resolve:
 
 115 of 192 tools are never named in any Markdown doc, and 102 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_answer`, `goat_decision_get`, `goat_decision_list`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_link_create`, `goat_host_link_remove`, `goat_hub_device_join`, `goat_hub_device_leave`, and 78 more. Agents learn these only from the MCP catalog.
 
-Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`, `goat theme set`, `goat theme clear`, `goat theme show`, `goat triage`.
+Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`.
 
 The server's `/llms.txt` lists every registry path with its summary, but arguments and examples are still served only by the MCP catalog.
 
