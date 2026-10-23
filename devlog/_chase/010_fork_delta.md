@@ -62,6 +62,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/web/src/components/chat`, `apps/web/src/index.css`
 - 정책: 레이아웃은 GOAT, 컴포저 동작은 upstream.
 
+### `contracts-rpc-leaves` GOAT RPC 그룹 모듈
+
+- 커밋: #860 #882 #896
+- 경로: `packages/contracts/src/{rpc,notesRpc,memoryRpc,hubNodesRpc,channelRpc,decisionRpc}.ts`
+- 정책: GOAT 전용 RPC 그룹은 leaf 모듈에 둔다. leaf는 자기 method 이름 상수(`NOTES_WS_METHODS`, `MEMORY_WS_METHODS`, `HUB_NODES_WS_METHODS`, `DECISION_WS_METHODS`)와 middleware 없는 `RpcGroup`을 정의하고 `rpc.ts`를 import하지 않는다. `rpc.ts`는 상수를 `WS_METHODS` 안에 펼치고 `RpcScopeAuthorization`을 붙여 기존 export 이름(`WsMemoryCoreRpcGroup`, `WsHubNodesRpcGroup`, `WsChannelRpcGroup`, `WsDecisionRpcGroup` 등)을 만들며 메모리 RPC 20개를 다시 export한다. upstream이 `rpc.ts`를 바꾸면 upstream을 받고 이 펼침, middleware 줄, re-export만 다시 얹는다. leaf가 `rpc.ts`를 import하면 모듈 평가 순서 때문에 `WS_METHODS`가 TDZ에 걸린다 (사이클 261023: `f054d1b` 대비 +869/−4 → +521/−4).
+
 ### `cua-driver` Cua Driver 컴퓨터 사용 포트
 
 - 커밋: #665 #667
@@ -116,6 +122,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/mcp/toolkits/*/tools.ts`, `orchestration-v2`, `packages/provider-*/src/server`, `t3McpToolPresentation.ts`
 - 정책: upstream 로직을 받고 도구 이름은 `goat_*`, 서버 이름은 GOAT로 다시 쓴다. 새 `t3_*` 도구는 이름을 바꾸고 표시용 legacy alias를 둔다. 텔레메트리(`telemetry/ProviderDimensions.ts`, `McpHttpServer`의 HANDOFF_TOOLS)도 `goat_*` 이름으로 세고, 들어온 `t3_*`는 `goat_*`로 정규화한다 (사이클 261020). 새 Prometheus 메트릭도 `goat_*`(`goat_process_group_*`, 사이클 261021). 도구 설명은 toolkit 파일이 아니라 `packages/contracts/src/agentSurface/registry.ts`에 있으므로 upstream 설명 변경은 거기로 옮긴다.
 
+### `memory-app-layers` 메모리 애플리케이션 조립
+
+- 커밋: #888
+- 경로: `apps/server/src/memory/MemoryApplicationLayers.ts`, `apps/server/src/server.ts`
+- 정책: 메모리 layer 조립(source read 바인딩, generation hold, worker, hub, sync, import, snapshot, toolkit)은 `makeMemoryApplicationLayers`에 있다. `server.ts`는 같은 자리에서 한 번 호출하고 `layerPersistence`, `layerRepositoryIdentityResolver`, `layerServerSettings`, `layerTextGeneration`을 넘긴 뒤 결과를 구조 분해해 기존 이름으로 export한다. 한 번만 호출해야 sync와 source read가 한 core를, worker와 sync가 한 hold를 공유한다. 이 네 layer는 모듈이 type으로 참조하도록 `export`가 붙어 있다. upstream이 `server.ts`를 바꾸면 upstream을 받고 호출, 구조 분해, `export` 네 개, `MemorySourceReadBinding` re-export를 다시 얹는다 (사이클 261023: `server.ts` +1005/−373 → +593/−376).
+
 ### `no-t3-import` T3 불러오기 제거
 
 - 커밋: `59d7fe1a6`
@@ -124,9 +136,9 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 ### `orchestrator-goat-modules` Orchestrator의 GOAT 명령 모듈
 
-- 커밋: #808 #809 #811 #813 #814 #815 #870 #874
+- 커밋: #808 #809 #811 #813 #814 #815 #870 #874 #892
 - 경로: `apps/server/src/orchestration-v2/goat/`, `apps/server/src/orchestration-v2/Orchestrator.ts`
-- 정책: GOAT 전용 명령 처리는 `orchestration-v2/goat/`의 factory 모듈에 둔다: 원격 위임 작업, thread notice와 GOAT 봇 timeline 기록, 스레드 승격, human handoff, review ledger, 서버 drain admission, PR 자동 watch, fleet fallback 전제 조건(`FallbackSelectionSource` 포함). `Orchestrator.ts`에는 `makeOrchestrator` 안의 factory 호출, switch case, 오류 union 항목, import만 남긴다. upstream이 Orchestrator를 바꾸면 upstream을 받고 이 hook만 다시 얹는다. 새 GOAT 명령도 이 폴더에 둔다. 모듈은 `Orchestrator.ts`를 type으로만 import하고 오류 class와 closure를 인자로 받는다. 런타임 import 순환을 피하기 위해서다. `makeOrchestrator`에서 뒤에 선언되는 closure(`stopReachedRun`, `planDelegatedCompletionDelivery`)는 화살표 함수로 감싸 넘긴다. 바로 넘기면 TDZ에 걸린다. 사이클 261023에 `f054d1b` 대비 Orchestrator 차이가 +2114/−225에서 +995/−230으로 줄었다.
+- 정책: GOAT 전용 명령 처리는 `orchestration-v2/goat/`의 factory 모듈에 둔다: 원격 위임 작업, thread notice와 GOAT 봇 timeline 기록, 스레드 승격, human handoff, review ledger, 서버 drain admission, PR 자동 watch, fleet fallback 전제 조건(`FallbackSelectionSource` 포함), 질문 이미 답함 오류(`goat/QuestionAnswers.ts`, Orchestrator가 다시 export한다). `Orchestrator.ts`에는 `makeOrchestrator` 안의 factory 호출, switch case, 오류 union 항목, import만 남긴다. upstream이 Orchestrator를 바꾸면 upstream을 받고 이 hook만 다시 얹는다. 새 GOAT 명령도 이 폴더에 둔다. 모듈은 `Orchestrator.ts`를 type으로만 import하고 오류 class와 closure를 인자로 받는다. 런타임 import 순환을 피하기 위해서다. `makeOrchestrator`에서 뒤에 선언되는 closure(`stopReachedRun`, `planDelegatedCompletionDelivery`)는 화살표 함수로 감싸 넘긴다. 바로 넘기면 TDZ에 걸린다. 사이클 261023에 `f054d1b` 대비 Orchestrator 차이가 +2114/−225에서 +959/−230으로 줄었다.
 
 ### `pdf-viewer` PDF.js 파일 뷰어
 
@@ -137,8 +149,8 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `remote-reports` 원격 보고와 원격 위임
 
 - 커밋: #5 #10 #6
-- 경로: `apps/server/src/remoteReports`, `apps/server/src/orchestration-v2/goat/RemoteDelegatedTasks.ts`, `apps/server/src/mcp/toolkits/{remoteReport,ssh}`, `apps/server/src/persistence/Migrations/*_{RemoteReports,RemoteDispatches}*`, `packages/contracts/src/remoteReports.ts`
-- 정책: GOAT 전용. RemoteReports·RemoteDispatches 마이그레이션은 다시 실행해도 안전하게 써서(`IF NOT EXISTS`) upstream이 그 id를 가져가면 옮길 수 있다. upstream의 SSH·MCP 변경은 받고 출발지 보고, 원격 위임, 첨부 전달을 다시 얹는다.
+- 경로: `apps/server/src/remoteReports`, `apps/server/src/orchestration-v2/goat/RemoteDelegatedTasks.ts`, `apps/server/src/mcp/goat/RemoteTaskTargets.ts`, `apps/server/src/mcp/toolkits/{remoteReport,ssh}`, `apps/server/src/persistence/Migrations/*_{RemoteReports,RemoteDispatches}*`, `packages/contracts/src/remoteReports.ts`
+- 정책: GOAT 전용. RemoteReports·RemoteDispatches 마이그레이션은 다시 실행해도 안전하게 써서(`IF NOT EXISTS`) upstream이 그 id를 가져가면 옮길 수 있다. upstream의 SSH·MCP 변경은 받고 출발지 보고, 원격 위임, 첨부 전달을 다시 얹는다. `OrchestratorMcpService`의 원격·클라우드 위임 판정(`authorizeRemoteWrite`, `preflightCloudLaunch`, `resolveRemoteTarget` 등)은 `mcp/goat/RemoteTaskTargets.ts`의 factory에 있고 서비스는 호출 한 번만 둔다(#915).
 
 ### `repo-hygiene` 저장소 루트 정리
 

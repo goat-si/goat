@@ -1,4 +1,3 @@
-import * as Decisions from "./decisions.ts";
 import {
   HandoffReadInput,
   HandoffRespondInput,
@@ -98,37 +97,10 @@ import {
   AcpRegistrySetProviderInput,
   AcpRegistrySetProviderResult,
 } from "./acpRegistry.ts";
-import {
-  CHANNEL_GATEWAY_WS_METHODS,
-  ChannelEnsureBotInput,
-  ChannelEnsureBotResult,
-  ChannelGetBotStatusInput,
-  ChannelGetBotStatusResult,
-  ChannelGatewayError,
-  ChannelGetInputInput,
-  ChannelGetTaskInput,
-  ChannelIdentityLinkCreateInput,
-  ChannelIdentityLinkCreateResult,
-  ChannelIdentityUnlinkInput,
-  ChannelIngestInput,
-  ChannelIngestResult,
-  ChannelInputSnapshot,
-  ChannelListTasksInput,
-  ChannelListTasksResult,
-} from "./channelGateway.ts";
-import { ChannelTask } from "./channelLedger.ts";
-import {
-  SLACK_CHANNEL_WS_METHODS,
-  SlackChannelConfigureInput,
-  SlackChannelDisconnectInput,
-  SlackChannelGetSettingsInput,
-  SlackChannelSettings,
-  SlackChannelSettingsError,
-  SlackChannelStatusEvent,
-  SlackChannelSubscribeStatusInput,
-} from "./slackChannel.ts";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import { NOTES_WS_METHODS, NotesRpcs } from "./notesRpc.ts";
+import { ChannelRpcs } from "./channelRpc.ts";
+import { DECISION_WS_METHODS, DecisionRpcs } from "./decisionRpc.ts";
 import {
   MEMORY_WS_METHODS,
   MemoryAdministrationRpcs,
@@ -678,11 +650,7 @@ export const WS_METHODS = {
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
   // Markdown notes on this environment
-  decisionList: "decision.list",
-  decisionGet: "decision.get",
-  decisionRequest: "decision.request",
-  decisionAnswer: "decision.answer",
-  decisionWithdraw: "decision.withdraw",
+  ...DECISION_WS_METHODS,
   ...NOTES_WS_METHODS,
 
   // Threads this environment launched or watches on other machines
@@ -2326,88 +2294,6 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
-const ChannelRpcError = Schema.Union([ChannelGatewayError, EnvironmentAuthorizationError]);
-
-/** Channel gateway and Slack settings RPCs. */
-export const ChannelEnsureBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ensureBot, {
-  payload: ChannelEnsureBotInput,
-  success: ChannelEnsureBotResult,
-  error: ChannelRpcError,
-});
-
-export const ChannelGetBotStatusRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotStatus, {
-  payload: ChannelGetBotStatusInput,
-  success: ChannelGetBotStatusResult,
-  error: ChannelRpcError,
-});
-
-export const ChannelIngestRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ingest, {
-  payload: ChannelIngestInput,
-  success: ChannelIngestResult,
-  error: ChannelRpcError,
-});
-
-export const ChannelGetTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getTask, {
-  payload: ChannelGetTaskInput,
-  success: ChannelTask,
-  error: ChannelRpcError,
-});
-
-export const ChannelListTasksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listTasks, {
-  payload: ChannelListTasksInput,
-  success: ChannelListTasksResult,
-  error: ChannelRpcError,
-});
-
-export const ChannelGetInputRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getInput, {
-  payload: ChannelGetInputInput,
-  success: ChannelInputSnapshot,
-  error: ChannelRpcError,
-});
-
-export const ChannelCreateIdentityLinkRpc = Rpc.make(
-  CHANNEL_GATEWAY_WS_METHODS.createIdentityLink,
-  {
-    payload: ChannelIdentityLinkCreateInput,
-    success: ChannelIdentityLinkCreateResult,
-    error: ChannelRpcError,
-  },
-);
-
-export const ChannelUnlinkIdentityRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.unlinkIdentity, {
-  payload: ChannelIdentityUnlinkInput,
-  error: ChannelRpcError,
-});
-
-const SlackChannelRpcError = Schema.Union([
-  SlackChannelSettingsError,
-  EnvironmentAuthorizationError,
-]);
-
-export const SlackChannelGetSettingsRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.getSettings, {
-  payload: SlackChannelGetSettingsInput,
-  success: Schema.Array(SlackChannelSettings),
-  error: SlackChannelRpcError,
-});
-
-export const SlackChannelConfigureRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.configure, {
-  payload: SlackChannelConfigureInput,
-  success: SlackChannelSettings,
-  error: SlackChannelRpcError,
-});
-
-export const SlackChannelDisconnectRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.disconnect, {
-  payload: SlackChannelDisconnectInput,
-  error: SlackChannelRpcError,
-});
-
-export const SlackChannelSubscribeStatusRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.subscribeStatus, {
-  payload: SlackChannelSubscribeStatusInput,
-  success: SlackChannelStatusEvent,
-  error: SlackChannelRpcError,
-  stream: true,
-});
-
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "goat/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -2668,52 +2554,12 @@ export const WsCoreRpcGroup = WsCoreServerRpcGroup.merge(WsCoreWorkspaceRpcGroup
  * GOAT Bot and Slack channel RPCs. The server registers their handlers in a layer of their own:
  * one handler layer for every RPC exceeds the type checker's instantiation budget.
  */
-export const WsChannelRpcGroup = RpcGroup.make(
-  ChannelEnsureBotRpc,
-  ChannelGetBotStatusRpc,
-  ChannelIngestRpc,
-  ChannelGetTaskRpc,
-  ChannelListTasksRpc,
-  ChannelGetInputRpc,
-  ChannelCreateIdentityLinkRpc,
-  ChannelUnlinkIdentityRpc,
-  SlackChannelGetSettingsRpc,
-  SlackChannelConfigureRpc,
-  SlackChannelDisconnectRpc,
-  SlackChannelSubscribeStatusRpc,
-).middleware(RpcScopeAuthorization);
+export const WsChannelRpcGroup = ChannelRpcs.middleware(RpcScopeAuthorization);
 
 /** Notes RPCs, registered by the server in a handler layer of their own like the channel group. */
 export const WsNotesRpcGroup = NotesRpcs.middleware(RpcScopeAuthorization);
 
-const decisionRpcErrors = Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]);
-export const WsDecisionRpcGroup = RpcGroup.make(
-  Rpc.make(WS_METHODS.decisionList, {
-    payload: Decisions.DecisionListInput,
-    success: Decisions.DecisionListResult,
-    error: decisionRpcErrors,
-  }),
-  Rpc.make(WS_METHODS.decisionGet, {
-    payload: Decisions.DecisionGetInput,
-    success: Decisions.DecisionItem,
-    error: decisionRpcErrors,
-  }),
-  Rpc.make(WS_METHODS.decisionRequest, {
-    payload: Decisions.DecisionRequestInput,
-    success: Decisions.DecisionItem,
-    error: decisionRpcErrors,
-  }),
-  Rpc.make(WS_METHODS.decisionAnswer, {
-    payload: Decisions.DecisionAnswerInput,
-    success: Decisions.DecisionItem,
-    error: decisionRpcErrors,
-  }),
-  Rpc.make(WS_METHODS.decisionWithdraw, {
-    payload: Decisions.DecisionGetInput,
-    success: Decisions.DecisionItem,
-    error: decisionRpcErrors,
-  }),
-).middleware(RpcScopeAuthorization);
+export const WsDecisionRpcGroup = DecisionRpcs.middleware(RpcScopeAuthorization);
 export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
   .merge(WsNotesRpcGroup)
   .merge(WsDecisionRpcGroup);

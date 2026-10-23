@@ -17,8 +17,9 @@ import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import {
   GOAT_BOT_DISPATCH_RULE,
   GOAT_BOT_READ_ONLY_RULE,
+  GOAT_BOT_ROUTING_RULE,
   GOAT_BOT_SUPERVISOR_RULE,
-} from "./ChannelDispatcher.ts";
+} from "./channelWorkerBrief.ts";
 import { turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
@@ -129,6 +130,7 @@ describe("GOAT Bot turns", () => {
         // Read-only is the prompt's promise now that the sandbox allows everything.
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
         assert.include(launch.initialMessage?.text ?? "", "delegate_task");
+        assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_ROUTING_RULE);
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_DISPATCH_RULE);
         assert.notInclude(launch.initialMessage?.text ?? "", GOAT_BOT_SUPERVISOR_RULE);
         // The acknowledgement was committed with the input, before the turn could run.
