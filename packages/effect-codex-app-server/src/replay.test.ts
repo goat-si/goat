@@ -153,3 +153,56 @@ it.effect.each([false, true])(
       );
     }),
 );
+
+const threadStartRecording = (scenario: string) =>
+  makeReplayDriver({
+    provider: "codex",
+    protocol: "codex.app-server",
+    version: "test",
+    scenario,
+    entries: [
+      {
+        type: "expect_outbound",
+        frame: {
+          id: 1,
+          method: "thread/start",
+          params: { config: { "tools.update_plan.enabled": true } },
+        },
+      },
+      { type: "emit_inbound", frame: { id: 1, result: {} } },
+    ],
+  });
+
+const startThread = (config: Record<string, unknown>) =>
+  Effect.gen(function* () {
+    const client = yield* CodexAppServerClient;
+    return yield* client.raw.request("thread/start", { config });
+  });
+
+it.effect(
+  "matches recordings made before thread MCP credential markers joined thread/start (#1004)",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* threadStartRecording("thread-credential-markers");
+      const result = yield* startThread({
+        "shell_environment_policy.set.GOAT_ACP_MCP_ENDPOINT": "",
+        "shell_environment_policy.set.GOAT_ACP_MCP_AUTHORIZATION": "",
+        "shell_environment_policy.set.T3_ACP_MCP_ENDPOINT": "http://127.0.0.1:41000/mcp",
+        "shell_environment_policy.set.T3_ACP_MCP_AUTHORIZATION": "Bearer short-lived",
+        "tools.update_plan.enabled": true,
+      }).pipe(Effect.provide(layerReplayWithDriver(driver)), Effect.scoped);
+      assert.deepEqual(result, {});
+      assert.deepEqual(yield* Ref.get(driver.state), { cursor: 2, failure: null });
+    }),
+);
+
+it.effect("still refuses a thread/start whose other shell environment differs", () =>
+  Effect.gen(function* () {
+    const driver = yield* threadStartRecording("thread-other-environment");
+    yield* startThread({
+      "shell_environment_policy.set.PATH": "/changed",
+      "tools.update_plan.enabled": true,
+    }).pipe(Effect.provide(layerReplayWithDriver(driver)), Effect.scoped, Effect.exit);
+    assert.isNotNull((yield* Ref.get(driver.state)).failure);
+  }),
+);
