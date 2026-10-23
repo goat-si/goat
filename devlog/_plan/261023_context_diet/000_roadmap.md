@@ -106,8 +106,13 @@ returned "Host RPC timed out"). The rows below come from web search.
 
 1. `goat_describe`: search and describe at detail levels.
 2. `goat_call`: run any path with the caller's own checks.
+3. `goat_html_render`, for now: web and mobile clients draw its result by tool name, so a call
+   through `goat_call` would lose the rendering. It leaves the core when the tool-surface lane's
+   follow-up teaches the clients to draw `goat_call` results by path (labels and rendering on web
+   and mobile, owned by that lane).
 
-Nothing else is resident unless D8 shows a tool saves a turn on most runs without raising
+Resident tools carry `_meta["anthropic/alwaysLoad"]` so Claude Code's tool search never defers
+them, and `goat_call` returns image blocks as images. Nothing else is resident unless D8 shows a tool saves a turn on most runs without raising
 failures. Candidates D8 tests: `goat_origin_report` (every launched lane reports),
 `goat_task_create` and `goat_thread_launch` (dispatch), and `goat_preview_snapshot` (browser
 work). A tool joins the core by a registry field (`listing: "core"`), never by a name list in a
@@ -143,6 +148,13 @@ test in `provider-core`, and the per-message Cursor and ACP extras shrink to the
   search never does.
 - **Zero matches.** The result says `total: 0` with full `coverage` and the three nearest paths
   by edit distance. The text never says the capability does not exist.
+- **Partial matches ([#962](https://github.com/goat-si/goat/issues/962)).** Today's search
+  requires every word, so "reply to pending request", "babysit pr checks", "pr merge watch" and
+  "which host has room" return nothing with `truncated: false`, which reads as "no such tool".
+  When no entry has every word, the search ranks entries by how many words they share and says
+  so in fields: `mode: "all" | "partial"` on the result and `matchedWords` and `unmatchedWords` on
+  each match. This lands before the flip. The verifier's `scripts/agent-surface/search-contract.ts`
+  (#958) checks these queries.
 - **Cache safety.** `surfaceVersion` (registry hash, [handlers.ts:25](../../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts))
   heads every result; the server sends `notifications/tools/list_changed` when the core set
   changes.
@@ -177,9 +189,9 @@ test in `provider-core`, and the per-message Cursor and ACP extras shrink to the
 - Agents and skills that name tools directly (AGENTS.md, codexclaw skills, scheduled task
   prompts) keep working because names stay callable. Text that tells agents to call a tool
   directly moves to the `goat_call` form in the flip PR.
-- The flip ships with a per-provider-instance setting `toolListing: "core" | "full"`, default
-  `core`, for a harness that regresses. It is removed when D8 and a week on `dev` show no
-  regression.
+- The flip ships with a rollback setting `agentToolListing: "core" | "full"` (Settings >
+  Integrations), default `core`, for a harness that regresses. It is removed when D8 and a week
+  on `dev` show no regression. Where this page says `toolListing` below, it means this setting.
 
 ## Done and in flight
 
@@ -190,11 +202,28 @@ names with legacy names callable; #913, #914, #917, #918, #908. It still owns #9
 (idempotency) and #942 (remote name translation, closes #781). The supervisor resumes it after
 the restart; its eval work stays behind D8.
 
+Verifier reviews so far: #942 at `376138bb0` approved with no findings and a 0 B change; #939 is
+in review and cuts the listing by 256 B and the instructions by about 400 B per harness. The
+tool-surface lane's own measurement PR #953 was closed in favour of #958; anything only it
+measured moves into `context-budget.ts` after #958 merges.
+
 ## PR sequence and file ownership
 
 At most two lanes edit one package at a time. A lane merges its own PRs under
 [merging.md](../../../docs/operations/merging.md); the program manager orders them and says
 when to merge `dev` in.
+
+**Merge coupling.** Under the core listing, text that calls a GOAT tool by name through a
+harness binding (for example `tools.mcp__goat__goat_provider_list` in Codex code mode) breaks,
+because that binding exists only for listed tools. So the default flip merges only after the
+injection lane's instruction PR (goat_describe and goat_call guidance), the harness adapters,
+the search contract including #962, and the flip lane's audit of agent-facing text are all on
+`dev`. Those land first and are harmless under the full listing, so no nightly ever pairs the
+core listing with direct-name guidance.
+
+**Placement.** New lanes go to mini (Windows, `C:\Users\super\Developer\goat`), mac-studio,
+macmini-ts, and lidge-ts (through the origin). clisu-oracle keeps its existing lanes (verifier,
+D8) and takes no new ones, at the user's request.
 
 | Order | PR                                                                                                                                                                                                                                                                                                  | Lane (host)                                       | Owns                                                                                                                                                                                                                                                               |
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
