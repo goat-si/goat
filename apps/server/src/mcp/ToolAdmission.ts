@@ -65,6 +65,10 @@ const LiteralJson = Schema.fromJsonString(
   Schema.Struct({ _tag: Schema.String, code: Schema.optionalKey(Schema.String) }),
 );
 const encodeJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeResult = Schema.decodeEffect(ResultJson);
+const encodeResult = Schema.encodeEffect(ResultJson);
+const decodeLiteral = Schema.decodeEffect(LiteralJson);
+const encodeLiteral = Schema.encodeEffect(LiteralJson);
 
 /** Sorted object keys, array order kept, undefined dropped; null stays distinct from omitted. */
 const canonical = (value: unknown): unknown =>
@@ -171,11 +175,8 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
       return { kind: "in_progress" } satisfies Reservation as Reservation;
     if (row.state !== "completed" || row.result_json === null)
       return { kind: "outcome_unknown" } satisfies Reservation as Reservation;
-    const result = yield* Schema.decodeEffect(ResultJson)(row.result_json);
-    const failure =
-      row.failure_json === null
-        ? undefined
-        : yield* Schema.decodeEffect(LiteralJson)(row.failure_json);
+    const result = yield* decodeResult(row.result_json);
+    const failure = row.failure_json === null ? undefined : yield* decodeLiteral(row.failure_json);
     return {
       kind: "replay",
       result,
@@ -195,9 +196,8 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
         WHERE receipt_id = ${receiptId} AND state = 'running'`;
       return;
     }
-    const resultJson = result === undefined ? null : yield* Schema.encodeEffect(ResultJson)(result);
-    const failureJson =
-      failure === undefined ? null : yield* Schema.encodeEffect(LiteralJson)(failure);
+    const resultJson = result === undefined ? null : yield* encodeResult(result);
+    const failureJson = failure === undefined ? null : yield* encodeLiteral(failure);
     const envelope = result === undefined ? undefined : fromToolResult(result, { effect: "write" });
     const outcome = envelope?.status === "error" ? envelope.error.code : (envelope?.status ?? null);
     yield* sql`UPDATE mcp_request_reservations SET state = ${settlement},

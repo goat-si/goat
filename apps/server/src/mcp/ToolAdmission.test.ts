@@ -34,7 +34,7 @@ class Probe extends Context.Service<
     readonly started: Deferred.Deferred<void>;
     readonly release: Deferred.Deferred<void>;
   }
->()("test/ToolAdmission/Probe") {}
+>()("goat/mcp/ToolAdmission.test/Probe") {}
 
 // A keyed write (project.delete: idempotency "key", settings.write) whose outcome the test picks.
 const keyed = agentSurfaceRegistry["project.delete"];

@@ -435,7 +435,9 @@ export async function collectTools(): Promise<{
   };
   const getAnnotation = Context["getOrUndefined"] as (context: unknown, key: unknown) => unknown;
   const getReference = Context["get"] as (context: unknown, key: unknown) => unknown;
-  const resolve = (await importFrom("@goat/contracts/agentSurface/resolve")) as {
+  const resolve = (await importFile(
+    NodePath.join(repoRoot, "packages/contracts/src/agentSurface/resolve.ts"),
+  )) as {
     resolveAgentSurfaceEntry: (name: string) => unknown;
     isKeyedWrite: (entry: unknown) => boolean;
   };
