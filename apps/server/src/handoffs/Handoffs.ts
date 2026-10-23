@@ -60,6 +60,7 @@ export type SshProgressBinding = typeof SshProgressBinding.Type;
 /** Provider approvals whose approval the server applies, keeping their arguments until it does. */
 const PROVIDER_CONTINUATION_PATHS = [
   "provider.home_request",
+  "provider.host_sync",
   "provider.settings",
   "provider.setup",
 ] as const;

@@ -5,7 +5,7 @@ import {
   type CloudAgentProvider,
   type CloudHolder,
   type Handoff,
-  HandoffError,
+  type HandoffError,
   type HandoffRespondInput,
   ProviderDriverKind,
   ProviderHostSyncError,
@@ -158,12 +158,6 @@ interface SyncOperation {
   readonly owners: Set<string>;
   fibers: Array<Fiber.Fiber<unknown, unknown>>;
 }
-interface PendingApproval {
-  readonly input: ProviderSyncInput;
-  readonly requester: string;
-  readonly expiresAtMs: number;
-}
-
 export class ProviderHostSync extends Context.Service<
   ProviderHostSync,
   {
@@ -214,8 +208,7 @@ const make = Effect.gen(function* () {
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const platform = hostPlatform(runtimePlatform);
   const operations = new Map<string, SyncOperation>();
-  const approvals = new Map<string, PendingApproval>();
-  const approvedSyncs = makeApprovedSyncs(handoffs);
+  const approvedSyncs = yield* makeApprovedSyncs(handoffs, HOST_SYNC_PATH);
   const installers = yield* Semaphore.make(MAX_CONCURRENT_INSTALLERS);
 
   const readCeiling = (caller: SshHostCaller) =>
@@ -246,11 +239,12 @@ const make = Effect.gen(function* () {
   const ownerSession = (caller: SshHostCaller): string =>
     caller.kind === "client" ? caller.sessionId : (caller.scope.client?.sessionId ?? "mcp");
 
+  const threadKey = (threadId: string) => `thread:${threadId}`;
   const callerKey = (caller: SshHostCaller): string =>
     caller.kind === "client"
       ? `session:${caller.sessionId}`
       : caller.scope.thread !== undefined
-        ? `thread:${caller.scope.thread.threadId}`
+        ? threadKey(caller.scope.thread.threadId)
         : `session:${caller.scope.client?.sessionId ?? "unknown"}`;
 
   const canManage = (caller: SshHostCaller) =>
@@ -521,7 +515,6 @@ const make = Effect.gen(function* () {
     const cutoff = now - SYNC_RETENTION_MS;
     for (const [id, operation] of operations)
       if (operation.startedAtMs < cutoff) operations.delete(id);
-    for (const [id, approval] of approvals) if (approval.expiresAtMs < now) approvals.delete(id);
   });
 
   const newOperation = (
@@ -995,12 +988,6 @@ const make = Effect.gen(function* () {
           expiresAt: DateTime.add(yield* DateTime.now, { minutes: 15 }),
         })
         .pipe(Effect.mapError(() => fail("unavailable", "Could not ask for approval. Try again.")));
-      if (!approvals.has(handoff.handoffId))
-        approvals.set(handoff.handoffId, {
-          input,
-          requester: callerKey(caller),
-          expiresAtMs: (yield* Clock.currentTimeMillis) + 15 * 60_000,
-        });
       return {
         kind: "needs_human" as const,
         handoff,
@@ -1023,7 +1010,10 @@ const make = Effect.gen(function* () {
       const operation = operations.get(syncId);
       return operation === undefined
         ? Effect.fail(
-            fail("not_found", "No such sync. It may have finished more than two hours ago."),
+            fail(
+              "not_found",
+              "No such sync. It finished more than two hours ago, or this server restarted.",
+            ),
           )
         : Effect.succeed(operation);
     });
@@ -1035,11 +1025,9 @@ const make = Effect.gen(function* () {
     yield* readCeiling(caller);
     const syncId =
       input.syncId ??
-      (input.handoffId === undefined ? undefined : approvedSyncs.syncId(input.handoffId));
-    if (syncId === undefined)
-      return yield* input.handoffId === undefined
-        ? fail("invalid_request", "Pass syncId or handoffId.")
-        : approvedSyncs.explain(input.handoffId, caller);
+      (input.handoffId === undefined
+        ? yield* fail("invalid_request", "Pass syncId or handoffId.")
+        : yield* approvedSyncs.syncFor(input.handoffId, caller));
     const operation = yield* find(syncId);
     const state = view(operation);
     if (operation.owners.has(callerKey(caller)) || (yield* canManage(caller))) return state;
@@ -1084,25 +1072,15 @@ const make = Effect.gen(function* () {
     input: HandoffRespondInput,
     sessionId: AuthSessionId,
   ) {
-    if (input.action !== "completed") {
-      const handoff = yield* handoffs.respond(input, sessionId);
-      if (handoff.state !== "opened") approvals.delete(input.handoffId);
-      return handoff;
-    }
-    yield* authorizeSshHost(sessions, { kind: "client", sessionId }, "providers:manage");
-    // Taken before any further wait, so two concurrent approvals start one sync.
-    const now = yield* Clock.currentTimeMillis;
-    const pending = approvals.get(input.handoffId);
-    approvals.delete(input.handoffId);
-    if (pending === undefined || pending.expiresAtMs < now)
-      return yield* new HandoffError({ reason: "expired" });
-    const handoff = yield* handoffs
-      .respond(input, sessionId)
-      .pipe(Effect.tapError(() => Effect.sync(() => approvals.set(input.handoffId, pending))));
+    if (input.action === "completed")
+      yield* authorizeSshHost(sessions, { kind: "client", sessionId }, "providers:manage");
+    // The persisted handoff decides expiry and keeps the request across a restart.
+    const handoff = yield* handoffs.respond(input, sessionId);
     if (handoff.state === "completed")
-      yield* start(pending.input, { kind: "client", sessionId }, [pending.requester]).pipe(
-        Effect.tap((started) => approvedSyncs.started(input.handoffId, started.sync.syncId)),
-        Effect.catchCause((cause) => approvedSyncs.failed(input.handoffId, cause)),
+      yield* approvedSyncs.startApproved(handoff, (approved) =>
+        start(approved, { kind: "client", sessionId }, [
+          threadKey(handoff.requestedBy.threadId),
+        ]).pipe(Effect.map((started) => started.sync.syncId)),
       );
     return handoff;
   });

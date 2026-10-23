@@ -7,6 +7,7 @@ import {
   type AuthEnvironmentScope,
   type AuthClientSession,
   EnvironmentId,
+  HandoffError,
   type HandoffState,
   ProviderDriverKind,
   ProviderHostMatrixResult,
@@ -68,6 +69,30 @@ interface Harness {
   readonly diagnoses: Array<string>;
 }
 
+interface StoredHandoff {
+  state: HandoffState;
+  readonly args: Readonly<Record<string, unknown>>;
+  readonly threadId: ThreadId;
+  approvedBy?: AuthSessionId;
+  finished?: boolean;
+  progress?: unknown;
+}
+/** Persisted handoffs; sharing one across harnesses is a server restart in between. */
+type HandoffStore = Map<string, StoredHandoff>;
+
+const handoffView = (handoffId: string, record: StoredHandoff, state = record.state) =>
+  ({
+    handoffId,
+    kind: "approval",
+    state,
+    requestedBy: {
+      threadId: record.threadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      path: HostSync.HOST_SYNC_PATH,
+    },
+    target: { environmentId, path: HostSync.HOST_SYNC_PATH },
+  }) as never;
+
 const cloudDriver = (driver: string, ready: boolean, reason?: ProviderDiagnosisReason) => ({
   checkedBy: "server" as const,
   diagnoses: [
@@ -97,6 +122,7 @@ const harness = (options: {
   readonly providersBroken?: boolean;
   /** The persisted state of the approval handoff, read when no sync started. */
   readonly handoffState?: () => HandoffState;
+  readonly handoffStore?: HandoffStore;
   readonly hub?: boolean;
   readonly cloud?: Partial<
     Record<
@@ -106,6 +132,14 @@ const harness = (options: {
   >;
 }) => {
   const state: Harness = { calls: [], spawned: [], handoffs: [], diagnoses: [] };
+  const stored: HandoffStore = options.handoffStore ?? new Map();
+  const lookup = (handoffId: string) =>
+    Effect.suspend(() => {
+      const record = stored.get(handoffId);
+      return record === undefined
+        ? Effect.fail(new HandoffError({ reason: "not_found" }))
+        : Effect.succeed(record);
+    });
   const spawner = Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
@@ -192,6 +226,12 @@ const harness = (options: {
           create: (input) =>
             Effect.sync(() => {
               state.handoffs.push(input);
+              if (!stored.has("handoff:sync"))
+                stored.set("handoff:sync", {
+                  state: "pending",
+                  args: input.args,
+                  threadId: input.requestedBy.threadId,
+                });
               return {
                 handoffId: TurnItemId.make("handoff:sync"),
                 kind: "approval" as const,
@@ -201,13 +241,50 @@ const harness = (options: {
                 expiresAt: input.expiresAt ?? null,
               };
             }),
-          respond: (input) =>
-            Effect.succeed({ handoffId: input.handoffId, state: input.action } as never),
+          // Like the real service, answering again with the same action replays its result.
+          respond: (input, sessionId) =>
+            lookup(input.handoffId).pipe(
+              Effect.flatMap((record) => {
+                if (record.state === "pending" || record.state === "opened") {
+                  if (input.action === "completed") record.approvedBy = sessionId;
+                  record.state = input.action;
+                }
+                if (record.state === "expired")
+                  return Effect.fail(new HandoffError({ reason: "expired" }));
+                return record.state === input.action
+                  ? Effect.succeed(handoffView(input.handoffId, record))
+                  : Effect.fail(new HandoffError({ reason: "conflict" }));
+              }),
+            ),
           read: (input) =>
-            Effect.succeed({
-              handoffId: input.handoffId,
-              state: options.handoffState?.() ?? "pending",
-            } as never),
+            lookup(input.handoffId).pipe(
+              Effect.map((record) =>
+                handoffView(input.handoffId, record, options.handoffState?.() ?? record.state),
+              ),
+            ),
+          completedProviderContinuations: () =>
+            Effect.sync(() =>
+              [...stored].flatMap(([handoffId, record]) =>
+                record.state === "completed" && !record.finished && record.approvedBy
+                  ? [
+                      {
+                        handoff: handoffView(handoffId, record),
+                        args: record.args,
+                        approvedBySessionId: record.approvedBy,
+                      },
+                    ]
+                  : [],
+              ),
+            ),
+          finishProviderContinuation: (input, progress) =>
+            lookup(input.handoffId).pipe(
+              Effect.map((record) => {
+                record.finished = true;
+                record.progress = progress;
+              }),
+            ),
+          readProviderProgress: (input) =>
+            lookup(input.handoffId).pipe(Effect.map((record) => record.progress)),
         }),
         Layer.mock(Threads.ThreadManagementService)({
           getThreadSnapshot: () =>
@@ -422,11 +499,11 @@ it.effect("asks a person before an agent's sync touches any host, then runs it a
       },
       person,
     );
-    // Two clicks racing: exactly one starts the sync.
+    // Two clicks racing both succeed, as the handoff replays its answer, but start one sync.
     const raced = yield* Effect.all([Effect.exit(approve), Effect.exit(approve)], {
       concurrency: "unbounded",
     });
-    expect(raced.filter(Exit.isSuccess)).toHaveLength(1);
+    expect(raced.filter(Exit.isSuccess)).toHaveLength(2);
     const followed = yield* sync.status(
       { handoffId: "handoff:sync" },
       { kind: "mcp", scope: threadScope },
@@ -461,17 +538,8 @@ it.effect("asks a person before an agent's sync touches any host, then runs it a
       },
     });
 
-    const replay = yield* Effect.exit(
-      sync.respondHandoff(
-        {
-          threadId: ThreadId.make("agent-thread"),
-          handoffId: TurnItemId.make("handoff:sync"),
-          action: "completed",
-        },
-        person,
-      ),
-    );
-    expect(Exit.isFailure(replay)).toBe(true);
+    yield* approve;
+    expect(state.calls).toHaveLength(1);
   }).pipe(Effect.provide(layer));
 });
 
@@ -544,6 +612,58 @@ const remoteSyncAnswer = (call: Call) =>
           rows: [{ host: null, status: "ok", goatVersion: "0.0.1", providers: [] }],
         },
   );
+
+it.effect("approves and answers status from the persisted handoff after restarts", () => {
+  const agent = { kind: "mcp", scope: threadScope } as const;
+  const approve = {
+    threadId: ThreadId.make("agent-thread"),
+    handoffId: TurnItemId.make("handoff:sync"),
+    action: "completed",
+  } as const;
+  // Each run builds a fresh ProviderHostSync over the same persisted handoffs.
+  const run = <A, E>(
+    handoffStore: HandoffStore,
+    program: (sync: HostSync.ProviderHostSync["Service"]) => Effect.Effect<A, E>,
+    providersBroken = false,
+  ) => {
+    const { layer, state } = harness({ answer: remoteSyncAnswer, handoffStore, providersBroken });
+    return HostSync.ProviderHostSync.pipe(
+      Effect.flatMap(program),
+      Effect.map((value) => ({ value, calls: state.calls })),
+      Effect.provide(layer),
+    );
+  };
+  const status = (sync: HostSync.ProviderHostSync["Service"]) =>
+    sync.status({ handoffId: "handoff:sync" }, agent).pipe(Effect.flip);
+  return Effect.gen(function* () {
+    const started: HandoffStore = new Map();
+    yield* run(started, (sync) => sync.sync({ driver: "opencode", hosts: ["box"] }, agent));
+    // Approved after a restart: the request comes from the handoff, not from memory.
+    const approved = yield* run(started, (sync) =>
+      sync.respondHandoff(approve, person).pipe(
+        Effect.andThen(sync.status({ handoffId: "handoff:sync" }, agent)),
+        Effect.flatMap((state) => sync.awaitDone(state.syncId)),
+      ),
+    );
+    expect(approved.value.done).toBe(true);
+    expect(approved.calls.map(({ call }) => [call.host, call.tool, call.arguments])).toEqual([
+      ["box", "goat_provider_sync", { driver: "opencode", version: "latest", login: true }],
+    ]);
+    const afterRestart = yield* run(started, status);
+    expect(afterRestart.value).toMatchObject({ code: "not_found", detail: /server restarted/ });
+    expect(afterRestart.value.message).not.toMatch(/not started a sync yet/);
+
+    const broken: HandoffStore = new Map();
+    yield* run(broken, (sync) => sync.sync({ driver: "opencode" }, agent));
+    yield* run(broken, (sync) => sync.respondHandoff(approve, person), true);
+    const failed = yield* run(broken, status);
+    expect(failed.value).toMatchObject({
+      code: "start_failed",
+      detail:
+        "The person approved this sync, but it did not start: an unexpected error stopped it.",
+    });
+  });
+});
 
 it.effect("refuses a read-only thread before creating a sync approval", () => {
   const { layer, state } = harness({});
@@ -683,10 +803,3 @@ it.effect("installs with the official argv and never relays the installer's outp
     expect(wire).not.toContain("npm ERR");
   }).pipe(Effect.provide(layer));
 });
-
-// quarantine: #783 status by handoffId answers "not started yet, ask the person" after a decline or expiry.
-it.todo(
-  "a declined or expired sync approval reads as a terminal error from goat_provider_sync_status",
-);
-// quarantine: #783 a start failure after approval is only logged, so the agent never learns the sync failed.
-it.todo("a sync that fails to start after approval reports failed instead of not started");
