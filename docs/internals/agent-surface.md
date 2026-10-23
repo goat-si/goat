@@ -156,7 +156,8 @@ reservation is its own statement, not part of each domain's transaction; the gap
 between it and the recorded outcome is what `unknown` covers. A transient
 refusal that ran nothing frees the key, other failures replay, and a failure that
 may have left effects, an interrupt, or a row an earlier server process left
-running stays `unknown` and never runs again. Only completed keys expire, after
+running stays `unknown` and never runs again; its refusal names the read that settles
+it, on the same host for a routed write. Only completed keys expire, after
 24 hours. Writes that already deduplicated in their own domain, such as
 `goat_thread_send` and `delegate_task`, keep those receipts for now.
 
@@ -443,8 +444,8 @@ destructive, so a client that prompts before destructive tools still prompts bef
 target reached through it. The checked-handler wrapper records the original typed error,
 and `goat_call` uses it only to classify by a literal the envelope's table declares; the
 message is always the text the direct call shows, so free-text reasons the direct path
-scrubs never leave through it. Writes count as unkeyed until the registry gains
-`idempotency`, and routed calls set `meta.host`.
+scrubs never leave through it. A write the registry keys counts as deduplicated when it
+carries a `clientRequestId`, and routed calls set `meta.host`.
 
 **Now.** A direct `tools/call` by a canonical alias runs the served tool. The `/mcp`
 auth middleware swaps the name for the served one before Effect's MCP core sees the

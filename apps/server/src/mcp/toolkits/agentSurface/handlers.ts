@@ -56,7 +56,10 @@ const availability = (
   return { now: true };
 };
 
-/** Reclassifies a direct failure by its declared literal; the text stays what a direct call shows. */
+/**
+ * Reclassifies a direct failure by its declared literal; the text stays what a direct call shows.
+ * A failure that says the write may have started stays unknown_outcome whatever its literal.
+ */
 const reclassified = (
   direct: AgentSurfaceResult,
   error: unknown,
@@ -64,7 +67,15 @@ const reclassified = (
 ): AgentSurfaceResult => {
   const declared = declaredFailureLiteral(error);
   if (direct.status !== "error" || declared === undefined) return direct;
-  const classified = fromFailure({ ...declared, message: direct.error.message }, context);
+  const mayHaveStarted =
+    direct.error.code === "unknown_outcome" ||
+    (typeof error === "object" &&
+      error !== null &&
+      (error as { readonly mayHaveStarted?: unknown }).mayHaveStarted === true);
+  const classified = fromFailure(
+    { ...declared, message: direct.error.message, ...(mayHaveStarted ? { mayHaveStarted } : {}) },
+    context,
+  );
   if (classified.status !== "error") return direct;
   return {
     ...direct,

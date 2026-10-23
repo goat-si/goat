@@ -18,7 +18,7 @@ export const providerSettingsSurfaceEntries = {
     humanSteps: ["approval"],
     annotations: { idempotentHint: true, openWorldHint: false },
     idempotency: "key",
-    reconcile: "provider.list",
+    reconcile: "provider.diagnose",
   },
   add: {
     resource: "provider",
@@ -36,7 +36,7 @@ export const providerSettingsSurfaceEntries = {
     humanSteps: ["approval"],
     annotations: { idempotentHint: false, openWorldHint: false },
     idempotency: "key",
-    reconcile: "provider.list",
+    reconcile: "provider.diagnose",
   },
   link: {
     resource: "provider",
@@ -54,7 +54,7 @@ export const providerSettingsSurfaceEntries = {
     humanSteps: ["approval"],
     annotations: { idempotentHint: true, openWorldHint: false },
     idempotency: "key",
-    reconcile: "provider.list",
+    reconcile: "provider.diagnose",
   },
   remove: {
     resource: "provider",
@@ -72,7 +72,7 @@ export const providerSettingsSurfaceEntries = {
     humanSteps: ["approval"],
     annotations: { idempotentHint: true, openWorldHint: false },
     idempotency: "key",
-    reconcile: "provider.list",
+    reconcile: "provider.diagnose",
   },
 } as const satisfies Record<
   string,

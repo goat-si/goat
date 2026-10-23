@@ -52,6 +52,7 @@ const ProbeToolkit = Toolkit.make(
       projectId: Schema.String,
       force: Schema.optional(Schema.Boolean),
       clientRequestId: Schema.optional(Schema.String),
+      host: Schema.optional(Schema.String),
       // What a launch carries that narrows the grant it runs under.
       permissionProfileCeiling: Schema.optional(PermissionProfile),
       goatclawRole: Schema.optional(GoatclawRole),
@@ -67,6 +68,13 @@ const outcomes: Readonly<Record<string, OrchestratorMcpFailure>> = {
   pressure: new OrchestratorMcpFailure({ code: "host_pressure", message: "busy" }),
   unreachable: new OrchestratorMcpFailure({ code: "host_unavailable", message: "gone" }),
   missing: new OrchestratorMcpFailure({ code: "not_found", message: "no project" }),
+  // What SSH dispatch reports when the remote stopped answering after the launch went out.
+  uncertain: new OrchestratorMcpFailure({
+    code: "host_unavailable",
+    reason: "ssh_failed",
+    mayHaveStarted: true,
+    message: "The host stopped answering after the launch was sent.",
+  }),
 };
 
 const handlers = {
@@ -575,6 +583,56 @@ it.effect("refuses a role launch's replay once the caller's own profile narrows"
     expect(yield* direct(launch)).toEqual({ run: 1 });
     yield* narrowProfile("owner", "cloud.launch");
     expect(yield* direct(launch)).toMatchObject({ code: "capability_denied" });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect(
+  "keeps an uncertain keyed write unknown_outcome through goat_call and never runs it again",
+  () =>
+    Effect.gen(function* () {
+      yield* seed;
+      expect(yield* viaGoatCall({ projectId: "uncertain", clientRequestId: "u" })).toMatchObject({
+        status: "error",
+        error: { code: "unknown_outcome", retryable: false },
+      });
+      expect(yield* viaGoatCall({ projectId: "uncertain", clientRequestId: "u" })).toMatchObject({
+        status: "error",
+        error: { code: "unknown_outcome", reason: "outcome_unknown", retryable: false },
+      });
+      expect(yield* runs).toBe(1);
+    }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect("names the host to read when a routed write's outcome is unknown", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const sql = yield* SqlClient.SqlClient;
+    const digest = yield* argumentsDigest({ projectId: "a", host: "box" });
+    yield* sql`INSERT INTO mcp_request_reservations (environment_id, principal, path,
+      client_request_id, receipt_id, tool_name, args_digest, grant_json, state, boot_id,
+      created_at, expires_at)
+      VALUES ('environment', ${`thread:${caller}`}, ${keyed.path}, 'k', 'receipt:routed',
+        ${keyed.name}, ${digest}, '{"runtimeMode":"full-access","interactionMode":"default","goatclaw":null,"role":null,"scopes":null,"readOnly":false}',
+        'running', 'boot:stopped', '1970-01-01T00:00:00.000Z', '1970-01-02T00:00:00.000Z')`;
+    expect(yield* direct({ projectId: "a", host: "box", clientRequestId: "k" })).toMatchObject({
+      reason: "outcome_unknown",
+      message: expect.stringContaining("with host box"),
+    });
+    expect(yield* runs).toBe(0);
+  }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect("reads a key unknown in this process once its outcome could not be saved", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TRIGGER reservations_refuse_updates BEFORE UPDATE ON mcp_request_reservations
+      BEGIN SELECT RAISE(ABORT, 'refused'); END`;
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toEqual({ run: 1 });
+    expect(yield* direct({ projectId: "a", clientRequestId: "k" })).toMatchObject({
+      reason: "outcome_unknown",
+    });
     expect(yield* runs).toBe(1);
   }).pipe(Effect.provide(served("owner"))),
 );

@@ -38,6 +38,12 @@ import { refusalResult } from "./toolRefusals.ts";
 const KEY_LIFETIME_HOURS = 24;
 /** One per process: a running row from another boot was left by a server that stopped mid-call. */
 const PROCESS_BOOT_ID = NodeCrypto.randomUUID();
+/**
+ * Reservations whose call ended but whose outcome could not be written. Their rows still say
+ * running under this boot, which would otherwise read as in_progress until the next restart.
+ * Process-wide like the boot id; it only grows when the database refuses a write.
+ */
+const ABANDONED_RECEIPTS = new Set<string>();
 
 type Outcome = McpSchema.CallToolResult | McpSchema.InputRequired;
 type Literal = { readonly _tag: string; readonly code?: string };
@@ -171,11 +177,23 @@ const principalOf = (scope: McpInvocationContext.McpInvocationScope) =>
       ? `client:${scope.client.sessionId}`
       : undefined;
 
+const hostOf = (params: unknown) => {
+  const host = (params as { readonly host?: unknown } | null)?.host;
+  return typeof host === "string" ? host : undefined;
+};
+
 const toolNameOf = (path: string) =>
   (agentSurfaceRegistry as Readonly<Record<string, AgentSurfaceEntry>>)[path]?.name ?? path;
 
-const reservationRefusal = (reason: Refusal, entry: KeyedEntry, clientRequestId: string) => {
+const reservationRefusal = (
+  reason: Refusal,
+  entry: KeyedEntry,
+  clientRequestId: string,
+  host: string | undefined,
+) => {
   const reconcile = entry.reconcile ?? entry.path;
+  // A routed write happened on that host, so only the same read there can settle it.
+  const where = host === undefined ? "" : ` with host ${host}`;
   const call = `${entry.name} with clientRequestId ${clientRequestId}`;
   switch (reason) {
     case "grant_lost":
@@ -192,7 +210,7 @@ const reservationRefusal = (reason: Refusal, entry: KeyedEntry, clientRequestId:
           reason,
           mayHaveStarted: true,
           reconcile,
-          message: `${call} started, but its outcome was never recorded, so GOAT will not run it again. Read ${toolNameOf(reconcile)} to see whether it happened. Only if it did not, call again with a new clientRequestId.`,
+          message: `${call} started, but its outcome was never recorded, so GOAT will not run it again. Read ${toolNameOf(reconcile)}${where} to see whether it happened. Only if it did not, call again with a new clientRequestId.`,
         }),
       );
     case "storage_failed":
@@ -247,7 +265,8 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
       readonly result_json: string | null;
       readonly failure_json: string | null;
       readonly grant_json: string;
-    }>`SELECT args_digest, state, boot_id, result_json, failure_json, grant_json
+      readonly receipt_id: string;
+    }>`SELECT args_digest, state, boot_id, result_json, failure_json, grant_json, receipt_id
       FROM mcp_request_reservations
       WHERE environment_id = ${request.environmentId} AND principal = ${request.principal}
         AND path = ${request.path} AND client_request_id = ${request.clientRequestId}`;
@@ -255,7 +274,11 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
     if (row === undefined) return { kind: "in_progress" } satisfies Reservation as Reservation;
     if (row.args_digest !== request.digest)
       return { kind: "idempotency_mismatch" } satisfies Reservation as Reservation;
-    if (row.state === "running" && row.boot_id === bootId)
+    if (
+      row.state === "running" &&
+      row.boot_id === bootId &&
+      !ABANDONED_RECEIPTS.has(row.receipt_id)
+    )
       return { kind: "in_progress" } satisfies Reservation as Reservation;
     if (row.state !== "completed" || row.result_json === null)
       return { kind: "outcome_unknown" } satisfies Reservation as Reservation;
@@ -290,7 +313,16 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
       completed_at = ${DateTime.formatIso(yield* DateTime.now)}
       WHERE receipt_id = ${receiptId} AND state = 'running'`;
   });
-  return { reserve, settle };
+  /** The outcome could not be recorded: from now on the key reads unknown, in this process too. */
+  const abandon = (receiptId: string) =>
+    Effect.sync(() => ABANDONED_RECEIPTS.add(receiptId)).pipe(
+      Effect.andThen(
+        sql`UPDATE mcp_request_reservations SET state = 'unknown'
+          WHERE receipt_id = ${receiptId} AND state = 'running'`,
+      ),
+      Effect.ignoreCause,
+    );
+  return { reserve, settle, abandon };
 };
 
 /** A call outside a keyed reservation must not inherit an enclosing call's admission. */
@@ -430,7 +462,6 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
         );
         if ("failure" in granted) return { kind: "refused", failure: granted.failure } as const;
         const { grant, ...audit } = granted;
-        const host = (params as { readonly host?: unknown } | null)?.host;
         const receiptId = NodeCrypto.randomUUID();
         const reservation = yield* store.value.reserve({
           environmentId: scope.environmentId,
@@ -442,7 +473,7 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
           digest,
           ...audit,
           grant,
-          host: typeof host === "string" ? host : null,
+          host: hostOf(params) ?? null,
         });
         if (reservation.kind === "reserved") yield* Ref.set(held, receiptId);
         if (
@@ -487,7 +518,14 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
                         );
                       default:
                         return restore(
-                          decide(reservationRefusal(reservation.kind, entry, clientRequestId)),
+                          decide(
+                            reservationRefusal(
+                              reservation.kind,
+                              entry,
+                              clientRequestId,
+                              hostOf(params),
+                            ),
+                          ),
                         );
                     }
                   }),
@@ -505,12 +543,11 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
             : Effect.flatMap(Ref.get(failure), (literal) =>
                 store.value.settle(receiptId, settlement, result, literal),
               ).pipe(
-                // The row stays running, so a retry here waits and a later process reads unknown.
                 Effect.catchCause((cause) =>
                   Effect.logError("clientRequestId outcome was not recorded", {
                     tool: entry.name,
                     cause,
-                  }),
+                  }).pipe(Effect.andThen(store.value.abandon(receiptId))),
                 ),
               ),
         );

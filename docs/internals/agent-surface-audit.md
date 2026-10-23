@@ -155,7 +155,7 @@ Only 22% of input parameters carry a description. 132 tools describe none of the
 | `html_render`            | 2799       | packages/contracts/src/agentSurface/registry.ts:917  |
 | `schedule_task`          | 2654       | packages/contracts/src/agentSurface/registry.ts:1283 |
 | `goat_thread_send`       | 2446       | packages/contracts/src/agentSurface/registry.ts:1461 |
-| `goat_ssh_thread_launch` | 2028       | packages/contracts/src/agentSurface/registry.ts:2639 |
+| `goat_ssh_thread_launch` | 2166       | packages/contracts/src/agentSurface/registry.ts:2639 |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
@@ -203,7 +203,7 @@ Names that look like tools but are not in the registry:
 | Name                      | Where                                                                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `update_runtime`          | packages/provider-core/src/server/orchestrationInstructions.ts:45                                                        |
-| `goat_eval`               | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:459, docs/internals/agent-surface.md:842 (+1)         |
+| `goat_eval`               | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:460, docs/internals/agent-surface.md:843 (+1)         |
 | `goat_host_cordon`        | docs/internals/agentic-k8s.md:955                                                                                        |
 | `goat_thread_reschedule`  | docs/internals/agentic-k8s.md:955                                                                                        |
 | `goat_scheduler_status`   | docs/internals/agentic-k8s.md:958                                                                                        |
