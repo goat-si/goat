@@ -6,6 +6,7 @@ import {
   type CloudHoldersInput,
   CloudHoldersResult,
   CloudLaunchResult,
+  type CloudLaunchMcpResult,
   type CloudLaunchInput,
   type CloudRunForgetInput,
   type CloudRunForgetResult,
@@ -53,6 +54,8 @@ import * as HostSync from "../provider/ProviderHostSync.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SshDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
+import { makeCloudLaunchConsent } from "./CloudLaunchConsent.ts";
 import {
   CAN_FOLLOW_REGISTERED,
   CLOUD_AGENT_LABELS,
@@ -111,7 +114,7 @@ export interface CloudAgentServiceShape {
     scope: McpInvocationScope,
     input: CloudLaunchInput,
     modes: Effect.Effect<StartModes, OrchestratorMcpFailure>,
-  ) => Effect.Effect<CloudLaunchResult, OrchestratorMcpFailure>;
+  ) => Effect.Effect<CloudLaunchMcpResult, OrchestratorMcpFailure>;
   readonly register: (
     scope: McpInvocationScope,
     input: CloudRunRegisterInput,
@@ -228,6 +231,7 @@ export const listCloudRuns = (input: CloudRunListInput) =>
 
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
+  const cloudConsent = yield* makeCloudLaunchConsent;
   const settings = yield* ServerSettings.ServerSettingsService;
   const hostSync = yield* HostSync.ProviderHostSync;
   const registry = yield* ProviderRegistry.ProviderRegistry;
@@ -572,10 +576,43 @@ const make = Effect.gen(function* () {
       const instanceId = holder.instanceId ?? ProviderInstanceId.make(input.provider);
       const started = yield* modes;
       const model = yield* modelFor(instanceId);
-      yield* permissions.requireCloudApproval(scope, effective, {
+      const label = CLOUD_AGENT_LABELS[input.provider];
+      // With goatclaw on, the approval covers the branch checked out now, which the launch then pins.
+      const branch =
+        input.branch ??
+        (effective.enabled
+          ? yield* cloudConsent.checkedOutBranch(project.workspaceRoot)
+          : undefined);
+      const from = branch ?? "the branch checked out in the project folder";
+      const consent = yield* cloudConsent.admit(scope, effective, {
         decisionId: input.decisionId,
+        handoffId: input.handoffId,
         target: `${input.provider}@local`,
+        binding: {
+          provider: input.provider,
+          repo: input.repo,
+          branch: branch ?? null,
+          prompt: input.prompt,
+          title: input.title ?? null,
+          notifyWebhook: input.notifyWebhook ?? null,
+          holder: { host: holder.host, instanceId },
+          threadId: scope.thread?.threadId ?? null,
+        },
+        request: {
+          title: `Allow a ${label} run on ${input.repo}?`,
+          reason: `Starts a ${label} run from ${from} on this machine's login; it bills that provider account.`,
+          location: `${label} on ${input.repo}, from ${from}${input.title === undefined ? "" : `, titled "${input.title}"`}.\n\nPrompt:\n${input.prompt}`,
+        },
       });
+      if (!consent.admitted)
+        return {
+          kind: "needs_human",
+          handoff: consent.handoff,
+          next: { after: "approval", call: "goat_cloud_launch" },
+          holder,
+          dryRun: false,
+          note: `A person must allow this launch in a GOAT app. Once approved, call goat_cloud_launch again with the same arguments and handoffId "${consent.handoff.handoffId}". A different launch needs a new approval.`,
+        };
       const launched = yield* launches
         .launch(
           scope,
@@ -586,7 +623,7 @@ const make = Effect.gen(function* () {
             modelSelection: { instanceId, model },
             workspaceStrategy: {
               type: "root",
-              ...(input.branch === undefined ? {} : { branch: input.branch }),
+              ...(branch === undefined ? {} : { branch }),
             },
             message: input.prompt,
             standingInstructions: false,
@@ -600,7 +637,7 @@ const make = Effect.gen(function* () {
         holder,
         dryRun: false,
         threadId: launched.threadId,
-        note: `The cloud run starts in this thread from ${input.branch ?? "the branch checked out in the project folder"}; goat_cloud_run_list and goat_thread_status follow it.`,
+        note: `The cloud run starts in this thread from ${from}; goat_cloud_run_list and goat_thread_status follow it.`,
       };
     },
   );
@@ -801,4 +838,7 @@ const make = Effect.gen(function* () {
   return CloudAgentService.of({ holders, launch, register, list, forget });
 });
 
-export const layer = Layer.effect(CloudAgentService, make).pipe(Layer.provide(Profiles.layer));
+export const layer = Layer.effect(CloudAgentService, make).pipe(
+  Layer.provide(Profiles.layer),
+  Layer.provide(ApprovalHandoffs.layer),
+);
