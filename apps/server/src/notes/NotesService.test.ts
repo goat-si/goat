@@ -845,7 +845,7 @@ it.effect("summary titles are capped without splitting a surrogate pair", () =>
 
 type Promises = typeof NodeFS.promises;
 /** Replaces a node:fs/promises function the service imports, for the scope's lifetime. */
-const replaceFs = <K extends "link" | "copyFile">(
+const replaceFs = <K extends "link" | "copyFile" | "unlink" | "rename">(
   key: K,
   replacement: (original: Promises[K]) => Promises[K],
 ) =>
@@ -862,6 +862,70 @@ const replaceFs = <K extends "link" | "copyFile">(
         NodeModule.syncBuiltinESMExports();
       }),
   );
+
+/** An editor saves the source right after the service's last revision check, before the source leaves its path. */
+const editBeforeRemoval = (name: string, contents: string) => {
+  let armed = true;
+  const edit = async (target: unknown) => {
+    if (!armed || !String(target).endsWith(`/${name}`)) return;
+    armed = false;
+    await NodeFS.promises.writeFile(String(target), contents);
+  };
+  return Effect.all([
+    replaceFs("unlink", (original) => async (target) => {
+      await edit(target);
+      return original(target);
+    }),
+    replaceFs("rename", (original) => async (from, to) => {
+      await edit(from);
+      return original(from, to);
+    }),
+  ]);
+};
+
+it.effect(
+  "a move keeps a source edited after its last revision check and reports the conflict",
+  () =>
+    Effect.gen(function* () {
+      const notes = yield* Notes.NotesService;
+      const fs = yield* FileSystem.FileSystem;
+      const { notesDir } = yield* Config.ServerConfig;
+      const initial = yield* notes.write(
+        { path: "a.md", body: "# A\n", baseRevision: null },
+        "user",
+      );
+      yield* editBeforeRemoval("a.md", "# Terminal\n");
+      const conflict = yield* notes
+        .move({ from: "a.md", to: "b.md", baseRevision: initial.revision }, "user")
+        .pipe(Effect.flip);
+      assert.strictEqual(conflict._tag, "NoteConflictError");
+      if (conflict._tag === "NoteConflictError")
+        assert.strictEqual(conflict.current.body, "# Terminal\n");
+      assert.strictEqual(yield* fs.readFileString(`${notesDir}/a.md`), "# Terminal\n");
+      assert.deepStrictEqual(yield* fs.readDirectory(notesDir), ["a.md"]);
+    }).pipe(Effect.scoped, Effect.provide(layer())),
+);
+
+it.effect(
+  "a delete keeps a note edited after its last revision check and reports the conflict",
+  () =>
+    Effect.gen(function* () {
+      const notes = yield* Notes.NotesService;
+      const fs = yield* FileSystem.FileSystem;
+      const { notesDir } = yield* Config.ServerConfig;
+      const initial = yield* notes.write(
+        { path: "a.md", body: "# A\n", baseRevision: null },
+        "user",
+      );
+      yield* editBeforeRemoval("a.md", "# Terminal\n");
+      const conflict = yield* notes
+        .delete({ path: "a.md", baseRevision: initial.revision })
+        .pipe(Effect.flip);
+      assert.strictEqual(conflict._tag, "NoteConflictError");
+      assert.strictEqual(yield* fs.readFileString(`${notesDir}/a.md`), "# Terminal\n");
+      assert.deepStrictEqual(yield* fs.readDirectory(notesDir), ["a.md"]);
+    }).pipe(Effect.scoped, Effect.provide(layer())),
+);
 
 it.effect("a failed move keeps a destination edited after it was placed", () =>
   Effect.gen(function* () {
