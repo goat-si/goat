@@ -1,7 +1,9 @@
 import {
   latestProviderTurnForAttempt,
   type MessageId,
+  type ModelSelection,
   type OrchestrationV2ConversationMessage,
+  type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
 
@@ -34,4 +36,23 @@ export function isUndeliveredMailboxSteer(
       latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId)?.status ===
         "completed")
   );
+}
+
+export function followsCurrentConversation(
+  message: OrchestrationV2ConversationMessage | undefined,
+): boolean {
+  return (
+    message?.notification?.source.kind === "monitor" && !isBufferedProviderNotification(message)
+  );
+}
+
+export function queuedRunModelSelection(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "messages">,
+  run: OrchestrationV2Run,
+): ModelSelection {
+  const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
+  // App-owned monitor updates follow the agent currently handling the thread.
+  return followsCurrentConversation(message)
+    ? projection.thread.modelSelection
+    : run.modelSelection;
 }

@@ -25,6 +25,7 @@ import * as HostHealthMonitor from "../health/HostHealthMonitor.ts";
 import * as HostPressureMonitor from "./HostPressureMonitor.ts";
 import {
   initialPressureState,
+  HOST_PRESSURE_KEY_PREFIX,
   launchAdvice,
   NOTHING_ANNOUNCED,
   nudgeDecision,
@@ -359,7 +360,7 @@ export const make = Effect.gen(function* () {
         (recipient) =>
           wake(
             ThreadId.make(recipient),
-            "host-pressure:" +
+            HOST_PRESSURE_KEY_PREFIX +
               key +
               ":wake:" +
               pressure.level +

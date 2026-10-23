@@ -1,6 +1,6 @@
 import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
-import { framePendingReports } from "../remoteReports/reportFrame.ts";
+import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
@@ -1781,17 +1781,16 @@ export const layer: Layer.Layer<
         }));
         const inbox =
           input.reattach === true
-            ? { texts: [] as ReadonlyArray<string>, throughId: null as number | null }
-            : yield* remoteReportInbox.pending(input.run.threadId).pipe(
-                Effect.catch((cause) =>
-                  Effect.logWarning("Failed to read remote report inbox.", { cause }).pipe(
-                    Effect.as({
-                      texts: [] as ReadonlyArray<string>,
-                      throughId: null as number | null,
-                    }),
+            ? { texts: [], reports: [], throughId: null }
+            : yield* remoteReportInbox
+                .pending(input.run.threadId)
+                .pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Failed to read remote report inbox.", { cause }).pipe(
+                      Effect.as({ texts: [], reports: [], throughId: null }),
+                    ),
                   ),
-                ),
-              );
+                );
         const compact =
           input.message.attachments.length === 0 &&
           input.message.text.trim().toLowerCase() === "/compact";
@@ -1913,7 +1912,7 @@ export const layer: Layer.Layer<
               ? input.message
               : {
                   ...input.message,
-                  text: `${framePendingReports(inbox.texts)}\n\n${input.message.text}`,
+                  text: turnText(input.message, inbox.reports),
                 },
           modelSelection: input.modelSelection,
           runtimePolicy: input.runtimePolicy,

@@ -34,6 +34,7 @@ import dispatchMigration from "../persistence/Migrations/070_RemoteDispatches.ts
 import threadRunResultsMigration from "../persistence/Migrations/073_ThreadRunResults.ts";
 import relayMigration from "../persistence/Migrations/074_RemoteReportRelay.ts";
 import observedChecksMigration from "../persistence/Migrations/091_ThreadRunObservedChecks.ts";
+import inboxRunIdMigration from "../persistence/Migrations/101_RemoteReportInboxRunId.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const threadId = ThreadId.make("remote-thread");
@@ -78,11 +79,8 @@ const stored = (sequence: number, event: object) =>
   }) as unknown as OrchestrationV2StoredEvent;
 const setup = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* migration;
-  yield* dispatchMigration;
-  yield* threadRunResultsMigration;
-  yield* observedChecksMigration;
-  yield* relayMigration;
+  for (const step of [migration, dispatchMigration, threadRunResultsMigration]) yield* step;
+  for (const step of [observedChecksMigration, relayMigration, inboxRunIdMigration]) yield* step;
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const changeTypes = [
     "thread.deleted",

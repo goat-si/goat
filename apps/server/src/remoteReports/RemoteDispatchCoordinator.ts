@@ -663,7 +663,11 @@ const make = Effect.gen(function* () {
           .filter((entry) => entry.report.relay === undefined);
         const ended = observed !== null && terminal(observed.status) && !hasMore;
         // The launch watch owns run-end wakes. Observation only settles this ledger.
-        const inbox: Array<{ kind: typeof RemoteReportKind.Type | "relay"; text: string }> = [];
+        const inbox: Array<{
+          kind: typeof RemoteReportKind.Type | "relay";
+          text: string;
+          runId: string | null;
+        }> = [];
         const latestNeedsInput = entries.findLast((entry) => entry.report.kind === "needs_input");
         for (const entry of entries) {
           const text = frameRemoteReport({
@@ -675,7 +679,8 @@ const make = Effect.gen(function* () {
           });
           if (r.delivery === "wake" && entry === latestNeedsInput)
             yield* wakeWithReport(r, entry.key, entry.report, entry.source);
-          else if (r.delivery !== "notify_only") inbox.push({ kind: entry.report.kind, text });
+          else if (r.delivery !== "notify_only")
+            inbox.push({ kind: entry.report.kind, text, runId: entry.report.runId });
         }
         // Only a binding this machine declared relaySend for carries relays.
         for (const report of forced === undefined ? fresh : []) {
@@ -703,7 +708,7 @@ const make = Effect.gen(function* () {
                 Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })),
               );
           } else if (r.delivery !== "notify_only")
-            inbox.push({ kind: "relay", text: outcome.text });
+            inbox.push({ kind: "relay", text: outcome.text, runId: null });
         }
         // No SQLite transaction encloses notification I/O. Its deterministic receipt
         // dedupes a crash here; SQL then atomically imports inbox + ledger + cursor.
@@ -715,8 +720,8 @@ const make = Effect.gen(function* () {
                   yield* sql`DELETE FROM remote_report_inbox
             WHERE origin_thread_id = ${r.origin_thread_id} AND correlation_id = ${id} AND kind = 'progress'`;
                 yield* sql`INSERT INTO remote_report_inbox
-            (origin_thread_id, correlation_id, kind, text, created_at)
-            VALUES (${r.origin_thread_id}, ${id}, ${entry.kind}, ${entry.text}, ${at})`;
+            (origin_thread_id, correlation_id, kind, text, run_id, created_at)
+            VALUES (${r.origin_thread_id}, ${id}, ${entry.kind}, ${entry.text}, ${entry.runId}, ${at})`;
               }
               const last = entries.at(-1)?.report;
               const cursor = fresh.at(-1)?.sequence ?? r.report_cursor;
