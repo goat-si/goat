@@ -52,6 +52,21 @@ describe("desktop update button state", () => {
     expect(getDesktopUpdateStatusText(state)).toBe(state.message);
   });
 
+  it("offers restart for a downloaded update that waits for busy backends and says quitting installs it", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "downloaded",
+      availableVersion: "1.1.0",
+      downloadedVersion: "1.1.0",
+      pendingRestartReason: "busy",
+      canRetry: true,
+    };
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("install");
+    expect(getDesktopUpdateButtonTooltip(state)).toBe(
+      "Update 1.1.0 downloaded. Click to restart and install. It also installs when you quit GOAT.",
+    );
+  });
+
   it("keeps retry action available after a download error", () => {
     const state: DesktopUpdateState = {
       ...baseState,

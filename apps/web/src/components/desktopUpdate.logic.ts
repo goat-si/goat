@@ -113,7 +113,11 @@ function getDesktopUpdateActionTooltip(state: DesktopUpdateState): string {
     return `Downloading update${progress}`;
   }
   if (state.status === "downloaded") {
-    return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.`;
+    const waiting =
+      state.pendingRestartReason === "busy" || state.pendingRestartReason === "unknown"
+        ? " It also installs when you quit GOAT."
+        : "";
+    return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.${waiting}`;
   }
   if (state.status === "error") {
     if (state.errorContext === "download" && state.availableVersion) {

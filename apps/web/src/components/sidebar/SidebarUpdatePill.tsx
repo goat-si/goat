@@ -479,6 +479,9 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
   );
   const statusIcon = renderStatusIcon("sm");
   const controlIcon = inRail ? renderStatusIcon("md") : statusIcon;
+  // An icon alone read as "check for updates" while a downloaded update waited for
+  // busy backends, so the footer names the action. The rail has no room for text.
+  const restartLabel = !inRail && iconStatus === "downloaded" ? "Restart to update" : null;
   const confirmDialog = (
     <UpdateEverythingDialog
       open={isConfirmingEverything}
@@ -551,7 +554,11 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       className={cn(
         "inline-flex items-center justify-center outline-hidden ring-ring transition-colors focus-visible:ring-2 focus-visible:ring-inset",
         // The rail's accent fill means "current page", so waiting updates keep the control fill.
-        inRail ? "size-10 shrink-0 rounded-lg" : "size-8 rounded-full",
+        inRail
+          ? "size-10 shrink-0 rounded-lg"
+          : restartLabel
+            ? "h-8 gap-1.5 rounded-full pr-3 pl-2 text-xs font-medium"
+            : "size-8 rounded-full",
         isInteractionDisabled ? "cursor-not-allowed" : "cursor-pointer",
         showUpdateIconState
           ? cn(
@@ -592,6 +599,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       }}
     >
       {controlIcon}
+      {restartLabel ? <span className="whitespace-nowrap">{restartLabel}</span> : null}
     </button>
   );
 
