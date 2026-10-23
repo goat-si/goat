@@ -44,18 +44,19 @@ const tokens = (text: string) =>
 const unY = (word: string) =>
   word.length > 4 && word.endsWith("ies") ? word.slice(0, -3) + "y" : word;
 
-/**
- * Two forms of one word: equal, or one extends the other by a short ending ("status" and
- * "statuses", "watch" and "watching", "policy" and "policies"). Symmetric, so plural and
- * singular find each other.
- */
-const sameWord = (left: string, right: string) => {
-  const a = unY(left);
-  const b = unY(right);
+/** Equal, or one extends the other by a short ending ("status" and "statuses"). */
+const extendsWord = (a: string, b: string) => {
   if (a === b) return true;
   const [short, long] = a.length < b.length ? [a, b] : [b, a];
   return short.length >= 4 && long.length - short.length <= 3 && long.startsWith(short);
 };
+
+/**
+ * Two forms of one word, compared as spelled ("cookie" and "cookies") and with -ies read as -y
+ * ("policy" and "policies"). Symmetric, so plural and singular find each other.
+ */
+const sameWord = (left: string, right: string) =>
+  extendsWord(left, right) || extendsWord(unY(left), unY(right));
 
 /**
  * The words an entry is named by: its resource, verb and tool names, plus the initials of a

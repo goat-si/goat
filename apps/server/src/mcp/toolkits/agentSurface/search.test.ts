@@ -236,17 +236,24 @@ describe("goat_describe search", () => {
     }).pipe(Effect.provide(registered)),
   );
 
-  it("matches -y words and their -ies plurals", () => {
+  it("matches -y words and their -ies plurals, and -ie words and theirs", () => {
     for (const plural of ["queries", "policies", "activities"])
       expect(searchEntries(entries, plural).matches.length, plural).toBeGreaterThan(0);
+    const send = agentSurfaceRegistry["thread.send"];
+    const cookie = { ...send, summary: "Send a cookie" };
+    expect(searchEntries([cookie], "cookies").matches).toHaveLength(1);
   });
 
   it("changes the surface version when a summary or a legacy name changes", () => {
-    const send = agentSurfaceRegistry["thread.send"];
     const version = surfaceVersionOf(entries);
-    const without = entries.filter((entry) => entry.path !== "thread.send");
-    expect(surfaceVersionOf([...without, { ...send, summary: "Other words" }])).not.toBe(version);
-    expect(surfaceVersionOf([...without, { ...send, legacyNames: ["send"] }])).not.toBe(version);
+    // In place, so only the field changes and never the order.
+    const changed = (change: object) =>
+      surfaceVersionOf(
+        entries.map((entry) => (entry.path === "thread.send" ? { ...entry, ...change } : entry)),
+      );
+    expect(changed({})).toBe(version);
+    expect(changed({ summary: "Other words" })).not.toBe(version);
+    expect(changed({ legacyNames: ["send"] })).not.toBe(version);
   });
 
   it.effect("holds a path that is searched to the query's length", () =>
