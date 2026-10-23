@@ -24,6 +24,10 @@ function refusalFields(
   return undefined;
 }
 
+// Clients such as Pi show the model only the text when there is any, so a refusal's text is
+// its JSON envelope, as every other tool's refusal is, and its code survives text-only clients.
+const refusalText = (refusal: Readonly<Record<string, unknown>>) => JSON.stringify(refusal);
+
 const isPreviewAutomationError = Schema.is(PreviewAutomationError);
 
 export const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
@@ -59,7 +63,10 @@ export const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
     content: [
       {
         type: "text",
-        text: refusal?.message ?? `Preview snapshot failed: ${message ?? `${errorTag}.`}`,
+        text:
+          refusal === undefined
+            ? `Preview snapshot failed: ${message ?? `${errorTag}.`}`
+            : refusalText(refusal),
       },
     ],
   });
@@ -123,8 +130,11 @@ export const imageToolFailure =
         {
           type: "text",
           text:
-            refusal?.message ??
-            (typeof failureText === "string" ? failureText : (message ?? `${toolName} failed.`)),
+            refusal === undefined
+              ? typeof failureText === "string"
+                ? failureText
+                : (message ?? `${toolName} failed.`)
+              : refusalText(refusal),
         },
       ],
     });

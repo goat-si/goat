@@ -328,19 +328,15 @@ const HANDLER_VALIDATION: Readonly<Record<string, string>> = {
   "project.create": "A project made from a title takes no other settings.",
 };
 const IMAGE_TOOL_FAILURE = /^(Preview snapshot|Device screenshot) failed/;
-// Image tools carry a refusal's code in structuredContent; every other tool in its JSON text.
-const refusalCode = (result: McpSchema.CallToolResult, text: string) => {
-  const structured = result.structuredContent as { error?: { code?: unknown } } | undefined;
-  const code = structured?.error?.code;
-  return typeof code === "string" ? code : /"code":"([a-z_]+)"/.exec(text)?.[1];
-};
+// Read from the text alone: Pi and other text-only clients never see structuredContent.
+const refusalCode = (text: string) => /"code":"([a-z_]+)"/.exec(text)?.[1];
 const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
   const content = result.content[0];
   const text = content?.type === "text" ? content.text : "";
   if (!result.isError) return "reached";
   if (text === INERT_SERVICE_DEFECT || text === HANDLER_DIED) return "reached";
   if (text.startsWith("defect:")) return "defect";
-  const code = refusalCode(result, text);
+  const code = refusalCode(text);
   // An agent tells a refusal from a failure by its code, so a refusal without one fails the case.
   const refused = (outcome: Outcome) => (code === undefined ? "uncoded" : outcome);
   if (/thread_credential_required|acts as the calling GOAT thread/.test(text))
