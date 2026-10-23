@@ -430,6 +430,12 @@ a harness that regresses, and a change to the setting sends `notifications/tools
 receives under the default listing, and `goat-ci` fails when a harness goes over 6 KiB of
 instructions, 6 KiB of listing, 12 KiB for its first prompt, or 300 B on each later turn.
 
+Known risk of the core default: an agent in a shell harness that does not find a tool in its
+listing can work around it by calling `/mcp` from the shell, which prints its thread credential
+into the transcript. Until [#1062](https://github.com/goat-si/goat/issues/1062) is fixed the core
+listing makes that path more likely; `agentToolListing: "full"` avoids it for a harness that
+shows it.
+
 ### Measured: D8
 
 The paired campaign `cmvl7drv2` ([#1064](https://github.com/goat-si/goat/pull/1064)) ran 10 ABBA
