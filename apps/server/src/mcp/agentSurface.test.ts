@@ -237,11 +237,10 @@ describe("agent surface schemas", () => {
   it("takes clientRequestId on every write the registry says GOAT deduplicates", () => {
     const keyed = entries.filter((entry) => isKeyedWrite(entry));
     expect(keyed.length).toBeGreaterThan(0);
-    for (const entry of keyed) {
-      const input = Tool.getJsonSchema(toolOf(entry)) as JsonSchema;
-      const properties = isObject(input["properties"]) ? input["properties"] : {};
-      expect(Object.keys(properties), entry.path).toContain("clientRequestId");
-    }
+    for (const entry of keyed)
+      expect(Tool.getJsonSchema(toolOf(entry)).properties, entry.path).toHaveProperty(
+        "clientRequestId",
+      );
   });
 });
 
