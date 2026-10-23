@@ -966,7 +966,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
               name: "goat",
-              config: goatRemoteMcpConfig(mcpSession),
+              config: goatRemoteMcpConfig(mcpSession.endpoint, mcpSession.authorizationHeader),
             }),
           );
         }
@@ -2981,7 +2981,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 client.mcp.add(
                   {
                     name: "goat",
-                    config: goatRemoteMcpConfig(currentMcp),
+                    config: goatRemoteMcpConfig(
+                      currentMcp.endpoint,
+                      currentMcp.authorizationHeader,
+                    ),
                   },
                   { signal },
                 ),

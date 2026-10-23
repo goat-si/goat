@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Executes the shipped Pi extension at its native JavaScript boundary.
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off -- Executes the shipped Pi extension at its native JavaScript boundary, including its own fetch.
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeVM from "node:vm";

@@ -3194,12 +3194,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           .add({
             server: name,
             location: { directory },
-            config: new Mcp.RemoteConfig(
-              goatRemoteMcpConfig({
-                endpoint: wanted.endpoint,
-                authorizationHeader: wanted.credential,
-              }),
-            ),
+            config: new Mcp.RemoteConfig(goatRemoteMcpConfig(wanted.endpoint, wanted.credential)),
           })
           .pipe(
             Effect.timeout(INVENTORY_TIMEOUT),

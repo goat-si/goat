@@ -204,7 +204,8 @@ describe("what each harness is offered from GOAT's /mcp", () => {
   it.effect("OpenCode: the remote goat entry both of its adapters add", () =>
     forEachListing((endpoint, listing) =>
       Effect.gen(function* () {
-        const goat = goatRemoteMcpConfig(session(endpoint));
+        const { endpoint: url, authorizationHeader } = session(endpoint);
+        const goat = goatRemoteMcpConfig(url, authorizationHeader);
         expectOffered(yield* listOverHttp(goat.url, goat.headers), listing);
       }),
     ),
