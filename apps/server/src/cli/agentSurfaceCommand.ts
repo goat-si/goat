@@ -26,6 +26,8 @@ export type AgentSurfaceInvocation =
       /** Decides whether a lost answer may be retried; an unknown path counts as a write. */
       readonly effect: CallEffect;
       readonly format: "value" | "describe";
+      /** The registry path the call resolved to, when it names one. */
+      readonly entryPath?: string;
     };
 
 /** Where `-` and `@file` read from, so tests need no real stdin or files. */
@@ -56,6 +58,8 @@ export const EXIT = {
   needsHuman: 3,
   retryable: 4,
   unknownOutcome: 5,
+  /** goat operation wait: the deadline came while the work was still queued or running. */
+  waitTimedOut: 6,
 } as const;
 
 const EXIT_CODES_HELP =
@@ -96,6 +100,9 @@ const usageLine = (command: string, entry?: AgentSurfaceRegistryEntry) =>
     "[--request-id <id>]",
   ].join(" ");
 
+const OPERATION_WAIT_HELP =
+  "goat operation wait exits by the work's state: 0 succeeded, 1 failed or cancelled, 3 waiting for a person, 5 unknown, 6 still queued or running when the wait ended.";
+
 const entryHelp = (entry: AgentSurfaceRegistryEntry) =>
   [
     usageLine(`goat ${toCli(entry.resource)} ${toCli(entry.verb)}`, entry),
@@ -118,6 +125,7 @@ const entryHelp = (entry: AgentSurfaceRegistryEntry) =>
     "  --request-id <id>   Send it as clientRequestId so a retry is deduplicated where supported.",
     "",
     EXIT_CODES_HELP,
+    ...(entry.path === "operation.wait" ? [OPERATION_WAIT_HELP] : []),
   ].join("\n");
 
 const resourceHelp = (resource: string) => {
@@ -307,6 +315,7 @@ const call = (
   json,
   effect: entry?.effect ?? "destructive",
   format: "value",
+  ...(entry === undefined ? {} : { entryPath: entry.path }),
 });
 
 const extraPositional = (parsed: Parsed, allowed: number) => {
@@ -377,7 +386,17 @@ const route = (
   const parsed = parseTokens(tokens, input, { fields: true, query: false });
   if (parsed.help) return { kind: "help", text: entryHelp(entry) };
   extraPositional(parsed, 1);
-  return call(entry.path, parsed, parsed.positionals[0], entry, input);
+  const [positional] = parsed.positionals;
+  // goat operation read|wait|cancel <id>: an operationId reads more naturally than JSON.
+  if (entry.resource === "operation" && positional !== undefined && !/^\s*[{-]/u.test(positional))
+    return call(
+      entry.path,
+      { ...parsed, fields: [["operationId", positional], ...parsed.fields] },
+      undefined,
+      entry,
+      input,
+    );
+  return call(entry.path, parsed, positional, entry, input);
 };
 
 /** The command argv names, or undefined when it belongs to the operator CLI. */
@@ -393,8 +412,26 @@ export const agentSurfaceInvocation = (
   }
 };
 
-export const exitCodeOf = (result: AgentSurfaceResult): number => {
-  if (result.status === "ok") return EXIT.ok;
+const WAIT_EXIT: Readonly<Record<string, number>> = {
+  succeeded: EXIT.ok,
+  failed: EXIT.error,
+  cancelled: EXIT.error,
+  waiting_human: EXIT.needsHuman,
+  unknown: EXIT.unknownOutcome,
+  queued: EXIT.waitTimedOut,
+  running: EXIT.waitTimedOut,
+};
+
+/** operation.wait answers ok whatever became of the work, so its exit code reads the state. */
+const operationWaitExit = (value: unknown): number => {
+  const operation = isRecord(value) && isRecord(value.operation) ? value.operation : undefined;
+  const state = typeof operation?.state === "string" ? operation.state : "unknown";
+  return WAIT_EXIT[state] ?? EXIT.unknownOutcome;
+};
+
+export const exitCodeOf = (result: AgentSurfaceResult, entryPath?: string): number => {
+  if (result.status === "ok")
+    return entryPath === "operation.wait" ? operationWaitExit(result.value) : EXIT.ok;
   if (result.status === "needs_human") return EXIT.needsHuman;
   if (result.error.code === "unknown_outcome") return EXIT.unknownOutcome;
   return result.error.retryable ? EXIT.retryable : EXIT.error;

@@ -726,8 +726,9 @@ failure before `goat_call` was sent exits `4` only when the server could not be 
 answered the handshake with HTTP 429 or 5xx, and `1` for any other handshake refusal; after it
 was sent, a lost answer exits `4` for a read and `5` for a write. A refused credential (401, 403,
 or `/mcp`'s in-band refusal) exits `1` and never falls back to another credential. `acp-mcp-call`
-resolves credentials like `goat call`, so outside a thread it uses the `goat login` session. `goat operation` is not
-built yet. Credentials resolve as below, and `goat login`, `logout`, and `whoami` manage the
+resolves credentials like `goat call`, so outside a thread it uses the `goat login` session.
+`goat operation read|wait|cancel <id>` are the generated commands for the operation verbs, and
+`wait` exits by the operation's state as the table above says. Credentials resolve as below, and `goat login`, `logout`, and `whoami` manage the
 stored one.
 
 The npm package keeps its `goat` and `t3` bins, and bare `goat` keeps starting a

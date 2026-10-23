@@ -328,6 +328,21 @@ describe("goat call's credential and routing", () => {
       }),
   );
 
+  it.effect("names the operation an ok result started, so accepted work is not read as done", () =>
+    Effect.gen(function* () {
+      const operation = { operationId: "op-9", kind: "task", state: "running", cancellable: true };
+      const origin = fakeOrigin(async (id) =>
+        toolResult(id, {
+          content: [],
+          structuredContent: { status: "ok", value: { taskId: "t" }, meta: { operation } },
+        }),
+      );
+      const cli = yield* runCli(["call", "task.create"], credential, origin.fetchImplementation);
+      expect(cli.code).toBe(0);
+      expect(cli.stderr).toContain("goat operation wait op-9");
+    }),
+  );
+
   it.effect(
     "reports a write whose answer was lost as an unknown outcome and a read as retryable",
     () =>

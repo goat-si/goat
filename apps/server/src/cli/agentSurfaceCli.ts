@@ -110,7 +110,7 @@ const report = (
   io: AgentSurfaceIo,
 ): number => {
   if (invocation.json) io.stdout(`${encodeEnvelope(result)}\n`);
-  else if (result.status === "ok")
+  else if (result.status === "ok") {
     io.stdout(
       `${
         invocation.format === "describe"
@@ -120,7 +120,13 @@ const report = (
             : encodePretty(result.value)
       }\n`,
     );
-  else if (result.status === "error")
+    // Accepted work is not done work: the handle is how to follow it.
+    const operation = result.meta?.operation;
+    if (operation !== undefined && invocation.entryPath?.startsWith("operation.") !== true)
+      io.stderr(
+        `Operation ${operation.operationId} is ${operation.state}. Follow it with goat operation wait ${operation.operationId}.\n`,
+      );
+  } else if (result.status === "error")
     io.stderr(`error: ${result.error.code} (${result.error.reason}): ${result.error.message}\n`);
   else {
     const { handoff, next } = result;
@@ -131,7 +137,7 @@ const report = (
       ].join("\n") + "\n",
     );
   }
-  return exitCodeOf(result);
+  return exitCodeOf(result, invocation.entryPath);
 };
 
 export const runAgentSurfaceInvocation = Effect.fn("cli.agentSurface.run")(function* (

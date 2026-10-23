@@ -58,6 +58,34 @@ describe("exit codes", () => {
       expect(exitCodeOf(result), JSON.stringify(result)).toBe(code);
   });
 
+  it("exit goat operation wait by the work's state, and every other ok with 0", () => {
+    const waited = (state: string, timedOut?: boolean) =>
+      exitCodeOf(
+        {
+          status: "ok",
+          value: {
+            operation: { operationId: "op", kind: "task", state, cancellable: true },
+            ...(timedOut === undefined ? {} : { timedOut }),
+          },
+        },
+        "operation.wait",
+      );
+    expect(
+      Object.fromEntries(
+        ["succeeded", "failed", "cancelled", "waiting_human", "unknown"].map((state) => [
+          state,
+          waited(state),
+        ]),
+      ),
+    ).toEqual({ succeeded: 0, failed: 1, cancelled: 1, waiting_human: 3, unknown: 5 });
+    expect(waited("running", true)).toBe(6);
+    expect(waited("queued", true)).toBe(6);
+    // read reports the same state without judging it.
+    expect(
+      exitCodeOf({ status: "ok", value: { operation: { state: "failed" } } }, "operation.read"),
+    ).toBe(0);
+  });
+
   it("call a lost answer to a write an unknown outcome, and retry only what proves nothing ran", () => {
     const at = (failure: Omit<CallFailure, "message">, effect: "read" | "write" = "write") =>
       exitCodeOf(failureResult({ ...failure, message: "m" }, effect));
@@ -183,6 +211,18 @@ describe("routing", () => {
       effect: agentSurfaceRegistry["thread.wait"].effect,
     });
     expect(invoke("pending-request", "respond", "--help")).toMatchObject({ kind: "help" });
+    expect(invoke("operation", "wait", "op-1", "-F", "timeoutMs=1000")).toMatchObject({
+      kind: "call",
+      path: "operation.wait",
+      entryPath: "operation.wait",
+      args: { operationId: "op-1", timeoutMs: 1000 },
+    });
+    expect(invoke("operation", "read", '{"operationId":"op-2"}')).toMatchObject({
+      args: { operationId: "op-2" },
+    });
+    expect(invoke("call", "goat_operation_wait", '{"operationId":"op-3"}')).toMatchObject({
+      entryPath: "operation.wait",
+    });
     expect(invoke("preview")).toMatchObject({ kind: "help" });
     expect(invoke("preview", "-h")).toMatchObject({ kind: "help" });
     expect(invoke("describe", "thread", "--query", "send message")).toMatchObject({
