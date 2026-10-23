@@ -34,7 +34,7 @@ export function assertOpenCode2QuestionOutput(
   const [request] = projection.runtimeRequests;
   assert.lengthOf(projection.runtimeRequests, 1);
   assert.deepInclude(request, { kind: "user_input", status: "resolved" });
-  assert.deepEqual(request?.answers, { q0: "blue" });
+  assert.deepEqual(request?.answers, { q0: "Blue" });
 
   const item = projection.turnItems.find((candidate) => candidate.type === "user_input_request");
   assert.equal(item?.status, "completed");

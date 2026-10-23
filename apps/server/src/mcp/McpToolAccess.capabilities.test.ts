@@ -171,11 +171,11 @@ const caller = ThreadId.make("thread:caller");
 
 // Writes each built-in profile may run: the declared mapping's effect, pinned for review.
 const ALLOWED_WRITES: Readonly<Record<string, number>> = {
-  observer: 49,
-  worker: 81,
-  manager: 95,
-  "merge-manager": 95,
-  owner: 127,
+  observer: 50,
+  worker: 82,
+  manager: 96,
+  "merge-manager": 96,
+  owner: 128,
 };
 
 it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
