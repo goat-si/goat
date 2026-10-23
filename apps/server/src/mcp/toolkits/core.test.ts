@@ -977,6 +977,95 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
   ),
 );
 
+it.effect("goat_schedule_run reports the thread the run dispatched to, not the binding", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const run = (taskId: string) =>
+      server
+        .callTool({ name: "goat_schedule_run", arguments: { taskId } })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            clientScope("full-access"),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    // A task without a binding launches a fresh thread on every run.
+    const launched = yield* run("task-unbound");
+    expect(launched.structuredContent).toMatchObject({
+      taskId: "task-unbound",
+      threadId: "launched-thread",
+      lastRunStatus: "succeeded",
+    });
+    const failed = yield* run("task-bound");
+    expect(failed.structuredContent).toMatchObject({
+      taskId: "task-bound",
+      threadId: null,
+      lastRunStatus: "failed",
+    });
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
+        Layer.provide(layerNoFleetSync),
+        Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+        Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+        Layer.provide(ServerSettings.layerTest()),
+        Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
+        Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
+        Layer.provide(
+          Layer.mock(LaunchWatchService.LaunchWatchService)({
+            find: () => Effect.succeed(null),
+          }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
+        ),
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+        Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+        Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
+        Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
+        Layer.provide(
+          Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({ connectedHosts: Effect.succeed([]) }),
+        ),
+        Layer.provide(
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+            list: () =>
+              Effect.succeed({
+                tasks: [
+                  scheduledTask("task-unbound", "auto"),
+                  { ...(scheduledTask("task-bound", "auto") as object), threadId: "bound-thread" },
+                ] as never,
+              }),
+            runNow: (input) =>
+              Effect.succeed(
+                (input.id === "task-unbound"
+                  ? {
+                      task: {
+                        ...(scheduledTask(input.id, "auto") as object),
+                        lastRunStatus: "succeeded",
+                        runCount: 1,
+                      },
+                      threadId: "launched-thread",
+                    }
+                  : {
+                      task: {
+                        ...(scheduledTask(input.id, "auto") as object),
+                        threadId: "bound-thread",
+                        lastRunStatus: "failed",
+                        runCount: 1,
+                      },
+                      threadId: null,
+                    }) as never,
+              ),
+          }),
+        ),
+        Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+        Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+      ),
+    ),
+  ),
+);
+
 function scheduledTask(id: string, runtimeMode: "auto" | "full-access"): never {
   return {
     id,

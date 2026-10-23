@@ -93,9 +93,9 @@ export const scheduleEntries = {
     toolkit: "thread",
     summary: "Run a scheduled task now through the existing scheduler.",
     description:
-      "Dispatch a manual run of a scheduled task. Each call is a new run, so retries can duplicate work. Completion covers dispatch and bookkeeping; the provider turn can still be running. The returned threadId reflects the stored task binding, so it can be null after a successful fresh-thread launch.",
+      "Dispatch a manual run of a scheduled task. Each call is a new run, so retries can duplicate work. Completion covers dispatch and bookkeeping; the provider turn can still be running. threadId names the thread this run went to, or is null when dispatch failed.",
     guide:
-      "Requires a full-access/default caller. Each call requests a new manual run. Webhook tasks refuse manual runs. The response includes taskId, threadId, lastRunStatus, runCount and nextRunAt. A bound task can return its bound threadId even when dispatch fails.",
+      "Requires a full-access/default caller. Each call requests a new manual run. Webhook tasks refuse manual runs. The response includes taskId, threadId, lastRunStatus, runCount and nextRunAt. A task without a bound thread reports the fresh thread it launched.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
