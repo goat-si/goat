@@ -41,22 +41,13 @@ const Line = Schema.Struct({
 type Line = typeof Line.Type;
 const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Line));
 
-/**
- * A prompt older than the run's start by more than this cannot be the run's own prompt. The
- * margin absorbs clock skew between this machine and the cloud.
- */
-const PROMPT_CLOCK_SKEW_MS = 60_000;
-
 export interface ReplyAnchor {
   /** The text GOAT sent for this run. When known, only a cloud prompt that matches it counts. */
   readonly prompt?: string;
   /**
-   * Texts of the prompts GOAT delivered to this session before this run. Each earlier prompt the
-   * run's text matches claims one matching cloud prompt, so a repeated message never adopts an
-   * older turn's reply.
+   * When this run started, in epoch milliseconds. GOAT sends the prompt only after its readiness
+   * checks, so the cloud stamps the run's prompt after this even with ordinary clock skew.
    */
-  readonly earlierPrompts?: ReadonlyArray<string>;
-  /** When this run started, in epoch milliseconds. */
   readonly since: number;
   /** The first run of a session registered after its prompt was sent: its latest prompt is the run's. */
   readonly latest?: boolean;
@@ -66,7 +57,9 @@ type SessionReply =
   | { readonly state: "waiting" }
   | { readonly state: "running" }
   | { readonly state: "replied"; readonly text: string }
-  | { readonly state: "failed"; readonly error: string };
+  | { readonly state: "failed"; readonly error: string }
+  /** The transcript cannot tell which prompt is the run's; GOAT refuses to guess. */
+  | { readonly state: "unattributable"; readonly reason: string };
 
 const blocks = (line: Line) => {
   const content = line.message?.content;
@@ -88,13 +81,13 @@ const matches = (cloud: string, wanted: string) =>
   cloud === wanted || (wanted.length >= 16 && cloud.includes(wanted));
 
 /**
- * The reply to the run's prompt. The prompt is found by its text, or without text by the first
- * prompt stamped after the run started; GOAT never guesses another run's prompt. A known text
- * selects the matching cloud prompt after those earlier deliveries claimed theirs, and that prompt
- * must also be recent. The turn is finished at
- * the first assistant line after it that stopped with end_turn; until then a tool_use line, a
- * tool result or a stop_sequence snapshot means the session is still working. A prompt sent
- * meanwhile is queued into the same turn, so it does not end it.
+ * The reply to the run's prompt. The run's prompt is the first cloud prompt with its text stamped
+ * after the run started, or without text the first prompt stamped after it. Prompts sent before,
+ * by GOAT or on claude.ai, never count, whatever their text; a matching prompt without a stamp
+ * makes the run unattributable. The turn is finished at the first assistant line after it that
+ * stopped with end_turn; until then a tool_use line, a tool result or a stop_sequence snapshot
+ * means the session is still working. A prompt sent meanwhile is queued into the same turn, so it
+ * does not end it.
  */
 export function readSessionReply(transcript: string, anchor: ReplyAnchor): SessionReply {
   const lines = transcript
@@ -108,22 +101,18 @@ export function readSessionReply(transcript: string, anchor: ReplyAnchor): Sessi
     const at = line.timestamp === undefined ? Number.NaN : Date.parse(line.timestamp);
     return [{ index, at, text: normalize(textOf([line])) }];
   });
-  const recent = (at: number, margin: number) => Number.isNaN(at) || at >= anchor.since - margin;
   const wanted = anchor.prompt === undefined ? undefined : normalize(anchor.prompt);
-  const occurrence = (text: string) => {
-    const claimed = (anchor.earlierPrompts ?? []).filter((earlier) =>
-      matches(normalize(earlier), text),
-    ).length;
-    const own = prompts.filter((prompt) => matches(prompt.text, text))[claimed];
-    return own && recent(own.at, PROMPT_CLOCK_SKEW_MS) ? own : undefined;
-  };
+  const candidates = prompts.filter(
+    (prompt) => wanted === undefined || matches(prompt.text, wanted),
+  );
+  if (!anchor.latest && candidates.some((prompt) => Number.isNaN(prompt.at)))
+    return {
+      state: "unattributable",
+      reason:
+        "the session transcript has a prompt without a time, so GOAT can't tell which is this run's",
+    };
   const start = (
-    anchor.latest
-      ? prompts.at(-1)
-      : wanted !== undefined
-        ? occurrence(wanted)
-        : // Without its text, only a prompt stamped after the run started can be the run's.
-          prompts.find((prompt) => !Number.isNaN(prompt.at) && recent(prompt.at, 0))
+    anchor.latest ? prompts.at(-1) : candidates.find((prompt) => prompt.at >= anchor.since)
   )?.index;
   if (start === undefined) return { state: "waiting" };
   const end = lines.findIndex(

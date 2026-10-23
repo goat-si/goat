@@ -67,7 +67,7 @@ it.effect(
         yield* Deferred.succeed(h.exit, undefined);
         yield* Deferred.await(h.read);
         expect(h.events.some((event) => event.type === "turn.terminal")).toBe(false);
-        yield* Deferred.succeed(h.deliver, undefined);
+        yield* h.pullRequestStands;
         yield* Deferred.await(h.terminal);
         expect(h.ledger.at(-1)?.status).toBe("succeeded");
         expect(h.ledger.at(-1)?.summary).toContain("Result PR found\nChanged behavior.");
@@ -519,7 +519,7 @@ it.effect(
         yield* Deferred.await(h.accepted);
         yield* Deferred.succeed(h.exit, undefined);
         yield* Deferred.await(h.read);
-        yield* Deferred.succeed(h.deliver, undefined);
+        yield* h.pullRequestStands;
         yield* Deferred.await(h.terminal);
         const summary = h.ledger.at(-1)?.summary;
         expect(summary?.length).toBeLessThanOrEqual(4000);
@@ -623,7 +623,7 @@ it.effect.each(
           yield* Deferred.await(h.accepted);
           yield* Deferred.succeed(h.exit, undefined);
           yield* Deferred.await(h.read);
-          yield* Deferred.succeed(h.deliver, undefined);
+          yield* h.pullRequestStands;
         }
         yield* Deferred.await(h.terminal);
         expect(h.startCwds).toEqual(["/fixture/project"]);
@@ -741,7 +741,7 @@ it.effect.each([true, false, undefined])(
           },
         });
         yield* Deferred.await(h.read);
-        yield* Deferred.succeed(h.deliver, undefined);
+        yield* h.pullRequestStands;
         yield* Deferred.await(h.terminal);
         expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 1 });
         for (const task of h.ledger) {

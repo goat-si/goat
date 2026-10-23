@@ -225,7 +225,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
         ),
         folderTrust: folderTrust.policy,
         runHistory: (input) =>
-          projection.getThreadRecords(input.threadId, ["runs", "messages", "turnItems"]).pipe(
+          projection.getThreadRecords(input.threadId, ["runs", "messages"]).pipe(
             Effect.mapError(() => undefined),
             Effect.flatMap((records) => {
               const history = cloudRunHistory(records, input.runId);

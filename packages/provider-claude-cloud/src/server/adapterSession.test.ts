@@ -104,7 +104,13 @@ it.effect("an unreadable session says so and falls back to the session-linked PR
       yield* Deferred.succeed(h.deliver, undefined);
       yield* TestClock.adjust("1 minute");
       yield* Deferred.await(h.terminal);
-      expect(h.ledger.at(-1)).toMatchObject({ status: "succeeded", progress: "Result PR found" });
+      // The result keeps why the PR stands in for the session's reply.
+      const reason = "GOAT can't read the session (Claude did not report the session it read.).";
+      expect(h.ledger.at(-1)).toMatchObject({
+        status: "succeeded",
+        progress: "Result PR found. " + reason,
+      });
+      expect(h.ledger.at(-1)?.summary).toContain(reason);
       expect(h.sessionReadTimes).toHaveLength(3);
     }),
   ),
@@ -214,4 +220,68 @@ it.effect("a registered session's follow-up recovers its own reply, not a later 
       expect(terminalOf(h)).toMatchObject({ status: "completed", resultText: reply });
     }),
   ),
+);
+
+it.effect("one failed read beside a found PR does not let the PR end the run early", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      h.sessionReads(
+        Effect.fail(new ClaudeCloudError({ detail: "Teleport timed out.", outcome: "uncertain" })),
+        sessionAnswer("task", "Finished after the PR."),
+      );
+      yield* Deferred.succeed(h.deliver, undefined);
+      yield* h.runtime.startTurn(h.input);
+      yield* Deferred.await(h.accepted);
+      yield* Deferred.succeed(h.exit, undefined);
+      yield* Deferred.await(h.prRecorded);
+      expect(terminalOf(h)).toBeUndefined();
+      yield* TestClock.adjust("1 minute");
+      yield* Deferred.await(h.terminal);
+      expect(terminalOf(h)).toMatchObject({
+        status: "completed",
+        resultText: "Finished after the PR.",
+      });
+      expect(h.ledger.at(-1)).toMatchObject({
+        status: "succeeded",
+        prUrl: "https://github.com/fixture/repository/pull/1",
+      });
+    }),
+  ),
+);
+
+it.effect(
+  "a registered session's follow-up ignores an identical prompt asked earlier on claude.ai",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const external = [
+          cloudPrompt("task", "1969-12-31T23:59:58.000Z"),
+          cloudAssistant({ type: "text", text: "Answer from claude.ai." }, "end_turn"),
+        ];
+        h.history({ first: false });
+        h.sessionReads(
+          Effect.succeed({ transcript: teleportTranscript(external), costUsd: 0.0064 }),
+          Effect.succeed({
+            transcript: teleportTranscript([
+              ...external,
+              cloudPrompt("task", "1970-01-01T00:00:31.000Z"),
+              cloudAssistant({ type: "text", text: "Answer to GOAT." }, "end_turn"),
+            ]),
+            costUsd: 0.0064,
+          }),
+        );
+        yield* h.runtime.startTurn({
+          ...h.input,
+          providerThread: { ...h.saved, cloudTask: { ...h.saved.cloudTask, attach: "registered" } },
+        });
+        yield* Deferred.await(h.admitted);
+        yield* TestClock.adjust("30 seconds");
+        expect(terminalOf(h)).toBeUndefined();
+        yield* TestClock.adjust("1 minute");
+        yield* Deferred.await(h.terminal);
+        expect(terminalOf(h)).toMatchObject({ status: "completed", resultText: "Answer to GOAT." });
+      }),
+    ),
 );

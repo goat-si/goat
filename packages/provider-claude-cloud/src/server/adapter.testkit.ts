@@ -15,6 +15,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as Adapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeClaudeCloudAdapter } from "./adapter.ts";
 import * as Cli from "./cli.ts";
@@ -118,9 +119,8 @@ export const makeHarness = Effect.fnUntraced(function* () {
   // What the saved thread says about the run: its message, earlier deliveries, first run or not.
   let history: {
     prompt: string | undefined;
-    earlierPrompts: ReadonlyArray<string>;
     first: boolean;
-  } = { prompt: "task", earlierPrompts: [], first: false };
+  } = { prompt: "task", first: false };
   const sessionReadTimes: number[] = [];
   let startError: ClaudeCloudError | undefined;
   let observedSummary = "Changed behavior.";
@@ -321,6 +321,14 @@ export const makeHarness = Effect.fnUntraced(function* () {
     accepted,
     admitted,
     prRecorded,
+    /**
+     * Lets the session-linked PR be found while the session stays unreadable, then runs the clock
+     * past the three failed reads after which the PR stands as the result.
+     */
+    pullRequestStands: Deferred.succeed(deliver, undefined).pipe(
+      Effect.andThen(Deferred.await(prRecorded)),
+      Effect.andThen(TestClock.adjust("3 minutes")),
+    ),
     following,
     exit,
     read,

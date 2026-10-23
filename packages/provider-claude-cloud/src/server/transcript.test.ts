@@ -112,12 +112,12 @@ describe("a repeated message", () => {
     cloudPrompt("continue", "2026-10-23T09:59:50.000Z"),
     cloudAssistant({ type: "text", text: "Earlier answer." }, "end_turn"),
   ];
-  const anchor = { prompt: "continue", earlierPrompts: ["continue"], since: RUN_START };
-  it("waits for its own occurrence instead of adopting the answer to the earlier one", () => {
+  const anchor = { prompt: "continue", since: RUN_START };
+  it("waits for its own prompt instead of adopting the answer to the earlier one", () => {
     expect(readSessionReply(teleportTranscript(earlierTurn), anchor)).toEqual({ state: "waiting" });
-    // Without timestamps the occurrence count alone keeps them apart.
+    // Without a time on the matching prompt GOAT refuses to guess.
     const unstamped = teleportTranscript(earlierTurn).replaceAll(/"timestamp":"[^"]*",/g, "");
-    expect(readSessionReply(unstamped, anchor)).toEqual({ state: "waiting" });
+    expect(readSessionReply(unstamped, anchor).state).toBe("unattributable");
     expect(
       readSessionReply(
         teleportTranscript([

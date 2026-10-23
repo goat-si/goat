@@ -156,7 +156,6 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
   readonly runHistory: (input: Turn | Attach) => Effect.Effect<
     {
       readonly prompt: string | undefined;
-      readonly earlierPrompts: ReadonlyArray<string>;
       readonly first: boolean;
     },
     ClaudeCloudError
@@ -415,7 +414,6 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
           // The registering run's prompt was sent outside GOAT; the session's latest is its own.
           latest: history.success.first && current(i).cloudTask?.attach === "registered",
           prompt: "message" in i ? i.message.text : history.success.prompt,
-          earlierPrompts: history.success.earlierPrompts,
         };
       });
       const observe = Effect.fn("ClaudeCloudAdapter.follow")(function* (
