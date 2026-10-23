@@ -16,7 +16,7 @@ export type LlmsTxtCaller =
 const REQUIRES_FLAG = { thread: "thread only", client: "client only", either: null } as const;
 
 /** Mirrors McpToolAccess: thread-only tools refuse clients, and read-only clients reach reads only. */
-export const usableBy = (entry: Entry, caller: LlmsTxtCaller): boolean => {
+const usableBy = (entry: Entry, caller: LlmsTxtCaller): boolean => {
   switch (caller.kind) {
     case "anonymous":
       return true;

@@ -31,7 +31,7 @@ export const SYNC_TOOL = agentSurfaceRegistry["permission_profile.sync"].name;
 /** A host that holds the policy is asked again this often, to notice a change made there. */
 export const REFRESH_MS = 10 * 60_000;
 /** A host that did not answer is retried this often. */
-export const RETRY_MS = 60_000;
+const RETRY_MS = 60_000;
 const CALL_TIMEOUT_MS = 15_000;
 
 const policyOf = (settings: GoatclawSettings): GoatclawFleetPolicy => ({
@@ -44,7 +44,7 @@ const versionOf = (policy: GoatclawFleetPolicy) =>
   `${policy.updatedAt ?? ""}\u0000${goatclawPolicyContent(policy)}`;
 
 /** Whether `incoming` replaces `current`: a deliberately set policy, no older, that changes something. */
-export const supersedes = (incoming: GoatclawFleetPolicy, current: GoatclawFleetPolicy) =>
+const supersedes = (incoming: GoatclawFleetPolicy, current: GoatclawFleetPolicy) =>
   incoming.updatedAt !== undefined &&
   (current.updatedAt === undefined || incoming.updatedAt >= current.updatedAt) &&
   versionOf(incoming) !== versionOf(current);

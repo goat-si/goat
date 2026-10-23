@@ -125,6 +125,11 @@ updates through its own drain like any owned runtime; a rollback without a retai
 restarts it through this client's runner pinned to its version. Records that name another live
 process, a drain in progress, Windows hosts, and any other command line (a developer's own
 server, another base directory, another user) stay foreign: attach-only, never replaced.
+Records that do name the live PID and port but carry an identity in another format, such as a
+Windows CommandLine written by hand after a manual restart, are repaired the same way, on Windows
+too: under the replacement lock, when the process is exactly that archive serve for this user, the
+canonical identity replaces the file (the old one stays as `identity.unverified`). Any other
+mismatch is refused and the error names the identity file and the next step.
 
 A reused forward is checked against the live descriptor's `serverVersion`. A server replaced on
 the same port by another client, a self-update or a person no longer matches the attachment, so

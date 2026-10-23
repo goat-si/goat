@@ -1,7 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - argv reading runs before any Effect runtime exists.
 import * as NodeFS from "node:fs";
 
-import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
+import {
+  type AgentSurfaceEntry,
+  agentSurfaceRegistry,
+  type AgentSurfaceRegistryEntry,
+} from "@goat/contracts/agentSurface";
 import { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Option from "effect/Option";
@@ -103,6 +107,8 @@ const usageLine = (command: string, entry?: AgentSurfaceRegistryEntry) =>
 const OPERATION_WAIT_HELP =
   "goat operation wait exits by the work's state: 0 succeeded, 1 failed or cancelled, 3 waiting for a person, 5 unknown, 6 still queued or running when the wait ended.";
 
+const guideOf = (entry: AgentSurfaceEntry) => entry.guide;
+
 const entryHelp = (entry: AgentSurfaceRegistryEntry) =>
   [
     usageLine(`goat ${toCli(entry.resource)} ${toCli(entry.verb)}`, entry),
@@ -110,6 +116,7 @@ const entryHelp = (entry: AgentSurfaceRegistryEntry) =>
     entry.summary,
     "",
     entry.description,
+    ...(guideOf(entry) === undefined ? [] : ["", guideOf(entry)]),
     "",
     `Path: ${entry.path}   Tool: ${listedToolName(entry)}   Effect: ${entry.effect}   Caller: ${entry.requires}`,
     `Host-routable: ${entry.hostRoutable ? "yes" : "no"}   Dry run: ${entry.dryRun}`,
