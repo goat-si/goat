@@ -7,7 +7,8 @@ export default Effect.gen(function* () {
   yield* sql`CREATE TABLE approval_consumptions (
     approval_id TEXT PRIMARY KEY, action TEXT NOT NULL, consumed_at TEXT NOT NULL
   )`;
-  // What a server-created inbox decision approves, as an HMAC the server alone can make.
+  // What a decision GOAT filed approves; no tool input writes here, so an agent's own decision
+  // never matches.
   yield* sql`CREATE TABLE approval_bindings (
     approval_id TEXT PRIMARY KEY, binding TEXT NOT NULL, created_at TEXT NOT NULL
   )`;
@@ -15,4 +16,8 @@ export default Effect.gen(function* () {
   yield* sql`CREATE TABLE handoff_wake_epoch (
     id INTEGER PRIMARY KEY CHECK (id = 1), since TEXT NOT NULL
   )`;
+  // Wake reconciliation reads the last day's resolved handoffs on every expiry tick.
+  yield* sql`CREATE INDEX orchestration_v2_projection_turn_items_resolved_handoff_idx
+    ON orchestration_v2_projection_turn_items(updated_at)
+    WHERE type = 'human_handoff' AND status <> 'waiting'`;
 });
