@@ -1,6 +1,8 @@
 import {
   type AuthEnvironmentScope,
   OrchestratorMcpFailure,
+  type HandoffSummary,
+  type HubDeviceMcpResult,
   type HubDeviceOperationInput,
   type HubDeviceOperationResult,
   type HubDeviceStep,
@@ -19,11 +21,12 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import { makeHubConsent } from "./HubConsent.ts";
 import * as HubParity from "./HubParity.ts";
 import { HubOcx, HubOcxError, SAFE_ALIAS, type OcxOutput } from "./HubOcx.ts";
 
-const DECISION_TTL_MS = 24 * 60 * 60 * 1000;
 // OpenCodex's own enrollment deadline is 360 seconds; leave room for its cleanup.
 const LINK_ADD_TIMEOUT_MS = 420_000;
 // `ocx connect` exchanges the code, then waits up to 120 idle seconds for the catalog.
@@ -122,17 +125,17 @@ export class HubMembership extends Context.Service<
       scope: McpInvocationScope,
       input: HubDeviceOperationInput,
       person?: HubPerson,
-    ) => Effect.Effect<HubDeviceOperationResult, OrchestratorMcpFailure>;
+    ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
     readonly leave: (
       scope: McpInvocationScope,
       input: HubDeviceOperationInput,
       person?: HubPerson,
-    ) => Effect.Effect<HubDeviceOperationResult, OrchestratorMcpFailure>;
+    ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
     readonly repair: (
       scope: McpInvocationScope,
       input: HubDeviceOperationInput,
       person?: HubPerson,
-    ) => Effect.Effect<HubDeviceOperationResult, OrchestratorMcpFailure>;
+    ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
   }
 >()("goat/hub/HubMembership") {}
 
@@ -140,6 +143,7 @@ const make = Effect.gen(function* () {
   const ocx = yield* HubOcx;
   const parity = yield* HubParity.HubParity;
   const inbox = yield* DecisionInbox.DecisionInbox;
+  const consent = yield* makeHubConsent;
   const profiles = yield* Profiles.PermissionProfiles;
   const sql = yield* SqlClient.SqlClient;
   // One hub, one link store: membership changes never interleave.
@@ -197,59 +201,6 @@ const make = Effect.gen(function* () {
     return offered?.alias === alias
       ? { ok: true as const, ...offered }
       : { ok: false as const, phase: output.phase };
-  });
-
-  const approved = Effect.fn("HubMembership.approved")(function* (
-    caller: DecisionInbox.DecisionCaller,
-    decisionId: string,
-    binding: string,
-  ) {
-    const item = yield* inbox.get(caller, decisionId);
-    // requiredProfile owner means only a person or an owner agent could have answered it.
-    if (
-      item.source !== "decision" ||
-      item.requiredProfile !== "owner" ||
-      !item.context.split("\n").includes(binding)
-    )
-      return yield* invalid(
-        "That decision does not approve this change for this device and host key. Call again without decisionId to request a new one.",
-      );
-    if (item.status === "open")
-      return yield* invalid("That decision is still open; call again once it is answered.");
-    if (item.status !== "answered" || item.answer !== "approve")
-      return yield* invalid("That decision was not approved.");
-    const used = yield* sql<{
-      id: number;
-    }>`SELECT id FROM audit_events WHERE decision_id = ${decisionId} AND action LIKE 'hub.%' AND outcome = 'started' LIMIT 1`.pipe(
-      Effect.mapError(storageFailure),
-    );
-    if (used.length > 0) return yield* invalid("That decision was already used.");
-  });
-
-  const requestDecision = Effect.fn("HubMembership.requestDecision")(function* (
-    caller: DecisionInbox.DecisionCaller,
-    input: {
-      readonly title: string;
-      readonly context: string;
-      readonly binding: string;
-      readonly approve: string;
-      readonly consequence: string;
-    },
-  ) {
-    const expiresAt = DateTime.formatIso(
-      DateTime.add(yield* DateTime.now, { milliseconds: DECISION_TTL_MS }),
-    );
-    const item = yield* inbox.create(caller, {
-      title: input.title,
-      context: `${input.context}\n\n${input.binding}`,
-      options: [
-        { id: "approve", label: input.approve, consequence: input.consequence },
-        { id: "decline", label: "Decline", consequence: "Nothing changes." },
-      ],
-      requiredProfile: "owner",
-      expiresAt,
-    });
-    return item.id;
   });
 
   const failing = (result: HubParityResult) => result.failingCheckIds.length > 0;
@@ -318,16 +269,42 @@ const make = Effect.gen(function* () {
     extra: {
       readonly parity?: HubParityResult;
       readonly decisionId?: string;
+      readonly handoff?: HandoffSummary;
       readonly transport?: HubDeviceTransport;
     } = {},
-  ): HubDeviceOperationResult => ({
-    deviceAlias: alias,
-    action,
-    state,
-    message,
-    steps,
-    ...extra,
-  });
+  ): HubDeviceMcpResult => {
+    const { handoff, ...rest } = extra;
+    const base = { deviceAlias: alias, action, state, message, steps, ...rest };
+    // A thread's approval is a handoff; the same tool continues once a person answers it.
+    return handoff === undefined || rest.decisionId === undefined
+      ? base
+      : action === "join"
+        ? {
+            ...base,
+            state: "needs_human",
+            decisionId: rest.decisionId,
+            kind: "needs_human",
+            handoff,
+            next: { after: "approval", call: "goat_hub_device_join" },
+          }
+        : action === "leave"
+          ? {
+              ...base,
+              state: "needs_human",
+              decisionId: rest.decisionId,
+              kind: "needs_human",
+              handoff,
+              next: { after: "approval", call: "goat_hub_device_leave" },
+            }
+          : {
+              ...base,
+              state: "needs_human",
+              decisionId: rest.decisionId,
+              kind: "needs_human",
+              handoff,
+              next: { after: "approval", call: "goat_hub_device_repair" },
+            };
+  };
 
   /** Link add, verification and steps 1-3: the shared tail of join and re-link. */
   const link = Effect.fn("HubMembership.link")(function* (
@@ -465,20 +442,20 @@ const make = Effect.gen(function* () {
     transport: HubDeviceTransport,
   ) {
     if (decisionId !== undefined) {
-      yield* approved(caller.inbox, decisionId, binding);
+      yield* consent.approved(caller, action, decisionId, binding);
       return undefined;
     }
     if (caller.owner) return undefined;
-    const requested = yield* requestDecision(caller.inbox, {
+    const requested = yield* consent.request(caller, action, {
       title: request.title,
       context: request.context,
       binding,
       approve: approve.label,
       consequence: approve.consequence,
     });
-    yield* audit(caller, `hub.${action}`, alias, "needs_decision", requested);
+    yield* audit(caller, `hub.${action}`, alias, "needs_decision", requested.decisionId);
     return result(action, alias, "needs_human", request.reason, steps, {
-      decisionId: requested,
+      ...requested,
       transport,
     });
   });
@@ -642,7 +619,8 @@ const make = Effect.gen(function* () {
       });
       const pin = yield* ocx.pinnedFingerprint(alias);
       const binding = decisionBinding("join", alias, offered.fingerprint);
-      if (input.decisionId !== undefined) yield* approved(caller.inbox, input.decisionId, binding);
+      if (input.decisionId !== undefined)
+        yield* consent.approved(caller, "join", input.decisionId, binding);
       else if (pin !== offered.fingerprint || !caller.owner) {
         const reason =
           pin === undefined
@@ -650,15 +628,15 @@ const make = Effect.gen(function* () {
             : pin !== offered.fingerprint
               ? `GOAT's pinned key is ${pin}, which differs from the offered key.`
               : "Joining a device needs an owner's approval.";
-        const decisionId = yield* requestDecision(caller.inbox, {
+        const requested = yield* consent.request(caller, "join", {
           title: `Join ${alias} to the hub`,
           context: `OpenCodex offers ${offered.keyType} ${offered.fingerprint} for ${alias}. ${reason} Approving links ${alias} as a Remote Link Child; its model traffic then goes through this Home.`,
           binding,
           approve: "Join with this key",
           consequence: `${alias} routes through this Home.`,
         });
-        yield* audit(caller, "hub.join", alias, "needs_decision", decisionId);
-        return result("join", alias, "needs_human", reason, steps, { decisionId, transport });
+        yield* audit(caller, "hub.join", alias, "needs_decision", requested.decisionId);
+        return result("join", alias, "needs_human", reason, steps, { ...requested, transport });
       }
       yield* audit(caller, "hub.join", alias, "started", input.decisionId);
       return yield* link(
@@ -731,9 +709,7 @@ const make = Effect.gen(function* () {
       // A forced removal is only ever a person's answer to a device that could not be cleaned up.
       const forced =
         input.decisionId !== undefined &&
-        (yield* inbox.get(caller.inbox, input.decisionId)).context
-          .split("\n")
-          .includes(forceBinding);
+        (yield* consent.forced(caller, input.decisionId, forceBinding));
       const stopped = yield* gate(
         caller,
         "leave",
@@ -754,21 +730,21 @@ const make = Effect.gen(function* () {
       if (!forced) {
         const failure = yield* leaveDevice(alias, steps);
         if (failure !== undefined) {
-          const decisionId = yield* requestDecision(caller.inbox, {
+          const requested = yield* consent.request(caller, "leave", {
             title: `Force-remove ${alias} from the hub`,
             context: `Cleaning up ${alias} failed: ${failure} The hub still holds ${what}. Forcing revokes it here without the device's help; ${alias} keeps its client settings until someone runs ocx disconnect and ocx restart there.`,
             binding: forceBinding,
             approve: "Force-revoke",
             consequence: `${alias} stops routing through this hub but keeps stale client settings.`,
           });
-          yield* audit(caller, "hub.leave", alias, "needs_decision", decisionId);
+          yield* audit(caller, "hub.leave", alias, "needs_decision", requested.decisionId);
           return result(
             "leave",
             alias,
             "needs_human",
             `${failure} The hub's ${what} was left in place.`,
             steps,
-            { decisionId, transport },
+            { ...requested, transport },
           );
         }
       }
@@ -826,8 +802,9 @@ const make = Effect.gen(function* () {
           outcome: "ok",
           detail: `${offered.keyType} ${offered.fingerprint}`,
         });
-        yield* approved(
-          caller.inbox,
+        yield* consent.approved(
+          caller,
+          "repair",
           input.decisionId,
           decisionBinding("relink", alias, offered.fingerprint),
         );
@@ -895,17 +872,17 @@ const make = Effect.gen(function* () {
         yield* audit(caller, "hub.repair", alias, "failed", undefined);
         return result("repair", alias, "failed", exhausted, steps, { parity: repaired });
       }
-      const decisionId = yield* requestDecision(caller.inbox, {
+      const requested = yield* consent.request(caller, "repair", {
         title: `Re-link ${alias}`,
         context: `${exhausted} Re-linking revokes link ${record.id}, disconnects ${alias} and joins it again with ${offered.keyType} ${offered.fingerprint}; routing is briefly gone.`,
         binding: decisionBinding("relink", alias, offered.fingerprint),
         approve: "Re-link",
         consequence: `${alias} loses routing until the new link is verified.`,
       });
-      yield* audit(caller, "hub.repair", alias, "needs_decision", decisionId);
+      yield* audit(caller, "hub.repair", alias, "needs_decision", requested.decisionId);
       return result("repair", alias, "needs_human", exhausted, steps, {
         parity: repaired,
-        decisionId,
+        ...requested,
       });
     }).pipe(
       Effect.catchTags({
@@ -922,4 +899,5 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(HubMembership, make);
+export const layerWithoutDependencies = Layer.effect(HubMembership, make);
+export const layer = layerWithoutDependencies.pipe(Layer.provide(ApprovalHandoffs.layer));

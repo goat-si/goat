@@ -55,6 +55,7 @@ it.effect(
         [96, "ThreadHistoryArchives"],
         [97, "PermissionProfiles"],
         [98, "DecisionInbox"],
+        [99, "ApprovalConsumptions"],
       ]);
       yield* ProjectionTurnItemRequestIndex;
       assert.deepStrictEqual(yield* runMigrations(), []);
