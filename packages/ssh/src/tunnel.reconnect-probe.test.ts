@@ -1126,9 +1126,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             result.success.selectedRuntime.updateBlocked,
             ordinary.success.selectedRuntime.updateBlocked,
           );
-
-          assert.isString(result.success.selectedRuntime.updateBlocked);
-          assert.isUndefined(result.success.selectedRuntime.reconnectProbe);
+          // A compatible newer runtime serves this app like any kept selection, so the next
+          // reconnect may fold its probe; there is no update to block.
+          assert.isUndefined(result.success.selectedRuntime.updateBlocked);
+          assert.isString(result.success.selectedRuntime.reconnectProbe);
         }
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );

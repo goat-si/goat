@@ -4350,12 +4350,15 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           { version: probe.liveVersion, commitTime: probe.liveCommitTime },
           { version: requestedVersion, commitTime: runner?.archiveCommitTime },
         );
-        const blocked =
-          probe.liveOwned !== true ||
-          order === undefined ||
-          order > 0 ||
-          (probe.liveVersion !== requestedVersion && probe.liveDrain !== true);
         const compatible = matchesSignals(probe.liveSignals, requestedVersion);
+        // This app never replaces a newer runtime, so one that speaks its protocols just serves it.
+        const newerCompatible = compatible && order !== undefined && order > 0;
+        const blocked =
+          !newerCompatible &&
+          (probe.liveOwned !== true ||
+            order === undefined ||
+            order > 0 ||
+            (probe.liveVersion !== requestedVersion && probe.liveDrain !== true));
         compatibleLive =
           compatible &&
           probe.identityAbsent !== true &&

@@ -390,16 +390,15 @@ sh -c ${shellSingleQuote(installer)} -- --version
             requireInstalled: true,
             runner: { ...runner, archiveVersion: selectedVersion },
             retainedRunnerSha256: retained ? (from.retainedRunnerSha256 ?? null) : null,
+            // A newer live runtime is selected only when compatible, and this app never replaces
+            // it, so there is no update to block.
             ...(from.liveStatus === "live" &&
+            !(liveOrder !== undefined && liveOrder > 0) &&
             (from.liveOwned !== true ||
               liveOrder === undefined ||
-              liveOrder > 0 ||
               (selectedVersion !== version && from.liveDrain !== true))
               ? {
-                  updateBlocked:
-                    liveOrder !== undefined && liveOrder > 0
-                      ? `${target.alias} runs a newer GOAT (${selectedVersion}). Update this app from the update button above Settings.`
-                      : `A GOAT server that this app didn't start or cannot replace is running on ${target.alias}. Stop it on the host, then reconnect.`,
+                  updateBlocked: `A GOAT server that this app didn't start or cannot replace is running on ${target.alias}. Stop it on the host, then reconnect.`,
                 }
               : {}),
           } satisfies PreparedRemoteRuntime),

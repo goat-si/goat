@@ -238,6 +238,24 @@ describe("SSH runtime status", () => {
   });
 
   it.effect(
+    "an app connects to a newer runtime that speaks its protocols and reports it ready",
+    () => {
+      const f = fixture(live("99.0.0"));
+      f.setLaunchVersion("99.0.0");
+      return Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+        const status = successfulStatus(yield* manager.status(uploadTarget));
+        assert.equal(status.state, "ready");
+        assert.equal(status.runtimeVersion, "99.0.0");
+        assert.isUndefined(status.detail);
+        yield* manager.readyEnvironment(uploadTarget);
+        assert.equal(f.calls.uploads, 0);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    },
+  );
+
+  it.effect(
     "a forward whose server was replaced on the same port reconnects to the live build without updating again",
     () => {
       const f = fixture(live("1.2.2"), { refreshOwnedRuntimeOnFirstConnection: false });
@@ -571,7 +589,9 @@ describe("SSH runtime status", () => {
   it.effect.each([
     { version: ARCHIVE.archiveVersion, owned: true, expected: "ready" },
     { version: "1.2.2", owned: true, expected: "ready" },
-    { version: "99.0.0", owned: true, expected: "update_blocked" },
+    // A newer runtime that speaks this app's protocols serves it; nothing waits on an update.
+    { version: "99.0.0", owned: true, expected: "ready" },
+    { version: "99.0.0", owned: false, expected: "ready" },
     { version: "1.2.2", owned: false, expected: "update_blocked" },
     { version: "1.2.3-dev.deadbeef", owned: true, expected: "update_blocked" },
   ])("classifies live $version owned=$owned as $expected", ({ version, owned, expected }) => {
@@ -590,6 +610,26 @@ describe("SSH runtime status", () => {
       assert.equal(successfulStatus(result).state, expected);
       assert.equal(successfulStatus(result).runtimeVersion, version);
       assert.equal(f.calls.launches, 0);
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  });
+
+  it.effect("blocks a newer runtime only when it no longer speaks this app's protocol", () => {
+    const f = fixture({
+      ...stopped,
+      liveStatus: "live",
+      liveVersion: "99.0.0",
+      liveOwned: true,
+      liveDrain: true,
+      liveSignals: {
+        ...signals("99.0.0"),
+        orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 1,
+      },
+    });
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      const status = successfulStatus(yield* manager.status(uploadTarget));
+      assert.equal(status.state, "update_blocked");
+      assert.include(status.detail ?? "", "runs a newer GOAT (99.0.0)");
     }).pipe(Effect.provide(f.layer), Effect.scoped);
   });
 
