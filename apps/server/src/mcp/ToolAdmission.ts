@@ -101,7 +101,7 @@ const holdsAll = (held: ReadonlyArray<string> | null, needed: ReadonlyArray<stri
   (needed ?? []).every((item) => (held ?? []).includes(item));
 
 /** Whether `current` still holds everything `recorded` did. Turning goatclaw on narrows it. */
-export const coversGrant = (current: Grant, recorded: Grant) =>
+const coversGrant = (current: Grant, recorded: Grant) =>
   (recorded.readOnly || !current.readOnly) &&
   holdsAll(current.scopes, recorded.scopes) &&
   (recorded.goatclaw === null
