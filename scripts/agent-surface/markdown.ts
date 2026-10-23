@@ -27,3 +27,13 @@ export const table = (
     ...body.map(line),
   ].join("\n");
 };
+
+/** Groups rows for the audit's per-toolkit, per-shape and per-family tables. */
+export const groupBy = <A>(items: ReadonlyArray<A>, key: (item: A) => string) => {
+  const out = new Map<string, Array<A>>();
+  for (const item of items) {
+    const k = key(item);
+    out.set(k, [...(out.get(k) ?? []), item]);
+  }
+  return out;
+};
