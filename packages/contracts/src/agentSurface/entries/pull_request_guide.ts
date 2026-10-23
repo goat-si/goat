@@ -10,7 +10,7 @@ export const pullRequestGuideEntries = {
     description:
       "Start writing pull request review guides in the background. Read progress with goat_pull_request_guide_read. A running guide for the same head is reused; a completed guide for that head is generated again.",
     guide:
-      "Accepts up to 20 pull requests. Each guide is a maintainer’s tour shown in the pull request’s Guide tab. Generation reads the change in a temporary checkout; the response returns after runs start. Each target must match a project checkout in this environment. Review guides must be enabled on the server.",
+      "Accepts up to 20 pull requests. Each guide is a maintainer’s tour shown in the pull request’s Guide tab. Generation reads the change in a temporary checkout and takes minutes; the response returns after runs start. Each target must match a project checkout in this environment. Review guides must be enabled on the server.",
     effect: "write",
     capability: "threads.launch",
     hostRoutable: false,
