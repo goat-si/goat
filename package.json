@@ -25,6 +25,7 @@
     "agent-surface:smoke": "node scripts/agent-surface/smoke.ts",
     "agent-surface:eval": "node scripts/agent-surface/eval/run.ts",
     "agent-surface:eval-report": "node scripts/agent-surface/eval/report.ts",
+    "agent-surface:context-budget": "node scripts/agent-surface/context-budget.ts",
     "licenses:sync": "node scripts/sync-third-party-license-notices.ts",
     "icons:export:android": "node scripts/export-android-icons.ts",
     "build": "vp run --filter './apps/*' build",
