@@ -64,8 +64,8 @@ export const ActorOther = Schema.Struct({
 })
 export interface ActorOther extends Schema.Struct.Type<typeof ActorOther.fields> {}
 
-/** `query T3ExpoViewer` */
-export const T3ExpoViewer = GraphQL.query("T3ExpoViewer", {
+/** `query GoatExpoViewer` */
+export const GoatExpoViewer = GraphQL.query("GoatExpoViewer", {
   document: {
     variables: [],
     selections: [
@@ -86,9 +86,9 @@ export const T3ExpoViewer = GraphQL.query("T3ExpoViewer", {
     ]))
   })
 })
-export declare namespace T3ExpoViewer {
-  export type Variables = typeof T3ExpoViewer.variables.Type
-  export type Result = typeof T3ExpoViewer.result.Type
+export declare namespace GoatExpoViewer {
+  export type Variables = typeof GoatExpoViewer.variables.Type
+  export type Result = typeof GoatExpoViewer.result.Type
 }
 
 /**
@@ -103,19 +103,19 @@ export const OwnerAccountAccount = Schema.Struct({
 export interface OwnerAccountAccount extends Schema.Struct.Type<typeof OwnerAccountAccount.fields> {}
 
 /** Represents an Exponent App (or Experience in legacy terms) */
-export const T3EasSimulatorAvailabilityAppByIdApp = Schema.Struct({
+export const GoatEasSimulatorAvailabilityAppByIdApp = Schema.Struct({
   ownerAccount: OwnerAccountAccount
 })
-export interface T3EasSimulatorAvailabilityAppByIdApp extends Schema.Struct.Type<typeof T3EasSimulatorAvailabilityAppByIdApp.fields> {}
+export interface GoatEasSimulatorAvailabilityAppByIdApp extends Schema.Struct.Type<typeof GoatEasSimulatorAvailabilityAppByIdApp.fields> {}
 
-export const T3EasSimulatorAvailabilityAppAppQuery = Schema.Struct({
+export const GoatEasSimulatorAvailabilityAppAppQuery = Schema.Struct({
   /** Look up app by app id */
-  byId: T3EasSimulatorAvailabilityAppByIdApp
+  byId: GoatEasSimulatorAvailabilityAppByIdApp
 })
-export interface T3EasSimulatorAvailabilityAppAppQuery extends Schema.Struct.Type<typeof T3EasSimulatorAvailabilityAppAppQuery.fields> {}
+export interface GoatEasSimulatorAvailabilityAppAppQuery extends Schema.Struct.Type<typeof GoatEasSimulatorAvailabilityAppAppQuery.fields> {}
 
-/** `query T3EasSimulatorAvailability` */
-export const T3EasSimulatorAvailability = GraphQL.query("T3EasSimulatorAvailability", {
+/** `query GoatEasSimulatorAvailability` */
+export const GoatEasSimulatorAvailability = GraphQL.query("GoatEasSimulatorAvailability", {
   document: {
     variables: [
       { name: "appId", body: "String!" },
@@ -131,12 +131,12 @@ export const T3EasSimulatorAvailability = GraphQL.query("T3EasSimulatorAvailabil
     filter: Schema.optional(Schema.NullOr(Schema.Array(Schema.String)))
   },
   result: Schema.Struct({
-    app: T3EasSimulatorAvailabilityAppAppQuery
+    app: GoatEasSimulatorAvailabilityAppAppQuery
   })
 })
-export declare namespace T3EasSimulatorAvailability {
-  export type Variables = typeof T3EasSimulatorAvailability.variables.Type
-  export type Result = typeof T3EasSimulatorAvailability.result.Type
+export declare namespace GoatEasSimulatorAvailability {
+  export type Variables = typeof GoatEasSimulatorAvailability.variables.Type
+  export type Result = typeof GoatEasSimulatorAvailability.result.Type
 }
 
 export const CreateDeviceRunSessionDeviceRunSession = Schema.Struct({
@@ -144,14 +144,14 @@ export const CreateDeviceRunSessionDeviceRunSession = Schema.Struct({
 })
 export interface CreateDeviceRunSessionDeviceRunSession extends Schema.Struct.Type<typeof CreateDeviceRunSessionDeviceRunSession.fields> {}
 
-export const T3CreateEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation = Schema.Struct({
+export const GoatCreateEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation = Schema.Struct({
   /** Create a device run session */
   createDeviceRunSession: CreateDeviceRunSessionDeviceRunSession
 })
-export interface T3CreateEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation extends Schema.Struct.Type<typeof T3CreateEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation.fields> {}
+export interface GoatCreateEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation extends Schema.Struct.Type<typeof GoatCreateEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation.fields> {}
 
-/** `mutation T3CreateEasSimulatorSession` */
-export const T3CreateEasSimulatorSession = GraphQL.mutation("T3CreateEasSimulatorSession", {
+/** `mutation GoatCreateEasSimulatorSession` */
+export const GoatCreateEasSimulatorSession = GraphQL.mutation("GoatCreateEasSimulatorSession", {
   document: {
     variables: [
       { name: "input", body: "CreateDeviceRunSessionInput!" }
@@ -166,12 +166,12 @@ export const T3CreateEasSimulatorSession = GraphQL.mutation("T3CreateEasSimulato
   },
   result: Schema.Struct({
     /** Mutations that create, stop, update, and delete device run sessions */
-    deviceRunSession: T3CreateEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation
+    deviceRunSession: GoatCreateEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation
   })
 })
-export declare namespace T3CreateEasSimulatorSession {
-  export type Variables = typeof T3CreateEasSimulatorSession.variables.Type
-  export type Result = typeof T3CreateEasSimulatorSession.result.Type
+export declare namespace GoatCreateEasSimulatorSession {
+  export type Variables = typeof GoatCreateEasSimulatorSession.variables.Type
+  export type Result = typeof GoatCreateEasSimulatorSession.result.Type
 }
 
 export const AgentDeviceRunSessionRemoteConfig = Schema.Struct({
@@ -205,8 +205,8 @@ export const DeviceRunSessionQuery = Schema.Struct({
 })
 export interface DeviceRunSessionQuery extends Schema.Struct.Type<typeof DeviceRunSessionQuery.fields> {}
 
-/** `query T3EasSimulatorSession` */
-export const T3EasSimulatorSession = GraphQL.query("T3EasSimulatorSession", {
+/** `query GoatEasSimulatorSession` */
+export const GoatEasSimulatorSession = GraphQL.query("GoatEasSimulatorSession", {
   document: {
     variables: [
       { name: "id", body: "ID!" }
@@ -223,9 +223,9 @@ export const T3EasSimulatorSession = GraphQL.query("T3EasSimulatorSession", {
     deviceRunSessions: DeviceRunSessionQuery
   })
 })
-export declare namespace T3EasSimulatorSession {
-  export type Variables = typeof T3EasSimulatorSession.variables.Type
-  export type Result = typeof T3EasSimulatorSession.result.Type
+export declare namespace GoatEasSimulatorSession {
+  export type Variables = typeof GoatEasSimulatorSession.variables.Type
+  export type Result = typeof GoatEasSimulatorSession.result.Type
 }
 
 export const NodeDeviceRunSession = Schema.Struct({
@@ -250,19 +250,19 @@ export const AppDeviceRunSessionsConnection = Schema.Struct({
 export interface AppDeviceRunSessionsConnection extends Schema.Struct.Type<typeof AppDeviceRunSessionsConnection.fields> {}
 
 /** Represents an Exponent App (or Experience in legacy terms) */
-export const T3ActiveEasSimulatorSessionsAppByIdApp = Schema.Struct({
+export const GoatActiveEasSimulatorSessionsAppByIdApp = Schema.Struct({
   deviceRunSessionsPaginated: AppDeviceRunSessionsConnection
 })
-export interface T3ActiveEasSimulatorSessionsAppByIdApp extends Schema.Struct.Type<typeof T3ActiveEasSimulatorSessionsAppByIdApp.fields> {}
+export interface GoatActiveEasSimulatorSessionsAppByIdApp extends Schema.Struct.Type<typeof GoatActiveEasSimulatorSessionsAppByIdApp.fields> {}
 
-export const T3ActiveEasSimulatorSessionsAppAppQuery = Schema.Struct({
+export const GoatActiveEasSimulatorSessionsAppAppQuery = Schema.Struct({
   /** Look up app by app id */
-  byId: T3ActiveEasSimulatorSessionsAppByIdApp
+  byId: GoatActiveEasSimulatorSessionsAppByIdApp
 })
-export interface T3ActiveEasSimulatorSessionsAppAppQuery extends Schema.Struct.Type<typeof T3ActiveEasSimulatorSessionsAppAppQuery.fields> {}
+export interface GoatActiveEasSimulatorSessionsAppAppQuery extends Schema.Struct.Type<typeof GoatActiveEasSimulatorSessionsAppAppQuery.fields> {}
 
-/** `query T3ActiveEasSimulatorSessions` */
-export const T3ActiveEasSimulatorSessions = GraphQL.query("T3ActiveEasSimulatorSessions", {
+/** `query GoatActiveEasSimulatorSessions` */
+export const GoatActiveEasSimulatorSessions = GraphQL.query("GoatActiveEasSimulatorSessions", {
   document: {
     variables: [
       { name: "appId", body: "String!" },
@@ -278,12 +278,12 @@ export const T3ActiveEasSimulatorSessions = GraphQL.query("T3ActiveEasSimulatorS
     filter: Schema.optional(Schema.NullOr(Shared.DeviceRunSessionFilterInput))
   },
   result: Schema.Struct({
-    app: T3ActiveEasSimulatorSessionsAppAppQuery
+    app: GoatActiveEasSimulatorSessionsAppAppQuery
   })
 })
-export declare namespace T3ActiveEasSimulatorSessions {
-  export type Variables = typeof T3ActiveEasSimulatorSessions.variables.Type
-  export type Result = typeof T3ActiveEasSimulatorSessions.result.Type
+export declare namespace GoatActiveEasSimulatorSessions {
+  export type Variables = typeof GoatActiveEasSimulatorSessions.variables.Type
+  export type Result = typeof GoatActiveEasSimulatorSessions.result.Type
 }
 
 export const EnsureDeviceRunSessionStoppedDeviceRunSession = Schema.Struct({
@@ -292,7 +292,7 @@ export const EnsureDeviceRunSessionStoppedDeviceRunSession = Schema.Struct({
 })
 export interface EnsureDeviceRunSessionStoppedDeviceRunSession extends Schema.Struct.Type<typeof EnsureDeviceRunSessionStoppedDeviceRunSession.fields> {}
 
-export const T3StopEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation = Schema.Struct({
+export const GoatStopEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation = Schema.Struct({
   /**
    * Ensure a device run session is stopped. Idempotent: if the session has already
    * finished, the existing session is returned unchanged (an ERRORED session stays
@@ -300,10 +300,10 @@ export const T3StopEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation =
    */
   ensureDeviceRunSessionStopped: EnsureDeviceRunSessionStoppedDeviceRunSession
 })
-export interface T3StopEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation extends Schema.Struct.Type<typeof T3StopEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation.fields> {}
+export interface GoatStopEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation extends Schema.Struct.Type<typeof GoatStopEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation.fields> {}
 
-/** `mutation T3StopEasSimulatorSession` */
-export const T3StopEasSimulatorSession = GraphQL.mutation("T3StopEasSimulatorSession", {
+/** `mutation GoatStopEasSimulatorSession` */
+export const GoatStopEasSimulatorSession = GraphQL.mutation("GoatStopEasSimulatorSession", {
   document: {
     variables: [
       { name: "id", body: "ID!" }
@@ -318,13 +318,13 @@ export const T3StopEasSimulatorSession = GraphQL.mutation("T3StopEasSimulatorSes
   },
   result: Schema.Struct({
     /** Mutations that create, stop, update, and delete device run sessions */
-    deviceRunSession: T3StopEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation
+    deviceRunSession: GoatStopEasSimulatorSessionDeviceRunSessionDeviceRunSessionMutation
   })
 })
-export declare namespace T3StopEasSimulatorSession {
-  export type Variables = typeof T3StopEasSimulatorSession.variables.Type
-  export type Result = typeof T3StopEasSimulatorSession.result.Type
+export declare namespace GoatStopEasSimulatorSession {
+  export type Variables = typeof GoatStopEasSimulatorSession.variables.Type
+  export type Result = typeof GoatStopEasSimulatorSession.result.Type
 }
 
 /** Every operation in ExpoApi.graphql. */
-export const ExpoApiGraphQLGroup = GraphQLGroup.make(T3ExpoViewer, T3EasSimulatorAvailability, T3CreateEasSimulatorSession, T3EasSimulatorSession, T3ActiveEasSimulatorSessions, T3StopEasSimulatorSession)
+export const ExpoApiGraphQLGroup = GraphQLGroup.make(GoatExpoViewer, GoatEasSimulatorAvailability, GoatCreateEasSimulatorSession, GoatEasSimulatorSession, GoatActiveEasSimulatorSessions, GoatStopEasSimulatorSession)

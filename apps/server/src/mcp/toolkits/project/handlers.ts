@@ -41,7 +41,7 @@ const decodeHostProject = Schema.decodeUnknownEffect(
   ProjectToolkit.tools.goat_project_read.successSchema,
 );
 
-/** The same tool on another machine's T3 server, which answers for its own projects. */
+/** The same tool on another machine's GOAT server, which answers for its own projects. */
 const readOnHost = <A extends object, E>(
   host: string,
   tool: "goat_project_list" | "goat_project_read",

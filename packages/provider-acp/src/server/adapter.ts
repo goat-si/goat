@@ -304,7 +304,7 @@ export interface AcpAdapterV2Flavor {
     | undefined;
   /**
    * Grok's Auto mode only asks about what its own classifier refused, so those
-   * must reach the user instead of being approved by T3's policy.
+   * must reach the user instead of being approved by GOAT's policy.
    */
   readonly permissionDisposition?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
@@ -560,7 +560,7 @@ export const AcpProviderCapabilitiesV2 = {
     appCanCheckpointFilesystem: true,
     supportsNestedCheckpointScopes: true,
     // ACP defines no conversation truncation, so rollback resets the provider
-    // conversation: T3 restores checkpointed state and the next turn starts a
+    // conversation: GOAT restores checkpointed state and the next turn starts a
     // fresh agent session without the rolled-back context.
     providerCanRollbackConversation: true,
     providerRollbackReturnsSnapshot: true,
@@ -1533,7 +1533,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               agentTerminalsById.get(sessionScopedId(sessionId, terminalId))?.command;
             return command === undefined ? [] : [command];
           });
-        // Client terminals (Devin) run with the T3 server's privileges, so they
+        // Client terminals (Devin) run with the GOAT server's privileges, so they
         // are policy-checked against the active turn policy; a command the user
         // already approved satisfies an "ask" disposition.
         const clientPolicyGrants = makeAcpClientPolicyGrants();

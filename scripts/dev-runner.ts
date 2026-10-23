@@ -93,7 +93,7 @@ const MODE_ARGS = {
 const BUILT_DEV_ARGS = [
   "run",
   "--filter=@goat/web",
-  "--filter=t3",
+  "--filter=goat",
   "--parallel",
   "dev:built",
 ] as const;
@@ -345,9 +345,9 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
   }
 
   // A dev-runner server is never launcher-managed. When the shell that runs
-  // this script was itself spawned by the machine's managed t3 service (an
+  // this script was itself spawned by the machine's managed goat service (an
   // agent working inside GOAT), these leak through and the child server
-  // fails startup with "The service launcher started a different t3 version"
+  // fails startup with "The service launcher started a different goat version."
   // (serviceLauncherClient.ts resolveStartup).
   delete output.GOAT_SERVICE_LAUNCHER_CONTEXT;
   delete output.GOAT_BOOT_SERVICE_UNIT;
