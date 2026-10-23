@@ -19,6 +19,8 @@ import * as OpenCode2Client from "@goat/provider-opencode/server/v2/OpenCode2Cli
 import * as OpenCode2Server from "@goat/provider-opencode/server/v2/OpenCode2Server";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import type { ProviderReplayGate } from "@goat/provider-testing/replayGate";
@@ -32,6 +34,10 @@ import {
 import * as OpenCode2Adapter from "@goat/provider-opencode/server/v2/adapter";
 
 export const OPENCODE2_HTTP_PROTOCOL = "opencode2-http.sse" as const;
+
+/** The session instructions GOAT writes when GOAT MCP is unavailable: no orchestration text. */
+export const noGoatMcpInstructions = (model: string) =>
+  `${buildRuntimeInstructions({ harness: "OpenCode", model })}\n\n${GOAT_DEVELOPMENT_INSTRUCTIONS}`;
 const BASE_URL = "http://opencode2.replay";
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));

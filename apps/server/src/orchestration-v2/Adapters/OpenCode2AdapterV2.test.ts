@@ -49,7 +49,6 @@ import { TestClock } from "effect/testing";
 
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import {
@@ -58,7 +57,7 @@ import {
   goatMcpServerName,
 } from "@goat/provider-opencode/testing";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
-import { openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
+import { noGoatMcpInstructions, openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
 import { makeProviderReplayGate, type ProviderReplayGate } from "@goat/provider-testing/replayGate";
 
 const SESSION = "ses_f148ca2deffeJcwCnRQtb0YFNX";
@@ -2473,7 +2472,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         out("session.instructions.entry.put", {
           sessionID: SESSION,
           key: "goat",
-          value: buildRuntimeInstructions({ harness: "OpenCode", model: bigPickle.model }),
+          value: noGoatMcpInstructions(bigPickle.model),
         }),
         reply("session.instructions.entry.put", null),
         ...turn,

@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { ProviderAdapterDriverCreateError } from "@goat/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import type { OrchestratorV2ProviderReplayHarness } from "../testkit/ProviderReplayHarness.ts";
@@ -161,9 +162,33 @@ function normalizeContextHandoffText(value: string): string {
   return `${value.slice(0, headerEnd + 2)}<dynamic-summary>${value.slice(markerIndex)}`;
 }
 
+const GOAT_INSTRUCTIONS_OPEN = "<t3_code_orchestration_instructions>";
+const GOAT_DEVELOPMENT_ONLY_PREFIX = `${GOAT_INSTRUCTIONS_OPEN}${GOAT_DEVELOPMENT_INSTRUCTIONS}</t3_code_orchestration_instructions>\n\n<user_request>\n`;
+const USER_REQUEST_CLOSE = "\n</user_request>";
+
+/**
+ * GOAT now puts its development discipline in every first Cursor prompt. Transcripts recorded
+ * before it existed stay valid: the discipline is removed and everything else is still compared.
+ */
+function withoutGoatDevelopmentInstructions(value: string): string {
+  if (value.startsWith(GOAT_DEVELOPMENT_ONLY_PREFIX)) {
+    const close = value.indexOf(USER_REQUEST_CLOSE, GOAT_DEVELOPMENT_ONLY_PREFIX.length);
+    if (close !== -1) {
+      return (
+        value.slice(GOAT_DEVELOPMENT_ONLY_PREFIX.length, close) +
+        value.slice(close + USER_REQUEST_CLOSE.length)
+      );
+    }
+  }
+  return value.replace(
+    `${GOAT_INSTRUCTIONS_OPEN}${GOAT_DEVELOPMENT_INSTRUCTIONS}\n\n`,
+    GOAT_INSTRUCTIONS_OPEN,
+  );
+}
+
 function normalizeFrame(value: unknown): unknown {
   if (typeof value === "string") {
-    return normalizeContextHandoffText(value);
+    return normalizeContextHandoffText(withoutGoatDevelopmentInstructions(value));
   }
   if (Array.isArray(value)) {
     return value.map(normalizeFrame);
