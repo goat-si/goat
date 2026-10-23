@@ -15,17 +15,30 @@ import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
 
-/** The folder an event brings into GOAT: a new or moved project root, or a thread's worktree. */
-function addedFolder(stored: ApplicationStoredEvent): string | null {
-  if ("aggregateKind" in stored) {
-    if (stored.type === "project.created") return stored.payload.workspaceRoot;
-    if (stored.type === "project.meta-updated") return stored.payload.workspaceRoot ?? null;
-    return null;
-  }
+/**
+ * The folder an event brings into GOAT: a new or moved project root, or a thread's worktree. The
+ * live stream buffers what this returns, so a large unrelated event never fills its budget.
+ */
+function addedFolder(stored: ApplicationStoredEvent) {
+  const folder = (path: string | null | undefined, worktree: boolean) => ({
+    sequence: stored.sequence,
+    folder: path ?? null,
+    worktree,
+  });
+  if ("aggregateKind" in stored)
+    return folder(
+      stored.type === "project.created" || stored.type === "project.meta-updated"
+        ? stored.payload.workspaceRoot
+        : null,
+      false,
+    );
   const event = stored.event;
-  return event.type === "thread.created" || event.type === "thread.metadata-updated"
-    ? event.payload.worktreePath
-    : null;
+  return folder(
+    event.type === "thread.created" || event.type === "thread.metadata-updated"
+      ? event.payload.worktreePath
+      : null,
+    true,
+  );
 }
 
 /**
@@ -57,21 +70,22 @@ export const make = Effect.gen(function* () {
         const from = yield* events.latestApplicationSequence;
         // Thread metadata repeats a worktree on every update; one request per worktree is enough.
         const worktrees = new Set<string>();
-        yield* events.streamApplicationEvents({ afterSequence: from }).pipe(
-          Stream.runForEach((stored) => {
-            const folder = addedFolder(stored);
-            if (folder === null) return Effect.void;
-            if ("event" in stored) {
-              if (worktrees.has(folder)) return Effect.void;
-              worktrees.add(folder);
-            }
-            return FiberSet.run(running, trust(folder)).pipe(Effect.asVoid);
-          }),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("Stopped trusting new folders for Claude Code", { cause }),
-          ),
-          Effect.forkScoped,
-        );
+        yield* events
+          .streamProjectedApplicationEvents({ afterSequence: from, project: addedFolder })
+          .pipe(
+            Stream.runForEach(({ folder, worktree }) => {
+              if (folder === null) return Effect.void;
+              if (worktree) {
+                if (worktrees.has(folder)) return Effect.void;
+                worktrees.add(folder);
+              }
+              return FiberSet.run(running, trust(folder)).pipe(Effect.asVoid);
+            }),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Stopped trusting new folders for Claude Code", { cause }),
+            ),
+            Effect.forkScoped,
+          );
         // Claude keeps a worktree's trust at its main checkout, so the roots cover their worktrees.
         const roots = (yield* projects.list())
           .filter((row) => row.deletedAt === null)

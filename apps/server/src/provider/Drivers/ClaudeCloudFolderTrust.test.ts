@@ -207,10 +207,14 @@ it.effect("an untrusted project folder becomes trusted with nobody asking", () =
 it.effect("concurrent requests for one folder open Claude once", () =>
   Effect.gen(function* () {
     const gate = { opened: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
-    const { trust, accepted } = yield* harness({ configJson: "{}", gate });
+    // Claude records nothing here, so a request that did not join would open Claude again.
+    const { trust, accepted } = yield* harness({ configJson: "{}", claudeRecords: false, gate });
     const first = yield* trust.capability.ensure(ROOT).pipe(Effect.forkChild);
     yield* Deferred.await(gate.opened);
-    const second = yield* trust.capability.ensure(`${ROOT}/`).pipe(Effect.forkChild);
+    // Runs until it waits, so it has joined before Claude answers the first.
+    const second = yield* trust.capability
+      .ensure(`${ROOT}/`)
+      .pipe(Effect.forkChild({ startImmediately: true }));
     yield* Deferred.succeed(gate.release, undefined);
     yield* Fiber.join(first);
     yield* Fiber.join(second);
@@ -221,16 +225,16 @@ it.effect("concurrent requests for one folder open Claude once", () =>
 it.effect("a refused launch joins a background answer instead of opening Claude again", () =>
   Effect.gen(function* () {
     const gate = { opened: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
-    const { trust, accepted } = yield* harness({ configJson: "{}", gate });
+    // Claude records nothing here, so a launch that did not join would open Claude again.
+    const { trust, accepted } = yield* harness({ configJson: "{}", claudeRecords: false, gate });
     const background = yield* trust.capability.ensure(ROOT).pipe(Effect.forkChild);
     yield* Deferred.await(gate.opened);
-    const launch = yield* trust.policy.accept(ROOT).pipe(Effect.forkChild);
+    const launch = yield* trust.policy
+      .accept(ROOT)
+      .pipe(Effect.forkChild({ startImmediately: true }));
     yield* Deferred.succeed(gate.release, undefined);
     yield* Fiber.join(background);
     yield* Fiber.join(launch);
-    assert.deepEqual(accepted, [ROOT]);
-    // Once Claude records the answer, a later refused launch does not reopen it either.
-    yield* trust.policy.accept(WORKTREE);
     assert.deepEqual(accepted, [ROOT]);
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
