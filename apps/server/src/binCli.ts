@@ -20,6 +20,7 @@ import { appCommand } from "./cli/app.ts";
 import { browserCommand } from "./cli/browser.ts";
 import { connectCommand } from "./cli/connect.ts";
 import { pairCommand } from "./cli/pair.ts";
+import { loginCommand, logoutCommand, whoamiCommand } from "./cli/login.ts";
 import { imessageCommand } from "./cli/imessage.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { extendConnectionAttemptTimeout, keepOutboundFetchOnHttp1 } from "./outboundHttp.ts";
@@ -101,6 +102,9 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       pairCommand,
       imessageCommand,
       authCommand,
+      loginCommand,
+      logoutCommand,
+      whoamiCommand,
       browserCommand,
       projectCommand,
       providerCommand,
