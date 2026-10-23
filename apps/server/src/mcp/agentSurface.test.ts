@@ -1,257 +1,41 @@
-import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.ts";
-import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
-import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
-import { DecisionToolkit } from "./toolkits/decision/tools.ts";
-import { NoteToolkit } from "./toolkits/note/tools.ts";
-import * as NotesService from "../notes/NotesService.ts";
-import * as SshDeviceAdd from "../sshRemote/SshDeviceAdd.ts";
-import * as Onboarding from "../provider/ProviderOnboarding.ts";
-import * as ProviderSettingsService from "../provider/ProviderSettings.ts";
-import * as HomeRequests from "../provider/CodexHomeRequests.ts";
-import * as ProviderDiagnosisRouting from "../provider/ProviderDiagnosisRouting.ts";
-import * as ProviderHostSync from "../provider/ProviderHostSync.ts";
-import * as CloudAgentService from "../cloudAgents/CloudAgentService.ts";
-import { ProviderToolkit } from "./toolkits/provider/tools.ts";
-import * as WorktreeInventoryService from "./WorktreeInventoryService.ts";
-import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
-import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
-import * as ServerConfig from "../config.ts";
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as FileSystem from "effect/FileSystem";
-import * as ChannelGateway from "../channels/ChannelGateway.ts";
-import * as ChannelLedger from "../channels/ChannelLedger.ts";
-import * as ChannelTaskExport from "../channels/ChannelTaskExport.ts";
-import * as ChannelBotHome from "../channels/ChannelBotHome.ts";
-import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
-import * as ChannelRuntime from "../channels/ChannelRuntime.ts";
-import * as ChannelWorkerReports from "../channels/ChannelWorkerReports.ts";
-import * as HubNodes from "../hubNodes/HubNodes.ts";
-import * as ConnectionCatalogBroker from "../connections/ConnectionCatalogBroker.ts";
 import * as DeviceService from "../device/DeviceService.ts";
-import * as Path from "effect/Path";
-import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as Settings from "../serverSettings.ts";
-import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
-import * as HostStatusMcpService from "./HostStatusMcpService.ts";
-import * as HubParity from "../hub/HubParity.ts";
-import * as HubMembership from "../hub/HubMembership.ts";
-import * as GoalService from "../fleet/goals/GoalService.ts";
-import * as FleetFallback from "../fleet/resources/Fallback.ts";
-import * as FleetPlacement from "../fleet/resources/Placement.ts";
-import * as HtmlRender from "../htmlRender/HtmlRender.ts";
-import * as MemoryService from "../memory/MemoryService.ts";
-import * as MemorySyncService from "../memory/MemorySyncService.ts";
-import * as MemorySettingsService from "../memory/MemorySettingsService.ts";
-import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
-import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
-import * as PreviewManager from "../preview/Manager.ts";
-import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
-import * as SourceControlRepositoryService from "../sourceControl/SourceControlRepositoryService.ts";
-import * as ThreadLaunchMcpService from "./ThreadLaunchMcpService.ts";
-import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
-import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
-import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
-import * as SshHostSetup from "../sshRemote/SshHostSetup.ts";
-import * as SshWorkspaceSync from "../sshRemote/SshWorkspaceSync.ts";
-import * as LaunchWatchService from "./LaunchWatchService.ts";
-import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
-import * as PendingQuestionsMcpService from "./PendingQuestionsMcpService.ts";
-import * as ThreadSearchMcpService from "./ThreadSearchMcpService.ts";
-import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
-import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
-import * as WorktreeMcpService from "./WorktreeMcpService.ts";
-import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { describe, expect, it } from "@effect/vitest";
-import { EnvironmentId, HandoffSummary, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import {
+  DeviceHostUnavailableError,
+  DeviceSession,
+  EnvironmentId,
+  HandoffSummary,
+  ProviderInstanceId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Arbitrary from "effect/Arbitrary";
 import * as Schema from "effect/Schema";
-import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
-import { layerPermissionProfilesOff, liveThreadsLayer } from "./McpToolAccess.testkit.ts";
+import {
+  type McpClientCaller,
+  McpInvocationContext,
+  type McpInvocationScope,
+} from "./McpInvocationContext.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { FAILURE_CLASSES } from "@goat/contracts/agentSurface/envelope";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
-import * as ProjectService from "../project/ProjectService.ts";
+import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import { type AgentSurfaceResult, FAILURE_CLASSES } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/ai";
-import * as McpHttpServer from "./McpHttpServer.ts";
-import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
-import { ChannelToolkit } from "./toolkits/channel/tools.ts";
-import { ConnectionToolkit } from "./toolkits/connection/tools.ts";
-import { DeviceToolkit } from "./toolkits/device/tools.ts";
-import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
-import { FleetToolkit } from "./toolkits/fleet/tools.ts";
-import { FleetResourcesToolkit } from "./toolkits/fleet/resources/tools.ts";
-import { HostStatusToolkit } from "./toolkits/hostStatus/tools.ts";
-import { FleetHealthToolkit } from "./toolkits/fleet/healthTools.ts";
-import * as HostHealthMonitor from "../fleet/health/HostHealthMonitor.ts";
-import * as FleetHostStates from "../fleet/health/FleetHostStates.ts";
-import * as Rescheduler from "../fleet/health/Rescheduler.ts";
-import { HtmlToolkit } from "./toolkits/html/tools.ts";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
-import { MemoryAdministrationToolkit } from "./toolkits/memoryAdministration/tools.ts";
-import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
-import { PreviewToolkit } from "./toolkits/preview/tools.ts";
-import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
-import { ProjectToolkit } from "./toolkits/project/tools.ts";
-import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
-import { RemoteReportToolkit } from "./toolkits/remoteReport/tools.ts";
-import { SshToolkit } from "./toolkits/ssh/tools.ts";
-import { ThreadToolkit } from "./toolkits/thread/tools.ts";
-import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
-import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
-import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
-import * as Handoffs from "../handoffs/Handoffs.ts";
 
-const toolkits = {
-  decision: DecisionToolkit,
-  attachment: AttachmentToolkit,
-  channel: ChannelToolkit,
-  computerUse: ComputerUseToolkit,
-  note: NoteToolkit,
-  connection: ConnectionToolkit,
-  device: DeviceToolkit,
-  environment: EnvironmentToolkit,
-  fleet: FleetToolkit,
-  fleetResources: FleetResourcesToolkit,
-  hostStatus: HostStatusToolkit,
-  fleetHealth: FleetHealthToolkit,
-  html: HtmlToolkit,
-  memory: MemoryToolkit,
-  memoryAdministration: MemoryAdministrationToolkit,
-  orchestrator: OrchestratorToolkit,
-  preview: PreviewToolkit,
-  previewControls: PreviewControlsToolkit,
-  project: ProjectToolkit,
-  provider: ProviderToolkit,
-  pullRequests: PullRequestsToolkit,
-  remoteReport: RemoteReportToolkit,
-  ssh: SshToolkit,
-  thread: ThreadToolkit,
-  worktree: WorktreeToolkit,
-};
-const entries = Object.values(agentSurfaceRegistry);
-const { htmlRender, ...otherRegistrations } = McpHttpServer.catalogRegistrations;
-const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistrations));
+import { catalog, client, dependencies, entries, toolkits } from "./agentSurface.testkit.ts";
+import {
+  resolveGoatMcpToolDefinition,
+  resolveGoatMcpToolPresentation,
+} from "@goat/shared/goatMcpToolPresentation";
 
-// Only registration and early argument refusal run. No domain handler may touch live state.
-const unusedImport = () => Effect.die("Catalog registration must not import memory");
-const dependencies = Layer.mergeAll(
-  Layer.mock(DecisionInbox.DecisionInbox)({}),
-  // goatclaw off: the capability gate admits every call, so handlers decide access.
-  layerPermissionProfilesOff,
-  Layer.mock(NotesService.NotesService)({}),
-  Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
-  Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
-  Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({}),
-  Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
-  // A live thread, so thread callers reach the handler instead of the inert services above.
-  liveThreadsLayer,
-  Layer.mock(ComputerUseLeases.ComputerUseLeases)({ proxy: undefined }),
-  Layer.mock(Handoffs.Handoffs)({}),
-  ServerConfig.layerTest("/tmp/agent-surface-catalog", "/tmp/agent-surface-catalog").pipe(
-    Layer.provide(Path.layer),
-    Layer.provide(FileSystem.layerNoop({ makeDirectory: () => Effect.void })),
-  ),
-  Layer.mock(ServerSecretStore.ServerSecretStore)({}),
-  FileSystem.layerNoop({ makeDirectory: () => Effect.void }),
-  Layer.mock(ChannelGateway.ChannelGateway)({}),
-  Layer.mock(ChannelLedger.ChannelLedger)({}),
-  Layer.mock(ChannelTaskExport.ChannelTaskExport)({}),
-  Layer.mock(ChannelWorkerReports.ChannelWorkerReports)({}),
-  Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
-  Layer.mock(ChannelBotHome.ChannelBotHome)({}),
-  Layer.mock(ChannelRuntime.ChannelRuntime)({ ownerToken: "test-owner" }),
-  Layer.mock(ConnectionCatalogBroker.ConnectionCatalogBroker)({}),
-  Layer.mock(HubNodes.HubNodes)({}),
-  Layer.mock(DeviceService.DeviceService)({}),
-  Path.layer,
-  Layer.mock(ServerEnvironment.ServerEnvironment)({}),
-  Layer.mock(Settings.ServerSettingsService)({}),
-  Layer.mock(ThreadCommandExecutor.ThreadCommandExecutor)({}),
-  Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
-  Layer.mock(HubParity.HubParity)({}),
-  Layer.mock(HubMembership.HubMembership)({}),
-  Layer.mock(GoalService.GoalService)({}),
-  Layer.mock(FleetFallback.FallbackChains)({}),
-  Layer.mock(FleetPlacement.Placement)({}),
-  Layer.mock(HtmlRender.HtmlRender)({}),
-  Layer.mock(MemoryService.MemoryService)({
-    importPorts: {
-      readRegistration: unusedImport,
-      saveRegistration: unusedImport,
-      preflightBatch: unusedImport,
-      readReceipt: unusedImport,
-      readItem: unusedImport,
-      findMatch: unusedImport,
-      prepareTarget: unusedImport,
-      binding: unusedImport,
-      resolveProjectKey: unusedImport,
-      commit: unusedImport,
-    },
-  }),
-  Layer.mock(MemorySyncService.MemorySyncService)({}),
-  Layer.mock(MemorySettingsService.MemorySettingsService)({}),
-  Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
-  Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
-  Layer.mock(PreviewManager.PreviewManager)({}),
-  Layer.mock(ProjectService.ProjectService)({}),
-  Layer.mock(ProviderDiagnosisRouting.ProviderDiagnosisRouting)({}),
-  Layer.mock(CloudAgentService.CloudAgentService)({}),
-  Layer.mock(HomeRequests.CodexHomeRequests)({}),
-  Layer.mock(ProviderHostSync.ProviderHostSync)({}),
-  Layer.mock(Onboarding.ProviderOnboarding)({}),
-  Layer.mock(ProviderSettingsService.ProviderSettings)({
-    presentDiagnosis: (result) => Effect.succeed(result),
-  }),
-  Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-    namedProjectsRoot: "/tmp/agent-surface-catalog",
-  }),
-  Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
-  Layer.mock(ThreadLaunchMcpService.ThreadLaunchMcpService)({}),
-  Layer.mock(Orchestrator.OrchestratorV2)({}),
-  Layer.mock(RemoteReportService.RemoteReportService)({}),
-  Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
-  Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
-  Layer.mock(HostHealthMonitor.HostHealthMonitor)({}),
-  Layer.mock(FleetHostStates.FleetHostStates)({}),
-  Layer.mock(Rescheduler.Rescheduler)({}),
-  Layer.mock(SshHostSetup.SshHostSetup)({}),
-  Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
-  Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
-  Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
-  Layer.mock(LaunchWatchService.LaunchWatchService)({}),
-  Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
-  Layer.mock(PendingQuestionsMcpService.PendingQuestionsMcpService)({}),
-  Layer.mock(ThreadSearchMcpService.ThreadSearchMcpService)({}),
-  Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
-  Layer.mock(ThreadResultService.ThreadResultService)({}),
-  Layer.mock(WorktreeMcpService.WorktreeMcpService)({}),
-  Layer.mock(CloudMachineService.CloudMachineService)({}),
-  Layer.mock(GitWorkflowService.GitWorkflowService)({}),
-  NodeCrypto.layer,
-);
 const registered = catalog.pipe(
   Layer.provide(dependencies),
   Layer.provideMerge(McpServer.McpServer.layer),
 );
-const client = McpSchema.McpServerClient.of({
-  clientId: 1,
-  clientCapabilities: {},
-  clientInfo: { name: "registry-test", version: "1" },
-  protocolVersion: "2025-06-18",
-  initializePayload: {
-    protocolVersion: "2025-06-18",
-    capabilities: {},
-    clientInfo: { name: "registry-test", version: "1" },
-  },
-  getClient: Effect.die("unused"),
-});
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(197); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, and preparation retry tools.
+  expect(entries).toHaveLength(199); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, and preparation retry tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
@@ -408,6 +192,8 @@ const DECISION_INBOX_NEEDS_HUMAN = new Set([
   "hub.device_leave",
   "hub.device_repair",
 ]);
+// goat_call returns the envelope, whose needs_human is a status rather than a kind; checked below.
+const ENVELOPE_NEEDS_HUMAN = new Set(["surface.call"]);
 
 describe("agent surface needs_human results", () => {
   it("hands work to a person only through the shared handoff summary and a registered next call", () => {
@@ -441,9 +227,31 @@ describe("agent surface needs_human results", () => {
       (entry) =>
         entry.description.includes("needs_human") &&
         !DECISION_INBOX_NEEDS_HUMAN.has(entry.path) &&
+        !ENVELOPE_NEEDS_HUMAN.has(entry.path) &&
         needsHumanArms(resultDocument(entry)).length === 0,
     );
     expect(missing.map((entry) => entry.path)).toEqual([]);
+  });
+
+  it("passes the shared handoff summary through goat_call's needs_human status", () => {
+    const document = resultDocument(agentSurfaceRegistry["surface.call"]);
+    const arms: Array<JsonSchema> = [];
+    const visit = (node: unknown) => {
+      if (isObject(node) && isObject(node["properties"])) {
+        const status = literals(resolve(node["properties"]["status"], document.definitions));
+        if (status.length === 1 && status[0] === "needs_human") arms.push(node);
+      }
+      for (const child of children(node)) visit(child);
+    };
+    visit(document.schema);
+    visit(document.definitions);
+    expect(arms).toHaveLength(1);
+    const arm = arms[0]!;
+    expect(arm["required"]).toContain("handoff");
+    const handoffKeys = Object.keys(
+      propertiesOf((arm["properties"] as JsonSchema)["handoff"], document.definitions),
+    ).sort();
+    expect(handoffKeys).toEqual(Object.keys(HandoffSummary.fields).sort());
   });
 });
 
@@ -544,6 +352,7 @@ const REASONS = {
   dryRunDefault: "Defaults to a dry run, which reads.",
   clientOnly: "Only another GOAT's dispatch session may call it.",
   grantChecked: "Checks a scope the test client does not hold, inside its handler.",
+  dispatches: "Runs other tools, each under its own declaration, and adds no gate of its own.",
 } as const;
 // Where the runtime outcome differs from what requires and effect alone predict, and why.
 // The service checks, SSH refusal wording and codeless refusals are tracked in #791.
@@ -593,11 +402,14 @@ const ACCESS_EXCEPTIONS: Readonly<
   "cloud_machine.create": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.resume": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
+  "surface.call": { reason: "dispatches", readOnlyClient: "reached" },
 };
 
-const expectedOutcome = (entry: Entry, caller: Caller): Outcome => {
-  const exception = ACCESS_EXCEPTIONS[entry.path]?.[caller];
-  if (exception !== undefined) return exception;
+const expectedOutcome = (entry: Entry, caller: Caller, route: Route): Outcome => {
+  const exception = ACCESS_EXCEPTIONS[entry.path];
+  // goat_call reports the refusal an image tool's own text hides.
+  const applies = !(route === "goat_call" && exception?.reason === "imageTool");
+  if (applies && exception?.[caller] !== undefined) return exception[caller];
   if (caller === "thread") return entry.requires === "client" ? "denied" : "reached";
   if (entry.requires === "thread") return "thread_required";
   if (caller === "readOnlyClient" && entry.effect !== "read") return "read_only";
@@ -637,7 +449,26 @@ const via = {
     McpServer.McpServer.pipe(
       Effect.flatMap((server) => server.callTool({ name, arguments: args })),
     ),
+  // The envelope's reason and message stand in for the direct result's text.
+  goat_call: (name: string, args: Record<string, unknown>) =>
+    McpServer.McpServer.pipe(
+      Effect.flatMap((server) =>
+        server.callTool({ name: "goat_call", arguments: { path: name, args } }),
+      ),
+      Effect.map((result) => {
+        const envelope = result.structuredContent as AgentSurfaceResult;
+        if (envelope.status !== "error")
+          return new McpSchema.CallToolResult({ isError: false, content: [] });
+        // A plain-text failure stays the direct call's own text; a classified one names its code.
+        const text =
+          envelope.error.reason === "tool_error"
+            ? envelope.error.message
+            : JSON.stringify({ code: envelope.error.reason, message: envelope.error.message });
+        return new McpSchema.CallToolResult({ isError: true, content: [{ type: "text", text }] });
+      }),
+    ),
 };
+type Route = keyof typeof via;
 
 describe("agent surface access", () => {
   it.effect("refuses each caller exactly where the registry's requires and effect say", () =>
@@ -648,7 +479,11 @@ describe("agent surface access", () => {
         if (entry.resource === "memory") continue;
         const args = yield* argumentsFor(entry);
         for (const caller of Object.keys(callers) as ReadonlyArray<Caller>) {
-          for (const [route, call] of Object.entries(via)) {
+          let directOutcome: Outcome | undefined;
+          for (const route of Object.keys(via) as ReadonlyArray<Route>) {
+            // goat_call refuses to call itself by design.
+            if (route === "goat_call" && entry.path === "surface.call") continue;
+            const call = via[route];
             const result = yield* call(entry.name, args).pipe(
               Effect.provideService(McpInvocationContext, callers[caller]),
               Effect.provideService(McpSchema.McpServerClient, client),
@@ -669,8 +504,15 @@ describe("agent surface access", () => {
                 ),
               ),
             );
-            const outcome = classify(entry.path, result);
-            const expected = expectedOutcome(entry, caller);
+            const classified = classify(entry.path, result);
+            // The envelope turns a refusal inside a successful value into an error; that is a
+            // domain answer after access passed, so it still counts as reaching the handler.
+            const outcome =
+              route === "goat_call" && classified === "unexpected" && directOutcome === "reached"
+                ? "reached"
+                : classified;
+            if (route === "direct") directOutcome = outcome;
+            const expected = expectedOutcome(entry, caller, route);
             if (outcome !== expected) {
               const content = result.content[0];
               const detail = content?.type === "text" ? content.text.slice(0, 160) : "";
@@ -698,8 +540,6 @@ describe("agent surface access", () => {
       );
   });
 
-  // quarantine: #778 goat_call is not on dev yet; add it to via when rollout step 5 lands.
-  it.todo("gives goat_call the same outcome as a direct call for every entry and caller");
   // quarantine: #778 goat_eval is gated on measurement (rollout step 11); add a one-call program to via if it ships.
   it.todo(
     "gives a goat_eval call step the same outcome as a direct call for every entry and caller",
@@ -773,4 +613,190 @@ it("classifies every domain failure literal the served tools can return", () => 
   expect(
     Object.fromEntries([...missing].map(([literal, names]) => [literal, [...names].sort()])),
   ).toEqual({});
+});
+const callerScope = (
+  caller: { readonly thread: true } | { readonly client: McpClientCaller["access"] },
+): McpInvocationScope => ({
+  environmentId: EnvironmentId.make("environment"),
+  requestNamespace: "thread" in caller ? "provider:thread" : "client:session",
+  thread:
+    "thread" in caller
+      ? {
+          threadId: ThreadId.make("thread"),
+          providerSessionId: "provider:thread",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        }
+      : undefined,
+  client:
+    "thread" in caller
+      ? undefined
+      : { sessionId: "session", label: "Agent", access: caller.client },
+  capabilities: new Set([
+    "memory",
+    "preview",
+    "orchestration",
+    "worktree",
+    "device",
+    "pull-requests",
+  ]),
+  issuedAt: 0,
+});
+
+/** One request: the caller's invocation scope and MCP client, as the auth middleware provides them. */
+const asCaller =
+  (scope: McpInvocationScope) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provideService(McpInvocationContext, scope),
+      Effect.provideService(McpSchema.McpServerClient, client),
+    );
+
+const textOf = (result: McpSchema.CallToolResult) =>
+  result.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+
+const viaCall = (server: McpServer.McpServer["Service"], path: string, args: object) =>
+  server.callTool({ name: "goat_call", arguments: { path, args } }).pipe(
+    Effect.map((result) => {
+      expect(result.isError, path).toBe(false);
+      return result.structuredContent as AgentSurfaceResult;
+    }),
+  );
+
+it("resolves paths, canonical names and legacy names to one entry without collisions", () => {
+  const owners = new Map<string, string>();
+  for (const entry of entries)
+    for (const name of [entry.path, canonicalToolName(entry), ...entry.legacyNames]) {
+      expect(owners.get(name) ?? entry.path, name).toBe(entry.path);
+      owners.set(name, entry.path);
+      expect(resolveAgentSurfaceEntry(name)?.path).toBe(entry.path);
+    }
+  expect(resolveAgentSurfaceEntry("orchestrator_capabilities")?.path).toBe("provider.list");
+  expect(resolveAgentSurfaceEntry("goat_provider_list")?.path).toBe("provider.list");
+  expect(resolveAgentSurfaceEntry("goat_permission_profile_sync")?.name).toBe("goat_goatclaw_sync");
+});
+
+it.effect("goat_call returns ok values and refuses unknown or recursive paths", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const run = asCaller(callerScope({ thread: true }));
+    const described = yield* run(viaCall(server, "goat_describe", {}));
+    expect(described).toMatchObject({ status: "ok", value: { depth: "surface" } });
+    expect(yield* run(viaCall(server, "thread.teleport", {}))).toMatchObject({
+      status: "error",
+      error: { code: "not_found", reason: "unknown_path" },
+    });
+    expect(yield* run(viaCall(server, "surface.call", { path: "surface.describe" }))).toMatchObject(
+      { status: "error", error: { code: "invalid_request", reason: "not_callable" } },
+    );
+  }).pipe(Effect.provide(registered)),
+);
+
+it.effect("goat_describe answers at three depths with availability for this caller", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const describe = (scope: McpInvocationScope, path?: string) =>
+      asCaller(scope)(
+        server
+          .callTool({ name: "goat_describe", arguments: path === undefined ? {} : { path } })
+          .pipe(Effect.map((result) => result.structuredContent as Record<string, unknown>)),
+      );
+    const thread = callerScope({ thread: true });
+    const outside = callerScope({ client: "full-access" });
+    const readOnly = callerScope({ client: "read-only" });
+
+    const surface = yield* describe(thread);
+    const resources = (
+      surface.resources as ReadonlyArray<{ resource: string; verbs: string[] }>
+    ).map(({ resource }) => resource);
+    expect(resources).toEqual([...new Set(entries.map((entry) => entry.resource))].sort());
+
+    const threadResource = yield* describe(thread, "thread");
+    expect(
+      (threadResource.entries as ReadonlyArray<{ path: string }>).every(({ path }) =>
+        path.startsWith("thread."),
+      ),
+    ).toBe(true);
+
+    const threadOnly = entries.find((entry) => entry.requires === "thread")!;
+    const detail = (scope: McpInvocationScope, path: string) =>
+      describe(scope, path).pipe(
+        Effect.map((result) => result.entry as { available: unknown; inputSchema: unknown }),
+      );
+    expect((yield* detail(thread, threadOnly.path)).available).toEqual({ now: true });
+    expect((yield* detail(outside, threadOnly.name)).available).toEqual({
+      now: false,
+      reason: "Needs an agent running inside a GOAT thread.",
+    });
+    const write = entries.find((entry) => entry.effect !== "read" && entry.requires === "either")!;
+    expect((yield* detail(readOnly, write.path)).available).toEqual({
+      now: false,
+      reason: "This MCP client was approved for read-only access.",
+    });
+    expect((yield* detail(readOnly, "goat_call")).available).toEqual({ now: true });
+    expect((yield* detail(thread, "thread.send")).inputSchema).toMatchObject({ type: "object" });
+
+    const missing = yield* asCaller(thread)(
+      server.callTool({ name: "goat_describe", arguments: { path: "teleport" } }),
+    );
+    expect(missing.isError).toBe(true);
+    expect(textOf(missing)).toContain("no resource or path named teleport");
+  }).pipe(Effect.provide(registered)),
+);
+
+const SECRET = "SECRET-planted-7c1f";
+const decodeDeviceSession = Schema.decodeUnknownSync(DeviceSession);
+const failingDevice = Layer.mock(DeviceService.DeviceService)({
+  sessionsForThread: (threadId) =>
+    Effect.succeed([
+      decodeDeviceSession({
+        threadId,
+        hostId: "local",
+        deviceId: "device-1",
+        platform: "ios",
+        openedAt: "2026-10-23T00:00:00.000Z",
+      }),
+    ]),
+  screenshot: () =>
+    Effect.fail(new DeviceHostUnavailableError({ hostId: "local", reason: SECRET })),
+});
+const registeredWithFailingDevice = catalog.pipe(
+  Layer.provide(Layer.mergeAll(dependencies, failingDevice)),
+  Layer.provideMerge(McpServer.McpServer.layer),
+);
+
+it.effect("goat_call never shows failure text a direct call hides", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const run = asCaller(callerScope({ thread: true }));
+    const direct = yield* run(server.callTool({ name: "device_screenshot", arguments: {} }));
+    expect(direct.isError).toBe(true);
+    expect(JSON.stringify(direct)).not.toContain(SECRET);
+    const envelope = yield* run(viaCall(server, "device.screenshot", {}));
+    expect(JSON.stringify(envelope)).not.toContain(SECRET);
+    // The declared tag still classifies it; the text is what the direct call shows.
+    expect(envelope).toMatchObject({
+      status: "error",
+      error: {
+        code: "unavailable",
+        reason: "DeviceHostUnavailableError",
+        message: textOf(direct),
+        retryable: true,
+      },
+    });
+  }).pipe(Effect.provide(registeredWithFailingDevice)),
+);
+
+it("gives goat_describe and goat_call a tool presentation", () => {
+  for (const entry of [
+    agentSurfaceRegistry["surface.describe"],
+    agentSurfaceRegistry["surface.call"],
+  ]) {
+    expect(
+      resolveGoatMcpToolDefinition(entry.name)?.summaryAction ?? null,
+      entry.name,
+    ).not.toBeNull();
+    expect(resolveGoatMcpToolPresentation(`mcp__t3-code__${entry.name}`)?.logo, entry.name).toBe(
+      "t3-code",
+    );
+  }
 });

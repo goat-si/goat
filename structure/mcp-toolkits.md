@@ -15,7 +15,7 @@ append orchestration events themselves. That write is the [command commit](serve
 
 ## Toolkits
 
-The directories under `apps/server/src/mcp/toolkits/` are `attachment`, `channel`, `connection`,
+The directories under `apps/server/src/mcp/toolkits/` are `agentSurface`, `attachment`, `channel`, `connection`,
 `decision`, `device`, `environment`, `hostStatus`, `html`, `memory`, `memoryAdministration`, `note`, `orchestrator`, `preview`, `previewControls`, `project`,
 `provider`, `pullRequests`, `remoteReport`, `ssh`, `thread`, and `worktree`. `provider` is
 composed beside `McpHttpServer.layer` in `apps/server/src/server.ts`, which provides
