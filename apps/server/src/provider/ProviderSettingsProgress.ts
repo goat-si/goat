@@ -8,6 +8,7 @@
  * effect, so a resumed add writes the same instance instead of deriving a new id.
  */
 import {
+  HandoffError,
   ProviderDiagnoseOnHostInput,
   ProviderInstanceConfig,
   ProviderInstanceId,
@@ -44,6 +45,19 @@ export const ProviderSettingsOutcome = Schema.Union([
   }),
 ]);
 export type ProviderSettingsOutcome = typeof ProviderSettingsOutcome.Type;
+
+/**
+ * What the person who approved a change is told when it did not apply: a change that failed is
+ * not one they asked for wrongly, and one that may have landed must not be approved again blindly.
+ */
+export const approvalError = (outcome: ProviderSettingsOutcome | undefined) =>
+  new HandoffError(
+    outcome?.state === "failed"
+      ? { reason: "apply_failed", detail: outcome.message }
+      : outcome?.state === "unknown_outcome"
+        ? { reason: "apply_unknown", detail: outcome.message }
+        : { reason: "invalid_request" },
+  );
 
 export const ProviderSettingsProgress = Schema.Struct({
   version: Schema.Literal(1),

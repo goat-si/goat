@@ -5,9 +5,12 @@ import {
   ThreadId,
   TurnItemId,
   ProviderInstanceId,
+  HandoffError,
+  PROVIDER_SETTINGS_HANDOFF_PATH,
   type Handoff,
   type SshHandoffProgressResult,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import { AtomRegistry, type AsyncResult as AtomAsyncResult } from "effect/reactivity";
 import { act } from "react";
@@ -574,6 +577,38 @@ it("preserves a failed pin after approval", async () => {
   expect(container.textContent).not.toContain("Host key pinned");
 });
 describe("provider setup request", () => {
+  it("tells the approver an approved provider change may have landed", async () => {
+    harness.open.mockResolvedValue({
+      _tag: "Success",
+      value: { human: { location: "Add Devin on box and link it to Devin Cloud." } },
+    });
+    harness.respond.mockResolvedValue({
+      _tag: "Failure",
+      cause: Cause.fail(
+        new HandoffError({
+          reason: "apply_unknown",
+          detail: "Calling goat_provider_add on box failed: connection reset",
+        }),
+      ),
+    });
+    await render({
+      ...handoff,
+      kind: "approval",
+      title: "Add Devin",
+      reason: "The agent asks to add the Devin agent on box.",
+      state: "pending",
+      target: { environmentId, path: PROVIDER_SETTINGS_HANDOFF_PATH },
+    });
+    await click("Review request");
+    await click("Approve");
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "This change may have been applied (Calling goat_provider_add on box failed: connection reset). Check the provider with Diagnose before you approve it again.",
+      ),
+    );
+    expect(container.textContent).not.toContain("It may already be resolved or expired");
+  });
+
   const request = {
     ...handoff,
     kind: "approval" as const,
