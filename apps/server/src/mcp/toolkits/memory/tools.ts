@@ -171,8 +171,8 @@ const RevertResolutionTool = Tool.dynamic(agentSurfaceRegistry["memory.revert_re
   .addDependency(ThreadManagementService.ThreadManagementService)
   .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.revert_resolution"]));
 
-const ReadSourceTool = Tool.dynamic(agentSurfaceRegistry["memory.read_source"].name, {
-  description: agentSurfaceRegistry["memory.read_source"].description,
+const ReadSourceTool = Tool.dynamic(agentSurfaceRegistry["memory.source_read"].name, {
+  description: agentSurfaceRegistry["memory.source_read"].description,
   parameters: memoryInputSchema(M.MemoryReadSourceInput),
   success: M.MemorySourcePage,
   failure,
@@ -182,7 +182,7 @@ const ReadSourceTool = Tool.dynamic(agentSurfaceRegistry["memory.read_source"].n
   .addDependency(MemoryService.MemoryService)
   .addDependency(MemorySyncService.MemorySyncService)
   .addDependency(ThreadManagementService.ThreadManagementService)
-  .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.read_source"]));
+  .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.source_read"]));
 
 export const MemoryToolkit = Toolkit.make(
   SearchTool,

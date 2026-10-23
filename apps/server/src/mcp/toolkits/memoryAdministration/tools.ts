@@ -9,8 +9,8 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { memoryInputSchema } from "../memory/tools.ts";
 export const MemoryAdministrationToolkit = Toolkit.make(
-  Tool.dynamic(agentSurfaceRegistry["memory.settings_get"].name, {
-    description: agentSurfaceRegistry["memory.settings_get"].description,
+  Tool.dynamic(agentSurfaceRegistry["memory.settings_read"].name, {
+    description: agentSurfaceRegistry["memory.settings_read"].description,
     parameters: memoryInputSchema(M.MemorySettingsGetInput),
     success: M.MemorySettingsView,
     failure: Schema.Union([M.MemoryRpcError, M.OrchestratorMcpFailure]),
@@ -19,7 +19,7 @@ export const MemoryAdministrationToolkit = Toolkit.make(
     .addDependency(McpInvocationContext.McpInvocationContext)
     .addDependency(MemorySettingsService.MemorySettingsService)
     .addDependency(ThreadManagementService.ThreadManagementService)
-    .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.settings_get"])),
+    .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.settings_read"])),
   Tool.dynamic(agentSurfaceRegistry["memory.settings_update"].name, {
     description: agentSurfaceRegistry["memory.settings_update"].description,
     parameters: memoryInputSchema(M.MemorySettingsUpdateInput),
