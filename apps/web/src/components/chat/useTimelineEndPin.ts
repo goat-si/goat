@@ -40,24 +40,28 @@ export function useTimelineEndPin({
       height: scrollNode.scrollHeight,
     });
     let scrolledUp = createUpwardScrollDetector(measuredPosition());
-    // Input that can start a user scroll, seen since the last pin.
-    let userInput = false;
-    const onUserInput = () => {
-      userInput = true;
-    };
     const onScroll = () => {
-      const position = measuredPosition();
-      // LegendList handles scroll events once a frame and corrects toward the offset it last
-      // saw, which can still predate a pin. A move onto that offset with no user input since
-      // the pin is the list adjusting, not the user leaving the end.
-      const tracked = listRef.current?.getState().scroll;
-      const programmatic =
-        !userInput && tracked !== undefined && Math.abs(position.top - tracked) <= 1;
-      if (scrolledUp({ ...position, programmatic })) {
+      if (scrolledUp(measuredPosition())) {
         released = true;
       }
       if (released && distanceFromEnd() <= 1) released = false;
     };
+    // LegendList corrects its anchor toward the offset it last saw, which can still predate a
+    // pin on a slow frame. That move is the list's own, so upward movement is measured from
+    // where it left the view. Its scrollBy runs inside the signal, before this microtask.
+    const listAdjusted = () =>
+      queueMicrotask(() => {
+        scrolledUp = createUpwardScrollDetector(measuredPosition());
+      });
+    // The pinned LegendList 3.3.5 emits these signals from ScrollAdjust; its public listener
+    // type leaves them out.
+    const listen = listRef.current?.getState().listen as
+      | ((signal: "scrollAdjust" | "scrollAdjustUserOffset", callback: () => void) => () => void)
+      | undefined;
+    const stopListening = [
+      listen?.("scrollAdjust", listAdjusted),
+      listen?.("scrollAdjustUserOffset", listAdjusted),
+    ];
     // Only growth after follow turns on is ours to correct: an explicit
     // animated scroll to the end must not be cut short by an immediate jump.
     let height = scrollNode.scrollHeight;
@@ -72,23 +76,16 @@ export function useTimelineEndPin({
       if (released || !viewport) return;
       if (distance <= 1 || (smooth && distance <= viewportHeight)) return;
       viewport.scrollTop = viewport.scrollHeight;
-      userInput = false;
       // Its scroll event arrives later and coalesces with any user scroll in
       // between, so upward movement is measured from where the pin landed.
       scrolledUp = createUpwardScrollDetector(measuredPosition());
     };
-    const inputEvents = ["wheel", "touchmove", "keydown", "pointerdown"] as const;
-    for (const type of inputEvents) {
-      scrollNode.addEventListener(type, onUserInput, { capture: true, passive: true });
-    }
     scrollNode.addEventListener("scroll", onScroll, { passive: true });
     const stopObserving = observeResize([scrollNode, content], pin);
     return () => {
       stopObserving();
       scrollNode.removeEventListener("scroll", onScroll);
-      for (const type of inputEvents) {
-        scrollNode.removeEventListener(type, onUserInput, { capture: true });
-      }
+      for (const stop of stopListening) stop?.();
     };
   }, [enabled, listRef, scrollNode, smooth]);
 }
