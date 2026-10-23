@@ -134,6 +134,7 @@ const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
 const delegateWithRemote = (
   targeted: { readonly catalogs: RemoteCatalogProviders } | { readonly fails: true },
   options?: ReadonlyArray<{ readonly id: string; readonly value: string }>,
+  model: string | null = "gpt-6-astra",
 ) =>
   Effect.gen(function* () {
     const commands: OrchestrationV2ServerCommand[] = [];
@@ -291,7 +292,7 @@ const delegateWithRemote = (
           target: {
             host: "box",
             providerInstanceId: codexInstanceId,
-            model: "gpt-6-astra",
+            ...(model === null ? {} : { model }),
             ...(options === undefined ? {} : { options }),
           },
           remote: { cwd: "/repo" },
@@ -390,3 +391,21 @@ describe("remote delegate_task model resolution", () => {
     }),
   );
 });
+
+it.effect("refuses an inherited model the remote no longer advertises", () =>
+  Effect.gen(function* () {
+    const { result, commands, launchInputs, capabilitiesCalls } = yield* delegateWithRemote(
+      { catalogs: [{ instanceId: codexInstanceId, models: [{ id: "gpt-6-luna", label: null }] }] },
+      undefined,
+      null,
+    );
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") {
+      assert.equal(result.failure.code, "model_unavailable");
+      assert.equal(result.failure.message, "The selected model is not advertised on this host.");
+    }
+    assert.deepEqual(commands, []);
+    assert.deepEqual(launchInputs, []);
+    assert.deepEqual(capabilitiesCalls, [{}, { search: "gpt-5.4" }]);
+  }),
+);
