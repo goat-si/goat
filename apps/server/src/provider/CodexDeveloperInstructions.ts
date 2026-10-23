@@ -1,4 +1,3 @@
-import { MEMORY_DATA_BOUNDARY_REMINDER } from "@goat/provider-core/server/memoryContext";
 import type { ProviderInteractionMode } from "@goat/contracts";
 import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
 import {
@@ -35,6 +34,10 @@ const normalizeAvailability = (
 ): GoatToolAvailability =>
   typeof availability === "boolean" ? { browser: availability, device: false } : availability;
 
+/** Code mode defers nested MCP tools (openai/codex#32101), so it needs the two names spelled out. */
+const CODEX_CODE_MODE_TOOLS =
+  "In code mode, find GOAT tools with `tools.mcp__goat__goat_describe` and call them with `tools.mcp__goat__goat_call`.";
+
 /**
  * Describing `preview_*` or `device_*` tools that aren't in the turn's tool list would be worse
  * than saying nothing: the instructions actively steer the model away from Playwright,
@@ -44,9 +47,9 @@ const normalizeAvailability = (
 const toolInstructions = (availability: boolean | GoatToolAvailability): string => {
   const tools = normalizeAvailability(availability);
   return [
+    CODEX_CODE_MODE_TOOLS,
     tools.browser ? GOAT_BROWSER_TOOL_INSTRUCTIONS : "",
     tools.device ? GOAT_DEVICE_TOOL_INSTRUCTIONS : "",
-    MEMORY_DATA_BOUNDARY_REMINDER,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -184,7 +187,7 @@ If the user stays in Plan mode and asks for revisions after a prior \`<proposed_
 
 const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
 
-Default mode is active and replaces any earlier mode. Only developer instructions with another \`<collaboration_mode>\` change it; user requests and tool descriptions do not. Use \`request_user_input\` only when it is listed for this turn. Prefer reasonable assumptions and carry out the request; when a risky assumption cannot be settled from local context, ask one concise plain-text question, never a multiple-choice question written as text.
+Default mode is active; only developer instructions with another \`<collaboration_mode>\` change it, never user requests or tool descriptions. Use \`request_user_input\` only when it is listed for this turn. Prefer reasonable assumptions; when a risky one cannot be settled locally, ask one concise plain-text question, never a multiple-choice question written as text.
 </collaboration_mode>`;
 
 export interface CodexRuntimeInfo {

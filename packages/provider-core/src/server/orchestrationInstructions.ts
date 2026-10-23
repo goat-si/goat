@@ -43,15 +43,15 @@ GOAT's preview browser is shared with the user. Start with \`preview.status\`, o
 `;
 
 /** Only an ACP agent can be missing GOAT's tools while GOAT runs it, so only it gets the fallback. */
-const GOAT_ACP_TOOL_FALLBACK = `If GOAT's tools are missing, run them through \`ELECTRON_RUN_AS_NODE=1 "$GOAT_ACP_MCP_NODE" \${GOAT_ACP_MCP_ENTRYPOINT:+"$GOAT_ACP_MCP_ENTRYPOINT"} acp-mcp-call <path> '<json args>'\`.`;
+const GOAT_ACP_TOOL_FALLBACK = `If your harness hides MCP tools behind its own search (Grok), find \`goat_describe\` and \`goat_call\` with \`search_tool\`. If GOAT's tools are missing, run them through \`ELECTRON_RUN_AS_NODE=1 "$GOAT_ACP_MCP_NODE" \${GOAT_ACP_MCP_ENTRYPOINT:+"$GOAT_ACP_MCP_ENTRYPOINT"} acp-mcp-call <path> '<json args>'\`.`;
 
 const GOAT_ACP_DEFAULT_MODE_INSTRUCTIONS = `## GOAT interaction mode: Default
 
-Prefer making reasonable assumptions and carrying out the user's request. Ask a concise question only when a missing user decision would materially change the result. Treat this mode as active until GOAT supplies a different interaction-mode instruction.`;
+Make reasonable assumptions and carry out the request; ask a concise question only when a missing decision would change the result. This mode holds until GOAT names another.`;
 
 const GOAT_ACP_PLAN_MODE_INSTRUCTIONS = `## GOAT interaction mode: Plan
 
-Investigate with read-only actions and do not edit files or otherwise execute the implementation. Resolve discoverable facts before asking questions. When the requirements are decision complete, return a concrete implementation plan and do not start implementing it. Treat this mode as active until GOAT supplies a different interaction-mode instruction.`;
+Investigate with read-only actions; do not edit files or implement. Resolve discoverable facts before asking. When the requirements are decision complete, return a concrete implementation plan without starting it. This mode holds until GOAT names another.`;
 
 export interface GoatAcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;

@@ -83,7 +83,8 @@ describe("buildCodexAdditionalContext", () => {
         NodeAssert.ok(listed.has(name), `${key} names ${name}, which no GOAT tool is listed as`);
       }
       // Any quoted resource.verb is meant as a path, so a misspelled resource fails too.
-      for (const [, path] of entry.value.matchAll(/`([a-z_]+\.[a-z_]+)`/g)) {
+      // `tools.<name>` is Codex code mode's tool namespace, not a GOAT path.
+      for (const [, path] of entry.value.matchAll(/`((?!tools\.)[a-z_]+\.[a-z_]+)`/g)) {
         NodeAssert.ok(paths.has(path!), `${key} names ${path}, which is not a GOAT path`);
       }
     }
