@@ -205,7 +205,7 @@ Names that look like tools but are not in the registry:
 | Name                      | Where                                                                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `update_runtime`          | packages/provider-core/src/server/orchestrationInstructions.ts:45                                                        |
-| `goat_eval`               | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:419, docs/internals/agent-surface.md:800 (+1)         |
+| `goat_eval`               | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:439, docs/internals/agent-surface.md:820 (+1)         |
 | `goat_host_cordon`        | docs/internals/agentic-k8s.md:955                                                                                        |
 | `goat_thread_reschedule`  | docs/internals/agentic-k8s.md:955                                                                                        |
 | `goat_scheduler_status`   | docs/internals/agentic-k8s.md:958                                                                                        |
