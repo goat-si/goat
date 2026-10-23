@@ -45,7 +45,7 @@ export const decisionEntries = {
     description:
       "Create a durable decision request and return its item and id. Each call creates a new request; check goat_decision_list before retrying after an uncertain result. Silence never approves.",
     guide:
-      "Use distinct option ids and name a stored required permission profile. Optionally recommend one of those ids and set a future expiry. An unanswered request stays open until it expires; expiry does not approve it.",
+      "The caller's profile must allow threads.launch. Use distinct option ids and name a stored required permission profile. Optionally recommend one of those ids and set a future expiry. An unanswered request stays open until it expires; expiry does not approve it.",
     effect: "write",
     capability: "threads.launch",
     hostRoutable: false,
