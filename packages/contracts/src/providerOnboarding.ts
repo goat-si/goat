@@ -196,6 +196,12 @@ export const ProviderLoginResult = Schema.Union([
 ]);
 export type ProviderLoginResult = typeof ProviderLoginResult.Type;
 export const ProviderLoginResultJson = Schema.toCodecJson(ProviderLoginResult);
+/** Following or cancelling a flow reports it; only starting one can ask a person. */
+export const ProviderLoginFlowResult = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("flow"), flow: ProviderLoginFlow }),
+  ProviderOnboardingError,
+]);
+export const ProviderLoginFlowResultJson = Schema.toCodecJson(ProviderLoginFlowResult);
 
 /** Asks a person to open the add-provider popup, preselecting a driver or an instance to sign in. */
 export const ProviderSetupOpenInput = Schema.Struct({
