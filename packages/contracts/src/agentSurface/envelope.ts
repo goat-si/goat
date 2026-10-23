@@ -64,7 +64,7 @@ export type AgentSurfaceHandoff = typeof AgentSurfaceHandoff.Type;
 
 /** What the agent calls after the person acts, when the server does not continue by itself. */
 export const AgentSurfaceNextCall = Schema.Struct({
-  after: Schema.Literals(["approval", "terminal"]),
+  after: Schema.Literals(["approval", "terminal", "input"]),
   path: Schema.String,
   args: Schema.optionalKey(Schema.Unknown),
 });
@@ -367,7 +367,7 @@ export const fromFailure = (fields: Fields, context: CallContext): AgentSurfaceR
 };
 
 const isHandoff = Schema.is(AgentSurfaceHandoff);
-const AFTER: ReadonlySet<string> = new Set(["approval", "terminal"]);
+const AFTER: ReadonlySet<string> = new Set(["approval", "terminal", "input"]);
 
 /** Today's next hints name a tool (`call`); the envelope names its registry path. */
 const nextCall = (value: unknown, context: CallContext): AgentSurfaceNextCall | undefined => {
