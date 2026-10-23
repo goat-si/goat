@@ -75,4 +75,11 @@ export const WIRE_KEEP_RULES: readonly KeepRule[] = [
     reason:
       "Existing device image-cache entries use this prefix; keep it until the cache reader supports legacy lookup (D-CACHE).",
   },
+  {
+    id: "wire-html-bridge-legacy-namespace",
+    pattern: /\bt3\//g,
+    scope: (path) => path === "packages/shared/src/htmlRender.ts",
+    reason:
+      "Saved HTML pages and older clients still speak the t3/ bridge methods, so the bridge documents how it answers them (#944, #966).",
+  },
 ];

@@ -76,7 +76,7 @@ it("checks untracked source locally, excludes ignored files and keeps explicit r
       path.join(dir, "scripts/lib/goat-rename"),
       { recursive: true },
     );
-    for (const script of ["goat-rename.ts", "check-changed.ts"]) {
+    for (const script of ["goat-rename.ts", "check-changed.ts", "lib/changed-tests.ts"]) {
       fs.copyFileSync(path.join(root, "scripts", script), path.join(dir, "scripts", script));
     }
     fs.mkdirSync(path.join(dir, ".github/scripts"), { recursive: true });

@@ -88,6 +88,7 @@ const relayCopyPaths = new Set([
   "packages/client-runtime/src/rpc/session.ts",
   "packages/client-runtime/src/state/environmentHttpAuth.ts",
   "packages/client-runtime/src/webhookAddress.ts",
+  "packages/contracts/src/agentSurface/entries/host_link.ts",
   "packages/contracts/src/agentSurface/registry.ts",
   "packages/contracts/src/environmentHttp.ts",
   "packages/contracts/src/orchestratorMcp.ts",
@@ -158,6 +159,7 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
   [
     "AGENTS.md",
     exactLines(
+      "GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code). It keeps that event-sourced core and still merges upstream changes, so many files here are shared with upstream. [Fork delta](devlog/_chase/010_fork_delta.md) records the areas where the two differ.",
       "# T3 Code",
       "T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.",
       'You can think of T3 Code as an open source "bring-your-own-subscription" alternative to apps like Claude Desktop, Codex App, Cursor Glass and Conductor.',
