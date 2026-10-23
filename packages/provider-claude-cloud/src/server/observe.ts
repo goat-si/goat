@@ -50,7 +50,7 @@ export type Observation =
   | { readonly kind: "done" }
   | { readonly kind: "replied"; readonly text: string }
   | { readonly kind: "failed"; readonly error: ClaudeCloudError };
-interface RunAnchor {
+export interface RunAnchor {
   readonly startedAt: DateTime.Utc;
   readonly followUp: boolean;
   /** How the run owns its cloud prompt; see ReplyAnchor. */

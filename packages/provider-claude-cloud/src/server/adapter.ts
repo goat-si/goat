@@ -31,6 +31,7 @@ import {
   observeCloudSession,
   recoverCloudReply,
   type Observation,
+  type RunAnchor,
 } from "./observe.ts";
 import {
   ClaudeCloudError,
@@ -407,15 +408,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
       const anchor = Effect.fn("ClaudeCloudAdapter.anchor")(function* (
         i: Turn | Attach,
         followUp: boolean,
-      ): Effect.fn.Return<
-        {
-          readonly startedAt: DateTime.Utc;
-          readonly followUp: boolean;
-          readonly ownership: "creation" | "latest" | "unique";
-          readonly prompt: string | undefined;
-        },
-        ClaudeCloudError
-      > {
+      ): Effect.fn.Return<RunAnchor, ClaudeCloudError> {
         const startedAt = yield* options.runStartedAt(i);
         const history = yield* options.runHistory(i).pipe(Effect.result);
         const registered = current(i).cloudTask?.attach === "registered";
