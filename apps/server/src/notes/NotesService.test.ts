@@ -927,6 +927,86 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(layer())),
 );
 
+it.effect("putting an edited note back never replaces a file created at its path meanwhile", () =>
+  Effect.gen(function* () {
+    const notes = yield* Notes.NotesService;
+    const fs = yield* FileSystem.FileSystem;
+    const { notesDir } = yield* Config.ServerConfig;
+    const initial = yield* notes.write({ path: "a.md", body: "# A\n", baseRevision: null }, "user");
+    yield* replaceFs("rename", (original) => async (from, to) => {
+      if (!String(from).endsWith("/a.md")) return original(from, to);
+      await NodeFS.promises.writeFile(String(from), "# Terminal\n");
+      await original(from, to);
+      await NodeFS.promises.writeFile(String(from), "# Newer\n");
+    });
+    const conflict = yield* notes
+      .move({ from: "a.md", to: "b.md", baseRevision: initial.revision }, "user")
+      .pipe(Effect.flip);
+    assert.strictEqual(conflict._tag, "NoteConflictError");
+    if (conflict._tag === "NoteConflictError")
+      assert.strictEqual(conflict.current.body, "# Newer\n");
+    assert.strictEqual(yield* fs.readFileString(`${notesDir}/a.md`), "# Newer\n");
+    assert.deepStrictEqual(yield* fs.readDirectory(notesDir), ["a.md"]);
+  }).pipe(Effect.scoped, Effect.provide(layer())),
+);
+
+it.effect(
+  "a note that cannot be renamed aside on its own volume is kept and the move refused",
+  () =>
+    Effect.gen(function* () {
+      const notes = yield* Notes.NotesService;
+      const fs = yield* FileSystem.FileSystem;
+      const { notesDir } = yield* Config.ServerConfig;
+      const initial = yield* notes.write(
+        { path: "a.md", body: "# A\n", baseRevision: null },
+        "user",
+      );
+      const before = yield* fs.readFileString(`${notesDir}/a.md`);
+      yield* replaceFs(
+        "rename",
+        (original) => (from, to) =>
+          String(from).endsWith("/a.md")
+            ? Promise.reject(Object.assign(new Error("cross-device link"), { code: "EXDEV" }))
+            : original(from, to),
+      );
+      const refused = yield* notes
+        .move({ from: "a.md", to: "b.md", baseRevision: initial.revision }, "user")
+        .pipe(Effect.flip);
+      assert.strictEqual(refused._tag === "NoteError" && refused.reason, "storage");
+      assert.strictEqual(yield* fs.readFileString(`${notesDir}/a.md`), before);
+      assert.deepStrictEqual(yield* fs.readDirectory(notesDir), ["a.md"]);
+    }).pipe(Effect.scoped, Effect.provide(layer())),
+);
+
+it.effect("an edited note that cannot be put back keeps its contents on disk", () =>
+  Effect.gen(function* () {
+    const notes = yield* Notes.NotesService;
+    const fs = yield* FileSystem.FileSystem;
+    const { notesDir } = yield* Config.ServerConfig;
+    const initial = yield* notes.write({ path: "a.md", body: "# A\n", baseRevision: null }, "user");
+    yield* editBeforeRemoval("a.md", "# Terminal\n");
+    yield* replaceFs(
+      "link",
+      (original) => (source, target) =>
+        String(target).endsWith("/a.md")
+          ? Promise.reject(Object.assign(new Error("i/o error"), { code: "EIO" }))
+          : original(source, target),
+    );
+    const failed = yield* notes
+      .delete({ path: "a.md", baseRevision: initial.revision })
+      .pipe(Effect.flip);
+    assert.strictEqual(failed._tag === "NoteError" && failed.reason, "storage");
+    const entries = yield* fs.readDirectory(notesDir);
+    assert.strictEqual(entries.length, 1);
+    assert.isTrue(entries[0]!.startsWith(".note-"));
+    assert.include(failed.message, `${entries[0]}/removed.md`);
+    assert.strictEqual(
+      yield* fs.readFileString(`${notesDir}/${entries[0]}/removed.md`),
+      "# Terminal\n",
+    );
+  }).pipe(Effect.scoped, Effect.provide(layer())),
+);
+
 it.effect("a failed move keeps a destination edited after it was placed", () =>
   Effect.gen(function* () {
     const notes = yield* Notes.NotesService;

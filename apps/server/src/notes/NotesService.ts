@@ -452,8 +452,60 @@ const make = Effect.gen(function* () {
         const directory = yield* pinDirectory(name);
         yield* directory.verifyFile;
         yield* expectOnDisk(name, directory.absolute, expected);
-        // As in persist, an edit between this check and unlink(2) is the remaining window.
-        yield* io(name, () => NodeFSP.unlink(directory.absolute));
+        // POSIX has no compare-and-unlink, so the file is renamed aside and checked again there.
+        // rename(2) takes whatever is at the path at that instant, so an edit landing after the
+        // check above is put back instead of deleted. A writer that keeps the file open and writes
+        // after the second check is the remaining window.
+        let keepAside = false;
+        const aside = yield* Effect.acquireRelease(
+          fs
+            .makeTempDirectory({ directory: directory.parent, prefix: ".note-" })
+            .pipe(Effect.mapError(() => storage)),
+          (temporary) =>
+            keepAside
+              ? Effect.void
+              : fs.remove(temporary, { recursive: true }).pipe(Effect.ignore({ log: true })),
+        );
+        yield* directory.pinTemporary(aside);
+        const removed = path.join(aside, "removed.md");
+        // Never fall back to copy and unlink (EXDEV, EBUSY on a bind-mounted file): that reopens
+        // the window this rename closes. The note stays where it is.
+        yield* io(name, () => NodeFSP.rename(directory.absolute, removed)).pipe(
+          Effect.mapError((error) =>
+            error.reason === "storage"
+              ? new NoteError({
+                  reason: "storage",
+                  message: "The note was kept because it could not be moved aside for removal.",
+                  path: name,
+                })
+              : error,
+          ),
+        );
+        if ((yield* diskRevision(name, removed)) !== expected) {
+          // link(2) never replaces a file created at the path since the rename. That file is the
+          // later write, which would have replaced this one without the move, so it is kept.
+          yield* createExclusive(name, removed, directory.absolute).pipe(
+            Effect.catchTags({
+              NoteError: (error) =>
+                error.reason === "exists"
+                  ? Effect.void
+                  : Effect.sync(() => {
+                      keepAside = true;
+                    }).pipe(
+                      Effect.andThen(
+                        Effect.fail(
+                          new NoteError({
+                            reason: "storage",
+                            message: `The note changed while it was being removed and could not be put back. Its contents are in ${path.relative(root, removed)}.`,
+                            path: name,
+                          }),
+                        ),
+                      ),
+                    ),
+            }),
+          );
+          return yield* changedOnDisk(name, expected);
+        }
         forget(name);
         yield* directory.verify;
       }),
@@ -496,6 +548,10 @@ const make = Effect.gen(function* () {
     expected: string | null,
   ) {
     if ((yield* diskRevision(name, absolute)) === expected) return;
+    return yield* changedOnDisk(name, expected);
+  });
+  /** The error for a note whose file no longer holds the expected revision. */
+  const changedOnDisk = Effect.fnUntraced(function* (name: NotePath, expected: string | null) {
     const current = yield* optionalLoad(name);
     if (!current)
       return yield* new NoteError({
