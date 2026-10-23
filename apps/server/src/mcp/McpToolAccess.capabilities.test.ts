@@ -296,6 +296,9 @@ it.effect("applies the host allowlist to every argument a write declares names a
       "host.cordon",
       "host.drain",
       "host.uncordon",
+      "hub.device_join",
+      "hub.device_leave",
+      "hub.device_repair",
       "ssh.host_forget",
       "ssh.host_prepare",
       "ssh.runtime_update",
@@ -317,6 +320,36 @@ it.effect("applies the host allowlist to every argument a write declares names a
           code: "capability_denied",
           message: expect.stringContaining("Profile owner does not allow host other."),
         });
+    }
+  }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "owner" }))),
+);
+
+// hub.manage alone checks the allowlist in HubMembership; the machine still needs threads.remote.
+it.effect("holds hub device writes to threads.remote for the device they name", () =>
+  Effect.gen(function* () {
+    yield* seed(caller);
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const policy = (yield* settings.getSettings).goatclaw;
+    const owner = policy.profiles.owner!;
+    yield* settings.updateSettings({
+      goatclaw: {
+        ...policy,
+        profiles: {
+          ...policy.profiles,
+          owner: {
+            ...owner,
+            capabilities: owner.capabilities.filter((capability) => capability !== "threads.remote"),
+          },
+        },
+      },
+    });
+    for (const path of ["hub.device_join", "hub.device_leave", "hub.device_repair"]) {
+      const entry = entryAt(path);
+      expect(entry.capability).toBe("hub.manage");
+      expect(yield* call(entry.name, threadCaller(caller), { deviceAlias: "box" })).toEqual({
+        code: "capability_denied",
+        message: `${entry.name} acts on host box, which needs the goatclaw threads.remote capability and a host the profile allows. Profile owner does not allow threads.remote.`,
+      });
     }
   }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "owner" }))),
 );

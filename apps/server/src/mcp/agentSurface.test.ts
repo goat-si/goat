@@ -177,7 +177,7 @@ it("declares every write argument that names a host, so the goatclaw host allowl
     if (entry.effect === "read" || entry.path in NOT_A_FLEET_HOST) continue;
     const document = Schema.toJsonSchemaDocument(toolOf(entry).parametersSchema);
     const named = Object.keys(propertiesOf(document.schema, document.definitions)).filter(
-      (key) => key === "host" || key.endsWith("Host"),
+      (key) => key === "host" || key.endsWith("Host") || key.endsWith("Alias"),
     );
     expect(hostArgumentsOf(entry).toSorted(), entry.path).toEqual(named.toSorted());
   }
