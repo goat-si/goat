@@ -292,6 +292,11 @@ export function makeHarness(
     /** List the bot's own workspace among the projects, as a real server does. */
     readonly botWorkspace?: boolean;
     /**
+     * Real directory as the work project's root. A .git inside it makes the dispatcher give the
+     * task its own worktree; the default is a path that does not exist.
+     */
+    readonly workspaceRoot?: string;
+    /**
      * Every project shell's default model: undefined keeps the shared modelSelection, a value
      * sets it, and null sets no default so resolution falls through to the server settings.
      */
@@ -586,7 +591,10 @@ export function makeHarness(
     ...Array.from({ length: options.projects ?? 1 }, (_, index) => ({
       id: index === 0 ? projectId : ProjectId.make("project:channel-work-" + index),
       title: index === 0 ? "Channel work" : "Other work " + index,
-      workspaceRoot: "/nonexistent/channel-work-" + index,
+      workspaceRoot:
+        index === 0
+          ? (options.workspaceRoot ?? "/nonexistent/channel-work-0")
+          : "/nonexistent/channel-work-" + index,
       defaultModelSelection: shellDefault,
       scripts: [],
       createdAt: "2026-10-12T00:00:00.000Z",

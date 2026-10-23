@@ -64,6 +64,7 @@ function fixture(
   sourceRestriction: OrchestrationV2CloudSourceRestriction = "published-ref",
   registered?: Layer.Layer<ProviderRegistry.ProviderRegistry>,
   profile?: string,
+  callerOverrides: Partial<OrchestrationV2ThreadShell> = {},
 ) {
   const launched: ThreadLaunch.ThreadLaunchInput[] = [];
   const sources: Parameters<CloudSource.CloudTaskSourceService["Service"]["resolve"]>[0][] = [];
@@ -77,7 +78,7 @@ function fixture(
       Layer.provide(NodeServices.layer),
     ),
     Layer.mock(ThreadManagement.ThreadManagementService)({
-      getThreadShell: () => Effect.succeed(caller),
+      getThreadShell: () => Effect.succeed({ ...caller, ...callerOverrides }),
     }),
     Layer.mock(Adapters.ProviderAdapterRegistryV2)({
       get: () =>
@@ -478,5 +479,61 @@ it.effect("role launches are refused while goatclaw is off", () => {
       .pipe(Effect.flip);
     expect(error.code).toBe("capability_denied");
     expect(f.launched).toHaveLength(0);
+  }).pipe(Effect.provide(f.layer));
+});
+
+it.effect(
+  "thread launch prefers the caller model over the project and an explicit model over the caller",
+  () => {
+    const callerModel = { instanceId, model: "caller-model" };
+    const explicitModel = { instanceId, model: "explicit-model" };
+    const registered = Layer.mock(ProviderRegistry.ProviderRegistry)({
+      getProviders: Effect.succeed([
+        {
+          instanceId,
+          models: [{ slug: "fake" }, { slug: "caller-model" }, { slug: "explicit-model" }],
+        },
+      ] as unknown as ReadonlyArray<never>),
+    });
+    const f = fixture(false, "published-ref", registered, undefined, {
+      modelSelection: callerModel,
+    });
+    return Effect.gen(function* () {
+      const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+      yield* service.launch(
+        scope,
+        { title: "Inherited", standingInstructions: false },
+        { runtimeMode: "full-access", interactionMode: "default" },
+      );
+      yield* service.launch(
+        scope,
+        { title: "Explicit", standingInstructions: false, modelSelection: explicitModel },
+        { runtimeMode: "full-access", interactionMode: "default" },
+      );
+      expect(f.launched.map((input) => input.modelSelection)).toEqual([callerModel, explicitModel]);
+    }).pipe(Effect.provide(f.layer));
+  },
+);
+
+it.effect("thread launch forwards the caller runtime ceiling despite a full-access request", () => {
+  const f = fixture(false, "published-ref", undefined, "owner", {
+    runtimeMode: "approval-required",
+  });
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES (${callerId}, ${projectId}, 'Caller', 'codex', 'approval-required', 'default', '2026-10-21', '2026-10-21', '{}')`;
+    yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+      VALUES ('caller-run', ${callerId}, 1, 'codex', 'running', '2026-10-21', '{"userMessageId":"caller-message"}')`;
+    yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)
+      VALUES ('caller-message', ${callerId}, 'caller-run', 'user', 0, '2026-10-21', '2026-10-21', '{"createdBy":"user","creationSource":"web"}')`;
+    const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+    yield* service.launch(
+      scope,
+      { title: "Child", standingInstructions: false, runtimeMode: "full-access" },
+      { runtimeMode: "full-access", interactionMode: "default" },
+    );
+    expect(f.launched).toHaveLength(1);
+    expect(f.launched[0]?.runtimeMode).toBe("approval-required");
   }).pipe(Effect.provide(f.layer));
 });
