@@ -931,6 +931,35 @@ it.effect.each(SYNTHETIC_FOLDER_TRUST_REFUSALS)(
     ),
 );
 
+it.effect("after a refusal, a caller's accept answers in place of interactive Claude", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const policy = trustPolicy();
+      let answers = 0;
+      const accept = Effect.sync(() => {
+        answers += 1;
+      });
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task", { ...policy.trust, accept })
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(SYNTHETIC_FOLDER_TRUST_REFUSALS[0]);
+      h.fake.finish(1);
+      const retried = h.fakes[1]!;
+      yield* retried.ready;
+      retried.emit(RECEIPT);
+      const handle = yield* Fiber.join(fiber);
+      expect(handle.receipt.taskId).toBe("session_ABC123");
+      expect(answers).toBe(1);
+      expect(h.starts.map((start) => start.args)).toEqual([["--cloud=task"], ["--cloud=task"]]);
+      expect(policy.accepted).toHaveLength(1);
+      retried.finish(0);
+      yield* handle.exited;
+    }),
+  ),
+);
+
 it.effect("a second refusal after accepting trust is reported and not retried again", () =>
   Effect.scoped(
     Effect.gen(function* () {

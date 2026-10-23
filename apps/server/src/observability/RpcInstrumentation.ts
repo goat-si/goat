@@ -141,6 +141,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.remoteLaunchesList]: "remoteLaunches",
   [WS_METHODS.cloudMachinesList]: "cloudMachines",
   [WS_METHODS.cloudAgentsListRuns]: "cloudAgents",
+  // Deprecated folder trust RPCs, kept for older clients; remove in GOAT 0.2.0.
   [WS_METHODS.cloudAgentsListFolderTrust]: "cloudAgents",
   [WS_METHODS.cloudAgentsAcceptFolderTrust]: "cloudAgents",
   [WS_METHODS.cloudMachinesConfigure]: "cloudMachines",

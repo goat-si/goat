@@ -191,6 +191,7 @@ const makeHarness = Effect.fnUntraced(function* () {
           trustChecks.push(cwd);
           return trustAllowed;
         }),
+      accept: () => Effect.die("refused launches are driven by the CLI tests"),
       record: (input) =>
         Effect.sync(() => {
           trustRecords.push(input);

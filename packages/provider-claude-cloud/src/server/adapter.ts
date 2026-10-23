@@ -164,6 +164,11 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
    */
   readonly folderTrust?: {
     readonly allowed: (cwd: string) => Effect.Effect<boolean>;
+    /**
+     * Answers the folder's trust prompt after Claude refused a launch, sharing one answer per
+     * folder with GOAT's own background trust.
+     */
+    readonly accept: (cwd: string) => Effect.Effect<void, ClaudeCloudError>;
     readonly record: (input: {
       readonly cwd: string;
       readonly threadId: Turn["threadId"];
@@ -716,6 +721,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                     i.message.text,
                     trustAllowed
                       ? {
+                          accept: options.folderTrust!.accept(launchSource.cwd),
                           onAccepted: () => {
                             trustPrompts += 1;
                           },

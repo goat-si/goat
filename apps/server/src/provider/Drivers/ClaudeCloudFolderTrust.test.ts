@@ -2,7 +2,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { ClaudeCloudCli, type ClaudeCloudLogin } from "@goat/provider-claude-cloud/server";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -51,7 +53,15 @@ it.effect("reads trust from Claude's config for the folder or a folder above it"
 );
 
 const harness = (
-  options: { readonly configJson?: string; readonly claudeRecords?: boolean } = {},
+  options: {
+    readonly configJson?: string;
+    readonly claudeRecords?: boolean;
+    /** Holds Claude on its prompt until released. */
+    readonly gate?: {
+      readonly opened: Deferred.Deferred<void>;
+      readonly release: Deferred.Deferred<void>;
+    };
+  } = {},
 ) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -89,6 +99,10 @@ const harness = (
       acceptTrust: (_login: ClaudeCloudLogin, cwd: string) =>
         Effect.gen(function* () {
           accepted.push(cwd);
+          if (options.gate) {
+            yield* Deferred.succeed(options.gate.opened, undefined);
+            yield* Deferred.await(options.gate.release);
+          }
           if (options.claudeRecords === false) return;
           yield* fileSystem
             .writeFileString(
@@ -98,7 +112,7 @@ const harness = (
             .pipe(Effect.orDie);
         }),
     } as never);
-    const trust = makeClaudeCloudFolderTrust({
+    const trust = yield* makeClaudeCloudFolderTrust({
       instanceId: ProviderInstanceId.make("claudeCloud"),
       sql,
       projects,
@@ -152,16 +166,15 @@ it.effect("trusts only live project folders and their GOAT worktrees", () =>
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
-it.effect("records each acceptance in the audit log and reports it as trust state", () =>
+const auditRows = (sql: SqlClient.SqlClient) =>
+  sql<{ actor: string; action: string; target: string; outcome: string }>`
+    SELECT actor, action, target, outcome FROM audit_events`;
+
+it.effect("records each launch-time acceptance in the audit log", () =>
   Effect.gen(function* () {
     const { trust, sql } = yield* harness({ configJson: JSON.stringify({ projects: {} }) });
-    assert.deepEqual(yield* trust.capability.states([ROOT]), [
-      { trusted: false, acceptedByGoatAt: null },
-    ]);
     yield* trust.policy.record({ cwd: ROOT, threadId: ThreadId.make("thread-1"), prompts: 1 });
-    const rows = yield* sql<{ actor: string; action: string; target: string; outcome: string }>`
-      SELECT actor, action, target, outcome FROM audit_events`;
-    assert.deepEqual(rows, [
+    assert.deepEqual(yield* auditRows(sql), [
       {
         actor: "thread:thread-1",
         action: "claudeCloud.folderTrust.accept",
@@ -169,55 +182,99 @@ it.effect("records each acceptance in the audit log and reports it as trust stat
         outcome: "accepted",
       },
     ]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.effect("an untrusted project folder becomes trusted with nobody asking", () =>
+  Effect.gen(function* () {
+    const { trust, accepted, sql } = yield* harness({ configJson: "{}" });
+    yield* trust.capability.ensure(ROOT);
+    assert.deepEqual(accepted, [ROOT]);
+    assert.deepEqual(yield* auditRows(sql), [
+      {
+        actor: "goat",
+        action: "claudeCloud.folderTrust.accept",
+        target: ROOT,
+        outcome: "accepted",
+      },
+    ]);
+    // Claude's config now holds the answer, so asking again does not reopen Claude.
+    yield* trust.capability.ensure(ROOT);
+    assert.deepEqual(accepted, [ROOT]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.effect("concurrent requests for one folder open Claude once", () =>
+  Effect.gen(function* () {
+    const gate = { opened: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
+    const { trust, accepted } = yield* harness({ configJson: "{}", gate });
+    const first = yield* trust.capability.ensure(ROOT).pipe(Effect.forkChild);
+    yield* Deferred.await(gate.opened);
+    const second = yield* trust.capability.ensure(`${ROOT}/`).pipe(Effect.forkChild);
+    yield* Deferred.succeed(gate.release, undefined);
+    yield* Fiber.join(first);
+    yield* Fiber.join(second);
+    assert.deepEqual(accepted, [ROOT]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.effect("a refused launch joins a background answer instead of opening Claude again", () =>
+  Effect.gen(function* () {
+    const gate = { opened: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
+    const { trust, accepted } = yield* harness({ configJson: "{}", gate });
+    const background = yield* trust.capability.ensure(ROOT).pipe(Effect.forkChild);
+    yield* Deferred.await(gate.opened);
+    const launch = yield* trust.policy.accept(ROOT).pipe(Effect.forkChild);
+    yield* Deferred.succeed(gate.release, undefined);
+    yield* Fiber.join(background);
+    yield* Fiber.join(launch);
+    assert.deepEqual(accepted, [ROOT]);
+    // Once Claude records the answer, a later refused launch does not reopen it either.
+    yield* trust.policy.accept(WORKTREE);
+    assert.deepEqual(accepted, [ROOT]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.effect("still reports folder state and GOAT's last acceptance to older clients", () =>
+  Effect.gen(function* () {
+    const { trust } = yield* harness({ configJson: "{}" });
+    assert.deepEqual(yield* trust.capability.states([ROOT]), [
+      { trusted: false, acceptedByGoatAt: null },
+    ]);
+    yield* trust.capability.ensure(ROOT);
     const [state] = yield* trust.capability.states([ROOT]);
+    assert.equal(state?.trusted, true);
     assert.isString(state?.acceptedByGoatAt);
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
-it.effect("Trust now answers the prompt once, skips trusted folders and refuses others", () =>
+it.effect("never accepts a folder outside GOAT's projects and their worktrees", () =>
   Effect.gen(function* () {
-    const untrusted = yield* harness({ configJson: "{}" });
-    yield* untrusted.trust.capability.accept(ROOT);
-    assert.deepEqual(untrusted.accepted, [ROOT]);
-    const [state] = yield* untrusted.trust.capability.states([ROOT]);
-    assert.equal(state?.trusted, true);
-    assert.isString(state?.acceptedByGoatAt);
-    const unrecorded = yield* harness({ configJson: "{}", claudeRecords: false });
-    const declined = yield* unrecorded.trust.capability.accept(ROOT).pipe(Effect.flip);
-    assert.match(declined.detail, /did not record trust/u);
-    const [after] = yield* unrecorded.trust.capability.states([ROOT]);
-    assert.equal(after?.trusted, false);
-    // Only the first, recorded acceptance reached the audit log.
-    const rows = yield* unrecorded.sql<{ readonly count: number }>`
-      SELECT COUNT(*) AS count FROM audit_events WHERE target = ${ROOT}`;
-    assert.equal(rows[0]?.count, 1);
-    const refused = yield* untrusted.trust.capability.accept("/tmp/elsewhere").pipe(Effect.flip);
-    assert.match(refused.detail, /only its own project folders/u);
-    const trusted = yield* harness({
-      configJson: JSON.stringify({ projects: { [ROOT]: { hasTrustDialogAccepted: true } } }),
-    });
-    yield* trusted.trust.capability.accept(ROOT);
-    assert.deepEqual(trusted.accepted, []);
+    const { trust, accepted, sql } = yield* harness({ configJson: "{}" });
+    yield* Effect.forEach(
+      ["/tmp/elsewhere", "/fixture/worktrees/gone", STRAY_WORKTREE, SUBFOLDER, UNRESOLVED],
+      trust.capability.ensure,
+    );
+    assert.deepEqual(accepted, []);
+    assert.deepEqual(yield* auditRows(sql), []);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.effect("a failed acceptance is logged, not returned, and leaves no audit row", () =>
+  Effect.gen(function* () {
+    const { trust, accepted, sql } = yield* harness({ configJson: "{}", claudeRecords: false });
+    yield* trust.capability.ensure(ROOT);
+    assert.deepEqual(accepted, [ROOT]);
+    assert.deepEqual(yield* auditRows(sql), []);
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
 it.effect("a worktree is trusted when Claude trusts its main checkout", () =>
   Effect.gen(function* () {
-    const { trust } = yield* harness({
+    const { trust, accepted } = yield* harness({
       configJson: JSON.stringify({ projects: { [ROOT]: { hasTrustDialogAccepted: true } } }),
     });
-    assert.deepEqual(
-      (yield* trust.capability.states([WORKTREE, "/tmp/elsewhere"])).map((state) => state.trusted),
-      [true, false],
-    );
-  }).pipe(Effect.provide(layer), Effect.scoped),
-);
-
-it.effect("reports unknown trust when Claude's config cannot be read", () =>
-  Effect.gen(function* () {
-    const { trust } = yield* harness();
-    assert.deepEqual(yield* trust.capability.states([ROOT]), [
-      { trusted: null, acceptedByGoatAt: null },
-    ]);
+    yield* Effect.forEach([ROOT, WORKTREE], trust.capability.ensure);
+    assert.deepEqual(accepted, []);
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
