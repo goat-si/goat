@@ -338,7 +338,9 @@ it.effect("holds hub device writes to threads.remote for the device they name", 
           ...policy.profiles,
           owner: {
             ...owner,
-            capabilities: owner.capabilities.filter((capability) => capability !== "threads.remote"),
+            capabilities: owner.capabilities.filter(
+              (capability) => capability !== "threads.remote",
+            ),
           },
         },
       },
