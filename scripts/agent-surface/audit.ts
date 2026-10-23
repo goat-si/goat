@@ -22,7 +22,7 @@ import {
   sourceFiles,
 } from "./inventory.ts";
 import { SHIPPED_TOOL_NAMES, toolTokensIn } from "./listedNames.ts";
-import { code, list, pct, table, TICK } from "./markdown.ts";
+import { code, groupBy, list, pct, table, TICK } from "./markdown.ts";
 
 const OUTPUT = "docs/internals/agent-surface-audit.md";
 
@@ -156,15 +156,6 @@ const checkCliMention = (mention: CliMention, cli: ReadonlyArray<CliEntry>): Cli
     }
   }
   return null;
-};
-
-const groupBy = <A>(items: ReadonlyArray<A>, key: (item: A) => string) => {
-  const out = new Map<string, Array<A>>();
-  for (const item of items) {
-    const k = key(item);
-    out.set(k, [...(out.get(k) ?? []), item]);
-  }
-  return out;
 };
 
 const SYNONYMS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
@@ -419,6 +410,10 @@ function render(inventory: Inventory): string {
         [
           "Mutating tools that accept clientRequestId",
           mutating.length - mutatingWithoutCrid.length,
+        ],
+        [
+          "Mutating tools whose clientRequestId GOAT deduplicates",
+          mutating.filter((tool) => tool.deduplicated).length,
         ],
         [
           "Input parameters with a description",
