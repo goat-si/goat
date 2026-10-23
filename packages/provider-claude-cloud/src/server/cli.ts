@@ -1,6 +1,9 @@
 import * as Context from "effect/Context";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -23,6 +26,7 @@ import {
   SESSION_ID,
   validateLogin,
 } from "./protocol.ts";
+import { makeSessionRead, type SessionRead } from "./sessionRead.ts";
 
 export interface ClaudeCloudLogin {
   readonly binary: string;
@@ -88,13 +92,30 @@ export class ClaudeCloudCli extends Context.Service<
       taskId: string,
       message: string,
     ) => Effect.Effect<{ taskId: string; url: string }, ClaudeCloudError>;
+    /**
+     * Reads the session's transcript through a throwaway teleport under `root`. Each read runs
+     * one small local model turn; GOAT removes the local copy afterwards.
+     */
+    readonly readSession: (
+      login: ClaudeCloudLogin,
+      root: string,
+      sessionId: string,
+    ) => Effect.Effect<SessionRead, ClaudeCloudError>;
   }
 >()("@goat/provider-claude-cloud/server/cli/ClaudeCloudCli") {}
+
+export type ClaudeCloudRun = (
+  login: ClaudeCloudLogin,
+  cwd: string,
+  args: string[],
+  options?: { readonly timeout?: Duration.Input },
+) => Effect.Effect<{ code: number; stdout: string }, ClaudeCloudError>;
 
 const run = Effect.fn("ClaudeCloudCli.run")(function* (
   login: ClaudeCloudLogin,
   cwd: string,
   args: string[],
+  options?: Parameters<ClaudeCloudRun>[3],
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const environment = yield* checkLogin(login);
@@ -138,7 +159,7 @@ const run = Effect.fn("ClaudeCloudCli.run")(function* (
       return { code: Number(code), stdout: stdout.text };
     }),
   ).pipe(
-    Effect.timeout("30 seconds"),
+    Effect.timeout(options?.timeout ?? "30 seconds"),
     Effect.mapError((cause) =>
       isClaudeCloudError(cause)
         ? cause
@@ -354,6 +375,12 @@ const make = Effect.gen(function* () {
   const provideSpawner = <A, E>(
     effect: Effect.Effect<A, E, ChildProcessSpawner.ChildProcessSpawner>,
   ) => Effect.provideService(effect, ChildProcessSpawner.ChildProcessSpawner, spawner);
+  const readSession = makeSessionRead({
+    run: (login, cwd, args, options) => provideSpawner(run(login, cwd, args, options)),
+    spawner,
+    fileSystem: yield* FileSystem.FileSystem,
+    path: yield* Path.Path,
+  });
 
   /** Opens interactive Claude in the folder only to answer its trust prompt, then closes it. */
   const acceptTrust = Effect.fn("ClaudeCloudCli.acceptTrust")(function* (
@@ -611,6 +638,7 @@ const make = Effect.gen(function* () {
   return ClaudeCloudCli.of({
     readiness: (login, cwd) => provideSpawner(probeReadiness(login, cwd)),
     acceptTrust,
+    readSession,
     start: Effect.fn("ClaudeCloudCli.start")(function* (login, cwd, prompt, trust) {
       // --cloud accepts IDs and URLs as well as descriptions. Never reinterpret a create as attach.
       if (

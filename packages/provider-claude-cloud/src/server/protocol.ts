@@ -32,7 +32,11 @@ export class ClaudeCloudError extends Schema.TaggedError<ClaudeCloudError>()("Cl
 
 export const isClaudeCloudError = Schema.is(ClaudeCloudError);
 
-const Auth = Schema.Struct({ loggedIn: Schema.Boolean, authMethod: Schema.String });
+const Auth = Schema.Struct({
+  loggedIn: Schema.Boolean,
+  authMethod: Schema.String,
+  projectsDirectory: Schema.optional(Schema.String),
+});
 const Send = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), session_id: Schema.String, url: Schema.String }),
   Schema.Struct({ ok: Schema.Literal(false), error: Schema.String }),

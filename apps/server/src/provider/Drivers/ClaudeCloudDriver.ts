@@ -74,6 +74,8 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
         Effect.provide(ClaudeCloudCli.layer),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(PtyAdapter.PtyAdapter, pty),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
       );
       const resolveLogin = resolveClaudeCloudLogin(config.sourceInstanceId).pipe(
         Effect.provideService(ProviderHost.ProviderHost, host),
@@ -146,7 +148,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
           auth: { status: "authenticated" as const, type: "claude.ai" },
           checkedAt: DateTime.formatIso(yield* DateTime.now),
           message:
-            "Claude Cloud starts tasks from the project folder. Local changes may be included. Waits for a session-linked GitHub PR for up to two hours; PR presence does not confirm passing checks.",
+            "Claude Cloud starts tasks from the project folder. Local changes may be included. GOAT follows each run for up to two hours by reading the session, which runs a small paid model turn per check, and by watching for a session-linked GitHub PR.",
         };
       }).pipe(Effect.catch((cause) => Effect.succeed(base("error", cause.detail))));
       const snapshot = yield* makeManagedServerProvider({
@@ -213,6 +215,13 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
         instanceId,
         resolveLogin,
         resolveControlCwd,
+        resolveReadRoot: Effect.succeed(
+          path.join(
+            host.paths.providerStatusCacheDir,
+            "claude-cloud-reads",
+            encodeURIComponent(instanceId),
+          ),
+        ),
         folderTrust: folderTrust.policy,
         observe: (input) =>
           pullRequests.findCloudSessionPullRequest(input).pipe(

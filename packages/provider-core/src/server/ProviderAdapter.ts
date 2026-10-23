@@ -154,6 +154,8 @@ export const ProviderAdapterV2Event = Schema.Union([
     status: Schema.Literals(["completed", "interrupted", "cancelled"]),
     failure: Schema.Null,
     threadDisposition: Schema.Literals(["reusable", "broken"]),
+    /** The full result a cloud task reported, when its saved summary is shortened. */
+    resultText: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("turn.terminal"),
