@@ -2,8 +2,8 @@
 
 ## First checkout
 
-Install `vp` using the [root README](../../README.md#install-vp). The checkout requires Node 24.16
-or newer, because earlier `node:sqlite` builds cut TEXT values off at the first NUL character and
+Install `vp` using the [root README](../../README.md#install-vp). The checkout requires Node 24.x,
+at least 24.16.0, because earlier `node:sqlite` builds cut TEXT values off at the first NUL character and
 the server's memory tests round-trip such text. Bun is optional. From the repository root:
 
 ```sh
