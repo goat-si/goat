@@ -167,10 +167,11 @@ following it: the run keeps going, and you cancel it from its page in the provid
 
 ## Scripts on the host
 
-On the machine that runs the environment, `goat thread` uses the same tools
-without a sign-in:
+On the machine that runs the environment, sign the terminal in once with
+`goat login`, and `goat thread` then uses the same tools:
 
 ```sh
+goat login
 id=$(goat thread start . "Find why the tests are slow")
 goat thread send "$id" "Now fix it" --wait
 goat thread show "$id"
@@ -186,6 +187,14 @@ the message to read it from stdin.
 `--wait` prints the agent's reply. It exits 1 when the run fails or stops, and
 2 when the agent waits for an answer you give in the app. Add `--json` for a
 result that always includes the thread id.
+
+`goat login` stores a client session for this environment that lasts 30 days. It
+appears under **Settings → Connections** as "goat CLI", and threads it starts or
+changes run at most `approval-required` unless you pass `--access`. `goat whoami`
+shows which credential the terminal uses, and `goat logout` revokes it. Inside a
+GOAT thread whose agent has a GOAT credential in its environment, `goat` uses
+that thread's own access instead, and `goat login`, `goat pair`, and the
+`goat auth` commands that create credentials refuse to run.
 
 ## Remove an agent
 

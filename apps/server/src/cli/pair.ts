@@ -48,6 +48,7 @@ import {
 } from "../startupAccess.ts";
 import { authScopesFlag } from "./authScopes.ts";
 import { baseDirFlag, DurationFromString } from "./config.ts";
+import { refuseInThread } from "./cliCredential.ts";
 
 const WELL_KNOWN_ENVIRONMENT_PATH = GOAT_ENVIRONMENT_PATH;
 const PAIR_PROBE_TIMEOUT = Duration.millis(2_500);
@@ -513,6 +514,7 @@ export const pairCommand = Command.make("pair", {
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
+      yield* refuseInThread("goat pair");
       const cliLogLevel = yield* GlobalFlag.LogLevel;
       const logLevel = Option.getOrElse(cliLogLevel, () => "Warn" as const);
 
