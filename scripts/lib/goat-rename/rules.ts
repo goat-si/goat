@@ -5,7 +5,11 @@
  *
  * Plan and reasons: devlog/_plan/261013_remove-t3-internals/000_plan.md.
  */
+import { isTest } from "./paths.ts";
+export { isTest } from "./paths.ts";
+
 import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
+import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 
 /**
  * Files no rule touches and the residue check skips. Upstream-owned files
@@ -31,11 +35,6 @@ export const isExempt = (path: string): boolean =>
   (path.startsWith(".github/workflows/") && !path.startsWith(".github/workflows/goat-")) ||
   // AUR packaging is published only by the disabled upstream workflow.
   path.startsWith("packaging/aur/");
-
-export const isTest = (path: string): boolean =>
-  /\.(?:test|testkit|fixture|bench)\.[^/]+$|(?:^|\/)(?:__tests__|testkit|testFixtures|fixtures)(?:\/|$)/.test(
-    path,
-  );
 
 const inLintPlugin = (path: string) => path.startsWith("oxlint-plugin-");
 
@@ -112,15 +111,19 @@ export const ENV_NAME = new RegExp(
   "g",
 );
 
-/** The SSH runner and the fixtures that pin its bytes (plan D17). */
+/**
+ * The SSH runner and the fixtures that pin its bytes (plan D17). The ownership scripts are
+ * uploaded byte for byte and hand T3CODE_ names to older runtimes, so a marker would change them.
+ */
 const outsideSshRunner = (path: string) =>
-  !/^packages\/ssh\/src\/(tunnel[^/]*|fixtures\/.*)$/.test(path);
+  !/^packages\/ssh\/src\/(tunnel[^/]*|runtimeOwnershipScripts\.ts|fixtures\/.*)$/.test(path);
 
 /** Lint rule ids are listed so that unrelated `t3code/...` paths and branch names stay. */
 const LINT_RULE_IDS =
   "namespace-node-imports|no-dom-test-environment|no-frame-waits-in-browser-tests|no-global-process-runtime|no-hermes-unsupported-apis|no-hookless-use-function|no-inline-schema-compile|no-low-value-comments|no-manual-effect-runtime-in-tests|no-manual-memo|no-mobile-pull-request-glyph-literals|no-mobile-uniwind-theme-escape-hatches|no-native-title-tooltip|no-outset-state-indicators|no-polling-loop-in-tests|no-raw-mcp-registration|no-raw-resize-observer|no-real-time-wait-in-tests|no-rpc-permission-bypass|no-test-in-loop|no-test-timeout-or-unreasoned-skip|no-unscoped-has|no-wall-clock-in-tests|prefer-catch-tags|prefer-effect-fn|require-centered-scroll-gutter|require-disposable-render|require-suppression-reason";
 
 export const TEXT_RULES: readonly TextRule[] = [
+  ...VISIBLE_TEXT_RULES,
   {
     id: "pull-request-context-tag",
     category: "local-names",
@@ -517,6 +520,7 @@ export const DROP_RULES: readonly DropRule[] = [
 
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
+  ...VISIBLE_KEEP_RULES,
   {
     id: "legacy-server-error-reader",
     pattern: /T3 server WebSocket/g,

@@ -104,7 +104,7 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
     withHostSync((service, caller) => service.cancel(input, caller)),
   ),
   goat_provider_addable_list: McpToolAccess.reads(() => onboarding((service) => service.list)),
-  goat_provider_setup_open: McpToolAccess.writes((input) =>
+  goat_provider_setup_open: McpToolAccess.writesAsCaller((input) =>
     onboarding((service, scope) => service.setupOpen(input, scope)),
   ),
   goat_provider_login_start: McpToolAccess.writes((input) =>
@@ -151,7 +151,7 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
   goat_cloud_run_forget: McpToolAccess.destructive(
     McpToolAccess.writesEnvironment((input) => cloud((service) => service.forget(input))),
   ),
-  goat_provider_home_request: McpToolAccess.writes((input) =>
+  goat_provider_home_request: McpToolAccess.writesAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocation.McpInvocationContext;
       const requests = yield* HomeRequests.CodexHomeRequests;

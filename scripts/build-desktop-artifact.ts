@@ -1044,7 +1044,7 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // app; a second copy inside app.asar would stay ad hoc signed.
   "!apps/desktop/prod-resources/resource-monitor",
   "!apps/desktop/prod-resources/resource-monitor/**/*",
-  // T3 Code always passes the user's installed Claude executable to the SDK,
+  // GOAT always passes the user's installed Claude executable to the SDK,
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",

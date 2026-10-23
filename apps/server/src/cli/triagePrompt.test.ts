@@ -1,21 +1,20 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFS from "node:fs";
-import * as NodePath from "node:path";
-
 import { assert, it } from "@effect/vitest";
 
-import { buildTriageContext, buildTriageLaunchPrompt, TRIAGE_PLAYBOOK } from "./triagePrompt.ts";
+import { exposureProblems } from "../../../../scripts/lib/release-verify.ts";
 
-it("stays byte-identical to .github/triage/PLAYBOOK.md", () => {
-  // Old releases fetch the repo copy from `main` and follow it when it differs
-  // from their bundled playbook. The two must say the same thing at HEAD, or a
-  // playbook edit silently changes behavior only for old (or only for new)
-  // installs.
-  const canonicalPath = NodePath.join(
-    import.meta.dirname,
-    "../../../../.github/triage/PLAYBOOK.md",
-  );
-  assert.equal(TRIAGE_PLAYBOOK, NodeFS.readFileSync(canonicalPath, "utf8"));
+import {
+  buildTriageContext,
+  buildTriageLaunchPrompt,
+  buildTriageSeedPrompt,
+  TRIAGE_PLAYBOOK,
+} from "./triagePrompt.ts";
+
+it("bundles triage instructions without exposing the private source repository", () => {
+  assert.deepEqual(exposureProblems("triage-playbook.md", TRIAGE_PLAYBOOK), []);
+  assert.deepEqual(exposureProblems("triage-seed.md", buildTriageSeedPrompt("context.md")), []);
+  assert.include(TRIAGE_PLAYBOOK, "# GOAT triage playbook");
+  assert.notInclude(TRIAGE_PLAYBOOK, "pingdotgg/t3code");
+  assert.notInclude(TRIAGE_PLAYBOOK, "npx t3");
 });
 
 it("launch prompt stays a single argv-safe line naming the prompt file", () => {
@@ -52,6 +51,7 @@ it("context file labels the CLI version as the CLI's, not the user's build", () 
       sourceCacheDir: "/home/u/.t3/source",
     },
   });
+  assert.deepEqual(exposureProblems("triage-context.md", context), []);
   assert.notInclude(context, "Installed version");
   assert.notInclude(context, "Release tag");
   assert.include(context, "- Triage CLI version: 0.0.42 (");

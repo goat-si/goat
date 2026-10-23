@@ -114,7 +114,7 @@ const memoryRefusal = (message: string) =>
 
 export interface SshDispatchHost {
   readonly alias: string;
-  readonly source: "ssh-config" | "known-hosts";
+  readonly source: "ssh-config" | "known-hosts" | "cloud-machine";
   readonly reachable?: boolean;
   readonly probeError?: string;
 }
@@ -1384,10 +1384,9 @@ const make = Effect.gen(function* () {
     readonly probe: boolean;
   }) {
     const hosts = (yield* knownHosts).filter((entry) => SAFE_HOST_ALIAS.test(entry.alias));
-    if (!input.probe) {
-      return hosts.map((entry) => ({ alias: entry.alias, source: entry.source }));
-    }
-    return yield* Effect.forEach(
+    const cloud = yield* CloudMachineService.unconfiguredHosts(cloudMachines, hosts);
+    if (!input.probe) return [...hosts.map(({ alias, source }) => ({ alias, source })), ...cloud];
+    const probed = yield* Effect.forEach(
       hosts,
       (entry) =>
         withRuntime(
@@ -1412,6 +1411,7 @@ const make = Effect.gen(function* () {
         ),
       { concurrency: 8 },
     );
+    return [...probed, ...cloud];
   });
 
   const browse = Effect.fn("SshRemoteDispatch.browse")(function* (input: {

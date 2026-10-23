@@ -120,7 +120,7 @@ These steps need T3 Connect, which is disabled in every build until GOAT Connect
 ships (`GOAT_CONNECT_ENABLED` in `packages/shared/src/goatConnect.ts`); they stay here
 for that work.
 
-Build the host client and mobile app with the same relay URL and Clerk public configuration. A source server or desktop development build can host the test environment; keep its T3 home separate from an existing installation. Signing into the phone alone does not link a host environment. Use the host client's T3 Connect settings to link it and enable activity publishing. A private Clerk instance also needs its own CLI OAuth application before using `goat connect login`; the repository's production CLI client ID belongs to the maintainers' instance.
+Build the host client and mobile app with the same relay URL and Clerk public configuration. A source server or desktop development build can host the test environment; keep its GOAT home separate from an existing installation. Signing into the phone alone does not link a host environment. Use the host client's T3 Connect settings to link it and enable activity publishing. A private Clerk instance also needs its own CLI OAuth application before using `goat connect login`; the repository's production CLI client ID belongs to the maintainers' instance.
 
 For deployment through GitHub Actions, add `FCM_SERVICE_ACCOUNT` to the `production` environment's secrets. The relay workflow passes it to Alchemy. The maintainer must also supply `google-services.json` for the production Android package in the native build environment; changing the relay secret alone cannot move an installed app to another Firebase project.
 

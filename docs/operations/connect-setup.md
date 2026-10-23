@@ -48,7 +48,7 @@ depend on. The stack's `PublishClientConfig` action writes the resulting relay U
 
 In Clerk's OAuth applications settings:
 
-1. Create a public OAuth application for the T3 CLI, using authorization-code exchange with PKCE.
+1. Create a public OAuth application for the GOAT CLI, using authorization-code exchange with PKCE.
 2. Allow the redirect URI `http://127.0.0.1:34338/callback`.
 3. Enable the `openid`, `profile`, `email`, and `offline_access` scopes.
 4. Enable **Device authorization grant** on the application. Headless and SSH authorization use
@@ -116,7 +116,7 @@ Local signed builds additionally use:
 
 ```dotenv
 GOAT_APPLE_TEAM_ID=ABC1234567
-GOAT_MACOS_PROVISIONING_PROFILE=/absolute/path/to/t3code.provisionprofile
+GOAT_MACOS_PROVISIONING_PROFILE=/absolute/path/to/goat.provisionprofile
 # Override only when the RP domain differs from the Clerk Frontend API hostname.
 T3CODE_CLERK_PASSKEY_RP_DOMAINS=example.clerk.accounts.dev,clerk.example.com
 ```
@@ -132,15 +132,15 @@ actual web and server ports. For example, with the default ports:
 ```sh
 VITE_DEV_SERVER_URL=http://127.0.0.1:5733 \
 GOAT_PORT=13773 \
-  "/Applications/T3 Code (Alpha).app/Contents/MacOS/T3 Code (Alpha)"
+  "/Applications/GOAT (Nightly).app/Contents/MacOS/GOAT (Nightly)"
 ```
 
 Rebuild the signed app after native dependency, main-process, preload, entitlement, provisioning,
 or signing changes. Renderer edits can reuse it. Verify the installed bundle before testing:
 
 ```sh
-codesign --verify --deep --strict "/Applications/T3 Code (Alpha).app"
-codesign -d --entitlements :- "/Applications/T3 Code (Alpha).app"
+codesign --verify --deep --strict "/Applications/GOAT (Nightly).app"
+codesign -d --entitlements :- "/Applications/GOAT (Nightly).app"
 ```
 
 ## Restricting sign-ups
