@@ -43,6 +43,10 @@
       "types": "./src/agentSurface/envelope.ts",
       "import": "./src/agentSurface/envelope.ts"
     },
+    "./agentSurface/operation": {
+      "types": "./src/agentSurface/operation.ts",
+      "import": "./src/agentSurface/operation.ts"
+    },
     "./agentSurface/resolve": {
       "types": "./src/agentSurface/resolve.ts",
       "import": "./src/agentSurface/resolve.ts"
