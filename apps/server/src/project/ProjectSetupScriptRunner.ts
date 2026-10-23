@@ -21,6 +21,8 @@ import * as Schema from "effect/Schema";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectService from "./ProjectService.ts";
+import * as GoatProjectFileLoader from "./GoatProjectFileLoader.ts";
+import { makeSetupScriptResolver } from "./projectSetupScripts.ts";
 
 export interface ProjectSetupScriptRunnerResultNoScript {
   readonly status: "no-script";
@@ -191,6 +193,7 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const resolveSetupProjectScripts = yield* makeSetupScriptResolver;
   const crypto = yield* Crypto.Crypto;
   const completionShell = resolveCompletionShell(
     yield* HostProcess.Platform,
@@ -344,7 +347,23 @@ export const make = Effect.gen(function* () {
       ),
     );
     const trigger = input.trigger ?? "setup";
-    const scripts = resolveProjectScripts(settings, project);
+    const scripts =
+      trigger === "setup"
+        ? yield* resolveSetupProjectScripts(
+            settings,
+            project,
+            input.cwd ?? input.worktreePath,
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProjectSetupScriptOperationError({
+                  ...errorContext,
+                  operation: "resolveProject",
+                  cause,
+                }),
+            ),
+          )
+        : resolveProjectScripts(settings, project);
     const script =
       trigger === "settle"
         ? settleProjectScript(scripts)
@@ -460,4 +479,6 @@ export const make = Effect.gen(function* () {
   return ProjectSetupScriptRunner.of({ runForThread });
 });
 
-export const layer = Layer.effect(ProjectSetupScriptRunner, make);
+export const layer = Layer.effect(ProjectSetupScriptRunner, make).pipe(
+  Layer.provide(GoatProjectFileLoader.layer),
+);
