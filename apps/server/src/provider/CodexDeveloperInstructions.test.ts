@@ -1,5 +1,7 @@
 import * as NodeAssert from "node:assert/strict";
 
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { listedToolName } from "@goat/contracts/agentSurface/resolve";
 import {
   GOAT_ORCHESTRATION_INSTRUCTIONS,
   GOAT_ORCHESTRATION_SECTIONS,
@@ -66,6 +68,19 @@ describe("buildCodexAdditionalContext", () => {
       kind: "application",
       value: GOAT_DEVELOPMENT_INSTRUCTIONS,
     });
+  });
+
+  it("names only tools the GOAT server lists", () => {
+    const listed = new Set(Object.values(agentSurfaceRegistry).map(listedToolName));
+    const context = buildCodexAdditionalContext(
+      { model: "gpt-5.3-codex", reasoningEffort: "high" },
+      { browser: true, device: true, computerUse: true },
+    );
+    for (const [key, entry] of Object.entries(context)) {
+      for (const name of entry.value.match(/\bgoat_[a-z_]+\b/g) ?? []) {
+        NodeAssert.ok(listed.has(name), `${key} names ${name}, which no GOAT tool is listed as`);
+      }
+    }
   });
 });
 
