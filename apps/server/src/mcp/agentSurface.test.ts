@@ -16,18 +16,32 @@ import {
   type McpInvocationScope,
 } from "./McpInvocationContext.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { canonicalToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import {
+  canonicalToolAliases,
+  canonicalToolName,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
 import { type AgentSurfaceResult, FAILURE_CLASSES } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/ai";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 
-import { catalog, client, dependencies, entries, toolkits } from "./agentSurface.testkit.ts";
 import {
+  catalog,
+  client,
+  dependencies,
+  entries,
+  serveCatalogOverHttp,
+  toolkits,
+} from "./agentSurface.testkit.ts";
+import {
+  GOAT_MCP_CANONICAL_TOOL_ALIASES,
   resolveGoatMcpToolDefinition,
   resolveGoatMcpToolPresentation,
 } from "@goat/shared/goatMcpToolPresentation";
+import { NodeHttpServer } from "@effect/platform-node";
+import { servedToolCallBody } from "./ToolDispatch.ts";
 
 const registered = catalog.pipe(
   Layer.provide(dependencies),
@@ -479,25 +493,39 @@ const via = {
       }),
     ),
 };
-type Route = keyof typeof via;
+// alias: the canonical name over HTTP /mcp, which resolves it to the served tool before dispatch.
+type Route = keyof typeof via | "alias";
+const RPC_INTERNAL_ERROR = 'rpc error: {"code":-32603';
+const ROUTES: ReadonlyArray<Route> = [
+  ...(Object.keys(via) as ReadonlyArray<keyof typeof via>),
+  "alias",
+];
 
 describe("agent surface access", () => {
   it.effect("refuses each caller exactly where the registry's requires and effect say", () =>
     Effect.gen(function* () {
+      const http = yield* serveCatalogOverHttp(callers);
       const mismatches: Array<string> = [];
       for (const entry of entries) {
         // Memory access is a per-task grant its handlers check; toolkits/memory tests own it.
         if (entry.resource === "memory") continue;
         const args = yield* argumentsFor(entry);
+        const alias = canonicalToolName(entry);
         for (const caller of Object.keys(callers) as ReadonlyArray<Caller>) {
           let directOutcome: Outcome | undefined;
-          for (const route of Object.keys(via) as ReadonlyArray<Route>) {
+          let directDied = false;
+          for (const route of ROUTES) {
             // goat_call refuses to call itself by design.
             if (route === "goat_call" && entry.path === "surface.call") continue;
-            const call = via[route];
-            const result = yield* call(entry.name, args).pipe(
-              Effect.provideService(McpInvocationContext, callers[caller]),
-              Effect.provideService(McpSchema.McpServerClient, client),
+            if (route === "alias" && !canonicalToolAliases.has(alias)) continue;
+            const call =
+              route === "alias"
+                ? http.callTool(caller, alias, args)
+                : via[route](entry.name, args).pipe(
+                    Effect.provideService(McpInvocationContext, callers[caller]),
+                    Effect.provideService(McpSchema.McpServerClient, client),
+                  );
+            const result = yield* call.pipe(
               // An inert service dies after the access layer ran; any other defect fails the case.
               Effect.catchDefect((defect) =>
                 Effect.succeed(
@@ -516,10 +544,18 @@ describe("agent surface access", () => {
               ),
             );
             const classified = classify(entry.path, result);
+            if (route === "direct") directDied = textOf(result) === INERT_SERVICE_DEFECT;
+            // Over HTTP, an image tool that dies answers with JSON-RPC's internal error under any
+            // name; it is the same death the direct route caught on an inert service.
+            const diedOverHttp =
+              route === "alias" && directDied && textOf(result).startsWith(RPC_INTERNAL_ERROR);
             // The envelope turns a refusal inside a successful value into an error; that is a
             // domain answer after access passed, so it still counts as reaching the handler.
             const outcome =
-              route === "goat_call" && classified === "unexpected" && directOutcome === "reached"
+              (route === "goat_call" &&
+                classified === "unexpected" &&
+                directOutcome === "reached") ||
+              diedOverHttp
                 ? "reached"
                 : classified;
             if (route === "direct") directOutcome = outcome;
@@ -535,7 +571,7 @@ describe("agent surface access", () => {
         }
       }
       expect(mismatches).toEqual([]);
-    }).pipe(Effect.provide(registered)),
+    }).pipe(Effect.scoped, Effect.provide(registered), Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it("documents every access exception", () => {
@@ -686,6 +722,24 @@ it("resolves paths, canonical names and legacy names to one entry without collis
   expect(resolveAgentSurfaceEntry("goat_permission_profile_sync")?.name).toBe("goat_goatclaw_sync");
 });
 
+it.effect("keeps canonical aliases out of tools/list and passes served names through", () =>
+  Effect.gen(function* () {
+    const http = yield* serveCatalogOverHttp(callers);
+    const listed = yield* http.listToolNames("thread");
+    expect(listed.toSorted()).toEqual(entries.map((entry) => entry.name).sort());
+    // A call by a served name, legacy ones included, reaches the server exactly as sent.
+    for (const name of listed) {
+      const body = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name },
+      });
+      expect(servedToolCallBody(body), name).toBeUndefined();
+    }
+  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
 it.effect("goat_call returns ok values and refuses unknown or recursive paths", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -810,4 +864,15 @@ it("gives goat_describe and goat_call a tool presentation", () => {
       "t3-code",
     );
   }
+});
+
+it("presents a call by canonical name as the tool it ran", () => {
+  const presented = [...canonicalToolAliases].filter(
+    ([, served]) => resolveGoatMcpToolDefinition(served) !== null,
+  );
+  expect(GOAT_MCP_CANONICAL_TOOL_ALIASES).toEqual(Object.fromEntries(presented));
+  for (const [canonical, served] of canonicalToolAliases)
+    expect(resolveGoatMcpToolDefinition(`mcp__goat__${canonical}`), canonical).toBe(
+      resolveGoatMcpToolDefinition(served),
+    );
 });

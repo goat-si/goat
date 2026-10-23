@@ -249,13 +249,13 @@ const PreviewEvaluateTool = Tool.make(agentSurfaceRegistry["preview.evaluate"].n
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.evaluate"]));
 
-const PreviewWaitForTool = Tool.make(agentSurfaceRegistry["preview.wait_for"].name, {
-  description: agentSurfaceRegistry["preview.wait_for"].description,
+const PreviewWaitForTool = Tool.make(agentSurfaceRegistry["preview.wait"].name, {
+  description: agentSurfaceRegistry["preview.wait"].description,
   parameters: PreviewAutomationWaitForInput,
   success: PreviewActionResult,
   failure: PreviewToolFailure,
   dependencies,
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.wait_for"]));
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.wait"]));
 
 const PreviewRecordingStartTool = Tool.make(agentSurfaceRegistry["preview.recording_start"].name, {
   description: agentSurfaceRegistry["preview.recording_start"].description,

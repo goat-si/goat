@@ -1066,9 +1066,9 @@ export const agentSurfaceRegistry = {
       openWorldHint: false,
     },
   }),
-  "memory.read_source": entry({
+  "memory.source_read": entry({
     resource: "memory",
-    verb: "read_source",
+    verb: "source_read",
     name: "memory_read_source",
     toolkit: "memory",
     summary: "Read original evidence through its owner.",
@@ -1103,9 +1103,9 @@ export const agentSurfaceRegistry = {
       openWorldHint: false,
     },
   }),
-  "memory.settings_get": entry({
+  "memory.settings_read": entry({
     resource: "memory",
-    verb: "settings_get",
+    verb: "settings_read",
     name: "memory_settings_get",
     toolkit: "memoryAdministration",
     summary: "Read memory settings and the effective memory model.",
@@ -2025,9 +2025,9 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
-  "preview.wait_for": entry({
+  "preview.wait": entry({
     resource: "preview",
-    verb: "wait_for",
+    verb: "wait",
     name: "preview_wait_for",
     toolkit: "preview",
     summary: "Wait for preview page condition",
