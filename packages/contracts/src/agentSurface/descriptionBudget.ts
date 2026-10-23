@@ -6,13 +6,6 @@ export const DESCRIPTION_BUDGET = 400;
  * shrink but never grow, and leaves this list once it fits; descriptionBudget.test.ts holds both.
  */
 export const DESCRIPTIONS_OVER_BUDGET: Readonly<Record<string, number>> = {
-  "connection.add_ssh": 1117,
-  "connection.remove": 401,
-  "host.status": 1311,
-  "hub.device_join": 1275,
-  "hub.device_leave": 745,
-  "hub.device_repair": 544,
-  "hub.device_verify": 422,
   "pull_request_guide.update": 578,
   "pull_request.link": 551,
   "pull_request.watch": 1416,
