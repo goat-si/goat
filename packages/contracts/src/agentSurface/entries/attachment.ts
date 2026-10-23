@@ -8,7 +8,9 @@ export const attachmentEntries = {
     toolkit: "attachment",
     summary: "Create the app's signed upload URL.",
     description:
-      "Create the app's signed upload URL. POST the exact bytes to relativeUrl on this MCP server's HTTP origin, then pass the attachment metadata and returned ID to goat_thread_send_attachments. Upload is separate from sending; provider attachment support is decided by its adapter.",
+      "Create a signed attachment upload URL and record its caller ownership. Uploading bytes and sending the attachment to a thread are separate steps; provider support depends on its adapter.",
+    guide:
+      "POST the exact file bytes to relativeUrl on this MCP server's HTTP origin. Then pass the attachment metadata and returned attachmentId to goat_thread_send_attachments. Preparing the URL does not send a thread message. The provider adapter decides attachment support.",
     effect: "destructive",
     capability: "none",
     capabilityReason:
@@ -29,7 +31,9 @@ export const attachmentEntries = {
     toolkit: "attachment",
     summary: "Discard a pending upload.",
     description:
-      "Discard a pending upload. Already-delivered thread attachments are never deleted by this operation.",
+      "Delete a pending attachment upload and its ownership record. File removal is best effort, so success can leave the file on disk. Already-delivered thread attachments are never deleted.",
+    guide:
+      "Only the caller that prepared the upload can discard it. Discard removes the pending file and its caller ownership record; the delivered thread copy remains separate.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Discards the caller's own pending upload.",
