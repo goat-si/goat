@@ -79,6 +79,11 @@ export const makeHubConsent = Effect.gen(function* () {
       requiredProfile: "owner",
       expiresAt: DateTime.formatIso(expiresAt),
     });
+    // Only decisions the server asked for approve a hub change: an agent can file a decision with
+    // any context, so the binding is kept here, where no tool input reaches.
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    yield* sql`INSERT INTO approval_bindings (approval_id, binding, created_at)
+      VALUES (${item.id}, ${input.binding}, ${createdAt})`.pipe(Effect.mapError(storageFailure));
     return { decisionId: item.id };
   });
 
@@ -104,9 +109,15 @@ export const makeHubConsent = Effect.gen(function* () {
     const rows = yield* sql<{
       readonly answered_by: string | null;
       readonly used: number;
+      readonly binding: string | null;
     }>`SELECT answered_by, (SELECT COUNT(*) FROM audit_events WHERE decision_id = ${decisionId}
-      AND action LIKE 'hub.%' AND outcome = 'started') AS used
+      AND action LIKE 'hub.%' AND outcome = 'started') AS used,
+      (SELECT binding FROM approval_bindings WHERE approval_id = ${decisionId}) AS binding
       FROM decision_items WHERE id = ${decisionId}`.pipe(Effect.mapError(storageFailure));
+    if (rows[0]?.binding !== binding)
+      return yield* invalid(
+        "That decision was not asked by GOAT for this change. Call again without decisionId to request one.",
+      );
     // A person approves a membership change; an owner-profile agent's answer does not count.
     if (rows[0]?.answered_by?.startsWith("client:") !== true)
       return yield* invalid(
