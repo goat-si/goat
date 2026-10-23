@@ -8,17 +8,18 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 
 ## Snapshot
 
-| Measure                                    | Value            |
-| ------------------------------------------ | ---------------- |
-| MCP tools mounted on /mcp                  | 195              |
-| Toolkits                                   | 24               |
-| Mutating tools, by enforced handler access | 125              |
-| Mutating tools that accept clientRequestId | 12               |
-| Input parameters with a description        | 160 of 702 (23%) |
-| Tool descriptions with an example          | 15 of 195        |
-| CLI commands, listed / unlisted            | 58 / 19          |
-| CLI commands with usage examples           | 0 of 77          |
-| Listed CLI leaf commands with --json       | 11 of 45         |
+| Measure                                                | Value            |
+| ------------------------------------------------------ | ---------------- |
+| MCP tools mounted on /mcp                              | 195              |
+| Toolkits                                               | 24               |
+| Mutating tools, by enforced handler access             | 125              |
+| Mutating tools that accept clientRequestId             | 20               |
+| Mutating tools whose clientRequestId GOAT deduplicates | 8                |
+| Input parameters with a description                    | 160 of 710 (23%) |
+| Tool descriptions with an example                      | 15 of 195        |
+| CLI commands, listed / unlisted                        | 58 / 19          |
+| CLI commands with usage examples                       | 0 of 77          |
+| Listed CLI leaf commands with --json                   | 11 of 45         |
 
 | Toolkit                | Tools | Mutating | clientRequestId | Paginated | failureMode   | Error tags | Source                                                     |
 | ---------------------- | ----- | -------- | --------------- | --------- | ------------- | ---------- | ---------------------------------------------------------- |
@@ -27,8 +28,8 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | `device`               | 4     | 2        | 0               | 0         | error         | 8          | apps/server/src/mcp/toolkits/device/tools.ts               |
 | `attachment`           | 3     | 3        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/attachment/tools.ts           |
 | `agentSurface`         | 5     | 2        | 0               | 1         | error         | 2          | apps/server/src/mcp/toolkits/agentSurface/tools.ts         |
-| `provider`             | 20    | 13       | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/provider/tools.ts             |
-| `ssh`                  | 17    | 12       | 0               | 2         | return        | 2          | apps/server/src/mcp/toolkits/ssh/tools.ts                  |
+| `provider`             | 20    | 13       | 4               | 1         | return        | 1          | apps/server/src/mcp/toolkits/provider/tools.ts             |
+| `ssh`                  | 17    | 12       | 1               | 2         | return        | 2          | apps/server/src/mcp/toolkits/ssh/tools.ts                  |
 | `computerUse`          | 1     | 1        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/computerUse/tools.ts          |
 | `connection`           | 3     | 2        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/connection/tools.ts           |
 | `decision`             | 4     | 2        | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/decision/tools.ts             |
@@ -39,8 +40,8 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | `remoteReport`         | 2     | 1        | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/remoteReport/tools.ts         |
 | `thread`               | 18    | 11       | 0               | 2         | return        | 1          | apps/server/src/mcp/toolkits/thread/tools.ts               |
 | `previewControls`      | 2     | 1        | 0               | 1         | return        | 19         | apps/server/src/mcp/toolkits/previewControls/tools.ts      |
-| `project`              | 8     | 5        | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/project/tools.ts              |
-| `worktree`             | 6     | 3        | 0               | 1         | return        | 2          | apps/server/src/mcp/toolkits/worktree/tools.ts             |
+| `project`              | 8     | 5        | 2               | 1         | return        | 1          | apps/server/src/mcp/toolkits/project/tools.ts              |
+| `worktree`             | 6     | 3        | 1               | 1         | return        | 2          | apps/server/src/mcp/toolkits/worktree/tools.ts             |
 | `html`                 | 2     | 1        | 0               | 0         | error, return | 1          | apps/server/src/mcp/toolkits/html/tools.ts                 |
 | `pullRequests`         | 7     | 5        | 0               | 0         | error         | 15         | apps/server/src/mcp/toolkits/pullRequests/tools.ts         |
 | `memory`               | 9     | 3        | 0               | 4         | return        | 1          | apps/server/src/mcp/toolkits/memory/tools.ts               |
@@ -139,10 +140,10 @@ One intent is spelled several ways (tool counts in parentheses):
 - **Undeclared arguments.** 175 of 195 published input schemas say `"additionalProperties": true`, but every registration refuses undeclared arguments at call time ((not found)). A client that validates against the schema cannot learn the real contract.
 - **Two failure modes.** Tools split 155 `return` and 40 `error`. Both reach the client as `isError` with JSON in a text block and no `structuredContent` (apps/server/src/mcp/toolkits/core.test.ts:110), so an agent parses text to branch on an error.
 - **7 error families.** 153 tools fail with `OrchestratorMcpFailure`; 4 tools fail with 8 tagged errors; 3 tools fail with `OperationError`; 25 tools fail with 19 tagged errors; 1 tools fail with `OrchestratorMcpFailure` or `SshThreadHandoffFailure`; 2 tools fail with `OrchestratorMcpFailure` or `WorktreeMcpFailure`; 7 tools fail with 15 tagged errors. Only `OrchestratorMcpFailure` carries a machine `code` (packages/contracts/src/orchestratorMcpFailure.ts:27). Preview, device, worktree, and pull request failures are told apart by `_tag` alone, and every preview tool advertises all of its toolkit's tags whether or not it can raise them.
-- **Idempotency.** 12 tools accept `clientRequestId`: `channel_ingest`, `create_threads`, `delegate_task`, `goat_goal_apply`, `goat_review_findings_record`, `goat_thread_interrupt`, `goat_thread_retry`, `goat_thread_send`, `goat_thread_update`, `request_secret`, and 2 more. The other 113 mutating tools have no retry key, including the destructive `delete_scheduled_task`, `device_close`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_call`, `goat_cloud_run_forget`, `goat_connection_remove`, `goat_decision_answer`, `goat_environment_preferences_update`, `goat_goal_delete`, and 42 more.
+- **Idempotency.** 20 tools accept `clientRequestId`: `channel_ingest`, `create_threads`, `delegate_task`, `goat_goal_apply`, `goat_project_delete`, `goat_provider_add`, `goat_provider_link`, `goat_provider_remove`, `goat_provider_update`, `goat_review_findings_record`, and 10 more. The other 105 mutating tools have no retry key, including the destructive `delete_scheduled_task`, `device_close`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_call`, `goat_cloud_run_forget`, `goat_connection_remove`, `goat_decision_answer`, `goat_environment_preferences_update`, `goat_goal_delete`, and 37 more.
 - **Pagination.** 10 tools use `cursor/nextCursor` (`channel_task_export`, `channel_task_list`, `goat_goal_list`, `goat_preview_list`, and 6 more); 10 tools use `limit only` (`goat_cloud_run_list`, `goat_decision_list`, `goat_describe`, `goat_ssh_browse`, and 6 more); 1 tool uses `afterSequence/hasMore` (`goat_origin_reports_wait`); 1 tool uses `limit/hasMore` (`goat_thread_read`). List tools with no page control: `device_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`.
 - **Hints that disagree with enforcement.** The handler's `McpToolAccess` declaration is what the server enforces; the MCP `readOnlyHint` is what clients see. They disagree for no tools. Reads declared `actsAsCaller` without a read-only hint: `task_status`.
-- **Image results.** `preview_snapshot`, `device_screenshot`, and `html_preview` are registered by hand to return image content (apps/server/src/mcp/McpHttpServer.ts:1187), outside the toolkit path every other tool uses.
+- **Image results.** `preview_snapshot`, `device_screenshot`, and `html_preview` are registered by hand to return image content (apps/server/src/mcp/McpHttpServer.ts:1177), outside the toolkit path every other tool uses.
 
 ## Descriptions and examples
 
@@ -153,19 +154,19 @@ Only 23% of input parameters carry a description. 132 tools describe none of the
 | Tool                     | Characters | Declared at                                               |
 | ------------------------ | ---------- | --------------------------------------------------------- |
 | `delegate_task`          | 4551       | packages/contracts/src/agentSurface/entries/task.ts:7     |
-| `goat_thread_launch`     | 2848       | packages/contracts/src/agentSurface/entries/thread.ts:370 |
+| `goat_thread_launch`     | 2833       | packages/contracts/src/agentSurface/entries/thread.ts:370 |
 | `html_render`            | 2804       | packages/contracts/src/agentSurface/entries/html.ts:26    |
 | `schedule_task`          | 2659       | packages/contracts/src/agentSurface/entries/schedule.ts:7 |
 | `goat_thread_send`       | 2449       | packages/contracts/src/agentSurface/entries/thread.ts:123 |
-| `goat_ssh_thread_launch` | 2028       | packages/contracts/src/agentSurface/entries/ssh.ts:134    |
+| `goat_ssh_thread_launch` | 2027       | packages/contracts/src/agentSurface/entries/ssh.ts:134    |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
 ## Errors an agent cannot act on
 
-- `orchestration_error` is raised from 85 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:192, apps/server/src/mcp/HostThreadsMcpService.ts:119, apps/server/src/mcp/HostThreadsMcpService.ts:149, apps/server/src/mcp/HostThreadsMcpService.ts:419. The code does not say whether to retry, fix the input, or ask the user.
-- `invalid_request` is raised from 139 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:275, apps/server/src/mcp/HostStatusMcpService.ts:330, apps/server/src/mcp/HostStatusMcpService.ts:333, apps/server/src/mcp/HostThreadsMcpService.ts:310. The code does not say whether to retry, fix the input, or ask the user.
-- `OrchestratorMcpFailure` has only `code` and `message` (packages/contracts/src/orchestratorMcpFailure.ts:104): no retry hint, offending field, or next action. Recovery advice, where it exists, lives in message text.
+- `orchestration_error` is raised from 87 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:192, apps/server/src/mcp/HostThreadsMcpService.ts:119, apps/server/src/mcp/HostThreadsMcpService.ts:149, apps/server/src/mcp/HostThreadsMcpService.ts:419. The code does not say whether to retry, fix the input, or ask the user.
+- `invalid_request` is raised from 140 places in `apps/server/src/mcp`, for example apps/server/src/mcp/HostStatusMcpService.ts:275, apps/server/src/mcp/HostStatusMcpService.ts:330, apps/server/src/mcp/HostStatusMcpService.ts:333, apps/server/src/mcp/HostThreadsMcpService.ts:310. The code does not say whether to retry, fix the input, or ask the user.
+- `OrchestratorMcpFailure` has only `code` and `message` (packages/contracts/src/orchestratorMcpFailure.ts:117): no retry hint, offending field, or next action. Recovery advice, where it exists, lives in message text.
 
 ## Where a human is required
 
@@ -205,7 +206,7 @@ Names that look like tools but are not in the registry:
 | Name             | Where                                                                                                                    |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `update_runtime` | packages/provider-core/src/server/orchestrationInstructions.ts:45                                                        |
-| `goat_eval`      | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:444, docs/internals/agent-surface.md:868 (+1)         |
+| `goat_eval`      | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:467, docs/internals/agent-surface.md:893 (+1)         |
 | `run_steps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144 |
 | `run_script`     | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145 |
 | `list_apps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                              |
@@ -228,9 +229,9 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (155 `return`, 40 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
 3. **Serve the full tool reference from the registry.** 82 tools appear in no doc or prompt. `/llms.txt` now lists every path for the calling credential; `goat_describe` should serve arguments and examples from the same registry, with no committed reference pages (decision D14 in agent-surface.md).
-4. **Describe every parameter.** 542 of 702 parameters have no description, and 132 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts:148 to fail on an undescribed field.
+4. **Describe every parameter.** 550 of 710 parameters have no description, and 132 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts:148 to fail on an undescribed field.
 5. **Publish the real argument contract.** 175 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
-6. **Retry keys on every mutating tool.** 113 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
+6. **Retry keys on every mutating tool.** 105 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 7. **One naming grammar.** Pick one shape for all 195 tools, keep old names as hidden aliases for a release, and drop the partial `goat_` prefix that the MCP server name already supplies.
 8. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 9. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.

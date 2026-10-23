@@ -11,6 +11,7 @@ import {
   fromFailure,
   fromInvalidParams,
   fromToolResult,
+  settlementOf,
 } from "./envelope.ts";
 
 const isResult = Schema.is(AgentSurfaceResult);
@@ -369,5 +370,29 @@ describe("fromToolResult", () => {
       message: "Missing key threadId",
       retryable: false,
     });
+  });
+});
+
+describe("settlementOf", () => {
+  const failed = (code: string, extra: Record<string, unknown> = {}) =>
+    fromFailure({ _tag: "OrchestratorMcpFailure", code, message: code, ...extra }, write);
+
+  it("frees a key only after a transient refusal that ran nothing", () => {
+    expect(settlementOf({ status: "ok", value: 1 })).toBe("completed");
+    expect(settlementOf(failed("host_pressure"))).toBe("released");
+    expect(settlementOf(failed("provider_unavailable"))).toBe("released");
+    // A refusal can follow a partial effect, so it is replayed rather than run again.
+    expect(settlementOf(failed("capability_denied"))).toBe("completed");
+    expect(settlementOf(failed("not_found"))).toBe("completed");
+    expect(settlementOf(failed("host_unavailable"))).toBe("unknown");
+    expect(settlementOf(failed("orchestration_error"))).toBe("unknown");
+    expect(settlementOf(failed("conflict", { mayHaveStarted: true }))).toBe("unknown");
+    // The server's own literal wins over what the flattened text says.
+    expect(
+      settlementOf(failed("invalid_request"), {
+        _tag: "OrchestratorMcpFailure",
+        code: "launch_uncertain",
+      }),
+    ).toBe("unknown");
   });
 });
