@@ -344,7 +344,7 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Evaluate JavaScript in preview",
     description:
-      "Run JavaScript in a browser page; it may change page state, so it needs the same control as a click. To read a tab the user or another agent is driving, use goat_preview_snapshot.",
+      "Run JavaScript in a browser page; it may change page state, so it needs the same control as a click. To read a tab another agent or the user opened while they drive it, use goat_preview_snapshot.",
     guide:
       "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Evaluation requires the same control as clicking even when the expression only reads. On server hosts the result must fit within 64,000 UTF-8 bytes after JSON serialization. The MCP result wraps the value as {value}; an absent value becomes null.",
     effect: "destructive",
@@ -413,7 +413,7 @@ export const previewEntries = {
     description:
       "Stop a browser recording and save the compressed video as an evidence file in the environment. Stopping consumes the active recording; retrying after a lost response does not replay the transfer.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Without tabId, when that tab is not recording and exactly one tab this session may act on is recording, that tab's recording is stopped instead. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. The compressed recording is limited to 50 MiB. The tool returns an environment-local path only after the attachment transfer and claim succeed. Server recording finalization clears the active recording even when encoding or size validation fails.",
+      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Without tabId, a session that owns several tabs in this thread is refused with tabRequired; otherwise, when the current tab is not recording and exactly one tab this session may act on is recording, that tab's recording is stopped instead. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. The compressed recording is limited to 50 MiB. The tool returns an environment-local path only after the attachment transfer and claim succeed. Server recording finalization clears the active recording even when encoding or size validation fails.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
