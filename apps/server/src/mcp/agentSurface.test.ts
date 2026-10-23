@@ -204,12 +204,6 @@ describe("agent surface schemas", () => {
   });
 });
 
-// quarantine: #782 hub devices ask through the decision inbox: state needs_human with a decisionId, no handoff.
-const DECISION_INBOX_NEEDS_HUMAN = new Set([
-  "hub.device_join",
-  "hub.device_leave",
-  "hub.device_repair",
-]);
 // goat_call returns the envelope, whose needs_human is a status rather than a kind; checked below.
 const ENVELOPE_NEEDS_HUMAN = new Set(["surface.call"]);
 
@@ -244,7 +238,6 @@ describe("agent surface needs_human results", () => {
     const missing = entries.filter(
       (entry) =>
         entry.description.includes("needs_human") &&
-        !DECISION_INBOX_NEEDS_HUMAN.has(entry.path) &&
         !ENVELOPE_NEEDS_HUMAN.has(entry.path) &&
         needsHumanArms(resultDocument(entry)).length === 0,
     );

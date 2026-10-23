@@ -15,6 +15,7 @@ import {
   handoffSummary,
   isHandoffPending,
   isClockedHandoffPath,
+  isHubDeviceHandoffPath,
   endsWithItsRun,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   TurnItemId,
@@ -62,6 +63,7 @@ export type SshProgressBinding = typeof SshProgressBinding.Type;
 /** Provider approvals whose approval the server applies, keeping their arguments until it does. */
 const PROVIDER_CONTINUATION_PATHS = [
   "provider.home_request",
+  "provider.host_sync",
   "provider.settings",
   "provider.setup",
 ] as const;
@@ -235,6 +237,11 @@ export class Handoffs extends Context.Service<
       sessionId: AuthSessionId,
     ) => Effect.Effect<SshProgressBinding | null, HandoffError | EnvironmentAuthorizationError>;
     readonly sweep: Effect.Effect<void, HandoffError>;
+    /** Whether a handoff was created with exactly these continuation arguments. */
+    readonly matchesArgs: (
+      handoff: Handoff,
+      args: Readonly<Record<string, unknown>>,
+    ) => Effect.Effect<boolean>;
   }
 >()("goat/handoffs/Handoffs") {}
 
@@ -347,8 +354,10 @@ const make = Effect.gen(function* () {
           ? ("environment:maintain" as const)
           : record.target.path.startsWith("provider.")
             ? ("providers:manage" as const)
-            : // Admitting an unattended thread to the screen is as strong as turning computer use on.
-              record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH
+            : // Admitting an unattended thread to the screen, or changing the hub's members, is as
+              // strong as changing this environment's settings.
+              record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH ||
+                isHubDeviceHandoffPath(record.target.path)
               ? ("settings:write" as const)
               : ("orchestration:operate" as const);
     const active = yield* sessions.listActive().pipe(Effect.mapError(unavailable));
@@ -391,7 +400,15 @@ const make = Effect.gen(function* () {
       const payload = yield* loadPrivate(input.handoffId);
       if (payload === null || !("kind" in payload) || payload.kind !== "continuation")
         return yield* new HandoffError({ reason: "unavailable" });
-      yield* savePrivate(input.handoffId, { ...payload, approvedBySessionId: sessionId }, true);
+      // Approvals asked before a path became a continuation path carry no namespace yet.
+      const namespace = isProviderContinuationPath(record.target.path)
+        ? { namespace: record.target.path }
+        : {};
+      yield* savePrivate(
+        input.handoffId,
+        { ...payload, ...namespace, approvedBySessionId: sessionId },
+        true,
+      );
     }
     const result = yield* transition(input, input.action, { type: "client", label });
     if (isComputerUseGrant && Option.isSome(computerUseLeases))
@@ -782,6 +799,14 @@ const make = Effect.gen(function* () {
     open,
     respond,
     sweep,
+    matchesArgs: (handoff, args) =>
+      Effect.sync(() => {
+        const expected = Buffer.from(
+          NodeCrypto.createHmac("sha256", key).update(targetKey(args)).digest("hex"),
+        );
+        const actual = Buffer.from(handoff.dedupeKey);
+        return expected.length === actual.length && NodeCrypto.timingSafeEqual(expected, actual);
+      }),
     answerSecret,
     completedSshContinuations,
     completedProviderHomeContinuations,

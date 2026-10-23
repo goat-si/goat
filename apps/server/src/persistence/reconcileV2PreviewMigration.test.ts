@@ -111,6 +111,7 @@ describe("V2 preview upgrade", () => {
         [96, "ThreadHistoryArchives"],
         [97, "PermissionProfiles"],
         [98, "DecisionInbox"],
+        [99, "HumanStepRecords"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -232,6 +233,7 @@ describe("V2 preview upgrade", () => {
         [96, "ThreadHistoryArchives"],
         [97, "PermissionProfiles"],
         [98, "DecisionInbox"],
+        [99, "HumanStepRecords"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
