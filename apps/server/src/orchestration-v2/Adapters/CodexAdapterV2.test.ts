@@ -329,7 +329,7 @@ describe("CodexAdapterV2 runtime policy", () => {
         kind: "untrusted",
         value: "Filtered to overdue",
       });
-      assert.isDefined(withGoat.additionalContext?.["t3_code_runtime"]);
+      assert.isDefined(withGoat.additionalContext?.["goat_code_runtime"]);
     }),
   );
 
@@ -347,11 +347,9 @@ describe("CodexAdapterV2 runtime policy", () => {
           });
         assert.deepEqual((yield* turn(false)).additionalContext, buildCodexDevelopmentContext());
         const withGoat = (yield* turn(true)).additionalContext;
-        assert.deepEqual(
-          withGoat?.t3_code_development,
-          buildCodexDevelopmentContext().t3_code_development,
-        );
-        assert.isDefined(withGoat?.t3_code_orchestration_01);
+        assert.isDefined(withGoat?.goat_code_development);
+        assert.deepInclude(withGoat, buildCodexDevelopmentContext());
+        assert.isDefined(withGoat?.goat_code_orchestration_01);
       }),
   );
 });
@@ -3084,7 +3082,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           hasGoatMcp: true,
         });
         assert.include(
-          params.additionalContext?.t3_code_orchestration_01?.value ?? "",
+          params.additionalContext?.goat_code_orchestration_01?.value ?? "",
           "delegate_task",
         );
         const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
