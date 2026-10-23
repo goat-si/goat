@@ -24,6 +24,7 @@ import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentit
 import {
   ClaudeCloudCli,
   ClaudeCloudError,
+  cloudRunHistory,
   makeClaudeCloudAdapter,
 } from "@goat/provider-claude-cloud/server";
 import { resolveClaudeCloudLogin } from "./ClaudeCloudLogin.ts";
@@ -223,16 +224,17 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
           ),
         ),
         folderTrust: folderTrust.policy,
-        runPrompt: (input) =>
-          projection.getThreadRecords(input.threadId, ["runs", "messages"]).pipe(
-            Effect.map((records) => {
-              const run = records.runs.find((item) => item.id === input.runId);
-              return records.messages.find((message) => message.id === run?.userMessageId)?.text;
+        runHistory: (input) =>
+          projection.getThreadRecords(input.threadId, ["runs", "messages", "turnItems"]).pipe(
+            Effect.mapError(() => undefined),
+            Effect.flatMap((records) => {
+              const history = cloudRunHistory(records, input.runId);
+              return history ? Effect.succeed(history) : Effect.fail(undefined);
             }),
             Effect.mapError(
               () =>
                 new ClaudeCloudError({
-                  detail: "Could not read the run's message to follow its reply.",
+                  detail: "Could not read the run's messages to follow its reply.",
                   outcome: "uncertain",
                 }),
             ),

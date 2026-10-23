@@ -182,3 +182,36 @@ it.effect("a restart after a cut reply reads the session once to import the whol
     }),
   ),
 );
+
+it.effect("a registered session's follow-up recovers its own reply, not a later prompt's", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const reply = "Own reply. " + "z".repeat(5000);
+      const h = yield* makeHarness();
+      h.history({ first: false });
+      h.sessionReads(
+        Effect.succeed({
+          transcript: teleportTranscript([
+            cloudPrompt("task", "1970-01-01T00:00:01.000Z"),
+            cloudAssistant({ type: "text", text: reply }, "end_turn"),
+            cloudPrompt("asked on claude.ai later", "1970-01-01T00:00:09.000Z"),
+            cloudAssistant({ type: "text", text: "Someone else's answer." }, "end_turn"),
+          ]),
+          costUsd: 0.0064,
+        }),
+      );
+      yield* h.runtime.resumeTurn!({
+        ...h.attach,
+        cloudTask: {
+          ...h.saved.cloudTask,
+          attach: "registered",
+          status: "succeeded",
+          progress: "Session replied (2 reads, $0.0128)",
+          summary: reply.slice(0, 3999) + "…",
+        },
+      });
+      yield* Deferred.await(h.terminal);
+      expect(terminalOf(h)).toMatchObject({ status: "completed", resultText: reply });
+    }),
+  ),
+);

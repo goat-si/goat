@@ -106,3 +106,27 @@ it("reads the local fork's ID and cost from the teleport's JSON result", () => {
   // A session ID becomes a file name, so anything but a UUID is refused.
   expect(readTeleportResult('{"session_id":"../../etc"}')).toBeUndefined();
 });
+
+describe("a repeated message", () => {
+  const earlierTurn = [
+    cloudPrompt("continue", "2026-10-23T09:59:50.000Z"),
+    cloudAssistant({ type: "text", text: "Earlier answer." }, "end_turn"),
+  ];
+  const anchor = { prompt: "continue", earlierPrompts: ["continue"], since: RUN_START };
+  it("waits for its own occurrence instead of adopting the answer to the earlier one", () => {
+    expect(readSessionReply(teleportTranscript(earlierTurn), anchor)).toEqual({ state: "waiting" });
+    // Without timestamps the occurrence count alone keeps them apart.
+    const unstamped = teleportTranscript(earlierTurn).replaceAll(/"timestamp":"[^"]*",/g, "");
+    expect(readSessionReply(unstamped, anchor)).toEqual({ state: "waiting" });
+    expect(
+      readSessionReply(
+        teleportTranscript([
+          ...earlierTurn,
+          cloudPrompt("continue", "2026-10-23T10:00:03.000Z"),
+          cloudAssistant({ type: "text", text: "New answer." }, "end_turn"),
+        ]),
+        anchor,
+      ),
+    ).toEqual({ state: "replied", text: "New answer." });
+  });
+});

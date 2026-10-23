@@ -115,7 +115,12 @@ export const makeHarness = Effect.fnUntraced(function* () {
   // marked as working, so PR-only tests keep today's PR completion.
   let sessionReplies: Array<Effect.Effect<SessionRead, ClaudeCloudError>> = [];
   let sessionWorking = false;
-  let runPrompt: string | undefined = "task";
+  // What the saved thread says about the run: its message, earlier deliveries, first run or not.
+  let history: {
+    prompt: string | undefined;
+    earlierPrompts: ReadonlyArray<string>;
+    first: boolean;
+  } = { prompt: "task", earlierPrompts: [], first: false };
   const sessionReadTimes: number[] = [];
   let startError: ClaudeCloudError | undefined;
   let observedSummary = "Changed behavior.";
@@ -214,7 +219,7 @@ export const makeHarness = Effect.fnUntraced(function* () {
       controlError ? Effect.fail(controlError) : Effect.succeed("/fixture/goat/control"),
     ),
     runStartedAt: () => Deferred.succeed(following, undefined).pipe(Effect.as(startedAt)),
-    runPrompt: () => Effect.sync(() => runPrompt),
+    runHistory: () => Effect.sync(() => history),
     resolveReadRoot: Effect.succeed("/fixture/goat/reads"),
     observe: (input) =>
       Effect.gen(function* () {
@@ -371,8 +376,8 @@ export const makeHarness = Effect.fnUntraced(function* () {
     sessionWorking: () => {
       sessionWorking = true;
     },
-    forgetPrompt: () => {
-      runPrompt = undefined;
+    history: (next: Partial<typeof history>) => {
+      history = { ...history, ...next };
     },
   };
 });

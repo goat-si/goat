@@ -54,15 +54,18 @@ type ReadState = "working" | "unconfirmed";
 interface RunAnchor {
   readonly startedAt: DateTime.Utc;
   readonly followUp: boolean;
-  /** A session registered after its prompt: its latest prompt is this run's. */
-  readonly registered: boolean;
+  /** The first run of a session registered after its prompt: its latest prompt is the run's. */
+  readonly latest: boolean;
   /** The run's own message; without it only a prompt sent after the run started counts. */
   readonly prompt?: string | undefined;
+  /** Messages GOAT delivered to this session in earlier runs. */
+  readonly earlierPrompts?: ReadonlyArray<string> | undefined;
 }
 const anchorOf = (input: RunAnchor): ReplyAnchor => ({
   since: DateTime.toEpochMillis(input.startedAt),
-  latest: input.registered && !input.followUp,
+  latest: input.latest,
   ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
+  ...(input.earlierPrompts === undefined ? {} : { earlierPrompts: input.earlierPrompts }),
 });
 
 /** The run's full reply from one more read, for a result whose saved summary was cut. */

@@ -50,9 +50,15 @@ const PROMPT_CLOCK_SKEW_MS = 60_000;
 export interface ReplyAnchor {
   /** The text GOAT sent for this run. When known, only a cloud prompt that matches it counts. */
   readonly prompt?: string;
+  /**
+   * Texts of the prompts GOAT delivered to this session before this run. Each earlier prompt the
+   * run's text matches claims one matching cloud prompt, so a repeated message never adopts an
+   * older turn's reply.
+   */
+  readonly earlierPrompts?: ReadonlyArray<string>;
   /** When this run started, in epoch milliseconds. */
   readonly since: number;
-  /** A session registered after its prompt was sent: its latest prompt is the run's. */
+  /** The first run of a session registered after its prompt was sent: its latest prompt is the run's. */
   readonly latest?: boolean;
 }
 
@@ -83,7 +89,9 @@ const matches = (cloud: string, wanted: string) =>
 
 /**
  * The reply to the run's prompt. The prompt is found by its text, or without text by the first
- * prompt after the run started; GOAT never guesses another run's prompt. The turn is finished at
+ * prompt stamped after the run started; GOAT never guesses another run's prompt. A known text
+ * selects the matching cloud prompt after those earlier deliveries claimed theirs, and that prompt
+ * must also be recent. The turn is finished at
  * the first assistant line after it that stopped with end_turn; until then a tool_use line, a
  * tool result or a stop_sequence snapshot means the session is still working. A prompt sent
  * meanwhile is queued into the same turn, so it does not end it.
@@ -102,13 +110,18 @@ export function readSessionReply(transcript: string, anchor: ReplyAnchor): Sessi
   });
   const recent = (at: number, margin: number) => Number.isNaN(at) || at >= anchor.since - margin;
   const wanted = anchor.prompt === undefined ? undefined : normalize(anchor.prompt);
+  const occurrence = (text: string) => {
+    const claimed = (anchor.earlierPrompts ?? []).filter((earlier) =>
+      matches(normalize(earlier), text),
+    ).length;
+    const own = prompts.filter((prompt) => matches(prompt.text, text))[claimed];
+    return own && recent(own.at, PROMPT_CLOCK_SKEW_MS) ? own : undefined;
+  };
   const start = (
-    wanted !== undefined
-      ? prompts.findLast(
-          (prompt) => matches(prompt.text, wanted) && recent(prompt.at, PROMPT_CLOCK_SKEW_MS),
-        )
-      : anchor.latest
-        ? prompts.at(-1)
+    anchor.latest
+      ? prompts.at(-1)
+      : wanted !== undefined
+        ? occurrence(wanted)
         : // Without its text, only a prompt stamped after the run started can be the run's.
           prompts.find((prompt) => !Number.isNaN(prompt.at) && recent(prompt.at, 0))
   )?.index;

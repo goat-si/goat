@@ -149,8 +149,18 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
   /** Environment-owned folder under which each session read makes and removes its own folder. */
   readonly resolveReadRoot: Effect.Effect<string, ClaudeCloudError>;
   readonly runStartedAt: (input: Turn | Attach) => Effect.Effect<DateTime.Utc, ClaudeCloudError>;
-  /** The run's own message, read back after a restart when the turn input no longer has it. */
-  readonly runPrompt: (input: Attach) => Effect.Effect<string | undefined, ClaudeCloudError>;
+  /**
+   * The run's own message, the messages earlier runs delivered to the same session, and whether
+   * this is the thread's first run on this instance, all from the saved thread.
+   */
+  readonly runHistory: (input: Turn | Attach) => Effect.Effect<
+    {
+      readonly prompt: string | undefined;
+      readonly earlierPrompts: ReadonlyArray<string>;
+      readonly first: boolean;
+    },
+    ClaudeCloudError
+  >;
   readonly observe: (input: {
     readonly projectId: ProjectId;
     readonly repository: string;
@@ -394,18 +404,18 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
         i: Turn | Attach,
         followUp: boolean,
       ) {
-        const registered = current(i).cloudTask?.attach === "registered";
+        const startedAt = yield* options.runStartedAt(i);
+        const history = yield* options.runHistory(i).pipe(Effect.result);
+        // Without the saved history GOAT cannot tell repeated messages apart, so it only claims a
+        // prompt stamped after the run started.
+        if (history._tag === "Failure") return { startedAt, followUp, latest: false };
         return {
-          startedAt: yield* options.runStartedAt(i),
+          startedAt,
           followUp,
-          registered,
-          // A registered session's prompt was sent outside GOAT; its latest prompt is the run's.
-          prompt:
-            registered && !followUp
-              ? undefined
-              : "message" in i
-                ? i.message.text
-                : yield* options.runPrompt(i).pipe(Effect.orElseSucceed(() => undefined)),
+          // The registering run's prompt was sent outside GOAT; the session's latest is its own.
+          latest: history.success.first && current(i).cloudTask?.attach === "registered",
+          prompt: "message" in i ? i.message.text : history.success.prompt,
+          earlierPrompts: history.success.earlierPrompts,
         };
       });
       const observe = Effect.fn("ClaudeCloudAdapter.follow")(function* (

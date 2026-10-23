@@ -1,9 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import * as ByteSize from "effect/ByteSize";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+import * as TestClock from "effect/testing/TestClock";
 import { sessionReadArgs } from "./sessionRead.ts";
 import {
   cloudAssistant,
@@ -46,18 +49,35 @@ const info: FileSystem.File.Info = {
 const makeRead = (
   options: {
     readonly teleport?: string;
-    readonly git?: ReadonlyArray<number>;
+    /** Git's answers in order: outside, inside, or a fatal config error that also exits 128. */
+    readonly git?: ReadonlyArray<"outside" | "inside" | "broken">;
     readonly stuck?: (path: string, attempt: number) => boolean;
+    /** Holds the transcript read open until the test lets it go. */
+    readonly reading?: Deferred.Deferred<void>;
+    /** Holds cleanup's first removal for one test-clock second after reporting it started. */
+    readonly removing?: Deferred.Deferred<void>;
   } = {},
 ) =>
   Effect.gen(function* () {
     // A small file tree: Claude's teleport writes the owned project directory and transcript.
     const present = new Set([PROJECTS, UNRELATED]);
     const attempts = new Map<string, number>();
-    const git = [...(options.git ?? [128])];
+    const git = [...(options.git ?? ["outside"])];
     const h = yield* makeCliHarness(
       (args) => {
-        if (args[0] === "rev-parse") return { code: git.shift() ?? 128, stdout: "" };
+        if (args[0] === "rev-parse") {
+          const answer = git.shift() ?? "outside";
+          return answer === "inside"
+            ? { code: 0, stdout: "true\n" }
+            : {
+                code: 128,
+                stdout: "",
+                stderr:
+                  answer === "outside"
+                    ? "fatal: not a git repository (or any of the parent directories): .git\n"
+                    : "fatal: bad boolean config value 'invalid' for 'core.bare'\n",
+              };
+        }
         if (args[0] === "auth")
           return {
             code: 0,
@@ -97,23 +117,39 @@ const makeRead = (
             ),
           exists: (target) => Effect.succeed(present.has(target)),
           stat: () => Effect.succeed(info),
-          readFileString: () => Effect.succeed(TRANSCRIPT),
+          readFileString: () =>
+            options.reading
+              ? Deferred.succeed(options.reading, undefined).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.as(TRANSCRIPT),
+                )
+              : Effect.succeed(TRANSCRIPT),
           remove: (target) =>
-            Effect.suspend(() => {
-              const attempt = (attempts.get(target) ?? 0) + 1;
-              attempts.set(target, attempt);
-              if (options.stuck?.(target, attempt))
-                return Effect.fail(
-                  PlatformError.systemError({
-                    _tag: "Busy",
-                    module: "FileSystem",
-                    method: "remove",
-                  }),
-                );
-              for (const entry of present)
-                if (entry === target || entry.startsWith(target + "/")) present.delete(entry);
-              return Effect.void;
-            }),
+            Effect.suspend(() =>
+              options.removing && attempts.size === 0
+                ? Deferred.succeed(options.removing, undefined).pipe(
+                    Effect.andThen(Effect.sleep("1 second")),
+                  )
+                : Effect.void,
+            ).pipe(
+              Effect.andThen(
+                Effect.suspend(() => {
+                  const attempt = (attempts.get(target) ?? 0) + 1;
+                  attempts.set(target, attempt);
+                  if (options.stuck?.(target, attempt))
+                    return Effect.fail(
+                      PlatformError.systemError({
+                        _tag: "Busy",
+                        module: "FileSystem",
+                        method: "remove",
+                      }),
+                    );
+                  for (const entry of present)
+                    if (entry === target || entry.startsWith(target + "/")) present.delete(entry);
+                  return Effect.void;
+                }),
+              ),
+            ),
         },
       },
     );
@@ -167,9 +203,9 @@ it.effect("a cleanup step that fails once is retried; one that keeps failing fai
   }),
 );
 
-it.effect("an inconclusive Git check refuses the read before anything is teleported", () =>
+it.effect("a Git check that exits 128 for a config error refuses the read before teleporting", () =>
   Effect.gen(function* () {
-    const h = yield* makeRead({ git: [1] });
+    const h = yield* makeRead({ git: ["broken"] });
     const error = yield* h.service.readSession(LOGIN, ROOT, "session_ABC123").pipe(Effect.flip);
     expect(error.detail).toContain("could not confirm with Git");
     expect(h.commands().some((command) => command.args[0] === "--print")).toBe(false);
@@ -181,10 +217,38 @@ it.effect(
   "a read folder inside a Git checkout moves to the OS temp folder before teleporting",
   () =>
     Effect.gen(function* () {
-      const h = yield* makeRead({ git: [0, 128] });
+      const h = yield* makeRead({ git: ["inside", "outside"] });
       yield* h.service.readSession(LOGIN, ROOT, "session_ABC123");
       const teleport = h.commands().find((command) => command.args[0] === "--print");
       expect(teleport?.cwd).toBe("/tmp/goat-claude-cloud-read-AbC123");
       expect(h.present.has(SCRATCH)).toBe(false);
     }),
+);
+
+it.effect("an interrupted read still removes everything it copied before it stops", () =>
+  Effect.gen(function* () {
+    const reading = yield* Deferred.make<void>();
+    const h = yield* makeRead({ reading });
+    const fiber = yield* h.service
+      .readSession(LOGIN, ROOT, "session_ABC123")
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(reading);
+    expect(h.present.has(OWNED)).toBe(true);
+    yield* Fiber.interrupt(fiber);
+    expect([...h.present]).toEqual([PROJECTS, UNRELATED]);
+  }),
+);
+
+it.effect("an interruption during cleanup waits for the cleanup to finish", () =>
+  Effect.gen(function* () {
+    const removing = yield* Deferred.make<void>();
+    const h = yield* makeRead({ removing });
+    const read = yield* h.service.readSession(LOGIN, ROOT, "session_ABC123").pipe(Effect.forkChild);
+    yield* Deferred.await(removing);
+    const stop = yield* Fiber.interrupt(read).pipe(Effect.forkChild);
+    // adjust runs the interrupting fiber before it wakes the held removal.
+    yield* TestClock.adjust("1 second");
+    yield* Fiber.join(stop);
+    expect([...h.present]).toEqual([PROJECTS, UNRELATED]);
+  }),
 );
