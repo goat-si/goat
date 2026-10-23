@@ -554,9 +554,7 @@ export const make = Effect.gen(function* () {
       yield* logUpdaterInfo("checking for updates", { reason });
 
       const channel = (yield* Ref.get(updateStateRef)).channel;
-      const failCheck = Effect.fn("desktop.updates.handleCheckForUpdatesFailure")(function* (
-        message: string,
-      ) {
+      const failCheck = Effect.fn("desktop.updates.applyCheckFailure")(function* (message: string) {
         const failedAt = yield* currentIsoTimestamp;
         yield* updateState((current) => ({
           ...reduceDesktopUpdateStateOnCheckFailure(current, message, failedAt),
@@ -576,19 +574,20 @@ export const make = Effect.gen(function* () {
         }),
         Effect.as(true),
         Effect.catchTags({
-          ElectronUpdaterCheckForUpdatesError: (error) =>
-            Effect.gen(function* () {
-              const cause = describeUpdateErrorCause(error.cause);
-              yield* failCheck(checkFailureMessage(cause));
-              yield* logUpdaterError(error.message, {
-                errorTag: error._tag,
-                cause,
-                channel: error.channel,
-              });
-              return true;
-            }),
-          DesktopUpdateCheckTimeoutError: (error) =>
-            Effect.gen(function* () {
+          ElectronUpdaterCheckForUpdatesError: Effect.fn(
+            "desktop.updates.handleCheckForUpdatesFailure",
+          )(function* (error) {
+            const cause = describeUpdateErrorCause(error.cause);
+            yield* failCheck(checkFailureMessage(cause));
+            yield* logUpdaterError(error.message, {
+              errorTag: error._tag,
+              cause,
+              channel: error.channel,
+            });
+            return true;
+          }),
+          DesktopUpdateCheckTimeoutError: Effect.fn("desktop.updates.handleCheckTimeout")(
+            function* (error) {
               yield* failCheck(
                 checkFailureMessage(
                   `the update server did not answer within ${UPDATE_CHECK_TIMEOUT_MINUTES} minutes.`,
@@ -599,7 +598,8 @@ export const make = Effect.gen(function* () {
                 channel: error.channel,
               });
               return true;
-            }),
+            },
+          ),
         }),
       );
     });
