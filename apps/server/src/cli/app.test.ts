@@ -149,7 +149,8 @@ describe("goat server command safety", () => {
         const baseDir = NodePath.join(root, "home");
         for (const word of [
           "account",
-          "login",
+          // goat login is a command; a near miss stays unknown.
+          "signin",
           "clients",
           "conenct",
           "package.json",
