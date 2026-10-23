@@ -1,5 +1,9 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
-import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
+import {
+  type AgentSurfaceEntry,
+  agentSurfaceRegistry,
+  type AgentSurfaceRegistryEntry,
+} from "@goat/contracts/agentSurface";
 import {
   canonicalToolName,
   deprecatedReplacement,
@@ -20,12 +24,13 @@ import { makeOperations } from "./operations.ts";
 import { AgentSurfaceToolkit, type DescribeResult } from "./tools.ts";
 
 const entries: ReadonlyArray<AgentSurfaceRegistryEntry> = Object.values(agentSurfaceRegistry);
+const guideOf = (entry: AgentSurfaceEntry) => entry.guide;
 
 // FNV-1a over what an agent relies on; stable across processes, unlike object identity.
 const surfaceVersion = (() => {
   let hash = 0x811c9dc5;
   for (const entry of entries)
-    for (const char of `${entry.path}|${entry.name}|${entry.effect}|${entry.requires}|${entry.description}\n`) {
+    for (const char of `${entry.path}|${entry.name}|${entry.effect}|${entry.requires}|${entry.description}|${guideOf(entry) ?? ""}\n`) {
       hash ^= char.charCodeAt(0);
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
@@ -38,19 +43,23 @@ const NOT_CALLABLE: ReadonlySet<string> = new Set(["surface.call", "surface.eval
 const SEARCH_LIMIT = 20;
 
 /**
- * Every word must appear in the path, summary or description; a word in the path counts most.
- * Ties keep registry order by path, so the same query always answers the same way.
+ * Every word must appear in the path, summary, description or guide; a word in the path counts
+ * most. Ties keep registry order by path, so the same query always answers the same way.
  */
-const search = (candidates: ReadonlyArray<AgentSurfaceRegistryEntry>, query: string) => {
+export const search = <Entry extends AgentSurfaceEntry & { readonly path: string }>(
+  candidates: ReadonlyArray<Entry>,
+  query: string,
+) => {
   const words = query
     .toLowerCase()
     .split(/\s+/u)
     .filter((word) => word !== "");
-  const scored: Array<{ readonly entry: AgentSurfaceRegistryEntry; readonly score: number }> = [];
+  const scored: Array<{ readonly entry: Entry; readonly score: number }> = [];
   for (const entry of candidates) {
     const path = `${entry.path} ${entry.name}`.toLowerCase();
     const summary = entry.summary.toLowerCase();
-    const description = entry.description.toLowerCase();
+    // Text moved from a description into its guide must stay findable.
+    const description = `${entry.description} ${guideOf(entry) ?? ""}`.toLowerCase();
     let score = 0;
     for (const word of words) {
       const points = path.includes(word)
@@ -157,6 +166,7 @@ export const layer = McpToolAccess.toLayer(
             canonicalName: canonicalToolName(entry),
             legacyNames: entry.legacyNames,
             description: entry.description,
+            ...(guideOf(entry) === undefined ? {} : { guide: guideOf(entry) }),
             hostRoutable: entry.hostRoutable,
             requires: entry.requires,
             dryRun: entry.dryRun,

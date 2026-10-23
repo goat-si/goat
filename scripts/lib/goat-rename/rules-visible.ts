@@ -62,12 +62,6 @@ export const VISIBLE_KEEP_RULES: readonly KeepRule[] = [
     reason: "ADR-0014 capture identity: byte-compared readiness must accept existing installs.",
   },
   {
-    id: "upstream-maintainer-text",
-    pattern: /[Tt]3[^\n]*/g,
-    scope: (path) => path === "AGENTS.md",
-    reason: "upstream maintainer text; concurrent edit, follow-up issue",
-  },
-  {
     id: "older-upstream-pairing-codes",
     pattern: /older T3 Code versions/g,
     scope: (path) => path === "docs/user/remote-access.md",

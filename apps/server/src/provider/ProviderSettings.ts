@@ -65,10 +65,12 @@ import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Settings from "../serverSettings.ts";
 import { authorizeApprovalRequest } from "../sshRemote/SshHostAuthorization.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { mayHaveReached, remoteFailure } from "./providerSettingsRemote.ts";
 import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
 import { instanceFingerprint } from "./CodexRouteService.ts";
 import {
   decodeProgress,
+  approvalError,
   encodeProgress,
   setupProgress,
   type ProviderSettingsEffect,
@@ -127,7 +129,7 @@ const targetOf = (request: ProviderSettingsRequest) => {
   return `${subject}@${request.input.host ?? "local"}`;
 };
 
-export const mergeConfig = (base: unknown, patch: Readonly<Record<string, unknown>> = {}) => {
+const mergeConfig = (base: unknown, patch: Readonly<Record<string, unknown>> = {}) => {
   const next: Record<string, unknown> = isRecord(base) ? { ...base } : {};
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) delete next[key];
@@ -136,7 +138,7 @@ export const mergeConfig = (base: unknown, patch: Readonly<Record<string, unknow
   return next;
 };
 
-export const mergeEnvironment = (
+const mergeEnvironment = (
   base: ProviderInstanceConfig["environment"],
   patch: ProviderUpdateInput["environment"],
 ): ProviderInstanceConfig["environment"] => {
@@ -156,7 +158,7 @@ export const mergeEnvironment = (
   return [...byName.values()];
 };
 
-export const summarize = (
+const summarize = (
   instanceId: ProviderInstanceId,
   instance: ProviderInstanceConfig,
 ): ProviderInstanceSummary => ({
@@ -169,7 +171,7 @@ export const summarize = (
 });
 
 /** What the person is asked to approve. Built from ids and keys only, never agent text or values. */
-export const describeRequest = (request: ProviderSettingsRequest): string => {
+const describeRequest = (request: ProviderSettingsRequest): string => {
   switch (request.action) {
     case "update": {
       const input = request.input;
@@ -607,37 +609,13 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const remoteFailure = (request: ProviderSettingsRequest, host: string) => (error: unknown) =>
-    error instanceof Dispatch.SshRemoteDispatchError
-      ? failure(
-          error.reason === "invalid_request" || error.reason === "host_unknown"
-            ? "invalid_request"
-            : "orchestration_error",
-          error.reason === "remote_refused" && error.remoteCode === undefined
-            ? `${host} refused ${TOOLS[request.action]}: ${error.message} Update GOAT there if it does not have this tool yet.`
-            : error.message,
-        )
-      : isMcpFailure(error)
-        ? error
-        : failure("orchestration_error", `Could not reach ${host}.`);
-
-  /**
-   * The remote may have applied the change: the call failed after its request could have
-   * arrived, so nothing proves it did not run there.
-   */
-  const mayHaveReached = (error: unknown): error is Dispatch.SshRemoteDispatchError =>
-    error instanceof Dispatch.SshRemoteDispatchError &&
-    (error.launchMayHaveStarted === true ||
-      error.reason === "ssh_failed" ||
-      error.reason === "host_unavailable");
-
   const forward = Effect.fn("ProviderSettings.forward")(function* (
     request: ProviderSettingsRequest,
     host: string,
     authorize: Effect.Effect<RuntimeMode, OrchestratorMcpFailure>,
   ) {
     const raw = yield* dispatchRemote(request, host, authorize).pipe(
-      Effect.mapError(remoteFailure(request, host)),
+      Effect.mapError(remoteFailure(TOOLS[request.action], host)),
     );
     const result = yield* decodeRemote(raw).pipe(
       Effect.mapError(() =>
@@ -869,7 +847,7 @@ const make = Effect.gen(function* () {
       if (Exit.isFailure(sent)) {
         const error = Cause.squash(sent.cause);
         if (mayHaveReached(error)) return yield* unknown("remote", error.reason, error.message);
-        const mapped = remoteFailure(request, host)(error);
+        const mapped = remoteFailure(TOOLS[request.action], host)(error);
         return yield* settle({
           state: "failed",
           effect: "remote",
@@ -1083,8 +1061,7 @@ const make = Effect.gen(function* () {
           address,
           yield* encodeProgress(progress).pipe(Effect.mapError(unavailableHandoff)),
         );
-        if (progress.outcome?.state !== "applied")
-          return yield* new HandoffError({ reason: "invalid_request" });
+        if (progress.outcome?.state !== "applied") return yield* approvalError(progress.outcome);
       }),
     );
   const paths = [PROVIDER_SETTINGS_HANDOFF_PATH, PROVIDER_SETUP_HANDOFF_PATH] as const;

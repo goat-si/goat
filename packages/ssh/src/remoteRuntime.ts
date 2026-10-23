@@ -157,6 +157,23 @@ export const matchesSignals = (signals: typeof RuntimeSignals.Type, requested: s
   );
 };
 
+/**
+ * Whether a live runtime keeps this app from updating it. `order` is its build against this app's
+ * (`compareRuntimeBuilds`). This app never replaces a newer runtime, so a newer one that speaks its
+ * protocols serves it and blocks nothing, and one that does not names this app as the side to
+ * update. Otherwise only an owned runtime of known order that can drain, or already runs the
+ * requested build, is this app's to update.
+ */
+export const liveRuntimeBlocksUpdate = (
+  live: { readonly liveOwned?: boolean | undefined; readonly liveDrain?: boolean | undefined },
+  order: number | undefined,
+  compatible: boolean,
+  runsRequested: boolean,
+) =>
+  order !== undefined && order > 0
+    ? !compatible
+    : live.liveOwned !== true || order === undefined || (!runsRequested && live.liveDrain !== true);
+
 export function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
   return {
     alias: target.alias,

@@ -139,6 +139,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   ssh_failed: c("unavailable"),
   // Classified by remoteCode when the remote sent a known one.
   remote_refused: c("failed_precondition"),
+  remote_outdated: before("failed_precondition"),
   caller_changed: before("conflict"),
   duplicate_task: before("conflict"),
   // Linked hosts (OrchestratorMcpFailure reason)
