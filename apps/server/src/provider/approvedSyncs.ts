@@ -45,6 +45,46 @@ const Progress = Schema.Struct({
 type Progress = typeof Progress.Type;
 const decodeProgress = Schema.decodeUnknownEffect(Progress);
 const decodeInput = Schema.decodeUnknownEffect(ProviderSyncInput);
+const readProgress = Schema.decodeUnknownOption(Progress);
+
+const OK_PHASES: ReadonlySet<string> = new Set(["installed", "signed_in"]);
+
+/**
+ * What the thread that asked hears once its approved sync settled: whether it started, and how
+ * each host ended. Sign-in codes are never part of the recorded result.
+ */
+export const settledSyncWake = (progress: unknown) => {
+  const settled = Option.getOrUndefined(readProgress(progress));
+  if (settled?.failed !== undefined)
+    return {
+      summary: "failed",
+      text: `${settled.failed} Ask again only if the user still wants it.`,
+    };
+  const hosts = settled?.result?.hosts ?? [];
+  if (hosts.length === 0)
+    return {
+      summary: "settled",
+      text: "The sync settled; goat_provider_host_matrix shows each host.",
+    };
+  const failed = hosts.filter((host) => !OK_PHASES.has(host.phase));
+  const name = (host: (typeof hosts)[number]) => host.host ?? "this machine";
+  return {
+    summary:
+      failed.length === 0
+        ? "applied"
+        : failed.length === hosts.length
+          ? "failed"
+          : "partly applied",
+    text: [
+      `The sync finished on ${hosts.length - failed.length} of ${hosts.length} host(s).`,
+      ...failed.map(
+        (host) =>
+          `${name(host)}: ${host.phase}${host.message === undefined ? "" : ` (${host.message})`}.`,
+      ),
+      "goat_provider_host_matrix shows each host.",
+    ].join(" "),
+  };
+};
 
 const fail = (code: ProviderHostSyncError["code"], detail: string) =>
   new ProviderHostSyncError({ code, detail });
