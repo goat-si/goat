@@ -19,7 +19,10 @@ export interface AgentSurfaceEntry {
   readonly name: string;
   readonly toolkit: string;
   readonly summary: string;
+  /** What a listing shows; at most DESCRIPTION_BUDGET characters (descriptionBudget.ts). */
   readonly description: string;
+  /** Guidance longer than the description, served only by goat_describe for one path. */
+  readonly guide?: string;
   readonly effect: AgentSurfaceEffect;
   readonly hostRoutable: boolean;
   readonly requires: "thread" | "client" | "either";
@@ -29,6 +32,8 @@ export interface AgentSurfaceEntry {
   >;
   readonly capability?: AgentSurfaceCapability;
   readonly capabilityReason?: string;
+  readonly idempotency?: "key";
+  readonly reconcile?: string;
   /** The kind of operation this path's accepted work becomes; goat_call returns its handle. */
   readonly operation?: OperationKind;
   readonly annotations: {
@@ -55,3 +60,12 @@ export type CapabilityDeclaration =
       readonly capability: "none";
       readonly capabilityReason: string;
     };
+
+/**
+ * "key": the write takes clientRequestId and GOAT's reservation store deduplicates it
+ * (docs/internals/agent-surface.md#idempotency). `reconcile` is the read path that tells an agent
+ * whether a write whose outcome is unknown happened.
+ */
+export type IdempotencyDeclaration =
+  | { readonly idempotency?: undefined; readonly reconcile?: undefined }
+  | { readonly idempotency: "key"; readonly reconcile: string };

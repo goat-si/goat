@@ -1,7 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - argv reading runs before any Effect runtime exists.
 import * as NodeFS from "node:fs";
 
-import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
+import {
+  type AgentSurfaceEntry,
+  agentSurfaceRegistry,
+  type AgentSurfaceRegistryEntry,
+} from "@goat/contracts/agentSurface";
 import { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Option from "effect/Option";
@@ -103,6 +107,8 @@ const usageLine = (command: string, entry?: AgentSurfaceRegistryEntry) =>
 const OPERATION_WAIT_HELP =
   "goat operation wait exits by the work's state: 0 succeeded, 1 failed or cancelled, 3 waiting for a person, 5 unknown, 6 still queued or running when the wait ended.";
 
+const guideOf = (entry: AgentSurfaceEntry) => entry.guide;
+
 const entryHelp = (entry: AgentSurfaceRegistryEntry) =>
   [
     usageLine(`goat ${toCli(entry.resource)} ${toCli(entry.verb)}`, entry),
@@ -110,6 +116,7 @@ const entryHelp = (entry: AgentSurfaceRegistryEntry) =>
     entry.summary,
     "",
     entry.description,
+    ...(guideOf(entry) === undefined ? [] : ["", guideOf(entry)]),
     "",
     `Path: ${entry.path}   Tool: ${listedToolName(entry)}   Effect: ${entry.effect}   Caller: ${entry.requires}`,
     `Host-routable: ${entry.hostRoutable ? "yes" : "no"}   Dry run: ${entry.dryRun}`,
@@ -157,11 +164,12 @@ const CALL_HELP = [
 ].join("\n");
 
 const DESCRIBE_HELP = [
-  "Usage: goat describe [path | resource] [--query <text>] [--json]",
+  "Usage: goat describe [path | resource] [--query <text>] [--detail names|summary|full]",
+  "       [--limit <n>] [--cursor <nextCursor>] [--json]",
   "",
   "Without a path: every resource and its verbs. With a resource: its paths. With a path: its",
   "input schema and whether this caller can use it now. --query ranks paths by text, within the",
-  "resource when one is given.",
+  "resource when one is given; --cursor continues the same search.",
   "",
   EXIT_CODES_HELP,
 ].join("\n");
@@ -174,7 +182,8 @@ interface Parsed {
   readonly dryRun: boolean;
   readonly host?: string;
   readonly requestId?: string;
-  readonly query?: string;
+  /** goat_describe's query, detail, limit and cursor. */
+  readonly search?: Readonly<Record<string, unknown>>;
 }
 
 class UsageError {
@@ -225,7 +234,7 @@ const parseTokens = (
   let dryRun = false;
   let host: string | undefined;
   let requestId: string | undefined;
-  let query: string | undefined;
+  const search: Record<string, unknown> = {};
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index] ?? "";
     const equals = token.startsWith("--") ? token.indexOf("=") : -1;
@@ -245,8 +254,14 @@ const parseTokens = (
     else if (flag === "--dry-run" && allow.fields) dryRun = true;
     else if (flag === "--host" && allow.fields) host = value();
     else if (flag === "--request-id" && allow.fields) requestId = value();
-    else if (flag === "--query" && allow.query) query = value();
-    else if ((flag === "-f" || flag === "--raw-field") && allow.fields)
+    else if (flag === "--query" && allow.query) search.query = value();
+    else if (flag === "--detail" && allow.query) search.detail = value();
+    else if (flag === "--cursor" && allow.query) search.cursor = value();
+    else if (flag === "--limit" && allow.query) {
+      const limit = Number(value());
+      if (!Number.isInteger(limit)) throw new UsageError("--limit needs a whole number.");
+      search.limit = limit;
+    } else if ((flag === "-f" || flag === "--raw-field") && allow.fields)
       fields.push(field(value(), false, input));
     else if ((flag === "-F" || flag === "--field") && allow.fields)
       fields.push(field(value(), true, input));
@@ -261,7 +276,7 @@ const parseTokens = (
     dryRun,
     ...(host === undefined ? {} : { host }),
     ...(requestId === undefined ? {} : { requestId }),
-    ...(query === undefined ? {} : { query }),
+    ...(Object.keys(search).length === 0 ? {} : { search }),
   };
 };
 
@@ -354,7 +369,7 @@ const route = (
       path: "surface.describe",
       args: {
         ...(path === undefined ? {} : { path }),
-        ...(parsed.query === undefined ? {} : { query: parsed.query }),
+        ...parsed.search,
       },
       json: parsed.json,
       effect: "read",

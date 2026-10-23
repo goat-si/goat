@@ -142,7 +142,7 @@ export class OpenCodexManagedUpdate extends Context.Service<
 >()("goat/hub/OpenCodexManagedUpdate") {}
 
 /** Script-safe by construction: the version passed `isStableOpenCodexVersion`. */
-export const installScript = (version: string) => {
+const installScript = (version: string) => {
   if (!isStableOpenCodexVersion(version)) throw new TypeError("Unsafe OpenCodex version.");
   return [
     'PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"',
@@ -289,7 +289,7 @@ const brokeAgainst = (
 
 type Window = NonNullable<State["window"]>;
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const host = yield* OpenCodexUpdateHost;
   const parity = yield* HubParity.HubParity;
   const settings = yield* ServerSettings.ServerSettingsService;
