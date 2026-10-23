@@ -174,6 +174,16 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     }),
   );
 
+  it.effect("leaves an SSH host this server did not create untouched", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      yield* home.ready("boat-someone-else");
+      expect(yield* home.bootstrap.ensure("boat-someone-else")).toBeUndefined();
+      expect(home.calls).toEqual([]);
+      expect(yield* home.bootstrap.status("boat-someone-else")).toBeUndefined();
+    }),
+  );
+
   it.effect("leaves the machine untouched when this server is not a hub", () =>
     Effect.gen(function* () {
       const home = yield* setup({ hub: false });

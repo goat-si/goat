@@ -210,13 +210,13 @@ const make = Effect.gen(function* () {
   const ensure: OpenCodexChildBootstrap["Service"]["ensure"] = Effect.fn(
     "OpenCodexChildBootstrap.ensure",
   )(function* (alias) {
-    if (!(yield* hubEnabled)) return undefined;
+    if (!(yield* hubEnabled) || !(yield* cloud.owns(alias))) return undefined;
     return yield* Fiber.join(yield* start(alias));
   });
 
   /** A joined Child is left to goat_hub_device_repair; a blocked one waits before retrying. */
   const onReady = Effect.fn("OpenCodexChildBootstrap.onReady")(function* (alias: string) {
-    if (jobs.has(alias) || !(yield* hubEnabled)) return;
+    if (jobs.has(alias) || !(yield* hubEnabled) || !(yield* cloud.owns(alias))) return;
     const previous = (yield* Ref.get(records))[alias];
     const now = yield* Clock.currentTimeMillis;
     if (previous?.state === "child" || previous?.state === "degraded") return;

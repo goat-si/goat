@@ -968,3 +968,12 @@ it.effect("GOAT joining a cloud machine that is already linked changes nothing",
     expect(hub.calls).toEqual(["home link status --json", "verify boat-builder"]);
   }),
 );
+
+it.effect("GOAT never joins a host a person added without asking, even with a matching pin", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED });
+    const refused = yield* hub.membership.joinProvisioned(scope, "mac-studio").pipe(Effect.flip);
+    expect(refused.code).toBe("invalid_request");
+    expect(hub.calls).toEqual([]);
+  }),
+);

@@ -9,6 +9,7 @@ import {
   type HubDeviceTransport,
   type HubParityCheckId,
   type HubParityResult,
+  hasCloudMachineAliasPrefix,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -923,7 +924,7 @@ const make = Effect.gen(function* () {
     leave: (scope, input, person) => permit.withPermits(1)(leave(scope, input, person)),
     repair: (scope, input, person) => permit.withPermits(1)(repair(scope, input, person)),
     joinProvisioned: (scope, alias) =>
-      SAFE_ALIAS.test(alias)
+      SAFE_ALIAS.test(alias) && hasCloudMachineAliasPrefix(alias)
         ? permit.withPermits(1)(
             joinAs(
               scope,
@@ -937,7 +938,7 @@ const make = Effect.gen(function* () {
               },
             ),
           )
-        : Effect.fail(invalid("deviceAlias must be a plain SSH alias.")),
+        : Effect.fail(invalid("Only a cloud machine GOAT created joins without a person.")),
   });
 });
 

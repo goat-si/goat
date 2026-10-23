@@ -1,4 +1,4 @@
-import { GoatHostStatusResult } from "@goat/contracts";
+import { GoatHostStatusResult, hasCloudMachineAliasPrefix } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -311,7 +311,11 @@ const make = Effect.gen(function* () {
     pinnedFingerprint: Effect.fn("HubOcx.pinnedFingerprint")(
       function* (alias) {
         if (!SAFE_ALIAS.test(alias)) return undefined;
-        for (const directory of ["goat-hosts", "goat-cloud"]) {
+        // A cloud alias is only ever pinned by the cloud machine service, never by a person.
+        const directories = hasCloudMachineAliasPrefix(alias)
+          ? ["goat-cloud"]
+          : ["goat-hosts", "goat-cloud"];
+        for (const directory of directories) {
           const file = path.join(homeDirectory, ".ssh", directory, `${alias}.known_hosts`);
           if (!(yield* fs.exists(file))) continue;
           const output = yield* run("ssh-keygen", ["-E", "sha256", "-lf", file], 10_000);
