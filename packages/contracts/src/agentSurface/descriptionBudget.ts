@@ -82,7 +82,7 @@ export const DESCRIPTIONS_OVER_BUDGET: Readonly<Record<string, number>> = {
   "thread.list": 1111,
   "thread.read": 1565,
   "thread.report_result": 618,
-  "thread.reschedule": 631,
+  "thread.reschedule": 626,
   "thread.retry": 1120,
   "thread.search": 1081,
   "thread.send": 2449,
