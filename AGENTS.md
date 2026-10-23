@@ -1,6 +1,6 @@
 # GOAT
 
-GOAT runs the coding agents people already use, such as Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity, Pi, ACP agents and cloud agents, on the machines they own, and lets them steer all of it from the desktop app, a browser, or a phone. Every machine runs a GOAT server: a Node WebSocket server that wraps the provider CLIs and serves the web, desktop, and mobile clients. On top of that, GOAT adds GOAT Bot, agents that start and follow work on other machines, Fleet, memory, and the `goat` MCP tools agents use to orchestrate other threads.
+GOAT runs the coding agents people already use, such as Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity, Pi and ACP agents, on the machines they own, puts cloud agents that run in their vendor's environment beside them, and lets people steer all of it from the desktop app, a browser, or a phone. Every machine runs a GOAT server: a Node WebSocket server that wraps the provider CLIs and serves the web, desktop, and mobile clients. On top of that, GOAT adds GOAT Bot, agents that start and follow work on other machines, Fleet, memory, and the `goat` MCP tools agents use to orchestrate other threads.
 
 GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code). It keeps that event-sourced core and still merges upstream changes, so many files here are shared with upstream. [Fork delta](devlog/_chase/010_fork_delta.md) records the areas where the two differ.
 
@@ -28,7 +28,7 @@ GOAT has 3 key app surfaces: **web**, **desktop**, and **mobile**.
 
 **Desktop** is the Electron app most users install first. It bundles the server, so it can also host the environment that browsers, phones, and other desktops connect to.
 
-**Mobile** is a React Native app for iOS and Android, available on the App Store and Google Play. It connects to any GOAT server to control work remotely.
+**Mobile** is a React Native app for iOS and Android (`apps/mobile`). It connects to any GOAT server to control work remotely. GOAT's own build (`si.goat.mobile`) is not in the App Store or Google Play yet; the store listings the user guides link are upstream's app.
 
 ## Design stance
 
