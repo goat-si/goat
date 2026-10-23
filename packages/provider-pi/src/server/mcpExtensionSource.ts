@@ -26,6 +26,12 @@ export const GOAT_CUA_GATE_ENV = "GOAT_CUA_GATE";
  */
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
 
+/**
+ * The tools/list `_meta` flag GOAT sets on each resident tool. It is Claude Code's own key for a
+ * tool that must never be deferred, so one flag serves every harness that defers tools.
+ */
+export const ALWAYS_LOAD_META_KEY = "anthropic/alwaysLoad";
+
 export const PI_GOAT_MCP_EXTENSION_SOURCE = `\
 import { stripFrontmatter, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as NodeFSP from "node:fs/promises";
@@ -39,6 +45,7 @@ const RUNTIME_MODE_ENV = ${JSON.stringify(GOAT_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(GOAT_PI_MCP_EXTENSION_PATH_ENV)};
 const CUA_ENV = ${JSON.stringify(GOAT_CUA_MCP_ENV)};
 const CUA_GATE_ENV = ${JSON.stringify(GOAT_CUA_GATE_ENV)};
+const ALWAYS_LOAD_META_KEY = ${JSON.stringify(ALWAYS_LOAD_META_KEY)};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(GOAT_ORCHESTRATION_INSTRUCTIONS.trim())};
 const DEVELOPMENT_INSTRUCTIONS = ${JSON.stringify(GOAT_DEVELOPMENT_INSTRUCTIONS)};
 const COMPUTER_USE_INSTRUCTIONS = ${JSON.stringify(COMPUTER_USE_INSTRUCTIONS)};
@@ -62,6 +69,7 @@ type McpTool = {
   readonly inputSchema?: Record<string, unknown>;
   readonly annotations?: { readonly readOnlyHint?: boolean };
   readonly outputSchema?: Record<string, unknown>;
+  readonly _meta?: Record<string, unknown>;
 };
 
 function env(name: string): string | undefined {
@@ -500,15 +508,6 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   // Tool exposure arrived with registerMcpServer in Pi 0.99. Keep the HTTP
   // bridge as the credential owner: mcp.json overrides native registrations.
   const supportsExposure = "registerMcpServer" in pi && typeof pi.registerMcpServer === "function";
-  // Listed names, plus the shipped ones a server from before the listing flip still lists.
-  const directTools = new Set([
-    "goat_provider_list",
-    "goat_task_create",
-    "goat_task_read",
-    "orchestrator_capabilities",
-    "delegate_task",
-    "task_status",
-  ]);
   let deferOptionalTools = supportsExposure;
   let catalog: ReadonlyArray<McpTool> = [];
 
@@ -523,7 +522,8 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
       const name = tool.name;
       const registeredName = \`mcp__goat__\${name}\`;
       if (tool.annotations?.readOnlyHint === true) readOnlyMcpTools.add(registeredName);
-      const exposure = deferOptionalTools && !directTools.has(name) ? "deferred" : "direct";
+      // The server marks its resident tools; Pi defers the rest only while tool_search can find them.
+      const exposure = deferOptionalTools && tool._meta?.[ALWAYS_LOAD_META_KEY] !== true ? "deferred" : "direct";
       pi.registerTool({
         name: registeredName,
         label: name,

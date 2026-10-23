@@ -2,7 +2,7 @@
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeVM from "node:vm";
-import { PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
+import { ALWAYS_LOAD_META_KEY, PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
 
 interface RegisteredTool {
   readonly name: string;
@@ -52,6 +52,7 @@ export async function loadMcpBridge(
       readonly name: string;
       readonly description?: string;
       readonly annotations?: { readonly readOnlyHint?: boolean };
+      readonly _meta?: Record<string, unknown>;
     }>;
     /** A stdio MCP server the bridge starts as the managed Cua Driver. */
     readonly cua?: { readonly command: string; readonly args: ReadonlyArray<string> };
@@ -83,18 +84,23 @@ export async function loadMcpBridge(
   const catalog = (
     options.catalog ?? [
       {
-        name: "orchestrator_capabilities",
-        description: "Discover available providers and models.",
+        name: "goat_describe",
+        description: "Find GOAT capabilities.",
         annotations: { readOnlyHint: true },
+        _meta: { [ALWAYS_LOAD_META_KEY]: true },
       },
-      { name: "delegate_task", description: "Delegate work to another agent." },
       {
-        name: "task_status",
-        description: "Check delegated work.",
+        name: "goat_call",
+        description: "Call any GOAT capability by path.",
+        _meta: { [ALWAYS_LOAD_META_KEY]: true },
+      },
+      {
+        name: "goat_task_create",
+        description: "Delegate work to another agent.",
         annotations: { readOnlyHint: false },
       },
       {
-        name: "preview_snapshot",
+        name: "goat_preview_snapshot",
         description: "Inspect the collaborative browser.",
       },
     ]
