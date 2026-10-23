@@ -457,6 +457,8 @@ export const layer = Layer.effect(
         return effective;
       }
       let granted = effective;
+      // The profile the child is bound under before any ceiling narrows it.
+      let base = effective.narrowing?.named ?? effective.profile;
       if (input.role !== undefined) {
         const { profileId } = goatclawRoleTemplate(input.role);
         const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
@@ -468,6 +470,7 @@ export const layer = Layer.effect(
         const missing = missingRoleCapabilities(input.role, profile);
         if (missing.length > 0) return yield* roleRefusal(input.role, missing);
         granted = { ...effective, profile, runtimeMode: profile.runtimeModeCeiling };
+        base = named;
       }
       const sql = yield* sqlEffect;
       return yield* sql
@@ -565,11 +568,14 @@ export const layer = Layer.effect(
                 ceiling_json: string;
               }>`SELECT profile_id, ceiling_json FROM goatclaw_thread_profiles WHERE thread_id = ${input.childThreadId}`)[0];
               // A first binding's snapshot carries the id of what narrowed it, so the child's
-              // refusals name that ceiling rather than the profile it is bound under.
+              // refusals name that ceiling rather than the profile it is bound under. A wider
+              // source removed nothing, so it is never the one named.
+              const narrows = (source: PermissionProfile) =>
+                encodeProfile(intersectProfiles(base, source)) !== encodeProfile(base);
               const narrower = [
                 ...(effective.narrowing?.ceilings ?? []),
                 ...(input.role === undefined ? [] : [effective.profile]),
-              ].findLast((source) => source.id !== granted.profile.id);
+              ].findLast((source) => source.id !== granted.profile.id && narrows(source));
               const inherited =
                 previous === undefined
                   ? { ...granted.profile, ...(narrower === undefined ? {} : { id: narrower.id }) }

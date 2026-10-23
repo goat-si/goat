@@ -832,3 +832,35 @@ it.effect("names the ceiling that refused, not the stored profile it narrowed", 
     expect(view.profile.id).toBe("manager");
   }).pipe(Effect.provide(fixture("manager"))),
 );
+
+// A wider ceiling narrowed nothing, so a later refusal must not blame it.
+it.effect(
+  "blames the launch snapshot, not a wider forwarded ceiling, once the profile widens",
+  () =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* profiles.claim(outside, {
+        id: "wider",
+        childThreadId: ThreadId.make("wider"),
+        runtimeMode: "full-access",
+        forwarded: BUILTIN_PERMISSION_PROFILES.owner!,
+      });
+      const policy = (yield* settings.getSettings).goatclaw;
+      const manager = policy.profiles.manager!;
+      yield* settings.updateSettings({
+        goatclaw: {
+          ...policy,
+          profiles: {
+            ...policy.profiles,
+            manager: { ...manager, capabilities: [...manager.capabilities, "hub.manage"] },
+          },
+        },
+      });
+      yield* seed("wider");
+      expect(yield* profiles.check(threadScope("wider"), "hub.manage")).toEqual({
+        ok: false,
+        reason: "Profile manager as this thread was launched with it does not allow hub.manage.",
+      });
+    }).pipe(Effect.provide(fixture("manager"))),
+);
