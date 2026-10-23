@@ -78,7 +78,7 @@ export function cuaDriverRelease(platform: NodeJS.Platform, arch: string): CuaDr
 // The embedded host clears the driver's environment and rejects names outside its allowlist, so
 // DO_NOT_TRACK and CUA_TELEMETRY cannot be forwarded. These allowlisted switches override any
 // inherited value and turn off the driver's default-on telemetry and GitHub update check.
-export const CUA_DRIVER_PRIVACY_ENVIRONMENT = [
+const CUA_DRIVER_PRIVACY_ENVIRONMENT = [
   { name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" },
   { name: "CUA_TELEMETRY_ENABLED", value: "false" },
   { name: "CUA_DRIVER_RS_UPDATE_CHECK", value: "false" },

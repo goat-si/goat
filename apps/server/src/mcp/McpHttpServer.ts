@@ -23,7 +23,6 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { llmsTxtCaller, llmsTxtResponse } from "./llmsTxtResponse.ts";
-import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -1329,7 +1328,7 @@ const layerProjectRegistration = catalogRegistrations.project.pipe(
   Layer.provide(OrchestratorMcpService.layer),
 );
 
-export const layerConnectionToolkit = catalogRegistrations.connection;
+const layerConnectionToolkit = catalogRegistrations.connection;
 
 const layerRemoteReportRegistration = catalogRegistrations.remoteReport;
 
