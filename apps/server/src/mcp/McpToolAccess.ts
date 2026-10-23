@@ -281,7 +281,7 @@ export const writes = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>
 export const writesAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("write", (params: P) =>
     requireThreadCaller.pipe(
-      Effect.flatMap(() => orchestratingCaller),
+      Effect.andThen(orchestratingCaller),
       Effect.flatMap(() => handle(params)),
     ),
   );

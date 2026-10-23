@@ -10,6 +10,7 @@ import * as McpToolAccess from "./McpToolAccess.ts";
 /** Results for calls refused before a tool runs, in the shape SshRemoteDispatch reads back. */
 const encodeOrchestratorMcpFailure = Schema.encodeSync(OrchestratorMcpFailure);
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
+const isCallToolResult = Schema.is(McpSchema.CallToolResult);
 export const encodeReferenceRefusal = Schema.encodeSync(
   Schema.fromJsonString(OrchestratorMcpFailure),
 );
@@ -27,10 +28,9 @@ export const refusalResult = (failure: OrchestratorMcpFailure) =>
  * report, passes it on to an enclosing goat_call, and answers such a refusal with its code.
  */
 export const keepingRefusalCode =
-  <E, R>(handle: (payload: unknown) => Effect.Effect<McpSchema.CallToolResult, E, R>) =>
-  (payload: unknown) =>
-    // Request instrumentation already owns the span for each tool call.
-    Effect.fnUntraced(function* () {
+  <P, A, E, R>(handle: (payload: P) => Effect.Effect<A, E, R>) =>
+  (payload: P) =>
+    Effect.gen(function* () {
       const outer = yield* Effect.serviceOption(McpToolAccess.CallFailureCapture);
       const captured = yield* Ref.make<unknown>(undefined);
       const result = yield* handle(payload).pipe(
@@ -42,6 +42,7 @@ export const keepingRefusalCode =
         }),
       );
       const error = yield* Ref.get(captured);
+      if (!isCallToolResult(result)) return result;
       const [only] = result.content;
       const flattened =
         result.isError === true &&
@@ -51,7 +52,7 @@ export const keepingRefusalCode =
         isOrchestratorMcpFailure(error) &&
         only.text === error.message;
       return flattened ? refusalResult(error) : result;
-    })();
+    });
 
 export const undeclaredArgumentsResult = (
   tool: string,
