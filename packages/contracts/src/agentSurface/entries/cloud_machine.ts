@@ -51,7 +51,7 @@ export const cloudMachineEntries = {
     toolkit: "ssh",
     summary: "Stop a cloud machine",
     description:
-      "Ask Boat to stop a managed cloud machine. Stopping is asynchronous; read goat_cloud_machine_list to check its state.",
+      "Ask Boat to stop a managed cloud machine: billing stops, running processes end, and its disk is kept as a snapshot for about 14 days. Stopping is asynchronous; read goat_cloud_machine_list for its state.",
     guide:
       "GOAT invalidates cached SSH state after Boat accepts the stop, then reads Boat's state again; when that read fails the result has presence unknown and state null. That state may already be archived; archiving is not guaranteed in every response. Needs a live settings:write grant reauthorized for this call.",
     effect: "write",
