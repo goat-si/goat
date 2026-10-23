@@ -51,8 +51,8 @@ export const DescribeResult = Schema.Union([
     depth: Schema.Literal("search"),
     surfaceVersion: Schema.String,
     query: Schema.String,
-    /** all: some path has every word; partial: paths share only some; none: no word matched. */
-    mode: Schema.Literals(["all", "partial", "none"]),
+    /** exact: the query named a path; all: some path has every word; partial: only some. */
+    mode: Schema.Literals(["exact", "all", "partial", "none"]),
     entries: Schema.Array(SearchMatch),
     /** Every path that matched, across pages. */
     total: Schema.Int,
@@ -75,24 +75,28 @@ export const DescribeResult = Schema.Union([
   }),
   Schema.Struct({
     depth: Schema.Literal("path"),
-    entry: Schema.Struct({
-      path: Schema.String,
-      name: Schema.String,
-      summary: Schema.String,
-      effect: Effect,
-      available: Availability,
-      canonicalName: Schema.String,
-      legacyNames: Schema.Array(Schema.String),
-      description: Schema.String,
-      /** Guidance longer than the listed description, for this path only. */
-      guide: Schema.optionalKey(Schema.String),
-      hostRoutable: Schema.Boolean,
-      requires: Requires,
-      dryRun: Schema.Literals(["supported", "unsupported"]),
-      humanSteps: Schema.Array(Schema.String),
-      inputSchema: Schema.Unknown,
-      outputSchema: Schema.NullOr(Schema.Unknown),
-    }),
+    /** Every field below, or at detail "names" or "summary" only the fields a list shows. */
+    entry: Schema.Union([
+      Schema.Struct({
+        path: Schema.String,
+        name: Schema.String,
+        summary: Schema.String,
+        effect: Effect,
+        available: Availability,
+        canonicalName: Schema.String,
+        legacyNames: Schema.Array(Schema.String),
+        description: Schema.String,
+        /** Guidance longer than the listed description, for this path only. */
+        guide: Schema.optionalKey(Schema.String),
+        hostRoutable: Schema.Boolean,
+        requires: Requires,
+        dryRun: Schema.Literals(["supported", "unsupported"]),
+        humanSteps: Schema.Array(Schema.String),
+        inputSchema: Schema.Unknown,
+        outputSchema: Schema.NullOr(Schema.Unknown),
+      }),
+      EntrySummary,
+    ]),
   }),
 ]);
 export type DescribeResult = typeof DescribeResult.Type;
@@ -107,7 +111,7 @@ const DescribeTool = Tool.make(agentSurfaceRegistry["surface.describe"].name, {
       }),
     ),
     query: Schema.optional(
-      Schema.String.check(Schema.isMinLength(1)).annotate({
+      Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500)).annotate({
         description:
           "Words or a tool name to find paths by. With a resource as path, searches only that resource.",
       }),

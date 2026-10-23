@@ -20,8 +20,8 @@ export interface SearchOutcome<Entry> {
   /** The words matched against entries, after dropping words such as "the" and "which". */
   readonly words: ReadonlyArray<string>;
   readonly ignoredWords: ReadonlyArray<string>;
-  /** "all" when some entry has every word; "partial" when entries share only some of them. */
-  readonly mode: "all" | "partial" | "none";
+  /** The best match: the query named an entry, some entry has every word, or only some. */
+  readonly mode: "exact" | "all" | "partial" | "none";
   /** Exact first, then every-word matches, then partial ones by how many words they share. */
   readonly matches: ReadonlyArray<Match<Entry>>;
 }
@@ -34,26 +34,21 @@ const STOP_WORDS: ReadonlySet<string> = new Set(
   ),
 );
 
-/** Folds plural and verb endings so "checks" finds "check" and "watching" finds "watch". */
-const stem = (word: string) =>
-  word.length > 5 && word.endsWith("ing")
-    ? word.slice(0, -3)
-    : word.length > 4 && word.endsWith("ies")
-      ? `${word.slice(0, -3)}y`
-      : word.length > 4 && /(?:ch|sh|x|ss)es$/u.test(word)
-        ? word.slice(0, -2)
-        : word.length > 4 && word.endsWith("ed")
-          ? word.slice(0, -2)
-          : word.length > 3 && word.endsWith("s") && !word.endsWith("ss")
-            ? word.slice(0, -1)
-            : word;
-
 const tokens = (text: string) =>
   text
     .toLowerCase()
     .split(/[^a-z0-9]+/u)
-    .filter((token) => token !== "")
-    .map(stem);
+    .filter((token) => token !== "");
+
+/**
+ * Two forms of one word: equal, or one extends the other by a short ending ("status" and
+ * "statuses", "watch" and "watching"). Symmetric, so plural and singular find each other.
+ */
+const sameWord = (a: string, b: string) => {
+  if (a === b) return true;
+  const [short, long] = a.length < b.length ? [a, b] : [b, a];
+  return short.length >= 4 && long.length - short.length <= 3 && long.startsWith(short);
+};
 
 /**
  * The words an entry is named by: its resource, verb and tool names, plus the initials of a
@@ -82,27 +77,34 @@ const fieldsOf = (entry: Searchable): Fields => ({
   text: new Set(tokens(`${entry.description} ${entry.guide ?? ""}`)),
 });
 
-const hasWord = (field: ReadonlySet<string>, word: string, prefix: boolean) => {
-  if (field.has(word)) return true;
-  if (!prefix) return false;
+const hasWord = (field: ReadonlySet<string>, word: string) => {
+  for (const token of field) if (sameWord(token, word)) return true;
+  return false;
+};
+
+const startsAName = (field: ReadonlySet<string>, word: string) => {
+  if (word.length < 3) return false;
   for (const token of field) if (token.startsWith(word)) return true;
   return false;
 };
 
 /**
- * 4 when the word is the whole resource ("host" for host.status, not host_link.list), 3 when a
- * name starts with it, 2 for the summary, 1 for the description or guide.
+ * 5 when the word is the whole resource ("host" for host.status, not host_link.list), 4 when it
+ * is a word of a name or a resource's initials, 3 when it starts one, 2 for the summary, 1 for
+ * the description or guide.
  */
 const tier = (fields: Fields, word: string) =>
   fields.resource === word
-    ? 4
-    : hasWord(fields.names, word, word.length >= 2)
-      ? 3
-      : hasWord(fields.summary, word, word.length >= 4)
-        ? 2
-        : hasWord(fields.text, word, word.length >= 4)
-          ? 1
-          : 0;
+    ? 5
+    : hasWord(fields.names, word)
+      ? 4
+      : startsAName(fields.names, word)
+        ? 3
+        : hasWord(fields.summary, word)
+          ? 2
+          : hasWord(fields.text, word)
+            ? 1
+            : 0;
 
 /**
  * Exact names resolve first, so a tool named outright is never lost behind text matches. Then
@@ -113,15 +115,10 @@ export const searchEntries = <Entry extends Searchable>(
   candidates: ReadonlyArray<Entry>,
   query: string,
 ): SearchOutcome<Entry> => {
-  // Matched on stems, reported in the caller's own words.
-  const spelled = new Map<string, string>();
-  for (const word of query.toLowerCase().split(/[^a-z0-9]+/u))
-    if (word !== "" && !spelled.has(stem(word))) spelled.set(stem(word), word);
-  const all = [...spelled.keys()];
-  const meaningful = all.filter((word) => !STOP_WORDS.has(spelled.get(word) ?? word));
+  const all = [...new Set(tokens(query))];
+  const meaningful = all.filter((word) => !STOP_WORDS.has(word));
   const words = meaningful.length > 0 ? meaningful : all;
-  const said = (stems: ReadonlyArray<string>) => stems.map((word) => spelled.get(word) ?? word);
-  const ignoredWords = said(all.filter((word) => !words.includes(word)));
+  const ignoredWords = all.filter((word) => !words.includes(word));
   const exact = resolveAgentSurfaceEntry(query.trim());
   const exactEntry = candidates.find((entry) => entry.path === exact?.path);
 
@@ -153,17 +150,20 @@ export const searchEntries = <Entry extends Searchable>(
   const matches: Array<Match<Entry>> = ranked.map(({ entry, matchedWords }) => ({
     entry,
     match: matchedWords.length === words.length ? "all" : "partial",
-    matchedWords: said(matchedWords),
-    unmatchedWords: said(words.filter((word) => !matchedWords.includes(word))),
+    matchedWords,
+    unmatchedWords: words.filter((word) => !matchedWords.includes(word)),
   }));
   return {
-    words: said(words),
+    words,
     ignoredWords,
-    mode: matches.some((match) => match.match === "all")
-      ? "all"
-      : matches.length > 0
-        ? "partial"
-        : "none",
+    mode:
+      exactEntry !== undefined
+        ? "exact"
+        : matches.some((match) => match.match === "all")
+          ? "all"
+          : matches.length > 0
+            ? "partial"
+            : "none",
     matches: [
       ...(exactEntry === undefined
         ? []
@@ -191,13 +191,16 @@ const distance = (a: string, b: string) => {
   return previous[b.length] ?? 0;
 };
 
+const NEAREST_QUERY_CHARS = 64;
+
 /** Paths spelled closest to the query, for a search nothing matched. */
 export const nearestPaths = (
   candidates: ReadonlyArray<Searchable>,
   query: string,
   count = 3,
 ): ReadonlyArray<string> => {
-  const target = query.trim().toLowerCase().replaceAll(/\s+/gu, "_");
+  // Paths are short; a longer query only costs time to compare.
+  const target = query.trim().toLowerCase().replaceAll(/\s+/gu, "_").slice(0, NEAREST_QUERY_CHARS);
   return candidates
     .map((entry) => ({
       path: entry.path,

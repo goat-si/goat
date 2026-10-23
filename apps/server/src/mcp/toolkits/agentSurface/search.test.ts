@@ -10,6 +10,8 @@ import { McpInvocationContext, type McpInvocationScope } from "../../McpInvocati
 import { searchEntries } from "./search.ts";
 
 const entries = Object.values(agentSurfaceRegistry);
+const agentSurfaceEntries = (resource: string) =>
+  entries.filter((entry) => entry.resource === resource);
 const registered = catalog.pipe(
   Layer.provide(dependencies),
   Layer.provideMerge(McpServer.McpServer.layer),
@@ -167,6 +169,69 @@ describe("goat_describe search", () => {
       expect(entry.guide).toBe(agentSurfaceRegistry["surface.describe"].guide);
       const found = yield* searchAs("thread", { query: "goat_describe" });
       expect(found.entries[0]).not.toHaveProperty("guide");
+    }).pipe(Effect.provide(registered)),
+  );
+
+  it("matches singular and plural forms and ranks a resource's initials above a prefix", () => {
+    const top = (query: string) =>
+      searchEntries(entries, query)
+        .matches.slice(0, 8)
+        .map(({ entry }) => entry.path);
+    expect(searchEntries(agentSurfaceEntries("host"), "statuses").matches[0]?.entry.path).toBe(
+      "host.status",
+    );
+    // Both resources have the initials; a name that only starts with "pr" ranks after them.
+    expect(top("pr").every((path) => /^(pull|pending)_request\./u.test(path))).toBe(true);
+  });
+
+  it.effect("calls a search that named a path exact, even with nothing else matching", () =>
+    Effect.gen(function* () {
+      const found = yield* searchAs("thread", { path: "workflow", query: "workflow.stop" });
+      expect(found).toMatchObject({ mode: "exact", total: 1 });
+    }).pipe(Effect.provide(registered)),
+  );
+
+  it.effect("refuses a cursor past the end of its search", () =>
+    Effect.gen(function* () {
+      const first = (yield* searchAs("thread", { query: "thread", limit: 3 })) as Search & {
+        readonly surfaceVersion: string;
+      };
+      const pastEnd = Buffer.from(
+        JSON.stringify({ version: first.surfaceVersion, query: "thread", path: null, offset: 1e5 }),
+      ).toString("base64url");
+      const refused = yield* describeAs("thread", { query: "thread", cursor: pastEnd });
+      expect(refused.isError).toBe(true);
+    }).pipe(Effect.provide(registered)),
+  );
+
+  it.effect("continues a search that an unknown path started, with its cursor", () =>
+    Effect.gen(function* () {
+      const first = yield* searchAs("thread", { path: "thread.teleport", limit: 1 });
+      expect(first.nextCursor).toBeDefined();
+      const next = yield* searchAs("thread", {
+        path: "thread.teleport",
+        limit: 1,
+        cursor: first.nextCursor,
+      });
+      expect(next.entries[0]?.path).not.toBe(first.entries[0]?.path);
+    }).pipe(Effect.provide(registered)),
+  );
+
+  it.effect("describes one path at the detail asked for", () =>
+    Effect.gen(function* () {
+      const named = yield* describeAs("thread", { path: "goat_describe", detail: "names" });
+      expect((named.structuredContent as { entry: object }).entry).toEqual({
+        path: "surface.describe",
+        name: "goat_describe",
+        summary: agentSurfaceRegistry["surface.describe"].summary,
+      });
+    }).pipe(Effect.provide(registered)),
+  );
+
+  it.effect("refuses a query too long to be a search", () =>
+    Effect.gen(function* () {
+      const refused = yield* Effect.flip(describeAs("thread", { query: "word ".repeat(200) }));
+      expect(refused._tag).toBe("InvalidParams");
     }).pipe(Effect.provide(registered)),
   );
 

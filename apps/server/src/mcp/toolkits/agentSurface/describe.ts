@@ -20,11 +20,12 @@ import type { DescribeResult } from "./tools.ts";
 const entries: ReadonlyArray<AgentSurfaceRegistryEntry> = Object.values(agentSurfaceRegistry);
 const guideOf = (entry: AgentSurfaceEntry) => entry.guide;
 
-// FNV-1a over what an agent relies on; stable across processes, unlike object identity.
+// FNV-1a over every field an agent relies on or search reads, so a cursor from an earlier
+// registry is refused; stable across processes, unlike object identity.
 const surfaceVersion = (() => {
   let hash = 0x811c9dc5;
   for (const entry of entries)
-    for (const char of `${entry.path}|${entry.name}|${entry.effect}|${entry.requires}|${entry.description}|${guideOf(entry) ?? ""}\n`) {
+    for (const char of `${JSON.stringify([entry.path, entry.name, entry.legacyNames, entry.effect, entry.requires, entry.summary, entry.description, guideOf(entry) ?? ""])}\n`) {
       hash ^= char.charCodeAt(0);
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
@@ -131,6 +132,11 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
       offset = cursor.value.offset;
     }
     const outcome = searchEntries(within, input.query);
+    // A cursor is only issued with matches left, so one at or past the end is not this search's.
+    if (input.cursor !== undefined && offset >= outcome.matches.length)
+      return yield* refuse(
+        "This cursor points past the matches this search has. Search again without cursor.",
+      );
     const page = outcome.matches.slice(offset, offset + input.limit);
     const next = offset + page.length;
     const matchedEntries = outcome.matches.map(({ entry }) => entry);
@@ -182,7 +188,7 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
   }) {
     const scope = yield* McpInvocationContext.McpInvocationContext;
     const detail = input.detail ?? "summary";
-    if (detail === "full" && (input.query !== undefined || input.path === undefined))
+    if (input.detail === "full" && (input.query !== undefined || input.path === undefined))
       return yield* refuse(
         'detail "full" describes one path: pass its path, such as "thread.send", without query.',
       );
@@ -195,8 +201,20 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
         limit,
         cursor: input.cursor,
       });
+    const entry = input.path === undefined ? undefined : resolveAgentSurfaceEntry(input.path);
+    const isResource = entries.some((candidate) => candidate.resource === input.path);
+    // A name that is no path or resource is searched, never answered with absence; its cursor
+    // continues that search.
+    if (input.path !== undefined && entry === undefined && !isResource)
+      return yield* search(scope, {
+        query: input.path,
+        path: undefined,
+        detail: detail === "full" ? "summary" : detail,
+        limit,
+        cursor: input.cursor,
+      });
     if (input.cursor !== undefined)
-      return yield* refuse("cursor continues a search: pass its query.");
+      return yield* refuse("cursor continues a search: pass the same query it came with.");
     if (input.path === undefined) {
       const resources = new Map<string, Array<string>>();
       for (const entry of entries)
@@ -210,7 +228,11 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
         next: 'Pass query to search, a resource ("thread") for its paths, or a path ("thread.send") for its schema and availability. Call any path with goat_call.',
       } satisfies DescribeResult;
     }
-    const entry = resolveAgentSurfaceEntry(input.path);
+    if (entry !== undefined && input.detail !== undefined && input.detail !== "full")
+      return {
+        depth: "path" as const,
+        entry: listed(entry, scope, input.detail),
+      } satisfies DescribeResult;
     if (entry !== undefined) {
       const tool = dispatch.served(listedToolName(entry));
       return {
@@ -235,15 +257,6 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
       } satisfies DescribeResult;
     }
     const inResource = entries.filter((candidate) => candidate.resource === input.path);
-    // A name that is neither a path nor a resource is searched, never answered with absence.
-    if (inResource.length === 0)
-      return yield* search(scope, {
-        query: input.path,
-        path: undefined,
-        detail: detail === "full" ? "summary" : detail,
-        limit,
-        cursor: undefined,
-      });
     return {
       depth: "resource" as const,
       resource: input.path,

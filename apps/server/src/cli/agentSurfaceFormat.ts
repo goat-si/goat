@@ -25,7 +25,7 @@ const table = (entries: ReadonlyArray<Row>) => {
   const width = Math.max(0, ...entries.map((row) => String(row.path).length));
   return entries.map(
     (row) =>
-      `  ${String(row.path).padEnd(width)}  ${String(row.effect).padEnd(11)}  ${String(row.summary)}${availability(row)}`,
+      `  ${String(row.path).padEnd(width)}  ${typeof row.effect === "string" ? `${row.effect.padEnd(11)}  ` : ""}${String(row.summary)}${availability(row)}`,
   );
 };
 
