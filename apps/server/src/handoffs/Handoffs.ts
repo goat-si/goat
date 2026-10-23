@@ -15,6 +15,7 @@ import {
   handoffSummary,
   isHandoffPending,
   isClockedHandoffPath,
+  endsWithItsRun,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   TurnItemId,
   type HandoffReadInput,
@@ -42,6 +43,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import { itemHandoff } from "../orchestration-v2/handoffState.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import { ThreadArchiveGate } from "../orchestration-v2/ThreadArchiveGate.ts";
+import { canResolveHumanStep, sessionResolver } from "./HumanStepAuthority.ts";
 
 export const SshProgressBinding = Schema.Struct({
   host: SshHostAlias,
@@ -340,6 +342,11 @@ const make = Effect.gen(function* () {
               : ("orchestration:operate" as const);
     const active = yield* sessions.listActive().pipe(Effect.mapError(unavailable));
     const session = active.find((session) => session.sessionId === sessionId);
+    if (session && !canResolveHumanStep(sessionResolver(session), "person_only"))
+      return yield* new EnvironmentAuthorizationError({
+        requiredScope: "orchestration:operate",
+        message: "Only a person's client can act on this handoff.",
+      });
     for (const requiredScope of new Set(["orchestration:operate" as const, targetScope])) {
       if (!session || !(session.permissions ?? session.scopes).includes(requiredScope))
         return yield* new EnvironmentAuthorizationError({
@@ -506,9 +513,7 @@ const make = Effect.gen(function* () {
       if (
         (handoff.expiresAt !== null &&
           DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)) ||
-        (handoff.kind === "approval" &&
-          !handoff.target.path.startsWith("ssh.") &&
-          !isClockedHandoffPath(handoff.target.path) &&
+        (endsWithItsRun(handoff) &&
           (runStatus === null || ThreadManagement.isTerminalRunStatus(runStatus)))
       ) {
         const input = yield* decodeAddress({
@@ -737,7 +742,11 @@ const make = Effect.gen(function* () {
   ) {
     const active = yield* sessions.listActive().pipe(Effect.mapError(unavailable));
     const session = active.find((session) => session.sessionId === sessionId);
-    if (!session || !(session.permissions ?? session.scopes).includes("orchestration:operate"))
+    if (
+      !session ||
+      !canResolveHumanStep(sessionResolver(session), "person_only") ||
+      !(session.permissions ?? session.scopes).includes("orchestration:operate")
+    )
       return yield* new EnvironmentAuthorizationError({
         requiredScope: "orchestration:operate",
         message: "This client cannot answer this request.",

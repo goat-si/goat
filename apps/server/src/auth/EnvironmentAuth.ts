@@ -49,6 +49,7 @@ import { legacyScopedSessionCookieName } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
 import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { MCP_CLIENT_SUBJECT } from "./mcpClientSubject.ts";
 
 const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
 export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
@@ -86,7 +87,6 @@ export interface IssuedBearerSession {
  * repositories, so it holds the scopes those need over RPC. Approving a grant
  * requires every scope it holds.
  */
-const MCP_CLIENT_SUBJECT = "mcp-client";
 const MCP_CLIENT_SESSION_TTL = Duration.days(30);
 
 export const mcpClientScopes = (

@@ -83,11 +83,11 @@ export const agentSurfaceRegistry = {
     summary:
       "Answer an open decision using optionId, or a projected pending question using answers or decision plus reason.",
     description:
-      "Answer an open decision using optionId, or a projected pending question using answers or decision plus reason. Requires the effective permission profile named by the item. Approvals and humanRequired items require a person in an authenticated GOAT client.",
+      "Answer an open decision using optionId, or a projected pending question using answers or decision plus reason. Requires the effective permission profile named by the item, except provider approvals. A provider approval takes a person in a GOAT client or an MCP client token holding orchestration:approve (under its own runtime ceiling), as with goat_pending_request_respond; other humanRequired items require a person in an authenticated GOAT client.",
     effect: "destructive",
     capability: "none",
     capabilityReason:
-      "Checked against the profile the decision names; approvals and humanRequired items need a person.",
+      "Checked against the profile the decision names; approvals need a person or an approve-scoped client.",
     hostRoutable: false,
     requires: "either",
     dryRun: "unsupported",
@@ -1354,7 +1354,7 @@ export const agentSurfaceRegistry = {
     toolkit: "orchestrator",
     summary: "Request a secret from the user",
     description:
-      "Ask the user for a secret (a token, API key, signing secret, password) through a private card in this thread, and wait for them to answer. The value is kept by the app and NEVER returned to you or shown in the transcript. When saved, the result carries a secretRef: pass it to a tool that accepts one (e.g. schedule_task's signature.secretRef). It works once. Never ask for secrets in chat, and never invent one.",
+      "Ask the user for a secret (a token, API key, signing secret, password) through a private card in this thread, and wait for them to answer. With wait:false it returns needs_human (status pending) with the card's handoff at once; call again with the same clientRequestId before this turn ends to collect it. The value is kept by the app and NEVER returned to you or shown in the transcript. When saved, the result carries a secretRef: pass it to a tool that accepts one (e.g. schedule_task's signature.secretRef). It works once. Never ask for secrets in chat, and never invent one.",
     effect: "write",
     capability: "none",
     capabilityReason: "Asks a person for a secret; the person decides.",

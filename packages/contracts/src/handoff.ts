@@ -93,6 +93,16 @@ export const COMPUTER_USE_GRANT_HANDOFF_PATH = "computer_use.grant";
 export const isClockedHandoffPath = (path: string) =>
   isProviderHandoffPath(path) || path === COMPUTER_USE_GRANT_HANDOFF_PATH;
 
+/**
+ * Steps that end with the run that asked: a secret card, whose caller collects it in that run,
+ * and approvals that are neither SSH nor clocked.
+ */
+export const endsWithItsRun = (handoff: Pick<Handoff, "kind" | "target">) =>
+  handoff.kind === "secret" ||
+  (handoff.kind === "approval" &&
+    !handoff.target.path.startsWith("ssh.") &&
+    !isClockedHandoffPath(handoff.target.path));
+
 /** When an approved computer use admission ends (epoch ms), while it still lasts; else null. */
 export const computerUseGrantLiveUntil = (
   handoff: Pick<Handoff, "state" | "expiresAt" | "target">,

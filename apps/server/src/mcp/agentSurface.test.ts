@@ -200,23 +200,14 @@ describe("agent surface schemas", () => {
   });
 });
 
-// quarantine: #782 computer_use.request returns needs_human without next, so agents cannot tell what to call after approval.
-const NEEDS_HUMAN_WITHOUT_NEXT = new Set(["computer_use.request"]);
 // quarantine: #782 hub devices ask through the decision inbox: state needs_human with a decisionId, no handoff.
 const DECISION_INBOX_NEEDS_HUMAN = new Set([
   "hub.device_join",
   "hub.device_leave",
   "hub.device_repair",
 ]);
-// quarantine: #782 these share a result union with their siblings, so their schema offers a needs_human they never return.
 // goat_call returns the envelope, whose needs_human is a status rather than a kind; checked below.
 const ENVELOPE_NEEDS_HUMAN = new Set(["surface.call"]);
-const SHARED_RESULT_NEEDS_HUMAN = new Set([
-  "ssh.host_forget",
-  "ssh.host_status",
-  "provider.login_status",
-  "provider.login_cancel",
-]);
 
 describe("agent surface needs_human results", () => {
   it("hands work to a person only through the shared handoff summary and a registered next call", () => {
@@ -225,8 +216,7 @@ describe("agent surface needs_human results", () => {
     for (const entry of entries) {
       const document = resultDocument(entry);
       for (const arm of needsHumanArms(document)) {
-        if (entry.humanSteps.length === 0 && !SHARED_RESULT_NEEDS_HUMAN.has(entry.path))
-          problems.push(`${entry.path}: no humanSteps`);
+        if (entry.humanSteps.length === 0) problems.push(`${entry.path}: no humanSteps`);
         const required = Array.isArray(arm["required"]) ? arm["required"] : [];
         if (!required.includes("handoff")) problems.push(`${entry.path}: handoff not required`);
         const properties = arm["properties"] as JsonSchema;
@@ -235,7 +225,6 @@ describe("agent surface needs_human results", () => {
         ).sort();
         if (handoffKeys.join() !== summaryKeys.join())
           problems.push(`${entry.path}: handoff fields ${handoffKeys.join(",")}`);
-        if (NEEDS_HUMAN_WITHOUT_NEXT.has(entry.path)) continue;
         const next = propertiesOf(properties["next"], document.definitions);
         const calls = literals(resolve(next["call"], document.definitions));
         if (calls.length === 0) problems.push(`${entry.path}: no next.call`);

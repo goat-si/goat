@@ -27,6 +27,7 @@ import {
   ProviderSyncStatusInput,
   ProviderLoginFlowInput,
   ProviderLoginResultJson,
+  ProviderLoginFlowResultJson,
   ProviderLoginStartInput,
   ProviderSetupOpenInput,
   ProviderSetupOpenResultJson,
@@ -143,7 +144,7 @@ const ProviderLoginStartTool = Tool.make(agentSurfaceRegistry["provider.login_st
 const ProviderLoginStatusTool = Tool.make(agentSurfaceRegistry["provider.login_status"].name, {
   description: agentSurfaceRegistry["provider.login_status"].description,
   parameters: ProviderLoginFlowInput,
-  success: ProviderLoginResultJson,
+  success: ProviderLoginFlowResultJson,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
   dependencies: onboardingDependencies,
@@ -151,7 +152,7 @@ const ProviderLoginStatusTool = Tool.make(agentSurfaceRegistry["provider.login_s
 const ProviderLoginCancelTool = Tool.make(agentSurfaceRegistry["provider.login_cancel"].name, {
   description: agentSurfaceRegistry["provider.login_cancel"].description,
   parameters: ProviderLoginFlowInput,
-  success: ProviderLoginResultJson,
+  success: ProviderLoginFlowResultJson,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
   dependencies: onboardingDependencies,

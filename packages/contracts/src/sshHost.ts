@@ -316,20 +316,34 @@ function sameProviders(left: SshHostProviders, right: SshHostProviders) {
   );
 }
 
+const SshHostOk = Schema.Struct({
+  kind: Schema.Literal("ok"),
+  status: SshHostStatus,
+  publicKey: Schema.optionalKey(Schema.String),
+  providers: Schema.optionalKey(SshHostProviders),
+});
+const SshHostError = Schema.Struct({
+  kind: Schema.Literal("error"),
+  code: SshHostErrorCode,
+  message: Schema.String,
+  status: Schema.optionalKey(SshHostStatus),
+  fix: Schema.optionalKey(ProviderDiagnosisFix),
+});
+const providersMatchStatus = Schema.makeFilter(
+  (result: {
+    readonly kind: string;
+    readonly providers?: SshHostProviders | undefined;
+    readonly status?: SshHostStatus | undefined;
+  }) =>
+    result.kind !== "ok" ||
+    result.providers === undefined ||
+    (result.status?.providers !== undefined &&
+      sameProviders(result.providers, result.status.providers)),
+);
+
 export const SshHostResult = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("ok"),
-    status: SshHostStatus,
-    publicKey: Schema.optionalKey(Schema.String),
-    providers: Schema.optionalKey(SshHostProviders),
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("error"),
-    code: SshHostErrorCode,
-    message: Schema.String,
-    status: Schema.optionalKey(SshHostStatus),
-    fix: Schema.optionalKey(ProviderDiagnosisFix),
-  }),
+  SshHostOk,
+  SshHostError,
   Schema.Struct({
     kind: Schema.Literal("needs_human"),
     handoff: HandoffSummary,
@@ -339,16 +353,13 @@ export const SshHostResult = Schema.Union([
     }),
     status: SshHostStatus,
   }),
-]).check(
-  Schema.makeFilter(
-    (result) =>
-      result.kind !== "ok" ||
-      result.providers === undefined ||
-      (result.status.providers !== undefined &&
-        sameProviders(result.providers, result.status.providers)),
-  ),
-);
+]).check(providersMatchStatus);
 export type SshHostResult = typeof SshHostResult.Type;
+/** What host status and forget return: they read or remove a host and never ask a person. */
+export const SshHostSettledResult = Schema.Union([SshHostOk, SshHostError]).check(
+  providersMatchStatus,
+);
+export type SshHostSettledResult = typeof SshHostSettledResult.Type;
 
 export const SshHandoffProgressInput = HandoffReadInput;
 export type SshHandoffProgressInput = typeof SshHandoffProgressInput.Type;

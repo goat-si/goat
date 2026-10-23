@@ -29,6 +29,7 @@ import {
   SshHostStatusInput,
   SshRuntimeUpdateInput,
   SshHostResult,
+  SshHostSettledResult,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -147,12 +148,13 @@ const HostLinkRemoveTool = Tool.make(agentSurfaceRegistry["host_link.remove"].na
 // HandoffSummary contains DateTime.Utc. MCP structuredContent accepts JSON values,
 // so encode the domain result through its JSON codec before CallToolResult validates it.
 const SshHostResultJson = Schema.toCodecJson(SshHostResult);
+const SshHostSettledResultJson = Schema.toCodecJson(SshHostSettledResult);
 
 const SshHostStatusTool = Tool.make(agentSurfaceRegistry["ssh.host_status"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.host_status"].description,
   parameters: SshHostStatusInput,
-  success: SshHostResultJson,
+  success: SshHostSettledResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_status"]));
 
 const SshHostAddTool = Tool.make(agentSurfaceRegistry["ssh.host_add"].name, {
@@ -172,7 +174,7 @@ const SshHostForgetTool = Tool.make(agentSurfaceRegistry["ssh.host_forget"].name
   ...shared,
   description: agentSurfaceRegistry["ssh.host_forget"].description,
   parameters: SshHostForgetInput,
-  success: SshHostResultJson,
+  success: SshHostSettledResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_forget"]));
 const SshRuntimeUpdateTool = Tool.make(agentSurfaceRegistry["ssh.runtime_update"].name, {
   ...shared,
