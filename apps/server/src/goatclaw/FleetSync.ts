@@ -78,6 +78,27 @@ export interface HostReach {
   readonly enforcesCeilings: boolean;
 }
 
+/**
+ * The one rule for forwarding a goatclaw ceiling to another host, shared by remote launches and
+ * follow-up sends so the two can never disagree (#786). The destination is synced first, and a
+ * sync that is pending or a destination too old to answer it never refuses the call: goatclaw is
+ * open by default, and orchestration that keeps running outranks a ceiling the destination may
+ * not enforce until it catches up. The ceiling is still forwarded either way.
+ */
+export const syncBeforeForwarding = Effect.fn("GoatclawFleetSync.syncBeforeForwarding")(function* (
+  fleet: GoatclawFleetSync["Service"],
+  host: string,
+) {
+  const reach = yield* fleet.ensure(host);
+  if (!reach.enforcesCeilings)
+    yield* Effect.logWarning("goatclaw.ceilingUnconfirmed", {
+      host,
+      state: reach.sync.state,
+      message: reach.sync.message,
+    });
+  return reach;
+});
+
 interface HostRecord extends HostReach {
   /** The local policy this host was last synced against. */
   readonly version: string;

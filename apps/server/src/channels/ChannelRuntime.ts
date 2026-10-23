@@ -25,10 +25,12 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
+import { hasUnsettledChannelDelivery } from "./channelDeliveryGate.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
@@ -62,6 +64,7 @@ const make = Effect.gen(function* () {
   const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
   const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+  const sql = yield* SqlClient.SqlClient;
   const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
   const imessage = yield* ImessageChannelRuntime.ImessageChannelRuntime;
   const owner = "channel-owner:" + NodeCrypto.randomUUID();
@@ -127,6 +130,13 @@ const make = Effect.gen(function* () {
       (left, right) => left.task.createdAt.localeCompare(right.task.createdAt),
     );
     for (const stored of waiting) {
+      // The acknowledgement goes out before the work starts: while its delivery could still
+      // reach the person, the task waits at received until that delivery settles.
+      if (
+        stored.task.status === "received" &&
+        (yield* hasUnsettledChannelDelivery(sql, stored.task.originInputId))
+      )
+        continue;
       yield* dispatcher.dispatch(stored.task.taskId, owner);
       started += 1;
     }
