@@ -122,8 +122,12 @@ const make = Effect.gen(function* () {
    * id. Each wake remembers its next attempt and when it may run, so a tick makes at most one
    * fresh attempt and waits longer after each failure; only the first try after a restart walks
    * past earlier rejected ids. A long failure retries ever more slowly but never stops.
+   * The wait counts from when the attempt failed, however long the dispatch took.
    */
-  const retries = new Map<string, { readonly next: number; readonly eligibleAt: number }>();
+  const retries = new Map<
+    string,
+    { readonly next: number; readonly failedAt: number; readonly eligibleAt: number }
+  >();
   const dispatchWake = Effect.fn("HandoffWakeReactor.dispatchWake")(function* (
     threadId: ThreadId,
     wake: LaunchWatchWake,
@@ -144,13 +148,21 @@ const make = Effect.gen(function* () {
       }
       // An earlier rejection under this id: move on without spending a fresh attempt.
       if (sent.failure._tag === "OrchestratorCommandPreviouslyRejectedError") continue;
+      const failedAt = DateTime.toEpochMillis(yield* DateTime.now);
       retries.set(wake.messageId, {
         next: attempt + 1,
-        eligibleAt: now + retryAfterMs(attempt + 1),
+        failedAt,
+        eligibleAt: failedAt + retryAfterMs(attempt + 1),
       });
       return yield* sent.failure;
     }
   });
+  /** Forgets wakes the last reconcile no longer offers: delivered, outside its window, or gone. */
+  const forgetRetries = (offered: ReadonlySet<string>, before: number) =>
+    Effect.sync(() => {
+      for (const [messageId, retry] of retries)
+        if (!offered.has(messageId) && retry.failedAt < before) retries.delete(messageId);
+    }).pipe(permit.withPermits(1));
 
   const deliver = Effect.fn("HandoffWakeReactor.deliver")(
     function* (handoff: Handoff, since: string) {
@@ -161,8 +173,12 @@ const make = Effect.gen(function* () {
       if (resolvedAt === undefined || resolvedAt < since) return;
       const threadId = handoff.requestedBy.threadId;
       const shell = yield* threads.getThreadShell(threadId);
-      if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null) return;
-      if (yield* delivered(wake.messageId)) {
+      if (
+        shell === null ||
+        shell.deletedAt !== null ||
+        shell.archivedAt !== null ||
+        (yield* delivered(wake.messageId))
+      ) {
         retries.delete(wake.messageId);
         return;
       }
@@ -190,8 +206,9 @@ const make = Effect.gen(function* () {
   const reconcile: HandoffWakeReactor["Service"]["reconcile"] = Effect.gen(function* () {
     const since = yield* epoch;
     if (Option.isNone(since)) return;
+    const startedAt = yield* DateTime.now;
     const windowStart = DateTime.formatIso(
-      DateTime.subtract(yield* DateTime.now, { hours: RECONCILE_WINDOW_HOURS }),
+      DateTime.subtract(startedAt, { hours: RECONCILE_WINDOW_HOURS }),
     );
     const from = since.value > windowStart ? since.value : windowStart;
     // The partial index keeps this to the day's resolved handoffs; delivered wakes drop out here.
@@ -203,11 +220,17 @@ const make = Effect.gen(function* () {
           || json_extract(item.payload_json, '$.handoff.state')
       WHERE item.type = 'human_handoff' AND item.status <> 'waiting'
         AND item.updated_at >= ${from} AND message.message_id IS NULL`;
+    const offered = new Set<string>();
     for (const row of rows) {
       if (row.handoff_json === null) continue;
       const handoff = decodeHandoff(row.handoff_json);
-      if (Option.isSome(handoff)) yield* deliver(handoff.value, since.value);
+      if (Option.isNone(handoff)) continue;
+      const wake = handoffWake(handoff.value);
+      if (wake !== undefined) offered.add(wake.messageId);
+      yield* deliver(handoff.value, since.value);
     }
+    // A wake the tail started after this read began keeps its retry state.
+    yield* forgetRetries(offered, DateTime.toEpochMillis(startedAt));
   }).pipe(
     Effect.catchCause((cause) => Effect.logWarning("handoff wake reconcile failed", { cause })),
   );

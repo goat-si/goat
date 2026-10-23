@@ -13,7 +13,9 @@ import {
   type OrchestrationV2DomainEvent,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -47,8 +49,16 @@ interface World {
   readonly handoffs: Handoffs.Handoffs["Service"];
   readonly reactor: HandoffWakeReactor.HandoffWakeReactor["Service"];
   readonly sql: SqlClient.SqlClient;
-  /** Wake command ids sent to the orchestrator; the next `failing` fresh ones are rejected. */
-  readonly outage: { failing: number; readonly sent: Array<string> };
+  /**
+   * Wake command ids sent to the orchestrator; the next `failing` fresh ones are rejected,
+   * `slowMs` after they arrive. `arrived` completes when a wake reaches the orchestrator.
+   */
+  readonly outage: {
+    failing: number;
+    slowMs: number;
+    arrived: Deferred.Deferred<void>;
+    readonly sent: Array<string>;
+  };
 }
 
 /** The asking thread mid-turn on the real orchestrator, with handoffs and the wake reactor. */
@@ -95,7 +105,12 @@ const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
       });
       yield* worker.drain();
       const now = yield* DateTime.now;
-      const outage: World["outage"] = { failing: 0, sent: [] };
+      const outage: World["outage"] = {
+        failing: 0,
+        slowMs: 0,
+        arrived: yield* Deferred.make<void>(),
+        sent: [],
+      };
       const session: AuthClientSession = {
         sessionId: person,
         subject: "browser",
@@ -113,20 +128,25 @@ const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
           if (command.type !== "message.dispatch" || !command.commandId.startsWith("server:"))
             return orchestrator.dispatch(command);
           outage.sent.push(command.commandId);
+          Deferred.doneUnsafe(outage.arrived, Effect.void);
           if (outage.failing === 0) return orchestrator.dispatch(command);
           outage.failing -= 1;
           // A planning failure: the orchestrator keeps a rejected receipt under this command id.
-          return sql`INSERT INTO orchestration_command_receipts
+          return Effect.sleep(outage.slowMs).pipe(
+            Effect.andThen(
+              sql`INSERT INTO orchestration_command_receipts
             (command_id, aggregate_kind, aggregate_id, command_type, accepted_at, result_sequence, status, error)
             VALUES (${command.commandId}, 'thread', ${threadId}, 'message.dispatch',
             '2026-10-23T00:00:00.000Z', 0, 'rejected', 'adapter unavailable')`.pipe(
-            Effect.orDie,
-            Effect.andThen(
-              Effect.fail(
-                new Orchestrator.OrchestratorCommandRejectedError({
-                  commandId: command.commandId,
-                  commandType: command.type,
-                }),
+                Effect.orDie,
+                Effect.andThen(
+                  Effect.fail(
+                    new Orchestrator.OrchestratorCommandRejectedError({
+                      commandId: command.commandId,
+                      commandType: command.type,
+                    }),
+                  ),
+                ),
               ),
             ),
           );
@@ -386,6 +406,35 @@ it.effect("reads the day's resolved handoffs through their index, not the whole 
       expect(plan.map((row) => row.detail).join("\n")).toContain(
         "orchestration_v2_projection_turn_items_resolved_handoff_idx (updated_at>?)",
       );
+    }),
+  ),
+);
+
+it.effect("counts the backoff from when a slow attempt failed", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "example.approve");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      // The first attempt takes three seconds to fail, longer than its two-second backoff.
+      world.outage.failing = 2;
+      world.outage.slowMs = 3000;
+      const first = yield* Effect.forkChild(world.reactor.reconcile);
+      yield* Deferred.await(world.outage.arrived);
+      yield* TestClock.adjust(3000);
+      yield* Fiber.join(first);
+      world.outage.slowMs = 0;
+      yield* world.reactor.reconcile;
+      expect(world.outage.sent).toHaveLength(1);
+      yield* TestClock.adjust(1999);
+      yield* world.reactor.reconcile;
+      expect(world.outage.sent).toHaveLength(1);
+      yield* TestClock.adjust(1);
+      yield* world.reactor.reconcile;
+      expect(world.outage.sent).toHaveLength(2);
     }),
   ),
 );
