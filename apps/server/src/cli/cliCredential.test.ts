@@ -45,6 +45,9 @@ const mintingCommands = [
   ["auth", "client", "create", "--name", "agent"],
   ["pair"],
   ["login"],
+  ["project", "add", "."],
+  ["project", "remove", "."],
+  ["project", "rename", ".", "x"],
 ] as const;
 
 /** Removed when the test's scope closes, failed or not. */
