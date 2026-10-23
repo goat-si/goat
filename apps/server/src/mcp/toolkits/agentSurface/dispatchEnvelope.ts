@@ -9,10 +9,12 @@ import {
 import type { AgentSurfaceEffect } from "@goat/contracts/agentSurface";
 import { isKeyedWrite, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
+import { ForwardedContent } from "./forwardedContent.ts";
 
 /**
  * Reclassifies a direct failure by its declared literal; the text stays what a direct call shows.
@@ -50,6 +52,23 @@ const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
 const withHost = (result: AgentSurfaceResult, host: string | undefined): AgentSurfaceResult =>
   host === undefined ? result : { ...result, meta: { ...result.meta, host } };
 
+/**
+ * Hands a target's non-text blocks to goat_call's registration, which returns them as content
+ * blocks; left in the envelope, their bytes could not be encoded. Without that registration, as
+ * for the operation verbs, the envelope keeps them.
+ */
+const forwardContent = Effect.fn("AgentSurface.forwardContent")(function* (
+  result: AgentSurfaceResult,
+) {
+  const blocks = result.status === "ok" ? result.meta?.content : undefined;
+  const forwarded = yield* Effect.serviceOption(ForwardedContent);
+  if (blocks === undefined || Option.isNone(forwarded) || result.status !== "ok") return result;
+  yield* forwarded.value.add(blocks);
+  const { content: _content, ...meta } = result.meta ?? {};
+  const { meta: _meta, ...rest } = result;
+  return Object.keys(meta).length === 0 ? rest : { ...rest, meta };
+});
+
 export const envelopeError = (
   code: "invalid_request" | "not_found" | "internal",
   reason: string,
@@ -85,6 +104,7 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
         : Effect.succeed(fromToolResult(result, context)),
     ),
     Effect.map((result) => withHost(result, host)),
+    Effect.flatMap(forwardContent),
     // A dying target still gets an answer, with the same fixed text a direct call shows.
     Effect.catchDefect(() =>
       Effect.succeed(

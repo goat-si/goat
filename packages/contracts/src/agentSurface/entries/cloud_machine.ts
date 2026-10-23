@@ -8,7 +8,9 @@ export const cloudMachineEntries = {
     toolkit: "ssh",
     summary: "List cloud machines",
     description:
-      "List the Boat cloud machines this environment manages. Each has a label, an SSH alias (boat-<sandbox id>) usable as host in goat_ssh_browse, goat_ssh_thread_launch and other host tools, its Boat state and its auto-stop time. A stopped (archived) machine must be resumed with goat_cloud_machine_resume before host tools reach it; browsing or launching on it resumes it. configured:false means no Boat API key is set in Settings → Connections. Machines bill the user's Boat account while they run.",
+      "List the Boat cloud machines managed by this environment. Listing does not resume stopped machines or extend their auto-stop timers; browsing or launching on a machine does.",
+    guide:
+      "Entries include a label, Boat state and configured auto-stop duration, plus an SSH alias formed as boat- followed by the sandbox id. Pass the alias to goat_ssh_browse, goat_ssh_thread_launch and other host tools. Explicit use can resume an archived machine without a separate goat_cloud_machine_resume call. configured:false means no Boat API key was found; configure it in Settings → Connections. Machines charge the user’s Boat account while running.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -27,7 +29,9 @@ export const cloudMachineEntries = {
     toolkit: "ssh",
     summary: "Create a cloud machine",
     description:
-      "Create a Boat cloud machine that bills the user's Boat account, then make it an SSH host this environment can browse and launch threads on. Only create one when the user asked for a new machine. ttlSeconds is the auto-stop time after the last explicit use (60 to 2592000). The machine provisions in the background; its alias appears in goat_cloud_machine_list immediately and in goat_ssh_host_list once it is ready. Needs a caller allowed to change settings.",
+      "Create a Boat cloud machine, billed to the user's Boat account, as an SSH host for browsing and thread launches; only when the user asked for a new machine. Provisioning continues after the response. Each call can create another machine, so after a lost response check goat_cloud_machine_list and unconfirmedCreates before retrying.",
+    guide:
+      "The user’s Boat account pays for the machine; create one only when requested. ttlSeconds is the auto-stop duration, from 60 to 2592000 seconds, restarted by explicit use rather than status checks. Its alias is added to the machine catalog before the response and is visible in goat_cloud_machine_list and goat_ssh_host_list even before SSH setup. The first browse, connection or launch waits for readiness and writes its SSH address and host key. Needs a live settings:write grant reauthorized for this call and the boat.start capability.",
     effect: "write",
     capability: "boat.start",
     hostRoutable: false,
@@ -47,7 +51,9 @@ export const cloudMachineEntries = {
     toolkit: "ssh",
     summary: "Stop a cloud machine",
     description:
-      "Stop a Boat cloud machine this environment manages. Its disk is saved as a snapshot (kept about 14 days) and billing stops; running processes end. Stopping is asynchronous: the result shows archiving until Boat finishes. Needs a caller allowed to change settings.",
+      "Ask Boat to stop a managed cloud machine: billing stops, running processes end, and its disk is kept as a snapshot for about 14 days. Stopping is asynchronous; read goat_cloud_machine_list for its state.",
+    guide:
+      "GOAT invalidates cached SSH state after Boat accepts the stop, then reads Boat's state again; when that read fails the result has presence unknown and state null. That state may already be archived; archiving is not guaranteed in every response. Needs a live settings:write grant reauthorized for this call.",
     effect: "write",
     capability: "boat.start",
     hostRoutable: false,
@@ -67,7 +73,9 @@ export const cloudMachineEntries = {
     toolkit: "ssh",
     summary: "Resume a cloud machine",
     description:
-      "Resume a stopped Boat cloud machine this environment manages, wait until it accepts SSH (up to a few minutes), refresh its SSH address and host key, and restart its auto-stop time. Billing starts again. Needs a caller allowed to change settings.",
+      "Resume a managed Boat cloud machine; billing starts again, so only when the user asked. Waits up to three minutes for SSH, refreshes its SSH address and host key, and restarts its auto-stop timer.",
+    guide:
+      "The operation also refreshes an already running machine and extends its timer. Readiness is based on Boat reporting ready, idle or running, followed by its SSH authorization endpoint; GOAT does not open a test SSH connection here. Needs a live settings:write grant reauthorized for this call and the boat.start capability.",
     effect: "write",
     capability: "boat.start",
     hostRoutable: false,
