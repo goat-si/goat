@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { GOAT_PROJECT_FILE_NAME } from "@goat/contracts";
+import { GOAT_PROJECT_FILE_NAME, ServerSettings } from "@goat/contracts";
 import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as GoatProjectFileLoader from "./GoatProjectFileLoader.ts";
 import { runSetup, setupScript, projectId } from "./testkit/ProjectScriptRunnerHarness.ts";
 
@@ -87,10 +88,16 @@ it.layer(layerTest)("GoatProjectFileLoader", (it) => {
       },
     },
     { name: "legacy reset", settings: { projectScriptOverrides: { [projectId]: null } } },
-    { name: "folded defaults", settings: { projectSettingsFolded: true } },
     {
       name: "unchecked defaults",
       settings: { defaultProjectScripts: [{ ...setupScript, runOnWorktreeCreate: false }] },
+    },
+    {
+      name: "unchecked folded defaults",
+      settings: {
+        projectSettingsFolded: true,
+        defaultProjectScripts: [{ ...setupScript, runOnWorktreeCreate: false }],
+      },
     },
   ])("#997 preserves $name instead of re-enabling file setup", (choice) =>
     Effect.gen(function* () {
@@ -105,6 +112,46 @@ it.layer(layerTest)("GoatProjectFileLoader", (it) => {
       expect(result).toEqual({ status: "no-script" });
       expect(writes).toEqual([]);
       expect(opened).toEqual([]);
+    }),
+  );
+
+  it.effect.each([
+    {
+      name: "folded empty defaults",
+      settings: { projectSettingsFolded: true, defaultProjectScripts: [] },
+      scripts: [],
+    },
+    {
+      name: "folded install with no defaults key",
+      settings: Schema.decodeSync(ServerSettings)({
+        projectSettingsFolded: true,
+        projectSettingsOverrides: {},
+        projectScriptOverrides: {},
+      }),
+      scripts: [],
+    },
+    {
+      name: "folded reset with stale DB and legacy actions",
+      settings: {
+        projectSettingsFolded: true,
+        defaultProjectScripts: [],
+        projectScriptOverrides: { [projectId]: [setupScript] },
+      },
+      scripts: [setupScript],
+    },
+  ])("#904 runs file setup for $name", (choice) =>
+    Effect.gen(function* () {
+      const root = yield* makeTempDir;
+      yield* writeProjectFile(
+        root,
+        JSON.stringify({
+          scripts: [{ name: "File", command: "file-setup", runOnWorktreeCreate: true }],
+        }),
+      );
+      const { result, writes, opened } = yield* runSetup({ root, checkout: root, ...choice });
+      expect(result).toMatchObject({ status: "started", scriptCommand: "file-setup" });
+      expect(writes).toEqual([" file-setup\r"]);
+      expect(opened).toEqual([root]);
     }),
   );
 

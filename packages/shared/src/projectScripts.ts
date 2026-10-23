@@ -22,16 +22,16 @@ export function resolveProjectScriptConfiguration(
 ) {
   const override = settings.projectSettingsOverrides[project.id]?.defaultProjectScripts;
   if (override !== undefined) return { scripts: override, source: "project-override" } as const;
-  if (settings.projectSettingsFolded)
-    return { scripts: settings.defaultProjectScripts, source: "folded-defaults" } as const;
-  const legacy = settings.projectScriptOverrides[project.id];
-  if (legacy !== undefined)
-    return {
-      scripts: legacy ?? settings.defaultProjectScripts,
-      source: "legacy-override",
-    } as const;
-  if (project.scripts.length > 0) return { scripts: project.scripts, source: "stored" } as const;
-  // Decoding supplies [] before a choice exists; folded settings must preserve later resets.
+  // Ignoring retired legacy sources prevents a reset from reviving old DB scripts.
+  if (!settings.projectSettingsFolded) {
+    const legacy = settings.projectScriptOverrides[project.id];
+    if (legacy !== undefined)
+      return {
+        scripts: legacy ?? settings.defaultProjectScripts,
+        source: "legacy-override",
+      } as const;
+    if (project.scripts.length > 0) return { scripts: project.scripts, source: "stored" } as const;
+  }
   return {
     scripts: settings.defaultProjectScripts,
     source: settings.defaultProjectScripts.length > 0 ? "defaults" : "unconfigured",
