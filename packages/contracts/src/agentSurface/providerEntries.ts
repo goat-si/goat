@@ -1,4 +1,4 @@
-import type { AgentSurfaceEntry, CapabilityDeclaration } from "./types.ts";
+import type { AgentSurfaceEntry, CapabilityDeclaration, IdempotencyDeclaration } from "./types.ts";
 
 /** Provider tool metadata, kept beside the registry like notes.ts. */
 export const providerSurfaceEntries = {
@@ -221,6 +221,8 @@ export const providerSurfaceEntries = {
     dryRun: "unsupported",
     humanSteps: ["approval"],
     annotations: { idempotentHint: true, openWorldHint: false },
+    idempotency: "key",
+    reconcile: "provider.diagnose",
   },
   add: {
     resource: "provider",
@@ -240,6 +242,8 @@ export const providerSurfaceEntries = {
     dryRun: "unsupported",
     humanSteps: ["approval"],
     annotations: { idempotentHint: false, openWorldHint: false },
+    idempotency: "key",
+    reconcile: "provider.diagnose",
   },
   link: {
     resource: "provider",
@@ -259,6 +263,8 @@ export const providerSurfaceEntries = {
     dryRun: "unsupported",
     humanSteps: ["approval"],
     annotations: { idempotentHint: true, openWorldHint: false },
+    idempotency: "key",
+    reconcile: "provider.diagnose",
   },
   remove: {
     resource: "provider",
@@ -278,5 +284,10 @@ export const providerSurfaceEntries = {
     dryRun: "unsupported",
     humanSteps: ["approval"],
     annotations: { idempotentHint: true, openWorldHint: false },
+    idempotency: "key",
+    reconcile: "provider.diagnose",
   },
-} as const satisfies Record<string, AgentSurfaceEntry & CapabilityDeclaration>;
+} as const satisfies Record<
+  string,
+  AgentSurfaceEntry & CapabilityDeclaration & IdempotencyDeclaration
+>;

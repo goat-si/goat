@@ -296,3 +296,25 @@ export const LEGACY_BROWSER_SECRET_BINARY_NAME = "t3-browser-secret";
 export const LEGACY_DESKTOP_RUNTIME_APP_BASE_NAME = "T3 Code";
 export const LEGACY_DESKTOP_RENDERER_SCHEME = "t3code";
 export const LEGACY_DESKTOP_DEV_RENDERER_SCHEME = "t3code-dev";
+
+/**
+ * Saved pages listen only for legacy shortcuts, so clients keep sending them. A page sends
+ * legacy events only to a client that has not sent goat/ shortcuts, which older clients do not.
+ */
+export const LEGACY_HTML_SHORTCUTS_METHOD = "t3/notifications/shortcuts";
+export const LEGACY_HTML_KEY_DOWN_METHOD = "t3/notifications/keydown";
+export const LEGACY_HTML_OPEN_IMAGE_METHOD = "t3/notifications/open-image";
+
+/** Independent measurement scripts can attach to an app running an older JS bundle. */
+export const LEGACY_RENDER_COUNTER_GLOBALS = {
+  open: "__t3RenderCounterOpen",
+  reload: "__t3RenderCounterReload",
+  start: "__t3RenderCounterStart",
+  stop: "__t3RenderCounterStop",
+} as const;
+export const LEGACY_RENDER_COUNTER_HOOK = "__t3RenderCounter";
+export const LEGACY_MOBILE_INSPECTOR_APP_PREFIX = "com.t3tools.t3code";
+export const LEGACY_MOBILE_DEVELOPMENT_SCHEME = "t3code-dev";
+
+/** Preserve the device image cache until its reader supports looking up a previous key. */
+export const LEGACY_ATTACHMENT_CACHE_PREFIX = "t3-attachment:";

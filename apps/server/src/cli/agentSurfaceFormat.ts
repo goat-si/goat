@@ -25,7 +25,7 @@ const table = (entries: ReadonlyArray<Row>) => {
   const width = Math.max(0, ...entries.map((row) => String(row.path).length));
   return entries.map(
     (row) =>
-      `  ${String(row.path).padEnd(width)}  ${String(row.effect).padEnd(11)}  ${String(row.summary)}${availability(row)}`,
+      `  ${String(row.path).padEnd(width)}  ${typeof row.effect === "string" ? `${row.effect.padEnd(11)}  ` : ""}${String(row.summary)}${availability(row)}`,
   );
 };
 
@@ -46,12 +46,25 @@ export const formatDescribe = (value: unknown): string => {
     return [`${String(value.resource)}:`, ...table(rows(value.entries))].join("\n");
   if (value.depth === "search")
     return [
-      `Paths matching "${String(value.query)}":`,
+      `Paths matching "${String(value.query)}": ${String(value.returned)} of ${String(value.total)}${value.mode === "partial" ? ", each sharing only some of the words" : ""}`,
       ...table(rows(value.entries)),
-      ...(value.truncated === true ? ["  More paths match; narrow the query."] : []),
+      ...(value.truncated === true && typeof value.nextCursor === "string"
+        ? [`  More paths match; add --cursor ${value.nextCursor} for the next page.`]
+        : []),
+      ...(Array.isArray(value.nearest)
+        ? [
+            `  No path shares a word with the query, which does not mean GOAT lacks it. Nearest: ${value.nearest.join(", ")}`,
+          ]
+        : []),
     ].join("\n");
   if (value.depth === "path" && isRecord(value.entry)) {
     const entry = value.entry;
+    // At detail names or summary the entry has only the fields a list shows.
+    if (!("inputSchema" in entry))
+      return [
+        ...table([entry as Row]),
+        ...(typeof entry.description === "string" ? ["", entry.description] : []),
+      ].join("\n");
     return [
       `${String(entry.path)} (${String(entry.name)}), ${String(entry.effect)}${availability(entry as Row) || "  (available)"}`,
       String(entry.summary),
