@@ -8,7 +8,9 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "Message GOAT's front desk",
     description:
-      "Send a message to GOAT's front desk as an agent. It answers within seconds; read the answer with goat_channel_input_read and the returned inputId. Agents can ask how work is going; only people can start work or answer a task's questions. Reuse clientRequestId to retry safely. conversationKey keeps related messages in one conversation (default: one per caller).",
+      "Send an agent message to GOAT's front desk and return an inputId for its reply. Reuse clientRequestId to retry safely.",
+    guide:
+      "Read the answer with goat_channel_input_read and the returned inputId. Agents can ask how work is going; only people can start work or answer a task's questions through the front desk.\n\nUse conversationKey to keep related messages in one conversation; it defaults to one conversation per caller. The current description says the front desk answers within seconds; that timing is unverified and is not a guaranteed deadline.",
     effect: "write",
     capability: "none",
     capabilityReason: "Agents can only ask the front desk; only people start work through it.",
@@ -29,7 +31,9 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "See where GOAT Bot lives",
     description:
-      "Read the GOAT Bot home this machine holds: the claimed environment, this machine's environment, and whether this machine may run GOAT Bot. When the home names a machine that is gone or no longer connects, GOAT Bot refuses messages on every machine until a machine claims the home with goat_channel_bot_home_claim.",
+      "Read the GOAT Bot home claim held by this machine, this machine's environment, and whether it may run GOAT Bot.",
+    guide:
+      "A machine holding a home claim for another environment refuses front desk messages. If that home machine is gone, claim a replacement with goat_channel_bot_home_claim. Claims are held locally and spread through connected GOAT apps.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -48,7 +52,9 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "Make this machine GOAT Bot's home",
     description:
-      "Make this machine GOAT Bot's home, replacing a home claim that names a machine that is gone or no longer connects. Other machines adopt the new home when a GOAT app connected to them syncs it; the newest claim wins. Needs a live full-access calling thread or a full-access client. Returns claimed:false with the current home when a newer claim names another machine.",
+      "Make this machine GOAT Bot's home by writing a new home claim. Other machines adopt it when a connected GOAT app syncs it; the newest claim wins. Check claimed: a newer competing claim returns claimed:false.",
+    guide:
+      "Use this to replace a home claim naming a machine that is gone or no longer connects. Use a live full-access calling thread in default interaction mode or a full-access client.\n\nIf a newer claim names another machine, the result contains claimed:false and the current home.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,
@@ -68,7 +74,8 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "Read a front desk reply",
     description:
-      "Read a message you sent with goat_channel_ingest: its state and the front desk's reply once it has one (reply.text), or failure. Only your own messages are visible.",
+      "Read a front desk message you sent: its state, reply.text when available, or failure. Only your own messages are visible.",
+    guide: "Pass the inputId returned by goat_channel_ingest.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -87,7 +94,8 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "Read a GOAT ledger task",
     description:
-      "Read one GOAT ledger task: status, worker thread, result summary, and open questions.",
+      "Read one GOAT ledger task, including its status, worker thread, result summary, and open questions.",
+    guide: "Pass the taskId.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -106,6 +114,7 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "List GOAT ledger tasks",
     description: "List GOAT ledger tasks, newest change first, optionally filtered by status.",
+    guide: "Pass status to filter tasks. Continue with nextCursor when returned.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -124,7 +133,9 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "Export GOAT brief/outcome pairs",
     description:
-      "Export GOAT ledger brief/outcome pairs as JSONL for terminal events in UTC [from, to). humanInterventions separates channelAnswers from threadAnswers, both scoped to the outcome's generation; reruns remains task-cumulative through the terminal event. threadAnswers counts local native user answers and agent answers marked relayedFromUser through the terminal time, excluding resolutions produced by channel forwarding; null means the thread count is unknown, including remote workers. memoryDelivered is read at export time: cumulative thread lineage including ancestor revisions. It may include memory delivered after the outcome and is not proof this run relied on them. Keep its tracked, unknown or overflow state; non-tracked revision lists are incomplete. Remote or unavailable lineage is unknown with an empty list. brief.context.notesRevision is the SHA-256 of the GOAT Bot notes file on this machine at launch, null when it is absent or the notes were not delivered (a remote message drops them to fit); missing on older briefs. Old tasks export brief:null. Use nextCursor to continue.",
+      "Export GOAT ledger brief/outcome pairs as JSONL for terminal events in UTC [from, to). Null counts and unknown or overflow memory lineage mean incomplete evidence, not zero. Memory delivery is observed at export time and may include later deliveries; it does not prove the run used them.",
+    guide:
+      "Continue with nextCursor when returned. Old tasks export brief:null.\n\n- humanInterventions separates channelAnswers from threadAnswers. Both are meant to be scoped to the outcome's generation, but the count resets only at task.retry.requested, so after a task move channelAnswers still includes answers from the previous generation (#987). reruns stays task-cumulative through the terminal event.\n- threadAnswers counts local native user answers and agent answers marked relayedFromUser through the terminal time. Exclude resolutions produced by channel forwarding. A null count means unknown, including remote workers.\n- memoryDelivered contains cumulative thread lineage at export time, including ancestor revisions. Deliveries after the outcome can appear; do not treat them as proof this run relied on those revisions. Preserve its tracked, unknown or overflow state; revision lists in non-tracked states are incomplete. Remote or unavailable lineage returns unknown with an empty list.\n- brief.context.notesRevision is the SHA-256 of this machine's GOAT Bot notes file at launch. It is null when the file is absent or notes were not delivered, including when a remote message drops them to fit. Older briefs may omit it.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -143,7 +154,9 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "Continue a GOAT task on another machine",
     description:
-      "Continue a remote GOAT ledger task on another known SSH host from its latest copied work. Requires orchestration:operate. Available only after the original host stopped answering and a copy is available. Work on the original machine stays there.",
+      "Continue a remote GOAT ledger task on another known SSH host from its latest copied work. Starts a new task generation. Work on the original machine stays there.",
+    guide:
+      "Require orchestration:operate. Move only after the original host stops answering and a copy is available.",
     effect: "write",
     capability: "threads.remote",
     hostRoutable: false,
@@ -163,7 +176,9 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "Report on a GOAT ledger task",
     description:
-      "Report on the GOAT ledger task this thread is working on: progress (running), a question for the person who asked (waiting_input, with question; then stop), a proposed completion (completed; recorded when your run ends), or failure. Only the task's worker thread can report, with the task's current generation. Use a new eventId for each report.",
+      "Record progress, a question, proposed completion, or failure for this thread's GOAT ledger task. Stop after reporting waiting_input. A completed report does not stop the run. A reused eventId or a stale task state returns success without changing the task.",
+    guide:
+      "Only the task's worker thread can report. Pass its current generation and a new eventId for each report.\n\n- Use running for progress.\n- Use waiting_input with question to ask the person who requested the work, then stop.\n- Use completed to propose completion; GOAT records the proposal and settles completion after the run ends.\n- Use failed to report failure.",
     effect: "write",
     capability: "none",
     capabilityReason: "Only the task's own worker thread reports on it.",
