@@ -162,4 +162,30 @@ describe("GoatclawFleetSync", () => {
       expect(calls.map((call) => call.requireReady)).toEqual([true, undefined]);
     }),
   );
+  it.effect(
+    "admits a launch and the follow-up send to a host alike while its sync is unconfirmed",
+    () =>
+      Effect.gen(function* () {
+        const failures = [
+          {
+            reason: "remote_refused",
+            message: `GOAT on box does not have ${FleetSync.SYNC_TOOL}.`,
+          },
+          { reason: "host_unavailable", message: "box did not answer." },
+        ] as const;
+        for (const failure of failures) {
+          let attempts = 0;
+          const local = yield* machine({ enabled: true }, () => {
+            attempts += 1;
+            return Effect.fail(new SshRemoteDispatch.SshRemoteDispatchError(failure));
+          });
+          const launch = yield* FleetSync.syncBeforeForwarding(local.sync, "box");
+          const send = yield* FleetSync.syncBeforeForwarding(local.sync, "box");
+          expect(launch.enforcesCeilings).toBe(false);
+          expect(send).toEqual(launch);
+          // Neither call is refused, and each retries the sync so the ceiling lands once it can.
+          expect(attempts).toBe(2);
+        }
+      }),
+  );
 });

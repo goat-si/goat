@@ -51,11 +51,7 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
-import {
-  GOATCLAW_SUPERVISOR_ASKS,
-  GOATCLAW_SUPERVISOR_DELEGATION,
-  goatclawRoleTemplate,
-} from "../goatclaw/RoleTemplates.ts";
+import { goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -73,7 +69,14 @@ import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts"
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { channelWorkerRules, workerHeader } from "./channelWorkerBrief.ts";
+import {
+  channelWorkerRules,
+  GOAT_BOT_DISPATCH_RULE,
+  GOAT_BOT_READ_ONLY_RULE,
+  GOAT_BOT_ROUTING_RULE,
+  GOAT_BOT_SUPERVISOR_RULE,
+  workerHeader,
+} from "./channelWorkerBrief.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
@@ -137,31 +140,6 @@ const ENDED_RUN_STATUSES = new Set([
 /** How long a stop keeps looking for a worker whose launch was in flight when it was asked. */
 const STOP_LAUNCH_GRACE_MS = 120_000;
 
-/**
- * GOAT Bot runs with full access so reading anything never stops on an approval, which makes
- * read-only a promise this text alone keeps. Work that changes things is a coding task.
- */
-export const GOAT_BOT_READ_ONLY_RULE =
-  "You run with full access and are read-only by instruction: nothing in GOAT stops you, so keep this rule yourself. Read anything that helps: files anywhere on this machine, git history and status, logs, system status, and GOAT's tools. Change nothing yourself: no file edits, no commands that write, install, delete, move, or restart anything, no commits or pushes, and no settings changes in GOAT or anywhere else. Subagents you start keep the same rule. If the request needs a change, say what you found and that it needs a coding task, then report; if it is unclear whether the person wants the change, ask them first.";
-
-/**
- * GOAT Bot hands work to the machines that have room for it; the general placement guidance is in
- * the GOAT orchestration instructions every agent gets.
- */
-export const GOAT_BOT_DISPATCH_RULE =
-  "When more than one machine is connected, spread work instead of doing it all here: check goat_host_status and the host lists, then start each lane on a machine that has what it needs and room to spare, with delegate_task here or goat_ssh_thread_launch on another machine. Put the read-only rule in every brief you send, never start a Boat cloud machine unless the person asked, rely on GOAT's notifications instead of polling, and say in your answer which machine ran what.";
-
-/**
- * With goatclaw on, GOAT Bot fronts the supervisor (design §8.4): it plans and launches managers,
- * whose profiles carry the authority, and it stays read-only by the rule above.
- */
-export const GOAT_BOT_SUPERVISOR_RULE = [
-  "goatclaw is on, so you front the goatclaw supervisor. The read-only rule still holds: plan the work and hand every change to a manager.",
-  GOATCLAW_SUPERVISOR_DELEGATION,
-  GOATCLAW_SUPERVISOR_ASKS,
-  "Fold each manager's report into your answer with its exact heads, check totals, and NOT RUN line.",
-].join(" ");
-
 /** What a GOAT Bot turn is told besides the person's request. */
 const turnInstruction = (task: ChannelTask, files: ChannelBotFiles, supervisor: boolean) =>
   [
@@ -169,7 +147,8 @@ const turnInstruction = (task: ChannelTask, files: ChannelBotFiles, supervisor: 
     "You are GOAT Bot handling this message yourself. Your summary is your answer to the person: write it in the language of their request, not your default language, short and outcome first.",
     "Look things up directly: read and search files, read GOAT Bot's notes (" +
       files.notes +
-      "), use GOAT memory, and use the channel_task_* and goat_thread_* tools to check the work GOAT Bot started and its threads. Hand research, long investigations, or anything that needs several steps to subagents with delegate_task, wait for them, and summarize what they found; do not paste their output.",
+      "), use GOAT memory, and use the channel_task_* and goat_thread_* tools to check the work GOAT Bot started and its threads.",
+    GOAT_BOT_ROUTING_RULE,
     GOAT_BOT_READ_ONLY_RULE,
     GOAT_BOT_DISPATCH_RULE,
     ...(supervisor ? [GOAT_BOT_SUPERVISOR_RULE] : []),
