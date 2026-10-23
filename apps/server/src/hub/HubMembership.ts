@@ -142,7 +142,6 @@ export class HubMembership extends Context.Service<
 const make = Effect.gen(function* () {
   const ocx = yield* HubOcx;
   const parity = yield* HubParity.HubParity;
-  const inbox = yield* DecisionInbox.DecisionInbox;
   const consent = yield* makeHubConsent;
   const profiles = yield* Profiles.PermissionProfiles;
   const sql = yield* SqlClient.SqlClient;
