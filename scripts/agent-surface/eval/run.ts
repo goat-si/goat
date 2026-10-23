@@ -123,15 +123,26 @@ const FIXTURES: Readonly<Record<string, (context: Context) => Promise<Fixture>>>
       ),
     ),
   existingThread: async ({ client, campaign }) => {
-    const listed = await client.call("goat_thread_list", {
-      projectId: campaign.projectId,
-      statuses: ["completed"],
-      limit: 20,
-    });
-    const thread = asObjects(listed["threads"]).find(
-      (item) => typeof item["title"] === "string" && !item["title"].startsWith("[eval"),
-    );
+    // Runs add eval threads at the top of the list, so the oldest page holds the stable one.
+    let thread: JsonObject | undefined;
+    let cursor: Json | undefined;
+    do {
+      const listed = await client.call("goat_thread_list", {
+        projectId: campaign.projectId,
+        statuses: ["completed"],
+        // A delegated child can be listed yet refuse goat_thread_read, which turns the
+        // one-call control into a retry.
+        includeSubagents: false,
+        limit: 100,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      thread = asObjects(listed["threads"]).find(
+        (item) => typeof item["title"] === "string" && !item["title"].startsWith("[eval"),
+      );
+      cursor = listed["nextCursor"] ?? undefined;
+    } while (thread === undefined && cursor !== undefined);
     if (thread === undefined) throw new Error("the eval project has no completed thread to read");
+    await client.call("goat_thread_read", { threadId: String(thread["threadId"]), limit: 1 });
     return {
       "fixture.threadId": String(thread["threadId"]),
       "fixture.title": String(thread["title"]),
@@ -178,9 +189,10 @@ const CHECKS: Readonly<Record<string, (input: CheckInput) => Promise<ReadonlyArr
     });
     const launched = asObjects(listed["threads"]).filter((thread) => thread["title"] === title);
     // A second launch is a duplicated side effect even when the answer looks right.
-    if (launched.length !== 1)
+    const [only] = launched;
+    if (launched.length !== 1 || only === undefined)
       return [launched.length + " threads titled " + title + ", expected 1"];
-    const threadId = String(launched[0]!["threadId"]);
+    const threadId = String(only["threadId"]);
     if (answer["threadId"] !== threadId)
       return ["reported " + JSON.stringify(answer["threadId"]) + ", launched " + threadId];
     const run = await latestRun(client, threadId);
