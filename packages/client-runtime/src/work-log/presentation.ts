@@ -12,6 +12,7 @@ import {
 } from "@goat/contracts";
 import {
   resolveGoatMcpToolDefinition,
+  resolveGoatMcpItemCall,
   type GoatMcpToolDefinition,
   type GoatMcpToolSummaryAction,
 } from "@goat/shared/goatMcpToolPresentation";
@@ -225,17 +226,31 @@ export function formatCommandActionsLabel(
     .join(", ");
 }
 
+/** The tool an entry ran and its arguments; a goat_call reads as the tool its path names. */
+function workEntryCall(
+  entry: Pick<WorkLogPresentationEntry, "label" | "toolTitle" | "toolData" | "structuredPayload">,
+): { readonly toolName: string | null | undefined; readonly input: unknown } {
+  const item = entry.structuredPayload;
+  const data = asRecord(entry.toolData);
+  const input =
+    item?.type === "dynamic_tool" ? item.input : (data?.arguments ?? data?.input ?? data?.rawInput);
+  const toolName =
+    item?.type === "dynamic_tool" && item.toolName
+      ? item.toolName
+      : typeof data?.server === "string" && typeof data.tool === "string"
+        ? `${data.server}.${data.tool}`
+        : typeof data?.toolName === "string"
+          ? data.toolName
+          : resolveGoatMcpToolDefinition(entry.toolTitle)
+            ? entry.toolTitle
+            : entry.label;
+  return resolveGoatMcpItemCall({ toolName, input });
+}
+
 function workEntryToolName(
   entry: Pick<WorkLogPresentationEntry, "label" | "toolTitle" | "toolData" | "structuredPayload">,
-): string | undefined {
-  const item = entry.structuredPayload;
-  if (item?.type === "dynamic_tool" && item.toolName) return item.toolName;
-  const data = asRecord(entry.toolData);
-  if (typeof data?.server === "string" && typeof data.tool === "string") {
-    return `${data.server}.${data.tool}`;
-  }
-  if (typeof data?.toolName === "string") return data.toolName;
-  return resolveGoatMcpToolDefinition(entry.toolTitle) ? entry.toolTitle : entry.label;
+): string | null | undefined {
+  return workEntryCall(entry).toolName;
 }
 
 function workEntryToolOutput(
@@ -311,12 +326,13 @@ export function resolveWorkEntryToolPresentation(
   >,
   fallbackStatus?: "inProgress" | "completed",
 ) {
-  const definition = resolveGoatMcpToolDefinition(workEntryToolName(entry));
+  const call = workEntryCall(entry);
+  const definition = resolveGoatMcpToolDefinition(call.toolName);
   const status = entry.toolLifecycleStatus ?? fallbackStatus;
   return resolveGoatMcpToolPresentation(
     definition,
     definition && goatToolResultIndicatesFailure(workEntryToolOutput(entry)) ? "failed" : status,
-    entry.toolData,
+    { input: call.input },
   );
 }
 
@@ -732,16 +748,8 @@ function exploreSummaryLabel(
 }
 
 function goatToolSummaryCall(entry: WorkLogPresentationEntry): GoatToolSummaryCall {
-  const item = entry.structuredPayload;
-  const data =
-    entry.toolData !== null && typeof entry.toolData === "object"
-      ? (entry.toolData as Record<string, unknown>)
-      : undefined;
   return {
-    input:
-      item?.type === "dynamic_tool"
-        ? item.input
-        : (data?.arguments ?? data?.input ?? data?.rawInput),
+    input: workEntryCall(entry).input,
     output: workEntryToolOutput(entry),
     outcome:
       entry.toolLifecycleStatus === "failed" ||

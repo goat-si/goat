@@ -207,6 +207,7 @@ Names that look like tools but are not in the registry:
 | ---------------- | -------------------------------------------------------------- |
 | `update_runtime` | packages/provider-core/src/server/orchestrationInstructions.ts |
 | `goat_eval`      | docs/internals/agent-surface.md                                |
+| `list_changed`   | docs/internals/agent-surface.md                                |
 | `run_steps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md        |
 | `run_script`     | structure/decisions/ADR-0022-cua-driver-computer-use.md        |
 | `list_apps`      | structure/decisions/ADR-0022-cua-driver-computer-use.md        |

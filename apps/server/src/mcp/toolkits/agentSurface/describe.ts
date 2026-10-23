@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { availability } from "../../toolAvailability.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
 import { type Match, nearestPaths, searchEntries } from "./search.ts";
 import type { DescribeResult } from "./tools.ts";
@@ -40,26 +41,8 @@ const surfaceVersion = surfaceVersionOf(entries);
 const DEFAULT_LIMIT = 10;
 const SEARCHED_FIELDS = ["path", "name", "summary", "description", "guide"] as const;
 
-type Availability = { readonly now: boolean; readonly reason?: string };
 type Scope = McpInvocationContext.McpInvocationScope;
 type Detail = "names" | "summary" | "full";
-
-/** Only the static refusals this server is sure of; handlers still check at call time. */
-const availability = (
-  entry: AgentSurfaceRegistryEntry,
-  scope: Scope,
-  served: boolean,
-): Availability => {
-  if (!served) return { now: false, reason: "This GOAT server does not serve it." };
-  if (entry.resource === "surface") return { now: true };
-  if (entry.requires === "thread" && scope.thread === undefined)
-    return { now: false, reason: "Needs an agent running inside a GOAT thread." };
-  if (entry.requires === "client" && scope.thread !== undefined)
-    return { now: false, reason: "Only an outside MCP client can call it." };
-  if (entry.effect !== "read" && scope.client?.access === "read-only")
-    return { now: false, reason: "This MCP client was approved for read-only access." };
-  return { now: true };
-};
 
 const Cursor = Schema.fromJsonString(
   Schema.Struct({

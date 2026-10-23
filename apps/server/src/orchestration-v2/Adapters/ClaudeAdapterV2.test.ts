@@ -87,6 +87,7 @@ import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { PreviewControlsToolkit } from "../../mcp/toolkits/previewControls/tools.ts";
 import { HtmlToolkit } from "../../mcp/toolkits/html/tools.ts";
+import { AgentSurfaceToolkit } from "../../mcp/toolkits/agentSurface/tools.ts";
 import { EnvironmentToolkit } from "../../mcp/toolkits/environment/tools.ts";
 import { HostStatusToolkit } from "../../mcp/toolkits/hostStatus/tools.ts";
 import { ProviderToolkit } from "../../mcp/toolkits/provider/tools.ts";
@@ -685,6 +686,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       "mcp__goat__goat_review_findings_export",
       "mcp__goat__goat_html_preview",
       "mcp__goat__goat_html_render",
+      "mcp__goat__goat_describe",
     ]);
     assert.isFalse(overrides.allowedTools?.includes("mcp__goat__goat_thread_read"));
   });
@@ -703,11 +705,11 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       ...Object.values(FleetHealthToolkit.tools),
       ...Object.values(PreviewControlsToolkit.tools),
       ...Object.values(HtmlToolkit.tools),
+      ...Object.values(AgentSurfaceToolkit.tools),
     ]
       .filter((tool) => Context.get(tool.annotations, Tool.Readonly))
       .map((tool) => ClaudeAdapterV2.claudeGoatToolName(tool.name))
       .sort();
-
     // Read-only metadata may grow without granting automatic approval to new tools.
     assert.includeMembers(
       readOnlyToolNames,
@@ -716,7 +718,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       ),
     );
     assert.notInclude(readOnlyToolNames, "mcp__goat__goat_html_render");
-
     for (const name of [
       "goat_thread_read",
       "goat_provider_host_matrix",
@@ -735,7 +736,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       assert.notInclude(ClaudeAdapterV2.CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS, toolName);
     }
   });
-
   it("never preapproves provider, cloud or fleet mutations in a read-only sandbox", () => {
     const mutatingTools = [
       ProviderToolkit.tools.goat_provider_home_request,
