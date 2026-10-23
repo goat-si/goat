@@ -198,7 +198,7 @@ The CLI operates a server; it is not an agent interface. Its 58 listed commands 
 
 ## Drift between docs and the registry
 
-Scanned 160 Markdown files (docs, structure, skills, root guides) and 3 agent prompt sources in `packages/provider-core/src/server`.
+Scanned 161 Markdown files (docs, structure, skills, root guides) and 3 agent prompt sources in `packages/provider-core/src/server`.
 
 Names that look like tools but are not in the registry:
 
