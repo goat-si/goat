@@ -1,6 +1,7 @@
 import {
   McpCapabilityUnavailableError,
   OrchestratorMcpFailure,
+  PreviewAutomationError,
   PreviewAutomationUnavailableError,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -22,6 +23,52 @@ function refusalFields(
     return { _tag: error._tag, capability: error.capability, message: error.message };
   return undefined;
 }
+
+const isPreviewAutomationError = Schema.is(PreviewAutomationError);
+
+export const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
+  if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
+    return Effect.failCause(cause).pipe(Effect.orDie);
+  }
+  const failures = cause.reasons.filter(Cause.isFailReason);
+  const firstFailure = failures[0]?.error;
+  const errorTag =
+    typeof firstFailure === "object" &&
+    firstFailure !== null &&
+    "_tag" in firstFailure &&
+    typeof firstFailure._tag === "string"
+      ? firstFailure._tag
+      : "PreviewSnapshotError";
+  // Preview errors build their message on the server, never from page output,
+  // and it tells the agent what to do next, such as falling back to a shell browser.
+  const refusal = refusalFields(firstFailure);
+  const message =
+    refusal?.message ?? (isPreviewAutomationError(firstFailure) ? firstFailure.message : undefined);
+  const result = new McpSchema.CallToolResult({
+    isError: true,
+    structuredContent: {
+      error: {
+        _tag: errorTag,
+        operation: "snapshot",
+        failureCount: failures.length,
+        ...refusal,
+        ...(message === undefined ? {} : { message }),
+      },
+    },
+    // Some clients show only the text content and others only structuredContent, so both carry it.
+    content: [
+      {
+        type: "text",
+        text: refusal?.message ?? `Preview snapshot failed: ${message ?? `${errorTag}.`}`,
+      },
+    ],
+  });
+  return Effect.logWarning("preview snapshot failed", {
+    operation: "snapshot",
+    errorTag,
+    failureCount: failures.length,
+  }).pipe(Effect.as(result));
+};
 
 interface ImageToolResult {
   readonly screenshot: {

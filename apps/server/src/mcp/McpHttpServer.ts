@@ -4,6 +4,7 @@ import { ToolDispatch } from "./ToolDispatch.ts";
 import {
   argumentKeys,
   encodeReferenceRefusal,
+  keepingRefusalCode,
   refusalResult,
   undeclaredArgumentsResult,
 } from "./toolRefusals.ts";
@@ -12,7 +13,6 @@ import * as DecisionHandlers from "./toolkits/decision/handlers.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   OrchestratorMcpFailure,
-  PreviewAutomationError,
   type PreviewAutomationSnapshot,
   type RunId,
   ThreadId,
@@ -76,7 +76,7 @@ import { validateRepositoryReferenceArguments } from "./repositoryReferenceArgum
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
-import { imageToolFailure, imageToolSuccess } from "./imageToolResult.ts";
+import { imageToolFailure, imageToolSuccess, previewSnapshotFailure } from "./imageToolResult.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -623,44 +623,6 @@ const decodeAsAdvertised = <Tools extends Record<string, Tool.Any>>(
     ),
   ) as unknown as Toolkit.Toolkit<Tools>;
 
-const isPreviewAutomationError = Schema.is(PreviewAutomationError);
-
-const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
-  if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
-    return Effect.failCause(cause).pipe(Effect.orDie);
-  }
-  const failures = cause.reasons.filter(Cause.isFailReason);
-  const firstFailure = failures[0]?.error;
-  const errorTag =
-    typeof firstFailure === "object" &&
-    firstFailure !== null &&
-    "_tag" in firstFailure &&
-    typeof firstFailure._tag === "string"
-      ? firstFailure._tag
-      : "PreviewSnapshotError";
-  // Preview errors build their message on the server, never from page output,
-  // and it tells the agent what to do next, such as falling back to a shell browser.
-  const message = isPreviewAutomationError(firstFailure) ? firstFailure.message : undefined;
-  const result = new McpSchema.CallToolResult({
-    isError: true,
-    structuredContent: {
-      error: {
-        _tag: errorTag,
-        operation: "snapshot",
-        failureCount: failures.length,
-        ...(message === undefined ? {} : { message }),
-      },
-    },
-    // Some clients show only the text content and others only structuredContent, so both carry it.
-    content: [{ type: "text", text: `Preview snapshot failed: ${message ?? `${errorTag}.`}` }],
-  });
-  return Effect.logWarning("preview snapshot failed", {
-    operation: "snapshot",
-    errorTag,
-    failureCount: failures.length,
-  }).pipe(Effect.as(result));
-};
-
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
@@ -917,6 +879,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
               ),
             };
             // Arguments never decode for a caller whose goatclaw profile refuses the tool.
+            const handle = keepingRefusalCode(registration.handle);
             const gated = (payload: unknown) =>
               McpToolAccess.requireDeclaredCapability(
                 permissions,
@@ -926,7 +889,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
               ).pipe(
                 Effect.matchEffect({
                   onFailure: (failure) => Effect.succeed(refusalResult(failure)),
-                  onSuccess: () => registration.handle(payload),
+                  onSuccess: () => handle(payload),
                 }),
               );
             const inputSchema = registration.tool.inputSchema;
