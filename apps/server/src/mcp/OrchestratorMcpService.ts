@@ -2482,8 +2482,8 @@ const make = Effect.gen(function* () {
               ceiling === undefined ? delegated : { ...delegated, ceiling },
             ),
           );
-        // A replay forwards nothing, and whether the first call carried a ceiling is not recorded,
-        // so it says nothing about one; syncing here would also wake the host just to report.
+        // A replay or a concurrent duplicate forwards nothing itself, and whether the call that
+        // launched carried a ceiling is not recorded, so neither says anything about one.
         if (existing !== undefined) return yield* acknowledge(undefined);
         yield* permissions.require(scope, "threads.launch", { host, runtimeMode });
         yield* permissions.require(scope, "threads.remote", { host, runtimeMode });
@@ -2597,7 +2597,7 @@ const make = Effect.gen(function* () {
           isRemoteDispatchError(launched.failure) &&
           launched.failure.reason === "duplicate_task"
         )
-          return yield* acknowledge(ceilingAdvice);
+          return yield* acknowledge(undefined);
         if (
           launched._tag === "Failure" &&
           isRemoteDispatchError(launched.failure) &&
