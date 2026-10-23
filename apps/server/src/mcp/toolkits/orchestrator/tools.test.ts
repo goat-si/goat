@@ -1,18 +1,21 @@
 import { assert, describe, expect, it } from "@effect/vitest";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { Tool } from "effect/ai";
-import { ProjectToolkit } from "../project/tools.ts";
 import { OrchestratorToolkit } from "./tools.ts";
 
 describe("orchestrator MCP tool guidance", () => {
-  it("describes GOAT thread links on each reader and launcher tool", () => {
-    for (const tool of [
-      OrchestratorToolkit.tools.goat_thread_list,
-      OrchestratorToolkit.tools.goat_thread_read,
-      ProjectToolkit.tools.goat_thread_launch,
-    ]) {
-      assert.include(tool.description ?? "", "[title](goat-thread://v1/<threadId>)");
-      assert.notInclude(tool.description ?? "", "t3-thread://");
+  it("describes GOAT thread links in each reader and launcher tool's guide", () => {
+    for (const path of ["thread.list", "thread.read", "thread.launch"] as const) {
+      const { description, guide } = agentSurfaceRegistry[path];
+      assert.include(guide ?? "", "[title](goat-thread://v1/<threadId>)");
+      assert.notInclude(`${description} ${guide ?? ""}`, "t3-thread://");
     }
+  });
+
+  it("keeps the launch watch opt-out guidance in goat_thread_launch's guide", () => {
+    expect(agentSurfaceRegistry["thread.launch"].guide).toContain(
+      'notifyOnCompletion:false or goat_thread_unwatch stops run-end and host-outage reports. Only local user-input questions still arrive. SSH-host questions then need goat_thread_wait({host}) or goat_pending_request_list({scope:"launched", hosts}). Approvals are no longer reported; check goat_thread_read or tell the user the thread may be waiting.',
+    );
   });
 });
 

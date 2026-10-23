@@ -201,7 +201,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
           Effect.timeout("5 seconds"),
           Effect.mapError((cause) => new MainCheckoutUnknownError({ cause })),
         );
-      const folderTrust = makeClaudeCloudFolderTrust({
+      const folderTrust = yield* makeClaudeCloudFolderTrust({
         instanceId,
         sql,
         projects: projectStore,

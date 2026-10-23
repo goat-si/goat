@@ -6,7 +6,7 @@ import { useState } from "react";
 import { isElectron } from "../../env";
 import { useNowWhile } from "../../hooks/useNowWhile";
 import { cn } from "../../lib/utils";
-import { useFleetCloudAgents, useFleetFolderTrust, useFleetSnapshot } from "../../state/fleet";
+import { useFleetCloudAgents, useFleetSnapshot } from "../../state/fleet";
 import { useFleetHostMetrics } from "../../state/fleetHostMetrics";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
@@ -18,7 +18,6 @@ import { ConnectionCatalogUnreadableAlert } from "../desktop/ConnectionCatalogUn
 import { ConnectionEnvironmentsSection } from "../settings/ConnectionEnvironmentsSection";
 import { BoatIcon } from "../Icons";
 import { FleetCloudAgents } from "./FleetCloudAgents";
-import { FleetCloudFolderTrust } from "./FleetCloudFolderTrust";
 import { FleetConsoleSlot } from "./FleetConsoleSlot";
 import { FleetGraph } from "./FleetGraph";
 import { fleetMachineSubtitle } from "./describeMachine";
@@ -76,7 +75,6 @@ export function FleetPage() {
   const live = useFleetSnapshot();
   const liveHeat = useFleetHostMetrics();
   const cloudAgents = useFleetCloudAgents();
-  const folderTrust = useFleetFolderTrust();
   const [demo] = useState(readHeatDemo);
   const { snapshot, connections, currentMachineId, loading } =
     demo === null ? live : { ...demo, loading: false };
@@ -229,7 +227,6 @@ export function FleetPage() {
             ) : null}
 
             {selectedMachine ? null : <FleetCloudAgents groups={cloudAgents} />}
-            {selectedMachine ? null : <FleetCloudFolderTrust sources={folderTrust} />}
 
             <ConnectionCatalogUnreadableAlert />
             <ConnectionEnvironmentsSection

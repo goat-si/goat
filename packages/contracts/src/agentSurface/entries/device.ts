@@ -8,7 +8,9 @@ export const deviceEntries = {
     toolkit: "device",
     summary: "Screenshot device",
     description:
-      "Capture the current screen of an open device as a PNG image. Use it to see what the user sees; for taps and text use the agent-device CLI.",
+      "Capture the screen of a device open in this thread as a PNG. Drive taps and text with the agent-device CLI returned by goat_device_open.",
+    guide:
+      "With no target, captures the most recently opened matching device. Needs agent device access enabled for this environment.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -27,7 +29,9 @@ export const deviceEntries = {
     toolkit: "device",
     summary: "List devices",
     description:
-      "List iOS Simulators and Android Emulators on this environment's device hosts, which platforms each host can run, and which devices are already open in this thread's Device panel. Call this before goat_device_open when you do not know a device id.",
+      "List simulators and emulators on this environment’s device hosts, host platform support, and devices open in this thread.",
+    guide:
+      "Call goat_device_list before goat_device_open when the target device is unknown. Needs agent device access enabled for this environment.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -46,7 +50,9 @@ export const deviceEntries = {
     toolkit: "device",
     summary: "Open device",
     description:
-      "Open a simulator or emulator for this thread: boots it if needed, starts its live stream, and shows it in the user's Device panel so they can watch. Returns the agent-device CLI invocation pinned to the device; drive the device with that CLI afterwards.",
+      "Boot or attach a simulator or emulator and open it in this thread’s Device panel for the user to watch. Drive it with the returned agent-device command and target flags on every call.",
+    guide:
+      "Needs agent device access enabled for this environment. Keep the exact returned executable path: login shells can reset PATH. Retain all --config and --session flags so concurrent hosts do not change the target. Remote app installation, builds, and Metro forwarding are separate work. For a cloud EAS session, close with shutdown enabled when finished to stop per-minute billing.",
     effect: "write",
     capability: "none",
     capabilityReason: "Opens a simulator for the calling thread only.",
@@ -67,7 +73,9 @@ export const deviceEntries = {
     toolkit: "device",
     summary: "Close device",
     description:
-      "Remove a device from this thread's Device panel. Pass shutdown=true to also power the simulator or emulator off.",
+      "Remove matching devices from this thread’s Device panel; optionally shut them down too. Closing without shutdown leaves the simulator or emulator running.",
+    guide:
+      "An omitted target closes all matching sessions in the thread. Shutdown also removes sessions for that device in other threads.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Closes the calling thread's own simulator.",
