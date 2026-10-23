@@ -147,9 +147,10 @@ describe("DesktopLifecycle", () => {
           Layer.provideMerge(
             layerUpdates({
               getState: Effect.succeed(updateState),
-              installPrepared: (version) =>
+              installPrepared: (version, options) =>
                 Effect.gen(function* () {
                   assert.equal(version, "1.2.4");
+                  assert.isTrue(options?.waitForCheck);
                   events.push("install");
                   yield* Deferred.succeed(installationStarted, undefined);
                   yield* Deferred.await(allowInstallation);

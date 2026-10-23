@@ -134,8 +134,10 @@ function handleBeforeQuit(
         update.downloadedVersion !== null
       ) {
         yield* (yield* DesktopWindow.DesktopWindow).flushMainWindowBounds;
+        // A running refresh check settles within its deadline; waiting for it keeps quit
+        // from skipping the downloaded update.
         const installation = yield* updates.installPrepared(update.downloadedVersion, {
-          waitForCheck: false,
+          waitForCheck: true,
         });
         if (installation.accepted)
           return installation.failed ? ("failed" as const) : ("installing" as const);

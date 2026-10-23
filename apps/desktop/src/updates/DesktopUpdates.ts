@@ -65,7 +65,8 @@ import {
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
-const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(90);
+// A running check always settles within its deadline, so a prepared install can wait it out.
+const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(UPDATE_CHECK_TIMEOUT_MINUTES * 60 + 15);
 
 type UpdateAction = "check" | "download" | "install" | "install-recovery" | "channel";
 
@@ -1173,8 +1174,23 @@ export const make = Effect.gen(function* () {
 
   const handleUpdaterError = Effect.fn("desktop.updates.handleUpdaterError")(function* (
     cause: unknown,
+    detail: unknown,
   ) {
     const activeAction = yield* activeUpdateAction;
+    // electron-updater reports a failed check with this detail. A check that outlived its
+    // deadline can fail later, while a download or install that has nothing to do with it runs.
+    if (
+      typeof detail === "string" &&
+      detail.startsWith("Cannot check for updates") &&
+      Option.isSome(activeAction) &&
+      activeAction.value !== "check"
+    ) {
+      yield* logUpdaterWarning("an update check failed after its deadline", {
+        cause: describeUpdateErrorCause(cause),
+        activeAction: activeAction.value,
+      });
+      return;
+    }
     const error = new DesktopUpdaterReportedError({
       operation: Option.match(activeAction, {
         onNone: () => "background" as const,
@@ -1420,8 +1436,8 @@ export const make = Effect.gen(function* () {
       yield* electronUpdater.on("update-not-available", () => {
         runEffect(handleUpdateNotAvailable);
       });
-      yield* electronUpdater.on("error", (error: unknown) => {
-        runEffect(handleUpdaterError(error));
+      yield* electronUpdater.on("error", (error: unknown, detail: unknown) => {
+        runEffect(handleUpdaterError(error, detail));
       });
       yield* electronUpdater.on("download-progress", (progress: unknown) => {
         runEffect(handleDownloadProgress(progress));

@@ -4,8 +4,12 @@ import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 
-// electron-updater has no deadline of its own under Electron (see ElectronUpdater.checkForUpdates).
-// A check is two small feed requests, so this bound stays well under the poll interval.
+// electron-updater arms its request timeout on a "socket" event that Electron's
+// net.ClientRequest never emits, so a stalled check can stay pending indefinitely.
+// The deadline frees GOAT's check and shows the stall. electron-updater keeps the
+// stalled request and hands it to later checks, so one request is ever in flight
+// and its eventual result is the current one. A check is two small feed requests,
+// so this bound stays well under the poll interval.
 export const UPDATE_CHECK_TIMEOUT_MINUTES = 2;
 export const UPDATE_CHECK_TIMEOUT = Duration.minutes(UPDATE_CHECK_TIMEOUT_MINUTES);
 

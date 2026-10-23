@@ -376,9 +376,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         0,
       ),
     sentStates,
-    emit: (eventName: string, payload?: unknown) => {
+    emit: (eventName: string, ...payload: ReadonlyArray<unknown>) => {
       for (const listener of listeners.get(eventName) ?? []) {
-        listener(payload);
+        listener(...payload);
       }
     },
   };

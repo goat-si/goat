@@ -282,6 +282,80 @@ describe("DesktopUpdates", () => {
     }),
   );
 
+  it.effect(
+    "regression: a check that fails after its deadline does not abort a running install",
+    () =>
+      Effect.gen(function* () {
+        const installStarted = yield* Deferred.make<void>();
+        const releaseInstall = yield* Deferred.make<void>();
+        const harness = makeHarness({
+          stopBackend: Deferred.succeed(installStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseInstall)),
+          ),
+        });
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            yield* updates.configure;
+            harness.emit("update-downloaded", { version: "1.2.4" });
+            yield* flushCallbacks;
+
+            const installFiber = yield* updates.install.pipe(Effect.forkScoped);
+            yield* Deferred.await(installStarted);
+            harness.emit(
+              "error",
+              new Error("feed request stalled"),
+              "Cannot check for updates: Error: feed request stalled",
+            );
+            yield* flushCallbacks;
+
+            yield* Deferred.succeed(releaseInstall, undefined);
+            const result = yield* Fiber.join(installFiber);
+            assert.isTrue(result.accepted);
+            assert.equal(harness.quitAndInstalls(), 1);
+            assert.notEqual((yield* updates.getState).errorContext, "install");
+          }),
+        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      }),
+  );
+
+  it.effect(
+    "regression: a prepared install waits out a refresh check through its deadline, then installs",
+    () =>
+      Effect.gen(function* () {
+        const checkStarted = yield* Deferred.make<void>();
+        const harness = makeHarness({
+          checkForUpdates: Deferred.succeed(checkStarted, undefined).pipe(
+            Effect.andThen(Effect.never),
+          ),
+        });
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            yield* updates.configure;
+            harness.emit("update-downloaded", { version: "1.2.4" });
+            yield* flushCallbacks;
+
+            const check = yield* updates.check("poll").pipe(Effect.forkScoped);
+            yield* Deferred.await(checkStarted);
+            const install = yield* updates
+              .installPrepared("1.2.4", { waitForCheck: true })
+              .pipe(Effect.forkScoped);
+            yield* flushCallbacks;
+            yield* TestClock.adjust("2 minutes");
+
+            const result = yield* Fiber.join(install);
+            assert.isTrue(result.accepted);
+            assert.isFalse(result.failed);
+            assert.equal(harness.quitAndInstalls(), 1);
+            assert.isTrue((yield* Fiber.join(check)).checked);
+          }),
+        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      }),
+  );
+
   it.effect("preserves a queued installer after a background updater error", () => {
     const harness = makeHarness();
 
