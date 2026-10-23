@@ -1,3 +1,4 @@
+import { LEGACY_ATTACHMENT_CACHE_PREFIX } from "@goat/contracts/legacyT3Names";
 import type { AssetResource, EnvironmentId } from "@goat/contracts";
 import type { ImageSource } from "expo-image";
 
@@ -14,7 +15,7 @@ export function assetImageSource(
   return resource._tag === "attachment"
     ? {
         uri,
-        cacheKey: `t3-attachment:${JSON.stringify([environmentId, resource.attachmentId])}`,
+        cacheKey: `${LEGACY_ATTACHMENT_CACHE_PREFIX}${JSON.stringify([environmentId, resource.attachmentId])}`,
       }
     : { uri };
 }
