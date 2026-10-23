@@ -149,11 +149,11 @@ Only 23% of input parameters carry a description. 132 tools describe none of the
 
 | Tool                     | Characters | Declared at                                          |
 | ------------------------ | ---------- | ---------------------------------------------------- |
-| `delegate_task`          | 4550       | packages/contracts/src/agentSurface/registry.ts:1158 |
-| `goat_thread_launch`     | 2845       | packages/contracts/src/agentSurface/registry.ts:2131 |
-| `html_render`            | 2799       | packages/contracts/src/agentSurface/registry.ts:908  |
-| `schedule_task`          | 2654       | packages/contracts/src/agentSurface/registry.ts:1274 |
-| `goat_thread_send`       | 2446       | packages/contracts/src/agentSurface/registry.ts:1452 |
+| `delegate_task`          | 4551       | packages/contracts/src/agentSurface/registry.ts:1158 |
+| `goat_thread_launch`     | 2848       | packages/contracts/src/agentSurface/registry.ts:2131 |
+| `html_render`            | 2804       | packages/contracts/src/agentSurface/registry.ts:908  |
+| `schedule_task`          | 2659       | packages/contracts/src/agentSurface/registry.ts:1274 |
+| `goat_thread_send`       | 2449       | packages/contracts/src/agentSurface/registry.ts:1452 |
 | `goat_ssh_thread_launch` | 2028       | packages/contracts/src/agentSurface/registry.ts:2626 |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
@@ -199,17 +199,39 @@ Scanned 160 Markdown files (docs, structure, skills, root guides) and 3 agent pr
 
 Names that look like tools but are not in the registry:
 
-| Name                      | Where                                                                                                                    |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `update_runtime`          | packages/provider-core/src/server/orchestrationInstructions.ts:45                                                        |
-| `goat_eval`               | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:438, docs/internals/agent-surface.md:817 (+1)         |
-| `goat_host_cordon`        | docs/internals/agentic-k8s.md:955                                                                                        |
-| `goat_thread_reschedule`  | docs/internals/agentic-k8s.md:955                                                                                        |
-| `goat_scheduler_status`   | docs/internals/agentic-k8s.md:958                                                                                        |
-| `goat_fallback_chain_get` | docs/internals/agentic-k8s.md:958                                                                                        |
-| `run_steps`               | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144 |
-| `run_script`              | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145 |
-| `list_apps`               | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                              |
+| Name                          | Where                                                                                                                                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `goat_provider_list`          | packages/provider-core/src/server/orchestrationInstructions.ts:15, packages/provider-core/src/server/orchestrationInstructions.ts:50, packages/provider-core/src/server/orchestrationInstructions.ts:55       |
+| `goat_task_create`            | packages/provider-core/src/server/orchestrationInstructions.ts:15, packages/provider-core/src/server/orchestrationInstructions.ts:17, packages/provider-core/src/server/orchestrationInstructions.ts:25 (+11) |
+| `goat_task_read`              | packages/provider-core/src/server/orchestrationInstructions.ts:15                                                                                                                                             |
+| `goat_task_cancel`            | packages/provider-core/src/server/orchestrationInstructions.ts:15, docs/orchestration-v2/orchestrator-mcp-server.md:291                                                                                       |
+| `goat_thread_create_many`     | packages/provider-core/src/server/orchestrationInstructions.ts:16, packages/provider-core/src/server/orchestrationInstructions.ts:36                                                                          |
+| `goat_schedule_create`        | packages/provider-core/src/server/orchestrationInstructions.ts:18, docs/internals/goat-bot-behavior-spec.md:366, structure/mcp-toolkits.md:39 (+1)                                                            |
+| `goat_handoff_create`         | packages/provider-core/src/server/orchestrationInstructions.ts:19, docs/orchestration-v2/orchestrator-mcp-server.md:470                                                                                       |
+| `update_runtime`              | packages/provider-core/src/server/orchestrationInstructions.ts:45                                                                                                                                             |
+| `goat_html_preview`           | packages/provider-core/src/server/orchestrationInstructions.ts:54                                                                                                                                             |
+| `goat_html_render`            | packages/provider-core/src/server/orchestrationInstructions.ts:54                                                                                                                                             |
+| `goat_preview_status`         | packages/provider-core/src/server/orchestrationInstructions.ts:84, packages/provider-core/src/server/orchestrationInstructions.ts:86                                                                          |
+| `goat_preview_open`           | packages/provider-core/src/server/orchestrationInstructions.ts:84, packages/provider-core/src/server/orchestrationInstructions.ts:86, packages/provider-core/src/server/orchestrationInstructions.ts:89       |
+| `goat_preview_navigate`       | packages/provider-core/src/server/orchestrationInstructions.ts:84                                                                                                                                             |
+| `goat_preview_snapshot`       | packages/provider-core/src/server/orchestrationInstructions.ts:84, packages/provider-core/src/server/orchestrationInstructions.ts:86                                                                          |
+| `goat_preview_wait`           | packages/provider-core/src/server/orchestrationInstructions.ts:86                                                                                                                                             |
+| `goat_preview_evaluate`       | packages/provider-core/src/server/orchestrationInstructions.ts:86                                                                                                                                             |
+| `goat_pull_request_link`      | packages/provider-core/src/server/runtimeInstructions.ts:2, docs/user/source-control.md:292                                                                                                                   |
+| `goat_pull_request_list`      | packages/provider-core/src/server/runtimeInstructions.ts:2                                                                                                                                                    |
+| `goat_pull_request_watch`     | packages/provider-core/src/server/runtimeInstructions.ts:2, AGENTS.md:157                                                                                                                                     |
+| `goat_pull_request_unwatch`   | packages/provider-core/src/server/runtimeInstructions.ts:2                                                                                                                                                    |
+| `goat_eval`                   | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:438, docs/internals/agent-surface.md:817 (+1)                                                                                              |
+| `goat_host_cordon`            | docs/internals/agentic-k8s.md:955                                                                                                                                                                             |
+| `goat_thread_reschedule`      | docs/internals/agentic-k8s.md:955                                                                                                                                                                             |
+| `goat_scheduler_status`       | docs/internals/agentic-k8s.md:958                                                                                                                                                                             |
+| `goat_fallback_chain_get`     | docs/internals/agentic-k8s.md:958                                                                                                                                                                             |
+| `goat_cloud_agent_launch`     | docs/internals/cloud-credential-holders.md:38, docs/internals/cloud-credential-holders.md:45                                                                                                                  |
+| `goat_cloud_agent_holders`    | docs/user/outside-agents.md:144                                                                                                                                                                               |
+| `goat_channel_bot_home_claim` | docs/user/slack.md:129, structure/channels.md:21                                                                                                                                                              |
+| `run_steps`                   | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144                                                                                      |
+| `run_script`                  | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145                                                                                      |
+| `list_apps`                   | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                                                                                                                   |
 
 CLI invocations in the docs that do not resolve:
 
@@ -217,7 +239,7 @@ CLI invocations in the docs that do not resolve:
 | --------------------------------- | ------------------------------------------ | ---------------------------------- |
 | `goat service install --no-start` | `goat service install` has no `--no-start` | docs/user/background-service.md:14 |
 
-115 of 192 tools are never named in any Markdown doc, and 102 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_answer`, `goat_decision_get`, `goat_decision_list`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_link_create`, `goat_host_link_remove`, `goat_hub_device_join`, `goat_hub_device_leave`, and 78 more. Agents learn these only from the MCP catalog.
+129 of 192 tools are never named in any Markdown doc, and 120 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_bot_home_claim`, `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `create_threads`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_cloud_holders`, `goat_cloud_launch`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_forget`, `goat_cloud_run_list`, `goat_cloud_run_register`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_answer`, `goat_decision_get`, and 96 more. Agents learn these only from the MCP catalog.
 
 Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`, `goat theme set`, `goat theme clear`, `goat theme show`, `goat triage`.
 
@@ -227,7 +249,7 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 
 1. **One error envelope with a machine code and a next action.** 6 error families and two failure modes (155 `return`, 37 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
-3. **Serve the full tool reference from the registry.** 102 tools appear in no doc or prompt. `/llms.txt` now lists every path for the calling credential; `goat_describe` should serve arguments and examples from the same registry, with no committed reference pages (decision D14 in agent-surface.md).
+3. **Serve the full tool reference from the registry.** 120 tools appear in no doc or prompt. `/llms.txt` now lists every path for the calling credential; `goat_describe` should serve arguments and examples from the same registry, with no committed reference pages (decision D14 in agent-surface.md).
 4. **Describe every parameter.** 537 of 693 parameters have no description, and 132 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts:148 to fail on an undescribed field.
 5. **Publish the real argument contract.** 172 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
 6. **Retry keys on every mutating tool.** 112 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
@@ -238,5 +260,5 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 11. **`--json` on every listed leaf command.** Only 11 of 40 offer it; agents parse human tables otherwise.
 12. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 15 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
 13. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
-14. **Move routing policy out of tool descriptions.** The longest description is 4550 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
+14. **Move routing policy out of tool descriptions.** The longest description is 4551 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
 15. **Group tools by resource.** Move queue and pending request tools out of the thread toolkit and thread launch out of the project toolkit, and give scheduled tasks one toolkit, so permissions, docs, and discovery follow the resource an agent is working on.

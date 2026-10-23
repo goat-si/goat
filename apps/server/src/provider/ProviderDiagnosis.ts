@@ -151,7 +151,7 @@ const missingInstance = (target: Target) =>
     `No provider instance ${target.instanceId} is configured on this environment.`,
     "instance_missing",
     agent(
-      "List the configured providers with provider.list (orchestrator_capabilities) and use one of their instance ids.",
+      "List the configured providers with provider.list (goat_provider_list) and use one of their instance ids.",
       { path: "provider.list" },
     ),
   );

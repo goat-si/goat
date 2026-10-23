@@ -289,7 +289,7 @@ and their marks follow the same rules as on web and desktop.
 A thread can hold several pull requests, including reviews from another repository on the same host.
 Use **Link pull request** in the command palette or **Linked pull requests** panel, or right-click a
 pull request link in the conversation. Creating a pull request from Git actions links it automatically.
-Agents can link their pull requests with the `link_pull_request` tool.
+Agents can link their pull requests with the `goat_pull_request_link` tool.
 
 Use **Link this PR** in a branch-detected badge's tooltip to keep it with the thread. From a review
 on the Pull Requests page, **Link to thread** lets you search for an active thread. The review header
@@ -308,7 +308,7 @@ review is terminal. An open or unsynced link keeps it active.
 GOAT automatically watches open pull requests that a thread creates or its agent links, unless you
 turn off automatic watching. Automatic watches can wake the agent without keeping the thread in
 **Working**. Ask the agent to watch, monitor, or babysit a pull request to make the watch explicit
-with `watch_pull_request` and keep the thread working between wakes.
+with `goat_pull_request_watch` and keep the thread working between wakes.
 
 The server checks every two minutes. By default, failed checks, passing required checks, and other
 people's comments or reviews wake the agent. Your own comments do not. Bot comments are ignored
@@ -320,7 +320,7 @@ human feedback, bot feedback, and conflicts, and adjust automatic watching and t
 
 To start or stop watching yourself, use the row menu in the **Linked pull requests** panel. In the
 thread details card, click a watched pull request's eye to stop it. Asking the agent to stop calls
-`unwatch_pull_request`, which stops either an automatic or explicit watch and keeps the PR linked.
+`goat_pull_request_unwatch`, which stops either an automatic or explicit watch and keeps the PR linked.
 Watching also ends when the PR merges or closes, after 10 wakes in a row that bring only comments,
 after 8 failed reads in a row, or when you press Stop, settle, or archive the thread. A rate limit
 only pauses watching. Unsettle the thread before starting a new watch. Watching a pull request

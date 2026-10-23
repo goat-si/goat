@@ -97,7 +97,7 @@ derive settlement from their own clocks or PR caches.
 
 ## Questions from launched threads
 
-A thread an agent starts with `goat_thread_launch`, `create_threads`, or `delegate_task`
+A thread an agent starts with `goat_thread_launch`, `goat_thread_create_many`, or `goat_task_create`
 records its `launchedBy`. Launcher identity is separate from lineage: lineage is ancestry and
 subagent ownership, while the launcher is who should hear about the thread's questions. Provider
 native subagents and forks never inherit it. The

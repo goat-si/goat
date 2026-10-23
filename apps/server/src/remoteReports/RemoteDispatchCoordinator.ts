@@ -880,7 +880,7 @@ const make = Effect.gen(function* () {
                   commandId: CommandId.make(`server:remote-task-outage:${id}`),
                   threadId: r.origin_thread_id,
                   messageId: MessageId.make(`message:remote-task-outage:${id}`),
-                  text: `GOAT cannot reach host ${r.host} to observe delegated task ${r.task_id}. The task remains running; use task_status to follow it.`,
+                  text: `GOAT cannot reach host ${r.host} to observe delegated task ${r.task_id}. The task remains running; use goat_task_read to follow it.`,
                   attachments: [],
                   createdBy: "agent",
                   creationSource: "server",

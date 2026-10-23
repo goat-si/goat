@@ -2598,7 +2598,7 @@ const make = Effect.gen(function* () {
           if (ownerError === undefined)
             return yield* failure(
               "invalid_request",
-              "An earlier delegate_task with this clientRequestId did not finish launching; use a new clientRequestId.",
+              "An earlier goat_task_create with this clientRequestId did not finish launching; use a new clientRequestId.",
             );
         }
         if (launched._tag === "Failure" || launched.success.launch.runId === null) {
@@ -3249,7 +3249,7 @@ const make = Effect.gen(function* () {
         if ((yield* permissions.resolve(scope, parent.thread.runtimeMode)).enabled)
           return yield* failure(
             "capability_denied",
-            "With goatclaw enabled, use goat_thread_launch or delegate_task so every child inherits its permission profile.",
+            "With goatclaw enabled, use goat_thread_launch or goat_task_create so every child inherits its permission profile.",
           );
         const parentNodeId = parentRun.rootNodeId;
         const providers = yield* loadProviders;

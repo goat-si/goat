@@ -272,7 +272,7 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     notifyTarget: Schema.optional(
       NotifyTargetInput.annotate({
         description:
-          "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in this machine's server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from request_secret and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, a url that resolves to a loopback, private, or link-local address (a local receiver needs a named target), or webhooks switched off in settings refuse the launch before any thread is created.",
+          "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in this machine's server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from goat_handoff_create and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, a url that resolves to a loopback, private, or link-local address (a local receiver needs a named target), or webhooks switched off in settings refuse the launch before any thread is created.",
       }),
     ),
   }),

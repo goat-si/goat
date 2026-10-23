@@ -131,7 +131,7 @@ export const CloudLaunchInput = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
   holder: Schema.optional(CloudHolderName).annotate({
     description:
-      'Run on this holder: "local" or an SSH host alias from goat_cloud_holders. Omit to pick a ready holder.',
+      'Run on this holder: "local" or an SSH host alias from goat_cloud_agent_holders. Omit to pick a ready holder.',
   }),
   dryRun: Schema.optional(Schema.Boolean).annotate({
     description: "Only say which holder would launch it. Starts nothing.",

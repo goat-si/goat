@@ -36,7 +36,7 @@ destructive hints from those declarations, overriding presentation metadata. The
 compares the registry against the production registration layers, including the three image tools
 and the separately composed memory tools, and checks that published strict inputs reject extra keys.
 
-`schedule_task` calls `ScheduledTaskService` through `apps/server/src/mcp/OrchestratorMcpService.ts`.
+`goat_schedule_create` calls `ScheduledTaskService` through `apps/server/src/mcp/OrchestratorMcpService.ts`.
 `goat_thread_launch` and `goat_ssh_thread_launch` register a launch watch when completion
 notifications are left on; a launch from outside any thread is watched only when the completion
 webhook takes it. Those two paths are [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)
@@ -48,7 +48,7 @@ caller named except `restart`. `OrchestratorMcpService` passes the call through
 `steer_when_ready` for that case and for every `auto` send. The message joins a running turn,
 waits for a turn that is still starting, or starts an idle thread. When a child's latest task is
 a finished review and no task is active, it refuses new agent follow-ups; start a new review
-round with `delegate_task`. Retrying an already delivered send returns its existing result.
+round with `goat_task_create`. Retrying an already delivered send returns its existing result.
 A provider that cannot steer,
 a turn that is already finishing, and the slash commands `/compact`, `/logout`, and `/goal` take
 it as the next turn. A thread sending to itself, and a client that is not inside a GOAT thread,

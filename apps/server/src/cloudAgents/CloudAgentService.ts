@@ -600,7 +600,7 @@ const make = Effect.gen(function* () {
         holder,
         dryRun: false,
         threadId: launched.threadId,
-        note: `The cloud run starts in this thread from ${input.branch ?? "the branch checked out in the project folder"}; goat_cloud_run_list and goat_thread_status follow it.`,
+        note: `The cloud run starts in this thread from ${input.branch ?? "the branch checked out in the project folder"}; goat_cloud_agent_run_list and goat_thread_status follow it.`,
       };
     },
   );
@@ -766,7 +766,7 @@ const make = Effect.gen(function* () {
                 : linkOnlyNote,
             }
           : tracking === "pending"
-            ? { note: "Still attaching; goat_cloud_run_list shows the outcome." }
+            ? { note: "Still attaching; goat_cloud_agent_run_list shows the outcome." }
             : { note: "GOAT follows this run and reports when it finishes." }),
       };
     },

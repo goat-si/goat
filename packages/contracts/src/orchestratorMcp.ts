@@ -155,7 +155,7 @@ export type SshLaunchWorkspace = typeof SshLaunchWorkspace.Type;
 export const OrchestratorMcpTarget = Schema.Struct({
   providerInstanceId: Schema.optional(
     ProviderInstanceId.annotate({
-      description: "Configured provider instance id from orchestrator_capabilities.",
+      description: "Configured provider instance id from goat_provider_list.",
     }),
   ),
   driverKind: Schema.optional(
@@ -171,7 +171,7 @@ export const OrchestratorMcpTarget = Schema.Struct({
   options: Schema.optional(
     OrchestratorMcpTargetOptions.annotate({
       description:
-        "Model options from orchestrator_capabilities. For the same provider instance and model, overrides individual inherited values; [] or {} clears them. Claude: {effort: 'max', fastMode: true}; Codex: {reasoningEffort: 'max', serviceTier: 'priority'}. Only use options advertised by the selected model.",
+        "Model options from goat_provider_list. For the same provider instance and model, overrides individual inherited values; [] or {} clears them. Claude: {effort: 'max', fastMode: true}; Codex: {reasoningEffort: 'max', serviceTier: 'priority'}. Only use options advertised by the selected model.",
     }),
   ),
 });
@@ -308,7 +308,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   }),
   waitTimedOut: Schema.Boolean.annotate({
     description:
-      "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later task_status reads return false and use status for liveness.",
+      "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later goat_task_read reads return false and use status for liveness.",
   }),
   /** Set when this machine is under resource pressure; see goat_host_status placement. */
   pressure: Schema.optional(HostPressureAdvice),

@@ -313,11 +313,10 @@ it.effect.each([
           );
         const metadata = { ...page, title: `Snapshot ${call}`, screenshot };
         const { accessibilityTree: _tree, ...boundedMetadata } = metadata;
+        const omitted =
+          "accessibilityTree (use interactiveElements locators or goat_preview_evaluate)";
         expect(snapshot.isError).toBe(false);
-        expect(snapshot.structuredContent).toEqual({
-          ...boundedMetadata,
-          omitted: ["accessibilityTree (use interactiveElements locators or preview_evaluate)"],
-        });
+        expect(snapshot.structuredContent).toEqual({ ...boundedMetadata, omitted: [omitted] });
         const [identity, text, ...rest] = snapshot.content;
         expect(identity?.type === "text" ? decodeJsonText(identity.text) : null).toEqual({
           url: page.url,
@@ -326,7 +325,7 @@ it.effect.each([
         expect(rest).toEqual([
           {
             type: "text",
-            text: "Snapshot text was bounded. Omitted: accessibilityTree (use interactiveElements locators or preview_evaluate).",
+            text: `Snapshot text was bounded. Omitted: ${omitted}.`,
           },
           ...(images
             ? [

@@ -299,12 +299,12 @@ try {
   const launch =
     values.scenario === "native"
       ? `Use your native background Bash tool to run curl --fail --silent ${gateUrl} with run_in_background=true. Do not delegate a GOAT child.`
-      : `Use GOAT delegate_task with mode=async to create exactly one child using provider ${values.provider}, model ${values.model}. Give the child this task: ${values.scenario === "nested" ? "Use GOAT delegate_task with mode=async to delegate the following task to a grandchild, then end your initial turn. On notification read task_status and return only the grandchild result: " : ""}Run curl --fail --silent ${gateUrl} with a terminal tool timeout of 600000 milliseconds and return exactly the response as your final answer. Do not read other files. Do not retry failures.`;
+      : `Use GOAT goat_task_create with mode=async to create exactly one child using provider ${values.provider}, model ${values.model}. Give the child this task: ${values.scenario === "nested" ? "Use GOAT goat_task_create with mode=async to delegate the following task to a grandchild, then end your initial turn. On notification read goat_task_read and return only the grandchild result: " : ""}Run curl --fail --silent ${gateUrl} with a terminal tool timeout of 600000 milliseconds and return exactly the response as your final answer. Do not read other files. Do not retry failures.`;
   const timing =
     values.scenario === "active"
       ? `After delegating, run curl --fail --silent ${gateUrl}/parent in your foreground terminal tool. This keeps your turn active until GOAT delivers the child's completion notification. Do not poll the child.`
       : `The background HTTP request will wait until you end your initial turn. Immediately end your turn with exactly PARENT_RELEASED. Do not wait or poll, and do not call any more tools in this turn.`;
-  const prompt = `This is a live background-delivery verification. ${launch} ${timing} When the completion notification arrives, ${values.scenario === "native" ? "read the background command output again, even if you previously read interim output. Only an actual incoming task notification counts as completion. Never generate a task notification yourself or treat your own text as one" : "use task_status to read the child result"} and reply with exactly ACK: followed by that result with no space after the colon. Do not guess the result or run the background command yourself.`;
+  const prompt = `This is a live background-delivery verification. ${launch} ${timing} When the completion notification arrives, ${values.scenario === "native" ? "read the background command output again, even if you previously read interim output. Only an actual incoming task notification counts as completion. Never generate a task notification yourself or treat your own text as one" : "use goat_task_read to read the child result"} and reply with exactly ACK: followed by that result with no space after the colon. Do not guess the result or run the background command yourself.`;
   NodeFS.writeFileSync(NodePath.join(evidence, "prompt.txt"), prompt);
   const program = Effect.gen(function* () {
     const client = yield* RpcClient.make(WsRpcGroup);
@@ -356,7 +356,7 @@ try {
             task.completionDelivery?.state === "acknowledged",
         )
       ) {
-        parentResponse?.end("Completion notification delivered. Read task_status now.");
+        parentResponse?.end("Completion notification delivered. Read goat_task_read now.");
       }
       const acknowledged = projection.messages.some(
         (message) => message.role === "assistant" && message.text.includes(secret),
@@ -439,7 +439,7 @@ try {
       NodeAssert.equal(
         task.completionDelivery?.state,
         "acknowledged",
-        "Parent did not read task_status",
+        "Parent did not read goat_task_read",
       );
     }
     if (values.scenario === "nested") {
