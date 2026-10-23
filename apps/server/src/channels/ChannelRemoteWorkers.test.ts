@@ -2156,10 +2156,13 @@ describe("Slack defaults for work on another machine", () => {
   const remoteModel = { instanceId: ProviderInstanceId.make("codex"), model: "remote-default" };
 
   /** A machine whose project has its own default model, and a Slack connection's defaults. */
-  const defaultsHarness = (defaultTarget: {
-    readonly projectId?: ProjectId;
-    readonly modelSelection?: typeof slackModel;
-  }) => {
+  const defaultsHarness = (
+    defaultTarget: {
+      readonly projectId?: ProjectId;
+      readonly modelSelection?: typeof slackModel;
+    },
+    settingsLayer?: NonNullable<Parameters<typeof makeHarness>[0]>["settingsLayer"],
+  ) => {
     const machine = new RemoteMachine();
     machine.projects = machine.projects.map((project) => ({
       ...project,
@@ -2178,6 +2181,7 @@ describe("Slack defaults for work on another machine", () => {
     const harness = makeHarness({
       sshRemote: machine.layer,
       channelsLayer: ChannelLayers.makeLayerServices(settings),
+      ...(settingsLayer === undefined ? {} : { settingsLayer }),
     });
     harness.script.current = remoteScript;
     return { machine, harness };
@@ -2200,6 +2204,36 @@ describe("Slack defaults for work on another machine", () => {
       // The default picks a model, never more authority.
       assert.strictEqual(launch.callerRuntimeMode, "auto-accept-edits");
       assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("keeps the Slack connection's model when a GOAT Bot model is configured", () => {
+    const { machine, harness } = defaultsHarness(
+      { modelSelection: slackModel },
+      ServerSettings.layerTest({
+        textGenerationModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-6-luna",
+        },
+        goatBotModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-6-astra",
+        },
+        defaultRuntimeMode: "full-access",
+      }).pipe(Layer.orDie),
+    );
+    machine.offeredModels = [
+      { instance: "codex", model: "slack-default" },
+      { instance: "codex", model: "remote-default" },
+      { instance: "codex", model: "gpt-6-astra" },
+    ];
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "d1b"), slackContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.deepStrictEqual(machine.launches[0]?.modelSelection, slackModel);
     }).pipe(Effect.provide(harness.layer));
   });
 

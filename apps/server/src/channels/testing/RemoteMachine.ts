@@ -126,6 +126,10 @@ export class RemoteMachine {
   refuseSendWith: string | undefined;
   /** The models orchestrator_capabilities lists; unset, the tool is refused (an older GOAT). */
   offeredModels: ReadonlyArray<{ readonly instance: string; readonly model: string }> | undefined;
+  /** Models a truncated catalog leaves out of untargeted responses but a search still finds. */
+  omittedFromUntargetedCatalog: ReadonlyArray<string> = [];
+  /** An older GOAT does not pin an exact slug match above its listing cap. */
+  capabilitiesPinsExact = true;
   /** orchestrator_capabilities alone cannot be reached (the call times out). */
   capabilitiesUnreachable = false;
   /** Weekly quota use per account that goat_host_status reports; unset, the tool is refused. */
@@ -454,23 +458,33 @@ export class RemoteMachine {
               case "goat_environment_read":
                 if (machine.environmentReadDown) return yield* machine.unreachable("down");
                 return { environmentId: machine.environmentReadId ?? machine.environmentId };
-              case "orchestrator_capabilities":
+              case "orchestrator_capabilities": {
                 if (machine.capabilitiesUnreachable) return yield* machine.unreachable("timed out");
                 if (machine.offeredModels === undefined) break;
+                const search = call.arguments.search;
+                const term = typeof search === "string" ? search.toLowerCase() : undefined;
+                const listed = machine.offeredModels.filter((entry) => {
+                  if (term !== undefined && !entry.model.toLowerCase().includes(term)) return false;
+                  return (
+                    !machine.omittedFromUntargetedCatalog.includes(entry.model) ||
+                    (term !== undefined && machine.capabilitiesPinsExact)
+                  );
+                });
                 return {
-                  providers: [...new Set(machine.offeredModels.map((entry) => entry.instance))].map(
+                  providers: [...new Set(listed.map((entry) => entry.instance))].map(
                     (instance) => ({
                       providerInstanceId: instance,
                       driverKind: "codex",
                       // A real GOAT sends null for an account without a display name.
                       displayName: null,
                       canRunChildTask: !machine.unrunnable.includes(instance),
-                      models: machine
-                        .offeredModels!.filter((entry) => entry.instance === instance)
+                      models: listed
+                        .filter((entry) => entry.instance === instance)
                         .map((entry) => ({ id: entry.model })),
                     }),
                   ),
                 };
+              }
               case "goat_provider_diagnose":
                 return {
                   diagnoses: [
