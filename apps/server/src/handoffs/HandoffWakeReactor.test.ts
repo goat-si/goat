@@ -47,6 +47,8 @@ interface World {
   readonly handoffs: Handoffs.Handoffs["Service"];
   readonly reactor: HandoffWakeReactor.HandoffWakeReactor["Service"];
   readonly sql: SqlClient.SqlClient;
+  /** Wake command ids sent to the orchestrator; the next `failing` fresh ones are rejected. */
+  readonly outage: { failing: number; readonly sent: Array<string> };
 }
 
 /** The asking thread mid-turn on the real orchestrator, with handoffs and the wake reactor. */
@@ -93,6 +95,7 @@ const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
       });
       yield* worker.drain();
       const now = yield* DateTime.now;
+      const outage: World["outage"] = { failing: 0, sent: [] };
       const session: AuthClientSession = {
         sessionId: person,
         subject: "browser",
@@ -106,7 +109,28 @@ const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
         current: true,
       };
       const threads = Layer.mock(ThreadManagement.ThreadManagementService)({
-        dispatch: orchestrator.dispatch,
+        dispatch: (command) => {
+          if (command.type !== "message.dispatch" || !command.commandId.startsWith("server:"))
+            return orchestrator.dispatch(command);
+          outage.sent.push(command.commandId);
+          if (outage.failing === 0) return orchestrator.dispatch(command);
+          outage.failing -= 1;
+          // A planning failure: the orchestrator keeps a rejected receipt under this command id.
+          return sql`INSERT INTO orchestration_command_receipts
+            (command_id, aggregate_kind, aggregate_id, command_type, accepted_at, result_sequence, status, error)
+            VALUES (${command.commandId}, 'thread', ${threadId}, 'message.dispatch',
+            '2026-10-23T00:00:00.000Z', 0, 'rejected', 'adapter unavailable')`.pipe(
+            Effect.orDie,
+            Effect.andThen(
+              Effect.fail(
+                new Orchestrator.OrchestratorCommandRejectedError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                }),
+              ),
+            ),
+          );
+        },
         getThreadRecords: orchestrator.getThreadRecords,
         getThreadShell: (id) => Effect.succeed(liveThreadShell(id)),
       });
@@ -144,6 +168,7 @@ const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
           orchestrator,
           worker,
           sql,
+          outage,
           handoffs: yield* Handoffs.Handoffs,
           reactor: yield* HandoffWakeReactor.HandoffWakeReactor,
         });
@@ -288,7 +313,7 @@ it.effect("wakes nothing before waking began, or resolved before it began", () =
 );
 
 it.effect(
-  "keeps retrying under fresh attempt ids, with backoff, after the orchestrator rejected earlier ones",
+  "walks past command ids the orchestrator rejected before a restart and delivers at once",
   () =>
     withWorld((world) =>
       Effect.gen(function* () {
@@ -305,18 +330,50 @@ it.effect(
           (command_id, aggregate_kind, aggregate_id, command_type, accepted_at, result_sequence, status, error)
           VALUES (${attempt === 0 ? first : `${first}:attempt:${attempt}`}, 'thread', ${threadId},
           'message.dispatch', '2026-10-23T00:00:00.000Z', 0, 'rejected', 'adapter unavailable')`;
-        // The next attempt waits out its backoff from the resolution, then delivers.
         yield* world.reactor.reconcile;
-        expect(yield* wakes(world)).toEqual([]);
-        yield* TestClock.adjust("16 minutes");
+        expect(world.outage.sent).toHaveLength(26);
         yield* world.reactor.reconcile;
-        yield* world.reactor.reconcile;
-        const sent = yield* wakes(world);
-        expect(sent.map((message) => message.id)).toEqual([
+        expect(world.outage.sent).toHaveLength(26);
+        expect((yield* wakes(world)).map((message) => message.id)).toEqual([
           `message:handoff-wake:${summary.handoffId}:completed`,
         ]);
       }),
     ),
+);
+
+it.effect("makes one fresh attempt per eligible tick, waiting longer after each failure", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "example.approve");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      // Fourteen failures run the backoff past its 15-minute cap.
+      world.outage.failing = 14;
+      yield* world.reactor.reconcile;
+      expect(world.outage.sent).toHaveLength(1);
+      for (let attempt = 1; attempt < 14; attempt++) {
+        const delayMs = Math.min(2 ** attempt * 1000, 15 * 60 * 1000);
+        yield* TestClock.adjust(delayMs - 1);
+        yield* world.reactor.reconcile;
+        expect(world.outage.sent).toHaveLength(attempt);
+        yield* TestClock.adjust(1);
+        yield* world.reactor.reconcile;
+        expect(world.outage.sent).toHaveLength(attempt + 1);
+        expect(world.outage.sent.at(-1)).toMatch(new RegExp(`:attempt:${attempt}$`));
+      }
+      expect(yield* wakes(world)).toEqual([]);
+      yield* TestClock.adjust("15 minutes");
+      yield* world.reactor.reconcile;
+      yield* world.reactor.reconcile;
+      expect(world.outage.sent).toHaveLength(15);
+      expect((yield* wakes(world)).map((message) => message.id)).toEqual([
+        `message:handoff-wake:${summary.handoffId}:completed`,
+      ]);
+    }),
+  ),
 );
 
 it.effect("reads the day's resolved handoffs through their index, not the whole history", () =>
