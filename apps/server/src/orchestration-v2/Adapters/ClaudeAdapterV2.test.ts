@@ -827,7 +827,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
     assert.equal(systemPrompt.type, "preset");
     assert.equal(systemPrompt.preset, "claude_code");
     assert.include(systemPrompt.append ?? "", GOAT_DEVELOPMENT_INSTRUCTIONS);
-    assert.include(systemPrompt.append ?? "", "Use `goat_task_create`");
+    assert.include(systemPrompt.append ?? "", "## GOAT orchestration");
     const logged = ClaudeAdapterV2.loggedClaudeQueryOptions(options);
     assert.equal(logged.hasMcpServers, true);
     assert.notInclude(JSON.stringify(logged), "secret-claude-token");
