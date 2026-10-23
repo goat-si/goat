@@ -2445,6 +2445,9 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
 // Loaded through --import and NODE_OPTIONS before the server entry. registerHooks covers import
 // and require; NODE_OPTIONS carries the hook into child Node processes; dlopen is wrapped because
 // an addon loaded by path never passes through resolve.
+// A worker evaluated from a string runs without --import, so it can still reach a package above
+// the probe. That only matters on a machine with such a node_modules; on a clean one the missing
+// package fails as before.
 const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `import { realpathSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { pathToFileURL } from "node:url";
