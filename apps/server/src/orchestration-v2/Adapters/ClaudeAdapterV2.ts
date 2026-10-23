@@ -9,6 +9,7 @@ import {
   CLAUDE_MEMORY_SOURCE_TOOL,
   CLAUDE_MEMORY_WRITE_TOOLS,
   CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS,
+  claudeAllowedToolName,
   claudeGoatToolName,
   claudeGoatMemoryTool,
 } from "./goatMcpToolNames.ts";
@@ -1579,13 +1580,16 @@ export function claudeMcpQueryOverrides(input: {
   return {
     allowedTools: Array.from(
       new Set([
-        ...(input.allowedTools ?? []).filter(
-          (tool) =>
-            !tool.startsWith(CLAUDE_CUA_MCP_TOOL_PREFIX) &&
-            (!input.readOnlySandbox ||
-              !tool.startsWith("mcp__goat__") ||
-              mcpAllowedTools.includes(tool)),
-        ),
+        ...(input.allowedTools ?? [])
+          // A user's own entry may name a GOAT tool as it shipped; Claude calls the listed name.
+          .map(claudeAllowedToolName)
+          .filter(
+            (tool) =>
+              !tool.startsWith(CLAUDE_CUA_MCP_TOOL_PREFIX) &&
+              (!input.readOnlySandbox ||
+                !tool.startsWith("mcp__goat__") ||
+                mcpAllowedTools.includes(tool)),
+          ),
         ...mcpAllowedTools,
         ...cuaAllowedTools,
       ]),
