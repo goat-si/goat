@@ -659,6 +659,7 @@ export const WS_METHODS = {
   // Boat cloud machines this environment manages as SSH hosts
   cloudMachinesList: "cloudMachines.list",
   cloudAgentsListRuns: "cloudAgents.listRuns",
+  // Deprecated since GOAT 0.1.2; only older clients call these. Remove in GOAT 0.2.0.
   cloudAgentsListFolderTrust: "cloudAgents.listFolderTrust",
   cloudAgentsAcceptFolderTrust: "cloudAgents.acceptFolderTrust",
   cloudMachinesConfigure: "cloudMachines.configure",
@@ -2171,13 +2172,19 @@ const WsCloudAgentsListRunsRpc = Rpc.make(WS_METHODS.cloudAgentsListRuns, {
   success: CloudRunListResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
-/** Claude Code folder trust for this environment's projects, for the cloud agents panel. */
+/**
+ * Claude Code folder trust for this environment's projects, for the cloud agents panel.
+ * Deprecated since GOAT 0.1.2: only older clients call it. Remove in GOAT 0.2.0.
+ */
 const WsCloudAgentsListFolderTrustRpc = Rpc.make(WS_METHODS.cloudAgentsListFolderTrust, {
   payload: CloudFolderTrustListInput,
   success: CloudFolderTrustListResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
-/** Answers a project folder's Claude Code trust prompt now, without starting a cloud session. */
+/**
+ * Answers a project folder's Claude Code trust prompt now, without starting a cloud session.
+ * Deprecated since GOAT 0.1.2: only older clients call it. Remove in GOAT 0.2.0.
+ */
 const WsCloudAgentsAcceptFolderTrustRpc = Rpc.make(WS_METHODS.cloudAgentsAcceptFolderTrust, {
   payload: CloudFolderTrustAcceptInput,
   success: CloudFolderTrust,
