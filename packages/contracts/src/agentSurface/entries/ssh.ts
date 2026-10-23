@@ -29,7 +29,7 @@ export const sshEntries = {
     description:
       "Start or install GOAT's runtime on a pinned SSH host over key-only SSH, then diagnose its providers. Returns at the first setup phase while setup continues on the host; follow it with goat_ssh_host_status until state is ready with setup.stage complete, failed, or providers_not_ready. On auth_failed, run the returned key command on this machine, then retry.",
     guide:
-      "Needs environment:maintain, which GOAT threads never hold: from a thread, ask a person to prepare the host in Settings → Connections, or call goat_ssh_runtime_update (when_idle updates an idle host on its own; now asks a person to approve). The host must already be pinned (goat_ssh_host_add). state ready with setup.stage diagnosis means provider diagnosis is still running. For update_waiting or update_blocked, follow the recovery the status names. A failed setup or diagnosis publishes an error whose fix says to call goat_ssh_host_prepare again; an expired or revoked approval needs the person to ask again.",
+      "A thread may prepare when its enabled goatclaw profile grants threads.remote and hub.manage for the host and it runs full-access in default mode; otherwise a person presses Retry on the host in Settings → Connections. Clients need environment:maintain. The host must already be pinned (goat_ssh_host_add). state ready with setup.stage diagnosis means provider diagnosis is still running. For update_waiting or update_blocked, follow the recovery the status names. A failed setup or diagnosis publishes an error whose fix says to call goat_ssh_host_prepare again.",
     effect: "write",
     capability: "threads.remote",
     hostRoutable: false,
