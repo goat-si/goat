@@ -13,10 +13,10 @@ const decodeProfile = Schema.decodeUnknownSync(PermissionProfile);
 const decodePolicy = Schema.decodeSync(GoatclawSettings);
 
 describe("permission profile contracts", () => {
-  it("keeps goatclaw opt-in and supplies five named profiles on upgrade", () => {
+  it("keeps goatclaw opt-in, defaults to the owner profile, and supplies five named profiles", () => {
     const { goatclaw } = decodeSettings({});
     expect(goatclaw.enabled).toBe(false);
-    expect(goatclaw.defaultProfile).toBe("worker");
+    expect(goatclaw.defaultProfile).toBe("owner");
     expect(Object.keys(goatclaw.profiles)).toEqual([
       "observer",
       "worker",
