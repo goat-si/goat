@@ -108,5 +108,13 @@ it.effect("refuses two fields that name different targets, naming both, and unkn
       "does not take bogus",
     );
     expect(yield* refusal("goat_describe", { verb: "read" })).toContain("does not take verb");
+    // The same args object written in another key order is one value, not a conflict.
+    expect(
+      yield* refusal("goat_call", {
+        path: "thread.read",
+        args: { goat_probe: 1, threadId: "a" },
+        arguments: { threadId: "a", goat_probe: 1 },
+      }),
+    ).toContain("does not take goat_probe");
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );

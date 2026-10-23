@@ -205,4 +205,13 @@ describe("resolveGoatMcpItemCall", () => {
     const call = resolveGoatMcpItemCall({ toolName: "goat_thread_send", input });
     expect(call).toMatchObject({ toolName: "goat_thread_send", input });
   });
+
+  it.each([
+    { name: "thread.read", arguments: { threadId: "t1" } },
+    { tool: "goat_thread_read", input: { threadId: "t1" } },
+    { resource: "thread", verb: "read", args: { threadId: "t1" } },
+  ])("reads a goat_call spelled %j as the server runs it", (input) => {
+    const call = resolveGoatMcpItemCall({ toolName: "mcp__goat__goat_call", input });
+    expect(call).toMatchObject({ toolName: "goat_thread_read", input: { threadId: "t1" } });
+  });
 });
