@@ -207,7 +207,7 @@ describe("SshRemoteDispatch with a linked host", () => {
         _tag: "Failure",
         failure: {
           reason: "remote_refused",
-          message: expect.stringContaining("goat_host_link_create"),
+          message: expect.stringContaining('goat_call {path:"host_link.create"}'),
         },
       });
     }),

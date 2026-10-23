@@ -4,6 +4,7 @@ import { resolveNodeExecutable } from "@goat/shared/nodeRuntime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 const SHIM_DIR = "device/bin";
 
@@ -26,7 +27,7 @@ const args = process.argv.slice(2);
 const informational = args.length === 1 && ["help", "--help", "-h", "--version", "version"].includes(args[0]);
 const hasValue = flag => { const index = args.indexOf(flag); return index >= 0 && !!args[index + 1] && !args[index + 1].startsWith("--"); };
 if (!informational && !(hasValue("--config") && hasValue("--session"))) {
-  console.error("Call goat_device_open first and include its --config and --session flags.");
+  console.error(${JSON.stringify(`Call ${goatCallText("device.open")} first and include its --config and --session flags.`)});
   process.exit(1);
 }
 const env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };

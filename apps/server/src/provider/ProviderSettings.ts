@@ -329,7 +329,7 @@ const make = Effect.gen(function* () {
       ? denied("The caller lost permission to manage providers before the change was saved.")
       : error.operation === "create-provider-instance"
         ? invalid(
-            `Provider instance ${error.providerInstanceId ?? ""} already exists. Change it with goat_provider_update.`,
+            `Provider instance ${error.providerInstanceId ?? ""} already exists. Change it with goat_call {path:"provider.update"}.`,
           )
         : failure("orchestration_error", "Could not save the provider settings.");
 
@@ -444,7 +444,7 @@ const make = Effect.gen(function* () {
       return yield* invalid("Pass driver, or acpAgentId for an ACP Registry agent.");
     if (!DRIVER_KINDS.has(driver))
       return yield* invalid(
-        `GOAT has no provider driver ${driver}. goat_provider_addable_list lists them.`,
+        `GOAT has no provider driver ${driver}. goat_call {path:"provider.addable_list"} lists them.`,
       );
     if (input.acpAgentId !== undefined && driver !== "acpRegistry")
       return yield* invalid("acpAgentId needs the acpRegistry driver.");
@@ -459,7 +459,7 @@ const make = Effect.gen(function* () {
     const instanceId = input.instanceId ?? uniqueId(instances, input.acpAgentId ?? driver);
     if (Object.hasOwn(instances, instanceId))
       return yield* invalid(
-        `Provider instance ${instanceId} already exists. Change it with goat_provider_update.`,
+        `Provider instance ${instanceId} already exists. Change it with goat_call {path:"provider.update"}.`,
       );
     const environment = mergeEnvironment(undefined, input.environment);
     const instance: ProviderInstanceConfig = {
@@ -499,7 +499,7 @@ const make = Effect.gen(function* () {
         const base = resolveEntry(instances, input.instanceId);
         if (base === undefined)
           return yield* invalid(
-            `No provider instance ${input.instanceId} on this environment. goat_provider_addable_list lists them.`,
+            `No provider instance ${input.instanceId} on this environment. goat_call {path:"provider.addable_list"} lists them.`,
           );
         const { displayName: _name, accentColor: _color, ...rest } = base;
         const displayName =

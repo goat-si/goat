@@ -7,6 +7,7 @@ import type {
   ProviderHostCloudCell,
   ProviderHostCloudReadiness,
 } from "@goat/contracts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * Pure decisions for cloud credential holders: what one environment's provider diagnosis says
@@ -196,7 +197,7 @@ export function chooseHolder(
     if (wanted === undefined)
       return {
         ok: false,
-        message: `${preference} is not a connected holder for ${label}. goat_cloud_agent_holders lists them.`,
+        message: `${preference} is not a connected holder for ${label}. ${goatCallText("cloud_agent.holders")} lists them.`,
       };
     if (wanted.runtime === "update_required")
       return {

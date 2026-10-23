@@ -27,6 +27,7 @@ import * as Settings from "../serverSettings.ts";
 import * as Notes from "./NotesService.ts";
 import * as Results from "./NoteResults.ts";
 import * as AutoDone from "./NoteAutoDone.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 const Intent = Schema.Struct({
   key: Schema.String,
@@ -171,7 +172,7 @@ const make = Effect.gen(function* () {
             reason: "launch_failed",
             message: "Choose a model or configure the hub's default model before starting work.",
           });
-        const message = `${note.title}\n\n${note.body}\n\nWhen finished, report with goat_thread_report_result.`;
+        const message = `${note.title}\n\n${note.body}\n\nWhen finished, report with ${goatCallText("thread.report_result")}.`;
         let threadId: ThreadId;
         let host: string | null = null;
         if (input.target.type === "hub") {

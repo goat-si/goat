@@ -20,16 +20,14 @@ import * as Semaphore from "effect/Semaphore";
 
 import type * as Handoffs from "../handoffs/Handoffs.ts";
 import type { SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 export const HOST_SYNC_PATH = "provider.host_sync";
 /** An approval may start its sync this long after the person answered, including after a restart. */
 const START_WINDOW = { minutes: 15 };
-const RESTARTED =
-  "GOAT restarted on this machine before this host finished. Call goat_provider_host_matrix to see its state.";
-const MAY_HAVE_RUN =
-  "GOAT restarted while this sync was starting, so it may have run. Call goat_provider_host_matrix to see each host.";
-const TOO_OLD =
-  "The person approved this sync, but GOAT stopped before it started and the approval is now too old to start. Call goat_provider_sync to ask again.";
+const RESTARTED = `GOAT restarted on this machine before this host finished. Call ${goatCallText("provider.host_matrix")} to see its state.`;
+const MAY_HAVE_RUN = `GOAT restarted while this sync was starting, so it may have run. Call ${goatCallText("provider.host_matrix")} to see each host.`;
+const TOO_OLD = `The person approved this sync, but GOAT stopped before it started and the approval is now too old to start. Call ${goatCallText("provider.sync")} to ask again.`;
 
 /**
  * What an approved sync has done, kept in the approval handoff's encrypted payload: `starting`
@@ -64,7 +62,7 @@ export const settledSyncWake = (progress: unknown) => {
   if (hosts.length === 0)
     return {
       summary: "settled",
-      text: "The sync settled; goat_provider_host_matrix shows each host.",
+      text: `The sync settled; ${goatCallText("provider.host_matrix")} shows each host.`,
     };
   const failed = hosts.filter((host) => !OK_PHASES.has(host.phase));
   const name = (host: (typeof hosts)[number]) => host.host ?? "this machine";
@@ -81,7 +79,7 @@ export const settledSyncWake = (progress: unknown) => {
         (host) =>
           `${name(host)}: ${host.phase}${host.message === undefined ? "" : ` (${host.message})`}.`,
       ),
-      "goat_provider_host_matrix shows each host.",
+      `${goatCallText("provider.host_matrix")} shows each host.`,
     ].join(" "),
   };
 };
@@ -301,7 +299,7 @@ export const makeApprovedSyncs = Effect.fn("ProviderHostSync.makeApprovedSyncs")
       case "expired":
         return yield* fail(
           "expired",
-          "This approval expired before anyone answered it. Call goat_provider_sync to ask again.",
+          `This approval expired before anyone answered it. Call ${goatCallText("provider.sync")} to ask again.`,
         );
       case "cancelled":
         return yield* fail("cancelled", "This approval was cancelled, so the sync will not run.");
@@ -310,7 +308,7 @@ export const makeApprovedSyncs = Effect.fn("ProviderHostSync.makeApprovedSyncs")
       case "completed":
         return yield* fail(
           "not_found",
-          "This approval has no sync on record: it ended more than a day ago or has not started yet. Call goat_provider_host_matrix to see each host.",
+          `This approval has no sync on record: it ended more than a day ago or has not started yet. Call ${goatCallText("provider.host_matrix")} to see each host.`,
         );
       default:
         return yield* fail(

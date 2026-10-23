@@ -27,6 +27,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 type LocalInput<A> = Omit<A, "host">;
 
@@ -327,7 +328,8 @@ const make = Effect.gen(function* () {
       if (!registered.includes(repository))
         return yield* failure(
           "invalid_request",
-          repo + " is not a repository of a GOAT project. goat_project_list lists them.",
+          repo +
+            ` is not a repository of a GOAT project. ${goatCallText("project.list")} lists them.`,
         );
       return (yield* scanRepository(repo, context)) ?? [];
     }
@@ -644,7 +646,8 @@ const make = Effect.gen(function* () {
     if (target === undefined)
       return yield* failure(
         "invalid_request",
-        requested + " is not a git worktree of a GOAT project. goat_worktree_inventory lists them.",
+        requested +
+          ` is not a git worktree of a GOAT project. ${goatCallText("worktree.inventory")} lists them.`,
       );
     // A symlink to a worktree resolves to it; deleting through an alias would
     // remove a checkout the caller did not name. A path must be the worktree's
