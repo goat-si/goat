@@ -19,7 +19,7 @@ describe("assetImageSource", () => {
       "https://host/api/assets/token-b/p.jpg",
     );
 
-    expect(first.cacheKey).toBeDefined();
+    expect(first.cacheKey).toBe('t3-attachment:["environment-1","thread-1-photo.jpg"]');
     expect(second).toStrictEqual({
       uri: "https://host/api/assets/token-b/p.jpg",
       cacheKey: first.cacheKey,
