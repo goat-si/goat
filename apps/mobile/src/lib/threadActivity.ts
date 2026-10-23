@@ -726,18 +726,16 @@ function itemSummary(
     case "secret_request":
       return item.label;
     case "dynamic_tool": {
-      const classified = classifyToolActivity({
-        itemType: "dynamic_tool_call",
-        data: { toolName: item.toolName ?? undefined, input: item.input },
-      });
+      const call = resolveGoatMcpItemCall(item);
+      const classified = classifyToolActivity({ itemType: "dynamic_tool_call", data: call });
       if (classified === "read") {
-        const [path] = collectToolFilePaths({ input: item.input });
+        const [path] = collectToolFilePaths({ input: call.input });
         return formatReadToolLabel(path ?? "");
       }
       if (classified === "search") {
-        return formatSearchToolLabel({ input: item.input }) ?? item.toolName ?? "Tool call";
+        return formatSearchToolLabel({ input: call.input }) ?? call.toolName ?? "Tool call";
       }
-      return toolPresentation?.displayName ?? item.toolName ?? "Tool call";
+      return toolPresentation?.displayName ?? call.toolName ?? "Tool call";
     }
     case "proposed_plan":
       return "Proposed plan";
