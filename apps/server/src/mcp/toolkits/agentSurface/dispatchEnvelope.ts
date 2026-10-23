@@ -75,43 +75,42 @@ export const envelopeError = (
  * Runs one registered tool through the handle /mcp serves, so its own checks apply, and returns
  * its answer as an envelope. goat_call and the operation verbs share it.
  */
-export const dispatchEnvelope = (
+export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
   dispatch: ToolDispatch["Service"],
   name: string,
   args: Readonly<Record<string, unknown>>,
   effect: AgentSurfaceEffect,
   host?: string,
-) =>
-  Effect.gen(function* () {
-    const captured = yield* Ref.make<unknown>(undefined);
-    // Writes count as unkeyed until the registry says which ones the server deduplicates.
-    const context: CallContext = { effect, pathOf };
-    return yield* dispatch.call(name, args).pipe(
-      Effect.provideService(McpToolAccess.CallFailureCapture, {
-        record: (error) => Ref.set(captured, error),
-      }),
-      Effect.flatMap((result) =>
-        result.isError === true
-          ? Effect.map(Ref.get(captured), (error) =>
-              reclassified(fromToolResult(result, context), error, context),
-            )
-          : Effect.succeed(fromToolResult(result, context)),
-      ),
-      Effect.map((result) => withHost(result, host)),
-      // A dying target still gets an answer, with the same fixed text a direct call shows.
-      Effect.catchDefect(() =>
-        Effect.succeed(
-          envelopeError(
-            "internal",
-            "tool_error",
-            "Tool execution failed due to an internal server error.",
-          ),
+) {
+  const captured = yield* Ref.make<unknown>(undefined);
+  // Writes count as unkeyed until the registry says which ones the server deduplicates.
+  const context: CallContext = { effect, pathOf };
+  return yield* dispatch.call(name, args).pipe(
+    Effect.provideService(McpToolAccess.CallFailureCapture, {
+      record: (error) => Ref.set(captured, error),
+    }),
+    Effect.flatMap((result) =>
+      result.isError === true
+        ? Effect.map(Ref.get(captured), (error) =>
+            reclassified(fromToolResult(result, context), error, context),
+          )
+        : Effect.succeed(fromToolResult(result, context)),
+    ),
+    Effect.map((result) => withHost(result, host)),
+    // A dying target still gets an answer, with the same fixed text a direct call shows.
+    Effect.catchDefect(() =>
+      Effect.succeed(
+        envelopeError(
+          "internal",
+          "tool_error",
+          "Tool execution failed due to an internal server error.",
         ),
       ),
-      Effect.catchTags({
-        InvalidParams: (error) => Effect.succeed(fromInvalidParams(error.message)),
-        InternalError: (error) =>
-          Effect.succeed(envelopeError("internal", "internal_error", error.message)),
-      }),
-    );
-  });
+    ),
+    Effect.catchTags({
+      InvalidParams: (error) => Effect.succeed(fromInvalidParams(error.message)),
+      InternalError: (error) =>
+        Effect.succeed(envelopeError("internal", "internal_error", error.message)),
+    }),
+  );
+});

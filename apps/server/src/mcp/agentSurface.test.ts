@@ -24,6 +24,8 @@ import { McpSchema, McpServer, Tool } from "effect/ai";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 
 import { catalog, client, dependencies, entries, toolkits } from "./agentSurface.testkit.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { makeOperationTokens } from "./operations/OperationTokens.ts";
 import {
   resolveGoatMcpToolDefinition,
   resolveGoatMcpToolPresentation,
@@ -812,3 +814,33 @@ it("gives goat_describe and goat_call a tool presentation", () => {
     );
   }
 });
+const OPERATION_KEY = new Uint8Array(32).fill(7);
+const operationKey = Layer.mock(ServerSecretStore.ServerSecretStore)({
+  getOrCreateRandom: () => Effect.succeed(OPERATION_KEY),
+});
+const registeredWithOperationKey = catalog.pipe(
+  Layer.provide(Layer.mergeAll(dependencies, operationKey)),
+  Layer.provideMerge(McpServer.McpServer.layer),
+);
+
+it.effect("goat_operation_cancel meets exactly the refusals of the kind's own cancel tool", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const tokens = yield* makeOperationTokens.pipe(Effect.provide(operationKey));
+    for (const scope of [callerScope({ client: "read-only" }), callerScope({ thread: true })]) {
+      const run = asCaller(scope);
+      const operationId = yield* tokens.issue("task", "task:conformance", scope);
+      const direct = yield* run(viaCall(server, "task.cancel", { taskId: "task:conformance" }));
+      const viaOperation = yield* run(
+        server.callTool({ name: "goat_operation_cancel", arguments: { operationId } }),
+      );
+      expect(viaOperation.isError, textOf(viaOperation)).toBe(false);
+      const { result } = viaOperation.structuredContent as {
+        readonly result: AgentSurfaceResult;
+      };
+      // The verb returns the cancel tool's own answer, as goat_call would: same refusal and text.
+      expect(direct.status, scope.requestNamespace).toBe("error");
+      expect(result).toEqual(direct);
+    }
+  }).pipe(Effect.provide(registeredWithOperationKey)),
+);

@@ -4,7 +4,6 @@ import { noteSurfaceEntries } from "./notes.ts";
 import { operationSurfaceEntries } from "./operations.ts";
 import { providerSurfaceEntries } from "./providerEntries.ts";
 import { metaSurfaceEntries } from "./surfaceEntries.ts";
-import type { AgentSurfaceEntry, AgentSurfaceExample, CapabilityDeclaration } from "./types.ts";
 
 export type {
   AgentSurfaceCapability,
