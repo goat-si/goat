@@ -16,19 +16,15 @@ import {
   type Inventory,
   type SourceRef,
   collectInventory,
-  findLine,
   readLines,
   repoRoot,
   sourceFiles,
 } from "./inventory.ts";
+import { at, files, ref } from "./citations.ts";
 import { SHIPPED_TOOL_NAMES, toolTokensIn } from "./listedNames.ts";
-import { code, list, pct, table, TICK } from "./markdown.ts";
+import { code, groupBy, list, pct, table, TICK } from "./markdown.ts";
 
 const OUTPUT = "docs/internals/agent-surface-audit.md";
-
-const ref = (source: SourceRef | null) =>
-  source ? source.path + ":" + source.line : "(not found)";
-const at = (file: string, pattern: RegExp) => ref(findLine(file, pattern));
 
 interface Mention {
   readonly token: string;
@@ -158,15 +154,6 @@ const checkCliMention = (mention: CliMention, cli: ReadonlyArray<CliEntry>): Cli
   return null;
 };
 
-const groupBy = <A>(items: ReadonlyArray<A>, key: (item: A) => string) => {
-  const out = new Map<string, Array<A>>();
-  for (const item of items) {
-    const k = key(item);
-    out.set(k, [...(out.get(k) ?? []), item]);
-  }
-  return out;
-};
-
 const SYNONYMS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ["read one thing", ["read", "get", "status", "configuration"]],
   ["list things", ["list", "inventory", "transfers", "reports", "search"]],
@@ -257,8 +244,6 @@ function analyse(inventory: Inventory) {
       .filter((tool) => !promptSet.has(tool.name) && !docSet.has(tool.name))
       .map((tool) => tool.name),
     cliDrift,
-    cliChecked: cliDocMentions.length,
-    toolMentionsChecked: docMentions.length + promptMentions.length,
     undocumentedCli: inventory.cli.filter(
       (command) =>
         !command.unlisted &&
@@ -271,7 +256,7 @@ function analyse(inventory: Inventory) {
   };
 }
 
-function render(inventory: Inventory): string {
+export function render(inventory: Inventory): string {
   const a = analyse(inventory);
   const { tools, mutating, fields } = a;
   const cli = inventory.cli;
@@ -391,7 +376,7 @@ function render(inventory: Inventory): string {
       code("/mcp") +
       " and the " +
       code("goat") +
-      " command tree. Every count and path:line comes from loading those registries from source (" +
+      " command tree. Every count and cited file comes from loading those registries from source (" +
       code("scripts/agent-surface/inventory.ts") +
       "), so regenerating after a change shows whether a finding still holds. " +
       "It is the evidence base for the agent surface redesign: it describes problems and ranks fixes, and leaves the target design to that spec.",
@@ -419,6 +404,10 @@ function render(inventory: Inventory): string {
         [
           "Mutating tools that accept clientRequestId",
           mutating.length - mutatingWithoutCrid.length,
+        ],
+        [
+          "Mutating tools whose clientRequestId GOAT deduplicates",
+          mutating.filter((tool) => tool.deduplicated).length,
         ],
         [
           "Input parameters with a description",
@@ -476,6 +465,7 @@ function render(inventory: Inventory): string {
       at(
         "apps/server/src/mcp/toolkits/core.test.ts",
         /filter\(\(name\) => name\.startsWith\("goat_"\)\)/,
+        "publishes unique tool names",
       ) +
       "). " +
       list(
@@ -522,7 +512,11 @@ function render(inventory: Inventory): string {
       " published input schemas say " +
       code('"additionalProperties": true') +
       ", but every registration refuses undeclared arguments at call time (" +
-      at("apps/server/src/mcp/McpHttpServer.ts", /const refuseUndeclaredArguments/) +
+      at(
+        "apps/server/src/mcp/McpHttpServer.ts",
+        /const refuseUndeclaredArguments/,
+        "refuseUndeclaredArguments",
+      ) +
       "). A client that validates against the schema cannot learn the real contract.",
     "- **Two failure modes.** Tools split " +
       [...failureModes.entries()]
@@ -533,7 +527,7 @@ function render(inventory: Inventory): string {
       " with JSON in a text block and no " +
       code("structuredContent") +
       " (" +
-      at("apps/server/src/mcp/toolkits/core.test.ts", /Effect returns a declared tool failure/) +
+      at("apps/server/src/mcp/toolkits/core.test.ts", /const declaredFailure/, "declaredFailure") +
       "), so an agent parses text to branch on an error.",
     "- **" +
       errorFamilies.size +
@@ -556,6 +550,7 @@ function render(inventory: Inventory): string {
       at(
         "packages/contracts/src/orchestratorMcpFailure.ts",
         /export const OrchestratorMcpFailureCode/,
+        "OrchestratorMcpFailureCode",
       ) +
       "). Preview, device, worktree, and pull request failures are told apart by " +
       code("_tag") +
@@ -630,7 +625,11 @@ function render(inventory: Inventory): string {
       ", and " +
       code("html_preview") +
       " are registered by hand to return image content (" +
-      at("apps/server/src/mcp/McpHttpServer.ts", /const imageToolRegistration/) +
+      at(
+        "apps/server/src/mcp/McpHttpServer.ts",
+        /const imageToolRegistration/,
+        "imageToolRegistration",
+      ) +
       "), outside the toolkit path every other tool uses.",
     "",
     "## Descriptions and examples",
@@ -671,11 +670,9 @@ function render(inventory: Inventory): string {
         ({ code: failureCode, hits }) =>
           "- " +
           code(failureCode) +
-          " is raised from " +
-          hits.length +
-          " places in " +
+          " is raised across " +
           code("apps/server/src/mcp") +
-          (hits.length ? ", for example " + hits.slice(0, 4).map(ref).join(", ") : "") +
+          (hits.length ? ", for example in " + files(hits).slice(0, 4).join(", ") : "") +
           ". The code does not say whether to retry, fix the input, or ask the user.",
       )
       .join("\n"),
@@ -689,6 +686,7 @@ function render(inventory: Inventory): string {
       at(
         "packages/contracts/src/orchestratorMcpFailure.ts",
         /export class OrchestratorMcpFailure /,
+        "OrchestratorMcpFailure",
       ) +
       "): no retry hint, offending field, or next action. Recovery advice, where it exists, lives in message text.",
     "",
@@ -844,36 +842,29 @@ function render(inventory: Inventory): string {
     "",
     "## Drift between docs and the registry",
     "",
-    "Scanned " +
-      DOC_FILES().length +
-      " Markdown files (docs, structure, skills, root guides) and " +
-      PROMPT_FILES().length +
-      " agent prompt sources in " +
+    "Scanned the Markdown docs (docs, structure, skills, root guides) and the agent prompt sources in " +
       code("packages/provider-core/src/server") +
       ".",
     "",
     unknownMentions.length === 0
-      ? "No doc or prompt names a tool that does not exist (" +
-        a.toolMentionsChecked +
-        " tool-name mentions checked)."
+      ? "No doc or prompt names a tool that does not exist."
       : "Names that look like tools but are not in the registry:\n\n" +
         table(
           ["Name", "Where"],
           unknownMentions.map(([token, mentions]) => [
             code(token),
-            mentions
-              .slice(0, 3)
-              .map((mention) => ref(mention.ref))
-              .join(", ") + (mentions.length > 3 ? " (+" + (mentions.length - 3) + ")" : ""),
+            ((where) =>
+              where.slice(0, 3).join(", ") +
+              (where.length > 3 ? " (+" + (where.length - 3) + ")" : ""))(
+              files(mentions.map((mention) => mention.ref)),
+            ),
           ]),
         ),
     "",
     a.cliDrift.length === 0
-      ? "All " +
-        a.cliChecked +
-        " " +
+      ? "Every " +
         code("goat ...") +
-        " invocations in the docs resolve to a real command and its flags."
+        " invocation in the docs resolves to a real command and its flags."
       : "CLI invocations in the docs that do not resolve:\n\n" +
         table(
           ["Text", "Problem", "Where"],
@@ -969,7 +960,11 @@ function rankedFixes(
         " parameters have no description, and " +
         n.allUndescribed +
         " tools describe none. Extend the catalog test at " +
-        at("apps/server/src/mcp/toolkits/core.test.ts", /publishes unique tool names/) +
+        at(
+          "apps/server/src/mcp/toolkits/core.test.ts",
+          /publishes unique tool names/,
+          "publishes unique tool names",
+        ) +
         " to fail on an undescribed field.",
     },
     {
@@ -1068,16 +1063,15 @@ function rankedFixes(
   ];
 }
 
-const inventory = await collectInventory();
-const output = render(inventory);
-const target = NodePath.join(repoRoot, OUTPUT);
-if (process.argv.includes("--check")) {
+if (import.meta.main) {
+  const target = NodePath.join(repoRoot, OUTPUT);
+  const output = render(await collectInventory());
   const current = NodeFS.existsSync(target) ? NodeFS.readFileSync(target, "utf8") : "";
-  if (current !== output) {
+  if (!process.argv.includes("--check")) {
+    NodeFS.writeFileSync(target, output);
+    process.stdout.write("Wrote " + OUTPUT + "\n");
+  } else if (current !== output) {
     process.stderr.write(OUTPUT + " is stale. Run: pnpm agent-surface:audit\n");
     process.exitCode = 1;
   }
-} else {
-  NodeFS.writeFileSync(target, output);
-  process.stdout.write("Wrote " + OUTPUT + "\n");
 }

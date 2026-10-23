@@ -13,6 +13,7 @@ import { Tool, Toolkit } from "effect/ai";
 import * as FleetHostStates from "../../../fleet/health/FleetHostStates.ts";
 import * as HostHealthMonitor from "../../../fleet/health/HostHealthMonitor.ts";
 import * as Rescheduler from "../../../fleet/health/Rescheduler.ts";
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -52,6 +53,7 @@ const HostDrainTool = Tool.make(agentSurfaceRegistry["host.drain"].name, {
 
 const ThreadRescheduleTool = Tool.make(agentSurfaceRegistry["thread.reschedule"].name, {
   ...shared,
+  dependencies: [...shared.dependencies, Profiles.PermissionProfiles],
   description: agentSurfaceRegistry["thread.reschedule"].description,
   parameters: GoatThreadRescheduleInput,
   success: GoatThreadRescheduleResult,

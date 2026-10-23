@@ -1,3 +1,4 @@
+import * as PrepareAuthorization from "./SshHostPrepareAuthorization.ts";
 import packageJson from "../../package.json" with { type: "json" };
 import * as MaintenanceAudit from "../maintenance/MaintenanceAudit.ts";
 import * as HomeRequests from "../provider/CodexHomeRequests.ts";
@@ -214,6 +215,7 @@ export const make = (
     const providerHostSync = yield* Effect.serviceOption(ProviderHostSync.ProviderHostSync);
     const providerSettings = yield* Effect.serviceOption(ProviderSettings.ProviderSettings);
     const threads = yield* Threads.ThreadManagementService;
+    const authorizePrepare = yield* PrepareAuthorization.make;
     const environment = yield* Environment.ServerEnvironment;
     const diagnosis = yield* Diagnosis.ProviderDiagnosisRouting;
     const fs = yield* FileSystem.FileSystem;
@@ -1035,7 +1037,9 @@ export const make = (
                     ? "diagnosis_failed"
                     : "operation_failed";
               const message = revoked
-                ? "The approving session no longer has permission. Ask again."
+                ? !update && caller.kind === "mcp" && caller.scope.thread !== undefined
+                  ? error.message
+                  : "The approving session no longer has permission. Ask again."
                 : expired
                   ? `This approval expired before GOAT could update ${host}. Ask again.`
                   : diagnosing
@@ -1049,7 +1053,12 @@ export const make = (
                   actor: revoked || expired ? "human" : "agent",
                   instruction:
                     revoked || expired
-                      ? "Ask again and approve with a client that has permission."
+                      ? !update &&
+                        revoked &&
+                        caller.kind === "mcp" &&
+                        caller.scope.thread !== undefined
+                        ? PrepareAuthorization.prepareRecovery(host)
+                        : "Ask again and approve with a client that has permission."
                       : `Call goat_call {path:"ssh.host_prepare"} for ${host} to retry setup and diagnosis.`,
                 },
               });
@@ -1127,20 +1136,8 @@ export const make = (
     };
     const prepare: SshHostSetup["Service"]["prepare"] = (input, caller) =>
       Effect.gen(function* () {
-        yield* authorize(caller, "environment:maintain").pipe(
-          Effect.catchTags({
-            // A thread can never gain this grant, so say what it can do instead.
-            EnvironmentAuthorizationError: (error) =>
-              Effect.fail(
-                caller.kind === "mcp" && caller.scope.thread !== undefined
-                  ? new EnvironmentAuthorizationError({
-                      requiredScope: error.requiredScope,
-                      message: `${error.message} GOAT threads never hold it. Ask a person to prepare ${input.host} in Settings → Connections, or call goat_call {path:"ssh.runtime_update"}: when_idle updates an idle host on its own, and now asks a person to approve.`,
-                    })
-                  : error,
-              ),
-          }),
-        );
+        const authorizeCaller = authorizePrepare(caller, input.host);
+        yield* authorizeCaller;
         const generation = aliasGenerations.get(input.host) ?? 0;
         yield* validateManaged(input.host);
         return yield* Deferred.await(
@@ -1154,6 +1151,8 @@ export const make = (
             undefined,
             undefined,
             generation,
+            undefined,
+            authorizeCaller,
           ),
         );
       }).pipe(

@@ -139,6 +139,29 @@ has no `clientRequestId`.
 
 ### Idempotency
 
+**Now.** Writes the registry marks `idempotency: "key"` (thread and SSH thread
+launch, provider add, update, link and remove, worktree remove, project delete)
+reserve their key in `mcp_request_reservations` through
+[ToolAdmission.ts](../../apps/server/src/mcp/ToolAdmission.ts). The key is taken
+where the declaration admits the write, after every caller check, so direct calls
+and `goat_call` share it and a replay passes the checks again. A handler that
+authorizes inside its body (SSH launch's profile and role checks, the worktree
+credential) declares `admission: "handler"` and admits after them. Services also
+authorize inside (provider settings, lane claims), so the reservation records the
+caller's grant as the launch resolves it: its runtime and interaction modes, its
+goatclaw capabilities, ceiling and host allowlist (narrowed by a forwarded ceiling
+or a role's profile), and a client's scopes and read-only state. A replay is
+answered only while the caller still holds at least that grant, with a client's
+scopes reauthorized live. The
+reservation is its own statement, not part of each domain's transaction; the gap
+between it and the recorded outcome is what `unknown` covers. A transient
+refusal that ran nothing frees the key, other failures replay, and a failure that
+may have left effects, an interrupt, or a row an earlier server process left
+running stays `unknown` and never runs again; its refusal names the read that settles
+it, on the same host for a routed write. Only completed keys expire, after
+24 hours. Writes that already deduplicated in their own domain, such as
+`goat_thread_send` and `delegate_task`, keep those receipts for now.
+
 **Proposed.** A write that takes `clientRequestId` follows the rules payment APIs
 settled on ([Stripe](https://docs.stripe.com/api/idempotent_requests),
 [AIP-155](https://google.aip.dev/155)):
@@ -394,9 +417,14 @@ summary, or description contains every word, best first, and `truncated` when mo
 with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
 
-**Proposed (later).** A `core` listing profile shows only the meta tools, the
-operation verbs, and the most used tools. It is opt-in per provider instance and
-measured against the full listing before it becomes a default.
+**Now.** `tools/list` is filtered per caller around Effect's MCP core, which checks one
+visibility predicate for both `tools/list` and `tools/call` and so cannot hide a tool that stays
+callable ([toolListing.ts](../../apps/server/src/mcp/toolListing.ts)). Both listings hide what
+`available.now` refuses for the caller. The server setting `agentToolListing` picks `full` (every
+other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
+`_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. Every
+tool stays callable by each of its names. The default stays `full` until the context-diet flip,
+and a change to the setting sends `notifications/tools/list_changed`.
 
 ## Calling: `goat_call`
 
@@ -428,8 +456,8 @@ destructive, so a client that prompts before destructive tools still prompts bef
 target reached through it. The checked-handler wrapper records the original typed error,
 and `goat_call` uses it only to classify by a literal the envelope's table declares; the
 message is always the text the direct call shows, so free-text reasons the direct path
-scrubs never leave through it. Writes count as unkeyed until the registry gains
-`idempotency`, and routed calls set `meta.host`.
+scrubs never leave through it. A write the registry keys counts as deduplicated when it
+carries a `clientRequestId`, and routed calls set `meta.host`.
 
 **Now.** A direct `tools/call` by a legacy name runs the listed tool. The `/mcp` auth
 middleware swaps the name for the listed one before Effect's MCP core sees the request,
@@ -557,6 +585,11 @@ Around it, a human step reaches an agent in several shapes:
 | Decisions                    | `DecisionItem` by id                                                             | agent or person, per item                | answer delivered as a thread message                                                                                                                             |
 | Cloud launch consent         | `needs_human` from a thread; outside one, a refusal naming a decision GOAT filed | person approving the handoff or decision | agent calls launch again with the same arguments and `handoffId` or `decisionId`; the approval binds a digest of the launch and its holder and starts one launch |
 
+`delegate_task` and `goat_thread_launch` onto a cloud provider have no consent handoff and
+take no `decisionId`: they refuse a turn a person did not start and point to
+`goat_cloud_launch` on the machine that holds the account, since it does not take a remote
+holder while goatclaw is on.
+
 When a handoff resolves or expires, GOAT wakes the thread that asked with a
 queued message naming the next call
 ([HandoffWakeReactor.ts](../../apps/server/src/handoffs/HandoffWakeReactor.ts)).
@@ -614,8 +647,10 @@ give the person a terminal route.
 host. Writes forward the caller's runtime ceiling. Since
 [#758](https://github.com/goat-si/goat/pull/758), a follow-up `thread.send` with
 `host` also forwards the caller's goatclaw ceiling as `permissionProfileCeiling`,
-and the origin refuses a destination that has not shown it enforces ceilings
-instead of falling back to the relay, which would deliver without one. Remote
+and a send that carries one never falls back to the relay, which would deliver
+without it. A destination that has not yet confirmed it enforces ceilings still
+gets the launch or send, and the result's `ceiling` field says so; a launch to a
+destination that cannot accept a ceiling at all is still refused. Remote
 servers built before canonical names answer only to the tool names they shipped with
 ([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)), so the origin sends a
 host-routed call under its canonical name only to a remote whose `serverVersion` is past
@@ -631,7 +666,8 @@ The origin checks the calling thread's capability before forwarding, plus
 as on cordon or SSH setup). This holds for writes that declare no capability of
 their own, such as `thread.watch`. A `host` that names something else, such as a
 git forge or the address of a machine being added, is not listed; a test pins
-which arguments are.
+which arguments are. A write that lets placement pick the machine, such as
+`thread.reschedule` without `targetHost`, picks only among the allowlist.
 A thread launched or sent with a forwarded ceiling is bound to it on the
 destination, so its own calls there are checked against it. Other host-routed writes
 arrive as the origin's dispatch session, and the destination relies on the origin's
@@ -650,7 +686,9 @@ check.
 **Now.** Each MCP call records one anonymous `mcp.tool.invoked` analytics event
 with no ids or text. Orchestration receipts record commands. The decision inbox
 keeps an append-only audit of actor, profile, action, target, and outcome, and
-handoff transitions are events with actors.
+handoff transitions are events with actors. A keyed write's reservation records
+principal, profile id, ceiling, host, path, argument digest, receipt id, and
+outcome.
 
 **Proposed.** Analytics stays anonymous. Every write through the invocation
 function records principal, profile id, effective ceiling, host, path, argument
@@ -833,7 +871,7 @@ Each PR ships on its own and leaves `tools/list` unchanged until the flip.
 | 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774) |
 | 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                 |
 | 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                 |
-| 6   | Idempotency receipts with digest, unknown state, audit columns                | Proposed                                                                                                                                                                   |
+| 6   | Idempotency receipts with digest, unknown state, audit columns                | Started: eight high-risk writes keyed                                                                                                                                      |
 | 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup; then provider syncs and approved provider changes)                       |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
 | 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                 |

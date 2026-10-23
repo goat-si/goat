@@ -445,7 +445,7 @@ const make = Effect.gen(function* () {
           // People read this in Settings; the status tells agents which tool to call.
           message:
             failure.status === "not_ready"
-              ? `GOAT is not running on ${host}. Prepare the host in Hosts, then refresh.`
+              ? `This machine has no ready connection to GOAT on ${host}. Connect it in Settings → Connections, then refresh.`
               : failure.message,
           providers: [],
         }),

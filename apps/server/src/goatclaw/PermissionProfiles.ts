@@ -409,9 +409,11 @@ export const layer = Layer.effect(
         .withTransaction(
           Effect.gen(function* () {
             if (input.decisionId === undefined) {
+              // Only goat_cloud_launch takes a decisionId or handoffId; the thread and task
+              // launches that also land here cannot, so the advice names a route they can take.
               if (threadId === undefined || !(yield* personStartedRun(sql, threadId)))
                 return yield* refusal(
-                  `A cloud launch bills a paid account. Launch it in a turn a person started, or ask with ${goatCallText("decision.request")} offering an option with id "approve" and pass decisionId once a person approves.`,
+                  `A cloud launch bills a paid account, so with goatclaw on it needs a turn a person started. Ask a person to start that turn, or launch with ${goatCallText("cloud_agent.launch")} from a thread on the machine that holds the cloud account; it asks a person to approve this exact launch.`,
                 );
             } else {
               const decision = (yield* sql<{

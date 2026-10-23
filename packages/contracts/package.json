@@ -58,6 +58,10 @@
     "./agentSurface/hosts": {
       "types": "./src/agentSurface/hosts.ts",
       "import": "./src/agentSurface/hosts.ts"
+    },
+    "./agentSurface/listing": {
+      "types": "./src/agentSurface/listing.ts",
+      "import": "./src/agentSurface/listing.ts"
     }
   },
   "scripts": {
