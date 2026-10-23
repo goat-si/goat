@@ -564,7 +564,7 @@ export const layerChains = Layer.effect(
                   message:
                     "Provider instance " +
                     step.instanceId +
-                    " is not configured here; orchestrator_capabilities lists the instances.",
+                    " is not configured here; goat_provider_list lists the instances.",
                 });
               if (
                 !provider.models.some(

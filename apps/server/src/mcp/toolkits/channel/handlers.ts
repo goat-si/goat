@@ -39,7 +39,7 @@ const failureFor = (error: ChannelGatewayError | ChannelLedger.ChannelLedgerErro
           (error.homeEnvironmentId === undefined
             ? ""
             : " Home environment: " + error.homeEnvironmentId + ".") +
-          " If that machine is gone, call channel_bot_home_claim on the machine that should run GOAT Bot."
+          " If that machine is gone, call goat_channel_bot_home_claim on the machine that should run GOAT Bot."
         : error.message,
   });
 

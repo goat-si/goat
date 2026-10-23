@@ -73,7 +73,7 @@ Two callers launch this way:
 
 - `goat_ssh_thread_launch`, when the MCP caller has a thread scope, calls `coordinator.launch`
   with `kind: "thread"`. Without a thread scope it calls `SshRemoteDispatch.launchThread` directly.
-- `delegate_task` with `target.host` and a remote cwd calls `coordinator.launch` with
+- `goat_task_create` with `target.host` and a remote cwd calls `coordinator.launch` with
   `kind: "task"` from `apps/server/src/mcp/OrchestratorMcpService.ts`.
 
 The remote agent reports with `goat_origin_report` (`apps/server/src/mcp/toolkits/remoteReport/tools.ts`).
@@ -143,7 +143,7 @@ uncertain reservations retain capacity across restart. Local run projections and
 dispatches determine completion, so removing a launch watch grants no capacity. An SSH launch requires
 a destination that accepts the inherited ceiling. goatclaw is on or off fleet-wide:
 `apps/server/src/goatclaw/FleetSync.ts` exchanges the policy with every connected host through
-`goat_goatclaw_sync` and keeps the newest change. Launches and follow-up sends go through one rule,
+`goat_permission_profile_sync` and keeps the newest change. Launches and follow-up sends go through one rule,
 `syncBeforeForwarding`: sync the destination first and never refuse because that sync is pending or
 outdated, so hub steering cannot stall on it. A remote follow-up send forwards the caller's ceiling
 and takes a lane that rides the target thread's dispatch. Bulk creation and remote cloud-holder forwarding refuse while enabled until

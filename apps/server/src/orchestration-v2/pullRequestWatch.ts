@@ -262,8 +262,8 @@ function pullRequestWatchMessage(input: {
     ),
     "",
     exhausted
-      ? `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row. Call watch_pull_request to watch it again.`
-      : "Look into each item and act on it as your task requires. GOAT keeps watching and wakes you on the next change, so end your turn when you are done. When you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox.",
+      ? `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row. Call goat_pull_request_watch to watch it again.`
+      : "Look into each item and act on it as your task requires. GOAT keeps watching and wakes you on the next change, so end your turn when you are done. When you hand the work back to the user, call goat_pull_request_unwatch first so the thread returns to their inbox.",
   ].join("\n");
   const failed = changes.some(
     (change) => change.kind === "checks-failed" || change.kind === "conflicting",

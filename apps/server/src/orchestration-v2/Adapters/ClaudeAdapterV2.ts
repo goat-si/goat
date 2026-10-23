@@ -5,6 +5,15 @@ import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
 import {
+  CLAUDE_MEMORY_READ_TOOLS,
+  CLAUDE_MEMORY_SOURCE_TOOL,
+  CLAUDE_MEMORY_WRITE_TOOLS,
+  CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS,
+  claudeAllowedToolName,
+  claudeGoatToolName,
+  claudeGoatMemoryTool,
+} from "./goatMcpToolNames.ts";
+import {
   dynamicToolTitle,
   formatReadToolLabel,
   formatSearchToolLabel,
@@ -1483,55 +1492,18 @@ export const CLAUDE_GOAT_MCP_TOOL_WILDCARD = "mcp__goat__*";
 const CLAUDE_CUA_MCP_TOOL_PREFIX = `mcp__${McpProviderSession.CUA_MCP_SERVER_NAME}__`;
 const CLAUDE_CUA_MCP_TOOL_WILDCARD = `${CLAUDE_CUA_MCP_TOOL_PREFIX}*`;
 
-// Automatic approval policy is separate from Tool.Readonly metadata.
-// Preserve html_render preapproval; reading another thread still requires approval.
-export const CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
-  "mcp__goat__orchestrator_capabilities",
-  "mcp__goat__list_scheduled_tasks",
-  "mcp__goat__goat_thread_list",
-  "mcp__goat__goat_thread_wait",
-  "mcp__goat__goat_thread_status",
-  "mcp__goat__goat_thread_watch_list",
-  "mcp__goat__goat_pending_request_list",
-  "mcp__goat__goat_pending_request_read",
-  "mcp__goat__goat_thread_configuration",
-  "mcp__goat__goat_thread_transfers",
-  "mcp__goat__goat_worktree_status",
-  "mcp__goat__goat_worktree_list",
-  "mcp__goat__goat_worktree_inventory",
-  "mcp__goat__goat_project_list",
-  "mcp__goat__goat_project_read",
-  "mcp__goat__goat_thread_search",
-  "mcp__goat__goat_preview_list",
-  "mcp__goat__goat_environment_read",
-  "mcp__goat__goat_host_status",
-  "mcp__goat__goat_provider_diagnose",
-  "mcp__goat__goat_queue_list",
-  "mcp__goat__goat_queue_read",
-  "mcp__goat__goat_review_findings_export",
-  "mcp__goat__html_preview",
-  "mcp__goat__html_render",
-];
+export {
+  CLAUDE_MEMORY_READ_TOOLS,
+  CLAUDE_MEMORY_WRITE_TOOLS,
+  CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS,
+  claudeGoatToolName,
+};
 
 // Claude Code aborts an HTTP MCP call after 60 s ("The operation timed out.")
 // unless the server config sets `timeout`. GOAT's wait tools (goat_thread_wait,
 // delegate_task mode=wait) legitimately block for up to an hour
 // (MAX_WAIT_TIMEOUT_MS in OrchestratorMcpService), so the budget sits just
 // above that and the server's own wait timeout is what ends a long call.
-export const CLAUDE_MEMORY_READ_TOOLS = [
-  "mcp__goat__memory_list",
-  "mcp__goat__memory_search",
-  "mcp__goat__memory_read",
-  "mcp__goat__memory_history",
-  "mcp__goat__memory_sync_status",
-  "mcp__goat__memory_read_source",
-] as const;
-export const CLAUDE_MEMORY_WRITE_TOOLS = [
-  "mcp__goat__memory_upsert",
-  "mcp__goat__memory_forget",
-  "mcp__goat__memory_revert_resolution",
-] as const;
-
 export const CLAUDE_GOAT_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 
 // The SDK's `allowedTools` only pre-approves tool calls; availability is the
@@ -1583,9 +1555,7 @@ export function claudeMcpQueryOverrides(input: {
   }
   const memory = McpProviderSession.memoryToolAvailability(session);
   const memoryReadTools = memory.read
-    ? CLAUDE_MEMORY_READ_TOOLS.filter(
-        (name) => name !== "mcp__goat__memory_read_source" || memory.source,
-      )
+    ? CLAUDE_MEMORY_READ_TOOLS.filter((name) => name !== CLAUDE_MEMORY_SOURCE_TOOL || memory.source)
     : [];
   const mcpAllowedTools = input.readOnlySandbox
     ? [...CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS, ...memoryReadTools]
@@ -1610,13 +1580,16 @@ export function claudeMcpQueryOverrides(input: {
   return {
     allowedTools: Array.from(
       new Set([
-        ...(input.allowedTools ?? []).filter(
-          (tool) =>
-            !tool.startsWith(CLAUDE_CUA_MCP_TOOL_PREFIX) &&
-            (!input.readOnlySandbox ||
-              !tool.startsWith("mcp__goat__") ||
-              mcpAllowedTools.includes(tool)),
-        ),
+        ...(input.allowedTools ?? [])
+          // A user's own entry may name a GOAT tool as it shipped; Claude calls the listed name.
+          .map(claudeAllowedToolName)
+          .filter(
+            (tool) =>
+              !tool.startsWith(CLAUDE_CUA_MCP_TOOL_PREFIX) &&
+              (!input.readOnlySandbox ||
+                !tool.startsWith("mcp__goat__") ||
+                mcpAllowedTools.includes(tool)),
+          ),
         ...mcpAllowedTools,
         ...cuaAllowedTools,
       ]),
@@ -9083,18 +9056,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 } satisfies PermissionResult);
           }
 
-          if (toolName.startsWith("mcp__goat__memory_")) {
+          const memoryTool = claudeGoatMemoryTool(toolName);
+          if (memoryTool !== undefined) {
             const availability = McpProviderSession.memoryToolAvailability(
               yield* readMcpSession(context.input.threadId),
             );
-            const write = CLAUDE_MEMORY_WRITE_TOOLS.some((name) => name === toolName);
+            const write = CLAUDE_MEMORY_WRITE_TOOLS.some((name) => name === memoryTool);
             if (
               !availability.read ||
               (write &&
                 (!availability.write ||
                   sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) ===
                     "readOnly")) ||
-              (toolName === "mcp__goat__memory_read_source" && !availability.source)
+              (memoryTool === CLAUDE_MEMORY_SOURCE_TOOL && !availability.source)
             ) {
               return {
                 behavior: "deny",
@@ -9107,7 +9081,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // allowedTools is fixed at query creation. Recover the same read-only
           // preapproval here using live authority without replacing the query.
           if (
-            CLAUDE_MEMORY_READ_TOOLS.some((name) => name === toolName) &&
+            CLAUDE_MEMORY_READ_TOOLS.some((name) => name === memoryTool) &&
             sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) === "readOnly"
           ) {
             return { behavior: "allow", updatedInput: toolInput } satisfies PermissionResult;
@@ -9478,7 +9452,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const queryPolicyKey = claudeEffectiveQueryPolicyKey(queryPolicy, {
             ...mcpOverrides,
             allowedTools: mcpOverrides.allowedTools?.filter(
-              (tool) => !tool.startsWith("mcp__goat__memory_"),
+              (tool) => claudeGoatMemoryTool(tool) === undefined,
             ),
           });
           const cuaServer = mcpOverrides.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME];

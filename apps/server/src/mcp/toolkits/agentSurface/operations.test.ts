@@ -13,6 +13,7 @@ import { McpSchema } from "effect/ai";
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 import { McpInvocationContext, type McpInvocationScope } from "../../McpInvocationContext.ts";
 import { makeOperationTokens } from "../../operations/OperationTokens.ts";
+import type { HandoffReader } from "../../operations/handoffReads.ts";
 import { ToolDispatch } from "../../ToolDispatch.ts";
 import { makeOperations } from "./operations.ts";
 
@@ -60,7 +61,7 @@ type Answer = (
 ) => Effect.Effect<McpSchema.CallToolResult>;
 
 /** The verbs over a dispatch that answers from `answer` and records every call. */
-const setup = (answer: Answer) =>
+const setup = (answer: Answer, readHandoff?: HandoffReader) =>
   Effect.gen(function* () {
     const calls: Array<{ readonly name: string; readonly args: unknown }> = [];
     const reads = yield* Queue.unbounded<string>();
@@ -79,7 +80,12 @@ const setup = (answer: Answer) =>
         }),
       ),
     );
-    return { operations: makeOperations(dispatch, tokens), calls, reads };
+    const noHandoffs: HandoffReader = () => Effect.die("no handoff reads");
+    return {
+      operations: makeOperations(dispatch, tokens, readHandoff ?? noHandoffs),
+      calls,
+      reads,
+    };
   });
 const as =
   (scope: McpInvocationScope) =>
@@ -284,6 +290,7 @@ it.effect("cancels through task_cancel, then reads the work again", () =>
     );
     const cancelled = yield* operations.cancel({ operationId });
     expect(calls.map(({ name, args }) => [name, args])).toEqual([
+      ["task_status", { taskId: "task:1" }],
       ["task_cancel", { taskId: "task:1" }],
       ["task_status", { taskId: "task:1" }],
     ]);
@@ -316,4 +323,105 @@ it.effect("refuses another thread's handle as not found and an aged one as expir
     expect(aged).toMatchObject({ reason: "expired" });
     expect(calls).toEqual([]);
   }),
+);
+const pendingSync = {
+  handoffId: "handoff:sync",
+  kind: "approval",
+  title: "Install OpenCode on box?",
+  state: "pending",
+  expiresAt: null,
+  targetPath: "provider.host_sync",
+} as const;
+const syncState = (done: boolean, phase: string) => ({
+  syncId: "sync_1",
+  driver: "opencode",
+  version: null,
+  login: true,
+  startedAt: "2026-10-23T00:00:00.000Z",
+  done,
+  hosts: [{ host: "box", phase, version: null }],
+});
+
+it.effect("follows a provider sync from its approval to the sync it started", () =>
+  Effect.gen(function* () {
+    let handoffState: string = "pending";
+    let status: McpSchema.CallToolResult = answered(syncState(false, "installing"));
+    const readHandoff: HandoffReader = () =>
+      Effect.sync(() =>
+        handoffState === "pending"
+          ? { status: "needs_human", handoff: pendingSync }
+          : ok({ handoff: { ...pendingSync, state: handoffState }, applying: false }),
+      );
+    const { operations, calls } = yield* setup(
+      (name) =>
+        Effect.succeed(
+          name === "goat_provider_sync_cancel" ? answered(syncState(true, "cancelled")) : status,
+        ),
+      readHandoff,
+    );
+    const asked = yield* operations.withOperation(agentSurfaceRegistry["provider.sync"], {
+      status: "needs_human",
+      handoff: pendingSync,
+    });
+    const { operationId, ...ref } = handleOf(asked);
+    expect(ref).toMatchObject({
+      kind: "provider_sync",
+      state: "waiting_human",
+      handoffId: "handoff:sync",
+      cancellable: true,
+    });
+    // Nothing runs before a person approves, so there is nothing to cancel.
+    expect(yield* Effect.flip(operations.cancel({ operationId }))).toMatchObject({
+      reason: "not_cancellable",
+    });
+    expect(calls).toEqual([]);
+
+    handoffState = "completed";
+    expect((yield* operations.read({ operationId })).operation.state).toBe("running");
+    expect(calls.at(-1)).toEqual({
+      name: "goat_provider_sync_status",
+      args: { handoffId: "handoff:sync" },
+    });
+    yield* operations.cancel({ operationId });
+    expect(calls.map(({ name }) => name)).toContain("goat_provider_sync_cancel");
+    expect(calls.find(({ name }) => name === "goat_provider_sync_cancel")?.args).toEqual({
+      syncId: "sync_1",
+    });
+    status = answered(syncState(true, "signed_in"));
+    expect((yield* operations.read({ operationId })).operation.state).toBe("succeeded");
+    status = answered(syncState(true, "failed"));
+    expect((yield* operations.read({ operationId })).operation.state).toBe("failed");
+  }).pipe(as(owner)),
+);
+
+it.effect("reads how a sync approval ended, and a sync the store forgot as unknown", () =>
+  Effect.gen(function* () {
+    let status: McpSchema.CallToolResult = refused("declined", "The person declined this sync.");
+    const { operations } = yield* setup(
+      () => Effect.succeed(status),
+      () => Effect.succeed(ok({ handoff: { ...pendingSync, state: "declined" }, applying: false })),
+    );
+    const viaApproval = handleOf(
+      yield* operations.withOperation(agentSurfaceRegistry["provider.sync"], {
+        status: "needs_human",
+        handoff: pendingSync,
+      }),
+    );
+    const stateOf = (operationId: string) =>
+      operations.read({ operationId }).pipe(Effect.map(({ operation }) => operation.state));
+    expect(yield* stateOf(viaApproval.operationId)).toBe("cancelled");
+    status = refused("start_failed", "The person approved this sync, but it did not start.");
+    expect(yield* stateOf(viaApproval.operationId)).toBe("failed");
+
+    // A person or outside client started it directly: the handle names the sync.
+    const direct = handleOf(
+      yield* operations.withOperation(
+        agentSurfaceRegistry["provider.sync"],
+        ok({ kind: "started", sync: syncState(false, "queued") }),
+      ),
+    );
+    expect(direct.state).toBe("running");
+    status = refused("not_found", "No such sync. It may have finished more than two hours ago.");
+    expect(yield* stateOf(direct.operationId)).toBe("unknown");
+  }).pipe(as(owner)),
 );

@@ -255,11 +255,11 @@ The Stop button sends `run.interrupt` with `holdQueue`. A Stop also holds the qu
 and ends the thread's pull request watches. Any `run.interrupt` ends the turn, not the
 work it delegated: async tasks (`completionWake: "always"`) keep running and still
 wake the thread, so steering an orchestrator does not kill its children. Wait-mode
-tasks (`settled_only`) answer the blocking `delegate_task` call the interrupt ends,
+tasks (`settled_only`) answer the blocking `goat_task_create` call the interrupt ends,
 so they stop with the turn and their wakes are dropped: a `delegated-tasks.stop`
 effect sends the internal `thread.stop` command to each of those child threads and
 every task under them, depth first. This runs after commit, not inside the parent's
-command, because a command holds only its own thread's lock. `task_cancel` sends the
+command, because a command holds only its own thread's lock. `goat_task_cancel` sends the
 same `thread.stop` to its child, and `thread.stop` drops every wake the stopped
 thread's tasks still owe.
 

@@ -904,7 +904,7 @@ it.effect("refuses a launch watch for a remote delegated task", () =>
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure") {
           expect(result.failure.code).toBe("invalid_request");
-          expect(result.failure.message).toContain("task_status");
+          expect(result.failure.message).toContain("goat_task_read");
         }
       }),
   ),
@@ -992,7 +992,7 @@ it.effect("refuses a finished remote review before forwarding or relaying", () =
     expect(result._tag).toBe("Failure");
     if (result._tag !== "Failure") return;
     expect(result.failure).toMatchObject({ code: "thread_not_sendable" });
-    expect(result.failure.message).toContain("delegate_task");
+    expect(result.failure.message).toContain("goat_task_create");
     expect(calls).toHaveLength(0);
     expect(relays).toHaveLength(0);
   }),

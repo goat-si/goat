@@ -631,7 +631,7 @@ const make = Effect.gen(function* () {
     ) {
       return yield* failure(
         "invalid_request",
-        "This remote thread backs a delegated task. Use task_status and task_cancel; its completion is already delivered to its parent.",
+        "This remote thread backs a delegated task. Use goat_task_read and goat_task_cancel; its completion is already delivered to its parent.",
       );
     }
     // Reading the thread checks the caller may see it, here or on the host.

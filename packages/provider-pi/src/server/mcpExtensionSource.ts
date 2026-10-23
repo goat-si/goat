@@ -500,7 +500,15 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   // Tool exposure arrived with registerMcpServer in Pi 0.99. Keep the HTTP
   // bridge as the credential owner: mcp.json overrides native registrations.
   const supportsExposure = "registerMcpServer" in pi && typeof pi.registerMcpServer === "function";
-  const directTools = new Set(["orchestrator_capabilities", "delegate_task", "task_status"]);
+  // Listed names, plus the shipped ones a server from before the listing flip still lists.
+  const directTools = new Set([
+    "goat_provider_list",
+    "goat_task_create",
+    "goat_task_read",
+    "orchestrator_capabilities",
+    "delegate_task",
+    "task_status",
+  ]);
   let deferOptionalTools = supportsExposure;
   let catalog: ReadonlyArray<McpTool> = [];
 
