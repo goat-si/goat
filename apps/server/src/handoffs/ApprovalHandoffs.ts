@@ -102,7 +102,7 @@ const make = Effect.gen(function* () {
         !(yield* handoffs.matchesArgs(handoff, input.binding))
       )
         return yield* invalid(
-          "That approval does not cover this change. Call again without decisionId to request a new one.",
+          "That approval does not cover this change. Call again without that approval id to request a new one.",
         );
       if (handoff.state === "pending" || handoff.state === "opened")
         return yield* invalid("That approval is still open; call again once a person answers it.");
@@ -113,7 +113,9 @@ const make = Effect.gen(function* () {
         handoff.expiresAt !== null &&
         DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)
       )
-        return yield* invalid("That approval expired. Call again without decisionId to ask again.");
+        return yield* invalid(
+          "That approval expired. Call again without that approval id to ask again.",
+        );
     },
   );
 

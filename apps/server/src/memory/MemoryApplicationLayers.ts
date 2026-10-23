@@ -6,11 +6,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as NodeCrypto from "node:crypto";
-import * as McpToolAccess from "../mcp/McpToolAccess.ts";
-import { invocationPermit, memoryError } from "../mcp/toolkits/memory/handlers.ts";
-import { MemoryAdministrationToolkit } from "../mcp/toolkits/memoryAdministration/tools.ts";
 import { parseClaudeMemory } from "../memory/imports/ClaudeMemoryImporter.ts";
 import { parseCodexMemory } from "../memory/imports/CodexMemoryImporter.ts";
 import {
@@ -42,12 +38,7 @@ import * as MemoryWorker from "../memory/MemoryWorker.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 
-import {
-  MemoryHubDisableInput,
-  MemoryHubDisableResult,
-  MemoryHubError,
-  MemorySettingsUpdateInput,
-} from "@goat/contracts";
+import { MemoryHubError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { HttpRouter } from "effect/http";
@@ -79,9 +70,6 @@ export class MemorySourceReadBinding extends Context.Service<
     readonly bind: (sync: MemorySync.MemorySyncService["Service"]) => Effect.Effect<void>;
   }
 >()("goat/memory/MemoryApplicationLayers/MemorySourceReadBinding") {}
-
-const decodeMemoryHubDisable = Schema.decodeUnknownEffect(MemoryHubDisableInput);
-const decodeMemoryHubDisabled = Schema.decodeUnknownEffect(MemoryHubDisableResult);
 
 /**
  * The memory application: core store, sync, hub, imports, snapshot and toolkits. server.ts calls
@@ -420,67 +408,10 @@ export const makeMemoryApplicationLayers = (deps: {
     Layer.provide(layerPersistence),
   );
 
-  const layerMemoryHubAdministration = Layer.effect(
-    ServerSettings.MemoryHubAdministration,
-    Effect.gen(function* () {
-      const sync = yield* MemorySync.MemorySyncService;
-      return ServerSettings.MemoryHubAdministration.of({
-        disableHub: (input, permit) =>
-          decodeMemoryHubDisable(input).pipe(
-            Effect.flatMap((value) =>
-              sync.updateHubSettings(
-                { ...value, action: "configure", settings: { mode: "disabled" } },
-                permit,
-              ),
-            ),
-            Effect.flatMap((result) =>
-              decodeMemoryHubDisabled({
-                settings: result.view.settings,
-                version: result.view.version,
-              }),
-            ),
-            Effect.mapError(memoryError),
-          ),
-      });
-    }),
+  // Production serves the same handler set the catalog and its tests register.
+  const layerMemoryAdministrationToolkit = McpHttpServer.layerMemoryAdministrationToolkit.pipe(
+    Layer.provide(MemorySettings.layer),
   );
-
-  // The application supplies settings administration without exposing hub credentials.
-  const layerMemoryAdministrationToolkit = McpHttpServer.toolkitRegistration(
-    MemoryAdministrationToolkit,
-    McpToolAccess.toLayer(
-      MemoryAdministrationToolkit,
-      Effect.gen(function* () {
-        const service = yield* ServerSettings.MemoryHubAdministration;
-        const memorySettings = yield* MemorySettings.MemorySettingsService;
-        return {
-          memory_settings_get: McpToolAccess.reads(() =>
-            Effect.gen(function* () {
-              return yield* memorySettings.get(yield* invocationPermit("read"));
-            }).pipe(Effect.mapError(memoryError)),
-          ),
-          memory_settings_update: McpToolAccess.writesWithCapability((input) =>
-            Effect.gen(function* () {
-              return yield* memorySettings.update(
-                yield* Schema.decodeUnknownEffect(MemorySettingsUpdateInput)(input),
-                yield* invocationPermit("settings"),
-              );
-            }).pipe(Effect.mapError(memoryError)),
-          ),
-          memory_hub_disable: McpToolAccess.destructive(
-            McpToolAccess.writesWithCapability((input) =>
-              Effect.gen(function* () {
-                return yield* service.disableHub(
-                  yield* decodeMemoryHubDisable(input),
-                  yield* invocationPermit("settings"),
-                );
-              }).pipe(Effect.mapError(memoryError)),
-            ),
-          ),
-        };
-      }),
-    ),
-  ).pipe(Layer.provide(layerMemoryHubAdministration), Layer.provide(MemorySettings.layer));
 
   const layerMemoryToolkits = Layer.mergeAll(
     McpHttpServer.layerMemoryToolkit,
@@ -500,7 +431,6 @@ export const makeMemoryApplicationLayers = (deps: {
     layerMemoryImport,
     layerMemorySnapshot,
     provideMemorySnapshot,
-    layerMemoryHubAdministration,
     layerMemoryToolkits,
     layerMemoryService,
     layerMemoryStarted,

@@ -72,6 +72,7 @@ import {
   wakeAttempt,
 } from "./launchWatch.ts";
 import { runFailure } from "./threadStatus.ts";
+import { wakeThread } from "./threadWake.ts";
 
 /**
  * Wakes a thread when a thread it launched finishes, so orchestrators do not
@@ -802,18 +803,7 @@ export const make = Effect.gen(function* () {
     );
 
   const wake = (launcherThreadId: ThreadId, message: LaunchWatchWake) =>
-    threads.dispatch({
-      type: "message.dispatch",
-      commandId: message.commandId,
-      threadId: launcherThreadId,
-      messageId: message.messageId,
-      text: message.text,
-      notification: message.notification,
-      attachments: [],
-      dispatchMode: { type: "queue_after_active" },
-      createdBy: "agent",
-      creationSource: "server",
-    });
+    wakeThread(threads, launcherThreadId, message);
 
   /**
    * Sends a wake. A refusal the orchestrator will repeat settles it, with a
