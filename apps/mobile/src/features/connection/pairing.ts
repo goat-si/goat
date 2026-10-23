@@ -3,7 +3,7 @@ import { MOBILE_PAIRING_URL_PARAM } from "@goat/shared/mobilePairingLink";
 import { readHostedPairingRequest } from "@goat/shared/remote";
 import * as Schema from "effect/Schema";
 
-/** App-link protocols whose `pair` URL wraps a pairing URL; T3 Code's are kept for older QR codes. */
+/** App-link protocols whose `pair` URL wraps a pairing URL; T3 Code's are kept for older QR codes. goat-rename: legacy */
 const PAIRING_LINK_PROTOCOLS = new Set([
   ...APP_SCHEMES.map((scheme) => `${scheme}:`),
   "t3code:",

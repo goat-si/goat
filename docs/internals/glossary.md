@@ -16,7 +16,7 @@ Terms whose meaning matters across GOAT. Architecture and lifecycle constraints 
 | Turn           | One user-to-agent cycle, a V2 run. Provider work can end before checkpoint and diff work settles.     |
 | Side chat      | A hidden thread with sideChatOf set, opened beside its parent. Lists that hide subagents hide it too. |
 | Activity       | A non-message timeline item, such as a tool action, approval, or failure.                             |
-| T3 home        | The base data directory. Runtime state normally lives under its `userdata` directory.                 |
+| GOAT home      | The base data directory. Runtime state normally lives under its `userdata` directory.                 |
 
 ## Orchestration
 

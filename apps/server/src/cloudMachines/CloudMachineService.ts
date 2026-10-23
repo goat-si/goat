@@ -586,3 +586,23 @@ const make = Effect.gen(function* () {
 });
 
 export const layerWithoutDependencies = Layer.effect(CloudMachineService, make);
+
+/**
+ * Machines this server manages that SSH config does not name yet: their first use readies them
+ * and writes the entry, so host lists show them before it exists. Never probed, because reaching
+ * one means readying it in Boat.
+ */
+export const unconfiguredHosts = (
+  cloud: Option.Option<CloudMachineService["Service"]>,
+  configured: ReadonlyArray<{ readonly alias: string }>,
+) =>
+  Option.isNone(cloud)
+    ? Effect.succeed([])
+    : cloud.value.catalog.pipe(
+        Effect.orElseSucceed(() => []),
+        Effect.map((machines) =>
+          machines
+            .filter((machine) => !configured.some((entry) => entry.alias === machine.alias))
+            .map((machine) => ({ alias: machine.alias, source: "cloud-machine" as const })),
+        ),
+      );

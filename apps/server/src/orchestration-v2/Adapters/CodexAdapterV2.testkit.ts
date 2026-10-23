@@ -192,28 +192,42 @@ export function layer(input: {
     input.driver === undefined
       ? CodexReplay.layerReplay(input.transcript)
       : CodexReplay.layerReplayWithDriver(input.driver);
-  const layerReplayClientFactory = Layer.succeed(CodexAdapterV2.CodexAppServerClientFactory, {
-    open: (openInput) =>
-      Effect.gen(function* () {
-        const context = yield* Layer.build(layerReplay).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderAdapter.ProviderAdapterOpenSessionError({
-                driver: CodexAdapterV2.CODEX_DRIVER_KIND,
-                providerSessionId: openInput.providerSessionId,
-                cause,
-              }),
-          ),
-        );
-        return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
-          Effect.map((client) => withCodexReplayChildMetadata(client, input.transcript)),
-          Effect.provide(context),
-        );
-      }),
+  return layerWithClientFactory({
+    scenario: input.transcript.scenario,
+    clientFactory: {
+      open: (openInput) =>
+        Effect.gen(function* () {
+          const context = yield* Layer.build(layerReplay).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+                  providerSessionId: openInput.providerSessionId,
+                  cause,
+                }),
+            ),
+          );
+          return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+            Effect.map((client) => withCodexReplayChildMetadata(client, input.transcript)),
+            Effect.provide(context),
+          );
+        }),
+    },
   });
+}
+
+/** The real Codex adapter registry over a caller-owned app-server client factory. */
+export function layerWithClientFactory(input: {
+  readonly scenario: string;
+  readonly clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape;
+}) {
+  const layerReplayClientFactory = Layer.succeed(
+    CodexAdapterV2.CodexAppServerClientFactory,
+    input.clientFactory,
+  );
   const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
-    makeReplayServerConfig(input.transcript.scenario).pipe(Effect.orDie),
+    makeReplayServerConfig(input.scenario).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
   const layerRegistry = ProviderAdapterRegistry.layerFromDrivers({
     drivers: [CodexAdapterV2.CodexAdapterV2Driver],
