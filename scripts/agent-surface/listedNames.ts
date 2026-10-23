@@ -22,10 +22,14 @@ export const SHIPPED_TOOL_NAMES: ReadonlyMap<string, string> = new Map(
   ]),
 );
 
-/** Snake-case words that may be tool names, and registry paths as goat_call takes them. */
+/**
+ * Snake-case words that may be tool names, known registry paths, and every explicit goat_call
+ * path value, known or not, so a mistyped path still reaches the unknown-name check.
+ */
 export const toolTokensIn = (text: string): ReadonlyArray<string> => [
   ...[...text.matchAll(/\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g)].map((match) => match[1] ?? ""),
   ...[...text.matchAll(/\b([a-z][a-z0-9_]*\.[a-z][a-z0-9_]*)\b/g)]
     .map((match) => match[1] ?? "")
     .filter((path) => SHIPPED_TOOL_NAMES.has(path)),
+  ...[...text.matchAll(/\bpath:\s*"([^"]+)"/g)].map((match) => match[1] ?? ""),
 ];

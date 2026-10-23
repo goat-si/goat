@@ -74,7 +74,7 @@ const toolMentions = (
       const tokens = texts.flatMap(toolTokensIn);
       for (const token of new Set([...prefixed, ...tokens])) {
         const first = token.split("_")[0] ?? "";
-        if (first === "goat" || firstSegments.has(first) || SHIPPED_TOOL_NAMES.has(token)) {
+        if (first === "goat" || firstSegments.has(first) || token.includes(".")) {
           out.push({ token, ref: { path: file, line: index + 1 } });
         }
       }
