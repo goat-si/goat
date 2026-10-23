@@ -9,7 +9,9 @@ export const schedulerEntries = {
     summary:
       "Read fleet placement status: per host counts, limits, quota windows and why goal work would be refused, plus fallback cooldowns and recent placement decisions.",
     description:
-      "Read fleet placement status from settings fleet.*: per host running and queued threads, maxThreads and allowGoals, quota per provider instance with exhausted windows and reset times, and the reason goal work would be refused there now (caps bind goal work only, never a person's own launch). Also lists fallback steps cooling down after a failure and the last placement decisions with reasons. Pass local:true for this machine only; reading other machines needs a caller allowed to use this machine's SSH keys.",
+      "Read fleet placement status: host thread counts and limits, provider quota summaries, reasons goal work would be refused, fallback cooldowns and recent placement decisions. Fleet caps apply to goal work; they do not limit a person's own launch.",
+    guide:
+      "Status uses settings fleet.*. Each host reports running and queued threads, maxThreads and allowGoals. Quotas identify the provider instance, busiest usage percentage, exhaustion and reset time. Placement decisions include reasons; fallback cooldowns show steps cooling down after failures.\n\nPass local:true to read only this machine. Reading other machines needs a caller allowed to use this machine's SSH keys.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

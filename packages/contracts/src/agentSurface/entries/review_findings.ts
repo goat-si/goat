@@ -8,7 +8,9 @@ export const reviewFindingsEntries = {
     toolkit: "orchestrator",
     summary: "Record review finding decisions and later outcomes",
     description:
-      "After each review round, append finding decisions to the parent thread's app-owned role=review task. Give each finding a stable findingId. Rebutting critical or high severity requires evidence. Changed decisions append history; outcomes require a decision and derive later_confirmed for a rebuttal or unneeded for acceptance. Returns full history and current decisions with latest outcomes. Use clientRequestId for idempotent retries.",
+      "Append review finding decisions and later outcomes to this parent thread's GOAT-owned review task, returning full history and current decisions. Retries must reuse clientRequestId; findingId does not deduplicate.",
+    guide:
+      "After each review round, record finding decisions on its app-owned role='review' task. Give every finding a stable findingId. Rebutting critical or high severity requires evidence.\n\nChanged decisions append history. An outcome requires a prior decision: a rebuttal derives later_confirmed; acceptance derives unneeded. The result includes full history and current decisions with latest outcomes. Use clientRequestId for idempotent retries.",
     effect: "write",
     capability: "none",
     capabilityReason: "Appends to the caller's own review task.",
@@ -25,7 +27,9 @@ export const reviewFindingsEntries = {
     toolkit: "orchestrator",
     summary: "Export review finding history as JSONL",
     description:
-      "Export review ledger entries recorded in [from,to) in this environment, including archived parents. Each line includes taskId, parent threadId, role, reviewerModel and authorModel selections, plus the latest outcome for decisions. Like goat_thread_read, requires orchestration read access. Pass nextCursor unchanged with the same date range to continue; pages use current projections.",
+      "Export review ledger entries as JSONL for [from,to) in this environment, including archived parents. Reads current projections; each decision includes its latest outcome. Pages can change as the ledger changes.",
+    guide:
+      "Each line includes taskId, parent threadId, role, reviewerModel and authorModel selections. Decision lines include the latest outcome. Like goat_thread_read, this requires orchestration read access.\n\nPass nextCursor unchanged with the same date range to continue. Pages use current projections, including archived parents.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
