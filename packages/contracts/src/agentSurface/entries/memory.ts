@@ -9,6 +9,8 @@ export const memoryEntries = {
     summary: "Search memory.",
     description:
       "Search memory (default scope: user). fts is phrase search; use mode substring for partial text. Pass nextCursor unchanged with the same query and scope, even when items is empty. If indexCoverage is partial/unavailable, do not conclude a memory is absent.",
+    guide:
+      "Needs memory:read. fts adds a stemmed and prefix alternative for Korean text. Treat nextCursor as opaque.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -25,7 +27,8 @@ export const memoryEntries = {
     name: "memory_list",
     toolkit: "memory",
     summary: "List one bounded memory page.",
-    description: "List one bounded memory page.",
+    description: "List one bounded page of memory items.",
+    guide: "Needs memory:read. The default scope is user.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -43,6 +46,7 @@ export const memoryEntries = {
     toolkit: "memory",
     summary: "Read one memory item.",
     description: "Read one memory item.",
+    guide: "Needs memory:read.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -59,7 +63,8 @@ export const memoryEntries = {
     name: "memory_history",
     toolkit: "memory",
     summary: "Read one bounded memory history page.",
-    description: "Read one bounded memory history page.",
+    description: "Read one bounded page of a memory item’s revision history.",
+    guide: "Needs memory:read.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -77,6 +82,8 @@ export const memoryEntries = {
     toolkit: "memory",
     summary: "Read memory synchronization status, including disabled or unbound state.",
     description: "Read memory synchronization status, including disabled or unbound state.",
+    guide:
+      "Needs memory:read. Agent calls also include the memory generation hold status when a model is selected.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -95,6 +102,8 @@ export const memoryEntries = {
     summary: "Create or update memory with an explicit memory:write grant.",
     description:
       "Create or update memory with an explicit memory:write grant. Read-only sessions cannot write. Keep one current assertion per item; correct an existing memory by updating it, not creating another. Do not store progress reports, tool output, or execution summaries.",
+    guide:
+      "Needs a session allowed to write as well as the memory:write grant. The content rules above are for the author: nothing filters content automatically.",
     effect: "write",
     capability: "threads.launch",
     hostRoutable: false,
@@ -112,7 +121,8 @@ export const memoryEntries = {
     name: "memory_forget",
     toolkit: "memory",
     summary: "Forget memory.",
-    description: "Forget memory. Requires memory:write and a session allowed to write.",
+    description: "Forget a memory item.",
+    guide: "Needs memory:write and a session allowed to write.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -130,7 +140,9 @@ export const memoryEntries = {
     name: "memory_revert_resolution",
     toolkit: "memory",
     summary: "Revert a memory resolution within its deadline.",
-    description: "Revert a memory resolution within its deadline. Requires memory:write.",
+    description: "Restore an input revision of a resolved memory item.",
+    guide:
+      "Needs memory:write and a session allowed to write. Reversion must occur before the resolution deadline.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -149,7 +161,9 @@ export const memoryEntries = {
     toolkit: "memory",
     summary: "Read original evidence through its owner.",
     description:
-      "Read original evidence through its owner. Requires memory:read and independently granted orchestration:read. No arbitrary path or SSH target.",
+      "Read a memory item’s original conversation evidence through the environment that owns it.",
+    guide:
+      "Needs memory:read and an independently granted orchestration:read scope. Reads recorded source messages, with no arbitrary file path or SSH target.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -166,8 +180,9 @@ export const memoryEntries = {
     name: "memory_hub_disable",
     toolkit: "memoryAdministration",
     summary: "Disable the memory hub using settings:write and a versioned compare-and-swap.",
-    description:
-      "Disable the memory hub using settings:write and a versioned compare-and-swap. Returns only the disabled settings view; no credential.",
+    description: "Disable memory sharing on this device.",
+    guide:
+      "Needs settings:write and a session allowed to write. The update compares the supplied settings version before changing it. The response contains only disabled settings and their version, with no credential.",
     effect: "destructive",
     capability: "settings.write",
     hostRoutable: false,
@@ -185,7 +200,8 @@ export const memoryEntries = {
     name: "memory_settings_get",
     toolkit: "memoryAdministration",
     summary: "Read memory settings and the effective memory model.",
-    description: "Read memory settings and the effective memory model. Requires memory:read.",
+    description: "Read memory settings and the effective memory model.",
+    guide: "Needs memory:read.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -200,7 +216,9 @@ export const memoryEntries = {
     toolkit: "memoryAdministration",
     summary: "Change memory generation, model, or sharing settings.",
     description:
-      "Change memory settings with settings:write. Sync on makes this device the hub; sync off disables sharing. A member can only turn sync off.",
+      "Change memory generation, model, or sharing settings. Enabling sync makes this device the hub; disabling sync turns sharing off.",
+    guide:
+      "Needs settings:write and a session allowed to write. A device enrolled as a member cannot enable hub sync; it can disable sync and can still change generation or model settings.",
     effect: "write",
     capability: "settings.write",
     hostRoutable: false,

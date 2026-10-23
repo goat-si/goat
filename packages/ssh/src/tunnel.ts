@@ -4273,7 +4273,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     )
       return active;
     if (active?.status?.state === "preparing" || active?.status?.state === "update_waiting")
-      return active;
+      if (active.status.state === "update_waiting" || flights.isActive(knownKey)) return active;
     const runner =
       options.resolveCliRunner === undefined ? undefined : yield* options.resolveCliRunner;
     let key = knownKey;
@@ -4317,7 +4317,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         drainAttachment = { entry, intent };
       yield* validateManagedPin(resolvedTarget);
       if (observed?.status?.state === "preparing" || observed?.status?.state === "update_waiting")
-        return observed;
+        if (observed.status.state === "update_waiting" || flights.isActive(key)) return observed;
       const requestedVersion = runner?.archiveVersion?.trim() ?? "";
       const output = yield* runSshCommand(resolvedTarget, {
         batchMode: "yes",
