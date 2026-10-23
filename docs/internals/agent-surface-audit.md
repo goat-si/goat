@@ -204,7 +204,7 @@ Names that look like tools but are not in the registry:
 
 | Name         | Where                                                                                                                    |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `goat_eval`  | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:444, docs/internals/agent-surface.md:860 (+1)         |
+| `goat_eval`  | docs/internals/agent-surface.md:9, docs/internals/agent-surface.md:444, docs/internals/agent-surface.md:868 (+1)         |
 | `run_steps`  | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:144 |
 | `run_script` | structure/decisions/ADR-0022-cua-driver-computer-use.md:130, structure/decisions/ADR-0022-cua-driver-computer-use.md:145 |
 | `list_apps`  | structure/decisions/ADR-0022-cua-driver-computer-use.md:137                                                              |

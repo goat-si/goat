@@ -1,4 +1,5 @@
 import {
+  type GoatclawCeilingAdvice,
   type GoatclawFleetPolicy,
   type GoatclawHostSync,
   type GoatclawSettings,
@@ -83,20 +84,26 @@ export interface HostReach {
  * follow-up sends so the two can never disagree (#786). The destination is synced first, and a
  * sync that is pending or a destination too old to answer it never refuses the call: goatclaw is
  * open by default, and orchestration that keeps running outranks a ceiling the destination may
- * not enforce until it catches up. The ceiling is still forwarded either way.
+ * not enforce until it catches up. The ceiling is still forwarded either way, and the caller gets
+ * advice to put in its result when the destination has not confirmed it enforces one.
  */
 export const syncBeforeForwarding = Effect.fn("GoatclawFleetSync.syncBeforeForwarding")(function* (
   fleet: GoatclawFleetSync["Service"],
   host: string,
-) {
+): Effect.fn.Return<GoatclawCeilingAdvice | undefined> {
   const reach = yield* fleet.ensure(host);
-  if (!reach.enforcesCeilings)
-    yield* Effect.logWarning("goatclaw.ceilingUnconfirmed", {
-      host,
-      state: reach.sync.state,
-      message: reach.sync.message,
-    });
-  return reach;
+  if (reach.enforcesCeilings) return undefined;
+  yield* Effect.logWarning("goatclaw.ceilingUnconfirmed", {
+    host,
+    state: reach.sync.state,
+    message: reach.sync.message,
+  });
+  return {
+    enforcement: "unconfirmed",
+    host,
+    sync: reach.sync,
+    message: `${host} has not confirmed it enforces goatclaw ceilings (sync ${reach.sync.state}), so the forwarded ceiling may not apply there yet.`,
+  };
 });
 
 interface HostRecord extends HostReach {

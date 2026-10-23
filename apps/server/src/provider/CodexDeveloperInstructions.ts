@@ -207,7 +207,7 @@ export function buildCodexDevelopmentContext(): Record<
   string,
   V2TurnStartParams__AdditionalContextEntry
 > {
-  return { t3_code_development: { kind: "application", value: GOAT_DEVELOPMENT_INSTRUCTIONS } };
+  return { goat_code_development: { kind: "application", value: GOAT_DEVELOPMENT_INSTRUCTIONS } };
 }
 
 /**
@@ -226,23 +226,23 @@ export function buildCodexAdditionalContext(
     ...buildCodexDevelopmentContext(),
     ...Object.fromEntries(
       GOAT_ORCHESTRATION_SECTIONS.map((section, index) => [
-        `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,
+        `goat_code_orchestration_${String(index + 1).padStart(2, "0")}`,
         { kind: "application" as const, value: section },
       ]),
     ),
-    t3_code_runtime: {
+    goat_code_runtime: {
       kind: "application",
       value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
     },
     // Its own entry keeps the runtime entry under the per-entry cap.
     ...(typeof toolsAvailable !== "boolean" && toolsAvailable.computerUse === true
       ? {
-          t3_code_runtime_computer_use: {
+          goat_code_runtime_computer_use: {
             kind: "application" as const,
             value: COMPUTER_USE_INSTRUCTIONS,
           },
         }
       : {}),
-    ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
+    ...(tools ? { goat_code_tools: { kind: "application", value: tools } } : {}),
   };
 }
