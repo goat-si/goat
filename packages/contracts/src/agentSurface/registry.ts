@@ -83,11 +83,11 @@ export const agentSurfaceRegistry = {
     summary:
       "Answer an open decision using optionId, or a projected pending question using answers or decision plus reason.",
     description:
-      "Answer an open decision using optionId, or a projected pending question using answers or decision plus reason. Requires the effective permission profile named by the item. Approvals and humanRequired items require a person in an authenticated GOAT client.",
+      "Answer an open decision using optionId, or a projected pending question using answers or decision plus reason. Requires the effective permission profile named by the item, except provider approvals. A provider approval takes a person in a GOAT client or an MCP client token holding orchestration:approve (under its own runtime ceiling), as with goat_pending_request_respond; other humanRequired items require a person in an authenticated GOAT client.",
     effect: "destructive",
     capability: "none",
     capabilityReason:
-      "Checked against the profile the decision names; approvals and humanRequired items need a person.",
+      "Checked against the profile the decision names; approvals need a person or an approve-scoped client.",
     hostRoutable: false,
     requires: "either",
     dryRun: "unsupported",
@@ -1066,9 +1066,9 @@ export const agentSurfaceRegistry = {
       openWorldHint: false,
     },
   }),
-  "memory.read_source": entry({
+  "memory.source_read": entry({
     resource: "memory",
-    verb: "read_source",
+    verb: "source_read",
     name: "memory_read_source",
     toolkit: "memory",
     summary: "Read original evidence through its owner.",
@@ -1103,9 +1103,9 @@ export const agentSurfaceRegistry = {
       openWorldHint: false,
     },
   }),
-  "memory.settings_get": entry({
+  "memory.settings_read": entry({
     resource: "memory",
-    verb: "settings_get",
+    verb: "settings_read",
     name: "memory_settings_get",
     toolkit: "memoryAdministration",
     summary: "Read memory settings and the effective memory model.",
@@ -2025,9 +2025,9 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
-  "preview.wait_for": entry({
+  "preview.wait": entry({
     resource: "preview",
-    verb: "wait_for",
+    verb: "wait",
     name: "preview_wait_for",
     toolkit: "preview",
     summary: "Wait for preview page condition",

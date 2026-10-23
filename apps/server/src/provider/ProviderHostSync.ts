@@ -65,13 +65,14 @@ import {
   type SshHostCaller,
 } from "../sshRemote/SshHostAuthorization.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
-import { makeApprovedSyncs } from "./approvedSyncs.ts";
+import { HOST_SYNC_PATH, makeApprovedSyncs } from "./approvedSyncs.ts";
 import * as ProviderAuth from "./ProviderAuthService.ts";
 import * as Diagnosis from "./ProviderDiagnosisService.ts";
 import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydration.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import {
+  describeInstallFailure,
   hostPlatform,
   installCommand,
   installMethod,
@@ -79,9 +80,10 @@ import {
   parseDeviceLogin,
   recipeFor,
   relayableBrowserUrl,
+  versionCore,
 } from "./ProviderHostSyncRecipes.ts";
 
-export const HOST_SYNC_PATH = "provider.host_sync";
+export { HOST_SYNC_PATH };
 const MATRIX_TOOL = "goat_provider_host_matrix";
 const SYNC_TOOL = "goat_provider_sync";
 const STATUS_TOOL = "goat_provider_sync_status" as const;
@@ -125,18 +127,6 @@ const classify = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailu
   return { status: "unreachable", message };
 };
 
-/** Safe summary of a failed installer; the raw output never leaves this process. */
-export function describeInstallFailure(exitCode: number | null, output: string): string {
-  if (exitCode === null) return "The installer did not finish within 10 minutes.";
-  if (/EACCES|permission denied/iu.test(output))
-    return "The installer could not write its install folder for this user. Fix npm's global prefix or install it once by hand.";
-  if (/ETARGET|notarget|No matching version/iu.test(output))
-    return "That version is not published. Pick another version or latest.";
-  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|Could not resolve host/iu.test(output))
-    return "The installer could not reach the network from this machine.";
-  return `The installer exited with code ${exitCode}.`;
-}
-
 type StatePatch = Partial<Omit<ProviderSyncHostState, "login" | "message">> & {
   readonly message?: string;
   readonly login?: ProviderSyncLogin | undefined;
@@ -145,6 +135,7 @@ interface HostTask {
   state: ProviderSyncHostState;
   finished: boolean;
   remoteSyncId?: string;
+  onFinished?: Effect.Effect<void>;
 }
 interface SyncOperation {
   readonly syncId: string;
@@ -157,11 +148,8 @@ interface SyncOperation {
   /** Callers who may cancel and see sign-in codes: requester, approver, outside client. */
   readonly owners: Set<string>;
   fibers: Array<Fiber.Fiber<unknown, unknown>>;
-}
-interface PendingApproval {
-  readonly input: ProviderSyncInput;
-  readonly requester: string;
-  readonly expiresAtMs: number;
+  /** Approvals that record this sync's result when its last host finishes. */
+  readonly settlers: Array<(state: ProviderSyncState) => Effect.Effect<void>>;
 }
 
 export class ProviderHostSync extends Context.Service<
@@ -190,6 +178,8 @@ export class ProviderHostSync extends Context.Service<
     ) => Effect.Effect<Handoff, HandoffError | EnvironmentAuthorizationError>;
     /** Waits until every host of a sync has finished, without polling. */
     readonly awaitDone: (syncId: string) => Effect.Effect<ProviderSyncState, ProviderHostSyncError>;
+    /** Starts approved syncs a stop left unstarted and settles ones it interrupted. */
+    readonly resumeApprovals: Effect.Effect<void, HandoffError>;
   }
 >()("goat/provider/ProviderHostSync") {}
 
@@ -214,8 +204,6 @@ const make = Effect.gen(function* () {
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const platform = hostPlatform(runtimePlatform);
   const operations = new Map<string, SyncOperation>();
-  const approvals = new Map<string, PendingApproval>();
-  const approvedSyncs = makeApprovedSyncs(handoffs);
   const installers = yield* Semaphore.make(MAX_CONCURRENT_INSTALLERS);
 
   const readCeiling = (caller: SshHostCaller) =>
@@ -502,7 +490,7 @@ const make = Effect.gen(function* () {
   });
 
   const update = (task: HostTask, next: StatePatch, finished = false) =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
       const { login, message, ...rest } = next;
       const base = { ...task.state, ...rest };
       const withMessage =
@@ -513,15 +501,26 @@ const make = Effect.gen(function* () {
             ? (({ login: _l, ...state }) => state)(withMessage)
             : { ...withMessage, login }
           : withMessage;
-      if (finished) task.finished = true;
+      if (!finished) return Effect.void;
+      task.finished = true;
+      return task.onFinished ?? Effect.void;
     });
+
+  /** Uninterruptible so a cancel that interrupts the last host's fiber cannot drop the record. */
+  const settleIfDone = (operation: SyncOperation) =>
+    Effect.suspend(() =>
+      operation.hosts.some((task) => !task.finished)
+        ? Effect.void
+        : Effect.forEach(operation.settlers.splice(0), (settle) => settle(view(operation)), {
+            discard: true,
+          }).pipe(Effect.uninterruptible),
+    );
 
   const prune = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const cutoff = now - SYNC_RETENTION_MS;
     for (const [id, operation] of operations)
       if (operation.startedAtMs < cutoff) operations.delete(id);
-    for (const [id, approval] of approvals) if (approval.expiresAtMs < now) approvals.delete(id);
   });
 
   const newOperation = (
@@ -530,6 +529,7 @@ const make = Effect.gen(function* () {
     login: boolean,
     hosts: ReadonlyArray<string | null>,
     owners: ReadonlyArray<string>,
+    settle?: SyncOperation["settlers"][number],
   ) =>
     Effect.gen(function* () {
       yield* prune;
@@ -545,7 +545,9 @@ const make = Effect.gen(function* () {
           operation.hosts.every((task) => hosts.includes(task.state.host)),
       );
       if (same !== undefined) {
+        // No yield since `active` was read, so the sync cannot finish before this settler joins.
         for (const owner of owners) same.owners.add(owner);
+        if (settle !== undefined) same.settlers.push(settle);
         return { operation: same, fresh: false };
       }
       if (active.length >= MAX_ACTIVE_SYNCS)
@@ -567,7 +569,9 @@ const make = Effect.gen(function* () {
         })),
         owners: new Set(owners),
         fibers: [],
+        settlers: settle === undefined ? [] : [settle],
       };
+      for (const task of operation.hosts) task.onFinished = settleIfDone(operation);
       operations.set(operation.syncId, operation);
       return { operation, fresh: true };
     });
@@ -912,38 +916,64 @@ const make = Effect.gen(function* () {
     message: `GOAT on ${host} returned an unreadable sync state.`,
   });
 
-  const start = (
-    input: ProviderSyncInput,
-    caller: SshHostCaller,
-    alsoOwnedBy: ReadonlyArray<string> = [],
-  ) =>
+  const resolveRequest = (input: ProviderSyncInput) =>
     Effect.gen(function* () {
-      const login = input.login ?? true;
       const localVersion = (yield* localProviders).find(
         (provider) => provider.driver === input.driver,
       )?.version;
       const requested = input.version ?? (localVersion ? versionCore(localVersion) : "latest");
-      const version = requested === "latest" || requested === null ? null : requested;
-      const hosts = input.hosts === undefined ? [null] : [...new Set(input.hosts)];
-      const { operation, fresh } = yield* newOperation(input.driver, version, login, hosts, [
-        callerKey(caller),
-        ...alsoOwnedBy,
-      ]);
-      if (!fresh) return { kind: "started" as const, sync: view(operation) };
-      const owner = ownerSession(caller);
-      yield* Effect.forEach(
-        operation.hosts,
-        (task) =>
-          fork(
-            operation,
-            task.state.host === null
-              ? runLocal(operation, task, owner)
-              : runRemote(operation, task, task.state.host, caller),
-          ),
-        { discard: true },
-      );
-      return { kind: "started" as const, sync: view(operation) };
+      return {
+        driver: input.driver,
+        version: requested === "latest" || requested === null ? null : requested,
+        login: input.login ?? true,
+        hosts: input.hosts === undefined ? [null] : [...new Set(input.hosts)],
+      };
     });
+  type SyncRequest = Effect.Success<ReturnType<typeof resolveRequest>>;
+
+  const launch = (
+    request: SyncRequest,
+    caller: SshHostCaller,
+    owners: ReadonlyArray<string>,
+    settle?: SyncOperation["settlers"][number],
+  ) =>
+    Effect.gen(function* () {
+      const { driver, version, login, hosts } = request;
+      const created = yield* newOperation(driver, version, login, hosts, owners, settle);
+      const { operation } = created;
+      const owner = ownerSession(caller);
+      if (created.fresh)
+        yield* Effect.forEach(
+          operation.hosts,
+          (task) =>
+            fork(
+              operation,
+              task.state.host === null
+                ? runLocal(operation, task, owner)
+                : runRemote(operation, task, task.state.host, caller),
+            ),
+          { discard: true },
+        );
+      return view(operation);
+    });
+
+  const start = (input: ProviderSyncInput, caller: SshHostCaller) =>
+    resolveRequest(input).pipe(
+      Effect.flatMap((request) => launch(request, caller, [callerKey(caller)])),
+      Effect.map((sync) => ({ kind: "started" as const, sync })),
+    );
+
+  const approvedSyncs = yield* makeApprovedSyncs(handoffs, {
+    prepare: (input, sessionId, requester) =>
+      authorizeSshHost(sessions, { kind: "client", sessionId }, "providers:manage").pipe(
+        Effect.andThen(resolveRequest(input)),
+        Effect.map((request) => ({ request, sessionId, requester })),
+        Effect.provideContext(context),
+      ),
+    launch: ({ request, sessionId, requester }, settle) =>
+      launch(request, { kind: "client", sessionId }, [`session:${sessionId}`, requester], settle),
+    isTracked: (syncId) => operations.has(syncId),
+  });
 
   const requestApproval = (
     input: ProviderSyncInput,
@@ -995,12 +1025,6 @@ const make = Effect.gen(function* () {
           expiresAt: DateTime.add(yield* DateTime.now, { minutes: 15 }),
         })
         .pipe(Effect.mapError(() => fail("unavailable", "Could not ask for approval. Try again.")));
-      if (!approvals.has(handoff.handoffId))
-        approvals.set(handoff.handoffId, {
-          input,
-          requester: callerKey(caller),
-          expiresAtMs: (yield* Clock.currentTimeMillis) + 15 * 60_000,
-        });
       return {
         kind: "needs_human" as const,
         handoff,
@@ -1033,13 +1057,15 @@ const make = Effect.gen(function* () {
     caller: SshHostCaller,
   ) {
     yield* readCeiling(caller);
-    const syncId =
-      input.syncId ??
-      (input.handoffId === undefined ? undefined : approvedSyncs.syncId(input.handoffId));
-    if (syncId === undefined)
-      return yield* input.handoffId === undefined
-        ? fail("invalid_request", "Pass syncId or handoffId.")
-        : approvedSyncs.explain(input.handoffId, caller);
+    if (input.syncId === undefined && input.handoffId === undefined)
+      return yield* fail("invalid_request", "Pass syncId or handoffId.");
+    const approved =
+      input.syncId === undefined && input.handoffId !== undefined
+        ? yield* approvedSyncs.lookup(input.handoffId, caller)
+        : undefined;
+    const syncId = input.syncId ?? approved?.syncId ?? "";
+    // A settled approval keeps its result, without sign-in codes, after this process forgets it.
+    if (!operations.has(syncId) && approved?.result !== undefined) return approved.result;
     const operation = yield* find(syncId);
     const state = view(operation);
     if (operation.owners.has(callerKey(caller)) || (yield* canManage(caller))) return state;
@@ -1084,27 +1110,9 @@ const make = Effect.gen(function* () {
     input: HandoffRespondInput,
     sessionId: AuthSessionId,
   ) {
-    if (input.action !== "completed") {
-      const handoff = yield* handoffs.respond(input, sessionId);
-      if (handoff.state !== "opened") approvals.delete(input.handoffId);
-      return handoff;
-    }
-    yield* authorizeSshHost(sessions, { kind: "client", sessionId }, "providers:manage");
-    // Taken before any further wait, so two concurrent approvals start one sync.
-    const now = yield* Clock.currentTimeMillis;
-    const pending = approvals.get(input.handoffId);
-    approvals.delete(input.handoffId);
-    if (pending === undefined || pending.expiresAtMs < now)
-      return yield* new HandoffError({ reason: "expired" });
-    const handoff = yield* handoffs
-      .respond(input, sessionId)
-      .pipe(Effect.tapError(() => Effect.sync(() => approvals.set(input.handoffId, pending))));
-    if (handoff.state === "completed")
-      yield* start(pending.input, { kind: "client", sessionId }, [pending.requester]).pipe(
-        Effect.tap((started) => approvedSyncs.started(input.handoffId, started.sync.syncId)),
-        Effect.catchCause((cause) => approvedSyncs.failed(input.handoffId, cause)),
-      );
-    return handoff;
+    if (input.action === "completed")
+      yield* authorizeSshHost(sessions, { kind: "client", sessionId }, "providers:manage");
+    return yield* approvedSyncs.respond(input, sessionId);
   });
 
   const provided =
@@ -1124,16 +1132,8 @@ const make = Effect.gen(function* () {
         Effect.tap((operation) => Fiber.awaitAll(operation.fibers)),
         Effect.map(view),
       ),
+    resumeApprovals: approvedSyncs.resume,
   });
 });
-
-/** `codex-cli 0.42.0` and `0.42.0 (Claude Code)` both pin to 0.42.0. */
-function versionCore(version: string): string | null {
-  return (
-    /\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20}){0,4})?/u.exec(
-      version,
-    )?.[0] ?? null
-  );
-}
 
 export const layer = Layer.effect(ProviderHostSync, make);
