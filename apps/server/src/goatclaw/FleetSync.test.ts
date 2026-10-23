@@ -181,7 +181,7 @@ describe("GoatclawFleetSync", () => {
           });
           const launch = yield* FleetSync.syncBeforeForwarding(local.sync, "box");
           const send = yield* FleetSync.syncBeforeForwarding(local.sync, "box");
-          expect(launch.enforcesCeilings).toBe(false);
+          expect(launch).toMatchObject({ enforcement: "unconfirmed", host: "box" });
           expect(send).toEqual(launch);
           // Neither call is refused, and each retries the sync so the ceiling lands once it can.
           expect(attempts).toBe(2);

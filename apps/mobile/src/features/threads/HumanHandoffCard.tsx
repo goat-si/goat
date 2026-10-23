@@ -1,4 +1,7 @@
-import { codexRouteErrorMessage } from "@goat/client-runtime/state/provider-instance-display";
+import {
+  codexRouteErrorMessage,
+  handoffRespondErrorMessage,
+} from "@goat/client-runtime/state/provider-instance-display";
 import { computerUseGrantLabel } from "@goat/client-runtime/computerUseGrant";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import * as DateTime from "effect/DateTime";
@@ -197,7 +200,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
           setError(
             isProviderHome
               ? codexRouteErrorMessage(squashAtomCommandFailure(result))
-              : "Could not update this handoff. It may already be resolved or expired.",
+              : handoffRespondErrorMessage(squashAtomCommandFailure(result)),
           );
       }
     } finally {
