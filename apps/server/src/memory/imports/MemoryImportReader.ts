@@ -24,6 +24,7 @@ import type {
   ImportSnapshot,
   MemoryImportReaderShape,
 } from "./MemoryImportTypes.ts";
+import { isSupportedGitVersion } from "./gitSupport.ts";
 
 const CONFIG = "[core]\n\trepositoryformatversion = 0\n\tbare = true\n";
 const PROCESS_LIMIT = 8 * 1024 * 1024;
@@ -888,8 +889,7 @@ export const acquireMemoryImportReader = (config: MemoryImportReaderConfig) =>
                   ),
                 );
               const version = (yield* git(["--version"], 256)).toString("utf8");
-              // Support policy: Git 2.48–2.99 only, with --no-lazy-fetch on every repository call. Unknown versions refuse.
-              if (!/^git version 2\.(?:4[8-9]|[5-9][0-9])\.[0-9]+(?:\s|$)/.test(version))
+              if (!isSupportedGitVersion(version))
                 return yield* Effect.fail(error("source_unreadable"));
               const run = (args: readonly string[], cap?: number) =>
                 git(["--no-lazy-fetch", ...args], cap);

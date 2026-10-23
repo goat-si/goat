@@ -203,12 +203,13 @@ Scanned the Markdown docs (docs, structure, skills, root guides) and the agent p
 
 Names that look like tools but are not in the registry:
 
-| Name         | Where                                                   |
-| ------------ | ------------------------------------------------------- |
-| `goat_eval`  | docs/internals/agent-surface.md                         |
-| `run_steps`  | structure/decisions/ADR-0022-cua-driver-computer-use.md |
-| `run_script` | structure/decisions/ADR-0022-cua-driver-computer-use.md |
-| `list_apps`  | structure/decisions/ADR-0022-cua-driver-computer-use.md |
+| Name           | Where                                                   |
+| -------------- | ------------------------------------------------------- |
+| `goat_eval`    | docs/internals/agent-surface.md                         |
+| `list_changed` | docs/internals/agent-surface.md                         |
+| `run_steps`    | structure/decisions/ADR-0022-cua-driver-computer-use.md |
+| `run_script`   | structure/decisions/ADR-0022-cua-driver-computer-use.md |
+| `list_apps`    | structure/decisions/ADR-0022-cua-driver-computer-use.md |
 
 CLI invocations in the docs that do not resolve:
 

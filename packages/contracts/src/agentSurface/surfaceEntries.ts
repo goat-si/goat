@@ -25,6 +25,7 @@ export const metaSurfaceEntries = {
     verb: "describe",
     name: "goat_describe",
     toolkit: "agentSurface",
+    listing: "core",
     summary: "Find GOAT capabilities and whether this caller can use them",
     description:
       "Find GOAT capabilities and how to call them. query takes words or a tool name: exact names come first, then paths with every word, then paths sharing some, with matchedWords. total, truncated and nextCursor say what else matched; a short or partial result never means nothing else exists. path takes a resource for its paths, or a path or tool name for its schemas and availability for this caller.",
@@ -42,6 +43,7 @@ export const metaSurfaceEntries = {
     verb: "call",
     name: "goat_call",
     toolkit: "agentSurface",
+    listing: "core",
     summary: "Call any GOAT capability by path and get one result shape",
     description:
       "Call one GOAT capability by path, canonical name or legacy tool name, with args exactly as that tool takes them; it runs the same checks as a direct call and adds no permission. Returns status ok with value, error with code, reason and retryable, or needs_human with a handoff: a person must finish a step, so do not retry; read the handoff's state.",

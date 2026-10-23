@@ -5602,10 +5602,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               threadId,
               renders.map((row) => {
                 const item = parseEncodedPayload(row.payload_json);
-                return {
-                  toolName: typeof item.toolName === "string" ? item.toolName : null,
-                  output: item.output,
-                };
+                const toolName = typeof item.toolName === "string" ? item.toolName : null;
+                return { toolName, input: item.input, output: item.output };
               }),
             ),
           ]),

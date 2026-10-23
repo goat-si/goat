@@ -702,7 +702,7 @@
   "packages/contracts/src/pullRequest.ts": { "lines": 1018 },
   "packages/contracts/src/relay.ts": { "lines": 1282 },
   "packages/contracts/src/rpc.ts": { "lines": 2946 },
-  "packages/contracts/src/settings.ts": { "lines": 2253 },
+  "packages/contracts/src/settings.ts": { "lines": 2239 },
   "packages/effect-acp/scripts/generate.ts": { "nonNull": 1 },
   "packages/effect-acp/src/client.test.ts": { "lines": 1538 },
   "packages/effect-acp/src/client.ts": { "lines": 1349 },
