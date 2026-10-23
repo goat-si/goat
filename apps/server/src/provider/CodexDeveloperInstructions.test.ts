@@ -74,7 +74,6 @@ describe("buildCodexAdditionalContext", () => {
     const entries = Object.values(agentSurfaceRegistry);
     const listed = new Set(entries.map(listedToolName));
     const paths = new Set<string>(entries.map((entry) => entry.path));
-    const resources = new Set<string>(entries.map((entry) => entry.resource));
     const context = buildCodexAdditionalContext(
       { model: "gpt-5.3-codex", reasoningEffort: "high" },
       { browser: true, device: true, computerUse: true },
@@ -83,9 +82,9 @@ describe("buildCodexAdditionalContext", () => {
       for (const name of entry.value.match(/\bgoat_[a-z_]+\b/g) ?? []) {
         NodeAssert.ok(listed.has(name), `${key} names ${name}, which no GOAT tool is listed as`);
       }
-      for (const [, path, resource] of entry.value.matchAll(/`(([a-z_]+)\.[a-z_]+)`/g)) {
-        if (resources.has(resource!))
-          NodeAssert.ok(paths.has(path!), `${key} names ${path}, which is not a GOAT path`);
+      // Any quoted resource.verb is meant as a path, so a misspelled resource fails too.
+      for (const [, path] of entry.value.matchAll(/`([a-z_]+\.[a-z_]+)`/g)) {
+        NodeAssert.ok(paths.has(path!), `${key} names ${path}, which is not a GOAT path`);
       }
     }
   });

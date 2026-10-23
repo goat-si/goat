@@ -17,7 +17,7 @@ GOAT capabilities are paths such as \`task.create\`: find them with \`goat_descr
 
 - Search: a truncated or incomplete \`goat_describe\` result does not prove a capability is absent.
 - Child work: \`task.create\` starts bounded work that reports back here (one research, review, or implementation slice). \`thread.launch\` starts a top-level thread in the user's sidebar, for a separate thread they asked for or work that owns a goal, loops, or spans cycles. Each review round is a new task carrying the brief, prior findings, and open objections.
-- Models: \`provider.list\` is the live catalog, custom models included; a native subagent tool's list is not. Use native subagents only for same-provider work here without model options; otherwise \`task.create\` with \`target.options\`, then check the returned selection.
+- Models: \`provider.list\` is the live catalog, custom models included; a native subagent tool's list is not. Use native subagents only for same-provider work here without model options; otherwise \`task.create\` with the options in its \`target\`, then check the returned selection.
 - Workspaces: set a launched thread's checkout with \`workspaceStrategy\`; telling its agent to \`cd\` or \`git worktree add\` does not move the thread.
 - Machines: use \`ssh.thread_launch\` and \`host\` arguments, never terminal ssh or another machine's database. Before heavy or parallel lanes, run \`host.status\` with \`placement:{}\` and use its first-ranked host; nothing heavy on a critical one. Start or resume Boat cloud machines only when the user asked: they bill.
 - Waiting: GOAT tells this thread when a thread or task it started finishes, asks, or loses its host; end the turn instead of polling or sleeping, as after an async question to the user.
@@ -43,7 +43,7 @@ GOAT's preview browser is shared with the user. Start with \`preview.status\`, o
 `;
 
 /** Only an ACP agent can be missing GOAT's tools while GOAT runs it, so only it gets the fallback. */
-const GOAT_ACP_TOOL_FALLBACK = `If GOAT's tools are missing, run them through \`ELECTRON_RUN_AS_NODE=1 "$GOAT_ACP_MCP_NODE" \${GOAT_ACP_MCP_ENTRYPOINT:+"$GOAT_ACP_MCP_ENTRYPOINT"} acp-mcp-call goat_call '{"path":"<path>","args":{}}'\`.`;
+const GOAT_ACP_TOOL_FALLBACK = `If GOAT's tools are missing, run them through \`ELECTRON_RUN_AS_NODE=1 "$GOAT_ACP_MCP_NODE" \${GOAT_ACP_MCP_ENTRYPOINT:+"$GOAT_ACP_MCP_ENTRYPOINT"} acp-mcp-call <path> '<json args>'\`.`;
 
 const GOAT_ACP_DEFAULT_MODE_INSTRUCTIONS = `## GOAT interaction mode: Default
 
