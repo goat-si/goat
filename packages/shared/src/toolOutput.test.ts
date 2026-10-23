@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   compactDynamicToolOutput,
+  htmlRenderFromToolItem,
   MAX_TOOL_OUTPUT_IMAGES,
   toolOutputImages,
   toolOutputIndicatesFailure,
@@ -20,6 +21,35 @@ describe("compactDynamicToolOutput", () => {
     ]) {
       expect(compactDynamicToolOutput(value)).toEqual(metadata);
     }
+  });
+
+  it("reads goat call's printed envelope: ids and pages from ok values, failure from errors", () => {
+    const htmlRender = { attachmentId: "attachment-1", title: "Report", height: 400 };
+    const ok = JSON.stringify({
+      status: "ok",
+      value: { threadId: "thread-1", taskId: "task-1", htmlRender, response: "Private body" },
+      meta: { host: "box" },
+    });
+    expect(compactDynamicToolOutput(ok)).toMatchObject({ threadId: "thread-1", taskId: "task-1" });
+    expect(compactDynamicToolOutput(ok)).not.toHaveProperty("isError");
+    expect(htmlRenderFromToolItem({ toolName: "goat.html_render", output: ok })).toEqual(
+      compactDynamicToolOutput({ htmlRender })?.htmlRender,
+    );
+
+    const error = JSON.stringify({
+      status: "error",
+      error: {
+        code: "not_found",
+        reason: "thread_not_found",
+        message: "Private",
+        retryable: false,
+      },
+    });
+    expect(compactDynamicToolOutput(error)).toEqual({ isError: true });
+    // A tool's own value that merely has status "ok" keeps its other fields.
+    expect(compactDynamicToolOutput({ status: "ok", value: 1, threadId: "thread-2" })).toEqual({
+      threadId: "thread-2",
+    });
   });
 
   it("keeps nested thread identity and scalar task IDs without result bodies", () => {

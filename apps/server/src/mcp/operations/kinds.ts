@@ -8,16 +8,26 @@ export interface ToolCall {
 }
 
 /**
- * How one kind of long-running work maps onto the tools that already own it. `state` reads the
- * envelope of the kind's status tool; `produce` finds the native id in the result that accepted
+ * Where a kind reads its work: a status tool, or the caller's own handoff (a person has not acted
+ * yet, or the work is the handoff's own continuation), then optionally a status tool.
+ */
+export type OperationSource =
+  | { readonly tool: ToolCall }
+  | { readonly handoffId: string; readonly then?: ToolCall };
+
+/**
+ * How one kind of long-running work maps onto the stores that already own it. `state` reads the
+ * envelope its source produced; `cancel` names the kind's cancel tool given the latest read, or
+ * nothing when nothing runs to cancel; `produce` finds the native id in the result that accepted
  * the work, or nothing when that result is already final.
  */
 export interface OperationKindSpec {
-  /** How long the native store keeps the work; an older handle is expired. */
+  /** How long a handle stays valid; the native store may forget the work sooner (unknown). */
   readonly retentionMs: number;
   readonly pollAfterMs: number;
-  readonly status: (nativeId: string) => ToolCall;
-  readonly cancel?: (nativeId: string) => ToolCall;
+  readonly source: (nativeId: string) => OperationSource;
+  readonly cancellable: boolean;
+  readonly cancel?: (nativeId: string, current: AgentSurfaceResult) => ToolCall | undefined;
   readonly state: (result: AgentSurfaceResult, nativeId: string) => OperationState;
   readonly produce: (result: AgentSurfaceResult) => string | undefined;
 }
@@ -44,7 +54,8 @@ const TASK_STATES: Readonly<Record<string, OperationState>> = {
 const task: OperationKindSpec = {
   retentionMs: 30 * 24 * 60 * 60_000,
   pollAfterMs: 5_000,
-  status: (taskId) => ({ tool: "task_status", args: { taskId } }),
+  source: (taskId) => ({ tool: { tool: "task_status", args: { taskId } } }),
+  cancellable: true,
   cancel: (taskId) => ({ tool: "task_cancel", args: { taskId } }),
   state: (result) => TASK_STATES[String(okFields(result)?.status)] ?? "unknown",
   produce: (result) => {
@@ -72,7 +83,10 @@ const sshStatus = (result: AgentSurfaceResult) => {
 const sshSetup: OperationKindSpec = {
   retentionMs: 24 * 60 * 60_000,
   pollAfterMs: 3_000,
-  status: (nativeId) => ({ tool: "goat_ssh_host_status", args: { host: sshParts(nativeId)[0] } }),
+  source: (nativeId) => ({
+    tool: { tool: "goat_ssh_host_status", args: { host: sshParts(nativeId)[0] } },
+  }),
+  cancellable: false,
   state: (result, nativeId) => {
     const status = sshStatus(result);
     const setup = fieldsOf(status?.setup);
@@ -92,7 +106,104 @@ const sshSetup: OperationKindSpec = {
   },
 };
 
+const SYNC = "sync:";
+const APPROVAL = "approval:";
+const SYNC_ERRORS: Readonly<Record<string, OperationState>> = {
+  declined: "cancelled",
+  cancelled: "cancelled",
+  expired: "failed",
+  start_failed: "failed",
+};
+
+/**
+ * A provider sync, by its syncId or by the approval that starts it. The sync store keeps syncs for
+ * two hours in memory, so an older or restarted one reads unknown while its handle is still valid.
+ */
+const providerSync: OperationKindSpec = {
+  retentionMs: 24 * 60 * 60_000,
+  pollAfterMs: 3_000,
+  source: (nativeId) =>
+    nativeId.startsWith(APPROVAL)
+      ? {
+          handoffId: nativeId.slice(APPROVAL.length),
+          then: {
+            tool: "goat_provider_sync_status",
+            args: { handoffId: nativeId.slice(APPROVAL.length) },
+          },
+        }
+      : {
+          tool: {
+            tool: "goat_provider_sync_status",
+            args: { syncId: nativeId.slice(SYNC.length) },
+          },
+        },
+  cancellable: true,
+  cancel: (nativeId, current) => {
+    const syncId = nativeId.startsWith(SYNC)
+      ? nativeId.slice(SYNC.length)
+      : okFields(current)?.syncId;
+    return typeof syncId === "string"
+      ? { tool: "goat_provider_sync_cancel", args: { syncId } }
+      : undefined;
+  },
+  state: (result) => {
+    if (result.status === "error") return SYNC_ERRORS[result.error.reason] ?? "unknown";
+    // goat_provider_sync answers { kind: "started", sync }; the status tool answers the sync.
+    const answer = okFields(result);
+    const value = answer?.kind === "started" ? fieldsOf(answer.sync) : answer;
+    const hosts = Array.isArray(value?.hosts) ? value.hosts.map(fieldsOf) : undefined;
+    if (hosts === undefined || typeof value?.done !== "boolean") return "unknown";
+    if (!value.done) return "running";
+    const phases = hosts.map((host) => host?.phase);
+    if (phases.some((phase) => phase === "failed" || phase === "update_runtime")) return "failed";
+    return phases.some((phase) => phase === "cancelled") ? "cancelled" : "succeeded";
+  },
+  produce: (result) => {
+    if (result.status === "needs_human") return APPROVAL + result.handoff.handoffId;
+    const value = okFields(result);
+    const sync = fieldsOf(value?.sync);
+    return value?.kind === "started" && typeof sync?.syncId === "string" && sync.done === false
+      ? SYNC + sync.syncId
+      : undefined;
+  },
+};
+
+const HANDOFF_STATES: Readonly<Record<string, OperationState>> = {
+  declined: "cancelled",
+  cancelled: "cancelled",
+  expired: "failed",
+  failed: "failed",
+};
+const OUTCOME_STATES: Readonly<Record<string, OperationState>> = {
+  applied: "succeeded",
+  failed: "failed",
+  // The outcome names the read that settles it (reconcile).
+  unknown_outcome: "unknown",
+};
+
+/**
+ * An approved change the server applies itself. Approved and applied are separate facts: the
+ * handoff says a person approved, the change's recorded outcome says whether it was applied.
+ */
+const handoff: OperationKindSpec = {
+  retentionMs: 24 * 60 * 60_000,
+  pollAfterMs: 3_000,
+  source: (handoffId) => ({ handoffId }),
+  cancellable: false,
+  state: (result) => {
+    const value = okFields(result);
+    const state = fieldsOf(value?.handoff)?.state;
+    if (state !== "completed") return HANDOFF_STATES[String(state)] ?? "unknown";
+    const outcome = fieldsOf(fieldsOf(value?.change)?.outcome)?.state;
+    if (outcome !== undefined) return OUTCOME_STATES[String(outcome)] ?? "unknown";
+    return value?.applying === true ? "running" : "unknown";
+  },
+  produce: (result) => (result.status === "needs_human" ? result.handoff.handoffId : undefined),
+};
+
 export const OPERATION_KINDS: Readonly<Record<OperationKind, OperationKindSpec>> = {
   task,
   ssh_setup: sshSetup,
+  provider_sync: providerSync,
+  handoff,
 };
