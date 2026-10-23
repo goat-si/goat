@@ -2442,21 +2442,42 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
   },
 );
 
-// Loaded with --import before the server entry; registerHooks covers both import and require.
-const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `import { registerHooks } from "node:module";
+// Loaded through --import and NODE_OPTIONS before the server entry. registerHooks covers import
+// and require; NODE_OPTIONS carries the hook into child Node processes; dlopen is wrapped because
+// an addon loaded by path never passes through resolve.
+const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `import { realpathSync } from "node:fs";
+import { registerHooks } from "node:module";
+import { pathToFileURL } from "node:url";
+
 const tree = process.env.GOAT_BUNDLE_SELF_CHECK_TREE;
+// The hook itself lives beside the tree and is imported again through argv after NODE_OPTIONS.
+const outside = (url) => url.startsWith("file:") && !url.startsWith(tree) && url !== import.meta.url;
+// Fail the way a clean machine would, so optional-dependency probes still read it as missing.
+const escaped = (what, url, code) =>
+  Object.assign(new Error(what + " resolved outside the packaged tree to " + url), { code });
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const resolved = nextResolve(specifier, context);
-    if (resolved.url.startsWith("file:") && !resolved.url.startsWith(tree)) {
-      // Fail the way a clean machine would, so optional-dependency probes still read it as missing.
-      const error = new Error(\`\${specifier} resolved outside the packaged tree to \${resolved.url}\`);
-      error.code = context.conditions.includes("require") ? "MODULE_NOT_FOUND" : "ERR_MODULE_NOT_FOUND";
-      throw error;
+    if (outside(resolved.url)) {
+      const code = context.conditions.includes("require") ? "MODULE_NOT_FOUND" : "ERR_MODULE_NOT_FOUND";
+      throw escaped(specifier, resolved.url, code);
     }
     return resolved;
   },
 });
+
+const dlopen = process.dlopen;
+process.dlopen = function (module, filename, ...rest) {
+  let url;
+  try {
+    url = pathToFileURL(realpathSync(filename)).href;
+  } catch {
+    // A missing file fails in dlopen itself with its usual error.
+  }
+  if (url !== undefined && outside(url)) throw escaped(filename, url, "ERR_DLOPEN_FAILED");
+  return dlopen.call(this, module, filename, ...rest);
+};
 `;
 
 export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
@@ -2485,6 +2506,7 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
     const treeUrl = NodeURL.pathToFileURL(`${yield* fs.realPath(probeApp)}${path.sep}`).href;
     const hookPath = path.join(probeRoot, "contain-resolution.mjs");
     yield* fs.writeFileString(hookPath, BUNDLE_SELF_CHECK_RESOLVE_HOOK);
+    const hookUrl = NodeURL.pathToFileURL(hookPath).href;
 
     const entryPoint = path.join(probeApp, "apps/server/dist/bin.mjs");
     if (!(yield* fs.exists(entryPoint).pipe(Effect.orElseSucceed(() => false)))) {
@@ -2501,18 +2523,18 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
         // CommonJS resolution still falls back to $HOME/.node_modules,
         // $HOME/.node_libraries and the install prefix, so a globally installed
         // copy of a missing dependency would quietly satisfy this check.
-        [
-          "--no-global-search-paths",
-          "--import",
-          NodeURL.pathToFileURL(hookPath).href,
-          entryPoint,
-          "--version",
-        ],
+        ["--no-global-search-paths", "--import", hookUrl, entryPoint, "--version"],
         {
           cwd: probeApp,
           stdout: "pipe",
           stderr: "pipe",
-          env: { ...process.env, NODE_PATH: "", GOAT_BUNDLE_SELF_CHECK_TREE: treeUrl },
+          // Replaces any inherited NODE_OPTIONS, which could preload code from outside the tree.
+          env: {
+            ...process.env,
+            NODE_PATH: "",
+            NODE_OPTIONS: `--import=${hookUrl}`,
+            GOAT_BUNDLE_SELF_CHECK_TREE: treeUrl,
+          },
         },
       ),
       {

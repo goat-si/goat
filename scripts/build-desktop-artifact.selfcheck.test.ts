@@ -23,6 +23,7 @@ const withAncestorNodeModules = Effect.fn("test.withAncestorNodeModules")(functi
     JSON.stringify({ name: "goat-ancestor-only-package", main: "index.js" }),
   );
   yield* fs.writeFileString(path.join(packageDir, "index.js"), "module.exports = 1;\n");
+  yield* fs.writeFileString(path.join(packageDir, "addon.node"), "not a native addon");
   const tempDir = path.join(root, "tmp");
   yield* fs.makeDirectory(tempDir);
   const names = ["TMPDIR", "TEMP", "TMP"] as const;
@@ -78,6 +79,24 @@ it.layer(NodeServices.layer)("bundle self-check", (it) => {
       "require",
       'import { createRequire } from "node:module";\ncreateRequire(import.meta.url)("goat-ancestor-only-package");\n',
     ],
+    [
+      "child Node process",
+      'import { execFileSync } from "node:child_process";\nexecFileSync(process.execPath, ["-e", "require(\'goat-ancestor-only-package\')"], { stdio: "inherit" });\n',
+    ],
+    [
+      "native addon",
+      [
+        'import { existsSync } from "node:fs";',
+        'import { dirname, join } from "node:path";',
+        'import { fileURLToPath } from "node:url";',
+        "// Found by walking directories, as addon loaders do, so it never passes through resolve.",
+        'const addon = "node_modules/goat-ancestor-only-package/addon.node";',
+        "let dir = dirname(fileURLToPath(import.meta.url));",
+        "while (!existsSync(join(dir, addon))) dir = dirname(dir);",
+        "process.dlopen({ exports: {} }, join(dir, addon));",
+        "",
+      ].join("\n"),
+    ],
   ] as const)(
     "rejects a sidecar whose %s resolves only through an ancestor node_modules",
     ([, serverEntrySource]) =>
@@ -92,6 +111,7 @@ it.layer(NodeServices.layer)("bundle self-check", (it) => {
 
           assert.instanceOf(error, BundleNotSelfContainedError);
           assert.include(error.output, "goat-ancestor-only-package");
+          assert.include(error.output, "outside the packaged tree");
         }),
       ),
   );
