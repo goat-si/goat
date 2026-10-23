@@ -300,7 +300,7 @@ Rules that hold for every row:
   may prepare a pinned SSH host when its enabled profile grants `hub.manage` for
   that host. Its credential, modes and profile are checked at admission and again
   before the job runs; preparation never confirms replacement. Other callers still
-  need M. Idle runtime updates keep their existing authorization. An agent can
+  need `environment:maintain`. Idle runtime updates keep their existing authorization. An agent can
   request an immediate update but cannot approve it; the handoff names the host
   and target, and the approver's grant is rechecked when it runs.
 - **Never downgrade.** No caller can move a server to an older build through
