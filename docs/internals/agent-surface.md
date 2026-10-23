@@ -616,8 +616,14 @@ host. Writes forward the caller's runtime ceiling. Since
 `host` also forwards the caller's goatclaw ceiling as `permissionProfileCeiling`,
 and the origin refuses a destination that has not shown it enforces ceilings
 instead of falling back to the relay, which would deliver without one. Remote
-servers answer only to the tool names they shipped with
-([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)).
+servers built before canonical names answer only to the tool names they shipped with
+([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)), so the origin sends a
+host-routed call under its canonical name only to a remote whose `serverVersion` is past
+0.1.2, and under the shipped name otherwise, which every version accepts; the steps a
+remote launch runs inside the dispatcher keep shipped names
+([remoteToolNames.ts](../../apps/server/src/sshRemote/remoteToolNames.ts)). A remote that
+has no such tool answers `failed_precondition` with reason `remote_outdated`, and the
+call never runs locally instead.
 The origin checks the calling thread's capability before forwarding, plus
 `threads.remote` and the profile's host allowlist for every machine a write names:
 `host` on a host-routable entry, and each argument listed for it in
@@ -635,12 +641,9 @@ check.
 
 - Forwarding stays with the origin server. A meta tool, the CLI, or a composed
   step names a `host`, and the origin's router builds the ceiling, claims the
-  lane, and translates canonical names to legacy ones when the remote's
-  `serverVersion` predates the listing flip.
+  lane, and picks the tool name the remote answers to.
 - `meta.host` says where a call ran. Remote errors keep their `reason` and gain
   `details.host`.
-- A remote too old for a requested feature answers `failed_precondition` with
-  reason `remote_outdated`. It never falls back to running locally.
 
 ## Audit
 
@@ -826,7 +829,7 @@ Each PR ships on its own and leaves `tools/list` unchanged until the flip.
 | 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup; then provider syncs and approved provider changes)                       |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
 | 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                 |
-| 10  | Listing flip, verb normalization, remote name translation                     | Started: canonical names callable as unlisted aliases ([#906](https://github.com/goat-si/goat/pull/906))                                                                   |
+| 10  | Listing flip, verb normalization, remote name translation                     | Shipped: aliases ([#906](https://github.com/goat-si/goat/pull/906)); flip, normalization, and translation (#781)                                                           |
 | 11  | `goat_eval`                                                                   | Gated on measurement                                                                                                                                                       |
 
 Testing follows the repository rules: focused tests per behavior, effect worker
