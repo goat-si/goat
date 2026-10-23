@@ -79,6 +79,8 @@ describe("pi T3 MCP injection", () => {
       "/tmp/cache/pi-goat-mcp-extension.ts",
     ]);
     assert.notInclude(launch.args, "--no-extensions");
+    assert.equal(launch.env.GOAT_ACP_MCP_ENDPOINT, mcpSession.endpoint);
+    assert.equal(launch.env.GOAT_ACP_MCP_AUTHORIZATION, mcpSession.authorizationHeader);
     assert.equal(launch.env[GOAT_MCP_URL_ENV], "http://127.0.0.1:43123/mcp");
     assert.equal(launch.env[GOAT_MCP_BEARER_ENV], "secret-pi-token");
     assert.equal(launch.env[GOAT_PI_RUNTIME_MODE_ENV], "approval-required");

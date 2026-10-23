@@ -8,7 +8,9 @@ export const workflowEntries = {
     toolkit: "orchestrator",
     summary: "Stop a workflow",
     description:
-      "Stop one running Claude workflow in a GOAT thread. Use the workflow coordinator's subagentId returned by goat_thread_read with view='activity'. Stops the whole workflow, including its phases and agents. Does not stop the parent thread or other workflows. Individual workflow phases and agents cannot be stopped separately.",
+      "Stop one running Claude workflow, including its phases and agents. The parent thread and other workflows keep running. Individual workflow phases and agents cannot be stopped separately.",
+    guide:
+      "Use the workflow coordinator's subagentId returned by goat_thread_read with view='activity'. The workflow must be running in the target GOAT thread.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,

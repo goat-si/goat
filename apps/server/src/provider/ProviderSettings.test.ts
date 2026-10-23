@@ -383,6 +383,9 @@ it.effect("an approval by a person without providers:manage changes nothing", ()
         ),
       );
       expect(failed).toBeInstanceOf(HandoffError);
+      // The approver is told the change failed, not that their request was invalid.
+      expect(failed).toMatchObject({ reason: "invalid_request", outcome: "apply_failed" });
+      expect(failed.message).toMatch(/^GOAT could not apply this change: /);
       expect((yield* fixture.instances)[cursorCloud]).toBeUndefined();
     }),
   ),
@@ -816,6 +819,10 @@ it.effect("a host add that may have been sent is never sent again and names the 
         dropped.service.respond({ ...handoff1, action: "completed" }, "person-session" as never),
       );
       expect(refused).toBeInstanceOf(HandoffError);
+      // It may have landed on box: the approver is told to check before approving again.
+      expect(refused).toMatchObject({ reason: "invalid_request", outcome: "apply_unknown" });
+      expect(refused.message).toContain("connection reset");
+      expect(refused.message).toContain("Check the provider with Diagnose");
       yield* dropped.service.resumeContinuations;
       expect(dropped.remote).toHaveLength(1);
       expect((yield* dropped.service.readChange(handoff1))?.outcome).toMatchObject({

@@ -24,7 +24,7 @@ hold the rules. This skill puts them in order.
    C3 gets one when the risk warrants.
 6. Deliver only as far as the user approved in this session. Push and open a pull request to `dev`
    under [Pull requests](../../../AGENTS.md#pull-requests), link it to the thread with
-   `link_pull_request`, and merge under [merging](../../../docs/operations/merging.md) only when you
+   `goat_call {path:"pull_request.link"}`, and merge under [merging](../../../docs/operations/merging.md) only when you
    hold merge authority. A goatclaw supervisor stays read-only; domain managers and issue sweepers
    hand merging to a merge manager.
 7. Report each claim with its command and result, full commit SHAs, pull request URLs, and a

@@ -8,7 +8,8 @@ export const queueEntries = {
     toolkit: "thread",
     summary: "List queued messages in delivery order.",
     description:
-      "List queued messages in delivery order. Results are a live offset page; use goat_thread_read for full thread history.",
+      "List queued messages in delivery order. Reads a live offset page; queue changes can shift later pages.",
+    guide: "Use goat_thread_read for full thread history.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -25,7 +26,9 @@ export const queueEntries = {
     name: "goat_queue_read",
     toolkit: "thread",
     summary: "Read up to 16,000 characters of a queued message.",
-    description: "Read up to 16,000 characters of a queued message. Omit threadId for this thread.",
+    description:
+      "Read up to 16,000 characters of a queued message without changing it; check truncated.",
+    guide: "Returns up to 16,000 characters. Omit threadId to read from this thread.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -42,8 +45,8 @@ export const queueEntries = {
     name: "goat_queue_edit",
     toolkit: "thread",
     summary: "Replace a queued message's text, preserving its attachments.",
-    description:
-      "Replace a queued message's text, preserving its attachments. The service rejects runs that are no longer queued.",
+    description: "Replace a queued message's text while preserving its attachments.",
+    guide: "The service rejects runs that are no longer queued.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -61,7 +64,10 @@ export const queueEntries = {
     name: "goat_queue_cancel",
     toolkit: "thread",
     summary: "Cancel a queued run using the existing queue command.",
-    description: "Cancel a queued run using the existing queue command.",
+    description:
+      "Cancel a queued run. Cancelling a delegated-completion message also drops the pending automatic result deliveries of its cohort.",
+    guide:
+      "The run must still be queued.\n\nCancellation uses the existing queue command. A delegated-completion message belongs to its parent run's completion cohort; cancelling it disposes every task completion delivery that cohort still owes, so later automatic parent wakes for those tasks do not come.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -81,6 +87,8 @@ export const queueEntries = {
     summary: "Move a queued run before another queued run, or to the end with beforeRunId=null.",
     description:
       "Move a queued run before another queued run, or to the end with beforeRunId=null.",
+    guide:
+      "Pass the queued run id and beforeRunId. Both runs must still be queued when beforeRunId is non-null.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -99,7 +107,8 @@ export const queueEntries = {
     toolkit: "thread",
     summary: "Deliver a queued message as steering to the specified active run.",
     description:
-      "Deliver a queued message as steering to the specified active run. Existing provider and run-state rules apply.",
+      "Deliver a queued message as steering to the specified active run. Cancels the queued run when promoting its message.",
+    guide: "Existing provider and run-state rules apply.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,

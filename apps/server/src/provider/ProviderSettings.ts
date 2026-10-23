@@ -70,6 +70,7 @@ import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
 import { instanceFingerprint } from "./CodexRouteService.ts";
 import {
   decodeProgress,
+  approvalError,
   encodeProgress,
   setupProgress,
   type ProviderSettingsEffect,
@@ -1060,8 +1061,7 @@ const make = Effect.gen(function* () {
           address,
           yield* encodeProgress(progress).pipe(Effect.mapError(unavailableHandoff)),
         );
-        if (progress.outcome?.state !== "applied")
-          return yield* new HandoffError({ reason: "invalid_request" });
+        if (progress.outcome?.state !== "applied") return yield* approvalError(progress.outcome);
       }),
     );
   const paths = [PROVIDER_SETTINGS_HANDOFF_PATH, PROVIDER_SETUP_HANDOFF_PATH] as const;

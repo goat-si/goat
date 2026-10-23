@@ -9,7 +9,7 @@ import {
   ordinaryReferenceCode,
 } from "./referenceSecretFixtures.testkit.ts";
 
-it.live(
+it.effect(
   "rejects complete prefixed credential assignment keys in Git blobs without blocking ordinary identifiers",
   () =>
     Effect.gen(function* () {
@@ -35,7 +35,7 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live(
+it.effect(
   "reads unpushed committed content, excludes dirty bytes and preserves source refs/config/index",
   () =>
     Effect.gen(function* () {
@@ -61,7 +61,7 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live(
+it.effect(
   "rejects write operations, unsupported root grants and traversal at the service boundary",
   () =>
     Effect.gen(function* () {
@@ -86,7 +86,7 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live("rejects tracked symlinks, symlink descendants, directories and submodule entries", () =>
+it.effect("rejects tracked symlinks, symlink descendants, directories and submodule entries", () =>
   Effect.gen(function* () {
     const f = yield* referenceFixture;
     const outside = f.root + "/outside";
@@ -108,35 +108,37 @@ it.live("rejects tracked symlinks, symlink descendants, directories and submodul
   }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live("blocks credential paths, credential-bearing content, binary files and byte overflow", () =>
-  Effect.gen(function* () {
-    const f = yield* referenceFixture;
-    yield* f.fs.writeFileString(f.repo + "/.env", "do not read");
-    yield* f.fs.writeFileString(
-      f.repo + "/config.ts",
-      "const remote = 'https://user:password@example.test/repo';",
-    );
-    yield* f.fs.writeFileString(f.repo + "/key.txt", "-----BEGIN PRIVATE KEY-----\nfixture\n");
-    yield* f.fs.writeFileString(f.repo + "/binary.txt", "before\0after");
-    yield* f.fs.writeFileString(f.repo + "/settings.ini", "password = exampleSecret123\n");
-    yield* f.fs.writeFileString(f.repo + "/settings.yaml", "api_key: exampleSecret123\n");
-    yield* f.fs.writeFileString(f.repo + "/large.txt", "x".repeat(16 * 1024 + 1));
-    yield* f.git(["add", "."]);
-    yield* f.git(["commit", "-m", "denied content fixtures"]);
-    expect((yield* f.capture({ ...f.source, files: [".env"] }).pipe(Effect.flip)).reason).toBe(
-      "path_denied",
-    );
-    for (const file of ["config.ts", "key.txt", "binary.txt", "settings.ini", "settings.yaml"])
-      expect((yield* f.capture({ ...f.source, files: [file] }).pipe(Effect.flip)).reason).toBe(
-        "credential_content",
+it.effect(
+  "blocks credential paths, credential-bearing content, binary files and byte overflow",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* referenceFixture;
+      yield* f.fs.writeFileString(f.repo + "/.env", "do not read");
+      yield* f.fs.writeFileString(
+        f.repo + "/config.ts",
+        "const remote = 'https://user:password@example.test/repo';",
       );
-    expect((yield* f.capture({ ...f.source, files: ["large.txt"] }).pipe(Effect.flip)).reason).toBe(
-      "content_limit",
-    );
-  }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
+      yield* f.fs.writeFileString(f.repo + "/key.txt", "-----BEGIN PRIVATE KEY-----\nfixture\n");
+      yield* f.fs.writeFileString(f.repo + "/binary.txt", "before\0after");
+      yield* f.fs.writeFileString(f.repo + "/settings.ini", "password = exampleSecret123\n");
+      yield* f.fs.writeFileString(f.repo + "/settings.yaml", "api_key: exampleSecret123\n");
+      yield* f.fs.writeFileString(f.repo + "/large.txt", "x".repeat(16 * 1024 + 1));
+      yield* f.git(["add", "."]);
+      yield* f.git(["commit", "-m", "denied content fixtures"]);
+      expect((yield* f.capture({ ...f.source, files: [".env"] }).pipe(Effect.flip)).reason).toBe(
+        "path_denied",
+      );
+      for (const file of ["config.ts", "key.txt", "binary.txt", "settings.ini", "settings.yaml"])
+        expect((yield* f.capture({ ...f.source, files: [file] }).pipe(Effect.flip)).reason).toBe(
+          "credential_content",
+        );
+      expect(
+        (yield* f.capture({ ...f.source, files: ["large.txt"] }).pipe(Effect.flip)).reason,
+      ).toBe("content_limit");
+    }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live("never infers a unique source from an incomplete inventory", () =>
+it.effect("never infers a unique source from an incomplete inventory", () =>
   Effect.gen(function* () {
     const f = yield* referenceFixture;
     const layer = References.layer.pipe(
@@ -173,7 +175,7 @@ it.live("never infers a unique source from an incomplete inventory", () =>
   }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live(
+it.effect(
   "pins exact local commits and rejects missing revisions, missing sources and removed registrations",
   () =>
     Effect.gen(function* () {
@@ -190,7 +192,7 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live(
+it.effect(
   "requires checkout selection for duplicate origins and deduplicates explicitly requested files",
   () =>
     Effect.gen(function* () {
@@ -206,30 +208,32 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live("refuses changed HEAD or origin during a read rather than returning mixed provenance", () =>
-  Effect.gen(function* () {
-    const f = yield* referenceFixture;
-    let changed = false;
-    f.intercept((input) => {
-      if (changed || !input.args.includes("blob")) return Effect.void;
-      changed = true;
-      return f.git(["commit", "--allow-empty", "-m", "concurrent change"]).pipe(Effect.asVoid);
-    });
-    expect((yield* f.capture().pipe(Effect.flip)).reason).toBe("source_changed");
-    f.intercept((input) =>
-      input.args.includes("blob")
-        ? f
-            .git(["remote", "set-url", "origin", "https://invalid.example/other/repo.git"])
-            .pipe(Effect.asVoid)
-        : Effect.void,
-    );
-    expect((yield* f.capture({ ...f.source, revision: f.base }).pipe(Effect.flip)).reason).toBe(
-      "source_changed",
-    );
-  }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
+it.effect(
+  "refuses changed HEAD or origin during a read rather than returning mixed provenance",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* referenceFixture;
+      let changed = false;
+      f.intercept((input) => {
+        if (changed || !input.args.includes("blob")) return Effect.void;
+        changed = true;
+        return f.git(["commit", "--allow-empty", "-m", "concurrent change"]).pipe(Effect.asVoid);
+      });
+      expect((yield* f.capture().pipe(Effect.flip)).reason).toBe("source_changed");
+      f.intercept((input) =>
+        input.args.includes("blob")
+          ? f
+              .git(["remote", "set-url", "origin", "https://invalid.example/other/repo.git"])
+              .pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      expect((yield* f.capture({ ...f.source, revision: f.base }).pipe(Effect.flip)).reason).toBe(
+        "source_changed",
+      );
+    }).pipe(Effect.scoped, Effect.provide(referenceTestLayer)),
 );
 
-it.live("refuses promisor repositories before object reads and never invokes their remote", () =>
+it.effect("refuses promisor repositories before object reads and never invokes their remote", () =>
   Effect.gen(function* () {
     const f = yield* referenceFixture;
     yield* f.git(["config", "remote.origin.promisor", "true"]);

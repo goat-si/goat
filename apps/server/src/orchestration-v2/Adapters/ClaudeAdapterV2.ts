@@ -1606,7 +1606,6 @@ export function claudeMcpQueryOverrides(input: {
       ...cuaServers,
       ...blockedServers,
     },
-    // Only the proxy exemption travels in the environment; the credential stays in the header.
     mcpEnvironment: claudeMcpProxyBypassEnvironment(session.endpoint, input.environment),
   };
 }
@@ -9584,7 +9583,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             attachmentsDir,
             settings: adapterOptions.settings,
             environment: claudeQueryEnvironment(
-              { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+              McpProviderSession.withThreadMcpEnvironment(
+                { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+                mcpSession,
+              ),
               turnInput.appThread,
               turnInput.appThread.lineage.relationshipToParent === "subagent"
                 ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)
