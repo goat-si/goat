@@ -73,8 +73,8 @@ describe("buildCodexAdditionalContext", () => {
   it("names only tools and paths the GOAT registry has", () => {
     const entries = Object.values(agentSurfaceRegistry);
     const listed = new Set(entries.map(listedToolName));
-    const paths = new Set(entries.map((entry) => entry.path));
-    const resources = new Set(entries.map((entry) => entry.resource));
+    const paths = new Set<string>(entries.map((entry) => entry.path));
+    const resources = new Set<string>(entries.map((entry) => entry.resource));
     const context = buildCodexAdditionalContext(
       { model: "gpt-5.3-codex", reasoningEffort: "high" },
       { browser: true, device: true, computerUse: true },
