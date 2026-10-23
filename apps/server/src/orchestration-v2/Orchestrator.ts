@@ -715,7 +715,7 @@ function delegatedCompletionWakeDetail(
           return detail;
         }
       }
-      return `${label}. Use goat_task_read with taskId ${taskId} to read the result.`;
+      return `${label}. Read the result with goat_call {path: "task.read", args: {taskId: "${taskId}"}}.`;
     })
     .join("\n\n");
 }

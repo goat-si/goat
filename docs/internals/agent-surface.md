@@ -417,9 +417,14 @@ summary, or description contains every word, best first, and `truncated` when mo
 with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
 
-**Proposed (later).** A `core` listing profile shows only the meta tools, the
-operation verbs, and the most used tools. It is opt-in per provider instance and
-measured against the full listing before it becomes a default.
+**Now.** `tools/list` is filtered per caller around Effect's MCP core, which checks one
+visibility predicate for both `tools/list` and `tools/call` and so cannot hide a tool that stays
+callable ([toolListing.ts](../../apps/server/src/mcp/toolListing.ts)). Both listings hide what
+`available.now` refuses for the caller. The server setting `agentToolListing` picks `full` (every
+other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
+`_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. Every
+tool stays callable by each of its names. The default stays `full` until the context-diet flip,
+and a change to the setting sends `notifications/tools/list_changed`.
 
 ## Calling: `goat_call`
 

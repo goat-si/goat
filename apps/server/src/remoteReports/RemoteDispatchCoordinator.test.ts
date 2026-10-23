@@ -1098,7 +1098,7 @@ it.effect("a remote task's question wakes the parent once and stays readable unt
         assert.equal(notice.threadId, origin);
         assert.include(
           notice.text,
-          `goat_pending_request_read {host: "box", threadId: "${remote}", requestId: "request-1"}`,
+          `goat_call {path: "pending_request.read", args: {host: "box", threadId: "${remote}", requestId: "request-1"}}`,
         );
       }
       yield* Queue.take(f.commits);

@@ -61,6 +61,19 @@ import {
   defaultInstanceIdForDriver,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
+import {
+  CodeFontSize,
+  DEFAULT_CODE_FONT_SIZE,
+  DEFAULT_INTERFACE_FONT_SIZE,
+  DEFAULT_PROMPT_FONT_SIZE,
+  DEFAULT_TERMINAL_FONT_SIZE,
+  InterfaceFontSize,
+  PromptFontSize,
+  TerminalFontSize,
+} from "./settingsFontSizes.ts";
+import { AgentToolListing, DEFAULT_AGENT_TOOL_LISTING } from "./agentSurface/listing.ts";
+
+export * from "./settingsFontSizes.ts";
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -133,38 +146,6 @@ export const PanelAnimationDurationMs = Schema.Int.check(
 );
 export type PanelAnimationDurationMs = typeof PanelAnimationDurationMs.Type;
 const DEFAULT_PANEL_ANIMATION_DURATION_MS: PanelAnimationDurationMs = 0;
-
-export const MIN_INTERFACE_FONT_SIZE = 12;
-export const MAX_INTERFACE_FONT_SIZE = 20;
-export const InterfaceFontSize = Schema.Int.check(
-  Schema.isBetween({ minimum: MIN_INTERFACE_FONT_SIZE, maximum: MAX_INTERFACE_FONT_SIZE }),
-);
-export type InterfaceFontSize = typeof InterfaceFontSize.Type;
-export const DEFAULT_INTERFACE_FONT_SIZE: InterfaceFontSize = 16;
-
-export const MIN_PROMPT_FONT_SIZE = 12;
-export const MAX_PROMPT_FONT_SIZE = 20;
-export const PromptFontSize = Schema.Int.check(
-  Schema.isBetween({ minimum: MIN_PROMPT_FONT_SIZE, maximum: MAX_PROMPT_FONT_SIZE }),
-);
-export type PromptFontSize = typeof PromptFontSize.Type;
-export const DEFAULT_PROMPT_FONT_SIZE: PromptFontSize = 14;
-
-export const MIN_CODE_FONT_SIZE = 10;
-export const MAX_CODE_FONT_SIZE = 18;
-export const CodeFontSize = Schema.Int.check(
-  Schema.isBetween({ minimum: MIN_CODE_FONT_SIZE, maximum: MAX_CODE_FONT_SIZE }),
-);
-export type CodeFontSize = typeof CodeFontSize.Type;
-export const DEFAULT_CODE_FONT_SIZE: CodeFontSize = 13;
-
-export const MIN_TERMINAL_FONT_SIZE = 8;
-export const MAX_TERMINAL_FONT_SIZE = 20;
-export const TerminalFontSize = Schema.Int.check(
-  Schema.isBetween({ minimum: MIN_TERMINAL_FONT_SIZE, maximum: MAX_TERMINAL_FONT_SIZE }),
-);
-export type TerminalFontSize = typeof TerminalFontSize.Type;
-const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;
 
 export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
@@ -1511,6 +1492,10 @@ export const ServerSettings = Schema.Struct({
   projectSettingsFolded: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 
   enableAgentDeviceAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** What tools/list shows GOAT's agents: the core tools, or every tool the caller can use. */
+  agentToolListing: AgentToolListing.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AGENT_TOOL_LISTING)),
+  ),
   enableCua: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
    * Kept separate from agent access so enabling the user's Device panel does
@@ -1999,6 +1984,7 @@ const ServerSettingsPatchFields = Schema.Struct({
     ),
   ),
   enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
+  agentToolListing: Schema.optionalKey(AgentToolListing),
   enableDeviceSupport: Schema.optionalKey(Schema.Boolean),
   enableCua: Schema.optionalKey(Schema.Boolean),
   deviceOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
