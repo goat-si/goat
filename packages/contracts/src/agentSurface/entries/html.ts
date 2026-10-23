@@ -1,4 +1,9 @@
-import { htmlPreviewDescription, htmlRenderDescription } from "../html.ts";
+import {
+  htmlPreviewDescription,
+  htmlPreviewGuide,
+  htmlRenderDescription,
+  htmlRenderGuide,
+} from "../html.ts";
 import { entry } from "../entry.ts";
 
 export const htmlEntries = {
@@ -9,6 +14,7 @@ export const htmlEntries = {
     toolkit: "html",
     summary: "Preview HTML",
     description: htmlPreviewDescription,
+    guide: htmlPreviewGuide,
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -27,6 +33,7 @@ export const htmlEntries = {
     toolkit: "html",
     summary: "Render HTML",
     description: htmlRenderDescription,
+    guide: htmlRenderGuide,
     effect: "write",
     capability: "none",
     capabilityReason: "Renders into the calling thread only.",

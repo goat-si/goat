@@ -8,7 +8,9 @@ export const hostLinkEntries = {
     toolkit: "ssh",
     summary: "Link a GOAT host over HTTPS",
     description:
-      "Link another machine's GOAT server that this machine reaches over HTTPS (Tailscale, LAN or T3 Connect) instead of SSH, such as a headless goat serve. Pass url as the pairing URL that goat pair or goat auth pairing create printed on that host, or its address plus code. The one-time code is spent here; nothing else is stored on that host. Afterwards pass name as host to goat_project_list, goat_ssh_thread_launch and the goat_thread_* tools. access is the most the link may do there (default approval-required; read-only cannot start threads). A caller with a lower runtime mode cannot change anything through it. The link lasts 30 days; link again with a new code to renew. Linking an existing name replaces it. Needs a full-access caller.",
+      "Link a remote GOAT server over HTTP(S) by spending its pairing code and saving a local session; then pass its name as host. The link lasts 30 days; link again with a new code to renew. The code can be spent even if saving fails. Reusing a name replaces the local link without revoking its old remote session.",
+    guide:
+      "This reaches a server directly rather than over SSH, including a headless goat serve exposed by Tailscale, LAN or T3 Connect. Supply the pairing URL printed by goat pair or goat auth pairing create, or the origin and a separate code. The remote server issues an MCP client session; the local environment stores its token with the link. Use the saved name as host with tools such as goat_project_list, goat_ssh_thread_launch and host-aware goat_thread tools. The requested access defaults to approval-required and limits what the remote session can do; read-only cannot start threads, and a caller whose runtime mode ranks below the link's access cannot write through it. Sessions last 30 days; renew by linking again with a fresh code. Needs a live full-access/default calling thread or a full-access client and the orchestration capability; GOAT threads also need hub.manage when goatclaw is enabled. Names that already identify an SSH host are refused. The code exchange precedes the final authority recheck and local catalog write, so a storage failure or lost authority can leave a valid remote session without a saved local link. After an uncertain response, inspect goat_host_link_list before trying a new code. Links cannot answer approvals on remote threads; a person must answer from a client connected to the remote host.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,
@@ -28,7 +30,9 @@ export const hostLinkEntries = {
     toolkit: "ssh",
     summary: "List linked GOAT hosts",
     description:
-      "List the GOAT hosts this environment linked over HTTPS with goat_host_link_create: each name, address, the access it was granted and when it expires. Pass a name as host to the host-aware tools. No credentials are returned.",
+      "List saved HTTP(S) links to other GOAT servers. Listing a link does not confirm that it is reachable or that its session is still valid.",
+    guide:
+      "These links belong to this environment and are created by goat_host_link_create. Public metadata includes each name, address, granted access and expiry, without the session token. Pass a saved name as host to host-aware tools. The list reads saved entries without probing the remote or filtering expired sessions. Needs the orchestration capability.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -47,7 +51,9 @@ export const hostLinkEntries = {
     toolkit: "ssh",
     summary: "Remove a linked GOAT host",
     description:
-      "Forget a linked host's address and session on this machine. Its threads and projects stay on that host, and launch watches on it report it unreachable. The host keeps the session until it expires; revoke it there in Settings → Connections to end it now. Needs a full-access caller.",
+      "Forget a linked host's address and session locally. Remote threads and projects remain; launch watches lose contact. The remote session stays valid until expiry unless revoked on that host.",
+    guide:
+      "Needs a live full-access/default calling thread or a full-access client, plus hub.manage for GOAT threads when goatclaw is enabled. To end access immediately, revoke the session on the remote host in Settings → Connections.",
     effect: "destructive",
     capability: "hub.manage",
     hostRoutable: false,

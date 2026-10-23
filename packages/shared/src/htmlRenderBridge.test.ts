@@ -1,7 +1,7 @@
 import * as NodeVM from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import {
-  htmlRenderShortcutsMessage,
+  htmlRenderShortcutsMessages,
   injectHtmlRenderBootstrap,
   readHtmlRenderImageRequest,
   readHtmlRenderKeyDown,
@@ -47,14 +47,17 @@ function pageBridge(savedScript?: string) {
   };
   return {
     messages,
+    // Without methods, sends exactly what a current client sends.
     shortcuts: (
-      method: string = htmlRenderShortcutsMessage([], []).method,
+      methods: ReadonlyArray<string> = htmlRenderShortcutsMessages([], []).map((m) => m.method),
       source: unknown = parent,
-    ) =>
-      dispatch("message", {
-        source,
-        data: { ...htmlRenderShortcutsMessage([shortcut], []), method },
-      }),
+    ) => {
+      for (const method of methods)
+        dispatch("message", {
+          source,
+          data: { jsonrpc: "2.0", method, params: { shortcuts: [shortcut], blocked: [] } },
+        });
+    },
     key: () => {
       const event = {
         ...shortcut,
@@ -105,28 +108,57 @@ describe("HTML bridge version compatibility", () => {
     expect(readHtmlRenderImageRequest(page.messages[1])?.src).toBe("https://example.com/chart.png");
   });
 
-  it.each(["t3", "goat"])(
-    "a new page accepts %s shortcuts and writes once to an old-client parser",
-    (prefix) => {
+  it("a new page answers an old client, which sends only t3/ shortcuts, in t3/", () => {
+    const page = pageBridge();
+    page.shortcuts(["t3/notifications/shortcuts"]);
+    expect(page.key()).toBe(true);
+    page.image();
+    expect(page.messages.map((message) => message.method)).toEqual([
+      "t3/notifications/keydown",
+      "t3/notifications/open-image",
+    ]);
+  });
+
+  it.each([
+    ["goat/notifications/shortcuts", "t3/notifications/shortcuts"],
+    ["t3/notifications/shortcuts", "goat/notifications/shortcuts"],
+  ])(
+    "a new page that hears goat/ shortcuts answers once per event in goat/ (%s first)",
+    (...methods) => {
       const page = pageBridge();
-      page.shortcuts(`${prefix}/notifications/shortcuts`);
+      page.shortcuts(methods);
       expect(page.key()).toBe(true);
       page.image();
-      // An old client recognizes only these two legacy methods.
-      const oldClient = page.messages.filter((message) =>
-        ["t3/notifications/keydown", "t3/notifications/open-image"].includes(message.method),
-      );
-      expect(oldClient).toHaveLength(2);
-      expect(page.messages).toEqual(oldClient);
-      expect(readHtmlRenderKeyDown(oldClient[0])?.code).toBe("KeyK");
-      expect(readHtmlRenderImageRequest(oldClient[1])?.name).toBe("Chart");
+      expect(page.messages.map((message) => message.method)).toEqual([
+        "goat/notifications/keydown",
+        "goat/notifications/open-image",
+      ]);
+      expect(readHtmlRenderKeyDown(page.messages[0])?.code).toBe("KeyK");
+      expect(readHtmlRenderImageRequest(page.messages[1])?.name).toBe("Chart");
     },
   );
 
+  it("a current client and a new page speak only goat/", () => {
+    const page = pageBridge();
+    page.shortcuts();
+    expect(page.key()).toBe(true);
+    page.image();
+    expect(page.messages.map((message) => message.method)).toEqual([
+      "goat/notifications/keydown",
+      "goat/notifications/open-image",
+    ]);
+  });
+
+  it("an image click before any shortcuts arrive uses t3/, which every client reads", () => {
+    const page = pageBridge();
+    page.image();
+    expect(page.messages.map((message) => message.method)).toEqual(["t3/notifications/open-image"]);
+  });
+
   it("does not configure shortcuts from an unrelated frame or unknown method", () => {
     const page = pageBridge();
-    page.shortcuts("goat/notifications/shortcuts", {});
-    page.shortcuts("other/notifications/shortcuts");
+    page.shortcuts(["goat/notifications/shortcuts"], {});
+    page.shortcuts(["other/notifications/shortcuts"]);
     expect(page.key()).toBe(false);
     expect(page.messages).toEqual([]);
   });
