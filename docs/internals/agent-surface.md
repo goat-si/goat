@@ -458,7 +458,9 @@ calls. The recorded failed calls show the cause: first calls in MCP-style argume
 Agents called `goat_describe` with `name` 28 times and with `resource`, `verb` or `tool` 7
 times, and called `goat_call` with `name` and `arguments`, `input`, `tool`, or `resource` and
 `verb` 10 times. Each refusal named the right fields and the next call worked, so both meta
-tools now accept those shapes. Two core runs were excluded because the agent worked around the
+tools now accept those MCP-style shapes
+([#1065](https://github.com/goat-si/goat/pull/1065)); a rerun of the campaign on top of that
+change is in progress. Two core runs were excluded because the agent worked around the
 listing from the shell ([#1062](https://github.com/goat-si/goat/issues/1062)).
 
 Two full-listing sets are kept as references and are not paired with anything: Codex code mode
