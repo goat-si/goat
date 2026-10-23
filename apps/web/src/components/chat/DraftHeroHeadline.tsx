@@ -27,7 +27,6 @@ import { useProjects, useThreadShells } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { PixelText } from "../ui/pixel-text";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
   Combobox,
@@ -385,14 +384,11 @@ export function DraftHeroHeadline({
       ) : (
         <h1 className="w-full text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
           {isScratchDraft ? (
-            <PixelText size="hero">What should we work on?</PixelText>
+            <>What should we work on?</>
           ) : canChooseProject ? (
-            <>
-              {projectSelector}
-              <PixelText size="hero"> to start</PixelText>
-            </>
+            <>{projectSelector} to start</>
           ) : (
-            <PixelText size="hero">Add a project to start</PixelText>
+            <>Add a project to start</>
           )}
         </h1>
       )}
