@@ -56,7 +56,7 @@ export const layer = McpToolAccess.toLayer(FleetToolkit, {
       return { policy: yield* sync.value.receive(policy) };
     }),
   ),
-  goat_goal_apply: McpToolAccess.writes((input) =>
+  goat_goal_apply: McpToolAccess.writesAsCaller((input) =>
     withGoals((goals, scope) => goals.apply(scope, input)),
   ),
   goat_goal_get: McpToolAccess.readsAsCaller(({ id }) =>
@@ -65,17 +65,19 @@ export const layer = McpToolAccess.toLayer(FleetToolkit, {
   goat_goal_list: McpToolAccess.readsAsCaller((input) =>
     withGoals((goals, scope) => goals.list(scope, input)),
   ),
-  goat_goal_pause: McpToolAccess.writes(({ id }) =>
+  goat_goal_pause: McpToolAccess.writesAsCaller(({ id }) =>
     withGoals((goals, scope) => goals.setPaused(scope, id, true)).pipe(
       Effect.map((goal) => ({ goal })),
     ),
   ),
-  goat_goal_resume: McpToolAccess.writes(({ id }) =>
+  goat_goal_resume: McpToolAccess.writesAsCaller(({ id }) =>
     withGoals((goals, scope) => goals.setPaused(scope, id, false)).pipe(
       Effect.map((goal) => ({ goal })),
     ),
   ),
   goat_goal_delete: McpToolAccess.destructive(
-    McpToolAccess.writes((input) => withGoals((goals, scope) => goals.remove(scope, input))),
+    McpToolAccess.writesAsCaller((input) =>
+      withGoals((goals, scope) => goals.remove(scope, input)),
+    ),
   ),
 });
