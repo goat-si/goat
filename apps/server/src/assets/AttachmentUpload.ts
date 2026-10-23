@@ -221,7 +221,8 @@ export const storeAttachmentUpload = Effect.fn("AttachmentUpload.store")(functio
   );
 });
 
-export const deletePendingAttachment = Effect.fn("AttachmentUpload.deletePending")(function* (
+/** Removes a pending upload's file, failing when the file could not be removed. */
+export const discardPendingAttachment = Effect.fn("AttachmentUpload.discardPending")(function* (
   attachmentId: string,
 ) {
   if (parseThreadSegmentFromAttachmentId(attachmentId) !== PENDING_ATTACHMENT_THREAD_SEGMENT) {
@@ -238,5 +239,17 @@ export const deletePendingAttachment = Effect.fn("AttachmentUpload.deletePending
   }
 
   const fileSystem = yield* FileSystem.FileSystem;
-  yield* fileSystem.remove(attachmentPath, { force: true }).pipe(Effect.orElseSucceed(() => {}));
+  yield* fileSystem.remove(attachmentPath, { force: true });
+});
+
+export const deletePendingAttachment = Effect.fn("AttachmentUpload.deletePending")(function* (
+  attachmentId: string,
+) {
+  // The client's delete has no failure to report, and the pending upload
+  // sweep removes a leftover file within a day.
+  yield* discardPendingAttachment(attachmentId).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Failed to delete pending attachment.", { attachmentId, cause }),
+    ),
+  );
 });

@@ -34,6 +34,7 @@ import { McpSchema, McpServer, Tool } from "effect/ai";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import { FetchHttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -1319,6 +1320,51 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
         Layer.provide(ServerSecretStore.layer),
         Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" })),
         Layer.provide(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
+it.effect("a discard whose file removal fails keeps ownership so the caller can retry", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    const call = (name: string, args: Record<string, unknown>) =>
+      server
+        .callTool({ name, arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    const prepared = yield* call("goat_attachment_prepare_upload", {
+      upload: { name: "shot.png", mimeType: "image/png", sizeBytes: 4 },
+    });
+    const { attachmentId } = prepared.structuredContent as { readonly attachmentId: string };
+    // A directory where the upload's file belongs makes the non-recursive removal fail.
+    const blocker = config.attachmentsDir + "/" + attachmentId + ".png";
+    yield* fs.makeDirectory(blocker, { recursive: true });
+
+    const failed = yield* call("goat_attachment_discard", { attachmentId });
+    expect(declaredFailure(failed)).toMatchObject({ code: "orchestration_error" });
+    expect(yield* fs.exists(blocker)).toBe(true);
+
+    yield* fs.remove(blocker, { recursive: true });
+    const retried = yield* call("goat_attachment_discard", { attachmentId });
+    expect(retried.isError).toBe(false);
+    const again = yield* call("goat_attachment_discard", { attachmentId });
+    expect(declaredFailure(again)).toMatchObject({ code: "invalid_request" });
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerAttachmentToolkit.pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provideMerge(
+          ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" }),
+        ),
+        Layer.provideMerge(NodeServices.layer),
       ),
     ),
   ),
