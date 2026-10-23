@@ -1,3 +1,4 @@
+import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
 import {
@@ -1139,7 +1140,8 @@ const withListedNames = <A, E, R>(registration: Effect.Effect<A, E, R>) =>
   Effect.flatMap(McpServer.McpServer, (server) =>
     Effect.provideService(registration, McpServer.McpServer, {
       ...server,
-      addTool: (options) => server.addTool(listedRegistration(options)),
+      addTool: (options) =>
+        server.addTool(forwardedContentRegistration(listedRegistration(options))),
     }),
   );
 
