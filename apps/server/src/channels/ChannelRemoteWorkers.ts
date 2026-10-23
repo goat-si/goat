@@ -80,6 +80,12 @@ import {
   remoteReportEventIdFor,
 } from "./channelIds.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
+import {
+  decodeOffered,
+  matchingOfferedProviders,
+  mergeOfferedModels,
+  type OfferedProviders,
+} from "./channelOfferedModels.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
@@ -319,25 +325,6 @@ const decodeProjects = Schema.decodeUnknownEffect(
 const decodeEnvironment = Schema.decodeUnknownEffect(
   Schema.Struct({ environmentId: EnvironmentId }),
 );
-/**
- * Only what the model check and placement need from orchestrator_capabilities, so newer fields
- * never break it. An older GOAT may omit driverKind or canRunChildTask; its accounts are then
- * never swapped.
- */
-const OfferedProviders = Schema.Struct({
-  providers: Schema.Array(
-    Schema.Struct({
-      providerInstanceId: Schema.String,
-      driverKind: Schema.optional(Schema.String),
-      displayName: Schema.optional(Schema.NullOr(Schema.String)),
-      /** False for an account that cannot run work now, such as one signed out or disabled. */
-      canRunChildTask: Schema.optional(Schema.Boolean),
-      models: Schema.Array(Schema.Struct({ id: Schema.String })),
-    }),
-  ),
-});
-type OfferedProviders = typeof OfferedProviders.Type;
-const decodeOffered = Schema.decodeUnknownEffect(OfferedProviders);
 const decodeProjectProviderDiagnosis = Schema.decodeUnknownEffect(
   Schema.Struct({
     diagnoses: Schema.Array(
@@ -1322,28 +1309,33 @@ const make = Effect.gen(function* () {
       }
       // A machine that answers but cannot list its models (an older GOAT) cannot confirm a
       // preference, so only the project's own model runs there and the launch decides.
-      const offered = capabilities._tag === "Success" ? capabilities.success : undefined;
-      const isOffered = (model: ModelSelection) => {
-        const configured = offered?.providers.find(
-          (provider) => provider.providerInstanceId === model.instanceId,
-        );
-        return (
-          offered !== undefined &&
-          offered.providers.some(
-            (provider) =>
-              (provider === configured ||
-                (configured?.driverKind !== undefined &&
-                  provider.driverKind === configured.driverKind &&
-                  provider.canRunChildTask === true)) &&
-              provider.models.some((entry) => entry.id === model.model),
-          )
-        );
-      };
+      let offered = capabilities._tag === "Success" ? capabilities.success : undefined;
+      // The untargeted listing truncates, so a missing model is re-asked for by name before
+      // the requester hears a no; confirmed entries join the catalog placement reads.
+      const isOffered = (model: ModelSelection) =>
+        Effect.gen(function* () {
+          if (offered === undefined) return false;
+          if (matchingOfferedProviders(offered, model).length > 0) return true;
+          const probe = yield* callHost(
+            {
+              host,
+              tool: "orchestrator_capabilities",
+              arguments: { search: model.model },
+              writes: false,
+              timeoutMs: READ_TIMEOUT_MS,
+            },
+            authorize,
+          ).pipe(Effect.flatMap(decodeOffered), Effect.result);
+          if (probe._tag === "Failure") return false;
+          if (matchingOfferedProviders(probe.success, model).length === 0) return false;
+          offered = mergeOfferedModels(offered, probe.success);
+          return true;
+        });
       const preferred = local.preferredModelSelection;
       // A Slack connection's model is a preference, as on this machine: when that machine does
       // not offer it, or cannot say, the project's model runs the work instead of a question
       // nobody can act on.
-      const usePreferred = preferred !== undefined && isOffered(preferred);
+      const usePreferred = preferred !== undefined && (yield* isOffered(preferred));
       if (preferred !== undefined && !usePreferred) {
         yield* Effect.logWarning("channel default model not offered on the other machine", {
           taskId: task.taskId,
@@ -1352,7 +1344,7 @@ const make = Effect.gen(function* () {
         });
       }
       const modelSelection = usePreferred ? preferred : fallbackModel;
-      if (offered !== undefined && !isOffered(modelSelection)) {
+      if (offered !== undefined && !(yield* isOffered(modelSelection))) {
         return {
           type: "question",
           text:
