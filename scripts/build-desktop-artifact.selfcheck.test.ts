@@ -84,6 +84,10 @@ it.layer(NodeServices.layer)("bundle self-check", (it) => {
       'import { execFileSync } from "node:child_process";\nexecFileSync(process.execPath, ["-e", "require(\'goat-ancestor-only-package\')"], { stdio: "inherit" });\n',
     ],
     [
+      "string-evaluated worker",
+      'import { Worker } from "node:worker_threads";\nawait new Promise((resolve, reject) => new Worker("require(\'goat-ancestor-only-package\')", { eval: true }).on("error", reject).on("exit", resolve));\n',
+    ],
+    [
       "native addon",
       [
         'import { existsSync } from "node:fs";',

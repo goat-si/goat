@@ -2442,19 +2442,18 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
   },
 );
 
-// Loaded through --import and NODE_OPTIONS before the server entry. registerHooks covers import
-// and require; NODE_OPTIONS carries the hook into child Node processes; dlopen is wrapped because
+// Preloaded with --require, in argv and NODE_OPTIONS, before the server entry. A CommonJS preload
+// also runs in every worker, including one evaluated from a string, and NODE_OPTIONS carries it
+// into child Node processes. registerHooks covers import and require; dlopen is wrapped because
 // an addon loaded by path never passes through resolve.
-// A worker evaluated from a string runs without --import, so it can still reach a package above
-// the probe. That only matters on a machine with such a node_modules; on a clean one the missing
-// package fails as before.
-const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `import { realpathSync } from "node:fs";
-import { registerHooks } from "node:module";
-import { pathToFileURL } from "node:url";
+const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `const { realpathSync } = require("node:fs");
+const { registerHooks } = require("node:module");
+const { pathToFileURL } = require("node:url");
 
 const tree = process.env.GOAT_BUNDLE_SELF_CHECK_TREE;
-// The hook itself lives beside the tree and is imported again through argv after NODE_OPTIONS.
-const outside = (url) => url.startsWith("file:") && !url.startsWith(tree) && url !== import.meta.url;
+// The hook lives beside the tree and is required again through argv after NODE_OPTIONS.
+const self = pathToFileURL(__filename).href;
+const outside = (url) => url.startsWith("file:") && !url.startsWith(tree) && url !== self;
 // Fail the way a clean machine would, so optional-dependency probes still read it as missing.
 const escaped = (what, url, code) =>
   Object.assign(new Error(what + " resolved outside the packaged tree to " + url), { code });
@@ -2507,9 +2506,8 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
     // packaged tree could resolve from whatever the machine has installed above the probe and
     // pass this check. The hook fails any resolution that leaves the tree instead.
     const treeUrl = NodeURL.pathToFileURL(`${yield* fs.realPath(probeApp)}${path.sep}`).href;
-    const hookPath = path.join(probeRoot, "contain-resolution.mjs");
+    const hookPath = path.join(probeRoot, "contain-resolution.cjs");
     yield* fs.writeFileString(hookPath, BUNDLE_SELF_CHECK_RESOLVE_HOOK);
-    const hookUrl = NodeURL.pathToFileURL(hookPath).href;
 
     const entryPoint = path.join(probeApp, "apps/server/dist/bin.mjs");
     if (!(yield* fs.exists(entryPoint).pipe(Effect.orElseSucceed(() => false)))) {
@@ -2526,7 +2524,7 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
         // CommonJS resolution still falls back to $HOME/.node_modules,
         // $HOME/.node_libraries and the install prefix, so a globally installed
         // copy of a missing dependency would quietly satisfy this check.
-        ["--no-global-search-paths", "--import", hookUrl, entryPoint, "--version"],
+        ["--no-global-search-paths", "--require", hookPath, entryPoint, "--version"],
         {
           cwd: probeApp,
           stdout: "pipe",
@@ -2535,7 +2533,8 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
           env: {
             ...process.env,
             NODE_PATH: "",
-            NODE_OPTIONS: `--import=${hookUrl}`,
+            // Quoted so a path with spaces or backslashes survives NODE_OPTIONS parsing.
+            NODE_OPTIONS: `--require="${hookPath.replace(/["\\]/g, "\\$&")}"`,
             GOAT_BUNDLE_SELF_CHECK_TREE: treeUrl,
           },
         },
