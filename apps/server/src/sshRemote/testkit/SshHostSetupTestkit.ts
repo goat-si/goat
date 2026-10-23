@@ -1,3 +1,5 @@
+import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
+import * as Settings from "../../serverSettings.ts";
 import * as MaintenanceAudit from "../../maintenance/MaintenanceAudit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -64,7 +66,7 @@ export const projection: OrchestrationV2ThreadProjection = {
   visibleTurnItems: [],
   updatedAt: now,
 };
-export const dependencies = Layer.mergeAll(
+export const baseDependencies = Layer.mergeAll(
   NodeServices.layer,
   Layer.succeed(MaintenanceAudit.MaintenanceAudit, { append: () => Effect.void }),
   ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
@@ -109,4 +111,9 @@ export const dependencies = Layer.mergeAll(
     getThreadSnapshot: () => Effect.succeed({ schemaVersion: 1, snapshotSequence: 0, projection }),
     getThreadShell: () => Effect.succeed(liveThreadShell(threadId)),
   }),
+);
+
+export const dependencies = Layer.mergeAll(
+  baseDependencies,
+  Profiles.layer.pipe(Layer.provide(Settings.layerTest())),
 );
