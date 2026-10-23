@@ -14,6 +14,7 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateCheckError,
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateIdleTooltip,
   getDesktopUpdateInstallConfirmationMessage,
@@ -83,12 +84,14 @@ function resolveSidebarUpdatePresentation({
   run,
   isDownloading,
   showCheckIcon,
+  checkFailed,
 }: {
   readonly action: ReturnType<typeof resolveDesktopUpdateButtonAction>;
   readonly showsEverything: boolean;
   readonly run: UpdateEverythingRun | null;
   readonly isDownloading: boolean;
   readonly showCheckIcon: boolean;
+  readonly checkFailed: boolean;
 }) {
   const showUpdateDetails = action !== "none" || showsEverything || run !== null || isDownloading;
   const iconStatus: DesktopUpdateStatusIconState = showCheckIcon
@@ -105,7 +108,9 @@ function resolveSidebarUpdatePresentation({
             ? "downloaded"
             : action === "download"
               ? "available"
-              : "idle";
+              : checkFailed
+                ? "check-failed"
+                : "idle";
 
   return {
     iconStatus,
@@ -288,6 +293,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     run,
     isDownloading,
     showCheckIcon,
+    checkFailed: getDesktopUpdateCheckError(state) !== null,
   });
   const idleTooltip =
     !showUpdateDetails && !showCheckIcon && !runsEverything && !run
@@ -473,6 +479,9 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
   );
   const statusIcon = renderStatusIcon("sm");
   const controlIcon = inRail ? renderStatusIcon("md") : statusIcon;
+  // An icon alone read as "check for updates" while a downloaded update waited for
+  // busy backends, so the footer names the action. The rail has no room for text.
+  const restartLabel = !inRail && iconStatus === "downloaded" ? "Restart to update" : null;
   const confirmDialog = (
     <UpdateEverythingDialog
       open={isConfirmingEverything}
@@ -545,7 +554,11 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       className={cn(
         "inline-flex items-center justify-center outline-hidden ring-ring transition-colors focus-visible:ring-2 focus-visible:ring-inset",
         // The rail's accent fill means "current page", so waiting updates keep the control fill.
-        inRail ? "size-10 shrink-0 rounded-lg" : "size-8 rounded-full",
+        inRail
+          ? "size-10 shrink-0 rounded-lg"
+          : restartLabel
+            ? "h-8 gap-1.5 rounded-full pr-3 pl-2 text-xs font-medium"
+            : "size-8 rounded-full",
         isInteractionDisabled ? "cursor-not-allowed" : "cursor-pointer",
         showUpdateIconState
           ? cn(
@@ -586,6 +599,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       }}
     >
       {controlIcon}
+      {restartLabel ? <span className="whitespace-nowrap">{restartLabel}</span> : null}
     </button>
   );
 

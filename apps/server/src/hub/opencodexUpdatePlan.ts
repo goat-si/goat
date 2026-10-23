@@ -7,7 +7,7 @@ export const isStableOpenCodexVersion = (version: string | undefined): version i
   version !== undefined && STABLE.test(version);
 
 /** Orders two stable versions; callers check `isStableOpenCodexVersion` first. */
-function compareOpenCodexVersions(a: string, b: string): number {
+export function compareOpenCodexVersions(a: string, b: string): number {
   const left = STABLE.exec(a)!.slice(1).map(Number);
   const right = STABLE.exec(b)!.slice(1).map(Number);
   for (let index = 0; index < 3; index++) {

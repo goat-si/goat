@@ -81,6 +81,31 @@ export const OpenCodexInventorySnapshot = Schema.Struct({
 });
 export type OpenCodexInventorySnapshot = typeof OpenCodexInventorySnapshot.Type;
 
+/**
+ * The Home's record of making a machine it provisioned into its Remote Link Child: install
+ * OpenCodex there, start it, link it. `reason` is a machine-readable code when `blocked`.
+ */
+export const OpenCodexChildBootstrapStatus = Schema.Struct({
+  state: Schema.Literals(["running", "child", "degraded", "blocked"]),
+  checkedAt: Schema.Number,
+  reason: Schema.optional(
+    Schema.Literals([
+      "home_unavailable",
+      "platform_unsupported",
+      "npm_missing",
+      "install_failed",
+      "ocx_unusable",
+      "runtime_unhealthy",
+      "unreachable",
+      "link_failed",
+    ]),
+  ),
+  message: Schema.optional(Schema.String),
+  /** OpenCodex on the machine once it answers. */
+  version: Schema.optional(Schema.String),
+});
+export type OpenCodexChildBootstrapStatus = typeof OpenCodexChildBootstrapStatus.Type;
+
 /** `alias` null is the machine that coordinates the window: the Home, or a standalone install. */
 const UpdateAlias = Schema.NullOr(Schema.String);
 

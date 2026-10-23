@@ -1,3 +1,4 @@
+import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 
 export type GoatMcpToolLogo = "t3-code";
@@ -883,12 +884,12 @@ export function resolveGoatMcpItemCall(item: {
   readonly presentation: GoatMcpToolPresentation | null;
 } {
   const input: unknown = item.input;
-  const path = isRecord(input) ? input.path : undefined;
-  const entry =
-    resolveGoatMcpShippedToolId(item.toolName) === "goat_call" && typeof path === "string"
-      ? resolveAgentSurfaceEntry(path)
-      : undefined;
-  const args = isRecord(input) && isRecord(input.args) ? input.args : {};
+  // However the call spelled them, as the server read it: {path, args}, {name, arguments}, ...
+  const target =
+    resolveGoatMcpShippedToolId(item.toolName) === "goat_call" ? goatCallTarget(input) : {};
+  const path = target.path;
+  const entry = typeof path === "string" ? resolveAgentSurfaceEntry(path) : undefined;
+  const args = isRecord(target.args) ? target.args : {};
   const call =
     entry === undefined || entry.resource === "surface"
       ? { toolName: item.toolName, input }

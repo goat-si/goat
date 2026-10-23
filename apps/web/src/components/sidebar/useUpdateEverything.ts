@@ -19,6 +19,7 @@ import { environmentSessionStatesAtom } from "~/state/session";
 import { sshRuntime } from "~/state/sshRuntime";
 import { savedConnectionSshRoute } from "../settings/ConnectionsSettings.logic";
 import { getProviderUpdateRunOutcome } from "../ProviderUpdateLaunchNotification.logic";
+import { useCheckForUpdateWhenHostIsNewer } from "./newerHostUpdateCheck";
 import { useProviderUpdates } from "../ProviderUpdatesAction";
 import {
   canUpdateServer,
@@ -161,6 +162,13 @@ export function useUpdateEverything(
   }));
   const localEnvironmentId =
     machines.find((machine) => machine.hostedByThisApp && machine.connected)?.environmentId ?? null;
+  useCheckForUpdateWhenHostIsNewer(
+    machines.map((machine) =>
+      machine.connected && !machine.hostedByThisApp
+        ? machine.serverConfig?.environment.serverVersion
+        : null,
+    ),
+  );
   const {
     targets: behindServers,
     sshRuntimes,

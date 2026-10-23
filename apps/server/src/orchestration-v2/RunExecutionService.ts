@@ -815,7 +815,7 @@ export const layer: Layer.Layer<
                 nodeId: input.rootNode.id,
                 providerThreadId: input.providerThread.id,
                 providerTurnId: input.terminal.providerTurnId,
-                text: cloudTaskResultText(finalizedProviderThread.cloudTask),
+                text: cloudTaskResultText(finalizedProviderThread.cloudTask, input.terminal),
                 completedAt,
                 allocateEventId,
               });

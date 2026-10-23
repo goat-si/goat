@@ -1,6 +1,7 @@
 import { listingSetting, withCallerListing } from "./toolListing.ts";
 import * as Settings from "../serverSettings.ts";
 import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
+import { surfaceArgumentAliases } from "./toolkits/agentSurface/argumentAliases.ts";
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
 import {
@@ -13,6 +14,7 @@ import {
   argumentKeys,
   encodeReferenceRefusal,
   keepingRefusalCode,
+  refusalResult,
   undeclaredArgumentsResult,
 } from "./toolRefusals.ts";
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
@@ -58,6 +60,8 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
+import * as SshRemoteDispatchLive from "../sshRemote/SshRemoteDispatchLive.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import * as HubOcx from "../hub/HubOcx.ts";
@@ -889,7 +893,10 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                 ...registration.tool,
                 inputSchema: { ...inputSchema, additionalProperties: false },
               }),
-              handle: (payload) => {
+              handle: (input) => {
+                const aliased = surfaceArgumentAliases(registration.tool.name, input);
+                if (!aliased.ok) return Effect.succeed(refusalResult(aliased.failure));
+                const payload = aliased.payload;
                 const undeclared = argumentKeys(payload).filter(
                   (key) => !Object.hasOwn(properties, key),
                 );
@@ -1276,6 +1283,13 @@ const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
  * RemoteDispatchCoordinator are left to the caller, like `layer`.
  */
 export const layerHostStatusService = HostStatusMcpService.layer.pipe(
+  // The cloud machine service is the runtime's shared reference, so readiness reaches it.
+  Layer.provideMerge(
+    OpenCodexChildBootstrap.layer.pipe(
+      Layer.provide(HubOcx.layer),
+      Layer.provide(SshRemoteDispatchLive.layerCloudMachines),
+    ),
+  ),
   Layer.provideMerge(
     HubMembership.layer.pipe(Layer.provide(HubOcx.layer), Layer.provide(Profiles.layer)),
   ),

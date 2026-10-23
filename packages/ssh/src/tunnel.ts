@@ -4382,7 +4382,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             ? {
                 detail:
                   order !== undefined && order > 0
-                    ? `${host} runs a newer GOAT (${probe.liveVersion}). Update this app from the update button above Settings.`
+                    ? `${host} runs a newer GOAT (${probe.liveVersion}). Update this app from the update button next to Settings.`
                     : `A GOAT server that this app didn't start or cannot replace is running on ${host}. Stop it on the host, then reconnect.`,
               }
             : {}),

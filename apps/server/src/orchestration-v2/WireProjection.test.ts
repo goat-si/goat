@@ -182,10 +182,17 @@ describe("orchestration V2 wire projection", () => {
         output: { status: "ok", value: { htmlRender } },
       });
     const html = "<p>" + "x".repeat(17_000) + "</p>";
-    const wrapped = page("mcp__goat__goat_call", { path: "html.render", args: { html } });
-    expect(htmlRenderFromToolItem(wrapped as Parameters<typeof htmlRenderFromToolItem>[0])).toEqual(
-      htmlRender,
-    );
+    // MCP's own {name, arguments} spelling, which goat_call also takes, keeps the page too.
+    for (const input of [
+      { path: "html.render", args: { html } },
+      { name: "html.render", arguments: { html } },
+    ]) {
+      const wrapped = page("mcp__goat__goat_call", input);
+      expect(
+        htmlRenderFromToolItem(wrapped as Parameters<typeof htmlRenderFromToolItem>[0]),
+        Object.keys(input).join(","),
+      ).toEqual(htmlRender);
+    }
     // Another tool's path-shaped argument stays inside the summary.
     const other = page("mcp__github__fetch_pr", { path: "html.render", body: html });
     expect(other.type === "dynamic_tool" ? other.input : null).not.toHaveProperty("path");

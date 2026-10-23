@@ -15,6 +15,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+import { UPDATE_CHECK_SETTLE_WAIT } from "../updates/updateFailures.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 export class DesktopLifecycleRelaunchError extends Schema.TaggedError<DesktopLifecycleRelaunchError>()(
@@ -128,12 +129,17 @@ function handleBeforeQuit(
       const update = yield* updates.getState;
       if (
         !(yield* Ref.get(state.quitting)) &&
-        update.installPolicy === "install-on-quit" &&
+        // Quitting stops every backend, so restart-when-idle has its idle moment here too.
+        // Only a paused policy leaves a downloaded update for later.
+        update.installPolicy !== "paused" &&
         update.downloadedVersion !== null
       ) {
         yield* (yield* DesktopWindow.DesktopWindow).flushMainWindowBounds;
+        // A running refresh check settles within its deadline; waiting for it keeps quit
+        // from skipping the downloaded update.
         const installation = yield* updates.installPrepared(update.downloadedVersion, {
-          waitForCheck: false,
+          waitForCheck: true,
+          checkWait: UPDATE_CHECK_SETTLE_WAIT,
         });
         if (installation.accepted)
           return installation.failed ? ("failed" as const) : ("installing" as const);

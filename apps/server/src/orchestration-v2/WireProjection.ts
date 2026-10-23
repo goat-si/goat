@@ -5,6 +5,7 @@ import type {
   OrchestrationV2TurnItem,
 } from "@goat/contracts";
 import { resolveGoatMcpShippedToolId } from "@goat/shared/goatMcpToolPresentation";
+import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import {
   compactDynamicToolOutput,
   omitToolOutputImageData,
@@ -172,16 +173,13 @@ function hasDynamicValue(value: unknown): boolean {
  */
 function projectDynamicInput(item: DynamicToolItem): unknown {
   const input = summarizeDynamicValue(item.input);
-  const path =
-    typeof item.input === "object" && item.input !== null && "path" in item.input
-      ? item.input.path
-      : undefined;
+  const isCall = resolveGoatMcpShippedToolId(item.toolName) === "goat_call";
+  const { path } = isCall ? goatCallTarget(item.input) : {};
   return input !== item.input &&
     typeof input === "object" &&
     input !== null &&
     typeof path === "string" &&
-    path.length <= 200 &&
-    resolveGoatMcpShippedToolId(item.toolName) === "goat_call"
+    path.length <= 200
     ? { ...input, path }
     : input;
 }

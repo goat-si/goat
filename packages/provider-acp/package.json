@@ -23,6 +23,10 @@
       "types": "./src/server/coreRuntimeEvents.ts",
       "import": "./src/server/coreRuntimeEvents.ts"
     },
+    "./server/mcpContext": {
+      "types": "./src/server/mcpContext.ts",
+      "import": "./src/server/mcpContext.ts"
+    },
     "./server/mcpOverAcpBridge": {
       "types": "./src/server/mcpOverAcpBridge.ts",
       "import": "./src/server/mcpOverAcpBridge.ts"

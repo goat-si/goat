@@ -187,6 +187,7 @@ const fixture = Effect.gen(function* () {
       Effect.sync(() => {
         listeners.push(listener);
       }),
+    onReady: () => Effect.void,
   });
   const ssh = SshRemoteDispatch.SshRemoteDispatch.of({
     proxyEndpoint: () => Effect.die("unused"),

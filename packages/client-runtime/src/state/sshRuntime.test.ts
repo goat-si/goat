@@ -116,7 +116,7 @@ describe("Desktop SSH runtime state", () => {
       requestedVersion: "0.4.3",
     } as const;
     expect(sshRuntimeStatusText({ ...base, detail: "external" })).toBe(
-      "vps-1 runs a newer GOAT (0.5.0). Update this app from the update button above Settings.",
+      "vps-1 runs a newer GOAT (0.5.0). Update this app from the update button next to Settings.",
     );
     const external =
       "A GOAT server that this app didn't start is running on vps-1. Stop it on the host, then reconnect.";
