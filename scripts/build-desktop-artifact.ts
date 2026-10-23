@@ -7,6 +7,7 @@ import { LEGACY_RESOURCE_MONITOR_BINARY_NAME } from "@goat/contracts/legacyT3Nam
 import * as NodeFSP from "node:fs/promises";
 import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
+import * as NodeURL from "node:url";
 // plist is CommonJS; Node cannot load its named exports from an ES module.
 import Plist from "plist";
 
@@ -2329,51 +2330,6 @@ export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBu
   },
 );
 
-function trimTrailingSeparators(value: string): string {
-  let end = value.length;
-  while (end > 1 && (value[end - 1] === "/" || value[end - 1] === "\\")) end -= 1;
-  return value.slice(0, end);
-}
-
-/**
- * The share is the highest real directory on a UNC path: `\\server` on its own
- * is not one, so the ancestor walk must stop there.
- */
-function uncShareRootLength(value: string): number {
-  const isUnc = value.startsWith("\\\\") || value.startsWith("//");
-  if (!isUnc) return 0;
-  const separator = /[\\/]/;
-  const serverEnd = value.slice(2).search(separator);
-  if (serverEnd < 0) return value.length;
-  const shareStart = 2 + serverEnd + 1;
-  const shareEnd = value.slice(shareStart).search(separator);
-  return shareEnd < 0 ? value.length : shareStart + shareEnd;
-}
-
-export function ancestorNodeModulesPaths(
-  startDir: string,
-  separator: string,
-): ReadonlyArray<string> {
-  // Walks with lastIndexOf rather than splitting into segments so UNC roots
-  // (\\server\share) and drive roots keep their prefix instead of being
-  // rebuilt into a relative path that silently resolves against the build cwd.
-  const paths: string[] = [];
-  let current = trimTrailingSeparators(startDir);
-  const uncRootLength = uncShareRootLength(current);
-  for (;;) {
-    const cut = Math.max(current.lastIndexOf("/"), current.lastIndexOf("\\"));
-    if (cut < 0 || (uncRootLength > 0 && cut < uncRootLength)) break;
-    const parent = cut === 0 ? current.slice(0, 1) : current.slice(0, cut);
-    if (parent === current) break;
-    paths.push(
-      parent.endsWith(separator) ? `${parent}node_modules` : `${parent}${separator}node_modules`,
-    );
-    if (cut === 0) break;
-    current = parent;
-  }
-  return paths;
-}
-
 const NativeMarkerManifest = Schema.Struct({
   dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   optionalDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -2486,6 +2442,46 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
   },
 );
 
+// Preloaded with --require, in argv and NODE_OPTIONS, before the server entry. A CommonJS preload
+// also runs in every worker, including one evaluated from a string, and NODE_OPTIONS carries it
+// into child Node processes. registerHooks covers import and require; dlopen is wrapped because
+// an addon loaded by path never passes through resolve.
+const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `const { realpathSync } = require("node:fs");
+const { registerHooks } = require("node:module");
+const { pathToFileURL } = require("node:url");
+
+const tree = process.env.GOAT_BUNDLE_SELF_CHECK_TREE;
+// The hook lives beside the tree and is required again through argv after NODE_OPTIONS.
+const self = pathToFileURL(__filename).href;
+const outside = (url) => url.startsWith("file:") && !url.startsWith(tree) && url !== self;
+// Fail the way a clean machine would, so optional-dependency probes still read it as missing.
+const escaped = (what, url, code) =>
+  Object.assign(new Error(what + " resolved outside the packaged tree to " + url), { code });
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const resolved = nextResolve(specifier, context);
+    if (outside(resolved.url)) {
+      const code = context.conditions.includes("require") ? "MODULE_NOT_FOUND" : "ERR_MODULE_NOT_FOUND";
+      throw escaped(specifier, resolved.url, code);
+    }
+    return resolved;
+  },
+});
+
+const dlopen = process.dlopen;
+process.dlopen = function (module, filename, ...rest) {
+  let url;
+  try {
+    url = pathToFileURL(realpathSync(filename)).href;
+  } catch {
+    // A missing file fails in dlopen itself with its usual error.
+  }
+  if (url !== undefined && outside(url)) throw escaped(filename, url, "ERR_DLOPEN_FAILED");
+  return dlopen.call(this, module, filename, ...rest);
+};
+`;
+
 export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     const fs = yield* FileSystem.FileSystem;
@@ -2506,17 +2502,12 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
     });
     yield* copyDirectoryPreservingSymlinks(extractedApp, probeApp);
 
-    // Guard the guard: if anything above the probe provides a node_modules, a
-    // missing dependency would resolve there and the check would pass while the
-    // packaged tree is broken.
-    for (const candidate of ancestorNodeModulesPaths(probeApp, path.sep)) {
-      if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
-        return yield* new BundleNotSelfContainedError({
-          exitCode: -1,
-          output: `Refusing to report success: ${candidate} is visible from the probe directory, so bare imports could resolve outside the packaged tree. Remove or rename it, or point TMPDIR somewhere without one.`,
-        });
-      }
-    }
+    // Node looks for node_modules in every ancestor directory, so a dependency missing from the
+    // packaged tree could resolve from whatever the machine has installed above the probe and
+    // pass this check. The hook fails any resolution that leaves the tree instead.
+    const treeUrl = NodeURL.pathToFileURL(`${yield* fs.realPath(probeApp)}${path.sep}`).href;
+    const hookPath = path.join(probeRoot, "contain-resolution.cjs");
+    yield* fs.writeFileString(hookPath, BUNDLE_SELF_CHECK_RESOLVE_HOOK);
 
     const entryPoint = path.join(probeApp, "apps/server/dist/bin.mjs");
     if (!(yield* fs.exists(entryPoint).pipe(Effect.orElseSucceed(() => false)))) {
@@ -2533,12 +2524,19 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
         // CommonJS resolution still falls back to $HOME/.node_modules,
         // $HOME/.node_libraries and the install prefix, so a globally installed
         // copy of a missing dependency would quietly satisfy this check.
-        ["--no-global-search-paths", entryPoint, "--version"],
+        ["--no-global-search-paths", "--require", hookPath, entryPoint, "--version"],
         {
           cwd: probeApp,
           stdout: "pipe",
           stderr: "pipe",
-          env: { ...process.env, NODE_PATH: "" },
+          // Replaces any inherited NODE_OPTIONS, which could preload code from outside the tree.
+          env: {
+            ...process.env,
+            NODE_PATH: "",
+            // Quoted so a path with spaces or backslashes survives NODE_OPTIONS parsing.
+            NODE_OPTIONS: `--require="${hookPath.replace(/["\\]/g, "\\$&")}"`,
+            GOAT_BUNDLE_SELF_CHECK_TREE: treeUrl,
+          },
         },
       ),
       {
