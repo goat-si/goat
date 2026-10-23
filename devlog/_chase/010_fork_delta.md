@@ -149,8 +149,8 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `remote-reports` 원격 보고와 원격 위임
 
 - 커밋: #5 #10 #6
-- 경로: `apps/server/src/remoteReports`, `apps/server/src/orchestration-v2/goat/RemoteDelegatedTasks.ts`, `apps/server/src/mcp/toolkits/{remoteReport,ssh}`, `apps/server/src/persistence/Migrations/*_{RemoteReports,RemoteDispatches}*`, `packages/contracts/src/remoteReports.ts`
-- 정책: GOAT 전용. RemoteReports·RemoteDispatches 마이그레이션은 다시 실행해도 안전하게 써서(`IF NOT EXISTS`) upstream이 그 id를 가져가면 옮길 수 있다. upstream의 SSH·MCP 변경은 받고 출발지 보고, 원격 위임, 첨부 전달을 다시 얹는다.
+- 경로: `apps/server/src/remoteReports`, `apps/server/src/orchestration-v2/goat/RemoteDelegatedTasks.ts`, `apps/server/src/mcp/goat/RemoteTaskTargets.ts`, `apps/server/src/mcp/toolkits/{remoteReport,ssh}`, `apps/server/src/persistence/Migrations/*_{RemoteReports,RemoteDispatches}*`, `packages/contracts/src/remoteReports.ts`
+- 정책: GOAT 전용. RemoteReports·RemoteDispatches 마이그레이션은 다시 실행해도 안전하게 써서(`IF NOT EXISTS`) upstream이 그 id를 가져가면 옮길 수 있다. upstream의 SSH·MCP 변경은 받고 출발지 보고, 원격 위임, 첨부 전달을 다시 얹는다. `OrchestratorMcpService`의 원격·클라우드 위임 판정(`authorizeRemoteWrite`, `preflightCloudLaunch`, `resolveRemoteTarget` 등)은 `mcp/goat/RemoteTaskTargets.ts`의 factory에 있고 서비스는 호출 한 번만 둔다(#915).
 
 ### `repo-hygiene` 저장소 루트 정리
 
