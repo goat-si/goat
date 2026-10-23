@@ -93,6 +93,9 @@ Any agent that supports remote MCP servers over HTTP with OAuth can connect. Giv
 it the MCP URL and choose OAuth, and the agent finds the sign-in settings itself.
 Agents without OAuth support can use a client token instead.
 
+The agent finds GOAT's capabilities with `goat_describe` and runs any of them with
+`goat_call {path, args}`, where `path` names the capability, such as `thread.read`.
+
 ## Long-running orchestrators
 
 A bot or script that drives GOAT for weeks, such as an orchestrator on another
@@ -108,7 +111,7 @@ days unless you pass `--ttl`. The `--runtime-mode-ceiling` works like the access
 you choose on the sign-in page. Without it, the client gets **Supervised**.
 
 Initialize MCP once and reuse the `mcp-session-id` header from that response
-for later calls, including long `goat_thread_wait` polls. End the session with
+for later calls, including long `thread.wait` polls. End the session with
 an HTTP `DELETE` when the bot shuts down.
 
 `goat auth client list` shows each token's name and when it was last used.
@@ -126,8 +129,8 @@ goat auth client create --name "Grok Bot" \
   --scope orchestration:read --scope orchestration:operate --scope orchestration:approve
 ```
 
-The client can then list approvals with `goat_pending_request_list`, read them
-with `goat_pending_request_read`, and answer with `goat_pending_request_respond`
+Through `goat_call`, the client can then list approvals with `pending_request.list`, read them
+with `pending_request.read`, and answer with `pending_request.respond`
 and `decision` set to `accept` or `decline`. It can only answer approvals in
 threads that run within its ceiling. Each answer records the client's name and
 reason, and the approval shows who answered it. This also works for threads on
@@ -141,12 +144,12 @@ and create one without `orchestration:approve`.
 ## Cloud agents from any machine
 
 Claude Cloud, Cursor Cloud and Devin Cloud runs only need one environment that is signed in to
-that service. An agent can call `goat_cloud_agent_holders` to see which connected environments hold a
-login, and `goat_cloud_agent_launch` to start a run there. Add `dryRun: true` to see which environment
+that service. Through `goat_call`, an agent can call `cloud_agent.holders` to see which connected environments hold a
+login, and `cloud_agent.launch` to start a run there. Add `dryRun: true` to see which environment
 would run it. The environment needs a project for the repository, and the run starts from that
 project's pushed branch. Launching needs **Full access**.
 
-A bot that starts cloud runs on its own can show them in GOAT with `goat_cloud_agent_run_register`:
+A bot that starts cloud runs on its own can show them in GOAT with `goat_call {path:"cloud_agent.run_register", args}`, where `args` is:
 
 ```json
 {
@@ -163,7 +166,7 @@ environment signed in to the same account can see the run, GOAT follows it and r
 ends. Otherwise it keeps only the link and says so (`tracking: "link-only"`), and never posts `run.completed` for it. Devin Cloud sessions
 started outside GOAT are always link-only. **Stop** on a registered run's thread only stops
 following it: the run keeps going, and you cancel it from its page in the provider.
-`goat_cloud_agent_run_forget` removes a registered run from GOAT; the cloud run itself keeps going.
+`cloud_agent.run_forget` removes a registered run from GOAT; the cloud run itself keeps going.
 
 ## Scripts on the host
 

@@ -54,4 +54,4 @@ On web and desktop, the notes button in a thread's header shows how many notes a
 
 ## For agents
 
-Agents use the `goat_note_list`, `goat_note_read`, `goat_note_write`, `goat_note_update`, and `goat_note_move` tools. A write needs the revision from the last read; a refused write means the note changed, so the agent reads it again and retries. `goat_note_update` pins a note or links a thread without touching its text.
+Agents call the `note.list`, `note.read`, `note.write`, `note.update`, and `note.move` paths through `goat_call`. A write needs the revision from the last read; a refused write means the note changed, so the agent reads it again and retries. `note.update` pins a note or links a thread without touching its text.
