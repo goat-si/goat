@@ -27,6 +27,10 @@ const AUTHORIZATION = "Bearer thread-token";
 
 /** Every shape of thread credential a shell can hold; each one blocks minting. */
 const threadShells = [
+  {
+    label: "both empty",
+    env: { GOAT_ACP_MCP_ENDPOINT: "", GOAT_ACP_MCP_AUTHORIZATION: "" },
+  },
   { label: "endpoint only", env: { GOAT_ACP_MCP_ENDPOINT: ENDPOINT } },
   { label: "authorization only", env: { GOAT_ACP_MCP_AUTHORIZATION: AUTHORIZATION } },
   {
@@ -38,6 +42,8 @@ const threadShells = [
     env: { GOAT_ACP_MCP_ENDPOINT: ENDPOINT, GOAT_ACP_MCP_AUTHORIZATION: AUTHORIZATION },
   },
 ] as const;
+
+const validShell = threadShells.find((shell) => shell.label === "valid credential")!;
 
 const mintingCommands = [
   ["auth", "pairing", "create"],
@@ -56,7 +62,22 @@ const tempBaseDir = Effect.acquireRelease(
   (directory) => Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
 );
 
+const THREAD_VARIABLES = ["GOAT_ACP_MCP_ENDPOINT", "GOAT_ACP_MCP_AUTHORIZATION"] as const;
+
+/**
+ * The thread variables are read from process.env, where an empty one still counts, so they are
+ * stubbed there; undefined removes one an outer agent shell may have set.
+ */
 const runCli = (args: ReadonlyArray<string>, env: Record<string, string> = {}) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => {
+      for (const name of THREAD_VARIABLES) vi.stubEnv(name, env[name]);
+    }),
+    () => runCliUnstubbed(args, env),
+    () => Effect.sync(() => vi.unstubAllEnvs()),
+  );
+
+const runCliUnstubbed = (args: ReadonlyArray<string>, env: Record<string, string>) =>
   Command.runWith(cli, { version: "0.0.0" })(args).pipe(
     Effect.provide(
       Layer.mergeAll(
@@ -109,7 +130,7 @@ describe("resolveCliCredential", () => {
   it.effect("uses the thread's own credential without reading a stored login", () =>
     Effect.gen(function* () {
       const credential = yield* resolveCliCredential(
-        threadEnvironmentFrom(threadShells[3].env),
+        threadEnvironmentFrom(validShell.env),
         mustNotReadLogin,
       );
       assert.deepStrictEqual(credential, {
@@ -121,7 +142,7 @@ describe("resolveCliCredential", () => {
   );
 
   it.effect.each([
-    ...threadShells.slice(0, 3),
+    ...threadShells.filter((shell) => shell !== validShell),
     {
       label: "endpoint not a URL",
       env: { GOAT_ACP_MCP_ENDPOINT: "goat", GOAT_ACP_MCP_AUTHORIZATION: AUTHORIZATION },
@@ -163,7 +184,7 @@ describe("goat thread", () => {
         .mockImplementation(async () => new Response(null, { status: 401 }));
       const error = yield* runCli(
         ["thread", "list", "--base-dir", baseDir, "--project", "proj-1"],
-        threadShells[3].env,
+        validShell.env,
       ).pipe(Effect.flip);
       expect(String(error)).toContain("401");
       expect(fetch).toHaveBeenCalledTimes(1);

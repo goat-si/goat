@@ -1,4 +1,3 @@
-import * as Config from "effect/Config";
 import * as CliError from "effect/cli/CliError";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -49,17 +48,14 @@ export const threadEnvironmentFrom = (
   return { _tag: "present", endpoint, authorization };
 };
 
-/** The thread environment as Config sees it, so commands and tests share one reading. */
-export const threadEnvironment: Effect.Effect<ThreadEnvironment> = Effect.gen(function* () {
-  const read = (name: string) =>
-    Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined));
-  const endpoint = yield* read(THREAD_ENDPOINT_VARIABLE);
-  const authorization = yield* read(THREAD_AUTHORIZATION_VARIABLE);
-  return threadEnvironmentFrom({
-    [THREAD_ENDPOINT_VARIABLE]: endpoint,
-    [THREAD_AUTHORIZATION_VARIABLE]: authorization,
-  });
-}).pipe(Effect.orDie);
+/**
+ * This process's thread environment, read from process.env itself: Effect's Config reads an
+ * empty variable as unset, which would let a blanked credential fall through to a stored login.
+ * A variable that is set, even to "", counts.
+ */
+export const threadEnvironment: Effect.Effect<ThreadEnvironment> = Effect.sync(() =>
+  threadEnvironmentFrom(process.env),
+);
 
 /** What `goat login` stores: an mcp-client session on the local server. */
 export const CliLogin = Schema.Struct({
