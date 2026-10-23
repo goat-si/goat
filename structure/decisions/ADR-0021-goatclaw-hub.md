@@ -46,8 +46,11 @@
   - goatclaw is switched for the whole fleet. Each GOAT exchanges its goatclaw policy with every host it reaches
     (`goat_goatclaw_sync`, with a `settings:write` dispatch session), and every machine keeps the most recently
     changed policy, so turning it on or off anywhere applies everywhere connected. A policy nobody set never wins.
-    Remote launches and follow-up sends forward the caller's ceiling; only a destination that cannot enforce it is
-    refused.
+    goatclaw is open by default: off until someone enables it, and the `owner` profile when enabled without a
+    choice. Remote launches and follow-up sends forward the caller's ceiling and share one admission rule
+    (`FleetSync.syncBeforeForwarding`): a pending or outdated sync never refuses them, because a hub that cannot
+    steer its workers costs more than a ceiling a destination enforces late. A launch still needs a destination
+    that accepts a ceiling at all.
   - Compatibility is a verdict from OpenCodex's served protocols and features. Adopted installs are advised and never
     replaced; managed installs follow ADR-0019's trial, probation and rollback.
 - **Reasons.** Credentials, rotation and revocation stay in the one program that already owns them. GOAT adds

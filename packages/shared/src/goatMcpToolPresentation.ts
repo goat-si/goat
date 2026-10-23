@@ -694,9 +694,80 @@ const GOAT_MCP_LEGACY_TOOL_ALIASES: Readonly<Record<string, string>> = {
   t3_worktree_status: "goat_worktree_status",
 };
 
+/**
+ * Canonical names (goat_<resource>_<verb>) that /mcp also accepts for a tool served under an
+ * older name, so history shows an alias call as the tool it ran. agentSurface.test.ts keeps this
+ * equal to the registry's aliases for every tool presented here.
+ */
+export const GOAT_MCP_CANONICAL_TOOL_ALIASES: Readonly<Record<string, string>> = {
+  goat_channel_bot_home_claim: "channel_bot_home_claim",
+  goat_channel_bot_home_read: "channel_bot_home",
+  goat_channel_ingest: "channel_ingest",
+  goat_channel_input_read: "channel_input_get",
+  goat_channel_task_export: "channel_task_export",
+  goat_channel_task_list: "channel_task_list",
+  goat_channel_task_move: "channel_task_move",
+  goat_channel_task_read: "channel_task_get",
+  goat_channel_task_report: "channel_task_report",
+  goat_cloud_agent_holders: "goat_cloud_holders",
+  goat_cloud_agent_launch: "goat_cloud_launch",
+  goat_cloud_agent_run_forget: "goat_cloud_run_forget",
+  goat_cloud_agent_run_list: "goat_cloud_run_list",
+  goat_cloud_agent_run_register: "goat_cloud_run_register",
+  goat_device_close: "device_close",
+  goat_device_list: "device_list",
+  goat_device_open: "device_open",
+  goat_device_screenshot: "device_screenshot",
+  goat_handoff_create: "request_secret",
+  goat_html_preview: "html_preview",
+  goat_html_render: "html_render",
+  goat_permission_profile_sync: "goat_goatclaw_sync",
+  goat_preview_back: "preview_back",
+  goat_preview_click: "preview_click",
+  goat_preview_dialog: "preview_dialog",
+  goat_preview_drag: "preview_drag",
+  goat_preview_evaluate: "preview_evaluate",
+  goat_preview_forward: "preview_forward",
+  goat_preview_hover: "preview_hover",
+  goat_preview_logs: "preview_logs",
+  goat_preview_navigate: "preview_navigate",
+  goat_preview_open: "preview_open",
+  goat_preview_press: "preview_press",
+  goat_preview_recording_start: "preview_recording_start",
+  goat_preview_recording_stop: "preview_recording_stop",
+  goat_preview_reload: "preview_reload",
+  goat_preview_resize: "preview_resize",
+  goat_preview_scroll: "preview_scroll",
+  goat_preview_select: "preview_select",
+  goat_preview_set_appearance: "preview_set_appearance",
+  goat_preview_snapshot: "preview_snapshot",
+  goat_preview_status: "preview_status",
+  goat_preview_type: "preview_type",
+  goat_preview_upload: "preview_upload",
+  goat_preview_wait: "preview_wait_for",
+  goat_provider_list: "orchestrator_capabilities",
+  goat_pull_request_guide_read: "read_pull_request_guide",
+  goat_pull_request_guide_update: "write_pull_request_guides",
+  goat_pull_request_link: "link_pull_request",
+  goat_pull_request_list: "list_thread_pull_requests",
+  goat_pull_request_unlink: "unlink_pull_request",
+  goat_pull_request_unwatch: "unwatch_pull_request",
+  goat_pull_request_watch: "watch_pull_request",
+  goat_schedule_create: "schedule_task",
+  goat_schedule_delete: "delete_scheduled_task",
+  goat_schedule_list: "list_scheduled_tasks",
+  goat_schedule_run: "run_scheduled_task_now",
+  goat_schedule_update: "update_scheduled_task",
+  goat_task_cancel: "task_cancel",
+  goat_task_create: "delegate_task",
+  goat_task_read: "task_status",
+  goat_thread_create_many: "create_threads",
+};
+
 export const GOAT_MCP_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...Object.keys(GOAT_MCP_TOOLS),
   ...Object.keys(GOAT_MCP_LEGACY_TOOL_ALIASES),
+  ...Object.keys(GOAT_MCP_CANONICAL_TOOL_ALIASES),
 ]);
 
 function normalizeGoatMcpToolLabel(value: string): string {
@@ -756,9 +827,12 @@ export function resolveGoatMcpToolDefinition(
   toolName: string | null | undefined,
 ): GoatMcpToolDefinition | null {
   const name = toolName == null ? null : resolveGoatMcpToolName(toolName);
-  const canonicalName = name === null ? null : (GOAT_MCP_LEGACY_TOOL_ALIASES[name] ?? name);
-  return canonicalName !== null && Object.hasOwn(GOAT_MCP_TOOLS, canonicalName)
-    ? GOAT_MCP_TOOLS[canonicalName]!
+  const servedName =
+    name === null
+      ? null
+      : (GOAT_MCP_LEGACY_TOOL_ALIASES[name] ?? GOAT_MCP_CANONICAL_TOOL_ALIASES[name] ?? name);
+  return servedName !== null && Object.hasOwn(GOAT_MCP_TOOLS, servedName)
+    ? GOAT_MCP_TOOLS[servedName]!
     : null;
 }
 
