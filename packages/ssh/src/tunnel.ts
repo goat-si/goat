@@ -4272,8 +4272,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ].includes(active.status.failure?.reason ?? "")
     )
       return active;
-    const preparing = (snapshot: SshHostResult | undefined, at: string) =>
-      snapshot?.status?.state === "preparing" && flights.isActive(at);
+    const preparing = (s: SshHostResult | undefined, at: string): s is SshHostResult =>
+      s?.status?.state === "preparing" && flights.isActive(at);
     if (preparing(active, knownKey) || active?.status?.state === "update_waiting") return active;
     const runner =
       options.resolveCliRunner === undefined ? undefined : yield* options.resolveCliRunner;
