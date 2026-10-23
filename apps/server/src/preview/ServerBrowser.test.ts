@@ -99,9 +99,9 @@ function makeSession(frame?: ReturnType<typeof makeFrame>) {
       if (method === "Page.createIsolatedWorld") {
         return {
           executionContextId:
-            (input as { worldName?: string }).worldName === "t3-preview"
+            (input as { worldName?: string }).worldName === "goat-preview"
               ? 1
-              : (input as { worldName?: string }).worldName === "t3-preview-metrics"
+              : (input as { worldName?: string }).worldName === "goat-preview-metrics"
                 ? 8
                 : 7,
         };

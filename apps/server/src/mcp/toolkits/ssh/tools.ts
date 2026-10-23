@@ -11,6 +11,7 @@ import {
   CloudMachineAlias,
   CloudMachinesCreateInput,
   CloudMachinesListResult,
+  GoatclawCeilingAdvice,
   HostPressureAdvice,
   ModelSelection,
   ProjectId,
@@ -293,6 +294,8 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     notes: Schema.Array(Schema.String),
     /** Set when that host was under resource pressure at its last status read. */
     pressure: Schema.optional(HostPressureAdvice),
+    /** Set when that host has not confirmed it enforces the forwarded goatclaw ceiling. */
+    ceiling: Schema.optional(GoatclawCeilingAdvice),
   }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.thread_launch"]));
 

@@ -127,7 +127,7 @@ export function ldconfigLibraries(output: string): ReadonlySet<string> {
 }
 
 /** What the pinned Linux driver binary links against, with the Debian/Ubuntu package for each. */
-export const LINUX_DRIVER_LIBRARIES = [
+const LINUX_DRIVER_LIBRARIES = [
   { soname: "libX11.so.6", package: "libx11-6" },
   { soname: "libXi.so.6", package: "libxi6" },
   { soname: "libxkbcommon.so.0", package: "libxkbcommon0" },
@@ -355,7 +355,7 @@ export function classifyWindows(
 const MAX_DISPLAYS = 8;
 const MAX_PROC_ENTRIES = 4_096;
 
-export const x11Handshake = (socketPath: string, cookie: Uint8Array | null) =>
+const x11Handshake = (socketPath: string, cookie: Uint8Array | null) =>
   Effect.callback<X11Outcome>((resume) => {
     let settled = false;
     const finish = (outcome: X11Outcome) => {

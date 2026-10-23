@@ -27,7 +27,9 @@ export const metaSurfaceEntries = {
     toolkit: "agentSurface",
     summary: "Find GOAT capabilities and whether this caller can use them",
     description:
-      'Describe GOAT\'s agent surface. Without path: every resource and its verbs. With a resource such as "thread": its paths, one-line summaries and effects. With a full path such as "thread.send" (or a tool name): input and output JSON Schema, effect, human steps, legacy names, and available.now for this caller, with the reason when a static check already refuses it. With query: up to 20 paths whose path, summary or description contain every word, best first, and truncated when more match; a resource as path narrows the search. Other checks still run when the call is made. Call a path with goat_call.',
+      "Find GOAT capabilities and how to call them. query takes words or a tool name: exact names come first, then paths with every word, then paths sharing some, with matchedWords. total, truncated and nextCursor say what else matched; a short or partial result never means nothing else exists. path takes a resource for its paths, or a path or tool name for its schemas and availability for this caller.",
+    guide:
+      "detail is names (path, name, summary), summary (the default: adds effect, requires, available and description) or full, for one path: input and output schema, guide, legacy names and human steps. limit is 1-50, default 10; pass nextCursor with the same query for the next page. coverage lists the fields and resources searched, the words ignored, and how many matches this server does not serve or this caller cannot use now; those are still returned, with available.now false. A query nothing matches returns the nearest paths. available.now reports only the static refusals the server is sure of; other checks run when the call is made. Call a path with goat_call.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -42,7 +44,9 @@ export const metaSurfaceEntries = {
     toolkit: "agentSurface",
     summary: "Call any GOAT capability by path and get one result shape",
     description:
-      'Call one GOAT capability by path ("thread.send"), canonical name ("goat_thread_send") or legacy tool name, with args exactly as that tool takes them. It runs the same checks as calling the tool directly and adds no permission. Returns status ok with value, error with code (invalid_request, unauthenticated, permission_denied, not_found, conflict, unavailable, timeout, expired, cancelled, internal), reason, message and retryable, or needs_human with a handoff: a person must finish a step, so do not retry; read the handoff\'s state instead. Find paths with goat_describe.',
+      "Call one GOAT capability by path, canonical name or legacy tool name, with args exactly as that tool takes them; it runs the same checks as a direct call and adds no permission. Returns status ok with value, error with code, reason and retryable, or needs_human with a handoff: a person must finish a step, so do not retry; read the handoff's state.",
+    guide:
+      "Error codes: invalid_request, unauthenticated, permission_denied, not_found, conflict, unavailable, timeout, expired, cancelled, internal; each carries reason, message and retryable. goat_call cannot call itself or goat_eval. Find paths with goat_describe.",
     // Destructive so clients that prompt for destructive tools still prompt here; each call keeps its target's checks.
     effect: "destructive",
     capability: "none",

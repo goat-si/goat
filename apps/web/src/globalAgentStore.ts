@@ -25,7 +25,7 @@ export interface GlobalAgentRef {
 export type GlobalAgentMode = "bot" | "thread";
 
 /** What the logo opens until someone picks a mode on this client. */
-export const DEFAULT_GLOBAL_AGENT_MODE: GlobalAgentMode = "thread";
+const DEFAULT_GLOBAL_AGENT_MODE: GlobalAgentMode = "thread";
 
 export interface GlobalAgentStoreState {
   ref: GlobalAgentRef | null;
