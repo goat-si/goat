@@ -2,7 +2,10 @@ import { tokenizeCliArgs } from "@goat/shared/cliArgs";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
-import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
+import {
+  withThreadMcpEnvironment,
+  type McpProviderSessionConfig,
+} from "@goat/provider-core/server/mcpSession";
 import { legacyEnvName, withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 import {
   PI_GOAT_MCP_EXTENSION_FILENAME,
@@ -289,7 +292,10 @@ export function buildPiRpcLaunch(input: {
   ) {
     args.push("--extension", input.extensionPath);
   }
-  const environment = { ...input.environment };
+  const environment = withThreadMcpEnvironment(
+    input.environment,
+    hasGoatMcp ? input.mcpSession : undefined,
+  );
   // These values belong to the current GOAT session. Never let a Pi child reuse
   // credentials inherited from the server or a parent provider process.
   for (const name of [GOAT_MCP_URL_ENV, GOAT_MCP_BEARER_ENV, GOAT_PI_MCP_EXTENSION_PATH_ENV]) {

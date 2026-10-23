@@ -51,6 +51,8 @@ export const DescribeResult = Schema.Union([
       canonicalName: Schema.String,
       legacyNames: Schema.Array(Schema.String),
       description: Schema.String,
+      /** Guidance longer than the listed description, for this path only. */
+      guide: Schema.optionalKey(Schema.String),
       hostRoutable: Schema.Boolean,
       requires: Schema.Literals(["thread", "client", "either"]),
       dryRun: Schema.Literals(["supported", "unsupported"]),

@@ -7,10 +7,11 @@ description: Test GOAT's native iOS and Android app through its Device panel and
 
 ## Open the device
 
-Call `device_list`, then `device_open` with the selected host and device IDs.
+GOAT's device tools run through `goat_call`. Call `goat_call {path:"device.list"}`, then
+`goat_call {path:"device.open"}` with the selected host and device IDs.
 GOAT boots the device and shows its live stream in the Device panel. Follow its
 returned `quickStart`, using the exact `agentDevice.command` and all `targetArgs`
-on every operation. Use `device_screenshot` to inspect the screen.
+on every operation. Use `goat_call {path:"device.screenshot"}` to inspect the screen.
 
 If GOAT device tools or the selected device are unavailable, report the blocker
 and stop verification. Do not install or switch to another automation system.
@@ -64,5 +65,5 @@ on Android. For a remote backend, use its reachable origin.
 
 Confirm the intended projects appear, exercise the affected flow, and capture
 evidence. Retain the app and environment while iterating. At teardown, remove
-the disposable connection, close the AgentDevice session, call `device_close`,
+the disposable connection, close the AgentDevice session, call `goat_call {path:"device.close"}`,
 and stop only your backend and Metro processes.

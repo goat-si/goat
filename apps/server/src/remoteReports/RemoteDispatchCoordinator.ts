@@ -597,9 +597,9 @@ const make = Effect.gen(function* () {
         // Refused before anything was sent, or by the target with a reason of its own.
         // A lost answer, or a target that failed after accepting it, may still have it.
         const refusedBeforeSending =
-          error.reason === "host_unknown" ||
-          error.reason === "invalid_request" ||
-          error.reason === "caller_changed" ||
+          ["host_unknown", "invalid_request", "caller_changed", "remote_outdated"].includes(
+            error.reason,
+          ) ||
           (error.reason === "remote_refused" &&
             error.remoteCode !== undefined &&
             error.remoteCode !== "orchestration_error");
@@ -1090,9 +1090,8 @@ const make = Effect.gen(function* () {
               const registered = yield* Deferred.isDone(owner);
               const refused =
                 (error instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-                  ["remote_refused", "invalid_request", "host_unknown", "caller_changed"].includes(
-                    error.reason,
-                  )) ||
+                  // Every reason except a transport failure, after which the send may have landed.
+                  !["ssh_failed", "host_unavailable"].includes(error.reason)) ||
                 (isOrchestratorMcpFailure(error) && !registered);
               if ((input.kind === "task" && !registered) || (input.kind === "thread" && refused)) {
                 yield* db(sql`DELETE FROM remote_dispatches WHERE correlation_id = ${id}`);
