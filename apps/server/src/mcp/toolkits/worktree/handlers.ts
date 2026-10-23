@@ -33,7 +33,8 @@ const requireWorktreeCapability = McpInvocationContext.McpInvocationContext.pipe
 
 /**
  * Runs `local` here, or the same tool on `host`, which answers for its own
- * worktrees. `writes` picks a host session that may change things.
+ * worktrees. `writes` picks a host session that may change things. A keyed write is admitted
+ * after the credential check, so a replay passes it again.
  */
 const hereOrOnHost = <P extends { readonly host?: string | undefined }, A extends object, E>(
   tool: string,
@@ -46,6 +47,7 @@ const hereOrOnHost = <P extends { readonly host?: string | undefined }, A extend
 ) =>
   Effect.gen(function* () {
     yield* requireWorktreeCapability;
+    yield* McpToolAccess.admit(input);
     const { host, ...rest } = input;
     if (host === undefined) return yield* local(rest);
     const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -76,6 +78,7 @@ const handlers = {
       hereOrOnHost("goat_worktree_remove", input, true, decodeRemove, (local) =>
         Effect.flatMap(inventoryService, (service) => service.remove(local)),
       ),
+    { admission: "handler" },
   ),
   // A dry run changes nothing, so only a real sweep needs a full-access caller.
   goat_worktree_cleanup: McpToolAccess.removesCheckouts(
