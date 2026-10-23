@@ -1,0 +1,38 @@
+import type { AgentSurfaceEntry, CapabilityDeclaration } from "./types.ts";
+
+/** The meta tools that reach every other path, kept beside the registry like notes.ts. */
+export const metaSurfaceEntries = {
+  describe: {
+    resource: "surface",
+    verb: "describe",
+    name: "goat_describe",
+    toolkit: "agentSurface",
+    summary: "Find GOAT capabilities and whether this caller can use them",
+    description:
+      'Describe GOAT\'s agent surface. Without path: every resource and its verbs. With a resource such as "thread": its paths, one-line summaries and effects. With a full path such as "thread.send" (or a tool name): input and output JSON Schema, effect, human steps, legacy names, and available.now for this caller, with the reason when a static check already refuses it. Other checks still run when the call is made. Call a path with goat_call.',
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  },
+  call: {
+    resource: "surface",
+    verb: "call",
+    name: "goat_call",
+    toolkit: "agentSurface",
+    summary: "Call any GOAT capability by path and get one result shape",
+    description:
+      'Call one GOAT capability by path ("thread.send"), canonical name ("goat_thread_send") or legacy tool name, with args exactly as that tool takes them. It runs the same checks as calling the tool directly and adds no permission. Returns status ok with value, error with code (invalid_request, unauthenticated, permission_denied, not_found, conflict, unavailable, timeout, expired, cancelled, internal), reason, message and retryable, or needs_human with a handoff: a person must finish a step, so do not retry; read the handoff\'s state instead. Find paths with goat_describe.',
+    // Destructive so clients that prompt for destructive tools still prompt here; each call keeps its target's checks.
+    effect: "destructive",
+    capability: "none",
+    capabilityReason: "Runs other tools, and each one checks its own capability for this caller.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: false, openWorldHint: false },
+  },
+} as const satisfies Record<string, AgentSurfaceEntry & CapabilityDeclaration>;

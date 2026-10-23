@@ -211,6 +211,39 @@ export const reads = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>)
   declare("read", (params: P) => handle(params));
 
 /**
+ * Runs other registered tools, each through its own declaration, so it adds no
+ * gate of its own. Declared a write so clients never auto-approve it as read-only.
+ */
+export const dispatches = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+  declare("write", (params: P) => handle(params));
+
+/**
+ * Receives a tool's original failure before the MCP layer flattens it into text.
+ * goat_call provides one per nested call, so the envelope keeps the error's tag,
+ * code and computed message; ordinary requests have none and nothing is recorded.
+ */
+export class CallFailureCapture extends Context.Service<
+  CallFailureCapture,
+  { readonly record: (error: unknown) => Effect.Effect<void> }
+>()("goat/mcp/McpToolAccess/CallFailureCapture") {}
+
+const recordFailure = (error: unknown) =>
+  Effect.serviceOption(CallFailureCapture).pipe(
+    Effect.flatMap((capture) =>
+      capture._tag === "Some" ? capture.value.record(error) : Effect.void,
+    ),
+  );
+
+const capturingFailures = <Handler>(handler: Handler): Handler =>
+  (typeof handler === "function"
+    ? (...args: ReadonlyArray<unknown>) => {
+        const result = (handler as (...args: ReadonlyArray<unknown>) => unknown)(...args);
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- wraps every handler shape; Handler restores the types.
+        return Effect.isEffect(result) ? result.pipe(Effect.tapError(recordFailure)) : result;
+      }
+    : handler) as Handler;
+
+/**
  * Changes nothing, but when `reachesHost` says the call goes to another
  * machine it uses this machine's SSH keys, so it then needs what
  * goat_ssh_browse needs: thread control, a client approved for more than
@@ -400,8 +433,12 @@ export class HandlersLayer<Tools extends Record<string, Tool.Any>, EX = never, R
   }
 }
 
-const checkedHandlers = <Handlers>(declarations: Declarations<Handlers>): Handlers =>
-  Struct.map(declarations, checkedHandler);
+const checkedHandlers = <Handlers>(declarations: Declarations<Handlers>): Handlers => {
+  const handlers: Readonly<Record<string, unknown>> = Struct.map(declarations, checkedHandler);
+  return Object.fromEntries(
+    Object.entries(handlers).map(([name, handler]) => [name, capturingFailures(handler)]),
+  ) as Handlers;
+};
 
 export const toLayer = <Tools extends Record<string, Tool.Any>, EX = never, RX = never>(
   toolkit: Toolkit.Toolkit<Tools>,
