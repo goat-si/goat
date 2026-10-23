@@ -214,14 +214,20 @@ it.effect("tells an outside client why a screenshot was refused, not only that i
       );
     expect(refused.isError).toBe(true);
     const text = refused.content[0]?.type === "text" ? refused.content[0].text : "";
-    expect(text).toContain("calling GOAT thread");
+    // Text-only clients such as Pi see just this block, so it carries the code as well.
+    const refusal = JSON.parse(text) as { readonly code: string; readonly message: string };
+    expect(refusal).toMatchObject({
+      _tag: "OrchestratorMcpFailure",
+      code: "thread_credential_required",
+    });
+    expect(refusal.message).toContain("calling GOAT thread");
     expect(refused.structuredContent).toEqual({
       error: {
         _tag: "OrchestratorMcpFailure",
         operation: "screenshot",
         failureCount: 1,
         code: "thread_credential_required",
-        message: text,
+        message: refusal.message,
       },
     });
   }).pipe(Effect.scoped, Effect.provide(layerTest)),

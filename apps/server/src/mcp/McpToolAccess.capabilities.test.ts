@@ -7,6 +7,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
 import { listedToolName } from "@goat/contracts/agentSurface/resolve";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -40,11 +41,16 @@ const result = {
 };
 // One probe per registered write. Declared as reads on purpose: the gate must follow the
 // registry entry, not the handler's own declaration.
+const hostKeys = hostArgumentsOf;
 const probes = writes.map((entry) =>
   Tool.make(entry.name, {
     ...result,
-    ...(entry.hostRoutable
-      ? { parameters: Schema.Struct({ host: Schema.optional(Schema.String) }) }
+    ...(hostKeys(entry).length > 0
+      ? {
+          parameters: Schema.Struct(
+            Object.fromEntries(hostKeys(entry).map((key) => [key, Schema.optional(Schema.String)])),
+          ),
+        }
       : {}),
   }),
 );
@@ -244,6 +250,124 @@ it.effect("needs threads.remote and an allowed host for a write that names a hos
     );
     expect(yield* call(listedToolName(send), threadCaller(caller))).toEqual({ ran: send.name });
   }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "manager" }))),
+);
+
+const limitProfileTo = (id: string, hosts: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const policy = (yield* settings.getSettings).goatclaw;
+    yield* settings.updateSettings({
+      goatclaw: {
+        ...policy,
+        profiles: { ...policy.profiles, [id]: { ...policy.profiles[id]!, hosts } },
+      },
+    });
+    return { settings, policy };
+  });
+
+// #856: a host-routed write without a capability of its own still reaches another machine.
+it.effect(
+  "holds a host-routed write that declares no capability to threads.remote and the allowlist",
+  () =>
+    Effect.gen(function* () {
+      yield* seed(caller);
+      const { settings, policy } = yield* limitProfileTo("manager", ["box"]);
+      for (const path of ["thread.watch", "thread.unwatch"]) {
+        const watch = entryAt(path);
+        expect(watch).toMatchObject({ hostRoutable: true, capability: "none" });
+        expect(yield* call(listedToolName(watch), threadCaller(caller), { host: "box" })).toEqual({
+          ran: watch.name,
+        });
+        expect(yield* call(listedToolName(watch), threadCaller(caller), { host: "other" })).toEqual(
+          {
+            code: "capability_denied",
+            message: `${watch.name} acts on host other, which needs the goatclaw threads.remote capability and a host the profile allows. Profile manager does not allow host other.`,
+          },
+        );
+      }
+      yield* settings.updateSettings({ goatclaw: { ...policy, defaultProfile: "worker" } });
+      const watch = entryAt("thread.watch");
+      expect(
+        yield* call(listedToolName(watch), threadCaller(caller), { host: "box" }),
+      ).toMatchObject(refusedFor("threads.remote"));
+      expect(yield* call(listedToolName(watch), threadCaller(caller))).toEqual({ ran: watch.name });
+    }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "manager" }))),
+);
+
+// #805, #857: these writes name the machine they act on outside a routing `host`.
+it.effect("applies the host allowlist to every argument a write declares names a host", () =>
+  Effect.gen(function* () {
+    yield* seed(caller);
+    // Owner holds every capability, so only the host decides.
+    yield* limitProfileTo("owner", ["box"]);
+    const declared = writes.filter((entry) => !entry.hostRoutable && hostKeys(entry).length > 0);
+    expect(declared.map((entry) => entry.path).toSorted()).toEqual([
+      "channel.task_move",
+      "host.cordon",
+      "host.drain",
+      "host.uncordon",
+      "hub.device_join",
+      "hub.device_leave",
+      "hub.device_repair",
+      "ssh.host_forget",
+      "ssh.host_prepare",
+      "ssh.runtime_update",
+      "thread.handoff_host",
+      "thread.replication_set",
+      "thread.reschedule",
+    ]);
+    for (const entry of declared) {
+      const keys = hostKeys(entry);
+      const allowed = Object.fromEntries(keys.map((key) => [key, "box"]));
+      expect(yield* call(listedToolName(entry), threadCaller(caller), allowed), entry.path).toEqual(
+        {
+          ran: entry.name,
+        },
+      );
+      for (const key of keys)
+        expect(
+          yield* call(listedToolName(entry), threadCaller(caller), { ...allowed, [key]: "other" }),
+          `${entry.path} ${key}`,
+        ).toMatchObject({
+          code: "capability_denied",
+          message: expect.stringContaining("Profile owner does not allow host other."),
+        });
+    }
+  }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "owner" }))),
+);
+
+// hub.manage alone checks the allowlist in HubMembership; the machine still needs threads.remote.
+it.effect("holds hub device writes to threads.remote for the device they name", () =>
+  Effect.gen(function* () {
+    yield* seed(caller);
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const policy = (yield* settings.getSettings).goatclaw;
+    const owner = policy.profiles.owner!;
+    yield* settings.updateSettings({
+      goatclaw: {
+        ...policy,
+        profiles: {
+          ...policy.profiles,
+          owner: {
+            ...owner,
+            capabilities: owner.capabilities.filter(
+              (capability) => capability !== "threads.remote",
+            ),
+          },
+        },
+      },
+    });
+    for (const path of ["hub.device_join", "hub.device_leave", "hub.device_repair"]) {
+      const entry = entryAt(path);
+      expect(entry.capability).toBe("hub.manage");
+      expect(
+        yield* call(listedToolName(entry), threadCaller(caller), { deviceAlias: "box" }),
+      ).toEqual({
+        code: "capability_denied",
+        message: `${entry.name} acts on host box, which needs the goatclaw threads.remote capability and a host the profile allows. Profile owner does not allow threads.remote.`,
+      });
+    }
+  }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "owner" }))),
 );
 
 it.effect("holds a thread launched with a forwarded ceiling to that ceiling", () =>

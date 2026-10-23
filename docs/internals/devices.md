@@ -9,7 +9,7 @@ Device panel work over Tailscale and T3 Connect, including when an SSH host runs
 
 [expo-device-hub](../../apps/server/src/device/LocalDeviceHost.ts) streams and
 [agent-device](../../apps/server/src/device/AgentDeviceShim.ts) drives. Each is
-npm-installed at a pinned version into the T3 home after its matching Device
+npm-installed at a pinned version into the GOAT home after its matching Device
 panel consent step. Manual setup installs and starts only expo-device-hub;
 agent-device remains absent and stopped until agent access is granted. Both run
 with the server's Node; `npx` would make the first `goat_device_open` after a reboot
