@@ -568,14 +568,22 @@ export const layer = Layer.effect(
                 ceiling_json: string;
               }>`SELECT profile_id, ceiling_json FROM goatclaw_thread_profiles WHERE thread_id = ${input.childThreadId}`)[0];
               // A first binding's snapshot carries the id of what narrowed it, so the child's
-              // refusals name that ceiling rather than the profile it is bound under. A wider
-              // source removed nothing, so it is never the one named.
-              const narrows = (source: PermissionProfile) =>
-                encodeProfile(intersectProfiles(base, source)) !== encodeProfile(base);
-              const narrower = [
+              // refusals name that ceiling rather than the profile it is bound under. The
+              // snapshot holds one id for every field, so a source is named only when it is
+              // within the base and every other source: then whatever the snapshot refuses,
+              // that source refuses too.
+              const sources = [
                 ...(effective.narrowing?.ceilings ?? []),
                 ...(input.role === undefined ? [] : [effective.profile]),
-              ].findLast((source) => source.id !== granted.profile.id && narrows(source));
+              ];
+              const withinAll = (source: PermissionProfile) =>
+                [base, ...sources].every(
+                  (other) =>
+                    encodeProfile(intersectProfiles(source, other)) === encodeProfile(source),
+                );
+              const narrower = sources.findLast(
+                (source) => source.id !== granted.profile.id && withinAll(source),
+              );
               const inherited =
                 previous === undefined
                   ? { ...granted.profile, ...(narrower === undefined ? {} : { id: narrower.id }) }
