@@ -614,8 +614,10 @@ give the person a terminal route.
 host. Writes forward the caller's runtime ceiling. Since
 [#758](https://github.com/goat-si/goat/pull/758), a follow-up `thread.send` with
 `host` also forwards the caller's goatclaw ceiling as `permissionProfileCeiling`,
-and the origin refuses a destination that has not shown it enforces ceilings
-instead of falling back to the relay, which would deliver without one. Remote
+and a send that carries one never falls back to the relay, which would deliver
+without it. A destination that has not yet confirmed it enforces ceilings still
+gets the launch or send, and the result's `ceiling` field says so; a launch to a
+destination that cannot accept a ceiling at all is still refused. Remote
 servers built before canonical names answer only to the tool names they shipped with
 ([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)), so the origin sends a
 host-routed call under its canonical name only to a remote whose `serverVersion` is past
