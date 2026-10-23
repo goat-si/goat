@@ -93,7 +93,7 @@ returns `_meta["goat/deprecated"]` naming the listed name
 ([ToolDispatch.ts](../../apps/server/src/mcp/ToolDispatch.ts) `withServedToolNames`).
 Toolkits register under the shipped name, so access declarations, capability checks, and
 analytics keep that key whichever name a caller used; only the listing renames
-(`layerListedToolNames`). Paths that used a near synonym of a standard verb were
+(`McpHttpServer` `withListedNames`). Paths that used a near synonym of a standard verb were
 normalized (D11): `decision.read`, `permission_profile.read`,
 `thread.configuration_read`, `provider.sync_read`, `origin.report_wait`,
 `memory.settings_read`, `memory.source_read`, and `preview.wait`. `goat_call` and
@@ -425,13 +425,13 @@ message is always the text the direct call shows, so free-text reasons the direc
 scrubs never leave through it. Writes count as unkeyed until the registry gains
 `idempotency`, and routed calls set `meta.host`.
 
-**Now.** A direct `tools/call` by a canonical alias runs the served tool. The `/mcp`
-auth middleware swaps the name for the served one before Effect's MCP core sees the
-request, because the core checks one visibility predicate for both `tools/list` and
+**Now.** A direct `tools/call` by a legacy name runs the listed tool. The `/mcp` auth
+middleware swaps the name for the listed one before Effect's MCP core sees the request,
+because the core checks one visibility predicate for both `tools/list` and
 `tools/call` and cannot hide a tool that stays callable. The call therefore gets the
-served tool's argument refusal, access checks, and result, and analytics record it
-under the served name, so each tool keeps one series until the flip renames it.
-Remote hosts are still called by the names they shipped with.
+listed tool's argument refusal, access checks, and result, plus
+`_meta["goat/deprecated"]`. Analytics record every call under the shipped name the
+toolkit registers, whichever name the caller used, so each tool keeps one series.
 
 ## Composition: `goat_eval`
 
@@ -539,20 +539,22 @@ authenticated client RPC. Agents get `HandoffSummary`.
 
 Around it, a human step reaches an agent in several shapes:
 
-| Flow                         | Agent sees                                        | Who resolves                          | What continues                                       |
-| ---------------------------- | ------------------------------------------------- | ------------------------------------- | ---------------------------------------------------- |
-| SSH trust, key, update       | `needs_human` with `next.call`                    | person with environment scopes        | server continues prepare and update; trust only pins |
-| Provider sync                | `needs_human` with `next.call`                    | person with `providers:manage`        | server runs the sync under the approver's session    |
-| Provider setup, Codex home   | `needs_human` with `next.call`                    | person with `providers:manage`        | person finishes in the app; agent calls again        |
-| Computer use                 | `needs_human` beside `available` and `refused`    | person with settings authority        | an admission lease; tools attach next turn           |
-| Sign-in by a managing client | `{kind: "flow"}` with `continueIn`                | the session that started it           | a server fiber, in memory                            |
-| Secrets                      | a blocking result with `secretRef`                | person in the thread                  | agent uses the ref in a later call                   |
-| Runtime approvals, questions | a pending request by `requestId`                  | person, or an outside approver client | the provider run                                     |
-| Decisions                    | `DecisionItem` by id                              | agent or person, per item             | answer delivered as a thread message                 |
-| Cloud launch consent         | `capability_denied` text telling the agent to ask | person answering a decision `approve` | agent calls launch again with `decisionId`           |
+| Flow                         | Agent sees                                                                       | Who resolves                             | What continues                                                                                                                                                   |
+| ---------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SSH trust, key, update       | `needs_human` with `next.call`                                                   | person with environment scopes           | server continues prepare and update; trust only pins                                                                                                             |
+| Provider sync                | `needs_human` with `next.call`                                                   | person with `providers:manage`           | server runs the sync under the approver's session                                                                                                                |
+| Provider setup, Codex home   | `needs_human` with `next.call`                                                   | person with `providers:manage`           | person finishes in the app; agent calls again                                                                                                                    |
+| Computer use                 | `needs_human` beside `available` and `refused`                                   | person with settings authority           | an admission lease; tools attach next turn                                                                                                                       |
+| Sign-in by a managing client | `{kind: "flow"}` with `continueIn`                                               | the session that started it              | a server fiber, in memory                                                                                                                                        |
+| Secrets                      | a blocking result with `secretRef`                                               | person in the thread                     | agent uses the ref in a later call                                                                                                                               |
+| Runtime approvals, questions | a pending request by `requestId`                                                 | person, or an outside approver client    | the provider run                                                                                                                                                 |
+| Decisions                    | `DecisionItem` by id                                                             | agent or person, per item                | answer delivered as a thread message                                                                                                                             |
+| Cloud launch consent         | `needs_human` from a thread; outside one, a refusal naming a decision GOAT filed | person approving the handoff or decision | agent calls launch again with the same arguments and `handoffId` or `decisionId`; the approval binds a digest of the launch and its holder and starts one launch |
 
-One gap follows. A handoff resolving does not wake the thread that asked; it
-only updates the card. Who may resolve a step is one predicate
+When a handoff resolves or expires, GOAT wakes the thread that asked with a
+queued message naming the next call
+([HandoffWakeReactor.ts](../../apps/server/src/handoffs/HandoffWakeReactor.ts)).
+Who may resolve a step is one predicate
 ([HumanStepAuthority.ts](../../apps/server/src/handoffs/HumanStepAuthority.ts)),
 used by pending-question MCP, the decision inbox, and handoffs, so an outside
 client holding `orchestration:approve` answers a provider approval the same way
@@ -868,7 +870,7 @@ every gate runs per step (D7).
 | D17 | `needs_human` only with a handoff a person can act on; a block nobody can clear stays `error`                                                                     | A human status that does not hold makes agents hand back work no person can fix                                                                  | Inferring human steps from messages            |
 | D18 | The D8 gate is a written protocol with paired ABBA runs, an oracle per workload, and model turns as the primary metric                                            | Agent-level timing hid real gains behind per-turn cost in aside-codemode; fewer turns and bytes were the measurable effect                       | A wall-clock threshold                         |
 | D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                        | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                 | Renaming paths to match shipped names          |
-| D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks, result and analytics name apply                                            | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                           | Registering alias tools, which would list them |
+| D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                           | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                           | Registering alias tools, which would list them |
 
 ## Open questions
 

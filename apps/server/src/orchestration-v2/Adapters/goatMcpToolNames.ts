@@ -32,6 +32,12 @@ export const claudeGoatToolName = (name: string) => {
   return claude(entry === undefined ? name : listedToolName(entry));
 };
 
+/** A Claude allowedTools entry with any GOAT tool it names by its listed name; others unchanged. */
+export const claudeAllowedToolName = (tool: string) =>
+  tool.startsWith(CLAUDE_GOAT_TOOL_PREFIX)
+    ? claudeGoatToolName(tool.slice(CLAUDE_GOAT_TOOL_PREFIX.length))
+    : tool;
+
 // Automatic approval policy is separate from Tool.Readonly metadata.
 // Preserve html_render preapproval; reading another thread still requires approval.
 export const CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = (

@@ -8,7 +8,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Fixture from "./mcp/toolkits/memory/handlers.testkit.ts";
 import * as McpToolAccessTestkit from "./mcp/McpToolAccess.testkit.ts";
 import * as Sync from "./memory/MemorySyncService.ts";
-import * as MemoryService from "./memory/MemoryService.ts";
 import * as Snapshot from "./memory/MemorySnapshot.ts";
 import * as Projection from "./orchestration-v2/ProjectionStore.ts";
 import * as Identity from "./environment/ServerEnvironment.ts";
@@ -17,9 +16,19 @@ import {
   layerMemoryToolkits,
   MemorySourceReadBinding,
   layerMemorySourceReadBinding,
-  layerMemoryHubAdministration,
   layerMemorySnapshot,
 } from "./server.ts";
+
+// The application's own memory toolkits, over a Sync that only answers hub settings updates.
+const servedMemoryToolkits = (sync: Layer.Layer<Sync.MemorySyncService>) =>
+  layerMemoryToolkits.pipe(
+    Layer.provide(Fixture.core),
+    Layer.provide(Layer.mock(Settings.ServerSettingsService)({})),
+    Layer.provide(sync),
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
+    Layer.provide(NodeServices.layer),
+  );
 
 it.effect(
   "the application registers the nine core tools and three administration tools on one MCP server",
@@ -42,71 +51,56 @@ it.effect(
       expect(result.body).toEqual({ settings: { mode: "disabled" }, version: 4 });
     }).pipe(
       Effect.provide(
-        layerMemoryToolkits.pipe(
-          Layer.provide(Fixture.core),
-          Layer.provide(Layer.mock(Settings.ServerSettingsService)({})),
-          Layer.provide(
-            Layer.mock(Sync.MemorySyncService)({
-              updateHubSettings: (input, permit) =>
-                permit.pipe(
-                  Effect.as({
-                    view: {
-                      members: [],
-                      settings: { mode: "disabled" },
-                      version: input.expectedVersion + 1,
-                    },
-                    credential: null,
-                  }),
-                ),
-            }),
-          ),
-          Layer.provideMerge(McpServer.McpServer.layer),
-          Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
-          Layer.provide(NodeServices.layer),
+        servedMemoryToolkits(
+          Layer.mock(Sync.MemorySyncService)({
+            updateHubSettings: (input, permit) =>
+              permit.pipe(
+                Effect.as({
+                  view: {
+                    members: [],
+                    settings: { mode: "disabled" },
+                    version: input.expectedVersion + 1,
+                  },
+                  credential: null,
+                }),
+              ),
+          }),
         ),
       ),
     ),
 );
 
-it.effect("disable forwards CAS and the live permit to Sync and returns a noncredential view", () =>
-  Effect.gen(function* () {
-    let calls = 0;
-    const sync = Layer.mock(Sync.MemorySyncService)({
-      updateHubSettings: (input, permit) =>
-        Effect.gen(function* () {
-          yield* permit;
-          expect(input).toEqual({
-            requestId: M.MemoryOperationId.make(Fixture.id(31)),
-            expectedVersion: 7,
-            action: "configure",
-            settings: { mode: "disabled" },
-          });
-          calls++;
-          return {
-            view: { members: [], settings: { mode: "disabled" }, version: 8 },
-            credential: null,
-          };
-        }),
-    });
-    yield* Effect.gen(function* () {
-      const service = yield* Settings.MemoryHubAdministration;
-      const input = { requestId: M.MemoryOperationId.make(Fixture.id(31)), expectedVersion: 7 };
-      expect(
-        (yield* Effect.flip(
-          service.disableHub(
-            input,
-            Effect.fail(new MemoryService.MemoryAccessError({ code: "unavailable" })),
-          ),
-        )).code,
-      ).toBe("unavailable");
-      expect(calls).toBe(0);
-      expect(yield* service.disableHub(input, Effect.void)).toEqual({
-        settings: { mode: "disabled" },
-        version: 8,
+it.effect(
+  "served disable forwards CAS and the live permit to Sync and returns a noncredential view",
+  () =>
+    Effect.gen(function* () {
+      const calls: Array<unknown> = [];
+      const sync = Layer.mock(Sync.MemorySyncService)({
+        updateHubSettings: (input, permit) =>
+          Effect.gen(function* () {
+            yield* permit;
+            calls.push(input);
+            return {
+              view: { members: [], settings: { mode: "disabled" }, version: 8 },
+              credential: null,
+            };
+          }),
       });
-      expect(calls).toBe(1);
-    }).pipe(Effect.provide(layerMemoryHubAdministration.pipe(Layer.provide(sync))));
-  }),
+      yield* Effect.gen(function* () {
+        const input = { requestId: M.MemoryOperationId.make(Fixture.id(31)), expectedVersion: 7 };
+        expect((yield* Fixture.call("memory_hub_disable", input)).body).toMatchObject({
+          code: "unavailable",
+        });
+        expect(calls).toEqual([]);
+        const result = yield* Fixture.call(
+          "memory_hub_disable",
+          input,
+          Fixture.scope(["settings:write"]),
+        );
+        expect(result.body).toEqual({ settings: { mode: "disabled" }, version: 8 });
+        expect(calls).toEqual([{ ...input, action: "configure", settings: { mode: "disabled" } }]);
+      }).pipe(Effect.provide(servedMemoryToolkits(sync)));
+    }),
 );
 
 it.effect("two consumers of the application Snapshot layer observe the same instance", () =>
