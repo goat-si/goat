@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - the ACP stdio bridge reads a native stream, as it does from an agent.
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off - each harness's own MCP client is native fetch, and the ACP stdio bridge reads a native stream, as they do from an agent.
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
@@ -225,10 +225,16 @@ describe("what each harness is offered from GOAT's /mcp", () => {
   it.effect("ACP: the stdio bridge and the MCP-over-ACP bridge both pass the listing through", () =>
     forEachListing((endpoint, listing) =>
       Effect.gen(function* () {
-        const context = acpMcpContext(session(endpoint), { command: "goat" });
-        const env = new Map(
-          (context.servers[0]?.env ?? []).map((variable) => [variable.name, variable.value]),
-        );
+        const context = acpMcpContext(session(endpoint), {
+          command: "goat",
+          entrypoint: undefined,
+        });
+        const stdio: unknown = context.servers.find((server) => server.name === "goat");
+        const variables =
+          typeof stdio === "object" && stdio !== null && "env" in stdio && Array.isArray(stdio.env)
+            ? (stdio.env as ReadonlyArray<{ readonly name: string; readonly value: string }>)
+            : [];
+        const env = new Map(variables.map((variable) => [variable.name, variable.value]));
         expectOffered(
           yield* listThroughStdioBridge(
             env.get("GOAT_ACP_MCP_ENDPOINT") ?? "",
@@ -252,7 +258,10 @@ describe("what each harness is offered from GOAT's /mcp", () => {
             clientInfo: { name: "acp-agent", version: "1" },
           },
         });
-        const listed = (yield* bridge.message({ connectionId, method: "tools/list" })) as {
+        const listed = (yield* bridge.message({
+          connectionId,
+          method: "tools/list",
+        })) as unknown as {
           readonly tools: ReadonlyArray<ListedTool>;
         };
         expectOffered(listed.tools, listing);
