@@ -5,6 +5,9 @@
  *
  * Plan and reasons: devlog/_plan/261013_remove-t3-internals/000_plan.md.
  */
+import { isTest } from "./paths.ts";
+export { isTest } from "./paths.ts";
+
 import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
 import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 
@@ -32,11 +35,6 @@ export const isExempt = (path: string): boolean =>
   (path.startsWith(".github/workflows/") && !path.startsWith(".github/workflows/goat-")) ||
   // AUR packaging is published only by the disabled upstream workflow.
   path.startsWith("packaging/aur/");
-
-export const isTest = (path: string): boolean =>
-  /\.(?:test|testkit|fixture|bench)\.[^/]+$|(?:^|\/)(?:__tests__|testkit|testFixtures|fixtures)(?:\/|$)/.test(
-    path,
-  );
 
 const inLintPlugin = (path: string) => path.startsWith("oxlint-plugin-");
 
@@ -115,7 +113,7 @@ export const ENV_NAME = new RegExp(
 
 /** The SSH runner and the fixtures that pin its bytes (plan D17). */
 const outsideSshRunner = (path: string) =>
-  !path.startsWith("packages/ssh/") && !path.startsWith("apps/server/src/sshRemote/");
+  !/^packages\/ssh\/src\/(tunnel[^/]*|fixtures\/.*)$/.test(path);
 
 /** Lint rule ids are listed so that unrelated `t3code/...` paths and branch names stay. */
 const LINT_RULE_IDS =

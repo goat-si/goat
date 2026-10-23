@@ -1,5 +1,9 @@
 import type { KeepRule, TextRule } from "./engine.ts";
-import { isTest } from "./rules.ts";
+import { isTest } from "./paths.ts";
+
+const productName =
+  /(?<![Uu]pstream |fork of \[?|original |any )T3 Code(?! versions\b| \((?:Alpha|Dev|Nightly)\)| <stage>| server\$| Test\b| Relay API)/g;
+const kdeCapturePath = "apps/desktop/src/snapShot/KdeSnapShot.ts";
 
 const isCopySurface = (path: string): boolean =>
   !isTest(path) &&
@@ -24,9 +28,17 @@ export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
     id: "visible-product-name",
     category: "visible-copy",
     // "T3 Code versions" describes upstream compatibility; older GOAT failures still rename.
-    find: /(?<![Uu]pstream |fork of \[?|original |any )T3 Code(?! versions\b| \((?:Alpha|Dev|Nightly)\)| <stage>| server\$| Test\b| Relay API)/g,
+    find: productName,
     replace: "GOAT",
-    scope: isCopySurface,
+    // KDE readiness compares the installed entry byte-for-byte (ADR-0014).
+    scope: (path) => isCopySurface(path) && path !== kdeCapturePath,
+  },
+  {
+    id: "visible-kde-copy",
+    category: "visible-copy",
+    find: new RegExp(`(?<!Name=)${productName.source}`, "g"),
+    replace: "GOAT",
+    scope: (path) => path === kdeCapturePath,
   },
   {
     id: "visible-cli-command",
@@ -43,6 +55,12 @@ export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
 ];
 
 export const VISIBLE_KEEP_RULES: readonly KeepRule[] = [
+  {
+    id: "kde-capture-desktop-name",
+    pattern: /Name=T3 Code SnapShots/g,
+    scope: (path) => path === kdeCapturePath,
+    reason: "ADR-0014 capture identity: byte-compared readiness must accept existing installs.",
+  },
   {
     id: "upstream-maintainer-text",
     pattern: /[Tt]3[^\n]*/g,

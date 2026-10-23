@@ -1,10 +1,18 @@
 import { assert, it } from "@effect/vitest";
 
-import { buildTriageContext, buildTriageLaunchPrompt, TRIAGE_PLAYBOOK } from "./triagePrompt.ts";
+import { exposureProblems } from "../../../../scripts/lib/release-verify.ts";
 
-it("keeps GOAT diagnostics on GOAT source and release instructions", () => {
+import {
+  buildTriageContext,
+  buildTriageLaunchPrompt,
+  buildTriageSeedPrompt,
+  TRIAGE_PLAYBOOK,
+} from "./triagePrompt.ts";
+
+it("bundles triage instructions without exposing the private source repository", () => {
+  assert.deepEqual(exposureProblems("triage-playbook.md", TRIAGE_PLAYBOOK), []);
+  assert.deepEqual(exposureProblems("triage-seed.md", buildTriageSeedPrompt("context.md")), []);
   assert.include(TRIAGE_PLAYBOOK, "# GOAT triage playbook");
-  assert.include(TRIAGE_PLAYBOOK, "https://github.com/goat-si/goat");
   assert.notInclude(TRIAGE_PLAYBOOK, "pingdotgg/t3code");
   assert.notInclude(TRIAGE_PLAYBOOK, "npx t3");
 });
@@ -43,6 +51,7 @@ it("context file labels the CLI version as the CLI's, not the user's build", () 
       sourceCacheDir: "/home/u/.t3/source",
     },
   });
+  assert.deepEqual(exposureProblems("triage-context.md", context), []);
   assert.notInclude(context, "Installed version");
   assert.notInclude(context, "Release tag");
   assert.include(context, "- Triage CLI version: 0.0.42 (");

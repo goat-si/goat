@@ -17,7 +17,7 @@ describe("server service keys", () => {
   });
 
   it("keeps SSH runner environment handoffs", () => {
-    const source = "T3CODE_NO_BROWSER=1";
+    const source = "T3CODE_NO_BROWSER=1 # goat-rename: legacy";
     expect(
       applyTextRules("packages/ssh/src/runtimeOwnershipScripts.ts", source, TEXT_RULES).text,
     ).toBe(source);
@@ -40,6 +40,11 @@ describe("package scope", () => {
 });
 
 describe("env names", () => {
+  it("renames SSH auth variables outside the frozen tunnel runner", () => {
+    expect(applyTextRules("packages/ssh/src/auth.ts", "T3_SSH_AUTH_SECRET", TEXT_RULES).text).toBe(
+      "GOAT_SSH_AUTH_SECRET",
+    );
+  });
   const rename = (source: string) =>
     applyTextRules("apps/server/src/x.ts", source, TEXT_RULES).text;
 
@@ -580,6 +585,15 @@ const keptVisibleCopy = [
 ] as const;
 
 describe("visible GOAT copy", () => {
+  it("preserves KDE capture's installed desktop entry identity (ADR-0014)", () => {
+    const path = "apps/desktop/src/snapShot/KdeSnapShot.ts";
+    const source = '    "Name=T3 Code SnapShots",';
+    expect(applyTextRules(path, source, TEXT_RULES).text).toBe(source);
+    expect(findResidue(path, source, KEEP_RULES)).toEqual([]);
+    expect(applyTextRules(path, '"T3 Code capture failed"', TEXT_RULES).text).toBe(
+      '"GOAT capture failed"',
+    );
+  });
   it.each(keptVisibleCopy)("keeps inventory copy in %s", (path, current) => {
     expect(applyTextRules(path, current, TEXT_RULES).text).toBe(current);
   });

@@ -118,7 +118,7 @@ T3 Connect does not have an active link between your account and the host.
 - **This device's sign-in expired, or the host no longer accepts this
   device.** Sign out of T3 Connect and sign in again.
 - **Your account reached its tunnel limit.** Remove an environment you do not
-  use from your T3 Connect account's T3 Connect page, then restart GOAT on the host.
+  use from your account's T3 Connect page, then restart GOAT on the host.
 
 ## The clock is off
 

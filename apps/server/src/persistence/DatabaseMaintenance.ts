@@ -69,7 +69,7 @@ export class LegacyDatabaseRemoveError extends Schema.TaggedError<LegacyDatabase
   }
 }
 
-/** Offline inspection and repair of a T3 state database, for `goat doctor`. */
+/** Offline inspection and repair of a GOAT state database, for `goat doctor`. */
 export class DatabaseMaintenance extends Context.Service<
   DatabaseMaintenance,
   {

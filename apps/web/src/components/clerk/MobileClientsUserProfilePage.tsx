@@ -95,7 +95,6 @@ function EmptyMobileClients() {
         <EmptyTitle>No mobile clients</EmptyTitle>
         <EmptyDescription>
           GOAT Connect is coming soon. Use direct pairing or Tailscale to connect your phone.
-          Activities.
         </EmptyDescription>
       </EmptyHeader>
     </Empty>

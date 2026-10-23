@@ -26,7 +26,7 @@ import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { serverEnvironment, updateOutdatedServer } from "~/state/server";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { manualServerUpdateCommand } from "~/versionSkew";
+import { manualServerUpdateInstructions } from "~/versionSkew";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -232,19 +232,21 @@ export function ServerUpdateAction({
     (settings) => settings.continueThreadsAfterServerUpdate,
   );
   const update = useServerUpdate();
-  const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
-    target: "update command",
-    onCopy: ({ command }) => {
+  const { copyToClipboard } = useCopyToClipboard<{ instructions: string }>({
+    target: "update instructions",
+    onCopy: ({ instructions }) => {
       toastManager.add({
         type: "success",
-        title: "Update command copied",
-        description: `Run \`${command}\` on ${serverLabel}, then restart GOAT with your usual options. If goat is not installed, install it from https://github.com/goat-si/goat-releases/releases first.`,
+        title: "Update instructions copied",
+        description: installation
+          ? `On ${serverLabel}: ${instructions}`
+          : `Run \`${instructions}\` on ${serverLabel}, then restart GOAT with your usual options.`,
       });
     },
     onError: (error) => {
       toastManager.add({
         type: "error",
-        title: "Could not copy update command",
+        title: "Could not copy update instructions",
         description: error.message,
       });
     },
@@ -286,12 +288,12 @@ export function ServerUpdateAction({
     );
   }
 
-  const manualCommand =
-    selfUpdate === null ? manualServerUpdateCommand(targetVersion, installation) : null;
-  const actionLabel = manualCommand !== null ? "Copy update command" : label;
+  const manualInstructions =
+    selfUpdate === null ? manualServerUpdateInstructions(targetVersion, installation) : null;
+  const actionLabel = manualInstructions !== null ? "Copy update instructions" : label;
   const onClick =
-    manualCommand !== null
-      ? () => copyToClipboard(manualCommand, { command: manualCommand })
+    manualInstructions !== null
+      ? () => copyToClipboard(manualInstructions, { instructions: manualInstructions })
       : () => void handleUpdate();
 
   if (appearance === "icon") {
@@ -304,7 +306,7 @@ export function ServerUpdateAction({
               variant="ghost-muted"
               className={className}
               aria-label={`${actionLabel} for ${serverLabel}`}
-              disabled={manualCommand === null && !canUpdate}
+              disabled={manualInstructions === null && !canUpdate}
               onClick={onClick}
             />
           }
@@ -321,7 +323,7 @@ export function ServerUpdateAction({
       size={size}
       variant={variant}
       className={className}
-      disabled={manualCommand === null && !canUpdate}
+      disabled={manualInstructions === null && !canUpdate}
       onClick={onClick}
     >
       {actionLabel}

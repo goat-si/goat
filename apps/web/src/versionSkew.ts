@@ -101,11 +101,13 @@ export function supportsServerUpdateThreadContinuation(
   return serverConfig?.environment.capabilities.serverUpdateThreadContinuation === true;
 }
 
-export function manualServerUpdateCommand(
+export function manualServerUpdateInstructions(
   targetVersion: string,
-  _installation?: ServerInstallation,
+  installation?: ServerInstallation,
 ): string {
-  return `goat update ${targetVersion}`;
+  return installation
+    ? `Install GOAT ${targetVersion} from https://github.com/goat-si/goat-releases/releases, then restart GOAT with your usual options.`
+    : `goat update ${targetVersion}`;
 }
 
 export function serverUpdateGuidance(capability: ServerSelfUpdateCapability): string {
