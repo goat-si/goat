@@ -118,8 +118,11 @@ import {
 } from "./RestartBackgroundNote.ts";
 import {
   isBufferedProviderNotification,
+  followsCurrentConversation,
   isUndeliveredMailboxSteer,
+  queuedRunModelSelection,
 } from "./NotificationMailbox.ts";
+import { foldIntoQueuedNotice } from "./TurnDigest.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
@@ -753,25 +756,6 @@ function nextQueuedRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
 ): OrchestrationV2Run | undefined {
   return queuedRunsInDeliveryOrder(projection)[0];
-}
-
-function followsCurrentConversation(
-  message: OrchestrationV2ConversationMessage | undefined,
-): boolean {
-  return (
-    message?.notification?.source.kind === "monitor" && !isBufferedProviderNotification(message)
-  );
-}
-
-function queuedRunModelSelection(
-  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "messages">,
-  run: OrchestrationV2Run,
-): ModelSelection {
-  const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
-  // App-owned monitor updates follow the agent currently handling the thread.
-  return followsCurrentConversation(message)
-    ? projection.thread.modelSelection
-    : run.modelSelection;
 }
 
 function usageLimitHoldsQueue(
@@ -5575,6 +5559,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     if (shouldQueue) {
+      const fold = foldIntoQueuedNotice(projection, command, yield* DateTime.now);
+      if (fold !== undefined) return void (yield* emit(events, command)(fold));
       if (pendingMergeBackTransfers.length > 0) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,

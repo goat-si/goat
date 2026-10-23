@@ -66,6 +66,15 @@ export const frameRelayOutcome = (input: {
         ]),
   ].join("\n");
 
+/** Message-id prefixes of the wakes RemoteDispatchCoordinator and RemoteReportService dispatch. */
+export const REMOTE_NOTICE_MESSAGE_PREFIXES: ReadonlyArray<string> = [
+  "message:remote-report:",
+  "message:remote-relay:",
+  "message:remote-task-question:",
+  "message:remote-task-outage:",
+  "message:origin-report:",
+];
+
 /** Pending reports ahead of the user's text, fenced so they cannot pass for it. */
 export const framePendingReports = (texts: ReadonlyArray<string>) =>
   [
