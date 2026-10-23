@@ -794,7 +794,7 @@ Each PR ships on its own and leaves `tools/list` unchanged until the flip.
 | 7   | Operations over existing stores; durable provider sync                        | Proposed                                                                                                                                                                   |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
 | 9   | Registry-generated CLI commands and credentials                               | Proposed                                                                                                                                                                   |
-| 10  | Listing flip, verb normalization, remote name translation                     | Started: canonical names callable as hidden aliases                                                                                                                        |
+| 10  | Listing flip, verb normalization, remote name translation                     | Started: canonical names callable as unlisted aliases ([#906](https://github.com/goat-si/goat/pull/906))                                                                   |
 | 11  | `goat_eval`                                                                   | Gated on measurement                                                                                                                                                       |
 
 Testing follows the repository rules: focused tests per behavior, effect worker
