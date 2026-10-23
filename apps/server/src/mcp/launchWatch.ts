@@ -170,6 +170,9 @@ export const OUTAGE_NOTICE_FAILURES = 3;
 const BACKOFF_BASE_MS = 30_000;
 const BACKOFF_MAX_MS = 15 * 60_000;
 export const EXCERPT_MAX_CHARS = 1_500;
+/** A wake quotes only the start of the last message; the thread holds the rest. */
+const WAKE_EXCERPT_LINES = 4;
+const WAKE_EXCERPT_MAX_CHARS = 400;
 const SUMMARY_MAX_CHARS = 120;
 
 /** Run statuses after which a run does no more work. */
@@ -385,8 +388,22 @@ const toolArgs = (watch: LaunchWatch) =>
     ? `{threadId: "${watch.threadId}"}`
     : `{threadId: "${watch.threadId}", host: "${watch.host}"}`;
 
-const STOP_HINT =
-  "Stop these reports with goat_thread_unwatch; goat_thread_watch_list shows every watch.";
+/** The goat_call form, which works whether or not the target tool is listed. */
+const call = (path: string, args: string) => `goat_call {path: "${path}", args: ${args}}`;
+
+const stopHint = (watch: LaunchWatch) =>
+  `Stop these reports with ${call("thread.unwatch", toolArgs(watch))}.`;
+
+/** The first lines of a message, cut at a line or word; says when it left text out. */
+function briefExcerpt(text: string): { readonly text: string; readonly cut: boolean } {
+  const lines = text
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")
+    .filter((line) => line.trim() !== "");
+  const head = lines.slice(0, WAKE_EXCERPT_LINES).join("\n");
+  const short = truncate(head, WAKE_EXCERPT_MAX_CHARS);
+  return { text: short, cut: short !== lines.join("\n") };
+}
 
 /**
  * Command and message ids derive from the watch and the event, so a wake
@@ -417,17 +434,18 @@ export function finishedWake(input: {
     return launchFailedWake({ ...input, failure: input.failure });
   }
   const name = named(watch, input.title);
+  // The UI shows the longer detail; the agent reads the rest from the thread when it needs it.
   const excerpt = input.excerpt === null ? null : truncate(input.excerpt, EXCERPT_MAX_CHARS);
+  const brief = input.excerpt === null ? null : briefExcerpt(input.excerpt);
   const place = [
     input.branch === null ? null : `branch ${input.branch}`,
     input.worktreePath === null ? null : `worktree ${input.worktreePath}`,
   ].filter((part) => part !== null);
+  const read = call("thread.read", toolArgs(watch));
   const lines = [
-    `${name} (${identity(watch)}) finished run ${input.runId} with status ${input.status}.`,
-    ...(place.length === 0 ? [] : [`It ran on ${place.join(", ")}.`]),
-    ...(excerpt === null ? [] : ["", "Last assistant message of that run:", excerpt]),
-    "",
-    `Read it with goat_thread_read ${toolArgs(watch)}. A goat_thread_send to it is reported the same way when that run ends. ${STOP_HINT}`,
+    `${name} (${identity(watch)}) finished run ${input.runId} with status ${input.status}${place.length === 0 ? "" : ` on ${place.join(", ")}`}.`,
+    ...(brief === null ? [] : ["Last message:", brief.text]),
+    `${brief?.cut === true ? `The message continues; read it with ${read}.` : `Read the thread with ${read}.`} ${stopHint(watch)}`,
   ];
   return {
     ...wakeIds(watch, `run:${input.runId}`),
@@ -527,7 +545,7 @@ function launchFailedWake(input: {
     .filter((part) => part !== null)
     .join(", ");
   const retry = failure.canRetry
-    ? `Retry with goat_thread_retry ${toolArgs(watch)}; the user can also press Retry on the failure in that thread. This watch reports the retried run.`
+    ? `Retry with ${call("thread.retry", toolArgs(watch))}; the user can also press Retry on the failure in that thread. This watch reports the retried run.`
     : failure.stage === "workspace_preparation"
       ? `Retry it from a GOAT client connected to ${watch.host ?? "this environment"} (Retry on the failure in that thread), or launch again.`
       : null;
@@ -540,7 +558,7 @@ function launchFailedWake(input: {
     "",
     `Suggested action: ${suggestedAction(failure, watch.host)}`,
     ...(retry === null ? [] : [retry]),
-    `goat_thread_status ${toolArgs(watch)} shows the same failure. ${STOP_HINT}`,
+    `${call("thread.status", toolArgs(watch))} shows the same failure. ${stopHint(watch)}`,
   ];
   const detail = truncate(
     log === null ? failure.message : `${failure.message}\n\n${tail(log, EXCERPT_MAX_CHARS / 2)}`,
@@ -575,8 +593,8 @@ export function questionWake(input: {
   const answer =
     input.kind === "user_input"
       ? watch.host !== null
-        ? `Read it with goat_pending_request_read {host: "${watch.host}", threadId: "${watch.threadId}", requestId: "${input.requestId}"} and answer with goat_pending_request_respond using the same host, threadId, and requestId (reason required) if you can decide, or forward it to the user.`
-        : `Read it with goat_pending_request_read {threadId: "${watch.threadId}", requestId: "${input.requestId}"} and answer with goat_pending_request_respond if you can decide, or leave it to the user.`
+        ? `Read it with ${call("pending_request.read", `{host: "${watch.host}", threadId: "${watch.threadId}", requestId: "${input.requestId}"}`)} and answer with ${call("pending_request.respond", "{host, threadId, requestId, reason}")} with the same values if you can decide, or forward it to the user.`
+        : `Read it with ${call("pending_request.read", `{threadId: "${watch.threadId}", requestId: "${input.requestId}"}`)} and answer with ${call("pending_request.respond", "{threadId, requestId, reason}")} with the same values if you can decide, or leave it to the user.`
       : watch.host !== null
         ? `It can be answered in that thread from a client connected to ${watch.host}.`
         : input.kind === null
@@ -584,7 +602,7 @@ export function questionWake(input: {
           : "An approval can only be given in that thread from a GOAT client, so tell the user.";
   return {
     ...wakeIds(watch, `question:${questionKey(input.runId, input.requestId)}`),
-    text: `${name} (${identity(watch)}) is waiting on ${request} (${input.requestId}) in run ${input.runId} and cannot continue until it is answered. ${answer} ${STOP_HINT}`,
+    text: `${name} (${identity(watch)}) is waiting on ${request} (${input.requestId}) in run ${input.runId} and cannot continue until it is answered. ${answer} ${stopHint(watch)}`,
     notification: {
       source: { kind: "background_task" },
       outcome: "updated",
@@ -600,7 +618,7 @@ export function outageWake(input: {
   const { watch, outage } = input;
   return {
     ...wakeIds(watch, `outage:${watch.incarnation}:${outage.episode}`),
-    text: `host_unavailable: GOAT cannot reach ${where(watch)} to follow ${named(watch, null).toLowerCase()} (${identity(watch)}). ${outage.failures} attempts failed, the last with: ${truncate(outage.lastError, 500)} It keeps retrying with backoff and reports the run once it reaches the host again; the thread itself may still be running there. ${watch.replica === undefined ? "No checkpoint copy is available." : `A checkpoint from ${watch.replica.capturedAt} (${watch.replica.bytes} bytes) is retained. Explicit recovery is available through goat_thread_handoff_host; the disconnected source can still produce external side effects.`} ${STOP_HINT}`,
+    text: `host_unavailable: GOAT cannot reach ${where(watch)} to follow ${named(watch, null).toLowerCase()} (${identity(watch)}). ${outage.failures} attempts failed, the last with: ${truncate(outage.lastError, 500)} It keeps retrying with backoff and reports the run once it reaches the host again; the thread itself may still be running there. ${watch.replica === undefined ? "No checkpoint copy is available." : `A checkpoint from ${watch.replica.capturedAt} (${watch.replica.bytes} bytes) is retained. Explicit recovery is available through goat_call {path: "thread.handoff_host"}, whose arguments goat_describe lists; the disconnected source can still produce external side effects.`} ${stopHint(watch)}`,
     notification: {
       source: { kind: "background_task" },
       outcome: "unknown",

@@ -763,18 +763,45 @@ export function pressureStatusText(input: PressureTextInput): string {
   ].join("\n");
 }
 
-/** The message that wakes an orchestrating thread when a host gets worse. */
+/**
+ * The message that wakes an orchestrating thread when a host gets worse. It goes into the
+ * agent's context, so it says what to do and where to go next in three lines; host.status lists
+ * the work running there and every host's room.
+ */
 export function pressureNudgeText(input: PressureTextInput): {
   readonly text: string;
   readonly summary: string;
 } {
   const where = hostLabel(input.host);
   const level = input.pressure.level;
+  const reason = input.pressure.reasons[0]?.message;
+  const mine = input.consumers.filter((consumer) => consumer.launcherThreadId === input.recipient);
+  const target = input.alternatives[0];
+  const next =
+    target === undefined
+      ? "No other host has room now."
+      : hostLabel(target.host) +
+        " has room (" +
+        target.reasons.join("; ") +
+        ")" +
+        (level === "critical"
+          ? "; start the next ones there" +
+            (target.host === null ? "." : ' with goat_call {path: "ssh.thread_launch"}.')
+          : ".");
   return {
     summary: where + " is under " + level + " resource pressure",
     text: [
       "Resource pressure: " + where + " is " + level + " (since " + input.pressure.since + ").",
-      ...pressureDetails(input),
+      (reason === undefined ? "" : reason + ". ") +
+        input.consumers.length +
+        " threads run there, " +
+        mine.length +
+        " started by this thread. " +
+        (level === "critical"
+          ? "Pause or queue new heavy lanes there and let running ones finish. "
+          : "Avoid starting more heavy lanes there. ") +
+        next,
+      'goat_call {path: "host.status", args: {placement: {}}} ranks hosts; goat_call {path: "thread.watch_list"} lists the threads this thread started.',
     ].join("\n"),
   };
 }

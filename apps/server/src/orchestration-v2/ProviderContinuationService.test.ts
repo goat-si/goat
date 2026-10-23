@@ -238,7 +238,7 @@ describe("ProviderContinuationService", () => {
           "node-provider-continuation-first",
           "node-provider-continuation-second",
         ]);
-        assert.include(command.text, "goat_task_read");
+        assert.include(command.text, "task.read");
       }).pipe(
         Effect.provide(
           layerTest({

@@ -58,7 +58,7 @@ describe("Pi orchestration prompt section", () => {
     assert.isUndefined(result);
     assert.equal(sections.existing, "keep");
     assert.equal(sections.goat_code_development, GOAT_DEVELOPMENT_INSTRUCTIONS);
-    assert.include(sections.goat_code_orchestration!, "goat_provider_list");
+    assert.include(sections.goat_code_orchestration!, "## GOAT orchestration");
     assert.isFalse(Object.hasOwn(sections, "t3_code_orchestration"));
   });
 
@@ -107,7 +107,7 @@ describe("Pi orchestration prompt section", () => {
       assert.isDefined(result);
       assert.isTrue(result!.systemPrompt.startsWith(`${event.systemPrompt}\n\n`));
       assert.include(result!.systemPrompt, GOAT_DEVELOPMENT_INSTRUCTIONS);
-      assert.include(result!.systemPrompt, "goat_provider_list");
+      assert.include(result!.systemPrompt, "## GOAT orchestration");
     }
   });
 });
@@ -177,7 +177,7 @@ describe("Pi MCP tool exposure", () => {
     const start = bridge.handlers.get("before_agent_start");
     assert.isDefined(start);
     const prompt = await start!({ systemPrompt: "Pi system prompt" }, discoveryContext);
-    assert.include(prompt?.systemPrompt ?? "", "goat_provider_list");
+    assert.include(prompt?.systemPrompt ?? "", "## GOAT orchestration");
     assert.equal(bridge.servers.length, 0);
     assert.equal(bridge.tools.length, 4);
     assert.equal(bridge.registrations.length, 4);
