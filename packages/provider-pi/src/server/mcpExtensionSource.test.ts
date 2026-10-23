@@ -5,6 +5,12 @@ import * as NodeOS from "node:os";
 import * as NodeModule from "node:module";
 import * as NodeVM from "node:vm";
 import { assert, describe, it } from "@effect/vitest";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import {
+  legacyAgentSurfacePaths,
+  listedToolName,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { ALWAYS_LOAD_META_KEY, PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
@@ -382,6 +388,61 @@ describe("Pi tool discovery permissions", () => {
         true,
       );
       assert.equal(confirmations.length, 4);
+    },
+  );
+
+  it.each(["approval-required", "auto-accept-edits", "auto"])(
+    "runs goat_call without asking in %s only when its path resolves to a read",
+    async (runtimeMode) => {
+      const bridge = await loadMcpBridge({ modern: true, runtimeMode });
+      const hook = bridge.handlers.get("tool_call") as unknown as (
+        event: { toolName: string; input: unknown },
+        ctx: { ui: { confirm: (title: string) => Promise<boolean> } },
+      ) => Promise<{ block: true; reason: string } | undefined>;
+      const confirmations: string[] = [];
+      const ctx = {
+        ui: {
+          confirm: async (title: string) => {
+            confirmations.push(title);
+            return false;
+          },
+        },
+      };
+      const call = (path: unknown) =>
+        hook({ toolName: "mcp__goat__goat_call", input: { path, args: {} } }, ctx);
+      const entries = Object.values(agentSurfaceRegistry);
+      const withEffect = (effect: string) =>
+        entries.find((entry) => entry.resource !== "surface" && entry.effect === effect)!;
+      const read = withEffect("read");
+      const legacyRead = entries.find(
+        (entry) => entry.effect === "read" && entry.legacyNames.length > 0,
+      )!;
+      const renamedRead = [...legacyAgentSurfacePaths.keys()].find(
+        (path) => resolveAgentSurfaceEntry(path)?.effect === "read",
+      )!;
+      for (const path of [
+        read.path,
+        listedToolName(read),
+        legacyRead.legacyNames[0],
+        renamedRead,
+      ]) {
+        assert.isUndefined(await call(path), String(path));
+      }
+      assert.lengthOf(confirmations, 0);
+      const asked = [
+        withEffect("write").path,
+        withEffect("destructive").path,
+        "goat_call",
+        "no.such_path",
+        undefined,
+      ];
+      for (const path of asked) {
+        assert.equal((await call(path))?.block, true, String(path));
+      }
+      assert.lengthOf(confirmations, asked.length);
+      // A user extension that takes over the name gets no read exemption.
+      bridge.setBridgeSourcePath("/user/extensions/replacement.ts");
+      assert.equal((await call(read.path))?.block, true);
     },
   );
 

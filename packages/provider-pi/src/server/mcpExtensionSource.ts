@@ -2,6 +2,12 @@
  * Do not import t3code modules from the string body. The Pi process resolves
  * `@earendil-works/pi-coding-agent` and `typebox` from the user's pi install.
  */
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import {
+  canonicalToolName,
+  legacyAgentSurfacePaths,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { COMPUTER_USE_INSTRUCTIONS } from "@goat/provider-core/server/runtimeInstructions";
@@ -32,6 +38,24 @@ export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
  */
 export const ALWAYS_LOAD_META_KEY = "anthropic/alwaysLoad";
 
+/**
+ * Every path and name goat_call resolves to a read, by the resolver goat_call itself uses.
+ * goat_call is annotated destructive so clients ask before it; a call naming a read runs as one.
+ */
+const GOAT_CALL_READ_TARGETS = [
+  ...new Set([
+    ...Object.values(agentSurfaceRegistry).flatMap((entry) => [
+      entry.path,
+      canonicalToolName(entry),
+      entry.name,
+      ...entry.legacyNames,
+    ]),
+    ...legacyAgentSurfacePaths.keys(),
+  ]),
+]
+  .filter((name) => resolveAgentSurfaceEntry(name)?.effect === "read")
+  .toSorted();
+
 export const PI_GOAT_MCP_EXTENSION_SOURCE = `\
 import { stripFrontmatter, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as NodeFSP from "node:fs/promises";
@@ -46,6 +70,7 @@ const EXTENSION_PATH_ENV = ${JSON.stringify(GOAT_PI_MCP_EXTENSION_PATH_ENV)};
 const CUA_ENV = ${JSON.stringify(GOAT_CUA_MCP_ENV)};
 const CUA_GATE_ENV = ${JSON.stringify(GOAT_CUA_GATE_ENV)};
 const ALWAYS_LOAD_META_KEY = ${JSON.stringify(ALWAYS_LOAD_META_KEY)};
+const GOAT_CALL_READ_TARGETS = new Set(${JSON.stringify(GOAT_CALL_READ_TARGETS)});
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(GOAT_ORCHESTRATION_INSTRUCTIONS.trim())};
 const DEVELOPMENT_INSTRUCTIONS = ${JSON.stringify(GOAT_DEVELOPMENT_INSTRUCTIONS)};
 const COMPUTER_USE_INSTRUCTIONS = ${JSON.stringify(COMPUTER_USE_INSTRUCTIONS)};
@@ -455,20 +480,27 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search");
 
   const readOnlyMcpTools = new Set<string>();
-  const isReadOnlyMcpTool = (name: string) => {
+  const ownsTool = (name: string) => {
     const extensionPath = env(EXTENSION_PATH_ENV);
-    if (extensionPath === undefined || !readOnlyMcpTools.has(name) || typeof pi.getAllTools !== "function") return false;
+    if (extensionPath === undefined || typeof pi.getAllTools !== "function") return false;
     // A user extension may own the same name. Only our registered HTTP bridge
     // may inherit the canonical T3 server's read-only annotation.
     return pi.getAllTools().some((tool) => tool.name === name &&
       typeof tool.sourceInfo?.path === "string" &&
       NodePath.resolve(tool.sourceInfo.path) === NodePath.resolve(extensionPath));
   };
+  const isReadOnlyMcpTool = (name: string) => readOnlyMcpTools.has(name) && ownsTool(name);
+  const isReadThroughGoatCall = (name: string, input: unknown) => {
+    if (name !== "mcp__goat__goat_call" || typeof input !== "object" || input === null) return false;
+    const path = (input as { readonly path?: unknown }).path;
+    return typeof path === "string" && GOAT_CALL_READ_TARGETS.has(path) && ownsTool(name);
+  };
 
   pi.on("tool_call", async (event, ctx) => {
     const mode = runtimeMode();
     if (mode === "full-access") return;
-    if ((event.toolName === "tool_search" ? hasBuiltinToolSearch() : READ_ONLY_TOOLS.has(event.toolName)) || isReadOnlyMcpTool(event.toolName)) {
+    if ((event.toolName === "tool_search" ? hasBuiltinToolSearch() : READ_ONLY_TOOLS.has(event.toolName)) ||
+      isReadOnlyMcpTool(event.toolName) || isReadThroughGoatCall(event.toolName, event.input)) {
       return;
     }
     if (mode === "auto-accept-edits" && FILE_CHANGE_TOOLS.has(event.toolName)) {
