@@ -219,7 +219,7 @@ CLI invocations in the docs that do not resolve:
 
 115 of 192 tools are never named in any Markdown doc, and 102 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_answer`, `goat_decision_get`, `goat_decision_list`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_link_create`, `goat_host_link_remove`, `goat_hub_device_join`, `goat_hub_device_leave`, and 78 more. Agents learn these only from the MCP catalog.
 
-Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`, `goat theme set`, `goat theme clear`, `goat theme show`, `goat triage`.
+Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`.
 
 The server's `/llms.txt` lists every registry path with its summary, but arguments and examples are still served only by the MCP catalog.
 
