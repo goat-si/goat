@@ -8,3 +8,4 @@ export {
   cuaMcpServerName,
   goatMcpServerName,
 } from "./server/v2/adapter.ts";
+export { goatRemoteMcpConfig } from "./server/goatMcpConfig.ts";
