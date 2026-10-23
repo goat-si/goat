@@ -100,18 +100,17 @@ export class ToolEffects extends Context.Service<
   Readonly<Record<string, AgentSurfaceEffect>>
 >()("goat/mcp/McpToolAccess/ToolEffects") {}
 
-const refuseReadOnlyClient = McpInvocationContext.McpInvocationContext.pipe(
-  Effect.flatMap((scope) =>
-    scope.client?.access === "read-only"
-      ? Effect.fail(
-          new OrchestratorMcpFailure({
-            code: "capability_denied",
-            message:
-              "This tool changes the environment, and this MCP client was approved for read-only access.",
-          }),
-        )
-      : Effect.void,
-  ),
+const refuseReadOnlyClientWith = (message: string) =>
+  McpInvocationContext.McpInvocationContext.pipe(
+    Effect.flatMap((scope) =>
+      scope.client?.access === "read-only"
+        ? Effect.fail(new OrchestratorMcpFailure({ code: "capability_denied", message }))
+        : Effect.void,
+    ),
+  );
+
+const refuseReadOnlyClient = refuseReadOnlyClientWith(
+  "This tool changes the environment, and this MCP client was approved for read-only access.",
 );
 
 const writingCaller = refuseReadOnlyClient.pipe(
@@ -125,7 +124,9 @@ const orchestratingCaller = refuseReadOnlyClient.pipe(
 );
 
 /** What a read that uses this machine's SSH keys to reach another host must pass first. */
-export const hostReachingCaller = orchestratingCaller;
+export const hostReachingCaller = refuseReadOnlyClientWith(
+  "This call reaches other machines with this machine's SSH keys, and this MCP client was approved for read-only access.",
+).pipe(Effect.andThen(readCaller()), Effect.tap(assertLiveCaller));
 
 /**
  * Where a write is admitted: after its caller checks and before its handler runs. ToolAdmission
@@ -298,7 +299,7 @@ export const readsOrReachesHost = <P, A, E, R>(
 ) =>
   declare("read", (params: P) =>
     reachesHost(params)
-      ? orchestratingCaller.pipe(Effect.flatMap(() => handle(params)))
+      ? hostReachingCaller.pipe(Effect.flatMap(() => handle(params)))
       : handle(params),
   );
 
@@ -317,6 +318,18 @@ export const writes = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>
   declare("write", (params: P) =>
     orchestratingCaller.pipe(
       Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
+    ),
+  );
+
+/**
+ * `writes` for a tool whose service acts for the calling thread, so an outside
+ * client is refused here, where goat_describe can see it, instead of in the service.
+ */
+export const writesAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+  declare("write", (params: P) =>
+    requireThreadCaller.pipe(
+      Effect.andThen(orchestratingCaller),
+      Effect.flatMap(() => handle(params)),
     ),
   );
 
@@ -464,7 +477,7 @@ export const removesCheckouts = <P, A, E, R>(
           ),
         )
       : reachesHost(params)
-        ? orchestratingCaller.pipe(Effect.flatMap(() => handle(params)))
+        ? hostReachingCaller.pipe(Effect.flatMap(() => handle(params)))
         : handle(params),
   );
 type Declarations<Handlers> = {
