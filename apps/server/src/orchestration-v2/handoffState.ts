@@ -1,8 +1,8 @@
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   HandoffError,
+  endsWithItsRun,
   isHandoffPending,
-  isClockedHandoffPath,
   type Handoff,
   type HandoffActor,
   type HandoffState,
@@ -48,10 +48,7 @@ export function transitionHandoff(
   const expired =
     (record.expiresAt !== null &&
       DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) ||
-    (record.kind === "approval" &&
-      !record.target.path.startsWith("ssh.") &&
-      !isClockedHandoffPath(record.target.path) &&
-      runEnded);
+    (endsWithItsRun(record) && runEnded);
   const next = expired ? "expired" : state;
   if (next === "pending" || (next === "expired" && !expired))
     return Effect.fail(new HandoffError({ reason: "conflict" }));

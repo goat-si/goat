@@ -27,7 +27,7 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
   }),
   wait: Schema.optional(Schema.Boolean).annotate({
     description:
-      "false returns at once with status pending and a handoff while the card waits; call again with the same clientRequestId to collect the answer. The card closes when this run ends, so collect it in this turn. Default true: wait for the answer.",
+      "false returns at once with status pending and a handoff while the card waits; it needs clientRequestId, and calling again with the same id collects the answer. The card closes when this run ends, so collect it in this turn. Default true: wait for the answer.",
   }),
 });
 export type OrchestratorMcpRequestSecretInput = typeof OrchestratorMcpRequestSecretInput.Type;

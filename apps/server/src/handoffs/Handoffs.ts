@@ -15,6 +15,7 @@ import {
   handoffSummary,
   isHandoffPending,
   isClockedHandoffPath,
+  endsWithItsRun,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   TurnItemId,
   type HandoffReadInput,
@@ -497,12 +498,7 @@ const make = Effect.gen(function* () {
       if (
         (handoff.expiresAt !== null &&
           DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)) ||
-        // Run-bound steps end with their run: a secret card nobody waits on any more, and
-        // approvals that are neither SSH nor clocked.
-        ((handoff.kind === "secret" ||
-          (handoff.kind === "approval" &&
-            !handoff.target.path.startsWith("ssh.") &&
-            !isClockedHandoffPath(handoff.target.path))) &&
+        (endsWithItsRun(handoff) &&
           (runStatus === null || ThreadManagement.isTerminalRunStatus(runStatus)))
       ) {
         const input = yield* decodeAddress({

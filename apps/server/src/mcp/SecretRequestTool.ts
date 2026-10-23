@@ -51,6 +51,12 @@ export const makeRequestSecret = (deps: {
     input: OrchestratorMcpRequestSecretInput,
   ): Effect.fn.Return<OrchestratorMcpRequestSecretResult, OrchestratorMcpFailure> {
     const { threadManagement, secretRequests } = deps;
+    // The follow-up call finds the card by this key, so a generated one would ask again.
+    if (input.wait === false && input.clientRequestId === undefined)
+      return yield* failure(
+        "invalid_request",
+        "Pass clientRequestId with wait:false; call again with the same id to collect the answer.",
+      );
     const { scope: threadScope, parent } = yield* deps.loadThreadCaller(scope, "request_secret");
     const threadId = threadScope.thread.threadId;
     const run = ThreadManagementService.latestActiveRun(parent);

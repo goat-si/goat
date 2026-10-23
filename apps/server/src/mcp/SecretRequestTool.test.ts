@@ -20,6 +20,9 @@ import * as Registry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { makeFakeCloudAdapter } from "../orchestration-v2/testkit/FakeCloudAdapter.ts";
 import * as Harness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import * as SecretStore from "../auth/ServerSecretStore.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import type { McpThreadInvocationScope } from "./McpInvocationContext.ts";
@@ -46,6 +49,8 @@ const input = {
 const withRunningTurn = <A, E>(
   body: (input: {
     readonly orchestrator: Orchestrator.OrchestratorV2["Service"];
+    readonly worker: Worker.OrchestrationEffectWorkerV2["Service"];
+    readonly handoffs: Handoffs.Handoffs["Service"];
     readonly requestSecret: ReturnType<typeof makeRequestSecret>;
   }) => Effect.Effect<A, E>,
 ) =>
@@ -89,6 +94,40 @@ const withRunningTurn = <A, E>(
         creationSource: "web",
       });
       yield* worker.drain();
+      const threads = Layer.mock(ThreadManagement.ThreadManagementService)({
+        dispatch: orchestrator.dispatch,
+        getThreadRecords: orchestrator.getThreadRecords,
+      });
+      const secrets = Layer.mock(SecretRequests.SecretRequests)({
+        savedRef: () => Effect.succeed(Option.some(SecretRef.make("secret-ref:saved"))),
+      });
+      const handoffs = yield* Handoffs.Handoffs.pipe(
+        Effect.provide(
+          Handoffs.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                threads,
+                secrets,
+                Layer.mock(SessionStore.SessionStore)({
+                  cookieName: "test",
+                  legacyCookieName: undefined,
+                }),
+                Layer.succeed(
+                  SecretStore.ServerSecretStore,
+                  SecretStore.ServerSecretStore.of({
+                    get: () => Effect.succeed(Option.none()),
+                    set: () => Effect.void,
+                    create: () => Effect.void,
+                    remove: () => Effect.void,
+                    getOrCreateRandom: (_name, size) =>
+                      Effect.succeed(new Uint8Array(size).fill(1)),
+                  }),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
       const requestSecret = yield* Effect.gen(function* () {
         return makeRequestSecret({
           threadManagement: yield* ThreadManagement.ThreadManagementService,
@@ -100,20 +139,8 @@ const withRunningTurn = <A, E>(
             ),
           requestKey: (key) => Effect.succeed(key ?? "random"),
         });
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            Layer.mock(ThreadManagement.ThreadManagementService)({
-              dispatch: orchestrator.dispatch,
-              getThreadRecords: orchestrator.getThreadRecords,
-            }),
-            Layer.mock(SecretRequests.SecretRequests)({
-              savedRef: () => Effect.succeed(Option.some(SecretRef.make("secret-ref:saved"))),
-            }),
-          ),
-        ),
-      );
-      return yield* body({ orchestrator, requestSecret });
+      }).pipe(Effect.provide(Layer.mergeAll(threads, secrets)));
+      return yield* body({ orchestrator, worker, handoffs, requestSecret });
     }).pipe(
       Effect.provide(
         Harness.layerWithRegistry(
@@ -162,4 +189,38 @@ it.effect(
         });
       }),
     ),
+);
+
+it.effect("refuses wait:false without a clientRequestId, which the next call would need", () =>
+  withRunningTurn(({ orchestrator, requestSecret }) =>
+    Effect.gen(function* () {
+      const { clientRequestId: _omitted, ...withoutKey } = input;
+      expect(yield* requestSecret(scope, withoutKey).pipe(Effect.flip)).toMatchObject({
+        code: "invalid_request",
+      });
+      const cards = (yield* orchestrator.getThreadProjection(threadId)).turnItems.filter(
+        (item) => item.type === "secret_request",
+      );
+      expect(cards).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("closes a card nobody collects once its run ends", () =>
+  withRunningTurn(({ orchestrator, worker, handoffs, requestSecret }) =>
+    Effect.gen(function* () {
+      yield* requestSecret(scope, input);
+      yield* orchestrator.dispatch({
+        type: "thread.stop",
+        commandId: CommandId.make("stop"),
+        threadId,
+      });
+      yield* worker.drain();
+      yield* handoffs.sweep;
+      const cards = (yield* orchestrator.getThreadProjection(threadId)).turnItems.filter(
+        (item) => item.type === "secret_request",
+      );
+      expect(cards).toMatchObject([{ secretStatus: "cancelled", handoff: { state: "expired" } }]);
+    }),
+  ),
 );
