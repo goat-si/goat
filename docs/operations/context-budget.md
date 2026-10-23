@@ -63,3 +63,27 @@ The served listing has 202 tools and 278,143 B (about 69,500 tokens) of model-fa
 Codex is largest because its block also carries GOAT's collaboration-mode text and the browser
 section. On one Linux host with a small history, wakes were 209 B for each of six monitor reports,
 560 B for one delegated completion, and 2,155 B for one background-task report.
+
+## Search contract
+
+[search-contract.ts](../../scripts/agent-surface/search-contract.ts) checks the other half of a
+search core: whether an agent can find what it needs.
+
+```sh
+node scripts/agent-surface/search-contract.ts [--json]
+```
+
+For five daily tasks (launch a remote thread, read its result, answer a pending question, watch a
+pull request, check host pressure), it runs fixed `goat_describe` queries as a GOAT thread would
+and reports where the task's path ranks. A task passes when one query ranks it in the top five and
+`goat_call` reaches the path's argument checks or handler. The script also reruns every query
+resource by resource and fails when a search that returned fewer paths than match says it was not
+truncated, or returns nothing while a resource matches. That is the silent loss in
+[aside-codemode issue #41](https://github.com/lidge-jun/aside-codemode/issues/41), checked with the
+server's own search so the script keeps no index of its own. Add new phrasings rather than editing
+old ones; an edited query measures something else.
+
+At `368b2c84a`, every task passes and no search hides loss. Natural phrasings still miss, because
+every word must appear in the entry: "reply to pending request", "babysit pr checks", "pr merge
+watch", and "which host has room" return nothing, and "check host load" and "watch PR" return
+results without the right path.

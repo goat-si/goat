@@ -5,8 +5,8 @@
  *
  *   node scripts/agent-surface/context-budget.ts [--json] [--db <copy of statev2.sqlite>]
  *
- * The listing comes from the same registrations /mcp mounts, built in-process with inert
- * services (apps/server/src/mcp/agentSurface.testkit.ts), so it measures the checked-out commit.
+ * The listing comes from servedCatalog.ts: the registrations /mcp mounts, built in-process at the
+ * checked-out commit.
  * Instruction text comes from the exported builders. Adapters compose those builders inline, so
  * each harness below names the source that composes it and a fragment that source must still
  * contain; the script exits 1 when one is missing instead of reporting a stale composition.
@@ -16,31 +16,16 @@
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeURL from "node:url";
+import { type ListedTool, loadServedCatalog, repoRoot } from "./servedCatalog.ts";
 
-const repoRoot = NodePath.resolve(import.meta.dirname, "../..");
-const serverRoot = NodePath.join(repoRoot, "apps/server");
-const serverRequire = NodeModule.createRequire(NodePath.join(serverRoot, "package.json"));
-// The catalog's Layer and McpServer must be the server's own effect instance.
-const fromServer = <T>(specifier: string): Promise<T> =>
-  import(NodeURL.pathToFileURL(serverRequire.resolve(specifier)).href) as Promise<T>;
 const fromRepo = <T>(file: string): Promise<T> =>
   import(NodeURL.pathToFileURL(NodePath.join(repoRoot, file)).href) as Promise<T>;
 
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
 const tokens = (n: number) => Math.ceil(n / 4);
-
-interface ListedTool {
-  readonly name: string;
-  readonly title?: string;
-  readonly description?: string;
-  readonly inputSchema?: unknown;
-  readonly outputSchema?: unknown;
-  readonly annotations?: unknown;
-}
 
 const json = (value: unknown) => (value === undefined ? "" : JSON.stringify(value));
 /** What a harness hands the model per tool: name, description, input schema, annotations. */
@@ -50,38 +35,6 @@ const modelFacing = (tool: ListedTool) =>
   bytes(tool.description ?? "") +
   bytes(json(tool.inputSchema)) +
   bytes(json(tool.annotations));
-
-async function servedTools(): Promise<ReadonlyArray<ListedTool>> {
-  type Layer = { readonly pipe: (...fns: ReadonlyArray<(self: Layer) => Layer>) => Layer };
-  const Effect = await fromServer<{
-    readonly gen: (body: () => Generator<unknown, ReadonlyArray<ListedTool>>) => unknown;
-    readonly provide: (layer: Layer) => (self: unknown) => unknown;
-    readonly runPromise: (effect: unknown) => Promise<ReadonlyArray<ListedTool>>;
-  }>("effect/Effect");
-  const LayerModule = await fromServer<{
-    readonly provide: (layer: Layer) => (self: Layer) => Layer;
-    readonly provideMerge: (layer: Layer) => (self: Layer) => Layer;
-  }>("effect/Layer");
-  const { McpServer } = await fromServer<{
-    readonly McpServer: {
-      readonly McpServer: { readonly layer: Layer } & Iterable<unknown>;
-    };
-  }>("effect/ai");
-  const kit = await fromRepo<{ readonly catalog: Layer; readonly dependencies: Layer }>(
-    "apps/server/src/mcp/agentSurface.testkit.ts",
-  );
-  const layer = kit.catalog.pipe(
-    LayerModule.provide(kit.dependencies),
-    LayerModule.provideMerge(McpServer.McpServer.layer),
-  );
-  const program = Effect.gen(function* () {
-    const server = (yield McpServer.McpServer) as {
-      readonly tools: ReadonlyArray<{ readonly tool: ListedTool }>;
-    };
-    return server.tools.map(({ tool }) => tool);
-  });
-  return Effect.runPromise(Effect.provide(layer)(program));
-}
 
 interface Builders {
   readonly orchestration: {
@@ -323,7 +276,9 @@ if (stale.length > 0) {
 }
 
 const builders = await loadBuilders();
-const listed = await servedTools();
+const catalog = await loadServedCatalog();
+const listed = catalog.tools;
+await catalog.dispose();
 const perTool = listed
   .map((tool) => ({ name: tool.name, bytes: modelFacing(tool) }))
   .toSorted((a, b) => b.bytes - a.bytes);
