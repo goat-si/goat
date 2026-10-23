@@ -6,7 +6,6 @@ import {
   Handoff,
   HandoffError,
 } from "./handoff.ts";
-import * as Memory from "./memory.ts";
 import { CuaHostStatus } from "./cua.ts";
 import {
   SshHostAddInput,
@@ -130,6 +129,13 @@ import {
 } from "./slackChannel.ts";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import { NOTES_WS_METHODS, NotesRpcs } from "./notesRpc.ts";
+import {
+  MEMORY_WS_METHODS,
+  MemoryAdministrationRpcs,
+  MemoryCoreRpcs,
+  MemoryImportRpcs,
+} from "./memoryRpc.ts";
+import { HUB_NODES_WS_METHODS, HubNodesRpcs } from "./hubNodesRpc.ts";
 import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
@@ -485,21 +491,6 @@ import {
   CloudMachinesListResult,
 } from "./cloudMachines.ts";
 import {
-  HubNodesAddInput,
-  HubNodesAddResult,
-  HubNodesCheckInput,
-  HubNodesDismissNoticeInput,
-  HubNodesDismissNoticeResult,
-  HubNodesError,
-  HubNodesImportInput,
-  HubNodesImportResult,
-  HubNodesListInput,
-  HubNodesRemoveInput,
-  HubNodesRemoveResult,
-  HubNodesSnapshot,
-  HubNodesSubscribeInput,
-} from "./hubNodes.ts";
-import {
   CloudFolderTrust,
   CloudFolderTrustAcceptInput,
   CloudFolderTrustListInput,
@@ -516,26 +507,7 @@ import {
 } from "./hubProxy.ts";
 
 export const WS_METHODS = {
-  memoryProjectBindingGet: "memory.projectBinding.get",
-  memoryProjectBindingUpdate: "memory.projectBinding.update",
-  memoryChanges: "memory.changes",
-  memorySearch: "memory.search",
-  memoryList: "memory.list",
-  memoryRead: "memory.read",
-  memoryHistory: "memory.history",
-  memoryHubDiagnostics: "memory.hub.diagnostics",
-  memoryHubReconcile: "memory.hub.reconcile",
-  memoryResetReportAttempts: "memory.resetReportAttempts",
-  memorySyncStatus: "memory.syncStatus",
-  memoryOwnerSourceReadPolicyGet: "memory.ownerSourceReadPolicy.get",
-  memoryOwnerSourceReadPolicyUpdate: "memory.ownerSourceReadPolicy.update",
-  memoryUpsert: "memory.upsert",
-  memoryForget: "memory.forget",
-  memoryRevertResolution: "memory.revertResolution",
-  memoryReadSource: "memory.readSource",
-  memoryHubSettingsGet: "memory.hubSettings.get",
-  memoryHubSettingsUpdate: "memory.hubSettings.update",
-  memoryImportProvider: "memory.importProvider",
+  ...MEMORY_WS_METHODS,
 
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -730,13 +702,7 @@ export const WS_METHODS = {
   cloudMachinesForget: "cloudMachines.forget",
   cloudMachinesDismissUnconfirmed: "cloudMachines.dismissUnconfirmed",
   cloudMachinesEnsureReady: "cloudMachines.ensureReady",
-  hubNodesList: "hub.nodes.list",
-  hubNodesSubscribe: "hub.nodes.subscribe",
-  hubNodesAdd: "hub.nodes.add",
-  hubNodesRemove: "hub.nodes.remove",
-  hubNodesCheck: "hub.nodes.check",
-  hubNodesImport: "hub.nodes.import",
-  hubNodesDismissNotice: "hub.nodes.dismissNotice",
+  ...HUB_NODES_WS_METHODS,
   hubProxyPrepareNode: "hubProxy.prepareNode",
   hubProxyEnrollNode: "hubProxy.enrollNode",
   hubProxyUnenrollNode: "hubProxy.unenrollNode",
@@ -2321,46 +2287,6 @@ const WsHubProxyUnenrollNodeRpc = Rpc.make(WS_METHODS.hubProxyUnenrollNode, {
   error: HubProxyRpcErrors,
 });
 
-const HubNodesRpcError = Schema.Union([HubNodesError, EnvironmentAuthorizationError]);
-const WsHubNodesListRpc = Rpc.make(WS_METHODS.hubNodesList, {
-  payload: HubNodesListInput,
-  success: HubNodesSnapshot,
-  error: HubNodesRpcError,
-});
-/** The current node list, then a new one after every change. */
-const WsHubNodesSubscribeRpc = Rpc.make(WS_METHODS.hubNodesSubscribe, {
-  payload: HubNodesSubscribeInput,
-  success: HubNodesSnapshot,
-  error: HubNodesRpcError,
-  stream: true,
-});
-const WsHubNodesAddRpc = Rpc.make(WS_METHODS.hubNodesAdd, {
-  payload: HubNodesAddInput,
-  success: HubNodesAddResult,
-  error: HubNodesRpcError,
-});
-const WsHubNodesRemoveRpc = Rpc.make(WS_METHODS.hubNodesRemove, {
-  payload: HubNodesRemoveInput,
-  success: HubNodesRemoveResult,
-  error: HubNodesRpcError,
-});
-/** Never wakes or extends a cloud machine. */
-const WsHubNodesCheckRpc = Rpc.make(WS_METHODS.hubNodesCheck, {
-  payload: HubNodesCheckInput,
-  success: HubNodesSnapshot,
-  error: HubNodesRpcError,
-});
-const WsHubNodesImportRpc = Rpc.make(WS_METHODS.hubNodesImport, {
-  payload: HubNodesImportInput,
-  success: HubNodesImportResult,
-  error: HubNodesRpcError,
-});
-const WsHubNodesDismissNoticeRpc = Rpc.make(WS_METHODS.hubNodesDismissNotice, {
-  payload: HubNodesDismissNoticeInput,
-  success: HubNodesDismissNoticeResult,
-  error: HubNodesRpcError,
-});
-
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -2792,126 +2718,7 @@ export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
   .merge(WsNotesRpcGroup)
   .merge(WsDecisionRpcGroup);
 
-const MemoryRpcErrors = Schema.Union([Memory.MemoryRpcError, EnvironmentAuthorizationError]);
-const MemoryImportRpcErrors = Schema.Union([
-  Memory.MemoryRpcError,
-  Memory.MemoryImportRpcError,
-  EnvironmentAuthorizationError,
-]);
-export const WsMemoryProjectBindingGetRpc = Rpc.make(WS_METHODS.memoryProjectBindingGet, {
-  payload: Memory.MemoryProjectBindingGetInput,
-  success: Memory.MemoryProjectBinding,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryProjectBindingUpdateRpc = Rpc.make(WS_METHODS.memoryProjectBindingUpdate, {
-  payload: Memory.MemoryProjectBindingUpdateInput,
-  success: Memory.MemoryProjectBindingUpdateResult,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryChangesRpc = Rpc.make(WS_METHODS.memoryChanges, {
-  payload: Memory.MemoryChangesInput,
-  success: Memory.MemoryChangeSignal,
-  error: MemoryRpcErrors,
-  stream: true,
-});
-export const WsMemorySearchRpc = Rpc.make(WS_METHODS.memorySearch, {
-  payload: Memory.MemorySearchInput,
-  success: Memory.MemoryPage,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryListRpc = Rpc.make(WS_METHODS.memoryList, {
-  payload: Memory.MemoryListInput,
-  success: Memory.MemoryPage,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryReadRpc = Rpc.make(WS_METHODS.memoryRead, {
-  payload: Memory.MemoryReadInput,
-  success: Memory.MemoryItem,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryHistoryRpc = Rpc.make(WS_METHODS.memoryHistory, {
-  payload: Memory.MemoryHistoryInput,
-  success: Memory.MemoryHistoryPage,
-  error: MemoryRpcErrors,
-});
-export const WsMemorySyncStatusRpc = Rpc.make(WS_METHODS.memorySyncStatus, {
-  payload: Memory.MemorySyncStatusInput,
-  success: Memory.MemorySyncStatus,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryHubDiagnosticsRpc = Rpc.make(WS_METHODS.memoryHubDiagnostics, {
-  payload: Memory.MemorySyncStatusInput,
-  success: Memory.MemoryHubDiagnostics,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryUpsertRpc = Rpc.make(WS_METHODS.memoryUpsert, {
-  payload: Memory.MemoryUpsertInput,
-  success: Memory.MemoryMutationReceipt,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryForgetRpc = Rpc.make(WS_METHODS.memoryForget, {
-  payload: Memory.MemoryForgetInput,
-  success: Memory.MemoryMutationReceipt,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryRevertResolutionRpc = Rpc.make(WS_METHODS.memoryRevertResolution, {
-  payload: Memory.MemoryRevertResolutionInput,
-  success: Memory.MemoryRevertResult,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryReadSourceRpc = Rpc.make(WS_METHODS.memoryReadSource, {
-  payload: Memory.MemoryReadSourceInput,
-  success: Memory.MemorySourcePage,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryHubSettingsGetRpc = Rpc.make(WS_METHODS.memoryHubSettingsGet, {
-  payload: Memory.MemoryHubSettingsGetInput,
-  success: Memory.MemoryHubSettingsView,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryHubSettingsUpdateRpc = Rpc.make(WS_METHODS.memoryHubSettingsUpdate, {
-  payload: Memory.MemoryHubSettingsUpdateInput,
-  success: Memory.MemoryHubSettingsUpdateResult,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryOwnerSourceReadPolicyGetRpc = Rpc.make(
-  WS_METHODS.memoryOwnerSourceReadPolicyGet,
-  {
-    payload: Memory.MemoryOwnerSourceReadPolicyGetInput,
-    success: Memory.MemoryOwnerSourceReadPolicyView,
-    error: MemoryRpcErrors,
-  },
-);
-export const WsMemoryOwnerSourceReadPolicyUpdateRpc = Rpc.make(
-  WS_METHODS.memoryOwnerSourceReadPolicyUpdate,
-  {
-    payload: Memory.MemoryOwnerSourceReadPolicyUpdateInput,
-    success: Memory.MemoryOwnerSourceReadPolicyView,
-    error: MemoryRpcErrors,
-  },
-);
-export const WsMemoryResetReportAttemptsRpc = Rpc.make(WS_METHODS.memoryResetReportAttempts, {
-  payload: Memory.MemoryResetReportAttemptsInput,
-  success: Memory.MemoryResetReportAttemptsResult,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryHubReconcileRpc = Rpc.make(WS_METHODS.memoryHubReconcile, {
-  payload: Memory.MemoryHubReconcileInput,
-  success: Memory.MemoryHubReconcileResult,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryAdministrationRpcGroup = RpcGroup.make(
-  WsMemoryHubReconcileRpc,
-  WsMemoryResetReportAttemptsRpc,
-  WsMemoryOwnerSourceReadPolicyGetRpc,
-  WsMemoryOwnerSourceReadPolicyUpdateRpc,
-).middleware(RpcScopeAuthorization);
-export const WsMemoryImportProviderRpc = Rpc.make(WS_METHODS.memoryImportProvider, {
-  payload: Memory.MemoryImportProviderInput,
-  success: Memory.MemoryImportProviderResult,
-  error: MemoryImportRpcErrors,
-});
-export const WsMemoryCoreRpcGroup = RpcGroup.make(
+export {
   WsMemoryProjectBindingGetRpc,
   WsMemoryProjectBindingUpdateRpc,
   WsMemoryChangesRpc,
@@ -2927,20 +2734,19 @@ export const WsMemoryCoreRpcGroup = RpcGroup.make(
   WsMemoryReadSourceRpc,
   WsMemoryHubSettingsGetRpc,
   WsMemoryHubSettingsUpdateRpc,
-).middleware(RpcScopeAuthorization);
-export const WsMemoryImportRpcGroup =
-  RpcGroup.make(WsMemoryImportProviderRpc).middleware(RpcScopeAuthorization);
+  WsMemoryOwnerSourceReadPolicyGetRpc,
+  WsMemoryOwnerSourceReadPolicyUpdateRpc,
+  WsMemoryResetReportAttemptsRpc,
+  WsMemoryHubReconcileRpc,
+  WsMemoryImportProviderRpc,
+} from "./memoryRpc.ts";
+export const WsMemoryAdministrationRpcGroup =
+  MemoryAdministrationRpcs.middleware(RpcScopeAuthorization);
+export const WsMemoryCoreRpcGroup = MemoryCoreRpcs.middleware(RpcScopeAuthorization);
+export const WsMemoryImportRpcGroup = MemoryImportRpcs.middleware(RpcScopeAuthorization);
 export const WsMemoryRpcGroup = WsMemoryCoreRpcGroup.merge(WsMemoryImportRpcGroup).merge(
   WsMemoryAdministrationRpcGroup,
 );
 
 /** The hub's node list. A group of its own so servers and clients install it together. */
-export const WsHubNodesRpcGroup = RpcGroup.make(
-  WsHubNodesListRpc,
-  WsHubNodesSubscribeRpc,
-  WsHubNodesAddRpc,
-  WsHubNodesRemoveRpc,
-  WsHubNodesCheckRpc,
-  WsHubNodesImportRpc,
-  WsHubNodesDismissNoticeRpc,
-).middleware(RpcScopeAuthorization);
+export const WsHubNodesRpcGroup = HubNodesRpcs.middleware(RpcScopeAuthorization);
