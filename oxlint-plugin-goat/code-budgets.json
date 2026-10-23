@@ -544,7 +544,7 @@
   "apps/web/src/components/settings/EnvironmentRow.logic.ts": { "nonNull": 1 },
   "apps/web/src/components/settings/HubDeviceActions.tsx": { "nonNull": 1 },
   "apps/web/src/components/settings/HubSettings.tsx": { "nonNull": 1 },
-  "apps/web/src/components/settings/IntegrationsSettings.tsx": { "lines": 1680, "nonNull": 5 },
+  "apps/web/src/components/settings/IntegrationsSettings.tsx": { "lines": 1640, "nonNull": 5 },
   "apps/web/src/components/settings/KeybindingsSettings.tsx": { "lines": 1520 },
   "apps/web/src/components/settings/LoadBalancingSettings.tsx": { "nonNull": 1 },
   "apps/web/src/components/settings/MemoryImportSettings.tsx": { "nonNull": 8 },
