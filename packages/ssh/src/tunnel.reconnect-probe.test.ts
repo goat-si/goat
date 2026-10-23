@@ -1134,7 +1134,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     );
 
     it.live(
-      "a host change between folded probe and launch falls back without replacing anything",
+      "an identity rewritten between folded probe and launch falls back and replaces nothing",
       () =>
         Effect.gen(function* () {
           const f = yield* fixture;
@@ -1153,7 +1153,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     `);
           const before = f.remoteCommands.length;
           const result = yield* Effect.result(launch(f, first.selectedRuntime));
-          assert.equal(result._tag, "Failure");
+          assert.equal(result._tag, "Success"); // The fallback launch repairs the identity (#970).
           assert.equal(f.remoteCommands.length - before, 3);
           const events = yield* f.fs.readFileString(`${f.test}/events`);
           assert.notInclude(events, '"type":"drain"');
