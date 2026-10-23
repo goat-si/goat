@@ -18,6 +18,7 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
+import { describeUpdateErrorCause } from "./updateFailures.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 import {
   getDesktopUpdateInstallationMessage,
@@ -305,7 +306,7 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("logs the redacted cause of a rejected update check", () => {
+  it.effect("logs and shows the redacted cause of a rejected update check", () => {
     const cause = Object.assign(
       new Error("request failed for https://user:secret@example.com/update?token=secret"),
       { code: "ERR_UPDATER_LATEST_VERSION_NOT_FOUND" },
@@ -343,8 +344,9 @@ describe("DesktopUpdates", () => {
         assert.notInclude(Object.values(loggedAnnotation).map(String).join(" "), "secret");
         assert.equal(
           state.message,
-          "Electron updater failed to check for updates on channel default.",
+          "Could not check for updates: Error [ERR_UPDATER_LATEST_VERSION_NOT_FOUND]: request failed for [redacted URL]",
         );
+        assert.equal(state.errorContext, "check");
         assert.notInclude(state.message ?? "", "secret");
       }),
     ).pipe(
@@ -832,36 +834,33 @@ describe("describeUpdateErrorCause", () => {
     ];
 
     for (const message of messages) {
-      const summary = DesktopUpdates.describeUpdateErrorCause(new Error(message));
+      const summary = describeUpdateErrorCause(new Error(message));
       assert.include(summary, "Error:");
       assert.notInclude(summary, "secret");
       assert.notInclude(summary, "https://");
       assert.notInclude(summary, "Headers:");
     }
-    assert.equal(
-      DesktopUpdates.describeUpdateErrorCause("404 Not Found\nbody-secret"),
-      "404 Not Found",
-    );
+    assert.equal(describeUpdateErrorCause("404 Not Found\nbody-secret"), "404 Not Found");
   });
 
   it("bounds long messages, parallel failures, and cyclic causes", () => {
     const longError = new Error("x".repeat(10_000));
     const parallel = Cause.combine(Cause.fail(longError), Cause.die(longError));
-    assert.isAtMost(DesktopUpdates.describeUpdateErrorCause(parallel).length, 1024);
+    assert.isAtMost(describeUpdateErrorCause(parallel).length, 1024);
 
     const cyclic = new Error("retry failed");
     cyclic.cause = cyclic;
-    assert.include(DesktopUpdates.describeUpdateErrorCause(cyclic), "[truncated cause]");
-    assert.isAtMost(DesktopUpdates.describeUpdateErrorCause(cyclic).length, 1024);
+    assert.include(describeUpdateErrorCause(cyclic), "[truncated cause]");
+    assert.isAtMost(describeUpdateErrorCause(cyclic).length, 1024);
   });
 
   it("does not serialize arbitrary payloads or let unreadable errors break logging", () => {
-    assert.equal(DesktopUpdates.describeUpdateErrorCause({ payload: "secret" }), "object");
+    assert.equal(describeUpdateErrorCause({ payload: "secret" }), "object");
     const unreadable = Object.defineProperty({}, "message", {
       get() {
         throw new Error("unreadable error");
       },
     });
-    assert.equal(DesktopUpdates.describeUpdateErrorCause(unreadable), "UnknownError");
+    assert.equal(describeUpdateErrorCause(unreadable), "UnknownError");
   });
 });

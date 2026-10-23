@@ -14,6 +14,7 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateCheckError,
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateIdleTooltip,
   getDesktopUpdateInstallConfirmationMessage,
@@ -83,12 +84,14 @@ function resolveSidebarUpdatePresentation({
   run,
   isDownloading,
   showCheckIcon,
+  checkFailed,
 }: {
   readonly action: ReturnType<typeof resolveDesktopUpdateButtonAction>;
   readonly showsEverything: boolean;
   readonly run: UpdateEverythingRun | null;
   readonly isDownloading: boolean;
   readonly showCheckIcon: boolean;
+  readonly checkFailed: boolean;
 }) {
   const showUpdateDetails = action !== "none" || showsEverything || run !== null || isDownloading;
   const iconStatus: DesktopUpdateStatusIconState = showCheckIcon
@@ -105,7 +108,9 @@ function resolveSidebarUpdatePresentation({
             ? "downloaded"
             : action === "download"
               ? "available"
-              : "idle";
+              : checkFailed
+                ? "check-failed"
+                : "idle";
 
   return {
     iconStatus,
@@ -288,6 +293,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     run,
     isDownloading,
     showCheckIcon,
+    checkFailed: getDesktopUpdateCheckError(state) !== null,
   });
   const idleTooltip =
     !showUpdateDetails && !showCheckIcon && !runsEverything && !run

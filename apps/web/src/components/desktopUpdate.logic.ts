@@ -159,6 +159,8 @@ export function canCheckForUpdate(state: DesktopUpdateState | null): boolean {
 export function getDesktopUpdateStatusText(state: DesktopUpdateState): string {
   if (!state.enabled) return state.message ?? "Automatic updates are disabled.";
   if (state.errorContext === "download" && state.message) return state.message;
+  const checkError = getDesktopUpdateCheckError(state);
+  if (checkError) return checkError;
   if (state.installPolicy === "paused")
     return "Automatic downloads and installation are paused. You can still check, download, and install manually.";
 
@@ -173,21 +175,54 @@ export function getDesktopUpdateStatusText(state: DesktopUpdateState): string {
     return state.downloadedVersion
       ? "The downloaded update will install when you quit the app."
       : "Updates download automatically and install when you quit the app.";
-  return "Updates download automatically and restart the app when every backend is idle.";
+  return "Updates download automatically and restart the app when every backend is idle, or install when you quit.";
 }
 
-export function getDesktopUpdateDisabledReason(
+function getDesktopUpdateDisabledReason(
   state: Pick<DesktopUpdateState, "enabled" | "status" | "message"> | null,
 ): string | null {
   if (!state || (state.enabled && state.status !== "disabled")) return null;
   return state.message?.trim() || "Automatic updates are not available in this build.";
 }
 
+/** Why the last update check failed, while that failure is the current state. */
+export function getDesktopUpdateCheckError(
+  state: Pick<
+    DesktopUpdateState,
+    "enabled" | "status" | "errorContext" | "downloadedVersion" | "message"
+  > | null,
+): string | null {
+  if (
+    !state?.enabled ||
+    state.status !== "error" ||
+    state.errorContext !== "check" ||
+    state.downloadedVersion !== null
+  )
+    return null;
+  return state.message?.trim() || "Could not check for updates.";
+}
+
+/** The version row's description when no update is waiting. */
+export function getDesktopUpdateIdleDescription(
+  state: Parameters<typeof getDesktopUpdateCheckError>[0],
+): string {
+  return (
+    getDesktopUpdateDisabledReason(state) ??
+    getDesktopUpdateCheckError(state) ??
+    "Current version of the application."
+  );
+}
+
 export function getDesktopUpdateIdleTooltip(
-  state: Pick<DesktopUpdateState, "enabled" | "status" | "message"> | null,
+  state: Pick<
+    DesktopUpdateState,
+    "enabled" | "status" | "errorContext" | "downloadedVersion" | "message"
+  > | null,
 ) {
   const disabledReason = getDesktopUpdateDisabledReason(state);
-  return disabledReason
-    ? { title: "Updates unavailable", detail: disabledReason }
+  if (disabledReason) return { title: "Updates unavailable", detail: disabledReason };
+  const checkError = getDesktopUpdateCheckError(state);
+  return checkError
+    ? { title: "Update check failed", detail: `${checkError} Click to check again.` }
     : { title: "Check for updates", detail: null };
 }

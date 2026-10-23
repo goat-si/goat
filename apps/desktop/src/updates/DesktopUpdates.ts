@@ -8,7 +8,6 @@ import {
   type DesktopUpdateCheckResult,
   type DesktopUpdateState,
 } from "@goat/contracts";
-import { errorTag } from "@goat/shared/observability";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -38,6 +37,13 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
+import {
+  checkFailureMessage,
+  DesktopUpdateCheckTimeoutError,
+  describeUpdateErrorCause,
+  UPDATE_CHECK_TIMEOUT,
+  UPDATE_CHECK_TIMEOUT_MINUTES,
+} from "./updateFailures.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
   classifyDesktopUpdateInstallation,
@@ -212,61 +218,6 @@ const {
   logWarning: logUpdaterWarning,
   logError: logUpdaterError,
 } = DesktopObservability.makeComponentLogger("desktop-updater");
-
-function redactMessage(message: string): string {
-  return (message.split(/[\r\n]/, 1)[0] ?? "")
-    .replace(/\b(?:https?|file):\/\/[^\s"'<>]+/gi, "[redacted URL]")
-    .replace(/\b(?:Bearer|Basic)\s+[^\s,;]+/gi, "[redacted credential]")
-    .replace(
-      /\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=].*$/gi,
-      "[redacted header]",
-    )
-    .replace(
-      /\b[\w-]*(?:token|password|secret|credential|api[_-]?key)[\w-]*\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
-      "[redacted credential]",
-    )
-    .slice(0, 512);
-}
-
-function summarizeCause(cause: unknown, depth: number): string {
-  if (depth >= 3) return "[truncated cause]";
-  if (Cause.isCause(cause)) {
-    return cause.reasons
-      .slice(0, 3)
-      .map((reason) =>
-        reason._tag === "Fail"
-          ? summarizeCause(reason.error, depth + 1)
-          : reason._tag === "Die"
-            ? summarizeCause(reason.defect, depth + 1)
-            : "Interrupted",
-      )
-      .join("; ");
-  }
-  if (typeof cause === "string") return redactMessage(cause);
-  if (typeof cause !== "object" || cause === null) return errorTag(cause);
-
-  const error = cause as {
-    readonly message?: unknown;
-    readonly code?: unknown;
-    readonly cause?: unknown;
-  };
-  const code =
-    typeof error.code === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(error.code)
-      ? ` [${error.code}]`
-      : "";
-  const message = typeof error.message === "string" ? `: ${redactMessage(error.message)}` : "";
-  const nested =
-    error.cause === undefined ? "" : `; caused by ${summarizeCause(error.cause, depth + 1)}`;
-  return `${errorTag(cause)}${code}${message}${nested}`;
-}
-
-export function describeUpdateErrorCause(cause: unknown): string {
-  try {
-    return summarizeCause(cause, 0).slice(0, 1024);
-  } catch {
-    return "UnknownError";
-  }
-}
 
 function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYmlConfig>> {
   const entries: Record<string, string> = {};
@@ -602,27 +553,53 @@ export const make = Effect.gen(function* () {
       }));
       yield* logUpdaterInfo("checking for updates", { reason });
 
+      const channel = (yield* Ref.get(updateStateRef)).channel;
+      const failCheck = Effect.fn("desktop.updates.handleCheckForUpdatesFailure")(function* (
+        message: string,
+      ) {
+        const failedAt = yield* currentIsoTimestamp;
+        yield* updateState((current) => ({
+          ...reduceDesktopUpdateStateOnCheckFailure(current, message, failedAt),
+          recoveryStatus:
+            current.pendingUpdate && !current.downloadedVersion
+              ? "needs-network"
+              : current.recoveryStatus,
+        }));
+      });
+
       return yield* electronUpdater.checkForUpdates.pipe(
+        // Without a deadline one stalled request keeps the check reserved, and every
+        // later poll then returns without checking while the app looks up to date.
+        Effect.timeoutOrElse({
+          duration: UPDATE_CHECK_TIMEOUT,
+          orElse: () => Effect.fail(new DesktopUpdateCheckTimeoutError({ channel })),
+        }),
         Effect.as(true),
         Effect.catchTags({
-          ElectronUpdaterCheckForUpdatesError: Effect.fn(
-            "desktop.updates.handleCheckForUpdatesFailure",
-          )(function* (error) {
-            const failedAt = yield* currentIsoTimestamp;
-            yield* updateState((current) => ({
-              ...reduceDesktopUpdateStateOnCheckFailure(current, error.message, failedAt),
-              recoveryStatus:
-                current.pendingUpdate && !current.downloadedVersion
-                  ? "needs-network"
-                  : current.recoveryStatus,
-            }));
-            yield* logUpdaterError(error.message, {
-              errorTag: error._tag,
-              cause: describeUpdateErrorCause(error.cause),
-              channel: error.channel,
-            });
-            return true;
-          }),
+          ElectronUpdaterCheckForUpdatesError: (error) =>
+            Effect.gen(function* () {
+              const cause = describeUpdateErrorCause(error.cause);
+              yield* failCheck(checkFailureMessage(cause));
+              yield* logUpdaterError(error.message, {
+                errorTag: error._tag,
+                cause,
+                channel: error.channel,
+              });
+              return true;
+            }),
+          DesktopUpdateCheckTimeoutError: (error) =>
+            Effect.gen(function* () {
+              yield* failCheck(
+                checkFailureMessage(
+                  `the update server did not answer within ${UPDATE_CHECK_TIMEOUT_MINUTES} minutes.`,
+                ),
+              );
+              yield* logUpdaterError(error.message, {
+                errorTag: error._tag,
+                channel: error.channel,
+              });
+              return true;
+            }),
         }),
       );
     });
@@ -1220,7 +1197,7 @@ export const make = Effect.gen(function* () {
       yield* updateState((current) => ({
         ...current,
         status: "error",
-        message: error.message,
+        message: `${error.message} ${describeUpdateErrorCause(error.cause)}`,
         checkedAt,
         downloadPercent: null,
         errorContext: current.errorContext,

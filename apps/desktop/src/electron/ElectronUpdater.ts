@@ -8,6 +8,19 @@ import { autoUpdater } from "electron-updater";
 
 type AutoUpdater = typeof autoUpdater;
 
+/**
+ * electron-updater hands every call the same in-flight check promise. Its request
+ * timeout is armed on a "socket" event that Electron's net.ClientRequest never
+ * emits, so a stalled request can stay pending forever and take every later check
+ * with it. A caller that gives up on a check drops that promise so the next call
+ * sends fresh requests.
+ */
+function forgetInFlightCheck(): void {
+  (
+    autoUpdater as unknown as { checkForUpdatesPromise: Promise<unknown> | null }
+  ).checkForUpdatesPromise = null;
+}
+
 export type ElectronUpdaterFeedUrl = Parameters<AutoUpdater["setFeedURL"]>[0];
 
 export class ElectronUpdaterCheckForUpdatesError extends Schema.TaggedError<ElectronUpdaterCheckForUpdatesError>()(
@@ -128,7 +141,10 @@ export const make = ElectronUpdater.of({
     return Effect.tryPromise({
       try: () => autoUpdater.checkForUpdates(),
       catch: (cause) => new ElectronUpdaterCheckForUpdatesError({ channel, cause }),
-    }).pipe(Effect.asVoid);
+    }).pipe(
+      Effect.onInterrupt(() => Effect.sync(forgetInFlightCheck)),
+      Effect.asVoid,
+    );
   }),
   downloadUpdate: Effect.suspend(() => {
     const channel = autoUpdater.channel;

@@ -128,7 +128,9 @@ function handleBeforeQuit(
       const update = yield* updates.getState;
       if (
         !(yield* Ref.get(state.quitting)) &&
-        update.installPolicy === "install-on-quit" &&
+        // Quitting stops every backend, so restart-when-idle has its idle moment here too.
+        // Only a paused policy leaves a downloaded update for later.
+        update.installPolicy !== "paused" &&
         update.downloadedVersion !== null
       ) {
         yield* (yield* DesktopWindow.DesktopWindow).flushMainWindowBounds;

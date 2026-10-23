@@ -129,9 +129,9 @@ function layerUpdates(input: Partial<DesktopUpdates.DesktopUpdates["Service"]> =
 }
 
 describe("DesktopLifecycle", () => {
-  it.effect(
-    "serializes install-on-quit and waits for updater-controlled quit without shutdown",
-    () =>
+  it.effect.each(["install-on-quit", "restart-when-idle"] as const)(
+    "installs a downloaded update on quit under %s and waits for updater-controlled quit without shutdown",
+    (installPolicy) =>
       Effect.gen(function* () {
         const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
         const installationStarted = yield* Deferred.make<void>();
@@ -140,7 +140,7 @@ describe("DesktopLifecycle", () => {
         const events: string[] = [];
         const updateState = {
           ...initialUpdateState,
-          installPolicy: "install-on-quit" as const,
+          installPolicy,
           downloadedVersion: "1.2.4",
         };
         const layer = DesktopLifecycle.layer.pipe(

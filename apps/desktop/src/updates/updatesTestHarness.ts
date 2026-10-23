@@ -45,6 +45,7 @@ export interface UpdatesHarnessOptions {
   readonly readOnlyPaths?: ReadonlyArray<string>;
   readonly packageType?: string | undefined;
   readonly installRecord?: string | undefined;
+  readonly appVersion?: string;
 }
 
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
@@ -196,7 +197,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     homeDirectory: `/tmp/goat-desktop-updates-home-${process.pid}`,
     platform: options.platform ?? "darwin",
     processArch: "x64",
-    appVersion: "1.2.3",
+    appVersion: options.appVersion ?? "1.2.3",
     appPath: options.appPath ?? "/repo",
     isPackaged: true,
     resourcesPath: "/missing/resources",

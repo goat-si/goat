@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -143,6 +144,100 @@ describe("DesktopUpdates automatic coordinator", () => {
         }),
       ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
     }),
+  );
+
+  it.effect(
+    "regression: a nightly install whose update check stalls reports it and is offered the newer nightly at the next poll",
+    () =>
+      Effect.gen(function* () {
+        const polled = yield* Deferred.make<void>();
+        const downloading = yield* Deferred.make<void>();
+        let checks = 0;
+        const harness = makeHarness({
+          appVersion: "0.1.2-nightly.20261022.236",
+          initialSettings: {
+            ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+            updateChannel: "nightly",
+          },
+          // The startup check's request never settles, as a stalled feed request does.
+          checkForUpdates: Effect.suspend(() => {
+            checks += 1;
+            return checks === 1 ? Effect.never : Deferred.succeed(polled, undefined);
+          }),
+          downloadUpdate: Deferred.succeed(downloading, undefined).pipe(Effect.asVoid),
+        });
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            yield* updates.configure;
+
+            const stalled = yield* observe(updates, (state) => state.errorContext === "check").pipe(
+              Effect.forkChild,
+            );
+            yield* TestClock.adjust("15 seconds");
+            yield* TestClock.adjust("2 minutes");
+            const failed = yield* Fiber.join(stalled);
+            assert.equal(failed.status, "error");
+            assert.equal(
+              failed.message,
+              "Could not check for updates: the update server did not answer within 2 minutes.",
+            );
+
+            yield* TestClock.adjust("2 minutes");
+            yield* Deferred.await(polled);
+            const offered = yield* observe(
+              updates,
+              (state) => state.availableVersion === "0.1.2-nightly.20261023.246",
+            ).pipe(Effect.forkChild);
+            harness.emit("update-available", { version: "0.1.2-nightly.20261023.246" });
+            const state = yield* Fiber.join(offered);
+            assert.equal(state.channel, "nightly");
+            yield* Deferred.await(downloading);
+            assert.equal(harness.checkCount(), 2);
+            assert.equal(harness.downloadCount(), 1);
+          }),
+        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      }),
+  );
+
+  it.effect(
+    "a poll that finds a newer build than the downloaded one downloads it and keeps it ready to restart",
+    () =>
+      Effect.gen(function* () {
+        const downloads = yield* Queue.unbounded<void>();
+        const harness = makeHarness({
+          installPolicy: "install-on-quit",
+          downloadUpdate: Queue.offer(downloads, undefined).pipe(Effect.asVoid),
+        });
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            yield* updates.configure;
+            harness.emit("update-available", { version: "1.2.4" });
+            yield* Queue.take(downloads);
+            const first = yield* observe(
+              updates,
+              (state) => state.downloadedVersion === "1.2.4",
+            ).pipe(Effect.forkChild);
+            harness.emit("update-downloaded", { version: "1.2.4" });
+            yield* Fiber.join(first);
+
+            assert.isTrue((yield* updates.check("poll")).checked);
+            harness.emit("update-available", { version: "1.2.5" });
+            yield* Queue.take(downloads);
+            const second = yield* observe(
+              updates,
+              (state) => state.downloadedVersion === "1.2.5",
+            ).pipe(Effect.forkChild);
+            harness.emit("update-downloaded", { version: "1.2.5" });
+            const state = yield* Fiber.join(second);
+            assert.equal(state.status, "downloaded");
+            assert.equal(state.pendingUpdate?.version, "1.2.5");
+            assert.equal(harness.settings().pendingUpdate?.version, "1.2.5");
+            assert.equal(harness.downloadCount(), 2);
+          }),
+        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      }),
   );
 
   it.effect("waits for the download reservation before stopping every backend and installing", () =>
