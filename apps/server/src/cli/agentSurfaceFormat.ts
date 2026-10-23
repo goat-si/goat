@@ -46,9 +46,16 @@ export const formatDescribe = (value: unknown): string => {
     return [`${String(value.resource)}:`, ...table(rows(value.entries))].join("\n");
   if (value.depth === "search")
     return [
-      `Paths matching "${String(value.query)}":`,
+      `Paths matching "${String(value.query)}": ${String(value.returned)} of ${String(value.total)}${value.mode === "partial" ? ", each sharing only some of the words" : ""}`,
       ...table(rows(value.entries)),
-      ...(value.truncated === true ? ["  More paths match; narrow the query."] : []),
+      ...(value.truncated === true && typeof value.nextCursor === "string"
+        ? [`  More paths match; add --cursor ${value.nextCursor} for the next page.`]
+        : []),
+      ...(Array.isArray(value.nearest)
+        ? [
+            `  No path shares a word with the query, which does not mean GOAT lacks it. Nearest: ${value.nearest.join(", ")}`,
+          ]
+        : []),
     ].join("\n");
   if (value.depth === "path" && isRecord(value.entry)) {
     const entry = value.entry;
