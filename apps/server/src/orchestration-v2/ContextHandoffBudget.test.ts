@@ -445,35 +445,39 @@ describe("handoff delivery", () => {
     }),
   );
 
-  it.effect("points coverage saved before the MCP rename at goat_thread_read", () =>
-    Effect.gen(function* () {
-      const legacyCoverage =
-        'Recover omitted history using t3_thread_read({threadId:"thread:handoff",view:"activity"}).';
-      const legacy: OrchestrationV2ContextHandoff = {
-        ...handoff,
-        history: { ...handoff.history!, coverage: legacyCoverage },
-      };
-      let delivered = "";
-      let persisted: OrchestrationV2ContextHandoff | undefined;
-      yield* deliverContextHandoffs({
-        handoffs: [legacy],
-        providerThread,
-        budget: 16_000,
-        alreadyDeliveredItemIds: new Set(),
-        inject: (value) =>
-          Effect.sync(() => {
-            delivered = value.context;
-            return true;
-          }),
-        persist: (value) =>
-          Effect.sync(() => {
-            persisted = value;
-          }),
-      });
-      assert.include(delivered, 'goat_thread_read({threadId:"thread:handoff"');
-      assert.notInclude(delivered, "t3_thread_read");
-      assert.equal(persisted?.history?.coverage, legacyCoverage);
-    }),
+  it.effect.each(["t3_thread_read", "goat_thread_read"])(
+    "points coverage saved naming %s at goat_call, which every tool listing keeps",
+    (savedName) =>
+      Effect.gen(function* () {
+        const legacyCoverage = `Recover omitted history using ${savedName}({threadId:"thread:handoff",view:"activity"}).`;
+        const legacy: OrchestrationV2ContextHandoff = {
+          ...handoff,
+          history: { ...handoff.history!, coverage: legacyCoverage },
+        };
+        let delivered = "";
+        let persisted: OrchestrationV2ContextHandoff | undefined;
+        yield* deliverContextHandoffs({
+          handoffs: [legacy],
+          providerThread,
+          budget: 16_000,
+          alreadyDeliveredItemIds: new Set(),
+          inject: (value) =>
+            Effect.sync(() => {
+              delivered = value.context;
+              return true;
+            }),
+          persist: (value) =>
+            Effect.sync(() => {
+              persisted = value;
+            }),
+        });
+        assert.include(
+          delivered,
+          'goat_call {path:"thread.read", args:{threadId:"thread:handoff",view:"activity"}}',
+        );
+        assert.notInclude(delivered, "_thread_read");
+        assert.equal(persisted?.history?.coverage, legacyCoverage);
+      }),
   );
 
   it.effect("persists successful injection before turn start and skips it on retry", () =>

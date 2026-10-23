@@ -10,11 +10,16 @@ import {
 } from "@goat/provider-core/server/handoffBudget";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
-// Coverage saved before the MCP rename tells the provider to call t3_thread_read,
-// which no longer exists. The recovery instruction is app-generated, so point it
-// at the current tool when delivering; the stored record stays unchanged.
+// Saved coverage names the thread read tool directly (t3_thread_read before the MCP rename,
+// goat_thread_read after it), which a harness cannot call under the core listing. The recovery
+// instruction is app-generated, so name it through goat_call when delivering; the stored record
+// stays unchanged.
 const refreshRecoveryToolName = (coverage: string) =>
-  coverage.replace(/\bt3_thread_read\b/gu, "goat_thread_read");
+  coverage
+    .replace(/\b(?:t3|goat)_thread_read\((\{[^()]*\})\)/gu, (_, args: string) =>
+      goatCallText("thread.read", args),
+    )
+    .replace(/\b(?:t3|goat)_thread_read\b/gu, goatCallText("thread.read"));
 
 /**
  * Persist before/after injection: an ambiguous pending delivery requires a fresh native thread.
