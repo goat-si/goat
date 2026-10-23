@@ -208,6 +208,34 @@ adopt_managed_orphan() {
     printf 'managed\n' >"$MANAGED_FILE" || { rm -f "$adopt_next"; return 1; }
   verify_owned_identity "$LIVE_PID" "$LIVE_PORT"
 }
+# Records that already name this live PID and port can carry an identity in another format, for
+# example PowerShell's CommandLine written by a person restarting the runtime on Windows. When the
+# process is exactly the archive serve this host installed, run by this user, the canonical
+# identity replaces it (the old file is kept as identity.unverified); anything else stays refused.
+owned_identity_repairable() {
+  [ "\${OWNING_LAUNCH:-0}" = 1 ] && [ "\${LEGACY_PENDING:-0}" != 1 ] || return 1
+  [ "$LIVE_STATUS" = live ] && [ "$LIVE_OWNED" = 1 ] && valid_version "$LIVE_VERSION" || return 1
+  [ -f "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ] || return 1
+  repair_dir="$HOME/.goat/runtime/goat/versions/$LIVE_VERSION"
+  [ -d "$repair_dir" ] && [ ! -L "$repair_dir" ] && [ -x "$repair_dir/goat" ] &&
+    [ "$(cat "$repair_dir/.install-complete" 2>/dev/null)" = "$LIVE_VERSION" ] || return 1
+  repair_identity="$repair_dir/goat serve --host 127.0.0.1 --port $LIVE_PORT --base-dir $DEFAULT_SERVER_HOME"
+  repair_uid="$(server_uid "$LIVE_PID")" || return 1
+  [ "$(printf '%s\n' "$repair_uid" | awk 'NF==1 { print $1 }')" = "$(id -u)" ] || return 1
+  [ "$(server_command "$LIVE_PID")" = "$repair_identity" ] || return 1
+}
+repair_owned_identity() {
+  owned_identity_repairable || return 1
+  # Before the host lock nothing is signalled or published; the owning launch repeats this
+  # classification under the lock, and only there rewrites the file.
+  [ "\${LOCK_HELD:-0}" = 1 ] || return 0
+  [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || return 1
+  repair_next="$STATE_DIR/identity.repair.$$"
+  cp -p "$STATE_DIR/identity" "$STATE_DIR/identity.unverified" &&
+    printf '%s\n' "$repair_identity" >"$repair_next" && mv -f "$repair_next" "$STATE_DIR/identity" ||
+    { rm -f "$repair_next"; return 1; }
+  verify_owned_identity "$LIVE_PID" "$LIVE_PORT"
+}
 check_live_protocol() {
   LIVE_STATUS=none; LIVE_PID=0; LIVE_PORT=0; LIVE_VERSION=unknown
   LIVE_COMPATIBLE=0; LIVE_OWNED=0; NEEDS_OWNED_UPGRADE=0; REPLACEMENT_REASON=incompatible; comparison=
@@ -259,7 +287,7 @@ check_live_protocol() {
     printf 'Cannot verify live GOAT PID=%s port=%s: descriptor unavailable or persisted identity disagrees; it may predate GOAT SSH runtime protocol metadata. It was left running, and the runner and ownership files were preserved. If this is your earlier GOAT server, stop it on the remote host (kill %s) and reconnect.\\n' "$recorded_pid" "$recorded_port" "$stop_pid" >&2; exit 1
   fi
   if [ "$LIVE_OWNED" = 1 ] && [ "$ALLOW_OWNED_UPGRADE" = 1 ] && [ "$LEGACY_PENDING" != 1 ]; then
-    verify_owned_identity "$LIVE_PID" "$LIVE_PORT" || ownership_unverified
+    verify_owned_identity "$LIVE_PID" "$LIVE_PORT" || repair_owned_identity || ownership_unverified
   fi
   if [ "$LIVE_STATUS" = live ] && [ -n "$REQUESTED_VERSION" ]; then
     if [ "$LIVE_COMPATIBLE" = 1 ] && [ "$LIVE_VERSION" = "$SELECTED_VERSION" ] && [ "$NEEDS_OWNED_UPGRADE" = 0 ]; then
@@ -778,8 +806,8 @@ export const REMOTE_OWNED_IDENTITY_SCRIPT = `verify_owned_identity() {
 
 export const VERIFY_OWNED_BEFORE_PUBLICATION = `if [ "$LEGACY_PENDING" = 1 ]; then
   verify_legacy_identity || ownership_unverified
-elif [ "$LIVE_OWNED" = 1 ] && ! verify_owned_identity "$LIVE_PID" "$LIVE_PORT"; then
-  printf 'GOAT ownership could not be verified for PID %s: persisted launch identity is missing or mismatched; process, runner and ownership files were preserved.\\n' "$LIVE_PID" >&2
+elif [ "$LIVE_OWNED" = 1 ] && ! verify_owned_identity "$LIVE_PID" "$LIVE_PORT" && ! repair_owned_identity; then
+  printf 'GOAT ownership could not be verified for PID %s: persisted launch identity is missing or mismatched; process, runner and ownership files were preserved. If you started that server by hand, stop it on the host and reconnect so GOAT starts its own.\\n' "$LIVE_PID" >&2
   exit 1
 fi`;
 
