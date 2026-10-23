@@ -8,6 +8,7 @@
  * @module HandoffWakeReactor
  */
 import {
+  CLOUD_AGENT_LAUNCH_HANDOFF_PATH,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   CommandId,
   Handoff,
@@ -61,6 +62,8 @@ const continuation = (handoff: Handoff) => {
     return "Nothing ran. Ask again only if the user still wants it.";
   if (isHubDeviceHandoffPath(handoff.target.path))
     return `Call ${handoff.target.path === "hub.device_join" ? "goat_hub_device_join" : handoff.target.path === "hub.device_leave" ? "goat_hub_device_leave" : "goat_hub_device_repair"} again with decisionId "${handoff.handoffId}" to continue.`;
+  if (handoff.target.path === CLOUD_AGENT_LAUNCH_HANDOFF_PATH)
+    return `Call goat_cloud_launch again with the same arguments and handoffId "${handoff.handoffId}".`;
   if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
     return "This turn has the cua-driver tools until the admission ends; goat_computer_use_request reports it.";
   return "GOAT continues it; check its status before acting.";

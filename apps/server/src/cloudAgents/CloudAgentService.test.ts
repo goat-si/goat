@@ -41,6 +41,11 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Project from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as SshDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
 import * as CloudAgents from "./CloudAgentService.ts";
 
 const SECRET = "sk-live-0123456789abcdefSECRET";
@@ -386,6 +391,18 @@ const layerFor = (world: World, profile?: string) => {
     }),
   );
   return CloudAgents.layer.pipe(
+    Layer.provide(
+      DecisionInbox.layer.pipe(
+        Layer.provide(Profiles.layer),
+        Layer.provide(Layer.mock(PendingQuestions.PendingQuestionsMcpService)({})),
+      ),
+    ),
+    Layer.provide(Layer.mock(Handoffs.Handoffs)({})),
+    Layer.provide(
+      Layer.mock(ServerEnvironment.ServerEnvironment)({
+        getEnvironmentId: Effect.succeed(EnvironmentId.make("macmini")),
+      }),
+    ),
     Layer.provide(
       ServerSettings.layerTest({
         goatclaw: { enabled: profile !== undefined, defaultProfile: profile ?? "worker" },
@@ -917,23 +934,29 @@ it.effect.each(["worker", "manager", "owner"])(
     return Effect.gen(function* () {
       const service = yield* CloudAgents.CloudAgentService;
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`INSERT INTO decision_items (id, title, context, options_json, required_profile, status, answer, answered_by, created_at, updated_at)
-        VALUES ('go', 'Launch?', '', '[]', 'owner', 'answered', 'approve', 'client:phone', '2026-10-21', '2026-10-21')`;
       const input = {
         provider: "cursorCloud",
         repo: "goat-si/goat",
         prompt: "Inspect",
         holder: "local",
       } as const;
+      // A decision this caller filed itself approves no launch, even once a person answers it.
+      yield* sql`INSERT INTO decision_items (id, title, context, options_json, required_profile, status, answer, answered_by, created_at, updated_at)
+        VALUES ('go', 'Launch?', '', '[]', 'owner', 'answered', 'approve', 'client:phone', '2026-10-21', '2026-10-21')`;
+      let decisionId = "go";
       if (profile === "owner") {
         const unapproved = yield* service
           .launch(scope("full-access"), input, full)
           .pipe(Effect.flip);
         assert.include(unapproved.message, "bills a paid account");
         assert.equal(world.launches.length, 0);
+        // A person approves the decision GOAT filed for exactly this launch.
+        decisionId = /decision (decision:\S+) for/.exec(unapproved.message)![1]!;
+        yield* sql`UPDATE decision_items SET status = 'answered', answer = 'approve',
+          answered_by = 'client:phone' WHERE id = ${decisionId}`;
       }
       const result = yield* service
-        .launch(scope("full-access"), { ...input, decisionId: "go" }, full)
+        .launch(scope("full-access"), { ...input, decisionId }, full)
         .pipe(Effect.result);
       if (profile === "owner") {
         assert.equal(result._tag, "Success");
