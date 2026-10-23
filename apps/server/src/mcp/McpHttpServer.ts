@@ -1,6 +1,11 @@
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
-import { listedRegistration, ToolDispatch, withServedToolNames } from "./ToolDispatch.ts";
+import {
+  listedRegistration,
+  registeredToolName,
+  ToolDispatch,
+  withServedToolNames,
+} from "./ToolDispatch.ts";
 import {
   argumentKeys,
   encodeReferenceRefusal,
@@ -1172,8 +1177,10 @@ const layerToolDispatch = Layer.effect(
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     return ToolDispatch.of({
-      call: (name, args) => server.callTool({ name, arguments: args }),
-      served: (name) => server.tools.find(({ tool }) => tool.name === name)?.tool,
+      // Callers may name a tool as it shipped; the server registers it under its listed name.
+      call: (name, args) => server.callTool({ name: registeredToolName(name), arguments: args }),
+      served: (name) =>
+        server.tools.find(({ tool }) => tool.name === registeredToolName(name))?.tool,
     });
   }),
 );
