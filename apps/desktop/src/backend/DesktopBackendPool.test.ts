@@ -54,6 +54,8 @@ function layerPool(labelRef: Ref.Ref<string>): Layer.Layer<DesktopBackendPool.De
           publishCuaReport: () => Effect.void,
           publishCuaReadiness: () => Effect.void,
           publishCuaSafety: () => Effect.void,
+          cuaFrames: Stream.empty,
+          publishCuaFrame: () => Effect.void,
           handleControlForSource: () => Effect.void,
           removeControlSource: () => Effect.void,
           publishUpdateReport: () => Effect.void,

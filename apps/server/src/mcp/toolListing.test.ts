@@ -26,17 +26,21 @@ const base = {
   capabilities: new Set(["orchestration", "worktree", "pull-requests", "preview"] as const),
   issuedAt: 0,
 };
-const callers: Readonly<Record<"thread" | "client" | "readOnly", McpInvocationScope>> = {
+const thread: McpInvocationScope = {
+  ...base,
+  requestNamespace: "provider:thread",
   thread: {
-    ...base,
-    requestNamespace: "provider:thread",
-    thread: {
-      threadId: ThreadId.make("thread"),
-      providerSessionId: "provider:thread",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-    },
-    client: undefined,
+    threadId: ThreadId.make("thread"),
+    providerSessionId: "provider:thread",
+    providerInstanceId: ProviderInstanceId.make("codex"),
   },
+  client: undefined,
+};
+const callers: Readonly<
+  Record<"thread" | "deviceThread" | "client" | "readOnly", McpInvocationScope>
+> = {
+  thread,
+  deviceThread: { ...thread, capabilities: new Set([...base.capabilities, "device"]) },
   client: {
     ...base,
     requestNamespace: "client:full",
@@ -138,8 +142,14 @@ it.effect(
 it.effect("lists every tool a caller can use in the full listing and hides the rest", () =>
   Effect.gen(function* () {
     const http = yield* serveCatalogOverHttp(callers, "full");
-    expect(names(yield* http.listTools("thread"))).toEqual(
+    const device = listed((entry) => entry.resource === "device");
+    expect(device).not.toEqual([]);
+    expect(names(yield* http.listTools("deviceThread"))).toEqual(
       listed((entry) => entry.requires !== "client"),
+    );
+    // A thread lists device tools only when the user granted it the device capability.
+    expect(names(yield* http.listTools("thread"))).toEqual(
+      listed((entry) => entry.requires !== "client" && entry.resource !== "device"),
     );
     expect(names(yield* http.listTools("client"))).toEqual(
       listed((entry) => entry.requires !== "thread"),

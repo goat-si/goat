@@ -1106,6 +1106,15 @@ export function resolveMacFileExclusions(arch?: typeof BuildArch.Type) {
   const unusedArch = arch === "arm64" ? "x64" : "arm64";
   return [...MAC_FILE_EXCLUSIONS, `!**/node_modules/node-pty/prebuilds/darwin-${unusedArch}/**/*`];
 }
+
+// A universal app ships both halves of every per-architecture native payload
+// (`*-darwin-arm64/` packages, `prebuilds/darwin-x64/`, loader-adjacent
+// `*.darwin-arm64.node` copies), and loaders pick one by process.arch. Both
+// slices carry those thin binaries byte-for-byte, which @electron/universal
+// rejects unless they match x64ArchFiles. Only paths that name one darwin
+// architecture match, so modules rebuilt per slice still get merged with lipo.
+export const MAC_UNIVERSAL_SINGLE_ARCH_FILES =
+  "**/node_modules/**/{*darwin-{arm64,x64}/**,*.darwin-{arm64,x64}.node}";
 // Windows ships the server tree (bundle + node_modules) as a separate
 // resources/server.asar sidecar instead of loose files: the NSIS installer then
 // extracts a handful of large archives instead of thousands of small files,
@@ -2279,7 +2288,8 @@ export const preflightMacDesktopBuild = Effect.fn("preflightMacDesktopBuild")(fu
       ),
       lipo:
         arch === "universal"
-          ? desktopBuildProbeSucceeds(ChildProcess.make("lipo", ["-version"]), "lipo")
+          ? // Command Line Tools' lipo rejects -version; xcrun finds it in either toolchain.
+            desktopBuildProbeSucceeds(ChildProcess.make("xcrun", ["--find", "lipo"]), "lipo")
           : Effect.succeed(true),
     },
     { concurrency: "unbounded" },
@@ -3203,6 +3213,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     const repoRoot = yield* RepoRoot;
     buildConfig.mac = {
       target: target === "dmg" ? [target, "zip"] : [target],
+      ...(arch === "universal" ? { x64ArchFiles: MAC_UNIVERSAL_SINGLE_ARCH_FILES } : {}),
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
       extendInfo: {

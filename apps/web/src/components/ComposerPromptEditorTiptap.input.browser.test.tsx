@@ -239,6 +239,37 @@ it("keeps the caret inside unknown dollar text across rich and plain remounts", 
   expect(serializeEditorDoc(editor.state.doc).value).toBe("echo $HOXYME now");
 });
 
+it("moves over, deletes, and copies a skill token as one unit", async () => {
+  const value = "use $babysit now";
+  await using screen = await mountEditor(value, true, [babysit]);
+  const { editor } = screen;
+  const before = "use ".length + 1;
+  const after = before + 1;
+  const placeCaret = (pos: number) =>
+    act(async () => {
+      editor.view.focus();
+      editor.commands.setTextSelection(pos);
+    });
+  await placeCaret(after);
+  await userEvent.keyboard("{ArrowLeft}");
+  expect(editor.state.selection.from).toBe(before);
+  await userEvent.keyboard("{ArrowRight}");
+  expect(editor.state.selection.from).toBe(after);
+
+  const clipboardData = new DataTransfer();
+  await act(async () => {
+    editor.commands.selectAll();
+    editor.view.dom.dispatchEvent(
+      new ClipboardEvent("copy", { clipboardData, bubbles: true, cancelable: true }),
+    );
+  });
+  expect(clipboardData.getData("text/plain")).toBe(value);
+
+  await placeCaret(after);
+  await userEvent.keyboard("{Backspace}");
+  expect(serializeEditorDoc(editor.state.doc).value).toBe("use  now");
+});
+
 const file = {
   type: "file",
   id: "file-1",
