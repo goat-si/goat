@@ -89,8 +89,8 @@ function CornerButton(props: {
             }}
             className={cn(
               // 28px targets, 8px in from each corner: Stop and Take over sit at opposite corners.
-              "absolute flex size-7 items-center justify-center rounded-lg bg-black/65 text-white shadow-sm outline-none backdrop-blur-sm transition-[opacity,background-color] duration-150 hover:bg-black/85 focus-visible:ring-2 focus-visible:ring-ring disabled:text-white/40 motion-reduce:transition-none",
-              props.destructive && "text-red-400 hover:bg-destructive hover:text-white",
+              "absolute flex size-7 items-center justify-center rounded-lg bg-black/65 text-white shadow-sm outline-none backdrop-blur-sm transition-[opacity,background-color] duration-150 hover:bg-black/85 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:text-white/40 motion-reduce:transition-none",
+              props.destructive && "text-destructive hover:bg-destructive hover:text-white",
               CORNER[props.corner],
               props.shown ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
             )}
@@ -250,24 +250,31 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
     (control) => control === "takeover" || control === "handBack",
   );
   const youControl = browser && large && stream?.controller === "you";
-  const takeover: { label: string; run: () => void; disabled: boolean } | null = stopped
+  const takeover = stopped
     ? null
     : browser
       ? youControl
-        ? { label: "Hand back", run: () => surface.current?.releaseControl(), disabled: false }
-        : {
-            label: "Take over",
-            run: () => (large ? takeBrowserControl() : props.onExpand({ takeOver: true })),
-            disabled:
-              !props.canOperateBrowser || (large && stream?.controller === "another-viewer"),
-          }
-      : desktopTakeover
-        ? {
-            label: desktopTakeover === "takeover" ? "Take over" : "Hand back",
-            run: () => props.onControl(desktopTakeover),
-            disabled: !props.canControl,
-          }
-        : null;
+        ? "browser-release"
+        : "browser-take"
+      : desktopTakeover === undefined
+        ? null
+        : "desktop";
+  const takeoverLabel =
+    takeover === "browser-release" || (takeover === "desktop" && desktopTakeover === "handBack")
+      ? "Hand back"
+      : "Take over";
+  const takeoverDisabled =
+    takeover === "browser-take"
+      ? !props.canOperateBrowser || (large && stream?.controller === "another-viewer")
+      : takeover === "desktop" && !props.canControl;
+  const runTakeover = () => {
+    if (takeover === "browser-release") surface.current?.releaseControl();
+    else if (takeover === "browser-take") {
+      if (large) takeBrowserControl();
+      else props.onExpand({ takeOver: true });
+    } else if (takeover === "desktop" && desktopTakeover !== undefined)
+      props.onControl(desktopTakeover);
+  };
   const canStop = session.capabilities.controls.includes("stop");
   const thumbnail = (
     <PreviewSessionThumbnail
@@ -310,7 +317,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
           <TooltipTrigger render={<span className="min-w-0 flex-1 truncate font-medium text-sm" />}>
             {name}
           </TooltipTrigger>
-          <TooltipPopup side="top">{detail ? `${detail} — ${chip}` : chip}</TooltipPopup>
+          <TooltipPopup side="top">{detail ? `${detail} · ${chip}` : chip}</TooltipPopup>
         </Tooltip>
         {props.headerAction ? (
           <span
@@ -325,7 +332,6 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
         <span
           role="img"
           aria-label={chip}
-          title={chip}
           className={cn("size-2 shrink-0 rounded-full", tone.dot)}
         />
       </div>
@@ -367,16 +373,16 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
             onClick={() => props.onControl("stop")}
           />
         ) : null}
-        {takeover ? (
+        {takeover === null ? null : (
           <CornerButton
-            label={takeover.label}
-            icon={takeover.label === "Take over" ? MousePointerClickIcon : MousePointerIcon}
+            label={takeoverLabel}
+            icon={takeoverLabel === "Take over" ? MousePointerClickIcon : MousePointerIcon}
             corner="bottom-left"
             shown={shown}
-            disabled={takeover.disabled}
-            onClick={takeover.run}
+            disabled={takeoverDisabled}
+            onClick={runTakeover}
           />
-        ) : null}
+        )}
         {large ? (
           <>
             <CornerButton

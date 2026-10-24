@@ -1,6 +1,6 @@
 import { orderPreviewSessions } from "@goat/client-runtime/state/preview-sessions";
 import type { EnvironmentId, PreviewSession, ScopedThreadRef } from "@goat/contracts";
-import { type RefObject, useEffect, useMemo, useState } from "react";
+import { type RefObject, useEffect, useState } from "react";
 
 import { observeResize } from "~/lib/observeResize";
 import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
@@ -190,7 +190,12 @@ export function useAgentCardsPlacement(
       for (const stop of stops) stop();
       window.removeEventListener("resize", measure);
     };
-  }, [layoutKey, probe, setNarrow]);
+  }, [
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A new layoutKey means the header or what floats beside it was replaced, so it measures and watches the new elements.
+    layoutKey,
+    probe,
+    setNarrow,
+  ]);
   return layout;
 }
 
@@ -230,19 +235,15 @@ export function useAgentScreenSessions(
   const dismissed = usePreviewSessionStack((state) => state.dismissed);
   const sessions = usePreviewSessions(environmentId);
   const threadId = threadRef?.threadId;
-  return useMemo(
-    () =>
-      onePerThread(orderPreviewSessions(sessions)).filter(
-        (session) =>
-          !(session.status === "stopped" && dismissed.has(sessionKey(session))) &&
-          !(
-            shownTab !== null &&
-            session.threadId === threadId &&
-            session.target.kind === "browser" &&
-            session.target.tabId === shownTab
-          ),
+  return onePerThread(orderPreviewSessions(sessions)).filter(
+    (session) =>
+      !(session.status === "stopped" && dismissed.has(sessionKey(session))) &&
+      !(
+        shownTab !== null &&
+        session.threadId === threadId &&
+        session.target.kind === "browser" &&
+        session.target.tabId === shownTab
       ),
-    [sessions, dismissed, shownTab, threadId],
   );
 }
 

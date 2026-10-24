@@ -4,7 +4,7 @@ import {
 } from "@goat/client-runtime/state/preview-sessions";
 import type { PreviewSession, PreviewSessionNoPicture } from "@goat/contracts";
 import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-browser-stream";
-import { type RefObject, useEffect, useState, useSyncExternalStore } from "react";
+import { type RefObject, useState, useSyncExternalStore } from "react";
 
 import { GlobeIcon, LockIcon, MonitorIcon, MousePointerClickIcon } from "~/components/solar";
 import { type ServerBrowserHandle, ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
@@ -134,10 +134,9 @@ function DesktopThumbnail(props: {
   const [last, setLast] = useState<string | null>(null);
   const frame = event?.type === "frame" ? `data:${event.mime};base64,${event.data}` : null;
   const reason = event?.type === "unavailable" ? event.reason : undefined;
-  useEffect(() => {
-    if (frame !== null) setLast(frame);
-    else if (reason === "private") setLast(null);
-  }, [frame, reason]);
+  // Kept for a stopped session; adjusted while rendering, as the last event decides it.
+  const kept = frame ?? (reason === "private" ? null : last);
+  if (kept !== last) setLast(kept);
   const shown = frame ?? (props.stopped ? last : null);
   if (shown !== null)
     return (

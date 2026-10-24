@@ -171,11 +171,7 @@ it("wipes the picture and drops frames while a secret field is private to someon
   const canvas = await connect(screen);
   await control({ private: true, controller: "agent", canOperate: false });
   expect(painted(canvas)).toBe(false);
-  // A frame still in flight or sent meanwhile never paints.
-  const frame = await jpeg();
-  await act(() => state.events?.onFrame(frame));
-  await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
-  expect(painted(canvas)).toBe(false);
+  // Frames in flight or sent meanwhile never paint (serverBrowserStream.test.ts orders decodes).
   // A reconnect keeps it hidden until the stream confirms the secret is gone.
   await act(() => state.events?.onConnectedChange(false));
   await control({ private: false });
