@@ -140,6 +140,118 @@ describe("foreground through real computer-use attachment", () => {
       }).pipe(Effect.provide(layer(false))),
   );
 
+  it.effect.each(["existing", "first"] as const)(
+    "uses a shorter desktop foreground approval until expiry (attachment: %s)",
+    (ordering) =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const apps = ["com.example.AppA"];
+        const background = yield* foregroundGrant(threadId, "handoff:long-app", {
+          foreground: false,
+          minutes: 10,
+          apps,
+        });
+        const first = ordering === "existing" ? yield* attach(false) : undefined;
+        if (first !== undefined) {
+          const initial = yield* first.leases.controlState(
+            threadId,
+            first.attachment.control.controlId,
+          );
+          assert.deepEqual(initial._tag === "active" ? initial.apps : initial, apps);
+        }
+        const grant = yield* foregroundGrant(threadId, "handoff:short-desktop", { minutes: 5 });
+        const { attachment, leases, h } = yield* attach(false);
+        if (first !== undefined)
+          assert.equal(attachment.control.controlId, first.attachment.control.controlId);
+        assert.equal(attachment.control.handoffId, background.handoffId);
+        assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+        assert.isFalse(yield* leases.foregroundAvailable(threadId, "A different purpose"));
+        const approved = yield* leases.controlState(threadId, attachment.control.controlId);
+        assert.equal(approved._tag, "active");
+        assert.isUndefined(
+          approved._tag === "active" ? approved.apps : approved,
+          "The actual attachment must admit the approved whole desktop, not only app A",
+        );
+        yield* h.send(
+          call("foreground-B", "type_text", {
+            pid: 43,
+            window_id: 8,
+            text: "approved desktop work",
+            delivery_mode: "foreground",
+          }),
+        );
+        assert.equal((yield* h.nextToDriver).id, "foreground-B");
+        yield* h.nextReservation;
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: "foreground-B", result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "foreground-B");
+        yield* h.nextReservation;
+        yield* h.send(call(1, "run_script", { script: "opaque approved work" }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        const reserved = yield* h.nextReservation;
+        assert.equal(
+          reserved.action === "reserve" ? reserved.foregroundGrantId : undefined,
+          grant.handoffId,
+        );
+        yield* TestClock.adjust("5 minutes");
+        yield* h.killed;
+        assert.equal((yield* h.nextReservation).action, "close");
+        const cutOff = (yield* h.nextToProvider).result as {
+          structuredContent: { detail: string };
+        };
+        assert.equal(cutOff.structuredContent.detail, "foreground_not_approved");
+        yield* h.restarted;
+        const remaining = yield* leases.controlState(threadId, attachment.control.controlId);
+        assert.deepEqual(remaining._tag === "active" ? remaining.apps : remaining, apps);
+        assert.isUndefined(remaining._tag === "active" ? remaining.foreground : remaining);
+        assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+        yield* h.send(call(2, "run_script", { script: "expired desktop work" }));
+        const refused = (yield* h.nextToProvider).result as {
+          structuredContent: { detail: string };
+        };
+        assert.equal(refused.structuredContent.detail, "desktop_not_approved");
+        yield* h.send(call(3, "list_apps"));
+        assert.equal((yield* h.nextToDriver).id, 3);
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 3,
+            result: {
+              structuredContent: {
+                apps: [
+                  { pid: 42, bundle_id: apps[0] },
+                  { pid: 43, bundle_id: "com.example.AppB" },
+                ],
+              },
+            },
+          }),
+        );
+        assert.equal((yield* h.nextToProvider).id, 3);
+        yield* h.send(call(4, "type_text", { pid: 42, window_id: 7, text: "background" }));
+        assert.equal((yield* h.nextToDriver).id, 4);
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 4, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 4);
+        yield* h.send(
+          call(5, "type_text", {
+            pid: 43,
+            window_id: 8,
+            text: "unapproved",
+            delivery_mode: "foreground",
+          }),
+        );
+        const outside = (yield* h.nextToProvider).result as {
+          structuredContent: { detail: string };
+        };
+        assert.equal(outside.structuredContent.detail, "app_not_approved");
+        yield* leases.approveForeground(grant, yield* leases.foregroundApprovalEpoch);
+        const next = yield* attach(false);
+        assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+        assert.equal(next.attachment.control.controlId, attachment.control.controlId);
+        assert.equal(next.attachment.control.handoffId, background.handoffId);
+      }).pipe(Effect.provide(layer(false))),
+  );
+
   it.effect.each([false, true])(
     "binds first unattended approval before its first control (full access %s)",
     (fullAccess) =>

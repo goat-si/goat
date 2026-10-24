@@ -515,7 +515,10 @@ const make = Effect.gen(function* () {
         _tag: "active",
         expiresAt: record.expiresAt,
         interruptions,
-        apps: scoped(record, grant.lease.apps),
+        // Only live desktop approvals bound to this control widen its app scope. Keeping the
+        // primary admission preserves background use after that shorter authority expires;
+        // durable desktop metadata alone must not restore scope after pause or replacement.
+        apps: scoped(record, focus.length > 0 ? undefined : grant.lease.apps),
         wakeAt: Math.min(DateTime.toEpochMillis(record.expiresAt), focusWake),
         ...focusState,
         ...(record.idle === true ? { idle: true as const } : {}),

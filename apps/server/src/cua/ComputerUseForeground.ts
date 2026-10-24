@@ -14,6 +14,7 @@ type LiveGrant = Pick<Handoff, "handoffId" | "expiresAt" | "apps" | "computerUse
 interface Binding {
   readonly threadId: ThreadId;
   readonly controlId?: string;
+  readonly admissionHandoffId: TurnItemId;
 }
 
 /** Durable admission cannot recreate focus authority after a pause, replacement or restart. */
@@ -40,6 +41,7 @@ export const makeForegroundApprovals = () => {
       readonly handoff: Handoff;
       readonly observedRevision: number;
       readonly controlId: string | undefined;
+      readonly admissionHandoffId: TurnItemId;
       readonly now: number;
       readonly blocked: boolean;
     }) {
@@ -55,6 +57,7 @@ export const makeForegroundApprovals = () => {
       if (observedRevision !== revision || input.blocked) return;
       bindings.set(handoff.handoffId, {
         threadId: handoff.requestedBy.threadId,
+        admissionHandoffId: input.admissionHandoffId,
         ...(controlId === undefined ? {} : { controlId }),
       });
     },
@@ -62,8 +65,9 @@ export const makeForegroundApprovals = () => {
       for (const [id, binding] of bindings) {
         if (binding.threadId !== threadId || binding.controlId !== undefined) continue;
         // Full-access admission has no primary handoff; its explicit approvals remain separate.
-        if (admissionHandoffId !== undefined && admissionHandoffId !== id) bindings.delete(id);
-        else bindings.set(id, { threadId, controlId });
+        if (admissionHandoffId !== undefined && admissionHandoffId !== binding.admissionHandoffId)
+          bindings.delete(id);
+        else bindings.set(id, { ...binding, controlId });
       }
     },
     replaceControl(threadId: ThreadId, controlId: string) {
@@ -92,7 +96,7 @@ export const makeForegroundApprovals = () => {
         return (
           binding?.threadId === threadId &&
           (binding.controlId === undefined
-            ? grants[0]?.handoffId === grant.handoffId
+            ? grants[0]?.handoffId === binding.admissionHandoffId
             : binding.controlId === controlId)
         );
       });
@@ -164,6 +168,13 @@ export const makeForegroundAuthority = <E>(options: {
         handoff,
         observedRevision: observedEpoch,
         controlId,
+        // A shorter desktop approval may accompany the selected background admission. Pin
+        // that admission now so pending authority cannot follow a different grant at mint.
+        // When foreground itself supplies admission, retain its exact handoff binding.
+        admissionHandoffId:
+          selected !== undefined && selected.computerUseForeground === undefined
+            ? selected.handoffId
+            : handoff.handoffId,
         now,
         blocked: options.blocked(),
       });
