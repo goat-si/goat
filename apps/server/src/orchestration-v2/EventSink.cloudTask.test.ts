@@ -571,7 +571,7 @@ it.effect(
       let next = 0;
       const events = yield* makeCloudResultEvents({
         run: owner.run,
-        nodeId: owner.run.rootNodeId,
+        nodeId: owner.run.rootNodeId!,
         providerThreadId: owner.provider.id,
         providerTurnId: null,
         text,
