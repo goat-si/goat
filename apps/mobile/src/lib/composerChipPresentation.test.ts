@@ -22,6 +22,7 @@ const CHIP_ACCENTS = [
         "pull-request",
         "skill",
         "thread",
+        "capability",
       ].map((kind) => contextChipPresentation(kind)),
       ...[
         { state: "open", isDraft: false },
@@ -105,5 +106,14 @@ describe("contextChipAccent", () => {
   it("keeps an accent that already reads everywhere", () => {
     const theme = getMobileThemeVariables("goat-code", "dark");
     expect(contextChipAccent("#00aa76", theme, theme["--color-md-body"])).toBe("#00aa76");
+  });
+});
+
+describe("capability chips", () => {
+  it("shows a monitor for @computer and a globe for @browser", () => {
+    expect(contextChipPresentation("capability", { capability: "computer-use" }).icon).toBe(
+      "monitor",
+    );
+    expect(contextChipPresentation("capability", { capability: "browser" }).icon).toBe("globe");
   });
 });

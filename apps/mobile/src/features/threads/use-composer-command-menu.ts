@@ -8,6 +8,8 @@ import type {
   ThreadPullRequestLink,
 } from "@goat/contracts";
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import { matchComposerCapabilityItems } from "@goat/client-runtime/composerCapabilityItems";
+import { turnCapabilityContextRecord } from "@goat/shared/turnCapabilities";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = [];
@@ -50,6 +52,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useComposerPathSearch, useComposerPullRequestSearch } from "../../state/queries";
 import type { ComposerCommandItem } from "./ComposerCommandPopover";
 import { matchesSlashSkillQuery } from "./composerSlashSkillSearch";
+import { useComposerCapabilityContext } from "./useComposerCapabilityContext";
 
 const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
 
@@ -335,6 +338,13 @@ export function useComposerCommandMenu({
     }
     return detectComposerTrigger(draftMessage, selection.end);
   })();
+  const capabilityContext = useComposerCapabilityContext({
+    environmentId,
+    // A draft has no shell yet; the server applies plan mode again when the turn starts.
+    interactionMode:
+      threadShells.find((shell) => shell.id === currentThreadId)?.interactionMode ?? "default",
+    active: trigger?.kind === "path",
+  });
   const pathSearch = useComposerPathSearch({
     environmentId,
     cwd: trigger?.kind === "path" ? projectCwd : null,
@@ -500,6 +510,7 @@ export function useComposerCommandMenu({
           })
         : [];
       return [
+        ...matchComposerCapabilityItems(trigger.query, capabilityContext),
         ...threadItems,
         ...pathSearch.entries.map((entry) => {
           const parts = entry.path.split("/");
@@ -520,6 +531,34 @@ export function useComposerCommandMenu({
 
   const onSelect = (item: ComposerCommandItem) => {
     if (!trigger) return;
+    if (item.type === "capability") {
+      if (!ownerKey || trigger.kind !== "path") return;
+      if (item.unavailableReason !== null) {
+        Dialog.alert(
+          "Computer use isn't ready",
+          `${item.unavailableReason} Set it up in GOAT on that computer under Settings > Integrations > Computer.`,
+        );
+        return;
+      }
+      const record = turnCapabilityContextRecord(item.capability);
+      const existing = getComposerDraftSnapshot(ownerKey).context?.records ?? [];
+      const alreadyAttached = existing.some((entry) => entry.contextId === record.contextId);
+      if (!alreadyAttached && existing.length >= COMPOSER_CONTEXT_MAX_RECORDS) {
+        Dialog.alert("Too many context items", "Remove some context from the draft and try again.");
+        return;
+      }
+      const result = replaceTextRange(
+        draftMessage,
+        trigger.rangeStart,
+        trigger.rangeEnd,
+        `${formatComposerContextReference(record)} `,
+      );
+      onChangeDraftMessage(result.text);
+      if (!alreadyAttached)
+        setComposerDraftContext(ownerKey, { version: 1, records: [...existing, record] });
+      setSelection({ start: result.cursor, end: result.cursor });
+      return;
+    }
     if (item.type === "thread") {
       if (!ownerKey || trigger.kind !== "path") return;
       const shell = threadShells.find(

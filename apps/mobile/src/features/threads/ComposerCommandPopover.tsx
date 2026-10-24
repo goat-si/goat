@@ -1,3 +1,4 @@
+import type { ComposerCapabilityItem } from "@goat/client-runtime/composerCapabilityItems";
 import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
@@ -60,7 +61,8 @@ export type ComposerCommandItem =
       readonly skill: ServerProviderSkill;
       readonly label: string;
       readonly description: string;
-    };
+    }
+  | ComposerCapabilityItem;
 
 interface ComposerCommandPopoverProps {
   readonly items: ReadonlyArray<ComposerCommandItem>;
@@ -110,6 +112,8 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
       return null;
     case "thread":
       return "text.bubble";
+    case "capability":
+      return item.capability === "computer-use" ? "desktopcomputer" : "globe";
   }
 }
 
@@ -122,7 +126,7 @@ function groupLabel(triggerKind: ComposerTriggerKind | null): string | null {
     case "skill":
       return "Skills";
     case "path":
-      return "Files";
+      return "Mentions";
     default:
       return null;
   }
@@ -153,10 +157,13 @@ const CommandRow = memo(function CommandRow(props: {
   readonly isSlashSkill: boolean;
 }) {
   const iconName = itemIcon(props.item);
+  const unavailableReason = props.item.type === "capability" ? props.item.unavailableReason : null;
+  const description = unavailableReason ?? props.item.description;
 
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityHint={unavailableReason ?? undefined}
       onPress={props.onPress}
       className="flex-row items-center gap-2.5 border-border px-3.5 py-2.5 active:opacity-60"
       style={{ borderBottomWidth: props.isLast ? 0 : StyleSheet.hairlineWidth }}
@@ -175,7 +182,14 @@ const CommandRow = memo(function CommandRow(props: {
           type="monochrome"
         />
       ) : null}
-      <Text className="shrink-0 text-base font-goat-medium text-foreground" numberOfLines={1}>
+      <Text
+        className={
+          unavailableReason === null
+            ? "shrink-0 text-base font-goat-medium text-foreground"
+            : "shrink-0 text-base font-goat-medium text-foreground-muted"
+        }
+        numberOfLines={1}
+      >
         {props.isSlashSkill && props.item.type === "skill" ? (
           <>
             <Text className="text-foreground-muted">skill:</Text>
@@ -185,9 +199,9 @@ const CommandRow = memo(function CommandRow(props: {
           props.item.label
         )}
       </Text>
-      {props.item.description ? (
+      {description ? (
         <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>
-          {props.item.description}
+          {description}
         </Text>
       ) : null}
     </Pressable>
