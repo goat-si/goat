@@ -601,26 +601,21 @@ async function watchRedraw(
   );
   if (!version) return undefined;
   const windowId = chain[0] ?? 0;
-  const client = (window: number) => window & ~setup.idMask;
-  const own = client(windowId);
-  const frameOwner = client(chain.at(-1) ?? windowId);
-  // Sizes of the windows read through: a new size replaces the top-level's pixmap.
-  const sizes = new Map<number, string>();
-  for (const window of chain) {
-    const geometry = await getGeometry(x, window);
-    if (!geometry) return undefined;
-    sizes.set(window, u16(geometry, 16) + "x" + u16(geometry, 18));
+  const topLevel = chain.at(-1) ?? windowId;
+  // Every window inside the top-level whose pixmap is read, whoever owns it: any of them that
+  // is created, destroyed, mapped, unmapped, reparented, moved, resized or restacked can leave
+  // pixels the app's redraw never covered. A new window is reported through its parent, which is
+  // already watched, so nothing joins unseen.
+  const tree = [topLevel];
+  for (let index = 0; index < tree.length; index++) {
+    if (tree.length > MAX_CHECKED_WINDOWS) return undefined;
+    const answer = await queryTree(x, tree[index] ?? 0);
+    if (!answer) return undefined;
+    tree.push(...childrenOf(answer));
   }
-  // The target's own subtree, where another app's window would draw into the pixels read.
-  const subtree = [windowId];
-  for (let index = 0; index < subtree.length; index++) {
-    if (subtree.length > MAX_CHECKED_WINDOWS) return undefined;
-    const tree = await queryTree(x, subtree[index] ?? 0);
-    if (!tree) return undefined;
-    subtree.push(...childrenOf(tree).filter((child) => (child & ~setup.idMask) === own));
-  }
-  const inSubtree = new Set(subtree);
-  const inChain = new Set(chain);
+  const watched = new Set(tree);
+  const topSize = await getGeometry(x, topLevel);
+  if (!topSize) return undefined;
   let disturbed = false;
   const drawn = coverage(width, height);
   let reports = 0;
@@ -632,25 +627,18 @@ async function watchRedraw(
     const code = (event[0] ?? 0) & 0x7f;
     // Structure events: [4] the window watched (or the new window's parent), [8] the window.
     if (code >= 16 && code <= 22 && code !== 20) {
-      const watched = u32(event, 4);
+      const parent = u32(event, 4);
       const window = u32(event, 8);
-      // A window read through that is destroyed, unmapped, mapped, reparented or resized gets a
-      // new pixmap, filled from what is behind it.
-      if (inChain.has(window) && watched === window) {
-        if (code !== 22 || sizes.get(window) !== u16(event, 20) + "x" + u16(event, 22))
+      // The top-level itself only matters when it is replaced or resized: moving it on screen
+      // keeps its pixmap.
+      if (window === topLevel && parent === topLevel) {
+        if (
+          code !== 22 ||
+          u16(event, 20) !== u16(topSize, 16) ||
+          u16(event, 22) !== u16(topSize, 18)
+        )
           disturbed = true;
-        return;
-      }
-      // Anything in the target's own subtree changing: windows added there are not watched.
-      if (inSubtree.has(watched) && code !== 22) disturbed = true;
-      // Another app's window coming or going beside the target or one of its ancestors.
-      else if (
-        inChain.has(watched) &&
-        (code === 16 || code === 18 || code === 19 || code === 21) &&
-        client(window) !== own &&
-        client(window) !== frameOwner
-      )
-        disturbed = true;
+      } else if (watched.has(parent)) disturbed = true;
       return;
     }
     if (code !== notify || asked === undefined || u32(event, 8) !== id) return;
@@ -667,14 +655,14 @@ async function watchRedraw(
     if (!added) done.resolve(false);
     else if (drawn.whole()) done.resolve(true);
   });
-  // ChangeWindowAttributes for this connection only: StructureNotify on every window read
-  // through, SubstructureNotify on those and on the target's own descendants.
-  for (const window of new Set([...chain, ...subtree]))
+  // ChangeWindowAttributes for this connection only: SubstructureNotify on every window in the
+  // top-level, StructureNotify on the top-level too, whose parent (the root) is not watched.
+  for (const window of tree)
     x.send(
       request(2, 0, 4, (view) => {
         view.setUint32(4, window, true);
         view.setUint32(8, 1 << 11, true);
-        view.setUint32(12, inChain.has(window) ? (1 << 17) | (1 << 19) : 1 << 19, true);
+        view.setUint32(12, window === topLevel ? (1 << 17) | (1 << 19) : 1 << 19, true);
       }),
     );
   // DamageCreate at the raw-rectangles level: every drawing operation is reported.

@@ -225,6 +225,12 @@ async function scriptedServer(
             event.writeUInt16LE(requests.length & 0xffff, 2);
             event.writeUInt32LE(watched, 4);
             event.writeUInt32LE(changed, 8);
+            const size = windows[changed];
+            // A ConfigureNotify carries the window's size as it is now.
+            if (code === 22 && size) {
+              event.writeUInt16LE(size.width, 20);
+              event.writeUInt16LE(size.height, 22);
+            }
             socket.write(event);
           }
         } else if (op === COMPOSITE && minor === 0) {
@@ -475,6 +481,7 @@ describe("X11 window capture against a scripted server", () => {
     const MAP = 19;
     const UNMAP = 18;
     const CREATE = 16;
+    const CONFIGURE = 22;
     for (const afterRedraw of [
       // Another app's window mapped inside the target.
       [[MAP, 0x200001, 0x600001]],
@@ -487,19 +494,23 @@ describe("X11 window capture against a scripted server", () => {
       ],
       // Another app's window mapped beside the target, inside its frame.
       [[MAP, 0x400001, 0x600001]],
+      // A window beside the target moved over it and away again (#1390 review r3).
+      [[CONFIGURE, 0x400001, 0x400005]],
+      // The frame's own window mapped: whatever it holds was never checked (#1390 review r3).
+      [[MAP, 0x400001, 0x400005]],
     ] as const) {
       await using server = await scriptedServer(FRAMED, { redirected: [0x400001], afterRedraw });
       expect(
         await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
       ).toEqual({ refused: STILL_DRAWING, transient: true });
     }
-    // The frame's own windows coming and going beside the target do not spoil it.
-    await using frame = await scriptedServer(FRAMED, {
+    // Moving the whole frame on screen keeps its pixmap.
+    await using moved = await scriptedServer(FRAMED, {
       redirected: [0x400001],
-      afterRedraw: [[19, 0x400001, 0x400005]],
+      afterRedraw: [[22, 0x400001, 0x400001]],
     });
     expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: frame.path }),
+      await captureX11Window(environment, 0x200001, shot, { socketPath: moved.path }),
     ).toMatchObject({ width: 100 });
   });
 
