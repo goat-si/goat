@@ -57,6 +57,9 @@ describe("redactLogText", () => {
     ['{"to\\u006ben":"CANARY","ok":1}', '{"to\\u006ben":***,"ok":1}'],
     ['{\\"to\\\\u006ben\\":\\"CANARY\\"}', '{\\"to\\\\u006ben\\":***}'],
     [`requestid.${jwt} done`, "requestid.*** done"],
+    // A whole assigned value: quoted segments joined to more text, or a JSON value with spaces.
+    ["password='first'CANARY user=me", "password=*** user=me"],
+    ['token={"a": "CANARY", "b": [1, 2]} next', "token=*** next"],
     // Pretty JSON escaped inside a JSON string: its whitespace is escaped too.
     [
       JSON.stringify('{"token" :\n\t"CANARY",\n"cookie":\n[\n"CANARY"\n],"ok":1}'),
@@ -368,6 +371,37 @@ describe("redactedDefects", () => {
     expect(redactedDefects(Cause.fromReasons(defects)).length).toBeGreaterThan(0);
     // One walk of the shared chain plus a constant per defect, not one walk per defect.
     expect(reads).toBeLessThan(450);
+  });
+});
+
+describe("forged list lengths", () => {
+  const forgedLength = (length: unknown, onValueOf: () => void) =>
+    new Proxy([], {
+      getOwnPropertyDescriptor: (target, key) =>
+        key === "length"
+          ? { value: length, writable: true, enumerable: false, configurable: false }
+          : Reflect.getOwnPropertyDescriptor(target, key),
+    });
+
+  it("reads a list's length without coercing it", () => {
+    let calls = 0;
+    const valueOf = {
+      valueOf: () => {
+        calls += 1;
+        return 1;
+      },
+    };
+    redactLogMessage({ list: forgedLength(valueOf, () => {}) });
+    const cause = Cause.fromReasons([]);
+    Object.defineProperty(cause, "reasons", { value: forgedLength(valueOf, () => {}) });
+    expect(redactedDefects(cause)).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
+  it("ends on a reason list that claims an endless length", () => {
+    const cause = Cause.fromReasons([]);
+    Object.defineProperty(cause, "reasons", { value: forgedLength(Infinity, () => {}) });
+    expect(redactedDefects(cause)).toEqual([]);
   });
 });
 

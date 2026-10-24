@@ -14,9 +14,6 @@ export const MASK = "***";
 const CREDENTIAL_KEY = String.raw`(?:(?:access|refresh|id|session|auth|bearer|csrf|xsrf|api|client)[_-]?)?token|(?:x[_-])?api[_-]?key|client[_-]?secret|secret|password|passwd|authorization|(?:set[_-]?)?cookie`;
 export const isCredentialKey = new RegExp(`^(?:${CREDENTIAL_KEY})$`, "i");
 
-// A value after = or :, whole when it is quoted.
-const VALUE = String.raw`(?:"(?:\\[\s\S]|[^"\\])*"?|'(?:\\[\s\S]|[^'\\])*'?|\S+)`;
-
 /**
  * A quoted field name followed by a colon, in JSON escaped inside another JSON string, in JSON,
  * and in a single-quoted repr. Names are decoded before they are compared, so an escaped spelling
@@ -256,6 +253,59 @@ function maskJoseToken(run: string): string {
   return run;
 }
 
+// key=value or key: value for every credential name a field is masked by.
+const ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_KEY})\s*[=:]\s*`, "gi");
+// "authorization=Bearer abc": a scheme word and the credential after it are one value.
+const SCHEME_WORD = /^[A-Za-z][\w-]*[ \t]+(?=\S)/;
+
+/**
+ * Every assignment to a credential name with its whole value masked: a JSON value up to its
+ * closing bracket ({@link valueEnd}), otherwise a shell word, quoted segments and all, as in
+ * password='first'second. The key and its = or : stay.
+ */
+function maskAssignments(text: string): string {
+  let out = "";
+  let shown = 0;
+  ASSIGNMENT.lastIndex = 0;
+  for (let match = ASSIGNMENT.exec(text); match !== null; match = ASSIGNMENT.exec(text)) {
+    const start = match.index + match[0].length;
+    if (match.index < shown || start >= text.length) continue;
+    const lead = text.charAt(start);
+    const scheme = /^authorization$/i.test(match[1] ?? "")
+      ? (SCHEME_WORD.exec(text.slice(start, start + 64))?.[0].length ?? 0)
+      : 0;
+    const end =
+      lead === "{" || lead === "["
+        ? valueEnd(text, start, false)
+        : shellWordEnd(text, start + scheme);
+    if (end === start) continue;
+    out += text.slice(shown, start) + MASK;
+    shown = end;
+    ASSIGNMENT.lastIndex = end;
+  }
+  return out + text.slice(shown);
+}
+
+/** The end of a shell word: up to unquoted whitespace, with quoted segments and escapes inside. */
+function shellWordEnd(text: string, start: number): number {
+  let index = start;
+  while (index < text.length) {
+    const char = text.charAt(index);
+    if (/\s/.test(char)) break;
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      index += 1;
+      while (index < text.length && text.charAt(index) !== char)
+        index += text.charAt(index) === "\\" && char === '"' ? 2 : 1;
+    }
+    index += 1;
+  }
+  return Math.min(index, text.length);
+}
+
 const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => string)]> = [
   // Cookie and Set-Cookie headers hold every cookie up to the end of the line.
   [/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/gi, `$1${MASK}`],
@@ -273,13 +323,6 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   [/\b(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, `$1 ${MASK}`],
   // An Authorization header holds its scheme and every parameter up to the end of the line.
   [/\b(authorization\s*:\s*)[^\r\n]+/gi, `$1${MASK}`],
-  // authorization=Scheme value, the scheme word and value together.
-  [
-    new RegExp(String.raw`\b(authorization\s*=\s*)(?:[A-Za-z][\w-]*\s+)?${VALUE}`, "gi"),
-    `$1${MASK}`,
-  ],
-  // key=value and key: value for every credential name a field is masked by.
-  [new RegExp(String.raw`\b(${CREDENTIAL_KEY})(\s*[=:]\s*)${VALUE}`, "gi"), `$1$2${MASK}`],
 ];
 
 const MAX_STRING = 32_000;
@@ -297,7 +340,8 @@ export function redactLogText(text: string): string {
         : current.replace(pattern, replacement),
     maskCredentialFields(redactGoatCredentials(scanned)),
   );
-  return redacted.length <= MAX_STRING && scanned === text
-    ? redacted
-    : `${redacted.slice(0, MAX_STRING)}…[cut from ${text.length} characters]`;
+  const assigned = maskAssignments(redacted);
+  return assigned.length <= MAX_STRING && scanned === text
+    ? assigned
+    : `${assigned.slice(0, MAX_STRING)}…[cut from ${text.length} characters]`;
 }

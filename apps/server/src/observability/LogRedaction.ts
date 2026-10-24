@@ -51,6 +51,8 @@ function diagnostic(error: Error, key: "name" | "message" | "stack"): string | u
 
 const MAX_CAUSE_DEPTH = 16;
 const MAX_REASONS = 16;
+// Reasons one report visits; a list claiming more is counted, not walked.
+const MAX_VISITED_REASONS = 100_000;
 const MAX_NAME_CHARS = 200;
 const MAX_MESSAGE_CHARS = 4_000;
 const MAX_STACK_CHARS = 8_000;
@@ -81,7 +83,8 @@ export const redactedDefects = (cause: Cause.Cause<unknown>): Array<Cause.Cause<
   const ignored = new Map<object, boolean>();
   const budget = { steps: MAX_PROTOTYPE_STEPS };
   let omitted = 0;
-  for (let index = 0; index < total; index++) {
+  const visited = Math.min(total, MAX_VISITED_REASONS);
+  for (let index = 0; index < visited; index++) {
     const reason = dataProperty(listed, index);
     const tag = dataProperty(reason, "_tag");
     if (tag === "Fail" || tag === "Interrupt") continue;
@@ -90,15 +93,27 @@ export const redactedDefects = (cause: Cause.Cause<unknown>): Array<Cause.Cause<
     else omitted += 1;
   }
   if (omitted > 0) defects.push(Cause.die(new Error(`${omitted} more defects omitted`)));
+  if (total > visited)
+    defects.push(Cause.die(new Error(`${total - visited} more reasons not inspected`)));
   return defects;
 };
 
 function listLength(listed: unknown): number {
-  return guarded(
-    () =>
-      Array.isArray(listed) ? Number(Object.getOwnPropertyDescriptor(listed, "length")?.value) : 0,
-    0,
-  );
+  return guarded(() => (Array.isArray(listed) ? arrayLength(listed) : 0), 0);
+}
+
+/**
+ * An array's length as its own data property holds it, when that is a valid length; nothing is
+ * coerced, so a forged length runs no valueOf and cannot claim Infinity.
+ */
+function arrayLength(target: unknown): number {
+  const length = dataProperty(target, "length");
+  return typeof length === "number" &&
+    Number.isInteger(length) &&
+    length >= 0 &&
+    length <= 2 ** 32 - 1
+    ? length
+    : 0;
 }
 
 // Prototype steps one report may take; only a Proxy inventing a fresh prototype each step gets near.
@@ -387,7 +402,7 @@ function sanitizeObject(value: object, depth: number, budget: Budget): unknown {
       sanitize(entry, depth + 1, budget),
     );
   if (Array.isArray(value)) {
-    const length = Number(Object.getOwnPropertyDescriptor(value, "length")?.value ?? 0);
+    const length = arrayLength(value);
     const indexes = (function* () {
       for (let index = 0; index < length; index++) yield index;
     })();
@@ -519,7 +534,7 @@ const MAX_SPANS = 64;
 /** Log span labels and start times, read through descriptors so no method of the list runs. */
 function spanSnapshot(spans: unknown): Array<readonly [string, number]> {
   if (!Array.isArray(spans)) return [];
-  const length = Number(Object.getOwnPropertyDescriptor(spans, "length")?.value ?? 0);
+  const length = arrayLength(spans);
   const snapshot: Array<readonly [string, number]> = [];
   for (let index = 0; index < Math.min(length, MAX_SPANS); index++) {
     const entry: unknown = Object.getOwnPropertyDescriptor(spans, index)?.value;
