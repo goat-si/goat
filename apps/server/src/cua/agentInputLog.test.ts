@@ -106,6 +106,25 @@ describe("agentInputLog", () => {
     assert.isTrue(log.isAgents(30_100, "pointer"));
   });
 
+  it("move_cursor covers a person's pointer only for desktop moves (#1486)", () => {
+    for (const [target, kinds] of [
+      [{ pid: 42, window_id: 7 }, []],
+      [{ scope: "window" }, []],
+      [{}, []],
+      [{ target: { kind: "window", pid: 42, window_id: 7 } }, []],
+      [{ scope: "desktop" }, ["pointer"]],
+      [{ target: { kind: "desktop", display_id: "primary" } }, ["pointer"]],
+    ] as const) {
+      const actual = inputKinds("move_cursor", { ...target, x: 10, y: 20 });
+      assert.deepEqual(actual, kinds);
+      const log = makeAgentInputLog();
+      log.started("move", 1_000, actual);
+      assert.equal(log.isAgents(1_200, "pointer"), kinds.length > 0);
+      log.ended("move", 1_400);
+      assert.equal(log.isAgents(1_900, "pointer"), kinds.length > 0);
+    }
+  });
+
   it("names the kinds a call can post from its tool and arguments", () => {
     for (const tool of ["get_window_state", "list_apps", "zoom", "invoke_menu", "launch_app"])
       assert.isFalse(postsInput(tool));
