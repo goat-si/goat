@@ -341,9 +341,18 @@ export const writesAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<
  * Unlike `writes` it does not need thread control; the handler checks its
  * capability, as the capability toolkits do.
  */
-export const writesWithCapability = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+export const writesWithCapability = <P, A, E, R>(
+  handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
+) =>
   declare("write", (params: P) =>
-    writingCaller.pipe(Effect.flatMap((caller) => admitted(params, caller.limits, handle(params)))),
+    writingCaller.pipe(
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params)),
+      ),
+    ),
   );
 
 export const writesThreads = <P, A, E, R>(
