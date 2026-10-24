@@ -563,7 +563,7 @@
   "apps/web/src/components/settings/ResourceTelemetryDiagnostics.tsx": { "lines": 1306 },
   "apps/web/src/components/settings/ScheduledTasksSettings.tsx": { "lines": 1776, "nonNull": 5 },
   "apps/web/src/components/settings/SessionPermissions.tsx": { "nonNull": 1 },
-  "apps/web/src/components/settings/SettingsPanels.tsx": { "lines": 2115 },
+  "apps/web/src/components/settings/SettingsPanels.tsx": { "lines": 1823 },
   "apps/web/src/components/settings/SnapShotSettings.tsx": { "nonNull": 1 },
   "apps/web/src/components/settings/StorageSettings.tsx": { "nonNull": 4 },
   "apps/web/src/components/settings/ThemeEditorPanel.tsx": { "lines": 1233 },

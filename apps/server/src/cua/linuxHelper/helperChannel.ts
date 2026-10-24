@@ -55,6 +55,11 @@ const frameId = (line: string): string | undefined => {
 };
 
 const NEWLINE = 0x0a;
+/**
+ * Room every reply needs beyond the request's id: generation, result and a refusal message.
+ * Requests are held this far below the frame limit so even the reply to the largest request fits.
+ */
+const ENVELOPE_RESERVE = 4096;
 
 /**
  * Splits input into lines without holding more than maxBytes of one: a longer line is dropped
@@ -152,7 +157,7 @@ export function serveHelperChannel(options: {
       );
       if (fits(trimmed)) return options.write(trimmed + "\n");
     }
-    send({
+    const fallback = JSON.stringify({
       id,
       generation: binding.generation,
       result: sent
@@ -169,6 +174,9 @@ export function serveHelperChannel(options: {
               " byte limit. Ask for a smaller screenshot.",
           ),
     });
+    // Requests are capped below the frame limit (see ENVELOPE_RESERVE), so this always fits;
+    // a reply that still would not is not sent, and the client's deadline answers for it.
+    if (fits(fallback)) options.write(fallback + "\n");
   };
 
   let greeted = false;
@@ -180,7 +188,7 @@ export function serveHelperChannel(options: {
       // A closed stdin is the launcher ending every session: stop the driver now.
       void options.helper.close().then(resolve, resolve);
     };
-    boundedLines(options.input, maxFrameBytes, {
+    boundedLines(options.input, maxFrameBytes - ENVELOPE_RESERVE, {
       end: finish,
       oversized: (prefix) => {
         if (!open) return;

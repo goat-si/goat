@@ -25,6 +25,7 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useOptionalSettingsScope } from "./SettingsScopeContext";
 import { SettingsScopeSentence } from "./SettingsScopeSentence";
+import { SettingsPageLead } from "./SettingsPageLead";
 import {
   isProjectScopedSettingKey,
   listProjectOverrides,
@@ -590,7 +591,10 @@ export function SettingsPageContainer({
         data-settings-page-scroll
       >
         <WorkspacePageContainer width={width} className={cn("gap-8", className)}>
-          <SettingsScopeSentence />
+          <div className="flex flex-col gap-3">
+            <SettingsPageLead />
+            <SettingsScopeSentence />
+          </div>
           {children}
         </WorkspacePageContainer>
       </div>

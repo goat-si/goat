@@ -187,7 +187,6 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
       }
     }
   }
-  // Public catalog contract: exactly the renamed tools, with no callable legacy aliases.
   expect([...names].filter((name) => name.startsWith("goat_")).sort()).toEqual([
     "goat_attachment_discard",
     "goat_attachment_prepare_upload",
@@ -221,6 +220,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_host_link_remove",
     "goat_host_status",
     "goat_host_uncordon",
+    "goat_html_list",
     "goat_hub_device_join",
     "goat_hub_device_leave",
     "goat_hub_device_repair",
@@ -320,7 +320,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(175);
+  expect(names.size).toBe(176);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);
