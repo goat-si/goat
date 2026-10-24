@@ -145,9 +145,25 @@ function decideStablePromotion({ releases, openBlockers, hold, now, sha }) {
 /**
  * Checked again right before a promotion publishes, hours after prepare decided: a blocker
  * opened or the hold set during the build stops a scheduled promotion, and a stable that
- * shipped meanwhile stops any. A manual run that named its commit skips the two gates.
+ * shipped meanwhile stops any. A manual run that named its commit skips the two gates. A
+ * re-run after this exact stable went public passes, so the publisher can match its bytes and
+ * finish the steps after it.
  */
-function recheckStablePromotion({ releases, openBlockers, hold, shortSha, manual }) {
+function recheckStablePromotion({ releases, openBlockers, hold, shortSha, version, manual }) {
+  const published = releases.some(
+    (release) =>
+      !release.draft &&
+      !release.prerelease &&
+      release.published_at &&
+      release.tag_name === "v" + version &&
+      NAME_SHA.exec(release.name ?? "")?.[1] === shortSha,
+  );
+  if (published) {
+    return {
+      ok: true,
+      reason: "v" + version + " of " + shortSha + " is already published; this is a re-run",
+    };
+  }
   if (!manual) {
     const held = heldBy({ openBlockers, hold });
     if (held) return { ok: false, reason: held };
@@ -191,6 +207,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
       openBlockers: blockerCount(),
       hold: env.GOAT_STABLE_HOLD ?? "",
       shortSha: env.SHORT_SHA,
+      version: env.VERSION,
       manual: Boolean(env.INPUT_SHA),
     });
     if (!result.ok) throw new Error("stable promotion stopped before publishing: " + result.reason);

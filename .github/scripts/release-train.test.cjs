@@ -146,6 +146,7 @@ describe("recheckStablePromotion", () => {
       openBlockers: 0,
       hold: "",
       shortSha: "bbbbbbbbbbbb",
+      version: "0.1.2",
       manual: false,
       ...input,
     });
@@ -164,11 +165,20 @@ describe("recheckStablePromotion", () => {
     assert.equal(recheck({ manual: true, openBlockers: 3, hold: "true" }).ok, true);
   });
 
-  it("stops any promotion whose commit shipped or was overtaken by a stable during the build", () => {
-    const shipped = [stable("0.1.2", "bbbbbbbbbbbb", ago(HOUR)), ...releases];
-    assert.equal(recheck({ releases: shipped }).ok, false);
-    assert.equal(recheck({ releases: shipped, manual: true }).ok, false);
+  it("stops any promotion overtaken by a stable of another commit during the build", () => {
     const overtaken = [stable("0.1.2", "cccccccccccc", ago(HOUR)), ...releases];
     assert.match(recheck({ releases: overtaken }).reason, /not newer than stable v0\.1\.2/);
+    assert.equal(recheck({ releases: overtaken, manual: true }).ok, false);
+    const newer = [stable("0.1.3", "dddddddddddd", ago(HOUR)), ...releases];
+    assert.equal(recheck({ releases: newer }).ok, false);
+  });
+
+  it("lets a re-run finish once this exact stable is public, so the publisher can match its bytes", () => {
+    const published = [stable("0.1.2", "bbbbbbbbbbbb", ago(HOUR)), ...releases];
+    assert.deepEqual(recheck({ releases: published, openBlockers: 1, hold: "true" }), {
+      ok: true,
+      reason: "v0.1.2 of bbbbbbbbbbbb is already published; this is a re-run",
+    });
+    assert.equal(recheck({ releases: published, version: "0.1.3" }).ok, false);
   });
 });

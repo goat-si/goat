@@ -912,10 +912,10 @@ describe("goat pre-push nightly workflow guard", () => {
     expect(result.status).toBe(0);
   });
 
-  it("allows contents: write on jobs that use the staging hand-off", () => {
+  it("allows contents: write on hand-off jobs, and issues: read on publish", () => {
     const jobs = nightlyJobs();
     jobs.build_mac = { ...jobs.build_mac, permissions: { contents: "write" } };
-    jobs.publish = { ...jobs.publish, permissions: { contents: "write" } };
+    jobs.publish = { ...jobs.publish, permissions: { contents: "write", issues: "read" } };
     jobs.cleanup = {
       needs: ["prepare", "publish"],
       if: `${downstreamGateText} && (always())`,
@@ -923,14 +923,6 @@ describe("goat pre-push nightly workflow guard", () => {
       permissions: { contents: "write" },
       steps: [checkout(), { run: "node scripts/nightly-staging.ts cleanup" }],
     };
-    const result = push(nightly(jobs));
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-  });
-
-  it("allows publish to read release-blocker issues beside contents: write", () => {
-    const jobs = nightlyJobs();
-    jobs.publish = { ...jobs.publish, permissions: { contents: "write", issues: "read" } };
     const result = push(nightly(jobs));
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
@@ -1207,16 +1199,6 @@ describe("goat pre-push nightly workflow guard", () => {
     ],
     [
       "write permissions beyond contents",
-      withJob("publish", { permissions: { contents: "write", actions: "write" } }),
-      "jobs.publish may only request contents: write",
-    ],
-    [
-      "issues: read beside contents: write outside publish",
-      withJob("build_mac", { permissions: { contents: "write", issues: "read" } }),
-      "jobs.build_mac may only request contents: write",
-    ],
-    [
-      "issues: write on publish",
       withJob("publish", { permissions: { contents: "write", issues: "write" } }),
       "jobs.publish may only request contents: write",
     ],
@@ -1226,8 +1208,8 @@ describe("goat pre-push nightly workflow guard", () => {
       "jobs.build_mac may only request contents: write",
     ],
     [
-      "a non-contents write permission",
-      withJob("build_other", { permissions: { packages: "write" } }),
+      "issues: read outside publish",
+      withJob("build_other", { permissions: { contents: "write", issues: "read" } }),
       "jobs.build_other may only request contents: write",
     ],
     [

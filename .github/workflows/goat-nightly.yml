@@ -949,7 +949,8 @@ jobs:
       # A stable promotion decided in prepare publishes hours later. Inside the publish
       # lock, right before the App token, check again that no release-blocker issue
       # opened and GOAT_STABLE_HOLD was not set (both skipped when a manual run named
-      # its commit), and that no stable shipped this commit or a newer base meanwhile.
+      # its commit), and that no stable shipped this commit or a newer base meanwhile. A
+      # re-run after this exact stable went public passes on to the publisher's byte check.
       - name: Recheck stable promotion
         if: needs.prepare.outputs.channel == 'stable'
         shell: bash
