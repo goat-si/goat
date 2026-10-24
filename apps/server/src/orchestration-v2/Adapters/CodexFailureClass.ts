@@ -64,6 +64,16 @@ function codexEntitlementRefusal(
   );
 }
 
+/**
+ * A turn's final failure. A refusal first reported while Codex still retried keeps that retry's
+ * flag; once the turn has failed, the same route cannot succeed.
+ */
+export function settledCodexFailure<
+  F extends { readonly class: string; readonly retryable?: boolean | null },
+>(failure: F): F {
+  return failure.class === "permission_error" ? { ...failure, retryable: false } : failure;
+}
+
 /** The class of a failure Codex reports as final: a turn's terminal error. */
 export function codexTerminalFailure(
   code: string | null,

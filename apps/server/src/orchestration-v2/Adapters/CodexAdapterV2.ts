@@ -175,6 +175,7 @@ import { codexFileChangePatch } from "../fileChangePatch.ts";
 import {
   codexExhaustionHttpStatus,
   codexRetryFailureClass,
+  settledCodexFailure,
   codexTerminalFailure,
 } from "./CodexFailureClass.ts";
 
@@ -6296,7 +6297,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         ...failure,
                         resetAt: codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot)),
                       }
-                    : failure,
+                    : settledCodexFailure(failure),
                 ...(input.providerRetry === undefined
                   ? {}
                   : {

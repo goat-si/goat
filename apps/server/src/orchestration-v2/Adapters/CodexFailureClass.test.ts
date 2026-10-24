@@ -4,6 +4,7 @@ import {
   codexRetryFailureClass,
   codexTerminalFailure,
   codexUsageLimitError,
+  settledCodexFailure,
 } from "./CodexFailureClass.ts";
 
 // What OpenCodex returned for a CommandCode model the account's plan lacks (#1205).
@@ -29,6 +30,13 @@ describe("Codex failure classes", () => {
         NOT_IN_PLAN,
       ),
     ).toBe("permission_error");
+  });
+
+  it("a refusal Codex reported while still retrying is not retryable once the turn failed", () => {
+    const retrying = { class: "permission_error", message: NOT_IN_PLAN, retryable: true };
+    expect(settledCodexFailure(retrying)).toEqual({ ...retrying, retryable: false });
+    const transient = { class: "transport_error", message: "stream closed", retryable: true };
+    expect(settledCodexFailure(transient)).toBe(transient);
   });
 
   it("keeps usage limits, transport and other provider errors as they were", () => {
