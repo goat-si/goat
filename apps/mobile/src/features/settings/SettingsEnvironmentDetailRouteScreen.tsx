@@ -212,7 +212,10 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
               />
             </SettingsSection>
             {connected && canRead ? (
-              <ComputerUseHostReadiness environmentId={environmentId} />
+              <ComputerUseHostReadiness
+                environmentId={environmentId}
+                machine={environment?.environmentLabel}
+              />
             ) : null}
             <EnvironmentRoutesSection
               environmentId={environmentId}

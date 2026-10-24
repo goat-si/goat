@@ -28,6 +28,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import { hasUnsettledChannelDelivery } from "./channelDeliveryGate.ts";
@@ -64,6 +65,7 @@ const make = Effect.gen(function* () {
   const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
   const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+  const childWork = yield* ChannelChildWork.ChannelChildWork;
   const sql = yield* SqlClient.SqlClient;
   const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
   const imessage = yield* ImessageChannelRuntime.ImessageChannelRuntime;
@@ -149,6 +151,13 @@ const make = Effect.gen(function* () {
       started += 1;
     }
     started += yield* reports.reconcile(owner);
+    // Child-work records settle against their destinations in the same pass, so capacity freed
+    // by a finished child is visible before the next admission.
+    started += yield* childWork.reconcile.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("channel child-work reconcile failed", { cause }).pipe(Effect.as(0)),
+      ),
+    );
     // Observers of workers on other machines run on their own fibers; this only starts missing ones.
     started += yield* remoteWorkers.ensure(owner);
     started += yield* delivery.deliverDue(owner);

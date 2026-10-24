@@ -11,7 +11,6 @@ import {
   RuntimeRequestId,
   ThreadId,
   RuntimeMode,
-  IsoDateTime,
   RemoteDispatchState,
   RemoteReportDeliveryMode,
   RemoteReportKind,
@@ -50,6 +49,7 @@ import {
   requestRemoteTaskCancel,
   recoverUnknownRemoteTaskLaunch,
 } from "./recordRemoteTaskResult.ts";
+import * as RemoteDispatchRow from "./remoteDispatchRow.ts";
 import {
   REPORTING_NOTE,
   frameLiteral,
@@ -69,6 +69,7 @@ export class RemoteDispatchError extends Schema.TaggedError<RemoteDispatchError>
       "unsupported_task",
       "not_found",
       "launch",
+      "authorize",
     ]),
     reason: Schema.optional(Schema.Literal("duplicate_task")),
     cause: Schema.optional(Schema.Defect()),
@@ -78,42 +79,10 @@ export class RemoteDispatchError extends Schema.TaggedError<RemoteDispatchError>
     return "Remote dispatch operation failed.";
   }
 }
-const Row = Schema.Struct({
-  memory_grant_ceiling: Schema.optional(MemoryTaskGrantCeiling),
-  correlation_id: Schema.String,
-  kind: Schema.Literals(["thread", "task"]),
-  origin_thread_id: ThreadId,
-  host: Schema.String,
-  remote_thread_id: Schema.NullOr(Schema.String),
-  launched_run_id: Schema.NullOr(RunId),
-  read_key: Schema.String,
-  delivery: RemoteReportDeliveryMode,
-  reports_supported: Schema.Number,
-  state: RemoteDispatchState,
-  report_cursor: Schema.Number,
-  known_run_id: Schema.NullOr(RunId),
-  known_run_status: Schema.NullOr(OrchestrationV2RunStatus),
-  latest_kind: Schema.NullOr(RemoteReportKind),
-  latest_summary: Schema.NullOr(Schema.String),
-  latest_at: Schema.NullOr(IsoDateTime),
-  cancel_requested_at: Schema.NullOr(IsoDateTime),
-  cancel_ceiling: Schema.NullOr(RuntimeMode),
-  task_id: Schema.NullOr(NodeId),
-  parent_run_id: Schema.NullOr(RunId),
-  pending_request_ids: Schema.NullOr(Schema.fromJsonString(Schema.Array(RuntimeRequestId))),
-  observation: Schema.optional(Schema.NullOr(Schema.fromJsonString(ChannelWorkerObservation))),
-  relay_send: Schema.Number,
-  relay_attempted: Schema.Number,
-  last_error: Schema.NullOr(Schema.String),
-  created_at: IsoDateTime,
-  updated_at: IsoDateTime,
-}).check(
-  Schema.makeFilter((r) => r.kind !== "task" || (r.task_id !== null && r.parent_run_id !== null)),
-);
-type Row = typeof Row.Type;
+type Row = RemoteDispatchRow.RemoteDispatchRow;
 
 const RELAY_REQUEST_OUTCOME_LIMIT = 1_000;
-const decodeRows = Schema.decodeUnknownEffect(Schema.Array(Row));
+const decodeRows = RemoteDispatchRow.decodeRemoteDispatchRows;
 const encodeRequestIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(RuntimeRequestId)));
 const encodeObservation = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerObservation));
 const decodeReportWait = Schema.decodeUnknownEffect(RemoteOriginReportsWaitResult);
@@ -203,6 +172,8 @@ export interface RemoteLaunchInput {
   readonly delivery: typeof RemoteReportDeliveryMode.Type;
   readonly launch: SshRemoteDispatch.SshLaunchInput;
   readonly task?: { readonly taskId: NodeId; readonly parentRunId: RunId };
+  /** A durable caller identity (a channel child-work record) keys the row for launch retries. */
+  readonly correlationId?: string | undefined;
 }
 export class RemoteDispatchCoordinator extends Context.Service<
   RemoteDispatchCoordinator,
@@ -1004,14 +975,16 @@ const make = Effect.gen(function* () {
     if ((input.kind === "task") !== (input.task !== undefined))
       return yield* new RemoteDispatchError({ stage: "unsupported_task" });
     const launchKey =
-      input.task === undefined ? null : `${input.originThreadId}:${input.task.taskId}`;
+      input.task === undefined
+        ? (input.correlationId ?? null)
+        : `${input.originThreadId}:${input.task.taskId}`;
     const pending = launchKey === null ? undefined : inFlight.get(launchKey);
     const owner =
       pending === undefined ? yield* Deferred.make<void, RemoteDispatchError>() : pending;
     const ownsEntry = launchKey !== null && pending === undefined;
     if (ownsEntry) inFlight.set(launchKey, owner);
     return yield* Effect.gen(function* () {
-      const id = `rr-${NodeCrypto.randomUUID()}`;
+      const id = input.correlationId ?? `rr-${NodeCrypto.randomUUID()}`;
       const readKey = NodeCrypto.randomBytes(32).toString("hex");
       const at = yield* now;
       const acquired = yield* db(sql`INSERT INTO remote_dispatches
@@ -1020,12 +993,7 @@ const make = Effect.gen(function* () {
         Effect.result,
       );
       if (acquired._tag === "Failure") {
-        const duplicate =
-          input.task === undefined
-            ? []
-            : yield* rows(
-                sql`SELECT * FROM remote_dispatches WHERE kind = 'task' AND origin_thread_id = ${input.originThreadId} AND task_id = ${input.task.taskId}`,
-              );
+        const duplicate = yield* rows(RemoteDispatchRow.findLaunchConflict(sql, input));
         if (duplicate.length === 0) return yield* acquired.failure;
         if (pending === undefined && duplicate[0]?.state !== "launching")
           return yield* new RemoteDispatchError({ stage: "launch", reason: "duplicate_task" });
@@ -1075,23 +1043,28 @@ const make = Effect.gen(function* () {
               .launchThread(legacyLaunch, register)
               .pipe(Effect.map((value) => ({ ...value, reportsSupported: false })));
           }),
-          Effect.tapError((error) =>
+          // No remote write can precede beforeLaunch. When the failure is proven to be from
+          // before any write, the row goes away so the request can retry, and the failure
+          // reaches the launcher wrapped as stage "authorize": its surfaces release the
+          // capacity they reserved, while its cause keeps the message the caller should see.
+          Effect.catch((error) =>
             Effect.gen(function* () {
-              // No remote write can precede beforeLaunch. Release the task key if
-              // registration never committed, so the same request can retry.
               const registered = yield* Deferred.isDone(owner);
               const refused =
                 (error instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-                  // Every reason except a transport failure, after which the send may have landed.
-                  !["ssh_failed", "host_unavailable"].includes(error.reason)) ||
+                  // Every reason except a transport failure, after which the send may have
+                  // landed; launchMayHaveStarted says even a refusal came too late to know.
+                  !["ssh_failed", "host_unavailable"].includes(error.reason) &&
+                  error.launchMayHaveStarted !== true) ||
                 (isOrchestratorMcpFailure(error) && !registered);
               if ((input.kind === "task" && !registered) || (input.kind === "thread" && refused)) {
                 yield* db(sql`DELETE FROM remote_dispatches WHERE correlation_id = ${id}`);
-                return;
+                return yield* new RemoteDispatchError({ stage: "authorize", cause: error });
               }
               yield* db(sql`UPDATE remote_dispatches SET state = 'lost',
       last_error = 'Launch outcome unknown or refused; check goat_thread_list with host before retrying.',
       updated_at = ${at} WHERE correlation_id = ${id}`);
+              return yield* Effect.fail(error);
             }),
           ),
         );

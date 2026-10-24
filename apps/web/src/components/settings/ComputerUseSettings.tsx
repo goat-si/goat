@@ -230,6 +230,7 @@ function ComputerUseControls({
       />
       <ComputerUseReadiness
         platform={host.status?.platform}
+        machine={hostLabel}
         readiness={withLiveGrants(host.status?.readiness, live)}
         tools={host.status?.tools}
         signals={host.status?.signals}
