@@ -169,21 +169,80 @@ function projectMatchesRepository(
   );
 }
 
-const readCloudRuns = Effect.fn("CloudAgentService.readRuns")(function* (limit: number) {
+interface RunQuery {
+  readonly limit: number;
+  readonly provider?: CloudAgentProvider | undefined;
+  readonly threadId?: ThreadId | undefined;
+  readonly after?: RunPosition | undefined;
+}
+
+/** A row's place in the newest-first order; the cursor encodes it so pages never overlap. */
+interface RunPosition {
+  readonly updatedAt: string;
+  readonly providerThreadId: string;
+}
+
+const encodeCursor = (position: RunPosition) =>
+  Buffer.from(JSON.stringify([position.updatedAt, position.providerThreadId]), "utf8").toString(
+    "base64url",
+  );
+
+const decodeCursor = (cursor: string): RunPosition | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === "string" &&
+      typeof parsed[1] === "string"
+    )
+      return { updatedAt: parsed[0], providerThreadId: parsed[1] };
+  } catch {
+    // A malformed cursor is reported to the caller below.
+  }
+  return undefined;
+};
+
+/**
+ * Filters run inside the query, so a match behind newer runs is still found. One extra row
+ * tells whether more match than the page holds.
+ */
+const readCloudRuns = Effect.fn("CloudAgentService.readRuns")(function* (query: RunQuery) {
   const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{ readonly provider_json: string; readonly thread_json: string }>`
-    SELECT p.payload_json AS provider_json, t.payload_json AS thread_json
+  const rows = yield* sql<{
+    readonly provider_thread_id: string;
+    readonly updated_at: string;
+    readonly provider_json: string;
+    readonly thread_json: string;
+  }>`
+    SELECT p.provider_thread_id, p.updated_at,
+      p.payload_json AS provider_json, t.payload_json AS thread_json
     FROM orchestration_v2_projection_provider_threads AS p
     JOIN orchestration_v2_projection_threads AS t ON t.thread_id = p.thread_id
     WHERE p.driver IN ('claudeCloud', 'cursorCloud', 'devinCloud')
       AND p.owner_node_id IS NULL
       AND t.deleted_at IS NULL
       AND json_type(p.payload_json, '$.cloudTask') = 'object'
+      ${query.provider === undefined ? sql`` : sql`AND p.driver = ${query.provider}`}
+      ${query.threadId === undefined ? sql`` : sql`AND p.thread_id = ${query.threadId}`}
+      ${
+        query.after === undefined
+          ? sql``
+          : sql`AND (p.updated_at < ${query.after.updatedAt}
+              OR (p.updated_at = ${query.after.updatedAt}
+                AND p.provider_thread_id > ${query.after.providerThreadId}))`
+      }
     ORDER BY p.updated_at DESC, p.provider_thread_id ASC
-    LIMIT ${limit}
+    LIMIT ${query.limit + 1}
   `;
+  const page = rows.slice(0, query.limit);
+  const last = page.at(-1);
+  const next =
+    rows.length > query.limit && last !== undefined
+      ? encodeCursor({ updatedAt: last.updated_at, providerThreadId: last.provider_thread_id })
+      : undefined;
   const runs: Array<StoredRun> = [];
-  for (const row of rows) {
+  for (const row of page) {
     const providerThread = yield* decodeProviderThreadPayload(row.provider_json).pipe(
       Effect.option,
     );
@@ -217,18 +276,26 @@ const readCloudRuns = Effect.fn("CloudAgentService.readRuns")(function* (limit: 
       },
     });
   }
-  return runs;
+  return { runs, next };
 });
 /** Cloud runs this environment follows or links, newest first. Needs only the database. */
-export const listCloudRuns = (input: CloudRunListInput) =>
-  readCloudRuns(input.limit ?? 50).pipe(
-    Effect.map((stored): CloudRunListResult => ({
-      runs: stored
-        .map((run) => run.summary)
-        .filter((run) => input.provider === undefined || run.provider === input.provider),
-    })),
-    Effect.mapError(() => failure("orchestration_error", "Could not read cloud runs here.")),
-  );
+export const listCloudRuns = Effect.fn("CloudAgentService.listRuns")(function* (
+  input: CloudRunListInput,
+) {
+  const after = input.cursor === undefined ? undefined : decodeCursor(input.cursor);
+  if (input.cursor !== undefined && after === undefined)
+    return yield* failure("invalid_request", "cursor is not a nextCursor from this list.");
+  const page = yield* readCloudRuns({
+    limit: input.limit ?? 50,
+    provider: input.provider,
+    after,
+  }).pipe(Effect.mapError(() => failure("orchestration_error", "Could not read cloud runs here.")));
+  return {
+    runs: page.runs.map((run) => run.summary),
+    truncated: page.next !== undefined,
+    ...(page.next === undefined ? {} : { nextCursor: page.next }),
+  } satisfies CloudRunListResult;
+});
 
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
@@ -251,8 +318,10 @@ const make = Effect.gen(function* () {
   const providersOf = (provider: CloudAgentProvider | undefined) =>
     provider === undefined ? CLOUD_AGENT_PROVIDERS : [provider];
 
-  const runs = (limit: number) =>
-    readCloudRuns(limit).pipe(
+  /** The run for one thread, however many newer runs there are. */
+  const runOf = (threadId: ThreadId) =>
+    readCloudRuns({ limit: 1, threadId }).pipe(
+      Effect.map((page) => page.runs[0]),
       Effect.provideService(SqlClient.SqlClient, sql),
       Effect.mapError(() => failure("orchestration_error", "Could not read cloud runs here.")),
     );
@@ -648,8 +717,7 @@ const make = Effect.gen(function* () {
   ) {
     const deadline = (yield* Clock.currentTimeMillis) + REGISTER_ATTACH_WAIT_MS;
     while ((yield* Clock.currentTimeMillis) < deadline) {
-      const run = (yield* runs(200)).find((candidate) => candidate.summary.threadId === threadId);
-      const task = run?.summary;
+      const task = (yield* runOf(threadId))?.summary;
       if (task?.tracking === "link-only") return "link-only" as const;
       if (task !== undefined && task.status !== "running" && task.status !== "submitting")
         return task.tracking;
@@ -817,9 +885,7 @@ const make = Effect.gen(function* () {
 
   const forget: CloudAgentServiceShape["forget"] = Effect.fn("CloudAgentService.forget")(
     function* (input) {
-      const run = (yield* runs(200)).find(
-        (candidate) => candidate.summary.threadId === input.threadId,
-      );
+      const run = yield* runOf(input.threadId);
       if (run === undefined) return { threadId: input.threadId, forgotten: false };
       if (!run.summary.registered)
         return yield* failure(

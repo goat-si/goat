@@ -489,8 +489,15 @@ it.effect("lists a provider's run that sits behind newer runs of another provide
           [newest.runs.map((entry) => entry.threadId), newest.truncated],
           [["thread:cursor-newest", "thread:cursor-new"], true],
         );
+        const rest = yield* service.list({ limit: 2, cursor: newest.nextCursor! });
+        assert.deepEqual(
+          [rest.runs.map((entry) => entry.threadId), rest.truncated, rest.nextCursor],
+          [["thread:claude-old"], false, undefined],
+        );
         const everything = yield* service.list({ limit: 3 });
         assert.deepEqual([everything.runs.length, everything.truncated], [3, false]);
+        const forged = yield* service.list({ cursor: "not-a-cursor" }).pipe(Effect.flip);
+        assert.equal(forged.code, "invalid_request");
       }),
     );
   }),

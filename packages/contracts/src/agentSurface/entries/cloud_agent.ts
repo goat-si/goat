@@ -66,7 +66,7 @@ export const cloudAgentEntries = {
     summary: "List cloud runs in this environment",
     description: "List cloud runs this environment follows or links, most recently updated first.",
     guide:
-      "Each entry includes the provider, status, tracking mode, repository and optional link and branch; registered entries also identify their external launcher. The query reads this environment’s stored runs, so execute it on the holder to inspect remote runs.",
+      "Each entry includes the provider, status, tracking mode, repository and optional link and branch; registered entries also identify their external launcher. A page holds up to limit runs (default 50); truncated means more match, and passing nextCursor as cursor with the same provider returns the next page. The query reads this environment’s stored runs, so execute it on the holder to inspect remote runs.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
