@@ -203,6 +203,48 @@ describe("DesktopTelemetryPublisher", () => {
     }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
   );
 
+  it.effect(
+    "sends the helper's readiness only to its own server, newest first to one that connects later",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const report = (generation: number) =>
+          ({
+            version: 1,
+            type: "cuaReadiness",
+            generation,
+            readiness: {
+              grants: { accessibility: "granted", screenCapture: "pending" },
+              helper: "unauthenticated",
+              capture: "pending",
+              tree: "unavailable",
+              input: "unavailable",
+              blockers: [],
+              reasons: [],
+            },
+            signals: { privateMode: "unsupported", humanInput: "unsupported" },
+          }) as const;
+        yield* publisher.publishCuaReadiness(report(1));
+        yield* publisher.publishCuaReadiness(report(2));
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const remote = yield* collectTelemetry(publisher.encodedForSource("ssh:remote"));
+        // The replay can land before the first snapshot that collectTelemetry waits for.
+        const replayed =
+          primary.received.find((message) => message.type === "cuaReadiness") ??
+          (yield* primary.next("cuaReadiness"));
+        assert.deepEqual(replayed, report(2));
+        yield* publisher.publishCuaReadiness(report(3));
+        assert.deepEqual(yield* primary.next("cuaReadiness"), report(3));
+        yield* publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "setDiagnosticsDemand",
+          enabled: true,
+        });
+        yield* remote.next("desktopTelemetry");
+        assert.isEmpty(remote.received.filter((message) => message.type === "cuaReadiness"));
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
   it.effect("stops when its scope closes during an Electron telemetry sample", () =>
     Effect.gen(function* () {
       const pollStarted = yield* Deferred.make<void>();
