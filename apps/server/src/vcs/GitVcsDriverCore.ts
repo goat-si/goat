@@ -59,6 +59,7 @@ import {
   missingWindowsCheckoutSettings,
   pinWorktreeRoot,
   readWorktreeRoot,
+  sourceHooksConfig,
   WINDOWS_CHECKOUT_SETTINGS,
   worktreeFolderName,
   worktreeSparseCheckoutPatterns,
@@ -4049,7 +4050,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const sanitizedBranch = worktreeFolderName(targetBranch, hostPlatform);
     // resolve: a cwd like `<repo>/sub/..` must not name the folder `..`.
     const repoName = path.basename(path.resolve(input.cwd));
-    let worktreePath = input.path;
+    let worktreePath = input.path === null ? null : path.resolve(input.cwd, input.path);
     const progress = options?.progress;
     if (worktreePath == null) {
       const location = yield* resolveAvailableWorktreesDirectory(
@@ -4071,7 +4072,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       worktreePath = path.join(location.directory, repoName, sanitizedBranch);
     }
-    const targetPath = path.resolve(input.cwd, worktreePath);
+    const targetPath = worktreePath;
     const newBranch = input.newRefName;
     const reuse = newBranch !== undefined && options?.reuseExistingBranch === true;
     const state = reuse
@@ -4279,12 +4280,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         input.cwd,
         existing === "added" ? newBranch! : input.refName,
       );
-      const root = yield* readWorktreeRoot(executeGit, input.cwd);
-      // A plain add would check out and run post-checkout with the shared root, so the
-      // checkout follows the add once the root is set.
-      const apart = sparse !== null || (root.inheritsShared && (yield* supportsHookRun(input.cwd)));
+      const root = yield* readWorktreeRoot(executeGit, path, input.cwd, supportsHookRun(input.cwd));
       yield* Effect.gen(function* () {
-        if (!apart) {
+        if (sparse === null && !root.checkoutApart) {
           yield* runCheckoutCommand("GitVcsDriver.createWorktree", input.cwd, [...args]);
           if (root.pin) yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);
           return;
@@ -4323,6 +4321,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           "HEAD",
         ])).trim();
         yield* runCheckoutCommand("GitVcsDriver.createWorktree.postCheckout", targetPath, [
+          ...(yield* sourceHooksConfig(executeGit, path, input.cwd)),
           "hook",
           "run",
           "--ignore-missing",

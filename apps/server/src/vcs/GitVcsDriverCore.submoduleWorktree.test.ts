@@ -77,14 +77,18 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
   const checkout = path.join(superproject, "sub");
   const gitDir = path.join(superproject, ".git", "modules", "sub");
   const head = yield* git(checkout, ["rev-parse", "HEAD"]);
-  // A setup hook would install dependencies into whatever root it sees.
+  // A setup hook would install dependencies into whatever root it sees. Like this
+  // repository's, the hooks directory is relative, generated and untracked.
   const hookLog = path.join(root, "post-checkout-roots");
-  yield* fileSystem.makeDirectory(path.join(gitDir, "hooks"), { recursive: true });
+  const hook = path.join(checkout, ".hooks", "post-checkout");
+  yield* git(checkout, ["config", "core.hooksPath", ".hooks"]);
+  yield* fileSystem.writeFileString(path.join(gitDir, "info", "exclude"), ".hooks/\n");
+  yield* fileSystem.makeDirectory(path.dirname(hook), { recursive: true });
   yield* fileSystem.writeFileString(
-    path.join(gitDir, "hooks", "post-checkout"),
+    hook,
     "#!/bin/sh\ngit rev-parse --show-toplevel >> '" + hookLog + "'\n",
   );
-  yield* fileSystem.chmod(path.join(gitDir, "hooks", "post-checkout"), 0o755);
+  yield* fileSystem.chmod(hook, 0o755);
   const hookRoots = () =>
     fileSystem.readFileString(hookLog).pipe(
       Effect.map((contents) => contents.trim().split("\n")),
@@ -92,16 +96,17 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
     );
   const createWorktree = Effect.fn("test.createWorktree")(function* (
     name: string,
-    relative = false,
+    { relative = false, from = checkout }: { relative?: boolean; from?: string } = {},
   ) {
     const worktreePath = path.join(root, name);
-    yield* driver.createWorktree({
-      cwd: checkout,
+    const { worktree } = yield* driver.createWorktree({
+      cwd: from,
       // Git resolves a relative destination against the checkout.
-      path: relative ? path.relative(checkout, worktreePath) : worktreePath,
+      path: relative ? path.relative(from, worktreePath) : worktreePath,
       refName: head,
       newRefName: `feature/${name}`,
     });
+    assert.equal(worktree.path, worktreePath);
     return worktreePath;
   });
   /** What `git submodule update` in the superproject rewrites, among other things. */
@@ -113,7 +118,16 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
     ]);
   const sharedRoot = () =>
     git(checkout, ["config", "--file", path.join(gitDir, "config"), "core.worktree"]);
-  return { checkout, gitDir, createWorktree, updateSubmodule, readConfig, sharedRoot, hookRoots };
+  return {
+    root,
+    checkout,
+    gitDir,
+    createWorktree,
+    updateSubmodule,
+    readConfig,
+    sharedRoot,
+    hookRoots,
+  };
 });
 
 const assertCheckedOutInPlace = Effect.fn("test.assertCheckedOutInPlace")(function* (
@@ -143,7 +157,7 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
         const configBefore = yield* repo.readConfig();
         assert.isTrue(Option.isNone(configBefore[1]));
 
-        const worktreePath = yield* repo.createWorktree(mode, mode === "full");
+        const worktreePath = yield* repo.createWorktree(mode, { relative: mode === "full" });
 
         yield* assertCheckedOutInPlace(worktreePath, {
           gitDir: repo.gitDir,
@@ -173,6 +187,42 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
         assert.deepStrictEqual(yield* repo.hookRoots(), [first, second]);
         assert.equal(yield* git(repo.checkout, ["rev-parse", "--show-toplevel"]), repo.checkout);
         assert.equal(yield* git(repo.checkout, ["status", "--porcelain"]), "");
+      }),
+  );
+
+  it.effect(
+    "a worktree made from a linked checkout keeps its own root after git submodule update (#799)",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const repo = yield* makeSubmoduleCheckout(true);
+        // A linked checkout made outside GOAT. Its sparse checkout moved core.worktree into
+        // the main worktree's config.worktree, which the linked checkout does not read.
+        const linked = path.join(repo.root, "linked");
+        yield* git(repo.checkout, [
+          "worktree",
+          "add",
+          "-q",
+          "--no-checkout",
+          "-b",
+          "linked",
+          linked,
+        ]);
+        yield* git(linked, ["sparse-checkout", "set", "--no-cone", "/*", "!/.repos/"]);
+        yield* git(linked, ["checkout", "-q", "-f"]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const inherited = yield* driver.execute({
+          operation: "GitVcsDriver.test.git",
+          cwd: linked,
+          args: ["config", "--get-all", "core.worktree"],
+          allowNonZeroExit: true,
+        });
+        assert.equal(inherited.stdout, "");
+
+        const child = yield* repo.createWorktree("child", { from: linked });
+        yield* repo.updateSubmodule();
+
+        yield* assertCheckedOutInPlace(child, { gitDir: repo.gitDir, sparse: true });
       }),
   );
 });

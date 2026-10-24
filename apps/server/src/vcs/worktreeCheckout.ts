@@ -1,6 +1,7 @@
 import { GitCommandError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
+import type * as Path from "effect/Path";
 import { isWindowsReservedFileName, normalizeProjectPathForComparison } from "@goat/shared/path";
 
 /**
@@ -78,35 +79,77 @@ type WorktreeGit = (
   options?: { readonly allowNonZeroExit?: boolean },
 ) => Effect.Effect<{ readonly exitCode: number; readonly stdout: string }, GitCommandError>;
 
+const lenient = { allowNonZeroExit: true };
+const output = (result: { readonly exitCode: number; readonly stdout: string }) =>
+  result.exitCode === 0 ? result.stdout.trim() : "";
+
 /**
  * Whether new linked worktrees of the checkout at `cwd` need their own `core.worktree`, and
  * whether a plain `git worktree add` would already resolve to the shared one while checking
- * out and running post-checkout.
+ * out and running post-checkout, so the checkout has to follow the add.
  *
  * A repository whose checkout lives outside its git dir, as a submodule's does, sets
  * `core.worktree`. Linked worktrees ignore a shared one until `extensions.worktreeConfig` is
  * on, then inherit it unless they set their own. In a submodule's git dir the value is
  * `../../../<path>`: `sparse-checkout set` moves it into the main worktree's
- * `config.worktree`, and the next `git submodule update` writes it back, so a worktree without
- * its own value resolves to, and checks out into, the git dir itself (#799). Ordinary
- * repositories stop after the first probe.
+ * `config.worktree`, which a linked checkout does not read, and the next
+ * `git submodule update` writes it back, so a worktree without its own value resolves to, and
+ * checks out into, the git dir itself (#799).
  */
 export const readWorktreeRoot = Effect.fn("GitVcsDriver.createWorktree.readWorktreeRoot")(
-  function* (git: WorktreeGit, cwd: string) {
+  function* (
+    git: WorktreeGit,
+    path: Path.Path,
+    cwd: string,
+    hookRunSupported: Effect.Effect<boolean, GitCommandError>,
+  ) {
     const operation = "GitVcsDriver.createWorktree.readWorktreeRoot";
-    const lenient = { allowNonZeroExit: true };
-    const roots = yield* git(operation, cwd, ["config", "--get-all", "core.worktree"], lenient);
-    if (roots.exitCode !== 0 || roots.stdout.trim() === "") {
-      return { pin: false, inheritsShared: false };
+    const read = (args: readonly string[]) =>
+      git(operation, cwd, args, lenient).pipe(Effect.map(output));
+    let pin = (yield* read(["config", "--get-all", "core.worktree"])) !== "";
+    if (!pin) {
+      const [gitDir = "", commonDir = ""] = (yield* read([
+        "rev-parse",
+        "--absolute-git-dir",
+        "--git-common-dir",
+      ])).split("\n");
+      const common = path.resolve(cwd, commonDir);
+      const mainConfig = path.join(common, "config.worktree");
+      pin =
+        commonDir !== "" &&
+        normalizeProjectPathForComparison(common) !== normalizeProjectPathForComparison(gitDir) &&
+        (yield* read(["config", "--file", mainConfig, "--get", "core.worktree"])) !== "";
     }
+    if (!pin) return { pin, checkoutApart: false };
     // Git applies its own boolean rules and precedence.
-    const worktreeConfig = yield* git(
-      operation,
-      cwd,
-      ["config", "--bool", "--get", "extensions.worktreeConfig"],
-      lenient,
-    );
-    return { pin: true, inheritsShared: worktreeConfig.stdout.trim() === "true" };
+    const checkoutApart =
+      (yield* read(["config", "--bool", "--get", "extensions.worktreeConfig"])) === "true";
+    if (checkoutApart && !(yield* hookRunSupported)) {
+      return yield* new GitCommandError({
+        operation,
+        command: "git hook run",
+        cwd,
+        detail:
+          "This checkout's worktrees would check out and run post-checkout in its git dir, and this Git lacks git hook run to check out first; install Git 2.36 or later.",
+      });
+    }
+    return { pin, checkoutApart };
+  },
+);
+
+/**
+ * Points `git hook run` at the source checkout's hooks directory by absolute path, where
+ * `git worktree add` runs post-checkout from. A relative `core.hooksPath`, such as a
+ * generated and untracked one, would otherwise resolve inside the new worktree.
+ */
+export const sourceHooksConfig = Effect.fn("GitVcsDriver.createWorktree.sourceHooksConfig")(
+  function* (git: WorktreeGit, path: Path.Path, cwd: string) {
+    const hooks = (yield* git("GitVcsDriver.createWorktree.sourceHooksConfig", cwd, [
+      "rev-parse",
+      "--git-path",
+      "hooks",
+    ])).stdout.trim();
+    return ["-c", `core.hooksPath=${path.resolve(cwd, hooks)}`];
   },
 );
 
