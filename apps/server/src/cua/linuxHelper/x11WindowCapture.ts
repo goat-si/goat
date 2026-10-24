@@ -272,6 +272,30 @@ function connection(socket: NodeNet.Socket) {
 
 type Connection = ReturnType<typeof connection>;
 
+/** Screenshot pixels each rounded side may be off by: the driver rounds twice at most. */
+const ROUNDING = 2;
+
+/**
+ * Whether a window of this size could have been scaled to the driver's screenshot. The driver
+ * scales both sides by one factor and rounds each (cua-driver-core image_utils.rs), possibly
+ * twice, so the factors each side allows must overlap; the window's height is never recovered
+ * from the rounded screenshot.
+ */
+export function sameShape(
+  window: { readonly width: number; readonly height: number },
+  shot: { readonly width: number; readonly height: number },
+): boolean {
+  const low = Math.max(
+    (shot.width - ROUNDING) / window.width,
+    (shot.height - ROUNDING) / window.height,
+  );
+  const high = Math.min(
+    (shot.width + ROUNDING) / window.width,
+    (shot.height + ROUNDING) / window.height,
+  );
+  return low <= high;
+}
+
 export interface DriverShot {
   readonly width: number;
   readonly height: number;
@@ -433,12 +457,7 @@ async function exchange(
   const height = u16(geometry, 18);
   if (width === 0 || height === 0 || width * height > MAX_WINDOW_PIXELS)
     return { refused: UNREADABLE };
-  // The driver rounds a resized screenshot, so the window's height is checked by scaling it the
-  // same way rather than by undoing the driver's rounding.
-  if (
-    width !== size.windowWidth ||
-    Math.abs(Math.round((height * size.width) / size.windowWidth) - size.height) > 1
-  )
+  if (width !== size.windowWidth || !sameShape({ width, height }, size))
     return { refused: RESIZED_CAPTURE };
   // The redirected window is the top-level one: the window itself or its ancestor under root.
   const chain = [windowId];

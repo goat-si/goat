@@ -12,6 +12,7 @@ import {
   parseSetup,
   RESIZED_CAPTURE,
   rgbToPng,
+  sameShape,
   SHARED_CAPTURE,
   shrinkRgb,
   UNREDIRECTED_CAPTURE,
@@ -79,6 +80,25 @@ describe("X11 window capture", () => {
     expect(pngColors(png)).toBe("varied");
     const header = new DataView(png.buffer, png.byteOffset + 16, 8);
     expect([header.getUint32(0), header.getUint32(4)]).toEqual([width, height]);
+  });
+
+  it("an unchanged window matches the driver's rounded screenshot in any orientation, and a resized one does not", () => {
+    // The driver's own rounding: scale by the long side, round each side.
+    const driver = (width: number, height: number, limit: number) => {
+      const scale = limit / Math.max(width, height);
+      return { width: Math.round(width * scale), height: Math.round(height * scale) };
+    };
+    for (const [width, height, limit] of [
+      [1920, 1040, 256],
+      [402, 1920, 256],
+      [406, 1920, 1568],
+      [1, 1920, 256],
+      [3000, 7, 1568],
+    ] as const)
+      expect(sameShape({ width, height }, driver(width, height, limit))).toBe(true);
+    // The same width with a clearly different height is another window size.
+    expect(sameShape({ width: 1920, height: 1200 }, driver(1920, 1040, 256))).toBe(false);
+    expect(sameShape({ width: 402, height: 1500 }, driver(402, 1920, 256))).toBe(false);
   });
 
   it("shrinks to the driver's screenshot size by averaging, never past the source", () => {
