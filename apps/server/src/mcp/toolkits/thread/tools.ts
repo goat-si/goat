@@ -1,3 +1,4 @@
+import { withClientRequestId } from "../keyedParameters.ts";
 import {
   IsoDateTime,
   ModelSelection,
@@ -169,31 +170,37 @@ const ThreadConfigurationTool = Tool.make(agentSurfaceRegistry["thread.configura
 const ThreadConfigureTool = Tool.make(agentSurfaceRegistry["thread.configure"].name, {
   ...commandTool,
   description: agentSurfaceRegistry["thread.configure"].description,
-  parameters: Schema.Struct({
-    threadId: Schema.optional(ThreadId),
-    modelSelection: ModelSelection,
-  }),
+  parameters: withClientRequestId(
+    Schema.Struct({
+      threadId: Schema.optional(ThreadId),
+      modelSelection: ModelSelection,
+    }),
+  ),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.configure"]));
 
 const transferResult = Schema.Struct({ sequence: NonNegativeInt, targetThreadId: ThreadId });
 const ThreadForkTool = Tool.make(agentSurfaceRegistry["thread.fork"].name, {
   ...commandTool,
   description: agentSurfaceRegistry["thread.fork"].description,
-  parameters: Schema.Struct({
-    threadId: Schema.optional(ThreadId),
-    sourcePoint: OrchestrationV2ThreadForkSourcePoint,
-    title: Schema.optional(TrimmedNonEmptyString),
-  }),
+  parameters: withClientRequestId(
+    Schema.Struct({
+      threadId: Schema.optional(ThreadId),
+      sourcePoint: OrchestrationV2ThreadForkSourcePoint,
+      title: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
   success: transferResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.fork"]));
 const ThreadMergeBackTool = Tool.make(agentSurfaceRegistry["thread.merge_back"].name, {
   ...commandTool,
   description: agentSurfaceRegistry["thread.merge_back"].description,
-  parameters: Schema.Struct({
-    sourceThreadId: Schema.optional(ThreadId),
-    targetThreadId: ThreadId,
-    sourcePoint: OrchestrationV2ThreadForkSourcePoint,
-  }),
+  parameters: withClientRequestId(
+    Schema.Struct({
+      sourceThreadId: Schema.optional(ThreadId),
+      targetThreadId: ThreadId,
+      sourcePoint: OrchestrationV2ThreadForkSourcePoint,
+    }),
+  ),
   success: transferResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.merge_back"]));
 const ThreadTransfersTool = Tool.make(agentSurfaceRegistry["thread.transfers"].name, {
@@ -223,7 +230,7 @@ const ThreadSearchTool = Tool.make(agentSurfaceRegistry["thread.search"].name, {
 const ScheduledTaskRunTool = Tool.make(agentSurfaceRegistry["schedule.run"].name, {
   ...commandTool,
   description: agentSurfaceRegistry["schedule.run"].description,
-  parameters: Schema.Struct({ taskId: ScheduledTaskId }),
+  parameters: withClientRequestId(Schema.Struct({ taskId: ScheduledTaskId })),
   success: Schema.Struct({
     taskId: ScheduledTaskId,
     threadId: ScheduledTask.fields.threadId,

@@ -1,4 +1,6 @@
 import { vi } from "@effect/vitest";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the expected path mirrors the host's native join.
+import * as NodePath from "node:path";
 import * as HostKey from "@goat/ssh/hostKey";
 import {
   EnvironmentAuthorizationError,
@@ -221,8 +223,7 @@ export const prepareFixture = (reason?: Reason) =>
             Layer.mock(ProcessRunner.ProcessRunner)({
               run: () =>
                 Effect.succeed({
-                  stdout:
-                    "hostname box\nuser deploy\nport 2222\nhostkeyalias box\nuserknownhostsfile /fixture-prepare/.ssh/goat-hosts/box.known_hosts\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n",
+                  stdout: `hostname box\nuser deploy\nport 2222\nhostkeyalias box\nuserknownhostsfile ${NodePath.join("/fixture-prepare", ".ssh", "goat-hosts", "box.known_hosts")}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`,
                   stderr: "",
                   code: ExitCode(0),
                   timedOut: false,

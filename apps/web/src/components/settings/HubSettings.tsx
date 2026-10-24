@@ -332,7 +332,6 @@ function HubControls({
       </SettingsSection>
       <SettingsSection
         {...searchableSetting("hub-devices")}
-        title="Devices"
         headerAction={
           <span className="flex items-center gap-1">
             <Button
