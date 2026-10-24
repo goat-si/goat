@@ -114,6 +114,7 @@ export const fixture = Effect.fn(function* (
   const starting = yield* Deferred.make<void>();
   const stopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
+  const agentMonitors = yield* Queue.unbounded<Effect.Effect<void>>();
   const gate = Promise.withResolvers<void>();
   const constructors: Array<{
     path: string;
@@ -261,8 +262,14 @@ export const fixture = Effect.fn(function* (
           exit.resolve();
         },
         waitForExit: (_generation, operation) => {
-          exits.push(() => exit.resolve());
+          const crash = () => {
+            exit.resolve();
+            return exit.promise;
+          };
+          exits.push(crash);
           operation.signal.addEventListener("abort", () => exit.resolve(), { once: true });
+          // Await this host's registered exit before detaching, without picking a previous check.
+          if (manifest?.scope === "agents") Queue.offerUnsafe(agentMonitors, Effect.promise(crash));
           return exit.promise;
         },
         uniffiDestroy: () => {
@@ -426,6 +433,7 @@ export const fixture = Effect.fn(function* (
     starting: Deferred.await(starting),
     stopping: Deferred.await(stopping),
     destroyed: Queue.take(destroyed),
+    nextAgentCrash: Queue.take(agentMonitors),
     release: Effect.sync(() => gate.resolve()),
     grantPermissions: Effect.sync(() => {
       allowed = true;
@@ -473,3 +481,21 @@ export const VERIFICATION_IDS = [
   "capture",
   "accessibility",
 ] as const;
+
+/** A healthy driver whose health report names the helper bundle and its parent process. */
+export const helperTools = (identity: { bundle: string; parent: number }) => ({
+  ...healthyTools(),
+  health_report: toolResult({
+    checks: [
+      {
+        name: "bundle_identity",
+        status: "pass",
+        data: {
+          bundle_identifier: identity.bundle,
+          identity_source: "parent_application",
+          parent_process_id: identity.parent,
+        },
+      },
+    ],
+  }),
+});
