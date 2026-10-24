@@ -646,7 +646,7 @@ describe("DesktopWindow", () => {
       // the registered main window, so registration has to come first.
       const mainAtLoad: Array<Option.Option<Electron.BrowserWindow>> = [];
       fakeWindow.loadURL.mockImplementation(() => {
-        mainAtLoad.push(Effect.runSync(Ref.get(mainWindow)));
+        mainAtLoad.push(Ref.getUnsafe(mainWindow));
         return Promise.resolve();
       });
 
