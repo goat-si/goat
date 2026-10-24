@@ -7,7 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 
-import { tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
+import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
 
 const SESSION_ID = "0c91bb28-9e89-4889-bd22-3de9880233d3";
 const TASK_ID = "bk6xreeye";
@@ -104,5 +104,29 @@ describe("tailClaudeTaskOutput", () => {
         assert.deepEqual(chunks, ["one\n", "two\n"]);
       }).pipe(Effect.provide(NodeServices.layer)),
     ),
+  );
+});
+
+describe("claudeTaskOutputRoot", () => {
+  it.effect("finds Claude Code's root with a uid and on Windows, which has none", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const temp = "C:\\Users\\Jane Doe\\AppData\\Local\\Temp";
+      assert.equal(claudeTaskOutputRoot({}, path, 501), path.join("/tmp", "claude-501"));
+      assert.equal(
+        claudeTaskOutputRoot({ CLAUDE_CODE_TMPDIR: "/scratch" }, path, 501),
+        path.join("/scratch", "claude-501"),
+      );
+      assert.equal(
+        claudeTaskOutputRoot({ TEMP: temp, TMP: "C:\\Other" }, path, undefined),
+        path.join(temp, "claude"),
+      );
+      assert.equal(claudeTaskOutputRoot({ TMP: temp }, path, undefined), path.join(temp, "claude"));
+      assert.equal(
+        claudeTaskOutputRoot({ CLAUDE_CODE_TMPDIR: "D:\\claude-tmp", TEMP: temp }, path, undefined),
+        path.join("D:\\claude-tmp", "claude"),
+      );
+      assert.isUndefined(claudeTaskOutputRoot({}, path, undefined));
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
