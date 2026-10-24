@@ -187,6 +187,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const settings = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
   const lifecycleLock = yield* Semaphore.make(1);
+  const closeLock = yield* Semaphore.make(1);
   const readDeviceSettings = settings.getSettings.pipe(
     Effect.map((value) => ({
       enabled: value.enableDeviceSupport,
@@ -691,11 +692,11 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     },
   );
 
-  const shutdownDevice = Effect.fn("DeviceService.shutdownDevice")(function* (
-    hostId: DeviceHostId,
-    deviceId: DeviceId,
-    platform: DevicePlatform,
-  ) {
+  const shutdownDevice = Effect.fn("DeviceService.shutdownDevice")(function* ({
+    hostId,
+    deviceId,
+    platform,
+  }: Pick<DeviceSession, "hostId" | "deviceId" | "platform">) {
     const ready = yield* readiness(hostId);
     yield* ready.devices.shutdown({ id: deviceId, platform });
     yield* publish((state) => ({
@@ -718,34 +719,31 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     );
   });
 
-  const close: DeviceService["Service"]["close"] = Effect.fn("DeviceService.close")(
-    function* (input) {
-      const { state } = yield* SynchronizedRef.get(stateRef);
-      const closing = state.sessions.filter(
-        (session) =>
-          session.threadId === input.threadId &&
-          (input.hostId === undefined || session.hostId === input.hostId) &&
-          (input.deviceId === undefined || session.deviceId === input.deviceId),
-      );
-      if (closing.length === 0) return;
-      yield* publish((current) => ({
-        ...current,
-        sessions: current.sessions.filter((session) => !closing.includes(session)),
-      }));
-      if (input.shutdown) {
-        yield* Effect.forEach(
-          closing,
-          (session) => shutdownDevice(session.hostId, session.deviceId, session.platform),
-          { discard: true },
-        );
-      }
-    },
-  );
+  const close: DeviceService["Service"]["close"] = Effect.fn("DeviceService.close")(function* (
+    input,
+  ) {
+    const { state } = yield* SynchronizedRef.get(stateRef);
+    const closing = state.sessions.filter(
+      (session) =>
+        session.threadId === input.threadId &&
+        (input.hostId === undefined || session.hostId === input.hostId) &&
+        (input.deviceId === undefined || session.deviceId === input.deviceId),
+    );
+    if (closing.length === 0) return;
+    // Each shutdown removes its device's sessions only once it succeeds, so a
+    // failed close stays retryable; the lock keeps a concurrent identical
+    // close from shutting the same device down twice.
+    if (input.shutdown) return yield* Effect.forEach(closing, shutdownDevice, { discard: true });
+    yield* publish((current) => ({
+      ...current,
+      sessions: current.sessions.filter((session) => !closing.includes(session)),
+    }));
+  }, closeLock.withPermit);
 
   const shutdown: DeviceService["Service"]["shutdown"] = Effect.fn("DeviceService.shutdown")(
     function* (input) {
       const host = yield* resolveHost(input.hostId);
-      yield* shutdownDevice(host.id, input.deviceId, input.platform);
+      yield* shutdownDevice({ ...input, hostId: host.id });
       yield* publish((current) => ({
         ...current,
         sessions: current.sessions.filter(
