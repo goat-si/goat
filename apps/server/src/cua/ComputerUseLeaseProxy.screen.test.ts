@@ -34,6 +34,7 @@ const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
   yield* runLeaseProxy({
     controlId: "control:one",
     expiresAt: DateTime.makeUnsafe("1970-01-01T00:30:00.000Z"),
+    bundleIds: true,
     input: Stream.fromQueue(input),
     output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
     leaseUpdates: Stream.fromEffectRepeat(

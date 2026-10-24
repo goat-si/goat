@@ -111,6 +111,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     runLeaseProxy({
       controlId,
       expiresAt: expiresAt.value,
+      bundleIds: platform === "darwin",
       input: Stream.fromAsyncIterable(
         NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
         () => undefined,

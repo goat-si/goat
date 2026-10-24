@@ -10,6 +10,7 @@ const verdict = (listed: Map<number, ListedApp>) =>
     args: { pid: KAKAO.pid, window_id: 57000, x: 51, y: 104 },
     apps: approvedApps([KAKAO.bundle_id]),
     appOf: (pid) => listed.get(pid),
+    bundleIds: true,
   });
 
 describe("learnApps", () => {
@@ -46,6 +47,7 @@ describe("scopeVerdict", () => {
         args: { pid: KAKAO.pid, window_id: 57000, x: 51, y: 104 },
         apps: approvedApps([KAKAO.name]),
         appOf: (pid) => listed.get(pid),
+        bundleIds: true,
       });
     const listed = new Map<number, ListedApp>();
     // list_windows on macOS names the app without its bundle id; that is no identity.
@@ -80,6 +82,7 @@ describe("scopeVerdict", () => {
         args: { pid: 12, window_id: 3, x: 1, y: 1 },
         apps: approvedApps(["gedit"]),
         appOf: (pid) => listed.get(pid),
+        bundleIds: false,
       }),
       { _tag: "allow" },
     );
@@ -111,5 +114,32 @@ describe("scopeVerdict", () => {
       true,
     );
     assert.deepEqual(listed.get(42), { id: "org.example.Editor", name: "Editor" });
+  });
+
+  it("launches an app only by an approved bundle id where apps have one, and by name elsewhere", () => {
+    const launch = (args: object, bundleIds: boolean, apps: ReadonlyArray<string>) =>
+      scopeVerdict({
+        name: "launch_app",
+        args,
+        apps: approvedApps(apps),
+        appOf: () => undefined,
+        bundleIds,
+      });
+    // A grant naming Safari by name must not open the Safari another grant holds by bundle id.
+    assert.deepInclude(
+      launch({ name: "Safari", urls: ["https://example.com"] }, true, ["Safari"]),
+      {
+        _tag: "refuse",
+        unnamed: true,
+      },
+    );
+    assert.deepInclude(
+      launch({ bundle_id: "com.apple.Safari", name: "Safari" }, true, ["com.apple.Safari"]),
+      { _tag: "refuse", unnamed: true },
+    );
+    assert.deepEqual(launch({ bundle_id: "com.apple.Safari" }, true, ["com.apple.Safari"]), {
+      _tag: "allow",
+    });
+    assert.deepEqual(launch({ name: "gedit" }, false, ["gedit"]), { _tag: "allow" });
   });
 });

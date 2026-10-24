@@ -49,6 +49,8 @@ export type ScopeVerdict =
       readonly reason: "app_not_approved" | "desktop_not_approved";
       readonly app?: string;
       readonly opaque?: boolean;
+      /** A launch that names its app other than by bundle id, where apps have one. */
+      readonly unnamed?: boolean;
     };
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
@@ -89,6 +91,8 @@ export function scopeVerdict(input: {
   readonly args: unknown;
   readonly apps: ReadonlySet<string> | undefined;
   readonly appOf: (pid: number) => ListedApp | undefined;
+  /** This host's apps have bundle ids (macOS), which is what grants name them by. */
+  readonly bundleIds: boolean;
 }): ScopeVerdict {
   if (input.apps === undefined) return { _tag: "allow" };
   const name = typeof input.name === "string" ? input.name : "";
@@ -97,7 +101,13 @@ export function scopeVerdict(input: {
     return { _tag: "refuse", reason: "desktop_not_approved", opaque: true };
   const args = record(input.args);
   if (name === "launch_app") {
-    const app = text(args?.bundle_id) ?? text(args?.name) ?? text(args?.app_name);
+    const bundle = text(args?.bundle_id);
+    const named = text(args?.name) ?? text(args?.app_name);
+    // The driver opens a named app as the system resolves the name, which can be an app another
+    // thread's grant names by bundle id; where apps have one, only it says which app launches.
+    if (input.bundleIds && (bundle === undefined || named !== undefined))
+      return { _tag: "refuse", reason: "app_not_approved", unnamed: true };
+    const app = bundle ?? named;
     return app !== undefined && approves(input.apps, app)
       ? { _tag: "allow" }
       : { _tag: "refuse", reason: "app_not_approved", ...(app === undefined ? {} : { app }) };
