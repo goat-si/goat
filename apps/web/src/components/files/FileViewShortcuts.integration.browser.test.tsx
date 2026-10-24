@@ -86,10 +86,11 @@ vi.mock("./useDirectoryEntries", async () => {
 
 import { useChatShortcuts } from "~/components/chat/useChatShortcuts";
 import { isEditableFocused } from "~/lib/editableFocus";
+import { isPreviewFocused } from "~/lib/previewFocus";
 import { useRightPanelStore } from "~/rightPanelStore";
 
 import FileBrowserPanel from "./FileBrowserPanel";
-import { fileSurfaceOwnsFind } from "./fileFindShortcut";
+import { isPdfFindShortcut } from "./pdf/pdfShortcuts";
 import { FileViewMenu, keepsEditorFindAgain } from "./FileViewMenu";
 
 const MAC = /mac|iphone|ipad/i.test(navigator.platform);
@@ -138,7 +139,11 @@ function setup(customRules: KeybindingRule[] = [], order: Order = "persisted") {
   }
 }
 
-/** The chat's real window shortcuts with handlers shaped like ChatView's. */
+/**
+ * The chat's real window shortcuts, with ChatView's context and chat.find handler.
+ * File views live inside the right panel's [data-preview-panel-mode], so previewFocus
+ * holds there and the default chat.find rule (!previewFocus) does not match.
+ */
 function ChatStandIn() {
   useChatShortcuts({
     enabled: true,
@@ -147,7 +152,7 @@ function ChatStandIn() {
     getShortcutContext: (target) => ({
       terminalFocus: false,
       terminalOpen: false,
-      previewFocus: false,
+      previewFocus: isPreviewFocused(),
       previewOpen: false,
       isWeb: true,
       isDesktop: false,
@@ -160,7 +165,7 @@ function ChatStandIn() {
     closeThreadFind: () => {},
     commands: {
       "chat.find": ({ event }) => {
-        if (fileSurfaceOwnsFind(event, state.keybindings)) return false;
+        if (isPdfFindShortcut(event)) return false;
         state.threadFind();
       },
       "thread.copyReference": () => {
@@ -174,7 +179,7 @@ function ChatStandIn() {
 
 async function renderView(readResult: ProjectReadFileResult | null = READ) {
   return render(
-    <div>
+    <div data-preview-panel-mode="inline">
       <ChatStandIn />
       <div
         data-file-view
@@ -307,10 +312,10 @@ describe("find ownership", () => {
     expect(state.threadCopy).not.toHaveBeenCalled();
   });
 
-  it("leaves thread find to a read-only or rendered view with no editor", async () => {
+  it("claims nothing in a read-only or rendered view with no editor", async () => {
     setup();
     await using screen = await render(
-      <div>
+      <div data-preview-panel-mode="inline">
         <ChatStandIn />
         <div data-file-view tabIndex={-1}>
           <FileViewMenu
@@ -324,9 +329,15 @@ describe("find ownership", () => {
       </div>,
       { router: false /* nothing here links */ },
     );
+    const seen: boolean[] = [];
+    const record = (event: KeyboardEvent) => seen.push(event.defaultPrevented);
+    window.addEventListener("keydown", record);
+    using _listener = { [Symbol.dispose]: () => window.removeEventListener("keydown", record) };
     view(screen.container).focus();
     await userEvent.keyboard(chord([MOD], "f"));
-    await vi.waitFor(() => expect(state.threadFind).toHaveBeenCalledTimes(1));
+    // Nothing in the app handles it, so the browser's own find keeps the key.
+    expect(seen.at(-1)).toBe(false);
+    expect(state.threadFind).not.toHaveBeenCalled();
   });
 });
 

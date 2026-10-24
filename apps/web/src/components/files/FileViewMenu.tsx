@@ -21,7 +21,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { copyFileContents, copyFileNames } from "./fileContentsCopy";
-import { sourceEditorContent } from "./fileFindShortcut";
+import { sourceEditorContent } from "./sourceEditorContent";
 import { FileGoToLine } from "./FileGoToLine";
 import { copyFilePathsForCommand } from "./filePathCopyShortcut";
 import { FileShortcutsHelp } from "./FileShortcutsHelp";

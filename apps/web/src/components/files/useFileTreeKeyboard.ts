@@ -4,7 +4,7 @@ import { useEffect, useRef, type RefObject } from "react";
 
 import { useStableCallback } from "~/hooks/useStableCallback";
 
-import { sourceEditorContent } from "./fileFindShortcut";
+import { sourceEditorContent } from "./sourceEditorContent";
 import { fileTreeCopyPaths, type FilePathCopyCommand } from "./filePathCopyShortcut";
 import {
   FILE_TREE_FOCUS_REQUEST,

@@ -99,8 +99,8 @@ Linux).
 `mod+f` in a file's editor opens the editor's own find; in the Files panel it
 moves to Search files, where `↓` returns to the rows. A rendered Markdown, HTML or
 table view, and a file shown read-only (for example one too large to load
-completely), has no find of its own, so `mod+f` there keeps finding in the
-thread. A rendered HTML page also keeps its own keys while it has focus.
+completely), has no find of its own; in a browser, `mod+f` there opens the
+browser's find. A rendered HTML page also keeps its own keys while it has focus.
 
 If you bind a file shortcut to keys another command already uses, move that
 command as well; otherwise the other command can run first.

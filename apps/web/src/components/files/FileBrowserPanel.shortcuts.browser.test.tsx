@@ -83,7 +83,6 @@ vi.mock("./useDirectoryEntries", async () => {
 });
 
 import FileBrowserPanel from "./FileBrowserPanel";
-import { fileSurfaceOwnsFind } from "./fileFindShortcut";
 
 const MAC = /mac|iphone|ipad/i.test(navigator.platform);
 const MOD = MAC ? "Meta" : "Control";
@@ -320,33 +319,5 @@ describe("file tree search shortcuts", () => {
     await userEvent.keyboard(chord([MOD], "{ArrowLeft}"));
     await userEvent.keyboard(chord(["Alt"], "{ArrowLeft}"));
     await expectExpanded(screen.container, "src/", true);
-  });
-});
-
-describe("chat find arbitration", () => {
-  function findEvent(target: Element, modifiers: Partial<KeyboardEventInit> = {}) {
-    const event = new KeyboardEvent("keydown", {
-      key: "f",
-      code: "KeyF",
-      metaKey: MAC,
-      ctrlKey: !MAC,
-      bubbles: true,
-      composed: true,
-      ...modifiers,
-    });
-    Object.defineProperty(event, "target", { value: target });
-    return event;
-  }
-
-  it("leaves Cmd/Ctrl+F to the tree, and to chat everywhere else or under a person's chat.find rule", async () => {
-    setup();
-    await using screen = await renderPanel();
-    const tree = host(screen.container);
-    const composer = screen.container.querySelector("input")!;
-    expect(fileSurfaceOwnsFind(findEvent(tree), state.keybindings)).toBe(true);
-    expect(fileSurfaceOwnsFind(findEvent(composer), state.keybindings)).toBe(false);
-    expect(fileSurfaceOwnsFind(findEvent(tree, { shiftKey: true }), state.keybindings)).toBe(false);
-    setup([{ key: "mod+f", command: "chat.find", when: "fileViewFocus" }]);
-    expect(fileSurfaceOwnsFind(findEvent(tree), state.keybindings)).toBe(false);
   });
 });

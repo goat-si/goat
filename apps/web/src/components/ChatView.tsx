@@ -292,7 +292,7 @@ import {
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
 import { environmentCatalog } from "../connection/catalog";
-import { fileSurfaceOwnsFind } from "./files/fileFindShortcut";
+import { isPdfFindShortcut } from "./files/pdf/pdfShortcuts";
 import { resolveEnvironmentMachineKind } from "@goat/contracts";
 import { useThreadShell } from "../state/entities";
 import {
@@ -2979,8 +2979,8 @@ export default function ChatView(props: ChatViewProps) {
         if (!event.repeat) copyActiveThreadReference();
       },
       "chat.find": ({ event }) => {
-        // A focused PDF or file view runs its own find.
-        if (fileSurfaceOwnsFind(event, keybindings)) return false;
+        // A focused PDF owns its own find.
+        if (isPdfFindShortcut(event)) return false;
         if (!isServerThread || serverConfig?.threadFind !== true) return false;
         openThreadFind();
       },
