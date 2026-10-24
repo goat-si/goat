@@ -20,6 +20,8 @@ import {
   RemoteOriginReportResult,
   RemoteOriginReportsWaitInput,
   RemoteOriginReportsWaitResult,
+  RemoteResolveBindingInput,
+  type RemoteResolveBindingResult,
   REMOTE_REPORT_SUMMARY_MAX_CHARS,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -60,6 +62,7 @@ export class RemoteReportError extends Schema.TaggedError<RemoteReportError>()(
       "thread_deleted",
       "relay_unsupported",
       "relay_queue_full",
+      "fenced",
       "unavailable",
       "storage",
     ]),
@@ -85,6 +88,7 @@ const decodeBindingInput = Schema.decodeUnknownEffect(RemoteReportBindingInput);
 const decodeReportInput = Schema.decodeUnknownEffect(RemoteOriginReportInput);
 const decodeRelayInput = Schema.decodeUnknownEffect(RemoteRelaySend);
 const decodeWaitInput = Schema.decodeUnknownEffect(RemoteOriginReportsWaitInput);
+const decodeResolveInput = Schema.decodeUnknownEffect(RemoteResolveBindingInput);
 const RelayJson = Schema.fromJsonString(RemoteRelaySend);
 const encodeRelay = Schema.encodeSync(RelayJson);
 const decodeReportRows = Schema.decodeUnknownEffect(
@@ -169,6 +173,14 @@ export class RemoteReportService extends Context.Service<
     readonly wait: (
       input: RemoteOriginReportsWaitInput,
     ) => Effect.Effect<RemoteOriginReportsWaitResult, RemoteReportError>;
+    /**
+     * Settles a correlation whose launch outcome the origin lost: returns the binding with the
+     * thread's live state, or durably fences the id so a late bind is refused. The correlation's
+     * read key is the caller's credential; a fence remembers its hash for repeat callers.
+     */
+    readonly resolveBinding: (
+      input: RemoteResolveBindingInput,
+    ) => Effect.Effect<RemoteResolveBindingResult, RemoteReportError>;
   }
 >()("goat/remoteReports/RemoteReportService") {}
 const make = Effect.gen(function* () {
@@ -178,6 +190,8 @@ const make = Effect.gen(function* () {
   const storage = (cause: unknown) => new RemoteReportError({ reason: "storage", cause });
   const unavailable = (cause: unknown) => new RemoteReportError({ reason: "unavailable", cause });
   const invalid = (cause: unknown) => new RemoteReportError({ reason: "invalid_request", cause });
+  const storageUnlessReport = (cause: unknown) =>
+    isRemoteReportError(cause) ? cause : storage(cause);
   const decodeRows = decodeBindingRows;
   const bindingForThread = (threadId: ThreadId) =>
     sql`
@@ -199,11 +213,23 @@ const make = Effect.gen(function* () {
   ) {
     const value = yield* decodeBindingInput(input).pipe(Effect.mapError(invalid));
     const createdAt = DateTime.formatIso(yield* DateTime.now);
-    yield* sql`
-      INSERT INTO remote_report_bindings
-        (thread_id, correlation_id, origin_label, origin_thread_id, read_key_hash, relay_send, created_at)
-      VALUES (${threadId}, ${value.correlationId}, ${value.originLabel}, ${value.originThreadId}, ${value.readKeyHash}, ${relaySendLevel(value)}, ${createdAt})
-    `.pipe(Effect.mapError(storage));
+    // The fence check and the insert share one write transaction, so a late bind and a
+    // reconcile's resolve-or-fence can never both land for the same correlation id.
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const fenced = yield* sql`
+            SELECT correlation_id FROM remote_report_fences WHERE correlation_id = ${value.correlationId}
+          `;
+          if (fenced.length > 0) return yield* new RemoteReportError({ reason: "fenced" });
+          yield* sql`
+            INSERT INTO remote_report_bindings
+              (thread_id, correlation_id, origin_label, origin_thread_id, read_key_hash, relay_send, created_at)
+            VALUES (${threadId}, ${value.correlationId}, ${value.originLabel}, ${value.originThreadId}, ${value.readKeyHash}, ${relaySendLevel(value)}, ${createdAt})
+          `;
+        }),
+      )
+      .pipe(Effect.mapError(storageUnlessReport));
   });
   const unbind = Effect.fn("RemoteReportService.unbind")(function* (threadId: ThreadId) {
     yield* sql
@@ -670,6 +696,68 @@ const make = Effect.gen(function* () {
     `.pipe(Effect.mapError(storage));
     return rows[0] ?? null;
   });
-  return RemoteReportService.of({ bind, unbind, origin, report, relay, relayReceipt, wait });
+  const resolveBinding = Effect.fn("RemoteReportService.resolveBinding")(function* (
+    input: RemoteResolveBindingInput,
+  ) {
+    const value = yield* decodeResolveInput(input).pipe(Effect.mapError(invalid));
+    const supplied = NodeCrypto.createHash("sha256").update(value.readKey, "utf8").digest();
+    const suppliedHex = supplied.toString("hex");
+    const authorized = (storedHash: string) =>
+      NodeCrypto.timingSafeEqual(supplied, Buffer.from(storedHash, "hex"));
+    const binding = yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const found = (yield* bindingForCorrelation(value.correlationId))[0];
+          if (found !== undefined) {
+            if (!authorized(found.readKeyHash))
+              return yield* new RemoteReportError({ reason: "access_denied" });
+            return found;
+          }
+          const fences = yield* sql<{ readonly readKeyHash: string }>`
+            SELECT read_key_hash AS "readKeyHash" FROM remote_report_fences
+            WHERE correlation_id = ${value.correlationId}
+          `;
+          const fence = fences[0];
+          if (fence !== undefined) {
+            if (!authorized(fence.readKeyHash))
+              return yield* new RemoteReportError({ reason: "access_denied" });
+            return null;
+          }
+          // Absent is not proof: a launch in flight binds after this lookup. The fence makes
+          // the absence durable, and its confirmation is what the origin may release on.
+          const createdAt = DateTime.formatIso(yield* DateTime.now);
+          yield* sql`
+            INSERT INTO remote_report_fences (correlation_id, read_key_hash, created_at)
+            VALUES (${value.correlationId}, ${suppliedHex}, ${createdAt})
+          `;
+          return null;
+        }),
+      )
+      .pipe(Effect.mapError(storageUnlessReport));
+    if (binding === null) return { _tag: "fenced" as const };
+    // The shell read stays outside the transaction: a thread created right after the commit
+    // is still found, and a missing one only means the destination has not started it yet.
+    const shell = yield* orchestrator
+      .getThreadShell(binding.threadId)
+      .pipe(Effect.mapError(unavailable));
+    return {
+      _tag: "bound" as const,
+      threadId: binding.threadId,
+      originThreadId: binding.originThreadId,
+      threadExists: shell !== null,
+      threadDeleted: shell?.deletedAt != null,
+      activeRunId: shell?.activeRunId ?? null,
+    };
+  });
+  return RemoteReportService.of({
+    bind,
+    unbind,
+    origin,
+    report,
+    relay,
+    relayReceipt,
+    wait,
+    resolveBinding,
+  });
 });
 export const layer = Layer.effect(RemoteReportService, make);

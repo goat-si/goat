@@ -10,7 +10,8 @@
  *
  * The reconcile pass settles records against the real state of their destinations: child thread
  * runs for local work, remote_dispatches rows for remote work. An unresolved remote outcome keeps
- * its capacity until the destination answers (resolve-or-fence lands with PR-D).
+ * its capacity until the destination answers; only the destination's fence (the dispatch is then
+ * recorded cancelled) or a confirmed pre-launch refusal releases it.
  *
  * @module ChannelChildWork
  */
@@ -482,7 +483,8 @@ const make = Effect.gen(function* () {
       return true;
     }
     if (state === "lost") {
-      // The outcome is uncertain; the resolve-or-fence reconcile (PR-D) is what may release it.
+      // The outcome is uncertain until the coordinator's resolve pass settles the row with the
+      // destination: rebound (running) or fenced (cancelled).
       if (record.state !== "unknown") {
         yield* transition(record, ["launched", "bound"], "unknown");
         return true;

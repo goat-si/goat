@@ -35,6 +35,7 @@ import threadRunResultsMigration from "../persistence/Migrations/074_ThreadRunRe
 import relayMigration from "../persistence/Migrations/075_RemoteReportRelay.ts";
 import observedChecksMigration from "../persistence/Migrations/092_ThreadRunObservedChecks.ts";
 import inboxRunIdMigration from "../persistence/Migrations/102_RemoteReportInboxRunId.ts";
+import fencesMigration from "../persistence/Migrations/103_RemoteReportFences.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const threadId = ThreadId.make("remote-thread");
@@ -81,6 +82,7 @@ const setup = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   for (const step of [migration, dispatchMigration, threadRunResultsMigration]) yield* step;
   for (const step of [observedChecksMigration, relayMigration, inboxRunIdMigration]) yield* step;
+  yield* fencesMigration;
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const changeTypes = [
     "thread.deleted",
