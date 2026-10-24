@@ -16,6 +16,8 @@ import {
 } from "./linuxHelper/linuxSession.ts";
 import type { CuaDisplayVariable } from "./CuaDisplayCapability.ts";
 import { readLinuxReadiness } from "./linuxHelper/readiness.ts";
+import { captureRoute } from "./linuxHelper/windowCapture.ts";
+import { captureX11Window } from "./linuxHelper/x11WindowCapture.ts";
 
 const UNWATCHED = { privateMode: "unsupported", humanInput: "unsupported" } as const;
 
@@ -50,15 +52,21 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
       const session = detectLinuxSession(
         linuxSessionFacts(sessionEnvironment, () => readGnomeShellVersion(sessionEnvironment)),
       );
-      const secureFocus = makeSecureFocusProbe(
-        gdbusRunner(
-          Object.fromEntries(
-            Object.entries(sessionEnvironment).filter(
-              (entry): entry is [string, string] => entry[1] !== undefined,
-            ),
+      const gdbus = gdbusRunner(
+        Object.fromEntries(
+          Object.entries(sessionEnvironment).filter(
+            (entry): entry is [string, string] => entry[1] !== undefined,
           ),
         ),
       );
+      const secureFocus = makeSecureFocusProbe(gdbus);
+      // The server's driver runs embedded, and its embedding passes no Hyprland instance on
+      // (cua-driver-sdk embedded.rs), so here only an X window's own capture counts.
+      const capture = captureRoute({
+        session,
+        driverEnvironment: {},
+        captureX11: (windowId, shot) => captureX11Window(sessionEnvironment, windowId, shot),
+      });
       for (const lookup of requireDriver.resolve.paths("@trycua/cua-driver") ?? []) {
         const directory = path.join(lookup, "@trycua", "cua-driver");
         if (!(yield* fs.exists(path.join(directory, "package.json")))) continue;
@@ -76,6 +84,7 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
               {
                 session,
                 secureFocus,
+                capture,
                 uinputWritable: async () => writable,
                 call: async (name, args) => {
                   const result = await client.callTool(name, JSON.stringify(args), { signal });

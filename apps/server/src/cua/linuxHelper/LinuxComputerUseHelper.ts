@@ -28,6 +28,7 @@ import type { DriverClient, DriverImage, DriverToolResult } from "./CuaDriverMcp
 import { driverRefusalCode, linuxActionResult, linuxDriverCall } from "./linuxActions.ts";
 import type { SignalMonitor } from "./linuxSignals.ts";
 import type { LinuxSession } from "./linuxSession.ts";
+import { driverShot, type CaptureRoute } from "./windowCapture.ts";
 
 /**
  * What the Linux helper does with each protocol request (WS10 #1138). It owns one Cua Driver
@@ -42,6 +43,7 @@ export interface LinuxHelperDependencies {
   readonly screen: string;
   readonly startDriver: () => Promise<DriverClient>;
   readonly secureFocus: (pid: number) => Promise<SecureFocus>;
+  readonly capture: CaptureRoute;
   readonly uinputWritable: () => Promise<boolean>;
   /** Waits for an action's effect to reach the accessibility tree before it is read back. */
   readonly settle: () => Promise<void>;
@@ -228,13 +230,22 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     readonly maxElements: number | undefined;
     readonly deadlineMs: number;
   }): Promise<HelperAnswer & { readonly result: ComputerUseObservation | ComputerUseRefusal }> => {
+    // A screenshot holds only the window's own pixels, or is refused (#1328; windowCapture.ts).
+    const route = input.screenshot ? deps.capture : undefined;
+    const refuseShot = (reason: string) => ({
+      result: {
+        ...unsupportedComputerUseMethod("observe", "linux"),
+        message: reason + " Observe again without a screenshot to read the window's controls.",
+      },
+    });
+    if (route?.route === "refused") return refuseShot(route.reason);
     const answer = await call(
       "get_window_state",
       {
         pid: input.pid,
         window_id: input.windowId,
         tree_format: "elements",
-        include_screenshot: input.screenshot,
+        include_screenshot: route !== undefined,
         ...(input.query === undefined ? {} : { query: input.query }),
         ...(input.maxElements === undefined ? {} : { max_elements: input.maxElements }),
       },
@@ -256,9 +267,21 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         ),
       };
     }
+    // On X11 the driver's own image is never sent; the window's own capture replaces it at the
+    // driver's screenshot size, which the driver's frames and its pointer scale are in.
+    let offered: DriverImage | undefined;
+    if (route?.route === "own") {
+      const shot = driverShot(answer.structured);
+      if (!shot)
+        return refuseShot(
+          answer.text.split("\n", 1)[0] || "Cua Driver could not capture this window.",
+        );
+      const own = await route.capture(input.windowId, shot);
+      if ("refused" in own) return refuseShot(own.refused);
+      offered = { mimeType: "image/png", data: Buffer.from(own.png).toString("base64") };
+    } else if (route?.route === "driver") offered = answer.images[0];
     // The screenshot is declared from its own bytes, so the size the agent points in is the
     // size of the image it sees; an image those bytes do not describe is not declared at all.
-    const offered = input.screenshot ? answer.images[0] : undefined;
     const info = offered ? computerUseImageInfo(offered.data) : undefined;
     const {
       screenshot_width: _width,

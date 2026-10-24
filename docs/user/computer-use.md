@@ -44,8 +44,7 @@ thread until then. Until it has an approval, the agent can list apps and
 windows but not look inside or type into them. A request for the whole screen
 says so; approving it lets the agent act on anything the screen shows. Agents
 cannot screenshot the whole display; they look at one window at a time. On
-Windows and on Linux under Wayland, a window's screenshot can still include
-other windows that cover it.
+Windows, a window's screenshot can still include other windows that cover it.
 
 **Stop** on a thread also stops its computer use at once, even in the middle of
 an action sequence. The agent gets the screen back on its next turn, within the
@@ -130,6 +129,10 @@ works with fewer apps, and your desktop may ask you to approve screen capture.
 A headless server with Xvfb also works. Without AT-SPI (the `at-spi2-core`
 package) and a D-Bus session, agents can take screenshots and use the mouse and
 keyboard but cannot read app controls.
+Window screenshots on Linux need a desktop that composites its windows (a bare
+Xvfb needs a compositor such as xcompmgr); in a Wayland session other than
+Hyprland, agents read app controls but get no window screenshots. A window that
+has just opened or is still redrawing can briefly show part of the app behind it.
 
 ## Other computers
 
