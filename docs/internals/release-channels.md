@@ -38,7 +38,7 @@ Both channels share one workflow because they differ only in version, manifest p
 - was published at least 24 hours ago,
 - is newer than the current stable and its commit has not shipped as stable,
 
-while no open issue carries the `release-blocker` label and the repository variable `GOAT_STABLE_HOLD` is not `true`. Otherwise it publishes nothing that day. `.github/scripts/release-train.cjs` makes the decision; the workflow runs it from its own commit, so an older nightly commit is promoted under the current rules.
+while no open issue carries the `release-blocker` label and the repository variable `GOAT_STABLE_HOLD` is not `true`. Otherwise it publishes nothing that day. `.github/scripts/release-train.cjs` makes the decision; the workflow runs it from its own commit, so an older nightly commit is promoted under the current rules. The build takes hours, so the rules are checked again after it and before publishing: a blocker opened or a hold set during the build still stops the release. Inside the serialized publish job, every release also rechecks its version against goat-releases, so a nightly and a stable that ran side by side cannot publish a version that sorts below the other.
 
 A promotion rebuilds exactly the nightly's commit with the plain version `X.Y.Z` of that nightly's base, signed and verified like every build. It never builds anything the nightly did not. The next nightly is then a prerelease of `X.Y.(Z+1)`, so no manifest bump is needed after a release.
 
