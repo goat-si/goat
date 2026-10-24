@@ -93,6 +93,14 @@ export function driverCallFor(
       "Raising this window needs a control lease that allows foreground input.",
     );
   const { pid, windowId } = request.target;
+  // Every action, keyboard input included, is for the window as the agent last saw it.
+  const confirmed = context.observations.confirm({
+    pid,
+    windowId,
+    observationId: request.observationId,
+    epoch: request.target.epoch,
+  });
+  if (confirmed !== true) return confirmed;
   const window = { pid, window_id: windowId, delivery_mode: request.delivery };
 
   // An element becomes its current driver token; a point must come from the latest screenshot.
@@ -217,7 +225,8 @@ export function driverCallFor(
       return { tool: "set_value", args: { pid, window_id: windowId, ...at, value: request.value } };
     }
     case "performAction": {
-      const action = AX_ACTIONS[request.name];
+      // Own keys only: an inherited name such as toString must not slip through as an action.
+      const action = Object.hasOwn(AX_ACTIONS, request.name) ? AX_ACTIONS[request.name] : undefined;
       if (!action)
         return {
           ...refusal(
@@ -279,17 +288,24 @@ export function actionResultFromDriver(
   request: ComputerUseActionRequest,
   result: DriverToolResult,
 ): ComputerUseActionResult {
-  const effect = field(result.structured, "effect");
-  const code = field(result.structured, "code");
+  // Two envelopes: { effect, code } from input tools, and { status: "refused", refusal: { code } }
+  // from the snapshot store (stale tokens).
+  const nested = field(result.structured, "refusal");
+  const refusedByStatus = field(result.structured, "status") === "refused";
+  const effect = refusedByStatus ? "refused" : field(result.structured, "effect");
+  const code = field(nested, "code") ?? field(result.structured, "code");
   const detail = result.text.trim().split("\n", 1)[0] || undefined;
   const sent = { delivery: request.delivery, ...(detail === undefined ? {} : { detail }) };
-  if (
-    effect === "refused" ||
-    (typeof code === "string" && effect === undefined && result.isError)
-  ) {
-    const reason = typeof code === "string" ? REFUSAL_CODES[code] : undefined;
+  const known =
+    typeof code === "string" && Object.hasOwn(REFUSAL_CODES, code)
+      ? REFUSAL_CODES[code]
+      : undefined;
+  // A refusal says nothing was sent, so it needs the driver's word for it: an explicit refused
+  // effect, or an error code that only fires before input leaves. Any other error, such as
+  // delivery_failed after a key went down, may have landed and stays unverifiable.
+  if (effect === "refused" || (known !== undefined && effect === undefined && result.isError)) {
     return refusal(
-      reason ?? "targetRefused",
+      known ?? "targetRefused",
       detail ??
         (typeof code === "string" ? "The driver refused: " + code + "." : "The driver refused."),
     );

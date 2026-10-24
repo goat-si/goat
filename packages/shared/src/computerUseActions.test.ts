@@ -203,3 +203,64 @@ describe("computer use keys on mac", () => {
     expect(press("/")).toBe("unsupported");
   });
 });
+
+describe("computer use action review regressions", () => {
+  it("does not call an error a refusal unless the driver says nothing was sent", () => {
+    const { save, request } = setup();
+    const click = request({ action: "pressKey", key: "a" });
+    const mapped = (structured: unknown) =>
+      actionResultFromDriver(click, { isError: true, text: "", structured });
+    // press_key reports delivery_failed after a key may already have gone down.
+    expect(mapped({ code: "delivery_failed" })).toMatchObject({
+      outcome: "unverifiable",
+      dispatch: "dispatched_unknown",
+    });
+    expect(mapped({ code: "something_new" })).toMatchObject({ outcome: "unverifiable" });
+    // The snapshot store's envelope for a stale token.
+    expect(
+      actionResultFromDriver(request({ action: "click", at: { element: save } }), {
+        isError: true,
+        text: "",
+        structured: {
+          status: "refused",
+          refusal: { code: "stale_element_token", message: "stale" },
+        },
+      }),
+    ).toMatchObject({ outcome: "refused", reason: "staleElement" });
+  });
+
+  it("checks the window and observation before keyboard input too", () => {
+    const { observations, first, context, request } = setup();
+    const press = (overrides: Record<string, unknown> = {}) => {
+      const call = driverCallFor(
+        { ...request({ action: "pressKey", key: "a" }), ...overrides } as ComputerUseActionRequest,
+        context,
+      );
+      return "outcome" in call ? call.reason : "sent";
+    };
+    expect(press()).toBe("sent");
+    expect(press({ target: { pid: 10, windowId: 20, epoch: "elsewhere" } })).toBe("epochChanged");
+    observations.observe({
+      read: read(2),
+      since: first.observationId,
+      epoch: "e1",
+      scope: "all",
+      screenshot: true,
+      privateMode: false,
+    });
+    expect(press()).toBe("staleElement");
+    expect(driverCallFor(request({ action: "typeText", text: "hi" }), context)).toMatchObject({
+      reason: "staleElement",
+    });
+    observations.forget(10, 20);
+    expect(press({ observationId: "any" })).toBe("staleElement");
+  });
+
+  it("allows only the driver's own AX action names", () => {
+    const { save, context, request } = setup();
+    for (const name of ["toString", "constructor", "__proto__"])
+      expect(
+        driverCallFor(request({ action: "performAction", element: save, name }), context),
+      ).toMatchObject({ reason: "unsupported" });
+  });
+});
