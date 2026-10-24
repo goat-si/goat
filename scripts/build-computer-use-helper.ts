@@ -431,7 +431,7 @@ export const buildComputerUseHelperCommand = Command.make(
           path.join(repoRoot, "apps/desktop/.computer-use-helper"),
         ),
         identity: Option.getOrUndefined(identity),
-        adHoc,
+        adHoc: Option.getOrElse(adHoc, () => false),
         notaryProfile: Option.getOrUndefined(notaryProfile),
       });
       yield* Effect.log(
