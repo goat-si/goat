@@ -78,6 +78,7 @@ describe("subagent shell events", () => {
   it("publishes a promoted delegated task's transcript updates again", () => {
     const subagents = new Set(["child"]);
     const promoted = {
+      sequence: 1,
       event: {
         threadId: "child",
         type: "thread.metadata-updated",
@@ -88,6 +89,40 @@ describe("subagent shell events", () => {
     expect(shouldPublishShellApplicationEvent(stored("child", "message.updated"), subagents)).toBe(
       true,
     );
+  });
+
+  it("keeps a live promotion when replay later reaches the delegated task's creation", () => {
+    // The live tail is filtered while replay is still draining the snapshot's range (through 5).
+    const subagents = new Set(["child"]);
+    const lineageEvent = (sequence: number, type: string, relationshipToParent: string | null) =>
+      ({
+        sequence,
+        event: { threadId: "child", type, payload: { lineage: { relationshipToParent } } },
+      }) as ApplicationStoredEvent;
+    expect(
+      shouldPublishShellApplicationEvent(
+        lineageEvent(8, "thread.metadata-updated", null),
+        subagents,
+        5,
+      ),
+    ).toBe(true);
+    expect(
+      shouldPublishShellApplicationEvent(
+        lineageEvent(3, "thread.created", "subagent"),
+        subagents,
+        5,
+      ),
+    ).toBe(true);
+    expect(
+      shouldPublishShellApplicationEvent(
+        {
+          sequence: 9,
+          event: { threadId: "child", type: "message.updated" },
+        } as ApplicationStoredEvent,
+        subagents,
+        5,
+      ),
+    ).toBe(true);
   });
 });
 

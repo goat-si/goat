@@ -106,21 +106,35 @@ export type ShellApplicationEvent =
       readonly event: Pick<OrchestrationV2StoredEvent["event"], "threadId">;
     };
 
+export const subagentThreadIdsOf = (
+  threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
+) =>
+  new Set<string>(
+    threads
+      .filter((thread) => thread.lineage.relationshipToParent === "subagent")
+      .map((thread) => thread.id),
+  );
+
 /** Focused subagents receive these updates through their thread subscription. */
 export function shouldPublishShellApplicationEvent(
   stored: ApplicationStoredEvent,
   subagentThreadIds: Set<string>,
+  // The snapshot that built the set. Replay and the live tail are filtered concurrently, so an
+  // event at or below it must not undo a newer classification, such as a GOAT promotion.
+  classifiedThroughSequence = 0,
 ): boolean {
   if ("aggregateKind" in stored) return true;
   const { event } = stored;
+  const reclassifies = !(stored.sequence <= classifiedThroughSequence);
   if (event.type === "thread.created") {
-    if (event.payload.lineage.relationshipToParent === "subagent") {
+    if (reclassifies && event.payload.lineage.relationshipToParent === "subagent") {
       subagentThreadIds.add(event.threadId);
     }
     return true;
   }
   if (event.type === "thread.metadata-updated") {
     // GOAT promotion detaches a delegated task in place, so its lineage can stop being a subagent.
+    if (!reclassifies) return true;
     if (event.payload.lineage.relationshipToParent === "subagent") {
       subagentThreadIds.add(event.threadId);
     } else {
