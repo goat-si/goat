@@ -547,7 +547,11 @@ describe("tree item actions", () => {
     state.readFile.mockResolvedValueOnce({
       _tag: "Failure",
       cause: Cause.fail(
-        new ProjectReadFileError({ relativePath: "notes.md", failure: "binary_file" }),
+        new ProjectReadFileError({
+          cwd: "/home/dev/repo",
+          relativePath: "notes.md",
+          failure: "binary_file",
+        }),
       ),
     });
     await userEvent.keyboard(chord([MOD, "Alt", "Shift"], "v"));
