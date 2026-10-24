@@ -6,6 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 
 import {
   buildAssetsCommit,
@@ -159,7 +160,11 @@ describe("pr-assets plumbing", () => {
   let work: string;
   let other: string;
   const run = (cwd: string, ...args: string[]) =>
-    NodeChildProcess.execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+    NodeChildProcess.execFileSync("git", args, {
+      cwd,
+      env: isolatedGitEnv(),
+      encoding: "utf8",
+    }).trim();
   const file = (name: string, content: string) => {
     const path = NodePath.join(root, "shots", name);
     NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });

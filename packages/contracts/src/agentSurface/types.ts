@@ -39,6 +39,8 @@ export interface AgentSurfaceEntry {
   readonly capabilityReason?: string;
   readonly idempotency?: "key";
   readonly reconcile?: string;
+  /** Why a write takes no GOAT-deduplicated key: idempotency.test.ts requires a key or this. */
+  readonly idempotencyReason?: string;
   /** The kind of operation this path's accepted work becomes; goat_call returns its handle. */
   readonly operation?: OperationKind;
   readonly annotations: {
@@ -69,8 +71,22 @@ export type CapabilityDeclaration =
 /**
  * "key": the write takes clientRequestId and GOAT's reservation store deduplicates it
  * (docs/internals/agent-surface.md#idempotency). `reconcile` is the read path that tells an agent
- * whether a write whose outcome is unknown happened.
+ * whether a write whose outcome is unknown happened. A write without a key says why in
+ * `idempotencyReason`, such as a domain store that already deduplicates its own key.
  */
 export type IdempotencyDeclaration =
-  | { readonly idempotency?: undefined; readonly reconcile?: undefined }
-  | { readonly idempotency: "key"; readonly reconcile: string };
+  | {
+      readonly idempotency?: undefined;
+      readonly reconcile?: undefined;
+      readonly idempotencyReason?: undefined;
+    }
+  | {
+      readonly idempotency: "key";
+      readonly reconcile: string;
+      readonly idempotencyReason?: undefined;
+    }
+  | {
+      readonly idempotency?: undefined;
+      readonly reconcile?: undefined;
+      readonly idempotencyReason: string;
+    };

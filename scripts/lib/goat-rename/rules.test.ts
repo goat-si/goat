@@ -547,7 +547,7 @@ const keptVisibleCopy = [
   ],
   [
     "packages/provider-testing/src/replayWorkspace.ts",
-    '  yield* runGit(cwd, ["config", "user.name", "T3 Code Test"]);',
+    '  yield* runGit(cwd, ["config", "--file", gitConfig, "user.name", "T3 Code Test"]);',
   ],
   ["packages/shared/src/goatHome.ts", " * T3 Code may be using `~/.t3` at the same time."],
   [

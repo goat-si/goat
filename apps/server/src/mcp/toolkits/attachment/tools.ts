@@ -1,3 +1,4 @@
+import { withClientRequestId } from "../keyedParameters.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import { McpAttachmentInput } from "./input.ts";
@@ -47,14 +48,16 @@ const AttachmentDiscardTool = Tool.make(agentSurfaceRegistry["attachment.discard
 const AttachmentSendTool = Tool.make(agentSurfaceRegistry["thread.send_attachments"].name, {
   ...shared,
   description: agentSurfaceRegistry["thread.send_attachments"].description,
-  parameters: Schema.Struct({
-    threadId: Schema.optional(ThreadId),
-    message: Schema.optional(Schema.String.check(Schema.isMaxLength(120000))),
-    attachments: Schema.Array(McpAttachmentInput).check(
-      Schema.isMinLength(1),
-      Schema.isMaxLength(8),
-    ),
-  }),
+  parameters: withClientRequestId(
+    Schema.Struct({
+      threadId: Schema.optional(ThreadId),
+      message: Schema.optional(Schema.String.check(Schema.isMaxLength(120000))),
+      attachments: Schema.Array(McpAttachmentInput).check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(8),
+      ),
+    }),
+  ),
   success: Schema.Struct({
     threadId: ThreadId,
     messageId: MessageId,

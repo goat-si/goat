@@ -55,7 +55,7 @@ function promptTextTests(root: string): ReadonlyArray<string> {
     );
   const replay = NodeFS.readdirSync(NodePath.join(root, REPLAY_DIR))
     .filter((entry) => REPLAY_SUITE.test(entry))
-    .map((entry) => NodePath.join(REPLAY_DIR, entry));
+    .map((entry) => NodePath.posix.join(REPLAY_DIR, entry));
   return [...direct, ...viaTestkit, ...replay].filter((path) => TEST.test(path));
 }
 
@@ -65,14 +65,17 @@ function promptTextTests(root: string): ReadonlyArray<string> {
  * `related` reaches most of a package: one leaf server file pulled in 252 of
  * 406 server test files and took 7 minutes. CI runs the rest. Prompt text is the
  * exception; see promptTextTests.
+ *
+ * Paths are git's repo-relative POSIX paths in and out on every platform, so Windows selects
+ * the same suites as CI; NodePath.join would emit backslashes there.
  */
 export function testsForChanges(root: string, code: ReadonlyArray<string>): ReadonlySet<string> {
   const tests = new Set(code.filter((file) => TEST.test(file)));
   for (const file of code) {
-    const dir = NodePath.dirname(file);
-    const prefix = `${NodePath.basename(file).replace(CODE, "")}.`;
+    const dir = NodePath.posix.dirname(file);
+    const prefix = `${NodePath.posix.basename(file).replace(CODE, "")}.`;
     for (const entry of NodeFS.readdirSync(NodePath.join(root, dir))) {
-      if (entry.startsWith(prefix) && TEST.test(entry)) tests.add(NodePath.join(dir, entry));
+      if (entry.startsWith(prefix) && TEST.test(entry)) tests.add(NodePath.posix.join(dir, entry));
     }
   }
   if (code.some((file) => PROMPT_TEXT.test(file) && !TEST.test(file)))

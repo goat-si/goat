@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DeviceHostUnavailableError,
   DeviceId,
+  type DeviceSummary,
   EnvironmentId,
   ProviderInstanceId,
   ThreadId,
@@ -14,6 +15,7 @@ import { McpSchema, McpServer } from "effect/ai";
 
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -105,54 +107,71 @@ const layerProjectsMock = Layer.mock(ProjectService.ProjectService)({
   getById: () => Effect.succeed(Option.none()),
 });
 
-const layerDeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
-  state: Effect.succeed(state),
-  list: Effect.succeed(state),
-  agentReadinessIfSupported: () => Effect.succeed(readiness),
-  open: (input) =>
-    Effect.succeed({
-      threadId: input.threadId,
-      hostId: "local",
-      deviceId: input.deviceId,
-      platform: input.platform,
-      openedAt: "2026-09-08T00:00:00.000Z",
-    }),
+const layerDeviceServiceMock = (
+  opened: Array<unknown> = [],
+  target: DeviceSummary = device,
+  bootedTarget = target,
+) => {
+  const observed = Effect.sync(() => ({
+    ...state,
+    devices: [opened.length > 0 ? bootedTarget : target, { ...target, id: "UDID-2" }],
+  }));
+  return Layer.mock(DeviceService.DeviceService)({
+    state: observed,
+    list: observed,
+    agentReadinessIfSupported: () => Effect.succeed(readiness),
+    open: (input) =>
+      Effect.sync(() => {
+        opened.push(input);
+        return {
+          threadId: input.threadId,
+          hostId: "local",
+          deviceId: bootedTarget.id,
+          platform: bootedTarget.platform,
+          openedAt: "2026-09-08T00:00:00.000Z",
+        };
+      }),
 
-  sessionsForThread: (id) =>
-    Effect.succeed(
-      id === threadId
-        ? [
-            {
-              threadId,
-              hostId: "local",
-              deviceId: DeviceId.make("UDID-1"),
-              platform: "ios" as const,
-              openedAt: "2026-09-08T00:00:00.000Z",
-            },
-          ]
-        : [],
+    sessionsForThread: (id) =>
+      Effect.succeed(
+        id === threadId
+          ? [
+              {
+                threadId,
+                hostId: "local",
+                deviceId: DeviceId.make("UDID-1"),
+                platform: "ios" as const,
+                openedAt: "2026-09-08T00:00:00.000Z",
+              },
+            ]
+          : [],
+      ),
+    screenshot: () => Effect.succeed({ device, png }),
+    close: () => Effect.void,
+    agentCli: Effect.succeed("/cli"),
+    testHost: () => Effect.die("not used"),
+    // As for an EAS device, agent-device knows the device by a different id than T3.
+    agentTarget: () =>
+      Effect.succeed({
+        agentDeviceId: "SIM-UDID",
+        args: ["--config", "/host.json", "--session", "thread-device"],
+      }),
+  });
+};
+
+const layerTest = (opened?: Array<unknown>, target?: DeviceSummary, bootedTarget?: DeviceSummary) =>
+  McpHttpServer.layerDeviceToolkit.pipe(
+    Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
+    Layer.provideMerge(layerDeviceServiceMock(opened, target, bootedTarget)),
+    Layer.provideMerge(Sqlite.layerMemory),
+    Layer.provide(layerProjectsMock),
+    Layer.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-device-toolkit-test-" }),
     ),
-  screenshot: () => Effect.succeed({ device, png }),
-  close: () => Effect.void,
-  agentCli: Effect.succeed("/cli"),
-  testHost: () => Effect.die("not used"),
-  // As for an EAS device, agent-device knows the device by a different id than T3.
-  agentTarget: () =>
-    Effect.succeed({
-      agentDeviceId: "SIM-UDID",
-      args: ["--config", "/host.json", "--session", "thread-device"],
-    }),
-});
-
-const layerTest = McpHttpServer.layerDeviceToolkit.pipe(
-  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-  Layer.provideMerge(McpServer.McpServer.layer),
-  Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
-  Layer.provideMerge(layerDeviceServiceMock),
-  Layer.provide(layerProjectsMock),
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-device-toolkit-test-" })),
-  Layer.provide(NodeServices.layer),
-);
+    Layer.provide(NodeServices.layer),
+  );
 
 it.effect("registers the device tools and returns the screenshot as image content", () =>
   Effect.scoped(
@@ -181,7 +200,9 @@ it.effect("registers the device tools and returns the screenshot as image conten
         .pipe(callWith(["device"]), Effect.provideService(McpSchema.McpServerClient, client));
       expect(shot.isError).toBe(false);
       expect(shot.content.map((entry) => entry.type)).toEqual(["text", "image"]);
-      expect(shot.structuredContent).toMatchObject({
+      expect(shot.structuredContent).toBeUndefined();
+      const [shotText] = shot.content;
+      expect(shotText?.type === "text" ? JSON.parse(shotText.text) : null).toMatchObject({
         screenshot: { mimeType: "image/png", width: 1206, height: 2622 },
       });
 
@@ -196,7 +217,7 @@ it.effect("registers the device tools and returns the screenshot as image conten
         .pipe(callWith(["preview"]), Effect.provideService(McpSchema.McpServerClient, client));
       expect(denied.isError).toBe(true);
     }),
-  ).pipe(Effect.provide(layerTest)),
+  ).pipe(Effect.provide(layerTest())),
 );
 
 it.effect("tells an outside client why a screenshot was refused, not only that it failed", () =>
@@ -230,7 +251,7 @@ it.effect("tells an outside client why a screenshot was refused, not only that i
         message: refusal.message,
       },
     });
-  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTest())),
 );
 
 it.effect("rejects unavailable agent access before booting or opening a device", () => {
@@ -275,4 +296,68 @@ it.effect("rejects unavailable agent access before booting or opening a device",
       ),
     ),
   );
+});
+
+it.effect("opens one device on a keyed retry and rechecks device access before replay", () => {
+  const opened: Array<unknown> = [];
+  const open = (
+    clientRequestId: string | undefined,
+    capabilities: ReadonlyArray<McpInvocationContext.McpCapability> = ["device"],
+    deviceId = "UDID-1",
+  ) =>
+    McpServer.McpServer.pipe(
+      Effect.flatMap((server) =>
+        server.callTool({
+          name: "goat_device_open",
+          arguments: { deviceId, clientRequestId },
+        }),
+      ),
+      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
+      Effect.provideService(McpSchema.McpServerClient, client),
+    );
+  return Effect.gen(function* () {
+    const first = yield* open("device-1");
+    expect(first.isError, JSON.stringify(first)).toBe(false);
+    expect(yield* open("device-1")).toEqual(first);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).not.toHaveProperty("clientRequestId");
+    expect((yield* open("device-1", [])).isError).toBe(true);
+    const mismatch = yield* open("device-1", ["device"], "UDID-2");
+    expect(mismatch.isError).toBe(true);
+    expect(mismatch.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining('"reason":"idempotency_mismatch"'),
+        }),
+      ]),
+    );
+    expect(opened).toHaveLength(1);
+    yield* open("device-2");
+    yield* open(undefined);
+    expect(opened).toHaveLength(3);
+  }).pipe(Effect.provide(layerTest(opened)));
+});
+
+it.effect("replays an Android device open after boot changes its discovered id", () => {
+  const opened: Array<unknown> = [];
+  const target: DeviceSummary = { ...device, id: "test-avd", platform: "android", booted: false };
+  const bootedTarget = { ...target, id: "emulator-5554", booted: true };
+  const open = McpServer.McpServer.pipe(
+    Effect.flatMap((server) =>
+      server.callTool({
+        name: "goat_device_open",
+        arguments: { deviceId: "test-avd", clientRequestId: "android-open" },
+      }),
+    ),
+    Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(["device"])),
+    Effect.provideService(McpSchema.McpServerClient, client),
+  );
+  return Effect.gen(function* () {
+    const first = yield* open;
+    expect(first.isError, JSON.stringify(first)).toBe(false);
+    expect(first.structuredContent).toMatchObject({ device: { id: "emulator-5554" } });
+    expect(yield* open).toEqual(first);
+    expect(opened).toHaveLength(1);
+  }).pipe(Effect.provide(layerTest(opened, target, bootedTarget)));
 });

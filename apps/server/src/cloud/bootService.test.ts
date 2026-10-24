@@ -218,9 +218,6 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       if (!failed && command === "systemctl --user restart goat.service") {
         yield* publishAnswer(path.join(home, ".config", "systemd", "user", "goat.service"));
       }
-      if (!failed && command === "systemctl --user restart goat.service") {
-        yield* publishAnswer(path.join(home, ".config", "systemd", "user", "goat.service"));
-      }
       if (!failed && command.startsWith("launchctl bootstrap ")) {
         const plist = input.args.at(-1);
         if (plist !== undefined) yield* publishAnswer(plist);
@@ -536,6 +533,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
             : [
                 "launchctl bootout --wait gui/501/si.goat.service",
                 `launchctl bootstrap gui/501 ${plan.unitPath}`,
+                "launchctl kickstart gui/501/si.goat.service",
               ],
         );
       }),
@@ -1133,7 +1131,7 @@ it.layer(NodeServices.layer)("boot service legacy migration", (it) => {
       }),
   );
 
-  it.effect("install moves an owned launch agent to si.goat.service", () =>
+  it.effect("regression #624: install moves the launch agent to si.goat.service, kickstarted", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness("darwin");
       const legacy = yield* installLegacy(harness, "darwin");
@@ -1147,6 +1145,7 @@ it.layer(NodeServices.layer)("boot service legacy migration", (it) => {
         "launchctl bootout --wait gui/501/com.t3tools.t3code.service", // goat-rename: legacy
         "launchctl enable gui/501/si.goat.service",
         `launchctl bootstrap gui/501 ${plan.unitPath}`,
+        "launchctl kickstart gui/501/si.goat.service",
       ]);
       expect(yield* harness.service.status).toMatchObject({ installed: true, current: true });
     }),

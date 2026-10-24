@@ -1,5 +1,6 @@
 import { assert } from "@effect/vitest";
 import type { ProviderReplayTranscript } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { normalizeTerminalOutput, terminalOutputPlainText } from "@goat/shared/terminalOutput";
 
 import type { OrchestratorV2ScenarioResult } from "../../OrchestratorScenario.ts";
@@ -33,9 +34,34 @@ export function assertCommandOutputStreamingOutput(
   if (command?.type !== "command_execution") return;
   assert.equal(command.status, "completed");
   assert.include(command.output ?? "", "progress 100%");
+  const final = terminalOutputPlainText(normalizeTerminalOutput(command.output ?? "").text);
+  // The row shows what the command printed, not a serialized tool result.
+  assert.notInclude(final, '"stdout"');
 
-  // Live output reached the hub, cleaned of escapes and the progress redraw.
   const streamed = result.commandOutput?.get(command.id);
+  if (transcript.provider === "claudeAgent" && HostProcess.Platform.defaultValue() === "win32") {
+    // Claude's live output comes from Claude Code's task files, which have no known
+    // Windows location (ClaudeTaskOutputTail.ts, #1165), so the row gets only its final output.
+    assert.isUndefined(streamed, "Claude streams no live command output on Windows");
+  } else {
+    assertLiveTailMatchesFinal(streamed, final);
+  }
+
+  // Never persisted while running: no event carries partial command output.
+  const commandEvents = result.domainEvents.flatMap((event) =>
+    event.type === "turn-item.updated" && event.payload.id === command.id ? [event.payload] : [],
+  );
+  for (const item of commandEvents) {
+    if (item.type !== "command_execution" || item.status === "completed") continue;
+    assert.isUndefined(item.output, "a running command item must not persist live output");
+  }
+}
+
+/** Live output reached the hub, cleaned of escapes and the progress redraw. */
+function assertLiveTailMatchesFinal(
+  streamed: ReturnType<NonNullable<OrchestratorV2ScenarioResult["commandOutput"]>["get"]>,
+  final: string,
+) {
   assert.isDefined(streamed, "the running command must stream its output");
   assert.isAbove(streamed?.chunks ?? 0, 0);
   const liveText = streamed?.output.text ?? "";
@@ -50,20 +76,8 @@ export function assertCommandOutputStreamingOutput(
   assert.notInclude(live, "\u001b");
   assert.notInclude(live, "progress 50%");
   // What viewers watched is the end of what the row keeps once it settles.
-  const final = terminalOutputPlainText(normalizeTerminalOutput(command.output ?? "").text);
   assert.isTrue(
     final.trimEnd().endsWith(live.trimEnd()),
     `the live tail must agree with the persisted final output: ${JSON.stringify({ final, live })}`,
   );
-  // The row shows what the command printed, not a serialized tool result.
-  assert.notInclude(final, '"stdout"');
-
-  // Never persisted while running: no event carries partial command output.
-  const commandEvents = result.domainEvents.flatMap((event) =>
-    event.type === "turn-item.updated" && event.payload.id === command.id ? [event.payload] : [],
-  );
-  for (const item of commandEvents) {
-    if (item.type !== "command_execution" || item.status === "completed") continue;
-    assert.isUndefined(item.output, "a running command item must not persist live output");
-  }
 }

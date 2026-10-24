@@ -43,7 +43,7 @@ export const decisionEntries = {
     summary:
       "Request a durable decision with distinct option ids, an optional recommendation and expiry, and a required permission profile.",
     description:
-      "Create a durable decision request and return its item and id. Each call creates a new request; check goat_decision_list before retrying after an uncertain result. Silence never approves.",
+      "Create a durable decision request and return its item and id. Retry with the same clientRequestId to reuse the result. Silence never approves.",
     guide:
       "The caller's profile must allow threads.launch. Use distinct option ids and name a stored required permission profile. Optionally recommend one of those ids and set a future expiry. An unanswered request stays open until it expires; expiry does not approve it.",
     effect: "write",
@@ -52,6 +52,8 @@ export const decisionEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotency: "key",
+    reconcile: "decision.list",
     annotations: { idempotentHint: false, openWorldHint: false },
   }),
   "decision.answer": entry({
@@ -73,6 +75,8 @@ export const decisionEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "DecisionInbox.answer atomically changes an open durable decision to answered and queues one delivery keyed by decision id; projected answers use the orchestrator's pending-to-resolved request transition, which rejects another response.",
     annotations: { idempotentHint: false, openWorldHint: false },
   }),
 } as const;

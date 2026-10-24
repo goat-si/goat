@@ -23,6 +23,10 @@
       "types": "./src/cuaDriverRelease.ts",
       "import": "./src/cuaDriverRelease.ts"
     },
+    "./computerUseObservation": {
+      "types": "./src/computerUseObservation.ts",
+      "import": "./src/computerUseObservation.ts"
+    },
     "./cuaDriverManifest": {
       "types": "./src/cuaDriverManifest.ts",
       "import": "./src/cuaDriverManifest.ts"
@@ -414,6 +418,10 @@
     "./testing/fileNames": {
       "types": "./src/testing/fileNames.ts",
       "import": "./src/testing/fileNames.ts"
+    },
+    "./testing/gitEnv": {
+      "types": "./src/testing/gitEnv.ts",
+      "import": "./src/testing/gitEnv.ts"
     },
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
