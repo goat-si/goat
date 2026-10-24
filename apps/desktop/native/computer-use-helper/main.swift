@@ -271,6 +271,7 @@ final class DriverService {
       switch method {
       case "permissions": result = permissions(prompt: params["prompt"] as? Bool == true)
       case "start": result = try start(params)
+      case "listApps": result = try listApps()
       case "stop":
         stop()
         result = [:]
@@ -326,20 +327,7 @@ final class DriverService {
     }
     if params["noOverlay"] as? Bool == true { arguments.append("--no-overlay") }
 
-    var environment: [String: String] = [:]
-    for (name, value) in ProcessInfo.processInfo.environment
-    where inheritedNames.contains(name) || name.hasPrefix("LC_") {
-      environment[name] = value
-    }
-    for entry in params["environment"] as? [[String: Any]] ?? [] {
-      guard let name = entry["name"] as? String, let value = entry["value"] as? String,
-        hostSettableNames.contains(name)
-      else { continue }
-      environment[name] = value
-    }
-    for (name, value) in privacyEnvironment { environment[name] = value }
-    environment["CUA_DRIVER_EMBEDDED"] = "1"
-    environment["CUA_DRIVER_EMBEDDED_HOST_PID"] = String(getpid())
+    let environment = driverEnvironment(params["environment"] as? [[String: Any]] ?? [])
 
     let process = Process()
     let pipe = Pipe()
@@ -389,6 +377,119 @@ final class DriverService {
     stop()
     throw HelperError(
       code: "startup_timeout", message: "Cua Driver did not become ready within 20 seconds.")
+  }
+
+/// What every driver this helper runs inherits: the allowlisted names, the host's tuning
+  /// knobs, privacy switches forced off, and embedded mode under this process.
+  func driverEnvironment(_ settable: [[String: Any]]) -> [String: String] {
+    var environment: [String: String] = [:]
+    for (name, value) in ProcessInfo.processInfo.environment
+    where inheritedNames.contains(name) || name.hasPrefix("LC_") {
+      environment[name] = value
+    }
+    for entry in settable {
+      guard let name = entry["name"] as? String, let value = entry["value"] as? String,
+        hostSettableNames.contains(name)
+      else { continue }
+      environment[name] = value
+    }
+    for (name, value) in privacyEnvironment { environment[name] = value }
+    environment["CUA_DRIVER_EMBEDDED"] = "1"
+    environment["CUA_DRIVER_EMBEDDED_HOST_PID"] = String(getpid())
+    return environment
+  }
+
+  /// The apps the driver can see, for the host's capability manifest. The driver runs only
+  /// after the same seal check as start, as a short-lived socket-free process in this helper's
+  /// responsibility chain (#1241); listing reads LaunchServices and needs no grant.
+  func listApps() throws -> [String: Any] {
+    guard let driverPath, FileManager.default.isExecutableFile(atPath: driverPath) else {
+      throw HelperError(code: "driver_missing", message: "The helper bundle has no Cua Driver.")
+    }
+    if let refusal = driverRefusal(driverPath) {
+      throw HelperError(code: "driver_untrusted", message: refusal)
+    }
+    let process = Process()
+    let input = Pipe()
+    let output = Pipe()
+    process.executableURL = URL(fileURLWithPath: driverPath)
+    process.arguments = ["mcp", "--direct", "--embedded", "--host-bundle-id", bundleId]
+    var environment = driverEnvironment([])
+    environment["CUA_DRIVER_PERMISSION_MODE"] = "standard"
+    process.environment = environment
+    process.standardInput = input
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    do { try process.run() } catch {
+      throw HelperError(code: "spawn_failed", message: "Could not start Cua Driver: \(error).")
+    }
+    defer {
+      try? input.fileHandleForWriting.close()
+      if process.isRunning { process.terminate() }
+      process.waitUntilExit()
+    }
+    func send(_ message: [String: Any]) {
+      guard var data = try? JSONSerialization.data(withJSONObject: message) else { return }
+      data.append(0x0A)
+      input.fileHandleForWriting.write(data)
+    }
+    // Reads the driver's replies on another thread so a silent driver cannot hang the helper.
+    var replies: [Int: [String: Any]] = [:]
+    let lock = NSLock()
+    let arrived = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+      var buffer = Data()
+      while true {
+        let chunk = output.fileHandleForReading.availableData
+        if chunk.isEmpty { break }
+        buffer.append(chunk)
+        while let newline = buffer.firstIndex(of: 0x0A) {
+          let line = buffer.subdata(in: buffer.startIndex..<newline)
+          buffer.removeSubrange(buffer.startIndex...newline)
+          guard let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+            let id = message["id"] as? Int
+          else { continue }
+          lock.lock()
+          replies[id] = message
+          lock.unlock()
+          arrived.signal()
+        }
+      }
+      arrived.signal()
+    }
+    let deadline = DispatchTime.now() + .seconds(15)
+    func reply(_ id: Int) -> [String: Any]? {
+      while true {
+        lock.lock()
+        let found = replies[id]
+        lock.unlock()
+        if let found { return found }
+        if !process.isRunning || arrived.wait(timeout: deadline) == .timedOut { return nil }
+      }
+    }
+    send([
+      "jsonrpc": "2.0", "id": 1, "method": "initialize",
+      "params": [
+        "protocolVersion": "2025-06-18", "capabilities": [:] as [String: Any],
+        "clientInfo": ["name": "goat-computer-use", "version": "1"],
+      ],
+    ])
+    guard reply(1) != nil else {
+      throw HelperError(code: "list_failed", message: "Cua Driver did not start listing apps.")
+    }
+    send(["jsonrpc": "2.0", "method": "notifications/initialized"])
+    send([
+      "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+      "params": ["name": "list_apps", "arguments": [:] as [String: Any]],
+    ])
+    guard let answer = reply(2), answer["error"] == nil,
+      let result = answer["result"] as? [String: Any], result["isError"] as? Bool != true,
+      let structured = result["structuredContent"] as? [String: Any],
+      let apps = structured["apps"] as? [Any]
+    else {
+      throw HelperError(code: "list_failed", message: "Cua Driver could not list apps.")
+    }
+    return ["apps": apps]
   }
 
   /// Closing the liveness pipe is the daemon's orderly shutdown signal; a daemon that ignores
@@ -484,3 +585,4 @@ if ProcessInfo.processInfo.environment[disclaimedVariable] == "1" {
 } else {
   runLauncher()
 }
+

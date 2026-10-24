@@ -110,6 +110,9 @@ export const fixture = Effect.fn(function* (
   const toolCalls: Array<{ name: string; input: unknown }> = [];
   let clientsOpen = 0;
   const helperProbes: Array<{ bundleId: string; prompt: boolean }> = [];
+  /** How each manifest got its app list: through the helper, or by running the driver here. */
+  const manifestListings: Array<{ scope: string; through: "helper" | "driver"; apps: number }> = [];
+  const helperAppListings: string[] = [];
   const helperLaunches: Array<{
     bundleId: string;
     driverPath: string;
@@ -203,7 +206,21 @@ export const fixture = Effect.fn(function* (
     prepareManifest: async (input) => {
       const path = `${input.directory}/${input.scope}.yaml`;
       prepared.set(path, { scope: input.scope, hostBundleIds: input.hostBundleIds });
+      if (input.scope === "agents")
+        manifestListings.push(
+          input.listApplications
+            ? {
+                scope: input.scope,
+                through: "helper",
+                apps: (await input.listApplications()).length,
+              }
+            : { scope: input.scope, through: "driver", apps: 0 },
+        );
       return path;
+    },
+    helperApps: async (bundle) => {
+      helperAppListings.push(bundle.bundleId);
+      return [{ bundle_id: "com.apple.TextEdit", name: "TextEdit" }];
     },
     processId: HOST_PID,
     executablePath: "C:\\Program Files\\GOAT\\GOAT.exe",
@@ -340,6 +357,8 @@ export const fixture = Effect.fn(function* (
     constructors,
     launches,
     helperProbes,
+    manifestListings,
+    helperAppListings,
     helperLaunches,
     counts: () => ({ starts, stops, destroys }),
   };
