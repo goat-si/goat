@@ -1,7 +1,14 @@
 import type { OrchestrationV2TurnItem } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { computerUseObservedTarget, computerUseRun, computerUseRunStatus } from "./computerUse.ts";
+import {
+  computerUseDisplayInput,
+  computerUseObservedTarget,
+  computerUseRun,
+  computerUseRunStatus,
+} from "./computerUse.ts";
+import { toolCallLines } from "./itemDetail.ts";
+import { toolItemForDisplay } from "./presentation.ts";
 
 const call = (toolName: string, input: unknown) =>
   ({ type: "dynamic_tool", toolName, input }) as unknown as OrchestrationV2TurnItem;
@@ -78,5 +85,53 @@ describe("computerUseRunStatus", () => {
     expect(computerUseRunStatus("declined")).toBe("denied");
     expect(computerUseRunStatus("stopped")).toBe("stopped");
     expect(computerUseRunStatus(undefined)).toBeNull();
+  });
+});
+
+describe("computerUseDisplayInput", () => {
+  it("shows only the length of typed text in the expanded row and its copy text", () => {
+    expect(computerUseDisplayInput("cua-driver.type_text", { pid: 1, text: "hunter2" })).toEqual({
+      pid: 1,
+      text: "7 characters",
+    });
+    expect(
+      computerUseDisplayInput("mcp__cua-driver__set_value", {
+        pid: 1,
+        element_index: 3,
+        value: "x",
+      }),
+    ).toEqual({ pid: 1, element_index: 3, value: "1 character" });
+    const click = { pid: 1, text: "Submit" };
+    expect(computerUseDisplayInput("cua-driver.click", click)).toBe(click);
+    const other = { text: "not typed into a screen" };
+    expect(computerUseDisplayInput("mcp__notes__type_text", other)).toBe(other);
+    // Mobile's full detail and long-press copy serialize this display item.
+    const shown = toolItemForDisplay(call("cua-driver.type_text", { pid: 1, text: "hunter2" }));
+    expect(JSON.stringify(shown)).not.toContain("hunter2");
+  });
+
+  it("masks an ACP child's enveloped call and reads the server's redacted input", () => {
+    const envelope = { server: "cua-driver", tool: "type_text", arguments: { text: "hunter2" } };
+    const child = call("cua-driver.type_text", envelope);
+    expect(JSON.stringify(toolItemForDisplay(child))).not.toContain("hunter2");
+    const lines = toolCallLines({
+      args: computerUseDisplayInput("cua-driver.type_text", envelope),
+    });
+    expect(JSON.stringify(lines)).not.toContain("hunter2");
+    expect(computerUseRun(child)?.summary).toBe("Type 7 characters");
+    // The server sends a marker: the card and row show its length.
+    const marker = { text: { redactedCharacters: 7 } };
+    expect(computerUseRun(call("cua-driver.type_text", marker))?.summary).toBe("Type 7 characters");
+    expect(computerUseDisplayInput("cua-driver.type_text", marker)).toEqual({
+      text: "7 characters",
+    });
+    // Raw text that reads like a label is measured, never trusted.
+    const lookalike = { text: "123 characters" };
+    expect(computerUseRun(call("cua-driver.type_text", lookalike))?.summary).toBe(
+      "Type 14 characters",
+    );
+    expect(computerUseDisplayInput("cua-driver.type_text", lookalike)).toEqual({
+      text: "14 characters",
+    });
   });
 });

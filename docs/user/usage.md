@@ -172,7 +172,8 @@ This chain tries two Claude accounts routed through Codex, then GPT, then the Cl
 - `scope` decides what the chain moves. `"goals"`, the default, applies it to fleet goals only.
   `"goals_and_threads"` also moves your ordinary threads whose model is one of the steps.
 - `on` lists what triggers a move: `usage_limit` (the default), `provider_error`,
-  `transport_error`, or `unavailable`. Ordinary threads move only on usage limits.
+  `transport_error`, or `unavailable`. `unavailable` includes a provider refusing the model for
+  your account, such as a plan that does not include it. Ordinary threads move only on usage limits.
 - A step that just failed is skipped for `cooldownMs` (15 minutes by default), and so is a step on
   another provider whose account reports an exhausted window. `maxHops` caps how many moves one
   piece of work makes; by default it can try every step once.

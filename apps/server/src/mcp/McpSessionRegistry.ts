@@ -9,7 +9,9 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
@@ -207,6 +209,8 @@ const withoutMemoryAuthority = (
 export interface McpSessionRegistryOptions {
   readonly livenessWindowMs?: number;
   readonly now?: () => number;
+  /** Makes (or reuses) the directory a thread's agent gets as TMPDIR; none when absent. */
+  readonly makeThreadTemporaryDirectory?: (threadKey: string) => Effect.Effect<string | undefined>;
 }
 
 /**
@@ -332,6 +336,12 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           : yield* hashToken(renewToken);
       const freshHash = yield* hashToken(freshToken);
       const browserToolsAvailable = request.browserToolsAvailable ?? true;
+      const temporaryDirectory =
+        options.makeThreadTemporaryDirectory === undefined
+          ? undefined
+          : yield* options.makeThreadTemporaryDirectory(
+              (yield* hashToken(request.threadId)).slice(0, 16),
+            );
 
       const makeRecord = (
         tokenHash: string,
@@ -436,6 +446,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           credentialGeneration: record.generation,
           browserToolsAvailable: scope.capabilities.has("preview"),
           capabilities: scope.capabilities,
+          ...(temporaryDirectory === undefined ? {} : { temporaryDirectory }),
         },
       };
     },
@@ -638,8 +649,32 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
 
 let activeMcpSessionRegistry: McpSessionRegistryShape | undefined;
 
+/**
+ * Thread TMPDIRs live under one root per server run, removed at shutdown. The root is in the
+ * system temporary directory, which provider sandboxes already let agents write.
+ */
+const makeThreadTemporaryDirectories = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-threads-" });
+  return (threadKey: string) => {
+    const directory = path.join(root, threadKey);
+    return fileSystem.makeDirectory(directory, { recursive: true }).pipe(
+      Effect.as(directory),
+      Effect.catch((cause) =>
+        Effect.logWarning("could not create a thread temporary directory", cause).pipe(
+          Effect.as(undefined),
+        ),
+      ),
+    );
+  };
+});
+
 const make = Effect.acquireRelease(
-  makeWithOptions().pipe(
+  makeThreadTemporaryDirectories.pipe(
+    Effect.flatMap((makeThreadTemporaryDirectory) =>
+      makeWithOptions({ makeThreadTemporaryDirectory }),
+    ),
     Effect.tap((registry) =>
       Effect.sync(() => {
         activeMcpSessionRegistry = registry;
