@@ -33,6 +33,7 @@ export interface SignalMonitorDependencies {
   readonly input: HumanInputSource | undefined;
   /** The input source broke; the helper ends after the pause it caused goes out. */
   readonly inputLost: () => void;
+  /** A monotonic clock, for spacing human input events; never wall time, which can step back. */
   readonly now: () => number;
   /** Runs task every ms until the returned function is called. */
   readonly every: (ms: number, task: () => Promise<void>) => () => void;
@@ -62,7 +63,7 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
   let targets: ComputerUseWindowTarget[] = [];
   const active = new Map<string, boolean>();
   let stops: Array<() => void> = [];
-  let lastInputAt = 0;
+  let lastInputOrder = 0;
   let lostReported = false;
   let lastEventAt = -Infinity;
   let busy = { focus: false };
@@ -125,8 +126,8 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
       return;
     }
     const latest = input.latest();
-    if (!latest || latest.at <= lastInputAt) return;
-    lastInputAt = latest.at;
+    if (!latest || latest.order <= lastInputOrder) return;
+    lastInputOrder = latest.order;
     const now = deps.now();
     if (now - lastEventAt < HUMAN_INPUT_QUIET_MS) return;
     lastEventAt = now;
@@ -152,7 +153,7 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
       // unwatch before then still clears it.
       for (const key of Array.from(active.keys())) if (!kept.has(key)) active.delete(key);
       // Input from before this watch is not its concern.
-      lastInputAt = deps.now();
+      lastInputOrder = deps.input?.latest()?.order ?? 0;
       lastEventAt = -Infinity;
       busy = { focus: false };
       deps.afterReply(async () => {

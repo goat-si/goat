@@ -222,21 +222,26 @@ describe("XInput2 human input", () => {
 
   it("refuses a server that negotiates XI 2.0, whose raw events name no device", async () => {
     const server = await scriptedServer({ minor: 0 });
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 1, {
-      socketPath: server.path,
-    });
+    const source = await openX11HumanInput(
+      { DISPLAY: ":0" },
+      {
+        socketPath: server.path,
+      },
+    );
     expect(source).toBeUndefined();
     server.close();
   });
 
   it("a keyboard plugged in after the source opened is the person's; the driver's devices never are", async () => {
     const server = await scriptedServer({ minor: 2 });
-    let clock = 0;
     const listed = lists();
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => ++clock, {
-      socketPath: server.path,
-      onListed: listed.onListed,
-    });
+    const source = await openX11HumanInput(
+      { DISPLAY: ":0" },
+      {
+        socketPath: server.path,
+        onListed: listed.onListed,
+      },
+    );
     if (!source) throw new Error("no source");
     // The driver adds its devices and types through them: not a person.
     server.setDevices([...XVFB, ...DRIVER]);
@@ -259,17 +264,20 @@ describe("XInput2 human input", () => {
   it("input from a device the list does not have yet waits for the next list", async () => {
     const server = await scriptedServer({ minor: 2 });
     const listed = lists();
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 5, {
-      socketPath: server.path,
-      onListed: listed.onListed,
-    });
+    const source = await openX11HumanInput(
+      { DISPLAY: ":0" },
+      {
+        socketPath: server.path,
+        onListed: listed.onListed,
+      },
+    );
     if (!source) throw new Error("no source");
     // The raw event arrives before the hierarchy event that announces its device.
     server.setDevices([...XVFB, { id: 20, use: 4, name: "Bluetooth Keyboard" }]);
     const applied = listed.next();
     server.send(xiEvent(RAW_KEY, 20));
     await applied;
-    expect(source.latest()).toEqual({ at: 5, source: "keyboard" });
+    expect(source.latest()).toMatchObject({ source: "keyboard" });
     source.close();
     server.close();
   });
@@ -289,16 +297,19 @@ describe("XInput2 human input", () => {
     server.setDevices(devicesNow);
     const listed = lists();
     const second = listed.next().then(() => listed.next());
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 7, {
-      socketPath: server.path,
-      onListed: () => {
-        server.setDevices(devicesNow);
-        listed.onListed();
+    const source = await openX11HumanInput(
+      { DISPLAY: ":0" },
+      {
+        socketPath: server.path,
+        onListed: () => {
+          server.setDevices(devicesNow);
+          listed.onListed();
+        },
       },
-    });
+    );
     if (!source) throw new Error("no source");
     await second;
-    expect(source.latest()).toEqual({ at: 7, source: "keyboard" });
+    expect(source.latest()).toMatchObject({ source: "keyboard" });
     source.close();
     server.close();
   });
@@ -317,18 +328,21 @@ describe("XInput2 human input", () => {
     });
     server.setDevices(devicesNow);
     const listed = lists();
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 9, {
-      socketPath: server.path,
-      onListed: () => {
-        server.setDevices(devicesNow);
-        listed.onListed();
+    const source = await openX11HumanInput(
+      { DISPLAY: ":0" },
+      {
+        socketPath: server.path,
+        onListed: () => {
+          server.setDevices(devicesNow);
+          listed.onListed();
+        },
       },
-    });
+    );
     if (!source) throw new Error("no source");
     const third = listed.next().then(() => listed.next());
     server.send(hierarchyEvent([8, 10, 11, 12]));
     await third;
-    expect(source.latest()).toEqual({ at: 9, source: "keyboard" });
+    expect(source.latest()).toMatchObject({ source: "keyboard" });
     source.close();
     server.close();
   });
@@ -346,10 +360,13 @@ describe("XInput2 human input", () => {
     });
     server.setDevices([...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }]);
     const listed = lists();
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 11, {
-      socketPath: server.path,
-      onListed: listed.onListed,
-    });
+    const source = await openX11HumanInput(
+      { DISPLAY: ":0" },
+      {
+        socketPath: server.path,
+        onListed: listed.onListed,
+      },
+    );
     if (!source) throw new Error("no source");
     server.holdNextList();
     const applied = listed.next();
@@ -361,7 +378,7 @@ describe("XInput2 human input", () => {
     server.send(hierarchyEvent([11]));
     server.releaseList();
     await applied;
-    expect(source.latest()).toEqual({ at: 11, source: "keyboard" });
+    expect(source.latest()).toMatchObject({ source: "keyboard" });
     source.close();
     server.close();
   });
@@ -369,10 +386,13 @@ describe("XInput2 human input", () => {
   it("a server that goes away leaves the source lost", async () => {
     const server = await scriptedServer({ minor: 2 });
     const lost = Promise.withResolvers<void>();
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 1, {
-      socketPath: server.path,
-      onLost: () => lost.resolve(),
-    });
+    const source = await openX11HumanInput(
+      { DISPLAY: ":0" },
+      {
+        socketPath: server.path,
+        onLost: () => lost.resolve(),
+      },
+    );
     if (!source) throw new Error("no source");
     server.close();
     await lost.promise;
@@ -381,7 +401,7 @@ describe("XInput2 human input", () => {
 });
 
 describe("makeDeviceLedger", () => {
-  const key = (at: number) => ({ at, source: "keyboard" as const });
+  const key = (order: number) => ({ order, source: "keyboard" as const });
   const driver = new Map([[11, false]]);
   const person = new Map([[11, true]]);
 

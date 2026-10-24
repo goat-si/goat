@@ -21,7 +21,11 @@ import { localDisplayNumber, x11SetupRequest, xauthorityCookie } from "../CuaDis
  */
 
 export interface HumanInput {
-  readonly at: number;
+  /**
+   * Arrival order: each input the source sees gets the next number. Compared instead of clock
+   * times, which can step backwards.
+   */
+  readonly order: number;
   readonly source: Exclude<ComputerUseHumanInputSource, "unknown">;
 }
 
@@ -255,7 +259,6 @@ const messageLength = (bytes: Uint8Array) => {
 /** Opens the display's input watch, or undefined when the display or XInput2 is missing. */
 export async function openX11HumanInput(
   environment: { readonly DISPLAY?: string | undefined; readonly XAUTHORITY?: string | undefined },
-  now: () => number,
   /** For tests: a scripted server's socket, and when a device list or the connection ends. */
   observe: {
     readonly socketPath?: string;
@@ -274,6 +277,7 @@ export async function openX11HumanInput(
   let buffer = new Uint8Array(0);
   let closed = false;
   let latest: HumanInput | undefined;
+  let arrivals = 0;
   let major: number | undefined;
   const ledger = makeDeviceLedger();
   let refreshing = false;
@@ -289,7 +293,7 @@ export async function openX11HumanInput(
     for (const wake of waiting.splice(0)) wake(undefined, ledger.changes());
   };
   const count = (input: HumanInput) => {
-    if (latest === undefined || input.at > latest.at) latest = input;
+    if (latest === undefined || input.order > latest.order) latest = input;
   };
   socket.on("error", close);
   socket.on("close", close);
@@ -330,7 +334,7 @@ export async function openX11HumanInput(
       }
       const raw = parseRawEvent(message, major);
       if (!raw) continue;
-      const input = { at: now(), source: raw.source };
+      const input = { order: ++arrivals, source: raw.source };
       const outcome = ledger.input(raw.device, input);
       if (outcome === "person") count(input);
       else if (outcome === "held") void refresh();

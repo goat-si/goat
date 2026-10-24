@@ -1,5 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process outside the server's runtime.
-// @effect-diagnostics globalDate:off -- Request deadlines are wall-clock budgets in a plain Node process.
 // @effect-diagnostics globalTimers:off -- Settle waits and the parent check are plain process timers.
 /**
  * goat-computer-use for Linux: the helper GOAT spawns to observe and act on one desktop
@@ -96,9 +95,11 @@ const input =
   session.unavailable === undefined &&
   session.unsupported === undefined &&
   session.displayServer === "x11"
-    ? await openX11HumanInput(environment, () => Date.now())
+    ? await openX11HumanInput(environment)
     : undefined;
 const generation = NodeCrypto.randomUUID();
+// Deadlines and event spacing need a clock that never steps back when the system time changes.
+const monotonic = () => performance.now();
 const secureFocus = makeSecureFocusProbe(gdbus);
 let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>
   undefined;
@@ -108,7 +109,7 @@ const signals = makeSignalMonitor({
   input,
   // The pause goes out first; then the helper ends so a restart reports humanInput unsupported.
   inputLost: () => void setImmediate(() => end(1)),
-  now: () => Date.now(),
+  now: monotonic,
   every: (ms, task) => {
     const timer = setInterval(() => void task(), ms);
     return () => clearInterval(timer);
@@ -137,7 +138,7 @@ const helper = makeLinuxHelper({
     ),
   settle: () => new Promise((resolve) => setTimeout(resolve, SETTLE_MS)),
   newId: () => NodeCrypto.randomUUID(),
-  now: () => Date.now(),
+  now: monotonic,
   signals,
   capabilities,
 });

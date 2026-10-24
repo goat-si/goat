@@ -116,16 +116,16 @@ describe("Linux safety signals", () => {
 
   it("reports a person's input once per burst, with its device kind", async () => {
     const helper = await connect();
+    // Input before the watch started is not its concern.
+    helper.personInput.latest = { order: 1, source: "keyboard" };
     helper.clock.now = 1_000;
     await watch(helper, "w1");
     await helper.events();
-    // Input before the watch started is not its concern.
-    helper.personInput.latest = { at: 500, source: "keyboard" };
     await helper.tick();
-    helper.personInput.latest = { at: 1_100, source: "pointer" };
+    helper.personInput.latest = { order: 2, source: "pointer" };
     helper.clock.now = 1_200;
     await helper.tick();
-    helper.personInput.latest = { at: 1_300, source: "keyboard" };
+    helper.personInput.latest = { order: 3, source: "keyboard" };
     helper.clock.now = 1_400;
     await helper.tick();
     const inputs = (await helper.events()).filter(
@@ -134,6 +134,23 @@ describe("Linux safety signals", () => {
     expect(inputs).toEqual([
       { generation: "g1", watchId: "w1", event: { type: "humanInput", source: "pointer" } },
     ]);
+    await helper.close();
+  });
+
+  it("input is ordered by arrival, so a wall clock stepping back hides nothing", async () => {
+    const helper = await connect();
+    helper.personInput.latest = { order: 5, source: "pointer" };
+    helper.clock.now = 10_000;
+    await watch(helper, "w1");
+    await helper.events();
+    // The system clock steps back an hour; the helper's clock is monotonic and does not, and a
+    // person's new input still follows the input seen before the watch.
+    helper.personInput.latest = { order: 6, source: "keyboard" };
+    helper.clock.now = 10_050;
+    await helper.tick();
+    expect((await helper.events()).at(-1)).toMatchObject({
+      event: { type: "humanInput", source: "keyboard" },
+    });
     await helper.close();
   });
 
@@ -148,7 +165,7 @@ describe("Linux safety signals", () => {
       first.observation,
     );
     // The source already leaves out the helper's own devices; this is a person's.
-    helper.personInput.latest = { at: 1_200, source: "keyboard" };
+    helper.personInput.latest = { order: 1, source: "keyboard" };
     helper.clock.now = 1_250;
     await helper.tick();
     expect((await helper.events()).at(-1)).toMatchObject({
