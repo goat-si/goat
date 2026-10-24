@@ -10,11 +10,13 @@ import { pngColors } from "./linuxSession.ts";
 import {
   BUSY_CAPTURE,
   captureX11Window,
+  coversWhole,
   parseSetup,
   RESIZED_CAPTURE,
   rgbToPng,
   SHARED_CAPTURE,
   shrinkRgb,
+  STILL_DRAWING,
   UNREDIRECTED_CAPTURE,
   zpixmapToRgb,
 } from "./x11WindowCapture.ts";
@@ -105,6 +107,8 @@ interface FakeWindow {
 
 const ROOT = 0x2b;
 const COMPOSITE = 140;
+const DAMAGE = 150;
+const DAMAGE_NOTIFY = 91;
 const CLIENT_LIST = 301;
 
 /**
@@ -123,6 +127,8 @@ async function scriptedServer(
     readonly grows?: { readonly width: number; readonly height: number };
     /** The root's _NET_CLIENT_LIST, the windows a window manager manages; none is no manager. */
     readonly managed?: ReadonlyArray<number>;
+    /** How the app redraws when asked: all of it (default), half of it, or not at all. */
+    readonly redraw?: "whole" | "half" | "none";
   },
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
@@ -143,6 +149,7 @@ async function scriptedServer(
     let geometries = 0;
     const sizes = new Map<number, number>();
     let named: number | undefined;
+    let damage: { readonly id: number; readonly drawable: number } | undefined;
     const reply = (extra: Buffer, data = 0) => {
       const head = Buffer.alloc(32);
       head[0] = 1;
@@ -174,11 +181,42 @@ async function scriptedServer(
         buffer = buffer.subarray(length);
         const window = (at: number) => windows[body.readUInt32LE(at)];
         const payload = (size: number) => Buffer.alloc(size);
+        const damageNotify = (drawable: number, w: number, h: number) => {
+          const event = Buffer.alloc(32);
+          event[0] = DAMAGE_NOTIFY;
+          event.writeUInt16LE(requests.length & 0xffff, 2);
+          event.writeUInt32LE(drawable, 4);
+          event.writeUInt32LE(damage?.id ?? 0, 8);
+          event.writeUInt16LE(w, 20);
+          event.writeUInt16LE(h, 22);
+          socket.write(event);
+        };
         if (op === 98) {
+          const name = body.subarray(8, 8 + body.readUInt16LE(4)).toString();
           const extra = payload(24);
           extra[0] = 1;
-          extra[1] = COMPOSITE;
+          extra[1] = name === "DAMAGE" ? DAMAGE : COMPOSITE;
+          extra[2] = name === "DAMAGE" ? DAMAGE_NOTIFY : 0;
           reply(extra);
+        } else if (op === DAMAGE && minor === 0) {
+          const extra = payload(24);
+          extra.writeUInt32LE(1, 0);
+          extra.writeUInt32LE(1, 4);
+          reply(extra);
+        } else if (op === DAMAGE && minor === 1) {
+          damage = { id: body.readUInt32LE(4), drawable: body.readUInt32LE(8) };
+          const found = windows[damage.drawable];
+          // Creating it reports the whole window at once, which is not a redraw.
+          if (found) damageNotify(damage.drawable, found.width, found.height);
+        } else if (op === 25) {
+          const found = damage && windows[damage.drawable];
+          const redraw = options.redraw ?? "whole";
+          if (damage && found && redraw !== "none")
+            damageNotify(
+              damage.drawable,
+              found.width,
+              redraw === "half" ? Math.floor(found.height / 2) : found.height,
+            );
         } else if (op === COMPOSITE && minor === 0) {
           const extra = payload(24);
           extra.writeUInt32LE(0, 0);
@@ -394,6 +432,27 @@ describe("X11 window capture against a scripted server", () => {
     ).toEqual({ refused: SHARED_CAPTURE });
   });
 
+  it("refuses, as transient, a window its app has not redrawn whole when asked (#1381)", async () => {
+    // Undrawn parts of a window without a background keep what Composite copied in from behind.
+    for (const redraw of ["none", "half"] as const) {
+      await using server = await scriptedServer(FRAMED, { redirected: [0x400001], redraw });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toEqual({ refused: STILL_DRAWING, transient: true });
+    }
+  });
+
+  it("counts drawing as tiles: rectangles that together cover the window are a whole redraw", () => {
+    const tiles = [
+      { x: 0, y: 0, w: 60, h: 80 },
+      { x: 50, y: 0, w: 50, h: 40 },
+      { x: 50, y: 40, w: 50, h: 40 },
+    ];
+    expect(coversWhole(tiles, 100, 80)).toBe(true);
+    expect(coversWhole(tiles.slice(0, 2), 100, 80)).toBe(false);
+    expect(coversWhole([{ x: 1, y: 0, w: 99, h: 80 }], 100, 80)).toBe(false);
+  });
+
   it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {
     await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
     expect(
@@ -403,7 +462,7 @@ describe("X11 window capture against a scripted server", () => {
         { ...shot, windowHeight: 90 },
         { socketPath: server.path },
       ),
-    ).toEqual({ refused: RESIZED_CAPTURE });
+    ).toEqual({ refused: RESIZED_CAPTURE, transient: true });
   });
 
   it("holds the server from the size check through the pixel read, and only for that", async () => {
@@ -453,7 +512,7 @@ describe("X11 window capture against a scripted server", () => {
       grabLimitMs: 1,
       onGrab: (ms) => held.push(ms),
     });
-    expect(capture).toEqual({ refused: BUSY_CAPTURE });
+    expect(capture).toEqual({ refused: BUSY_CAPTURE, transient: true });
     // The server sees the connection end, which releases the hold.
     await server.ended;
     expect(held).toHaveLength(1);
@@ -485,7 +544,7 @@ describe("X11 window capture against a scripted server", () => {
           { ...shot, ...changed },
           { socketPath: server.path },
         ),
-      ).toEqual({ refused: RESIZED_CAPTURE });
+      ).toEqual({ refused: RESIZED_CAPTURE, transient: true });
   });
 
   it("a connection lost in the middle ends the capture instead of leaving it waiting", async () => {

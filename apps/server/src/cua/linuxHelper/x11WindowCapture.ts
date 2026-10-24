@@ -27,7 +27,8 @@ export type X11WindowCapture =
       readonly width: number;
       readonly height: number;
     }
-  | { readonly refused: string };
+  /** Transient refusals (busy, resized, still drawing) clear on their own: observe again. */
+  | { readonly refused: string; readonly transient?: true };
 
 export const UNREDIRECTED_CAPTURE =
   "This X display does not render the window by itself (no compositing manager, or it stopped redirecting windows), so a capture could show whatever covers it, other apps included. Screenshots are off here; app controls still work. A desktop with a compositor (GNOME, KDE, or picom on other window managers) can show GOAT a single window.";
@@ -36,6 +37,8 @@ export const SHARED_CAPTURE =
 const UNREADABLE = "The window's pixels could not be read in a format GOAT understands.";
 export const BUSY_CAPTURE =
   "The window took too long to read without holding up the rest of the desktop. Observe it again.";
+export const STILL_DRAWING =
+  "The app did not finish redrawing the window in time, so its screenshot could show what was behind it. Observe it again.";
 export const RESIZED_CAPTURE =
   "The window changed size while it was read, so its screenshot would not match its controls. Observe it again.";
 
@@ -49,6 +52,11 @@ const GRAB_LIMIT_MS = 250;
 const MAX_WINDOW_PIXELS = 16_000_000;
 /** Windows checked for drawing over the target before the capture gives up and refuses. */
 const MAX_CHECKED_WINDOWS = 256;
+/**
+ * How long the app has to redraw the whole window after the capture asks it to (#1381). The
+ * server is not held meanwhile.
+ */
+const REDRAW_LIMIT_MS = 500;
 
 const pad4 = (length: number) => (4 - (length % 4)) % 4;
 
@@ -224,6 +232,9 @@ function connection(socket: NodeNet.Socket) {
   let closed = false;
   let setup: ((reply: Uint8Array | undefined) => void) | undefined;
   const waiting: Array<(reply: Uint8Array | undefined) => void> = [];
+  /** The sequence number of the last request sent, as the server counts them (16 bits). */
+  let sequence = 0;
+  let onEvent: ((event: Uint8Array) => void) | undefined;
   const fail = () => {
     closed = true;
     setup?.(undefined);
@@ -250,13 +261,18 @@ function connection(socket: NodeNet.Socket) {
     for (;;) {
       if (buffer.length < 32) return;
       const kind = buffer[0] ?? 0;
-      const length = kind === 1 ? 32 + 4 * new DataView(buffer.buffer).getUint32(4, true) : 32;
+      // Replies and GenericEvents carry a length; every other message is 32 bytes.
+      const length =
+        kind === 1 || (kind & 0x7f) === 35
+          ? 32 + 4 * new DataView(buffer.buffer).getUint32(4, true)
+          : 32;
       if (buffer.length < length) return;
       const message = buffer.slice(0, length);
       buffer = buffer.slice(length);
       // An error ends the exchange: an unnamed pixmap errs and so does every read of it.
       if (kind === 0) fail();
       else if (kind === 1) waiting.shift()?.(message);
+      else onEvent?.(message);
     }
   });
   return {
@@ -267,14 +283,22 @@ function connection(socket: NodeNet.Socket) {
         socket.write(bytes);
       }),
     send: (bytes: Uint8Array) => {
-      if (!closed) socket.write(bytes);
+      if (closed) return;
+      sequence = (sequence + 1) & 0xffff;
+      socket.write(bytes);
     },
     ask: (bytes: Uint8Array) =>
       new Promise<Uint8Array | undefined>((resolve) => {
         if (closed) return resolve(undefined);
+        sequence = (sequence + 1) & 0xffff;
         waiting.push(resolve);
         socket.write(bytes);
       }),
+    sequence: () => sequence,
+    /** Every event the server sends from now on, until replaced. */
+    listen: (listener: ((event: Uint8Array) => void) | undefined) => {
+      onEvent = listener;
+    },
     close: fail,
     /** Ends the connection now; the X server then releases anything it held for it. */
     abort: () => {
@@ -483,6 +507,108 @@ async function drawnOver(
   return false;
 }
 
+/** Whether rectangles, in the window's own coordinates, cover all of a width by height window. */
+export function coversWhole(
+  rects: ReadonlyArray<{
+    readonly x: number;
+    readonly y: number;
+    readonly w: number;
+    readonly h: number;
+  }>,
+  width: number,
+  height: number,
+): boolean {
+  for (let y = 0; y < height; y++) {
+    const spans = rects
+      .filter((rect) => rect.y <= y && y < rect.y + rect.h && rect.w > 0)
+      .map((rect) => [rect.x, rect.x + rect.w] as const)
+      .toSorted((a, b) => a[0] - b[0]);
+    let reached = 0;
+    for (const [start, end] of spans) {
+      if (start > reached) break;
+      reached = Math.max(reached, end);
+    }
+    if (reached < width) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether the app redrew the whole window when asked (#1381). A window with no background keeps,
+ * where it has not drawn yet, the pixels Composite copied in from behind it, and those can be
+ * another app's. The protocol does not say which windows have no background, so every capture
+ * asks the app to redraw the window (a synthetic Expose, which paints nothing by itself) and
+ * waits, without holding the server, until the app's own drawing (Damage, which includes the
+ * window's children) has covered all of it. An app that does not redraw, or not all of it in
+ * REDRAW_LIMIT_MS, is refused. Undefined when the display cannot track drawing.
+ */
+async function redrawnWhole(
+  x: Connection,
+  setup: Setup,
+  windowId: number,
+  width: number,
+  height: number,
+): Promise<boolean | undefined> {
+  const name = new TextEncoder().encode("DAMAGE");
+  const extension = await x.ask(
+    request(98, 0, 2 + Math.ceil(name.length / 4), (view) => {
+      view.setUint16(4, name.length, true);
+      name.forEach((byte, index) => view.setUint8(8 + index, byte));
+    }),
+  );
+  if (!extension || extension[8] !== 1) return undefined;
+  const damage = extension[9] ?? 0;
+  const notify = extension[10] ?? 0;
+  // DamageQueryVersion must come first.
+  const version = await x.ask(
+    request(damage, 0, 3, (view) => {
+      view.setUint32(4, 1, true);
+      view.setUint32(8, 1, true);
+    }),
+  );
+  if (!version) return undefined;
+  const id = setup.idBase | 2;
+  const drawn: Array<{ x: number; y: number; w: number; h: number }> = [];
+  let asked: number | undefined;
+  const done = Promise.withResolvers<boolean>();
+  x.listen((event) => {
+    if ((event[0] ?? 0) % 128 !== notify || asked === undefined) return;
+    if (u32(event, 8) !== id) return;
+    // Drawing reported before the Expose was sent, creating the Damage object's own report
+    // included, is not the redraw.
+    if (((u16(event, 2) - asked) & 0xffff) >= 0x8000) return;
+    drawn.push({ x: i16(event, 16), y: i16(event, 18), w: u16(event, 20), h: u16(event, 22) });
+    if (coversWhole(drawn, width, height)) done.resolve(true);
+  });
+  // DamageCreate at the raw-rectangles level: every drawing operation is reported.
+  x.send(
+    request(damage, 1, 4, (view) => {
+      view.setUint32(4, id, true);
+      view.setUint32(8, windowId, true);
+      view.setUint8(12, 0);
+    }),
+  );
+  // SendEvent of an Expose for the whole window to whoever selected exposure on it.
+  x.send(
+    request(25, 0, 11, (view) => {
+      view.setUint32(4, windowId, true);
+      view.setUint32(8, 1 << 15, true);
+      view.setUint8(12, 12);
+      view.setUint32(16, windowId, true);
+      view.setUint16(24, width, true);
+      view.setUint16(26, height, true);
+    }),
+  );
+  asked = x.sequence();
+  const timer = setTimeout(() => done.resolve(false), REDRAW_LIMIT_MS);
+  // A lost connection never redraws; the exchange then ends on its own.
+  const covered = await done.promise;
+  clearTimeout(timer);
+  x.listen(undefined);
+  x.send(request(damage, 2, 2, (view) => view.setUint32(4, id, true)));
+  return covered;
+}
+
 async function exchange(
   x: Connection,
   cookie: Uint8Array | null,
@@ -530,6 +656,9 @@ async function exchange(
   const attributes = await getAttributes(x, topLevel);
   if (!attributes) return undefined;
   const visual = setup.visuals.get(u32(attributes, 8));
+  const redrawn = await redrawnWhole(x, setup, windowId, u16(first, 16), u16(first, 18));
+  if (redrawn === undefined) return undefined;
+  if (!redrawn) return { refused: STILL_DRAWING, transient: true };
   // Held: nothing else may map, move or draw a window between the check and the read. The hold
   // covers only that, and is cut off at GRAB_LIMIT_MS by ending the connection.
   const held = async () => {
@@ -540,7 +669,7 @@ async function exchange(
     // The window may have grown since it was first read; the reply is never larger than this.
     if (width * height > MAX_WINDOW_PIXELS) return { refused: UNREADABLE };
     if (width !== size.windowWidth || height !== size.windowHeight)
-      return { refused: RESIZED_CAPTURE };
+      return { refused: RESIZED_CAPTURE, transient: true };
     const inFrame = await translate(x, windowId, topLevel);
     const onScreen = await translate(x, windowId, setup.root);
     // The pixmap holds the top-level window with its border, so the crop starts past it; read
@@ -586,12 +715,13 @@ async function exchange(
   if (read === "limit") {
     x.abort();
     hold.onGrab?.(performance.now() - started);
-    return { refused: BUSY_CAPTURE };
+    return { refused: BUSY_CAPTURE, transient: true };
   }
   x.send(request(37, 0, 1, () => undefined));
   hold.onGrab?.(performance.now() - started);
   if (!read) return undefined;
-  if (read.refused !== undefined) return { refused: read.refused };
+  if (read.refused !== undefined)
+    return read.transient ? { refused: read.refused, transient: true } : { refused: read.refused };
   const { image, width, height } = read;
   const format = setup.bitsPerPixel.get(image[1] ?? 0);
   if (!setup.lsbImages || !visual?.trueColor || format?.bpp !== 32) return { refused: UNREADABLE };

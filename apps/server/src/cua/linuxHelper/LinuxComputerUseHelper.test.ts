@@ -26,7 +26,7 @@ import {
 } from "./linuxSession.ts";
 import { readLinuxReadiness } from "./readiness.ts";
 import { CROPPED_CAPTURE } from "./windowCapture.ts";
-import { UNREDIRECTED_CAPTURE, type DriverShot } from "./x11WindowCapture.ts";
+import { STILL_DRAWING, UNREDIRECTED_CAPTURE, type DriverShot } from "./x11WindowCapture.ts";
 
 describe("Linux session facts", () => {
   it("refuses Wayland GNOME 50 for readiness as the helper does, without probing the driver", async () => {
@@ -565,6 +565,22 @@ describe("Linux computer use helper conformance", () => {
     expect(readiness).toMatchObject({ capture: "unavailable", tree: "ready" });
     expect(readiness.reasons).toContain(UNREDIRECTED_CAPTURE);
     expect(computerUseReady(readiness)).toBe(false);
+    await helper.close();
+  });
+
+  it("a capture that may succeed on the next read is refused as busy, so the agent observes again", async () => {
+    const helper = await connect({
+      capture: {
+        route: "own",
+        capture: async () => ({ refused: STILL_DRAWING, transient: true }),
+      },
+    });
+    const shot = await helper.request("observe", {
+      target: { pid: 10, windowId: 20 },
+      screenshot: true,
+    });
+    expect(shot.result).toMatchObject({ outcome: "refused", reason: "busy" });
+    expect(shot.image).toBeUndefined();
     await helper.close();
   });
 
