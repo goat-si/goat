@@ -2,15 +2,11 @@ import {
   PREVIEW_SESSION_THUMBNAIL_FRAME_MS,
   PREVIEW_SESSION_THUMBNAIL_WIDTH,
 } from "@goat/client-runtime/state/preview-sessions";
-import {
-  createPreviewFramePainter,
-  createPreviewStreamClient,
-} from "@goat/client-runtime/preview/server-browser-stream";
 import type { PreviewSession } from "@goat/contracts";
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 import { LockIcon, MonitorIcon } from "~/components/solar";
-import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/previewStream";
+import { ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
 
 const subscribeVisibility = (onChange: () => void) => {
   document.addEventListener("visibilitychange", onChange);
@@ -33,43 +29,6 @@ function Placeholder(props: { readonly icon: "lock" | "monitor"; readonly text: 
   );
 }
 
-/** A browser tab's frames at a low rate, scaled down on the server, only while `live`. */
-function BrowserThumbnail(props: {
-  readonly session: PreviewSession;
-  readonly tabId: string;
-  readonly live: boolean;
-}) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const access = usePreviewStreamAccess(props.session.environmentId);
-  const threadId = props.session.threadId;
-  useEffect(() => {
-    if (!props.live || access === null || threadId === undefined || canvas.current === null) return;
-    const painter = createPreviewFramePainter(canvas.current);
-    const client = createPreviewStreamClient(
-      {
-        access,
-        threadId,
-        tabId: props.tabId,
-        maxWidth: PREVIEW_SESSION_THUMBNAIL_WIDTH,
-        maxHeight: Math.round(PREVIEW_SESSION_THUMBNAIL_WIDTH * 0.625),
-        interactive: false,
-        ackDelayMs: PREVIEW_SESSION_THUMBNAIL_FRAME_MS,
-      },
-      {
-        onFrame: painter.paint,
-        onViewport: () => undefined,
-        onConnectedChange: () => undefined,
-        onUnauthorized: () => refreshPreviewStreamAccess(props.session.environmentId),
-      },
-    );
-    return () => {
-      client.stop();
-      painter.stop();
-    };
-  }, [access, props.live, props.session.environmentId, props.tabId, threadId]);
-  return <canvas ref={canvas} className="size-full object-contain" aria-hidden />;
-}
-
 /** What a tile shows of its session: live pixels, or why there are none. Never a private screen. */
 export function PreviewSessionThumbnail(props: {
   readonly session: PreviewSession;
@@ -79,7 +38,22 @@ export function PreviewSessionThumbnail(props: {
   if (session.owner === "private")
     return <Placeholder icon="lock" text="Private (paused) while a person enters a secret" />;
   if (session.target.kind === "browser" && session.capabilities.frames)
-    return <BrowserThumbnail session={session} tabId={session.target.tabId} live={props.live} />;
+    return (
+      // The built-in browser's own surface, so a tile and the full preview are one view.
+      <ServerBrowserSurface
+        environmentId={session.environmentId}
+        threadId={session.threadId ?? ""}
+        tabId={session.target.tabId}
+        visible={props.live && session.threadId !== undefined}
+        followSize={false}
+        controlPosition="none"
+        thumbnail={{
+          frameIntervalMs: PREVIEW_SESSION_THUMBNAIL_FRAME_MS,
+          maxWidth: PREVIEW_SESSION_THUMBNAIL_WIDTH,
+        }}
+        className="size-full"
+      />
+    );
   return (
     <Placeholder
       icon="monitor"

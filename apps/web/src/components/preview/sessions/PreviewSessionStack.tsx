@@ -11,7 +11,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef } from "react";
 
 import {
   ChevronDownIcon,
@@ -31,6 +31,7 @@ import { previewSessionsEnvironment, usePreviewSessions } from "~/state/previewS
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { PreviewSessionThumbnail, useDocumentVisible } from "./PreviewSessionThumbnail";
+import { openPreviewSessionStack, usePreviewSessionStack } from "./previewSessionStackStore";
 
 const CHIP_VARIANT = {
   "Agent controlling": "info",
@@ -48,6 +49,8 @@ const CONTROL_LABEL: Partial<Record<PreviewSessionControl, string>> = {
 
 function PreviewSessionTile(props: {
   readonly session: PreviewSession;
+  readonly focused: boolean;
+  readonly focusRequest: number;
   readonly live: boolean;
   readonly onControl: (control: PreviewSessionControl) => void;
 }) {
@@ -76,9 +79,19 @@ function PreviewSessionTile(props: {
       ? expand?.()
       : props.onControl(control);
   const actions = session.capabilities.controls.filter((control) => control in CONTROL_LABEL);
+  const tile = useRef<HTMLElement>(null);
+  // Each request scrolls again, even to the tile already focused.
+  const focusRequest = props.focused ? props.focusRequest : 0;
+  useEffect(() => {
+    if (focusRequest > 0) tile.current?.scrollIntoView({ block: "nearest" });
+  }, [focusRequest]);
   return (
     <article
-      className="overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-sm"
+      ref={tile}
+      className={cn(
+        "overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-sm",
+        props.focused && "ring-2 ring-ring",
+      )}
       aria-label={`${session.target.title || previewSessionDetail(session)}: ${chip}`}
     >
       <div className="flex items-center gap-2 px-2.5 pt-2">
@@ -160,8 +173,19 @@ export function PreviewSessionStack(props: {
       ),
   );
   const control = useAtomCommand(previewSessionsEnvironment.control);
-  const [collapsed, setCollapsed] = useState(false);
+  const collapsed = usePreviewSessionStack((state) => state.collapsed);
+  const setCollapsed = usePreviewSessionStack((state) => state.setCollapsed);
+  const focus = usePreviewSessionStack((state) => state.focus);
+  const focusRequest = usePreviewSessionStack((state) => state.focusRequest);
   const visible = useDocumentVisible();
+  const focusedId =
+    focus === null
+      ? null
+      : (sessions.find((session) =>
+          focus.sessionId === undefined
+            ? session.kind === focus.kind
+            : session.id === focus.sessionId,
+        )?.id ?? null);
   if (props.environmentId === null || sessions.length === 0 || panelOpen) return null;
   const environmentId = props.environmentId;
   const send = (input: { readonly sessionId?: string; readonly control: PreviewSessionControl }) =>
@@ -191,7 +215,7 @@ export function PreviewSessionStack(props: {
           size="icon-xs"
           aria-label={collapsed ? "Show agent sessions" : "Hide agent sessions"}
           aria-expanded={!collapsed}
-          onClick={() => setCollapsed((value) => !value)}
+          onClick={() => (collapsed ? openPreviewSessionStack() : setCollapsed(true))}
         >
           {collapsed ? <ChevronDownIcon /> : <ChevronUpIcon />}
         </Button>
@@ -201,6 +225,8 @@ export function PreviewSessionStack(props: {
           {sessions.map((session) => (
             <PreviewSessionTile
               key={session.id}
+              focused={session.id === focusedId}
+              focusRequest={focusRequest}
               session={session}
               live={visible}
               onControl={(next) => send({ sessionId: session.id, control: next })}
