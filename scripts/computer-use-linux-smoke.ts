@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off -- A local live check: it owns an X server, a bus and a fixture.
 // @effect-diagnostics globalTimers:off -- Waits for processes it started.
+// @effect-diagnostics globalDate:off -- Wall-clock bounds on waits for processes this script started.
 // @effect-diagnostics preferSchemaOverJson:off
 // Live smoke for the Linux computer use helper (WS10 #1138): starts a private Xvfb display, a
 // private D-Bus session with AT-SPI and the GOAT fixture window, then drives a packaged helper
@@ -61,9 +62,30 @@ const start = (
   stdio: NodeChildProcess.StdioOptions = "ignore",
 ) => {
   const child = NodeChildProcess.spawn(command, args, { env, stdio });
+  // A missing executable fails the run through its waits, inside the cleanup path.
+  child.on("error", (error) => log("FAIL spawn", { command, message: error.message }));
   started.push(child);
   return child;
 };
+
+/** The first line a child prints, failing when it exits, cannot start, or stays silent. */
+const firstLine = (
+  child: NodeChildProcess.ChildProcess,
+  input: NodeJS.ReadableStream,
+  what: string,
+) =>
+  Promise.race([
+    new Promise<string>((resolve) =>
+      NodeReadline.createInterface({ input }).once("line", (line) => resolve(line.trim())),
+    ),
+    new Promise<never>((_, reject) => {
+      child.once("exit", (code) => reject(new Error(what + " exited with " + code + ".")));
+      child.once("error", (error) => reject(error));
+    }),
+    sleep(10_000).then(() => {
+      throw new Error(what + " did not answer in time.");
+    }),
+  ]);
 /** Child pids of one process, from /proc; the helper's driver is found this way. */
 const children = async (pid: number) => {
   const tasks = await NodeFSP.readdir("/proc/" + pid + "/task").catch(() => []);
@@ -115,9 +137,7 @@ try {
   ]);
   const busOutput = dbus.stdout;
   if (!busOutput) throw new Error("dbus-daemon has no stdout.");
-  const address = await new Promise<string>((resolve) =>
-    NodeReadline.createInterface({ input: busOutput }).once("line", (line) => resolve(line.trim())),
-  );
+  const address = await firstLine(dbus, busOutput, "dbus-daemon");
   const env = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
@@ -148,8 +168,23 @@ try {
     queue.push(line);
     waiters.splice(0).forEach((wake) => wake());
   });
+  let helperGone = false;
+  helper.once("exit", () => {
+    helperGone = true;
+    waiters.splice(0).forEach((wake) => wake());
+  });
+  helper.once("error", () => {
+    helperGone = true;
+    waiters.splice(0).forEach((wake) => wake());
+  });
+  /** The helper's next line; fails if it exits or takes longer than any request may. */
   const next = async () => {
-    while (queue.length === 0) await new Promise<void>((wake) => waiters.push(wake));
+    const deadline = Date.now() + 30_000;
+    while (queue.length === 0) {
+      if (helperGone) throw new Error("The helper exited.");
+      if (Date.now() > deadline) throw new Error("The helper did not answer in time.");
+      await Promise.race([new Promise<void>((wake) => waiters.push(wake)), sleep(1_000)]);
+    }
     return queue.shift() ?? "";
   };
   toHelper.write(JSON.stringify({ clientApiVersion: COMPUTER_USE_PROTOCOL_VERSION }) + "\n");
