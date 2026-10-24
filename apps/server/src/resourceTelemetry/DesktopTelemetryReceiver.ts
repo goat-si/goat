@@ -200,8 +200,9 @@ export class DesktopTelemetryReceiver extends Context.Service<
       enabled: boolean,
     ) => Effect.Effect<void, DesktopTelemetryControlError | DesktopTelemetryDescriptorUnavailable>;
     /**
-     * Tells the desktop whether agents control this host, so its helper watches only then. A
-     * change gets the next seq; the current value goes out again when the desktop reconnects.
+     * Tells the desktop whether agents control this host, so its helper watches only then. Every
+     * call writes: a change with the next seq, a repeat (a retry after a failed write) with the
+     * same one. The current value also goes out again when the desktop reconnects.
      */
     readonly setCuaWatch: (active: boolean) => Effect.Effect<void, DesktopTelemetryControlError>;
   }
@@ -692,10 +693,11 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
         ? Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: config.mode }))
         : sendControlMessage({ version: 1, type: "cuaDriverRequest", requestId, enabled }),
     setCuaWatch: (active) =>
-      Ref.modify(cuaWatch, (current) => {
-        const next = nextCuaWatch(current, active);
-        return [next !== current, next];
-      }).pipe(Effect.flatMap((changed) => (changed ? sendCuaWatch : Effect.void))),
+      Ref.updateAndGet(cuaWatch, (current) => nextCuaWatch(current, active)).pipe(
+        Effect.flatMap(({ seq }) =>
+          sendControlMessage({ version: 1, type: "cuaWatch", seq, active }),
+        ),
+      ),
     latest: Ref.get(latest),
     changes: Stream.fromPubSub(changes),
     subscribe: snapshotMutex.withPermits(1)(

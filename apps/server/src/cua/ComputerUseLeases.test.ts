@@ -208,6 +208,84 @@ it.effect(
     }),
 );
 
+it.effect("tells the desktop again after a failed write, without waiting for it to reconnect", () =>
+  Effect.gen(function* () {
+    const attempts = yield* Queue.unbounded<boolean>();
+    let failures = 1;
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* leases.control(thread, Option.none());
+      assert.isTrue(yield* Queue.take(attempts));
+      yield* TestClock.adjust("1 second");
+      assert.isTrue(yield* Queue.take(attempts));
+      // Delivered now: nothing more until something changes.
+      yield* TestClock.adjust("1 second");
+      assert.equal(yield* Queue.size(attempts), 0);
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                setCuaWatch: (active) =>
+                  Queue.offer(attempts, active).pipe(
+                    Effect.andThen(
+                      Effect.suspend(() =>
+                        failures-- > 0
+                          ? Effect.fail(
+                              new DesktopTelemetryReceiver.DesktopTelemetryControlFailed({
+                                fd: 4,
+                                operation: "write",
+                                cause: "EAGAIN",
+                              }),
+                            )
+                          : Effect.void,
+                      ),
+                    ),
+                  ),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect("stops watching when the grant behind the last control is cancelled", () =>
+  Effect.gen(function* () {
+    const sent = yield* Queue.unbounded<boolean>();
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const sql = yield* SqlClient.SqlClient;
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* grant(other, "handoff:watched");
+      yield* leases.control(other, yield* leases.active(other));
+      assert.isTrue(yield* Queue.take(sent));
+      yield* sql`DELETE FROM orchestration_v2_projection_turn_items WHERE turn_item_id = 'handoff:watched'`;
+      yield* leases.changed;
+      assert.isFalse(yield* Queue.take(sent));
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                setCuaWatch: (active) => Queue.offer(sent, active).pipe(Effect.asVoid),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
 it.effect(
   "follows the helper's reports: what it detects, and a secret field that pauses every agent until it loses focus",
   () =>

@@ -92,6 +92,7 @@ export interface Interruptions {
 
 /** How long an interactive control lasts before the thread's next turn mints another. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
+const WATCH_RETRY_MS = 1_000;
 
 /** Why a thread runs without a person directing it; see ComputerUseOrigin. */
 export type ChannelOrigin = "goat_bot" | "channel_task";
@@ -356,21 +357,38 @@ const make = Effect.gen(function* () {
     const kicks = yield* PubSub.subscribe(watchKick);
     const receiver = desktop.value;
     yield* Effect.gen(function* () {
-      let watching = false;
+      // What the desktop last heard; it starts out not watching.
+      let delivered = false;
       for (;;) {
+        // A grant cancelled or expired under a control ends it, though nothing here ended it.
+        for (const record of [...controls.values()]) {
+          if (record.ended !== undefined || record.handoffId === undefined) continue;
+          const grant = yield* state(record.threadId, record.handoffId).pipe(Effect.option);
+          if (Option.isSome(grant) && grant.value._tag === "ended")
+            end(record.threadId, grant.value.reason);
+        }
         const now = DateTime.toEpochMillis(yield* DateTime.now);
         const expiries = [...controls.values()]
           .filter((record) => record.ended === undefined)
           .map((record) => DateTime.toEpochMillis(record.expiresAt))
           .filter((expiresAt) => expiresAt > now);
         const active = expiries.length > 0;
-        if (active !== watching) {
-          watching = active;
-          // A lost write is repaired when the desktop reconnects and hears the current value.
-          yield* receiver.setCuaWatch(active).pipe(Effect.ignore);
+        let retry = false;
+        if (active !== delivered) {
+          const sent = yield* receiver.setCuaWatch(active).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          );
+          if (sent) delivered = active;
+          else retry = true;
         }
+        const waits = [
+          ...(active ? [Math.min(...expiries) - now] : []),
+          // A failed write is tried again: the desktop may not reconnect to hear it otherwise.
+          ...(retry ? [WATCH_RETRY_MS] : []),
+        ];
         const woken = PubSub.take(kicks);
-        yield* active ? Effect.race(woken, Effect.sleep(Math.min(...expiries) - now)) : woken;
+        yield* waits.length > 0 ? Effect.race(woken, Effect.sleep(Math.min(...waits))) : woken;
       }
     }).pipe(Effect.forkScoped);
   }
