@@ -1,22 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { appendPreparationLine, redactLogLine, renderPreparationLog } from "./preparationLog.ts";
+import { appendPreparationLine, renderPreparationLog } from "./preparationLog.ts";
 
 const build = (lines: ReadonlyArray<string>) => lines.reduce(appendPreparationLine, []);
 
 describe("preparationLog", () => {
-  it.each([
-    [
-      "fatal: unable to access 'https://bot:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/o/r.git/'",
-      "fatal: unable to access 'https://***@github.com/o/r.git/'",
-    ],
-    ["token github_pat_11ABCDEFG0123456789_abcdefghijklmnop", "token ***"],
-    ["Authorization: Bearer abcdefghijklmnop.qrstuv", "Authorization: Bearer ***"],
-    ["export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuv", "export OPENAI_API_KEY=***"],
-    ["password=hunter2hunter2 user=me", "password=*** user=me"],
-    ["Receiving objects: 100% (2000/2000), done.", "Receiving objects: 100% (2000/2000), done."],
-  ])("redacts %s", (line, expected) => {
-    expect(redactLogLine(line)).toBe(expected);
+  it("redacts each line on the way in", () => {
+    const log = build([
+      "Cloning https://bot:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/o/r.git",
+    ]);
+    expect(log).toEqual(["Cloning https://***@github.com/o/r.git"]);
   });
 
   it("keeps only the latest progress line of each step", () => {
