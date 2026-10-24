@@ -3933,7 +3933,7 @@ describe("OrchestratorMcpService thread interrupt", () => {
             commands.some((command) => "runId" in command && command.runId === queuedRunId),
           );
           assert.equal(parentStop[0]?.commandId, commandIdFor("thread-stop", "stop-live"));
-          assert.equal(parentStop[0]?.reason, "hold the queue");
+          assert.equal(parentStop[0]?.reason, "Stopped by an agent: hold the queue");
           assert.isUndefined(parentStop[0]?.stopCascadeFrom);
           assert.equal(stopDelegated[0]?.threadId, parentThreadId);
           assert.equal(stopDelegated[0]?.commandId, parentStop[0]?.commandId);
@@ -3942,7 +3942,7 @@ describe("OrchestratorMcpService thread interrupt", () => {
             CommandId.make(`${parentStop[0]?.commandId}:stop:${childThreadId}`),
           );
           assert.equal(childStop[0]?.stopCascadeFrom, parentThreadId);
-          assert.equal(childStop[0]?.reason, "hold the queue");
+          assert.equal(childStop[0]?.reason, "Stopped by an agent: hold the queue");
         }),
       ),
   );
@@ -3967,7 +3967,7 @@ describe("OrchestratorMcpService thread interrupt", () => {
         assert.equal(stopDelegated.length, 1);
         assert.equal(parentStop[0]?.commandId, commandIdFor("thread-stop", "stop-idle"));
         assert.equal(childStop[0]?.stopCascadeFrom, parentThreadId);
-        assert.equal(childStop[0]?.reason, "subagent still running");
+        assert.equal(childStop[0]?.reason, "Stopped by an agent: subagent still running");
       }),
     ),
   );
