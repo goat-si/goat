@@ -25,6 +25,8 @@ const DriverElement = Schema.Struct({
   label: Schema.optionalKey(Schema.String),
   value: Schema.optionalKey(Schema.String),
   actions: Schema.optionalKey(Schema.Array(Schema.String)),
+  enabled: Schema.optionalKey(Schema.Boolean),
+  selected: Schema.optionalKey(Schema.Boolean),
   parent_index: Schema.optionalKey(Schema.Number),
   screenshot_frame: Schema.optionalKey(
     Schema.Struct({ x: Schema.Number, y: Schema.Number, w: Schema.Number, h: Schema.Number }),
@@ -235,6 +237,15 @@ export function makeObservationTracker(newId: () => string): ObservationTracker 
           ...(element.label === undefined ? {} : { label: element.label }),
           ...(element.value === undefined ? {} : { value: element.value }),
           actions: [...(element.actions ?? [])],
+          // The driver reports a checked box as selected; state carries it as the driver says.
+          ...(element.enabled === undefined && element.selected === undefined
+            ? {}
+            : {
+                state: {
+                  ...(element.enabled === undefined ? {} : { enabled: element.enabled }),
+                  ...(element.selected === undefined ? {} : { selected: element.selected }),
+                },
+              }),
           ...(frame ? { frame: { x: frame.x, y: frame.y, width: frame.w, height: frame.h } } : {}),
           ...(parent === undefined ? {} : { parent }),
         } satisfies ComputerUseElement;
