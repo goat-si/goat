@@ -12,7 +12,9 @@ const ACCOUNT_LIMIT = ALONE(
     "credit balance",
     // A bare quota can be a disk's; only an account's or plan's counts.
     "(?:usage|request|monthly|team|account|plan) quota (?:exceeded|reached)",
-    "usage limit",
+    // Containers have memory and disk usage limits too; only an account's or plan's counts.
+    "(?:account|team|plan|monthly|daily|cursor) usage limit",
+    "usage limit (?:for|on) (?:your|this) (?:account|team|plan)",
     "spend(?:ing)? limit",
     "plan limit",
     "billing (?:issue|problem|required|error)",

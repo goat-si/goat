@@ -28,6 +28,7 @@ describe("Cursor Cloud failed run", () => {
     ["You have no usage credits left.", BILLING],
     ["Authentication: insufficient credits", BILLING],
     ["Your team hit its spend limit; upgrade to continue.", BILLING],
+    ["Your team reached its monthly usage limit.", BILLING],
     ["Authentication: required", ACCESS],
     ["Permission denied for repository fixture/repo", ACCESS],
     // Supported phrases still count when they end a sentence.
@@ -51,6 +52,8 @@ describe("Cursor Cloud failed run", () => {
     ["remote: 403 Forbidden while cloning payment-service.git", UNEXPECTED],
     ["ERR_CRYPTO_INVALID_KEYLEN: Invalid key length", UNEXPECTED],
     ["Container setup failed: disk quota exceeded", UNEXPECTED],
+    ["Container terminated: memory usage limit exceeded", UNEXPECTED],
+    ["Container setup failed: disk usage limit exceeded", UNEXPECTED],
     ["EACCES: permission denied, open '/workspace/file'", UNEXPECTED],
     ["npm ERR! 403 Forbidden - GET https://registry.npmjs.org/fixture", UNEXPECTED],
     ["Quota exceeded.", UNEXPECTED],
