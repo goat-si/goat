@@ -11,15 +11,17 @@ vi.mock(import("@effect/atom-react"), async (original) => ({
   useAtomValue: ((atom: unknown) =>
     atom === "keybindings" ? DEFAULT_RESOLVED_KEYBINDINGS : undefined) as never,
 }));
-vi.mock(
-  import("~/state/server"),
-  async (original) =>
-    ({
-      ...(await original()),
-      primaryServerKeybindingsAtom: "keybindings",
-      serverEnvironment: { configValueAtom: () => "environment" },
-    }) as never,
-);
+vi.mock(import("~/state/server"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    primaryServerKeybindingsAtom: "keybindings" as never,
+    serverEnvironment: {
+      ...actual.serverEnvironment,
+      configValueAtom: (() => "environment") as never,
+    },
+  };
+});
 vi.mock("~/hooks/useHtmlRenderTheme", async () => {
   const { htmlRenderTheme } = await import("@goat/shared/htmlRender");
   const { getStandardThemeColors } = await import("~/themePalette");
