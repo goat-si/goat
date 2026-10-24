@@ -368,7 +368,8 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(desktop.environmentId).not.toBe(headless.environmentId);
       expect(desktop.machineId).toBe(headless.machineId);
       // Every host GOAT CI and its developers run on exposes an OS machine identifier.
-      if (process.platform === "darwin" || process.platform === "linux") {
+      const platform = yield* HostProcess.Platform;
+      if (platform === "darwin" || platform === "linux") {
         expect(desktop.machineId).toMatch(/^[0-9a-f]{32}$/);
       }
     }),

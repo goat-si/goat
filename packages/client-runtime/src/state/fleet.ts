@@ -154,10 +154,15 @@ export function fleetMachineOwners(
   );
   for (const group of groups.values()) {
     if (group.length < 2) continue;
-    const owner =
-      group.find((environment) => environment.environmentId === primaryEnvironmentId) ??
-      group.find((environment) => environment.connected !== false) ??
-      group[0]!;
+    const rank = (environment: (typeof group)[number]) =>
+      environment.environmentId === primaryEnvironmentId
+        ? 0
+        : environment.connected !== false
+          ? 1
+          : 2;
+    const owner = group.reduce((best, candidate) =>
+      rank(candidate) < rank(best) ? candidate : best,
+    );
     for (const environment of group) owners.set(environment.environmentId, owner.environmentId);
   }
   return owners;
@@ -362,8 +367,9 @@ export function buildFleet(input: {
   const owners = fleetMachineOwners(input.environments, input.primaryEnvironmentId);
   const aliasesOf = new Map<EnvironmentId, string[]>();
   for (const environment of input.environments) {
-    const owner = owners.get(environment.environmentId)!;
-    const ownerEnvironment = input.environments.find((env) => env.environmentId === owner)!;
+    const owner = owners.get(environment.environmentId) ?? environment.environmentId;
+    const ownerEnvironment =
+      input.environments.find((env) => env.environmentId === owner) ?? environment;
     const existing = machines.get(machineId(owner));
     if (existing === undefined) {
       machines.set(machineId(owner), {
@@ -435,7 +441,8 @@ export function buildFleet(input: {
   for (const shell of connectedShells) {
     const state = classifyFleetThread(shell);
     if (state === null) continue;
-    const machine = nodeOf(shell.environmentId)!;
+    const machine = nodeOf(shell.environmentId);
+    if (machine === undefined) continue;
     const agent = agentOf(shell);
     count(machine, agent, state);
     threads.push({
@@ -484,7 +491,8 @@ export function buildFleet(input: {
       (sharesClientAliases ? environmentBySshAlias.get(alias) : undefined);
     const hostMachine = (alias: string, kind: "ssh" | "cloud", label: string) => {
       const environmentId = resolveAlias(alias);
-      if (environmentId !== undefined) return nodeOf(environmentId)!;
+      const node = environmentId === undefined ? undefined : nodeOf(environmentId);
+      if (node !== undefined) return node;
       // One alias reached from one machine is one host, whichever server there dispatched to it.
       const id = JSON.stringify(["ssh", dispatcherOwner, alias]);
       const existing = machines.get(id);
@@ -515,10 +523,8 @@ export function buildFleet(input: {
         // No node for a machine on its way out, but a connected one still says why it is going.
         const environmentId = resolveAlias(cloud.alias);
         if (environmentId !== undefined) {
-          nodeOf(environmentId)!.boat = identifyBoatMachine({
-            record: cloud,
-            aliases: [],
-          });
+          const node = nodeOf(environmentId);
+          if (node !== undefined) node.boat = identifyBoatMachine({ record: cloud, aliases: [] });
         }
         continue;
       }

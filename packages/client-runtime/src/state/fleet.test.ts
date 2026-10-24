@@ -16,6 +16,7 @@ import {
   createFleetSummaryAtom,
   summarizeFleet,
   type FleetEnvironment,
+  type FleetRemoteSource,
   type FleetShell,
 } from "./fleet.ts";
 

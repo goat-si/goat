@@ -1,8 +1,9 @@
 import type { EnvironmentMachineKind } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
-import * as NodeCrypto from "node:crypto";
 
 import * as ProcessRunner from "../processRunner.ts";
 
@@ -198,8 +199,9 @@ const readOsMachineIdentifier = Effect.fn("readOsMachineIdentifier")(function* (
 export const detectServerMachineId = Effect.fn("detectServerMachineId")(function* () {
   const identifier = yield* readOsMachineIdentifier();
   if (identifier === null) return null;
-  return NodeCrypto.createHash("sha256")
-    .update("goat-machine-id:v1:" + identifier.toLowerCase())
-    .digest("hex")
-    .slice(0, 32);
+  const crypto = yield* Crypto.Crypto;
+  const digest = yield* crypto
+    .digest("SHA-256", new TextEncoder().encode("goat-machine-id:v1:" + identifier.toLowerCase()))
+    .pipe(Effect.orElseSucceed(() => null));
+  return digest === null ? null : Hex.encode(digest).slice(0, 32);
 });
