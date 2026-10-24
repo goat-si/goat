@@ -62,7 +62,7 @@ export function syncedPullRequestWatch(
 ): ThreadPullRequestWatch {
   const { heldContext: kept, ...progress } = explicitPullRequestWatch(observed);
   const settled = settleHeldContext(current.heldContext, {
-    conflicting: progress.conflicting,
+    ...progress,
     headMoved: progress.headSha !== current.headSha,
   });
   const heldContext = mergeHeldContext(settled, kept);

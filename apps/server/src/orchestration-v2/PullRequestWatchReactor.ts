@@ -587,7 +587,8 @@ export const make = Effect.gen(function* () {
         report,
       });
       if (outcome.wake !== undefined) {
-        return record(target, outcome.next, outcome.wake, undefined, outcome.endedWatch).pipe(
+        return (outcome.settle === undefined ? Effect.void : record(target, outcome.settle)).pipe(
+          Effect.andThen(record(target, outcome.next, outcome.wake, undefined, outcome.endedWatch)),
           Effect.tap(() => woke(target)),
           Effect.tap(() => (report.exhausted ? ended(target, "comment-limit") : Effect.void)),
         );

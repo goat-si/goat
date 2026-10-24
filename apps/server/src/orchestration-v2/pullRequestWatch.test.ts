@@ -348,9 +348,37 @@ describe("pull request watch policy", () => {
   it("drops kept context the pull request has moved past", () => {
     const comment = '1 new comment, latest from bot: "ready"';
     const kept = ["conflicts with main", "all 2 checks passed on aaaaaaa", comment];
-    assert.deepEqual(settleHeldContext(kept, { conflicting: true, headMoved: false }), kept);
+    const state = { conflicting: true, failedChecks: [], passed: true, headMoved: false };
+    assert.deepEqual(settleHeldContext(kept, state), kept);
     // A clean merge clears the conflict; a push makes the old head's checks stale.
-    assert.deepEqual(settleHeldContext(kept, { conflicting: false, headMoved: true }), [comment]);
+    assert.deepEqual(settleHeldContext(kept, { ...state, conflicting: false, headMoved: true }), [
+      comment,
+    ]);
+    // On the same head, failures that cleared no longer hold, nor does a pass a rerun undid.
+    const failed = ["checks failed on aaaaaaa: lint", comment];
+    assert.deepEqual(settleHeldContext(failed, state), [comment]);
+    assert.deepEqual(settleHeldContext(kept, { ...state, passed: false }), [
+      "conflicts with main",
+      comment,
+    ]);
+  });
+
+  it("records what a watch kept before it ends on its comment limit", () => {
+    const policy: PullRequestWatchPolicy = { ...REACT_ALL, botRemarks: "keep_as_context" };
+    const report = evaluate(
+      watch({ headSha: "aaaaaaaaaa", wakes: PULL_REQUEST_WATCH_WAKE_LIMIT - 1 }),
+      detail(),
+      [remark("reviewer", "2026-10-02T12:10:00Z"), bot("vercel[bot]", "2026-10-02T12:11:00Z")],
+      context(policy),
+    );
+    const ending = pullRequestWatchOutcome({ number: 7, url: "u", baseBranch: "main", report });
+    assert.isNull(ending.next);
+    assert.match(
+      ending.settle?.heldContext?.[0] ?? "",
+      /^1 new comment, latest from vercel\[bot\]/,
+    );
+    // The ending wake tells it as the orchestrator stores it, merged and settled once.
+    assert.notInclude(ending.wake?.text ?? "", "kept as context");
   });
 
   it("reads context kept before the digest as one fragment per kind", () => {

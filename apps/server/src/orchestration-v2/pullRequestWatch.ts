@@ -310,11 +310,23 @@ export function mergeHeldContext(
  */
 export function settleHeldContext(
   heldContext: ReadonlyArray<string> | undefined,
-  state: { readonly conflicting: boolean; readonly headMoved: boolean },
+  state: Pick<ThreadPullRequestWatch, "conflicting" | "failedChecks" | "passed"> & {
+    readonly headMoved: boolean;
+  },
 ): ReadonlyArray<string> {
   return mergeHeldContext(heldContext).filter((fragment) => {
-    const kind = heldKind(fragment);
-    return !(kind === "conflict" && !state.conflicting) && !(kind === "checks" && state.headMoved);
+    switch (heldKind(fragment)) {
+      case "conflict":
+        return state.conflicting;
+      case "checks":
+        // Failures that cleared, or a pass a rerun or a new failure undid, no longer hold.
+        return (
+          !state.headMoved &&
+          (fragment.startsWith("checks failed") ? state.failedChecks.length > 0 : state.passed)
+        );
+      default:
+        return true;
+    }
   });
 }
 
@@ -342,8 +354,6 @@ function pullRequestWatchMessage(input: {
   readonly baseBranch: string;
   readonly headSha: string | null;
   readonly report: PullRequestWatchReport;
-  /** What this pass kept, told with the wake a watch ends on. */
-  readonly heldContext?: ReadonlyArray<string>;
 }): PullRequestWatchWake {
   const { changes, exhausted } = input.report;
   const context = {
@@ -351,13 +361,8 @@ function pullRequestWatchMessage(input: {
     commit: input.headSha === null ? "" : ` on ${input.headSha.slice(0, 7)}`,
   };
   const text = [
-    withHeldContext(
-      [
-        `Update on pull request #${input.number} (${input.url}), which GOAT is watching for you:`,
-        ...changes.flatMap((change) => changeLines(change, context)),
-      ].join("\n"),
-      input.heldContext,
-    ),
+    `Update on pull request #${input.number} (${input.url}), which GOAT is watching for you:`,
+    ...changes.flatMap((change) => changeLines(change, context)),
     "",
     exhausted
       ? `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row. Call ${goatCallText("pull_request.watch")} to watch it again.`
@@ -398,7 +403,8 @@ export interface PullRequestWatchWake {
  * timeline note for updates kept as context. The watch carries only this pass's kept fragments;
  * the orchestrator merges them into the ones not told yet and folds those into the next notice
  * turn that starts (#1055). A watch that spent its comment limit ends with its wake, which tells
- * what this pass kept; the orchestrator adds what the watch kept before, read under its lock.
+ * what the watch kept: `settle` records this pass first, so its fragments merge and settle with
+ * the stored ones under the thread lock, and the ending wake reads the result there.
  */
 export function pullRequestWatchOutcome(input: {
   readonly number: number;
@@ -409,6 +415,8 @@ export function pullRequestWatchOutcome(input: {
   readonly next: ThreadPullRequestWatch | null;
   /** An ending watch keeps what this pass saw, so watching again starts from it. */
   readonly endedWatch?: ThreadPullRequestWatch;
+  /** Progress to record before the watch ends on its wake. */
+  readonly settle?: ThreadPullRequestWatch;
   readonly wake?: PullRequestWatchWake;
   readonly note?: OrchestrationV2Notification;
 } {
@@ -422,14 +430,13 @@ export function pullRequestWatchOutcome(input: {
   const kept = held.length === 0 ? next : { ...next, heldContext: held };
   if (report.changes.length > 0) {
     return {
-      ...(report.exhausted ? { next: null, endedWatch: next } : { next: kept }),
+      ...(report.exhausted ? { next: null, endedWatch: next, settle: kept } : { next: kept }),
       wake: pullRequestWatchMessage({
         number: input.number,
         url: input.url,
         baseBranch: input.baseBranch,
         headSha: next.headSha,
         report,
-        ...(report.exhausted ? { heldContext: held } : {}),
       }),
     };
   }

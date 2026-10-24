@@ -180,7 +180,9 @@ it.effect(
       expect(runEnds!.text).toContain("lane-b is done.");
       expect(runEnds!.notification?.source.kind).toBe("background_task");
       expect(runEnds!.notification?.summary).toMatch(/^2 notices · /);
-      expect(pressure!.text).toBe("Resource pressure: box-a is critical.");
+      // The newer level stays in its own block: the turn's message id still names the older one.
+      expect(pressure!.text).toContain("Resource pressure: box-a is critical.");
+      expect(pressure!.text).not.toContain("elevated");
       expect(last!.text).toBe(later.text);
     }).pipe(Effect.provide(layer)),
 );

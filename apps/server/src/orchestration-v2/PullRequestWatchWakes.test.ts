@@ -428,8 +428,8 @@ const threadWithKeptContext = (name: string) =>
       worktreePath: null,
     });
     const kept = [
-      [key, url, ["all 3 checks passed on aaaaaaa"]],
-      [second, secondUrl, ['1 new comment, latest from vercel[bot]: "Preview ready"']],
+      [key, url, ["all 3 checks passed on aaaaaaa"], { headSha: "aaaaaaaaaa", passed: true }],
+      [second, secondUrl, ['1 new comment, latest from vercel[bot]: "Preview ready"'], {}],
     ] as const;
     for (const [pr, prUrl] of kept)
       yield* orchestrator.dispatch({
@@ -442,7 +442,7 @@ const threadWithKeptContext = (name: string) =>
       });
     const shell = yield* orchestrator.getThreadShell(threadId);
     const links = shell?.pullRequests ?? [];
-    for (const [pr, , heldContext] of kept) {
+    for (const [pr, , heldContext, state] of kept) {
       const watch = links.find((link) => link.number === pr.number)?.watch;
       if (watch === undefined) return yield* Effect.die("no watch");
       yield* orchestrator.dispatch({
@@ -451,7 +451,7 @@ const threadWithKeptContext = (name: string) =>
         threadId,
         ...pr,
         startedAt: watch.startedAt,
-        watch: { ...watch, heldContext },
+        watch: { ...watch, ...state, heldContext },
         note: {
           source: { kind: "monitor" },
           outcome: "updated",
@@ -473,6 +473,80 @@ const threadWithKeptContext = (name: string) =>
   });
 
 describe("pull request updates kept as context (#1055)", () => {
+  it.effect("a notice left alone under a dropped wake's id survives the next push", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, links } = yield* threadWithKeptContext("refold");
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("pr-kept-refold-work"),
+        threadId,
+        messageId: MessageId.make("message:pr-kept-refold-work"),
+        text: "Keep working.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const link = links.find((candidate) => candidate.number === 7)!;
+      const watchAt = (headSha: string) =>
+        Effect.map(orchestrator.getThreadShell(threadId), (shell) => ({
+          ...shell!.pullRequests!.find((candidate) => candidate.number === 7)!.watch!,
+          headSha,
+          heldContext: [],
+        }));
+      const sync = (name: string, headSha: string, wake?: { id: string; text: string }) =>
+        Effect.flatMap(watchAt(headSha), (watch) =>
+          orchestrator.dispatch({
+            type: "thread.pull-request-watch.sync",
+            commandId: CommandId.make(`pr-kept-refold-${name}`),
+            threadId,
+            ...key,
+            startedAt: watch.startedAt,
+            watch,
+            ...(wake === undefined
+              ? {}
+              : {
+                  wake: {
+                    messageId: MessageId.make(wake.id),
+                    text: wake.text,
+                    notification,
+                  },
+                }),
+          }),
+        );
+      const pressure = (level: string) =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`pr-kept-refold-${level}`),
+          threadId,
+          messageId: MessageId.make(`${HOST_PRESSURE_MESSAGE_PREFIX}box-a:wake:${level}`),
+          text: `Resource pressure: box-a is ${level}.`,
+          attachments: [],
+          notification: { source: { kind: "monitor" }, outcome: "updated", summary: "box-a" },
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "server",
+        });
+      const checksId = pullRequestWakeMessageId(link, "refold", "1111111aaaa");
+      yield* sync("checks", "1111111aaaa", { id: checksId, text: "Checks failed on 1111111." });
+      yield* pressure("elevated");
+      yield* sync("push-1", "2222222bbbb");
+      // The newer pressure notice replaces the older one in the turn the check wake opened.
+      yield* pressure("critical");
+      yield* sync("push-2", "3333333cccc");
+      const { runs, messages } = yield* orchestrator.getThreadRecords(threadId, [
+        "runs",
+        "messages",
+      ]);
+      const queued = runs.find((run) => run.userMessageId === checksId);
+      expect(queued?.status).toBe("queued");
+      const text = messages.find((message) => message.id === checksId)?.text;
+      expect(text).toContain("Resource pressure: box-a is critical.");
+      expect(text).not.toContain("Checks failed on 1111111.");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("a queued notice on another model tells kept context once", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, startedText, heldLeft } =
@@ -724,23 +798,25 @@ describe("pull request updates kept as context (#1055)", () => {
     Effect.gen(function* () {
       const { orchestrator, threadId, links, startedText, heldLeft } =
         yield* threadWithKeptContext("react");
-      const link = links.find((candidate) => candidate.number === 7)!;
+      const link = links.find((candidate) => candidate.number === 8)!;
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      const watch = shell!.pullRequests!.find((candidate) => candidate.number === 8)!.watch!;
       yield* orchestrator.dispatch({
         type: "thread.pull-request-watch.sync",
         commandId: CommandId.make("pr-kept-react-wake"),
         threadId,
-        ...key,
-        startedAt: link.watch!.startedAt,
-        watch: link.watch!,
+        ...second,
+        startedAt: watch.startedAt,
+        watch: { ...watch, heldContext: [] },
         wake: {
           messageId: pullRequestWakeMessageId(link, "react"),
-          text: "Checks failed on bbbbbbb: lint.",
+          text: 'alice on src/index.ts: "Please rename this."',
           notification,
         },
       });
       const [text, ...others] = yield* startedText;
       expect(others).toEqual([]);
-      expect(text).toContain("Checks failed on bbbbbbb: lint.");
+      expect(text).toContain("Please rename this.");
       expect(text).toContain("all 3 checks passed on aaaaaaa");
       expect(text).toContain("Preview ready");
       expect(yield* heldLeft).toEqual([]);

@@ -252,7 +252,7 @@ export function foldIntoQueuedNotice(
     occurredAt: now,
     payload: {
       ...queued,
-      text: renderNotices(notices),
+      text: renderDigest(queued.id, notices),
       notification: foldedNotification(notices.length, queued.notification, command.notification),
       updatedAt: now,
     },
