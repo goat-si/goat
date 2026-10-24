@@ -365,7 +365,9 @@ describe("X11 window capture against a scripted server", () => {
         environment,
         0x200001,
         { width: 256, height: 139, windowWidth: 1920, windowHeight: 1040 },
-        { socketPath: server.path },
+        // The scripted server's 2 MP reply can outlast the real hold limit on a slow runner; this
+        // test is about rounding, the hold limit has its own test.
+        { socketPath: server.path, grabLimitMs: 60_000 },
       ),
     ).toMatchObject({ width: 256, height: 139 });
   });
