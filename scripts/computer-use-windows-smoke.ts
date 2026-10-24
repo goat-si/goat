@@ -11,6 +11,7 @@
 // own close button), and writes screenshots and transcript.json to --out.
 // @effect-diagnostics nodeBuiltinImport:off -- A standalone harness around child processes and files.
 // @effect-diagnostics globalTimers:off -- Waits for windows the harness itself opened.
+// @effect-diagnostics globalConsole:off -- Prints progress to the person running it by hand.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";

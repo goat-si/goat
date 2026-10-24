@@ -117,7 +117,7 @@ describe("Windows computer use observations (conformance)", () => {
     const moved = observe(
       tracker,
       fixtureRead("s00000002"),
-      { ...FACTS, epoch: FACTS.epoch?.replace("dpi-96", "dpi-144") },
+      { ...FACTS, epoch: (FACTS.epoch ?? "").replace("dpi-96", "dpi-144") },
       first.observationId,
     );
     assert.equal(moved.kind, "full");
