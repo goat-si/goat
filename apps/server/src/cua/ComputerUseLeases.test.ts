@@ -494,18 +494,34 @@ it.effect(
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         const signals = yield* leases.subscribe;
         // Nothing reported yet: a host that never says it detects anything detects nothing.
-        assert.deepEqual(yield* leases.detection, { humanInput: false, privateMode: false });
+        assert.deepEqual(yield* leases.detection, {
+          humanInput: false,
+          privateMode: false,
+          frames: false,
+        });
         const supported = readiness({ humanInput: "supported", privateMode: "supported" });
         yield* Ref.set(accepted, Option.some(supported));
         yield* Queue.offer(reports, supported);
         yield* PubSub.take(signals);
-        assert.deepEqual(yield* leases.detection, { humanInput: true, privateMode: true });
+        assert.deepEqual(yield* leases.detection, {
+          humanInput: true,
+          privateMode: true,
+          frames: false,
+        });
         // A downgrade counts as soon as the receiver accepts it, before the report is consumed.
         yield* Ref.set(
           accepted,
           Option.some(readiness({ humanInput: "supported", privateMode: "unsupported" })),
         );
-        assert.deepEqual(yield* leases.detection, { humanInput: true, privateMode: false });
+        assert.deepEqual(yield* leases.detection, {
+          humanInput: true,
+          privateMode: false,
+          frames: false,
+        });
+        yield* Ref.set(accepted, Option.some(supported));
+        // Frames count only when the helper itself says it sends them (#1370).
+        yield* Ref.set(accepted, Option.some({ ...supported, frames: true }));
+        assert.isTrue((yield* leases.detection).frames);
         yield* Ref.set(accepted, Option.some(supported));
 
         const control = yield* leases.control(thread, Option.none());
@@ -554,6 +570,13 @@ it.effect(
           _tag: "paused",
           reason: "human_input",
         });
+        // Only the thread's live control records a window; a replaced proxy's report changes nothing.
+        assert.isFalse(yield* leases.setTarget(thread, "control:old", { pid: 9, windowId: 9 }));
+        assert.isTrue(yield* leases.setTarget(thread, control.controlId, { pid: 7, windowId: 3 }));
+        const recorded = (yield* leases.sessions).find(
+          (entry) => entry.control.controlId === control.controlId,
+        );
+        assert.deepEqual(recorded?.control.target, { pid: 7, windowId: 3 });
       }).pipe(
         Effect.provide(
           ComputerUseLeases.layer.pipe(

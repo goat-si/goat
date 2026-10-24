@@ -13,6 +13,11 @@ it("lets readers follow computer use status without granting control", () => {
   ])
     expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
 });
+it("a desktop window's live picture needs the same read grant as a browser tab's stream", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.previewSessionsFrames, {})).toEqual([
+    "orchestration:read",
+  ]);
+});
 describe("memory client guards", () => {
   it("guards all three memory mutations", () => {
     for (const method of [

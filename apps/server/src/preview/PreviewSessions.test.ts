@@ -3,6 +3,7 @@ import { it as effectIt } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -30,7 +31,7 @@ const control = {
   threadId,
   expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
 };
-const detected = { humanInput: true, privateMode: true } as const;
+const detected = { humanInput: true, privateMode: true, frames: true } as const;
 const active = {
   _tag: "active",
   expiresAt: control.expiresAt,
@@ -94,7 +95,11 @@ describe("preview sessions", () => {
     const secret = desktopSession(base, control, { _tag: "paused", reason: "private" }, detected)!;
     expect([previewSessionChip(secret), secret.status]).toEqual(["Private (paused)", "paused"]);
     // A host whose helper cannot detect these says so instead of implying protection.
-    const blind = desktopSession(base, control, active, { humanInput: false, privateMode: false })!;
+    const blind = desktopSession(base, control, active, {
+      humanInput: false,
+      privateMode: false,
+      frames: false,
+    })!;
     expect(blind.capabilities).toMatchObject({ privateMode: false, humanInput: false });
     expect(previewSessionChip(ended)).toBe("Stopped");
   });
@@ -150,6 +155,8 @@ describe("preview sessions", () => {
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
             stopAll: Effect.sync(() => (stopped.push("desktop"), [])),
             grants: Effect.succeed([]),
+            // The live picture service listens for control changes from the start.
+            subscribe: PubSub.unbounded<void>().pipe(Effect.flatMap(PubSub.subscribe)),
             proxy: undefined,
           }),
           Layer.mock(Handoffs.Handoffs)({}),
