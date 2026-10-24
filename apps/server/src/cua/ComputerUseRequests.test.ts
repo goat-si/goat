@@ -236,6 +236,49 @@ it.effect(
     ),
 );
 
+it.effect.each(["first", "existing"] as const)(
+  "reuses a shorter foreground approval over app-only admission (control: %s)",
+  (ordering) =>
+    withHarness(({ orchestrator }) =>
+      withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+        Effect.gen(function* () {
+          const apps = ["com.example.AppA"];
+          const background = yield* request({ apps, minutes: 10 });
+          if (background.kind !== "needs_human") return assert.fail("background needs approval");
+          const admitted = yield* handoffs.respond(
+            { threadId, handoffId: background.handoff.handoffId, action: "completed" },
+            sessionId,
+          );
+          if (admitted.expiresAt === null) return assert.fail("admission needs an expiry");
+          if (ordering === "existing")
+            yield* leases.control(threadId, yield* leases.active(threadId));
+          const focus = yield* request({ foreground: true, minutes: 5 });
+          if (focus.kind !== "needs_human") return assert.fail("foreground needs approval");
+          yield* handoffs.respond(
+            { threadId, handoffId: focus.handoff.handoffId, action: "completed" },
+            sessionId,
+          );
+          const control = yield* leases.control(threadId, yield* leases.active(threadId));
+          const state = yield* leases.controlState(threadId, control.controlId);
+          assert.equal(state._tag, "active");
+          assert.isUndefined(state._tag === "active" ? state.apps : state);
+          assert.isTrue(yield* leases.foregroundAvailable(threadId, purpose));
+          const repeated = yield* request({ foreground: true, minutes: 5 });
+          assert.equal(repeated.kind, "available", "Matching live authority must not ask again");
+          assert.include(repeated.message, "whole-desktop foreground");
+          assert.notInclude(repeated.message, DateTime.formatIso(admitted.expiresAt));
+          assert.equal(
+            (yield* request({ foreground: true, purpose: "A different purpose" })).kind,
+            "needs_human",
+          );
+          yield* TestClock.adjust("5 minutes");
+          assert.equal((yield* request({ foreground: true })).kind, "needs_human");
+          assert.equal((yield* request({ apps })).kind, "available");
+        }),
+      ),
+    ),
+);
+
 it.effect("a background approval cannot satisfy a foreground request for the same purpose", () =>
   withHarness(({ orchestrator }) =>
     withRequests(orchestrator, supported, ({ request, handoffs }) =>

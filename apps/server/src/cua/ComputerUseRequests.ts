@@ -98,14 +98,14 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     (granted === undefined ||
       (wanted !== undefined &&
         wanted.every((app) => granted.some((name) => name.toLowerCase() === app.toLowerCase()))));
-  if (
-    Option.isSome(own) &&
-    covered &&
-    (!foreground || (yield* leases.foregroundAvailable(input.threadId, input.request.purpose)))
-  )
+  const foregroundCovered =
+    foreground && (yield* leases.foregroundAvailable(input.threadId, input.request.purpose));
+  if (Option.isSome(own) && (foreground ? foregroundCovered : covered))
     return {
       kind: "available",
-      message: `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
+      message: foreground
+        ? "This thread already has live whole-desktop foreground approval for this purpose until its approved expiry. Pause, Stop or control replacement requires new foreground approval. The cua-driver tools are attached from your next turn if they are not already."
+        : `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
     } satisfies ComputerUseRequestResult;
 
   const view = yield* threads.getThreadSnapshot(input.threadId);
