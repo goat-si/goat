@@ -533,6 +533,41 @@ describe("Cursor Cloud adapter", () => {
       expect(h.send).not.toHaveBeenCalled();
     }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
+  effectIt.effect(
+    "a sign-in refusal before any Cursor request records the submitting intent as failed with its reason",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness;
+        h.readKey.mockReturnValue(
+          Effect.fail(
+            new ProviderSetupError({
+              instanceId,
+              operation: "credentials",
+              detail: "Could not read sign-in.",
+            }),
+          ),
+        );
+        const failure = yield* h.runtime
+          .startTurn({
+            ...h.input,
+            providerThread: { ...h.input.providerThread, cloudTask: task("submitting") },
+          })
+          .pipe(Effect.flip);
+        expect(failure).toMatchObject({ detail: "Cursor Cloud sign-in is unavailable." });
+        // Without this record, shared finalization turns the intent into an unknown task.
+        expect(h.commits).toEqual([
+          expect.objectContaining({
+            status: "failed",
+            source,
+            error: "Cursor Cloud sign-in is unavailable.",
+            summary:
+              "Cursor Cloud sign-in is unavailable. Sign in to Cursor, then send the message again. Nothing was sent to Cursor Cloud.",
+          }),
+        ]);
+        expect(h.create).not.toHaveBeenCalled();
+        expect(h.send).not.toHaveBeenCalled();
+      }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
   effectIt.effect("a failed post-create intent/agent-ref commit sends no prompt", () =>
     Effect.gen(function* () {
       const h = yield* harness;

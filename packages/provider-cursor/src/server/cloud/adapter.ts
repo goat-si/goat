@@ -610,12 +610,42 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 return yield* protocol(
                   "A Cursor Cloud run is already active or awaiting reconciliation.",
                 );
-              if (input.message.attachments.length > 0)
-                return yield* protocol("Cursor Cloud currently accepts text-only messages.");
-              if (!input.cloudSource || !input.commitCloudTask)
+              const commitCloudTask = input.commitCloudTask;
+              if (!input.cloudSource || !commitCloudTask)
                 return yield* protocol(
                   "Cloud source or persistence was not resolved by the shared base.",
                 );
+              // These refusals come before any Cursor request. Record the base's submitting intent
+              // as failed, or shared finalization reports an unknown task that may still be running.
+              const refuse = (detail: string, guidance = "") =>
+                Effect.gen(function* () {
+                  const intent = input.providerThread.cloudTask;
+                  if (intent?.status === "submitting") {
+                    const now = yield* DateTime.now;
+                    yield* commitCloudTask(
+                      {
+                        ...intent,
+                        status: "failed",
+                        error: detail,
+                        summary: `${detail}${guidance} Nothing was sent to Cursor Cloud.`,
+                        updatedAt: DateTime.formatIso(now),
+                      },
+                      {
+                        nativeThreadRef: input.providerThread.nativeThreadRef,
+                        nativeConversationHeadRef: input.providerThread.nativeConversationHeadRef,
+                      },
+                    ).pipe(
+                      Effect.catch(() =>
+                        Effect.logWarning("Cursor Cloud refusal could not be persisted", {
+                          runId: input.runId,
+                        }),
+                      ),
+                    );
+                  }
+                  return yield* protocol(detail);
+                });
+              if (input.message.attachments.length > 0)
+                return yield* refuse("Cursor Cloud currently accepts text-only messages.");
               const sandbox = input.runtimePolicy.sandboxPolicy;
               if (
                 input.runtimePolicy.runtimeMode !== "full-access" ||
@@ -627,7 +657,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                     !("type" in sandbox) ||
                     sandbox.type !== "dangerFullAccess"))
               ) {
-                return yield* protocol(
+                return yield* refuse(
                   "Cursor Cloud supports full access only; GOAT sandbox and approval overrides cannot be applied in the cloud.",
                 );
               }
@@ -642,12 +672,16 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 !/^[a-f0-9]{40,64}$/i.test(source.sha) ||
                 repository(source.repository) === undefined
               ) {
-                return yield* protocol(
+                return yield* refuse(
                   "Cursor Cloud requires a published repository and remote tip SHA.",
                 );
               }
               const sha = source.sha;
-              const apiKey = yield* key;
+              const apiKey = yield* key.pipe(
+                Effect.catch((failure) =>
+                  refuse(failure.detail, " Sign in to Cursor, then send the message again."),
+                ),
+              );
               const agentId = input.providerThread.nativeThreadRef?.nativeId;
               const agent = yield* Effect.acquireRelease(
                 call(agentId ? "resume" : "create", () =>
