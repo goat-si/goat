@@ -1,4 +1,5 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
+import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -54,16 +55,38 @@ export const keepingRefusalCode =
       return flattened ? refusalResult(error) : result;
     });
 
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Refuses top-level arguments a tool does not declare. The tool is named as /mcp lists it, since
+ * the registration keeps its shipped name and a refusal under that name sends the agent back to a
+ * name it can no longer see. An object wrapped in args or arguments alone is goat_call's shape;
+ * the refusal says so but still refuses, so a direct call keeps its strict arguments.
+ */
 export const undeclaredArgumentsResult = (
-  tool: string,
+  registered: string,
+  payload: unknown,
   undeclared: ReadonlyArray<string>,
   declared: ReadonlyArray<string>,
 ) => {
+  const entry = resolveAgentSurfaceEntry(registered);
+  const tool = entry === undefined ? registered : listedToolName(entry);
   const accepted =
     declared.length === 0 ? `${tool} takes no arguments.` : `It takes ${declared.join(", ")}.`;
+  const [only] = undeclared;
+  const wrapped =
+    undeclared.length === 1 &&
+    (only === "args" || only === "arguments") &&
+    isRecord(payload) &&
+    isRecord(payload[only]);
+  const path = entry === undefined ? "path" : `path: "${entry.path}"`;
+  const unwrap = wrapped
+    ? ` ${only} wraps arguments only for goat_call {${path}, args: {...}}; call ${tool} with its fields at the top level instead.`
+    : "";
   const failure = new OrchestratorMcpFailure({
     code: "invalid_request",
-    message: `${tool} does not take ${undeclared.join(", ")}, so nothing ran. ${accepted}`,
+    message: `${tool} does not take ${undeclared.join(", ")}, so nothing ran. ${accepted}${unwrap}`,
   });
   return new McpSchema.CallToolResult({
     isError: true,
