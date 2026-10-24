@@ -770,12 +770,8 @@ it.effect("every progress report imported before the origin's next turn reaches 
       yield* f.launch(c, "next_turn");
       // #1054: reports held on the worker arrive as one batch, and more land before the turn.
       const late = Array.from({ length: 46 }, (_, i) => report(i + 4));
-      for (const reports of [
-        [report(1), report(2)],
-        [report(3)],
-        late,
-        [report(50, "needs_input")],
-      ]) {
+      const batches = [[report(1), report(2)], [report(3)], late, [report(50, "needs_input")]];
+      for (const reports of batches) {
         const call = yield* Queue.take(f.calls);
         yield* Queue.offer(call.reply, Effect.succeed(answer(reports)));
         yield* Queue.take(f.commits);
@@ -785,13 +781,12 @@ it.effect("every progress report imported before the origin's next turn reaches 
       for (let i = 1; i <= 50; i++) assert.include(lines, `> report-${i}`);
       assert.include(turn, "Report 50 from a thread on");
       // Progress folds into one row per run of reports, so the question is not paged behind it.
+      const rows = yield* f.sql<{ kind: string }>`SELECT kind FROM remote_report_inbox ORDER BY id`;
       assert.deepEqual(
-        (yield* f.sql<{ kind: string }>`SELECT kind FROM remote_report_inbox ORDER BY id`).map(
-          (row) => row.kind,
-        ),
+        rows.map((row) => row.kind),
         ["progress", "needs_input"],
       );
-    }).pipe(Effect.provide(f.layer), Effect.provide(Inbox.layer));
+    }).pipe(Effect.provide(Layer.merge(f.layer, Inbox.layer)));
   }).pipe(Effect.provide(database)),
 );
 

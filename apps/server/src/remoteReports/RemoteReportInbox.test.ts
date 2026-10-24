@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import { ThreadId } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import Migration070 from "../persistence/Migrations/070_RemoteDispatches.ts";
 import Migration101 from "../persistence/Migrations/101_RemoteReportInboxRunId.ts";
@@ -43,7 +44,8 @@ it.effect(
       const turn = yield* inbox.pending(origin);
       assert.equal(turn.reports.length, rows.length);
     }).pipe(
-      Effect.provide(Inbox.layer),
-      Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" })),
+      Effect.provide(
+        Inbox.layer.pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" }))),
+      ),
     ),
 );
