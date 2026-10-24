@@ -323,7 +323,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       : null;
   // Expanded edit rows carry Open diff themselves, so the inspector below skips its summary.
   const fileChangeDiff =
-    expanded && projectedFileChange !== null ? fileChangeDiffTarget(projectedFileChange) : null;
+    expanded && workEntry.projectedItem ? fileChangeDiffTarget(workEntry.projectedItem) : null;
   // The label truncates and "+N more" hides the rest; the tooltip names every edited file.
   const tooltipPaths =
     workEntry.changedFiles !== undefined && workEntry.changedFiles.length > 0
@@ -548,7 +548,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             <InlineButton
               onClick={(event) => {
                 event.stopPropagation();
-                ctx.onOpenTurnDiff(fileChangeDiff.runId, fileChangeDiff.filePath);
+                ctx.onOpenTurnDiff(
+                  fileChangeDiff.runId,
+                  fileChangeDiff.filePath,
+                  fileChangeDiff.sourceItem,
+                );
               }}
               onKeyDown={stopRowToggle}
             >
