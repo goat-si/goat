@@ -93,9 +93,11 @@ requirement, never from a pid or path alone. The driver stays the helper's child
   the designated requirement.
 - The driver's own daemon socket lives in the helper's private state directory. It has no secret
   (ADR-0022 "Limits"); the helper narrows which path agents get, not what the OS user can reach.
-- Liveness runs both ways: the helper exits when stdin closes or its launcher pid disappears, and
-  the driver is started so that it exits with the helper. An orphaned driver after a helper crash
-  is a qualification failure.
+- Liveness runs both ways. A spawned helper exits when stdin closes or its launcher pid
+  disappears. A helper reached over a socket instead ends every session of a client whose
+  connection drops, through the normal Stop path with its cleanup report, and exits after an idle
+  period with no client and no session. Either way the driver is started so that it exits with
+  the helper, and an orphaned driver after a helper crash is a qualification failure.
 
 ## Observation
 
@@ -260,7 +262,8 @@ PreviewSession {
   that while they are on, processes GOAT starts can use them; it opens the System Settings pane so
   a person who does not use SnapShot can turn them off.
 - **Usage strings.** The helper's `Info.plist` carries the Accessibility, Screen Recording and
-  Apple Events usage descriptions (GOAT.app lacks them today, #1175).
+  Apple Events usage descriptions. GOAT.app has the Screen Recording one today and lacks the
+  other two (#1175).
 - **Development builds.** Ad-hoc signatures change the code hash on every build, and TCC keys
   grants to it, so a rebuilt development helper asks again. Sign development helpers with a stable
   local certificate to avoid it; builds never run `tccutil reset`.
