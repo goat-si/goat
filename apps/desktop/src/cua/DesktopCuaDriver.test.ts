@@ -24,6 +24,7 @@ import {
   toolResult,
   healthyTools,
   fixture,
+  helperTools,
   VERIFICATION_IDS,
 } from "./DesktopCuaDriver.testkit.ts";
 
@@ -462,23 +463,6 @@ describe("DesktopCuaDriver verification", () => {
 });
 
 describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
-  const helperTools = (identity: { bundle: string; parent: number }) => ({
-    ...healthyTools(),
-    health_report: toolResult({
-      checks: [
-        {
-          name: "bundle_identity",
-          status: "pass",
-          data: {
-            bundle_identifier: identity.bundle,
-            identity_source: "parent_application",
-            parent_process_id: identity.parent,
-          },
-        },
-      ],
-    }),
-  });
-
   it.effect("asks the helper for grants and lets it own the driver agents cannot target", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -493,7 +477,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
         assert.equal(report.status, "ready");
         assert.equal(
           report.status === "ready" ? report.mcp.command : "",
-          `${HELPER_BUNDLE}/Contents/Resources/cua-driver/cua-driver`,
+          `${HELPER_BUNDLE}/Contents/MacOS/GOAT Computer Use`,
         );
         assert.deepEqual(test.helperProbes, [{ bundleId: HELPER_ID, prompt: true }]);
         assert.isEmpty(test.constructors);
@@ -611,7 +595,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
   );
 
   it.effect(
-    "is ready only after the check proved capture and the tree and while the helper runs the driver",
+    "is ready once the check proved the helper, capture and the tree, also while the helper is idle",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -634,7 +618,13 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
           assert.equal(checked?.readiness.tree, "ready");
           // The check retired the agent's driver to see fresh grants.
           assert.equal((yield* test.next).status, "stopped");
-          assert.equal(checked?.readiness.helper, "unauthenticated");
+          // Idle is not a failure: the helper proved itself and starts when an agent needs it.
+          assert.equal(checked?.readiness.helper, "authenticated");
+          assert.equal(checked?.readiness.input, "background");
+          assert.isTrue(checked ? computerUseReady(checked.readiness) : false);
+          assert.isFalse(
+            (checked?.readiness.reasons ?? []).some((reason) => /not running/.test(reason)),
+          );
 
           yield* test.request("agent-again");
           assert.equal((yield* test.next).status, "ready");
@@ -812,6 +802,24 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
         assert.equal((yield* test.next).status, "ready");
         const running = test.readiness.at(-1);
         assert.isFalse(running ? computerUseReady(running.readiness) : true);
+      }),
+    ),
+  );
+  it.effect("starts no driver daemon for agents on macOS; only the readiness check does", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+        yield* test.request("agent");
+        const report = yield* test.next;
+        assert.equal(report.status, "ready");
+        // What the server hands each agent's proxy: the helper itself, and no socket to reach.
+        assert.deepEqual(report.status === "ready" ? report.mcp.args.slice(0, 1) : [], ["--mcp"]);
+        assert.isUndefined(report.status === "ready" ? report.mcp.socketPath : "missing");
+        yield* test.verify;
+        assert.deepEqual(
+          test.helperLaunches.map(({ direct }) => direct),
+          [true, false],
+        );
       }),
     ),
   );

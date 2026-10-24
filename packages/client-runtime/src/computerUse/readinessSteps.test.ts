@@ -270,3 +270,19 @@ describe.each(platforms)("%s platform parity", (platform) => {
     expect([...states].sort()).toEqual(["blocked", "ok", "pending", "unknown", "unsupported"]);
   });
 });
+
+it("does not call input unsupported while the helper has not confirmed itself yet", () => {
+  const unconfirmed = view({
+    ...ready,
+    helper: "unauthenticated",
+    capture: "pending",
+    tree: "unavailable",
+    input: "unavailable",
+  });
+  const capture = unconfirmed.steps[2];
+  expect(capture?.state).not.toBe("unsupported");
+  expect(capture?.detail.join(" ")).not.toContain("Input is unavailable");
+  expect(unconfirmed.steps[1]?.detail.join(" ")).toContain("Run the readiness check");
+  // A confirmed helper in a session without input still says so.
+  expect(view({ ...ready, input: "unavailable" }).steps[2]?.state).toBe("unsupported");
+});
