@@ -246,6 +246,45 @@ export interface HelperBundle {
   readonly bundleId: string;
 }
 
+/**
+ * Whether a helper bundle is at a path. absent only when nothing is there, not even a link, and
+ * the caller did not insist on it; anything else that does not resolve to a bundle with its
+ * executable is unusable, so a broken install never silently becomes "no helper".
+ */
+export async function classifyHelperBundle(
+  candidate: string,
+  required: boolean,
+): Promise<
+  | { readonly kind: "found"; readonly path: string }
+  | { readonly kind: "absent" }
+  | { readonly kind: "unusable"; readonly message: string }
+> {
+  const unusable = (error: unknown) => ({
+    kind: "unusable" as const,
+    message:
+      COMPUTER_USE_HELPER_NAME +
+      " at " +
+      candidate +
+      " cannot be used (" +
+      ((error as NodeJS.ErrnoException).code ?? "unknown error") +
+      ").",
+  });
+  try {
+    await NodeFSP.lstat(candidate);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" && !required
+      ? { kind: "absent" }
+      : unusable(error);
+  }
+  try {
+    const path = await NodeFSP.realpath(candidate);
+    await NodeFSP.access(helperBundle(path, "").executable, NodeFSP.constants.X_OK);
+    return { kind: "found", path };
+  } catch (error) {
+    return unusable(error);
+  }
+}
+
 export const helperBundle = (bundlePath: string, bundleId: string): HelperBundle => ({
   bundlePath,
   executable: NodePath.join(bundlePath, "Contents", "MacOS", COMPUTER_USE_HELPER_NAME),
