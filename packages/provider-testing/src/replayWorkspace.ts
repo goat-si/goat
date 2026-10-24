@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -29,7 +30,9 @@ function runGit(
 > {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const exitCode = yield* spawner.exitCode(ChildProcess.make("git", args, { cwd }));
+    const exitCode = yield* spawner.exitCode(
+      ChildProcess.make("git", ["-C", cwd, ...args], { cwd, env: isolatedGitEnv() }),
+    );
     if (Number(exitCode) !== 0) {
       return yield* new ReplayFixtureGitCommandError({
         command: `git ${args.join(" ")}`,
@@ -51,8 +54,9 @@ const makeCheckpointWorkspaceEffect = Effect.fn("makeCheckpointWorkspace")(funct
     prefix: `goat-orchestrator-v2-${fixtureName}-`,
   });
   yield* runGit(cwd, ["init"]);
-  yield* runGit(cwd, ["config", "user.name", "T3 Code Test"]);
-  yield* runGit(cwd, ["config", "user.email", "t3code-test@example.com"]);
+  const gitConfig = path.join(cwd, ".git", "config");
+  yield* runGit(cwd, ["config", "--file", gitConfig, "user.name", "T3 Code Test"]);
+  yield* runGit(cwd, ["config", "--file", gitConfig, "user.email", "t3code-test@example.com"]);
   yield* fs.writeFileString(path.join(cwd, "README.md"), `# ${fixtureName}\n`);
   for (const [relativePath, contents] of Object.entries(files)) {
     const filePath = path.join(cwd, relativePath);
