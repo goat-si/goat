@@ -175,6 +175,9 @@ func runLauncher() -> Never {
 
 // MARK: - Service
 
+/// Nanoseconds on a clock that never jumps with wall-clock changes.
+func monotonicNanoseconds() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+
 struct HelperError: Error {
   let code: String
   let message: String
@@ -458,9 +461,9 @@ final class DriverService {
       // still names it; then reap it, so it never lingers as a zombie.
       if waitpid(child, &status, WNOHANG) == 0 {
         kill(child, SIGTERM)
-        let grace = Date().addingTimeInterval(1)
+        let grace = monotonicNanoseconds() + 1_000_000_000
         var reaped = false
-        while Date() < grace {
+        while monotonicNanoseconds() < grace {
           if waitpid(child, &status, WNOHANG) != 0 {
             reaped = true
             break
@@ -482,25 +485,29 @@ final class DriverService {
         var offset = 0
         while offset < bytes.count {
           let written = write(toDriver[1], bytes.baseAddress! + offset, bytes.count - offset)
+          if written < 0 && errno == EINTR { continue }
           if written <= 0 { return }
           offset += written
         }
       }
     }
-    let deadline = Date().addingTimeInterval(15)
+    // Monotonic, so a clock change cannot stretch or cut the wait.
+    let deadline = monotonicNanoseconds() + 15_000_000_000
     var buffer = Data()
     var replies: [Int: [String: Any]] = [:]
     /// Reads until the reply with id arrives, the driver closes its output, or the deadline.
     func reply(_ id: Int) -> [String: Any]? {
       var chunk = [UInt8](repeating: 0, count: 65_536)
       while replies[id] == nil {
-        let remaining = deadline.timeIntervalSinceNow
-        if remaining <= 0 { return nil }
+        let now = monotonicNanoseconds()
+        if now >= deadline { return nil }
+        let remainingMs = Int32(min((deadline - now) / 1_000_000, 1000))
         var descriptor = pollfd(fd: fromDriver[0], events: Int16(POLLIN), revents: 0)
-        let ready = poll(&descriptor, 1, Int32(min(remaining, 1) * 1000))
+        let ready = poll(&descriptor, 1, remainingMs)
         if ready < 0 && errno == EINTR { continue }
         if ready <= 0 { continue }
         let count = read(fromDriver[0], &chunk, chunk.count)
+        if count < 0 && errno == EINTR { continue }
         if count <= 0 { return nil }
         buffer.append(contentsOf: chunk[0..<count])
         if buffer.count > maxLineBytes * 4 { return nil }
@@ -508,8 +515,9 @@ final class DriverService {
           let line = buffer.subdata(in: buffer.startIndex..<newline)
           buffer.removeSubrange(buffer.startIndex...newline)
           if let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-            let messageId = message["id"] as? Int
+            let messageId = message["id"] as? Int, messageId == 1 || messageId == 2
           {
+            // Only the two replies this exchange asks for are kept, so memory stays bounded.
             replies[messageId] = message
           }
         }
