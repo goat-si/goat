@@ -161,10 +161,15 @@ export function HubDeviceListSection(props: {
           Device versions and checks show for sessions that can operate threads.
         </p>
       )}
-      {/* Search and old links to "Devices on this hub" land on the forms that add one. */}
-      <SettingsSearchTarget {...searchableSetting("hub-nodes")} className="outline-none">
+      {/* Search and old links to "Devices on this hub" land on the forms that add one. The
+          anchor waits for both reads, so rows arriving above it do not push it out of view. */}
+      {nodes.loading || props.hostsState === "reading" ? (
         <HubNodeAddForms nodes={nodes} />
-      </SettingsSearchTarget>
+      ) : (
+        <SettingsSearchTarget id={searchableSetting("hub-nodes").id} className="outline-none">
+          <HubNodeAddForms nodes={nodes} />
+        </SettingsSearchTarget>
+      )}
     </SettingsSection>
   );
 }
