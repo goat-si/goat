@@ -1,4 +1,5 @@
-import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
+import * as DecisionService from "./goatclaw/DecisionService.ts";
+import * as DecisionClient from "./goatclaw/DecisionClient.ts";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
@@ -1340,7 +1341,7 @@ export const layerWsRpc = (
   Layer.unwrap(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
-      const decisions = yield* DecisionInbox.DecisionInbox;
+      const decisions = yield* DecisionService.DecisionService;
       const requireCatalogHost = RpcAuthorization.requireConnectionCatalogHost(currentSession);
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
@@ -1363,12 +1364,7 @@ export const layerWsRpc = (
         .getEnvironmentId;
       // Channel calls act for the authenticated session; nothing here comes from client input.
       const channelOwner = ownerFromSession(channelEnvironmentId, currentSession);
-      const decisionCaller = {
-        kind: "client",
-        environmentId: channelEnvironmentId,
-        sessionId: currentSessionId,
-        scopes: currentSession.scopes,
-      } satisfies DecisionInbox.DecisionCaller;
+      const decisionCaller = yield* DecisionClient.caller(channelEnvironmentId, currentSession);
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
@@ -2198,7 +2194,7 @@ export const layerWsRpc = (
       });
       const decisionHandlers = WsDecisionRpcGroup.middleware(RpcInstrumentation).of({
         [WS_METHODS.decisionList]: (input) => decisions.list(decisionCaller, input),
-        [WS_METHODS.decisionGet]: (input) => decisions.get(decisionCaller, input.id),
+        [WS_METHODS.decisionGet]: (input) => decisions.get(decisionCaller, input),
         [WS_METHODS.decisionRequest]: (input) => decisions.create(decisionCaller, input),
         [WS_METHODS.decisionAnswer]: (input) => decisions.answer(decisionCaller, input),
         [WS_METHODS.decisionWithdraw]: (input) => decisions.withdraw(decisionCaller, input.id),

@@ -275,7 +275,7 @@ describe("#1405 baseline-failing: HostThreads additional authorization", () => {
               serverVersion: "0.1.0-test",
               access: "full-access",
               linkedAt: "2026-10-25T00:00:00.000Z",
-              expiresAt: null,
+              expiresAt: "2026-11-25T00:00:00.000Z",
             },
             token: "fixture-link",
           },

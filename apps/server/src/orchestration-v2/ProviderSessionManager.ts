@@ -63,6 +63,7 @@ import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
+import { providerThreadScopes } from "./providerThreadScopes.ts";
 import * as MemoryAccess from "../memory/MemoryAccess.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as EventSink from "./EventSink.ts";
@@ -668,7 +669,6 @@ export const layerWithOptions = (
                       : undefined,
                 });
                 const readOnly = preparedInput.readOnly === true;
-                const threadReadAllowed = usableThread;
                 const committed = Option.isSome(memoryPolicy)
                   ? yield* memoryPolicy.value.read
                   : { policyReady: false, enableAgentMemoryAccess: false, epoch: 0 };
@@ -684,7 +684,7 @@ export const layerWithOptions = (
                 const grantedScopes: ReadonlyArray<AuthEnvironmentScope> = [
                   ...(grant === "none" ? [] : ["memory:read" as const]),
                   ...(grant === "read_write" ? ["memory:write" as const] : []),
-                  ...(threadReadAllowed ? ["orchestration:read" as const] : []),
+                  ...providerThreadScopes(usableThread, readOnly, preparedInput.dispatchScopes),
                 ];
                 const readCurrentPolicy = () =>
                   Effect.gen(function* () {

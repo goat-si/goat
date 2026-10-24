@@ -8,9 +8,15 @@ import {
   type PermissionProfile,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import type * as Toolkit from "effect/ai/Toolkit";
+import type * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Inbox from "./DecisionInbox.ts";
+import * as Service from "./DecisionService.ts";
 import * as Profiles from "./PermissionProfiles.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Hosts from "../mcp/HostThreadsMcpService.ts";
@@ -63,7 +69,13 @@ const run = <A, E>(
       args: Readonly<Record<string, unknown>>,
     ) => Effect.Effect<unknown, OrchestratorMcpFailure>;
   },
-  body: (toolkit: typeof DecisionToolkit.Service) => Effect.Effect<A, E>,
+  body: (
+    toolkit: Toolkit.WithHandler<typeof DecisionToolkit.tools>,
+  ) => Effect.Effect<
+    A,
+    E,
+    Invocation.McpInvocationContext | Threads.ThreadManagementService | Service.DecisionService
+  >,
 ) => {
   const calls: Array<{ host: string; tool: string; arguments: Readonly<Record<string, unknown>> }> =
     [];
@@ -89,7 +101,7 @@ const run = <A, E>(
       return { ...(yield* decode(value).pipe(Effect.mapError(() => denied()))), host: input.host };
     });
   const currentProfile =
-    options.currentProfile ?? (() => options.profile ?? BUILTIN_PERMISSION_PROFILES.manager);
+    options.currentProfile ?? (() => options.profile ?? BUILTIN_PERMISSION_PROFILES.manager!);
   const profileLayer = Layer.mock(Profiles.PermissionProfiles)({
     resolve: () =>
       Effect.sync(() => {
@@ -110,7 +122,7 @@ const run = <A, E>(
   });
   const dependencies = Layer.mergeAll(
     Layer.mock(Inbox.DecisionInbox)({
-      list: () => Effect.succeed({ items: [local] }),
+      list: () => Effect.succeed({ items: [local], unavailableHosts: [], truncated: false }),
       get: () => Effect.succeed(local),
       answer: () => Effect.succeed({ ...local, status: "answered", answer: "wait" }),
     }),
@@ -126,7 +138,9 @@ const run = <A, E>(
     liveThreadsLayer,
     Layer.succeed(Invocation.McpInvocationContext, options.caller ?? scope),
   );
-  const layer = Access.HandlersLayer.layer(Handlers.layer).pipe(Layer.provideMerge(dependencies));
+  const layer = Access.HandlersLayer.layer(Handlers.layer).pipe(
+    Layer.provideMerge(Service.layer.pipe(Layer.provideMerge(dependencies))),
+  );
   return Effect.gen(function* () {
     const toolkit = yield* DecisionToolkit;
     const result = yield* body(toolkit);
@@ -154,7 +168,7 @@ it.effect(
         ["alpha", "beta"].map(() =>
           expect.objectContaining({
             launcherEnvironmentId: "origin",
-            permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.manager,
+            permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.manager!,
           }),
         ),
       );
@@ -216,9 +230,9 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const profile = {
-        ...BUILTIN_PERMISSION_PROFILES.manager,
+        ...BUILTIN_PERMISSION_PROFILES.manager!,
         hosts: ["alpha"],
-        capabilities: BUILTIN_PERMISSION_PROFILES.manager.capabilities.filter(
+        capabilities: BUILTIN_PERMISSION_PROFILES.manager!.capabilities.filter(
           (c) => c !== "threads.remote",
         ),
       };
@@ -281,19 +295,20 @@ it.effect("preservation #1405: explicit remote writes refuse read-only clients",
 );
 
 it.effect(
-  "baseline-failing #1405: narrowing hosts or threads.remote during preparation stops remote reads",
+  "baseline-failing #1405: narrowing hosts, capabilities or profile limits during preparation stops remote reads",
   () =>
     Effect.gen(function* () {
       for (const narrowed of [
-        { ...BUILTIN_PERMISSION_PROFILES.manager, hosts: [] },
+        { ...BUILTIN_PERMISSION_PROFILES.manager!, hosts: [] },
+        { ...BUILTIN_PERMISSION_PROFILES.manager!, maxLanes: 5 },
         {
-          ...BUILTIN_PERMISSION_PROFILES.manager,
-          capabilities: BUILTIN_PERMISSION_PROFILES.manager.capabilities.filter(
+          ...BUILTIN_PERMISSION_PROFILES.manager!,
+          capabilities: BUILTIN_PERMISSION_PROFILES.manager!.capabilities.filter(
             (c) => c !== "threads.remote",
           ),
         },
       ]) {
-        let live = BUILTIN_PERMISSION_PROFILES.manager;
+        let live = BUILTIN_PERMISSION_PROFILES.manager!;
         const { result, calls } = yield* run(
           {
             aliases: ["alpha"],
@@ -397,5 +412,98 @@ it.effect(
       );
       expect(result.at(-1)?.result).toMatchObject({ code: "capability_denied" });
       expect(calls.filter((call) => call.tool === "goat_decision_answer")).toEqual([]);
+    }),
+);
+
+it.effect(
+  "preservation #1405: old explicit answer transports require an update without retry",
+  () =>
+    Effect.gen(function* () {
+      const { result, calls } = yield* run(
+        {
+          answer: (host, tool) =>
+            tool === "goat_decision_answer"
+              ? Effect.fail(
+                  new OrchestratorMcpFailure({
+                    code: "invalid_request",
+                    message: "does not take permissionProfileCeiling",
+                  }),
+                )
+              : Effect.succeed(item(host)),
+        },
+        (toolkit) =>
+          toolkit
+            .handle("goat_decision_answer", {
+              id: "decision:collision",
+              host: "beta",
+              optionId: "wait",
+              reason: "Wait",
+            })
+            .pipe(Stream.unwrap, Stream.runCollect),
+      );
+      expect(result.at(-1)?.result).toMatchObject({
+        code: "remote_outdated",
+        message: expect.stringMatching(/Update GOAT/),
+      });
+      expect(calls.filter((call) => call.tool === "goat_decision_answer")).toHaveLength(1);
+    }),
+);
+
+it.effect("preservation #1405: discovery caps hosts and retains partial-page truncation", () =>
+  Effect.gen(function* () {
+    const aliases = Array.from(
+      { length: 17 },
+      (_, index) => `host-${String(index).padStart(2, "0")}`,
+    );
+    const { result, calls } = yield* run({ aliases }, (toolkit) =>
+      toolkit.handle("goat_decision_list", { limit: 3 }).pipe(Stream.unwrap, Stream.runCollect),
+    );
+    expect(result.at(-1)?.result).toMatchObject({
+      items: expect.any(Array),
+      truncated: true,
+      unavailableHosts: [expect.objectContaining({ host: "host-16" })],
+    });
+    expect(calls).toHaveLength(16);
+  }),
+);
+it.effect(
+  "preservation #1405: the fan-out deadline keeps fast results and lets preparation finish",
+  () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const finished = yield* Deferred.make<void>();
+      const page = (host: string) => ({
+        items: [item(host)],
+        unavailableHosts: [],
+        truncated: false,
+      });
+      const task = yield* run(
+        {
+          aliases: ["fast", "slow"],
+          answer: (host) =>
+            host === "slow"
+              ? Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.as(page(host)),
+                  Effect.tap(() => Deferred.succeed(finished, undefined)),
+                )
+              : Effect.succeed(page(host)),
+        },
+        (toolkit) =>
+          toolkit.handle("goat_decision_list", {}).pipe(Stream.unwrap, Stream.runCollect),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust("15 seconds");
+      const { result } = yield* Fiber.join(task);
+      yield* Deferred.succeed(release, undefined);
+      yield* Deferred.await(finished);
+      expect(result.at(-1)?.result).toMatchObject({
+        items: [
+          expect.objectContaining({ from: { environmentId: "fast", host: "fast" } }),
+          expect.objectContaining({ from: { environmentId: "origin" } }),
+        ],
+        unavailableHosts: [{ host: "slow", code: "host_unavailable", message: expect.any(String) }],
+      });
     }),
 );
