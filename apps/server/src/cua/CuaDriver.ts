@@ -33,6 +33,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
@@ -43,6 +44,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
 import * as LinuxReadiness from "./LinuxReadiness.ts";
+import { LinuxHelperReport } from "./linuxHelperHost/LinuxHelperReport.ts";
 
 export class CuaDriverStartError extends Schema.TaggedError<CuaDriverStartError>()(
   "CuaDriverStartError",
@@ -804,7 +806,15 @@ export const layer = Layer.effect(
                       new CuaDriverHostError({ operation: "install", cause: error.message }),
                   ),
                 );
-            return { factory, install, helperReadiness: undefined };
+            // A Linux server runs its own helper (#1223); its report stands in for the desktop's.
+            const linuxHelper =
+              platform === "linux" ? yield* Effect.serviceOption(LinuxHelperReport) : Option.none();
+            const helperReadiness = Option.isSome(linuxHelper)
+              ? Ref.get(linuxHelper.value.latest).pipe(
+                  Effect.map(Option.map(({ readiness, signals }) => ({ readiness, signals }))),
+                )
+              : undefined;
+            return { factory, install, helperReadiness };
           });
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;

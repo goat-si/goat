@@ -53,8 +53,12 @@ export interface SignalMonitor {
     watchId: string,
     targets: ReadonlyArray<ComputerUseWindowTarget>,
   ) => Promise<void>;
-  /** Clears every active target, then stops reading. */
-  readonly unwatch: () => Promise<void>;
+  /**
+   * Clears every active target, then stops reading. A helper shutting down stops without the
+   * clearing events: it has not seen the secrets go, and its exit already ends every target of
+   * its generation for the client, which then holds them until a later helper sees them clear.
+   */
+  readonly unwatch: (options?: { readonly announce?: boolean }) => Promise<void>;
   readonly watching: () => ReadonlyArray<ComputerUseWindowTarget>;
 }
 
@@ -209,10 +213,13 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
         await Promise.all(initial);
       });
     },
-    unwatch: async () => {
+    unwatch: async (options) => {
       stop();
       incarnation++;
-      if (watchId !== undefined) for (const target of targets) release(watchId, target);
+      if (watchId !== undefined)
+        for (const target of targets)
+          if (options?.announce === false) active.delete(keyOf(target));
+          else release(watchId, target);
       watchId = undefined;
       targets = [];
     },
