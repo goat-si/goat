@@ -185,7 +185,10 @@ export function CuaSetupDialog({
                 {cuaHostRequirements(status.platform, hostLabel)}
               </p>
             ) : null}
-            {status.display && status.display.capability !== "available" ? (
+            {status.display &&
+            status.display.capability !== "available" &&
+            // The steps above already say which grants this Mac still needs.
+            !(holder !== null && !verified && status.display.capability === "partial") ? (
               <p
                 role={status.display.capability === "unavailable" ? "alert" : undefined}
                 className={

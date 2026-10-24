@@ -79,7 +79,9 @@ export const fixture = Effect.fn(function* (
     blankCapture?: boolean;
     refuseStart?: boolean;
     /** Ship the GOAT Computer Use helper; its grants are separate from Electron's. */
-    helper?: { readonly granted: boolean; readonly detail?: string } | "unusable";
+    helper?:
+      | { readonly granted: boolean; readonly detail?: string; readonly fails?: Error }
+      | "unusable";
   } = {},
 ) {
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
@@ -135,6 +137,7 @@ export const fixture = Effect.fn(function* (
     helperGrants: async (bundle, prompt) => {
       helperProbes.push({ bundleId: bundle.bundleId, prompt });
       const helper = typeof options.helper === "object" ? options.helper : undefined;
+      if (helper?.fails) throw helper.fails;
       const granted = helper?.granted ?? false;
       return helper?.detail === undefined
         ? { accessibility: granted, screenRecording: granted }

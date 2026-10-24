@@ -77,6 +77,14 @@ type Engine =
   | { readonly kind: "helper"; readonly bundle: HelperBundle }
   | { readonly kind: "embedded"; readonly driverPath: string };
 
+/** Helper failures that can pass on their own, so setup keeps asking instead of giving up. */
+const TRANSIENT_HELPER_FAILURES: ReadonlySet<string> = new Set([
+  "no_hello",
+  "helper_exited",
+  "timeout",
+  "grantsUnreadable",
+]);
+
 /**
  * The app that must hold the macOS grants and how to read them now. Onboarding drags this app
  * into System Settings and polls it, so it can never name GOAT while a helper ships.
@@ -873,14 +881,27 @@ export const make = Effect.fn("desktop.cua.make")(function* (
               "grantsUnreadable",
               cause instanceof Error ? cause.message : "Could not read the permissions.",
             ),
-    });
+    }).pipe(
+      Effect.map((value) => ({ ok: true as const, value })),
+      // A helper that answers as another app, speaks another protocol, or refuses its parent
+      // stays that way however often setup asks; only a slow or vanished helper is worth retrying.
+      Effect.catchIf(
+        (error) => !TRANSIENT_HELPER_FAILURES.has(error.code),
+        (error) => Effect.succeed({ ok: false as const, message: error.message }),
+      ),
+    );
+    if (!read.ok)
+      return {
+        principal: "unusable",
+        message: `${COMPUTER_USE_HELPER_NAME} cannot be used: ${read.message}`,
+      } satisfies DesktopCuaGrants;
     return {
       principal: target.kind,
       name: target.kind === "helper" ? target.name : environment.displayName,
       ...(target.kind === "helper" ? { bundlePath: target.bundlePath } : {}),
       bundleId: target.bundleId,
-      accessibility: read.accessibility,
-      screenRecording: read.screenRecording,
+      accessibility: read.value.accessibility,
+      screenRecording: read.value.screenRecording,
     } satisfies DesktopCuaGrants;
   }).pipe(Effect.withSpan("desktop.cua.grants"));
 

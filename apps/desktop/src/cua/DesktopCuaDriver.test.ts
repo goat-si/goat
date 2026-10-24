@@ -7,6 +7,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { afterEach, vi } from "vite-plus/test";
 
 import { bitmapHasContent } from "./DesktopCuaDriver.ts";
+import { ComputerUseHelperError } from "./ComputerUseHelper.ts";
 
 import {
   privacyEnvironment,
@@ -622,6 +623,40 @@ describe("DesktopCuaDriver grants for setup", () => {
         assert.isEmpty(app.helperProbes);
       }),
     ),
+  );
+
+  it.effect(
+    "reports a helper that answers as another app as unusable, and retries one that vanished",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const mismatched = yield* fixture({
+            platform: "darwin",
+            helper: {
+              granted: true,
+              fails: new ComputerUseHelperError(
+                "bundle_mismatch",
+                "GOAT Computer Use is si.goat.desktop.dev.computer-use, expected codes.t3.host-test.computer-use.",
+              ),
+            },
+          });
+          assert.deepEqual(yield* mismatched.grants, {
+            principal: "unusable",
+            message:
+              "GOAT Computer Use cannot be used: GOAT Computer Use is si.goat.desktop.dev.computer-use, expected codes.t3.host-test.computer-use.",
+          });
+
+          const vanished = yield* fixture({
+            platform: "darwin",
+            helper: {
+              granted: true,
+              fails: new ComputerUseHelperError("helper_exited", "The helper exited."),
+            },
+          });
+          const exit = yield* Effect.exit(vanished.grants);
+          assert.isTrue(Exit.isFailure(exit));
+        }),
+      ),
   );
 });
 

@@ -135,9 +135,14 @@ it("turns on only after both grants, then reports the step that failed and retri
 
 it("asks for the helper's grants one step at a time and marks each one allowed", async () => {
   const f = fixture();
-  await using _screen = await dialog(f);
+  const reason = "Accessibility and Screen Recording must be granted at this Mac.";
+  await using _screen = await dialog(f, {
+    status: { platform: "darwin", running: false, display: { capability: "partial", reason } },
+  });
   await refocus();
   expect(text()).toContain("Agents work through GOAT Computer Use");
+  // The host's generic note would repeat the steps.
+  expect(text()).not.toContain(reason);
   expect(text()).toContain("Step 1 · Accessibility (to do now)");
   expect(text()).toContain("Step 2 · Screen & System Audio Recording (after the step above)");
   expect(button("Open Settings")).toBeDefined();
