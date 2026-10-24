@@ -56,7 +56,7 @@ function ThemeSwatches({ swatches }: { swatches: ReadonlyArray<ThemeSwatch> }) {
     <span aria-hidden className="flex shrink-0 items-center gap-0.5">
       {swatches.map((swatch) => (
         <ThemePreviewCircle
-          className="size-3.5 border-0"
+          className="size-3.5 border border-border"
           colors={swatch.colors}
           key={swatch.mode}
           mode={swatch.mode}
