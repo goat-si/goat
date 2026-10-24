@@ -5,7 +5,12 @@ import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeUtil from "node:util";
 
-import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
+import { isolatedGitEnv, removeInheritedGitEnv } from "@goat/shared/testing/gitEnv";
+
+// The showcase runner imports this module before it starts any server. Started from a git hook,
+// it inherits GIT_DIR, which would point the showcase servers' git (status, background fetch) at
+// the developer's checkout instead of these fixture workspaces (#1114).
+removeInheritedGitEnv(process.env);
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 
