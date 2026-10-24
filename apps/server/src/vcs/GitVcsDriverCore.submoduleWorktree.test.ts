@@ -1,5 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
+import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { GOAT_PROJECT_FILE_NAME } from "@goat/contracts";
+import { GOAT_PROJECT_FILE_NAME, type GitCommandError } from "@goat/contracts";
+import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -9,6 +12,7 @@ import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import { readWorktreeRoot } from "./worktreeCheckout.ts";
 
 const layerTest = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-submodule-worktree-test-" })),
@@ -35,6 +39,13 @@ const git = Effect.fn("test.git")(function* (cwd: string, args: ReadonlyArray<st
   return result.stdout.trim();
 });
 
+/** Git prints C:/ paths on Windows, where Node joins C:\\ ones. */
+const assertSamePaths = (actual: ReadonlyArray<string>, expected: ReadonlyArray<string>) =>
+  assert.deepStrictEqual(
+    actual.map(normalizeProjectPathForComparison),
+    expected.map(normalizeProjectPathForComparison),
+  );
+
 const commitFiles = Effect.fn("test.commitFiles")(function* (
   cwd: string,
   files: Record<string, string>,
@@ -59,7 +70,7 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const driver = yield* GitVcsDriver.GitVcsDriver;
-  const root = yield* fileSystem.realPath(
+  const root = NodeFS.realpathSync.native(
     yield* fileSystem.makeTempDirectoryScoped({ prefix: "git-submodule-worktree-" }),
   );
   const inner = path.join(root, "inner");
@@ -86,7 +97,7 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
   yield* fileSystem.makeDirectory(path.dirname(hook), { recursive: true });
   yield* fileSystem.writeFileString(
     hook,
-    "#!/bin/sh\ngit rev-parse --show-toplevel >> '" + hookLog + "'\n",
+    "#!/bin/sh\ngit rev-parse --show-toplevel >> '" + hookLog.replaceAll("\\", "/") + "'\n",
   );
   yield* fileSystem.chmod(hook, 0o755);
   const hookRoots = () =>
@@ -138,7 +149,7 @@ const assertCheckedOutInPlace = Effect.fn("test.assertCheckedOutInPlace")(functi
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  assert.equal(yield* git(worktreePath, ["rev-parse", "--show-toplevel"]), worktreePath);
+  assertSamePaths([yield* git(worktreePath, ["rev-parse", "--show-toplevel"])], [worktreePath]);
   assert.isTrue(yield* fileSystem.exists(path.join(worktreePath, "src/app.ts")));
   assert.equal(yield* fileSystem.exists(path.join(worktreePath, ".repos")), !input.sparse);
   assert.equal(yield* git(worktreePath, ["status", "--porcelain"]), "");
@@ -166,11 +177,14 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
           sparse: mode === "sparse",
         });
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), `feature/${mode}`);
-        assert.deepStrictEqual(yield* repo.hookRoots(), [worktreePath]);
+        assertSamePaths(yield* repo.hookRoots(), [worktreePath]);
         assert.deepStrictEqual(yield* repo.readConfig(), configBefore);
-        assert.equal(yield* git(repo.checkout, ["rev-parse", "--show-toplevel"]), repo.checkout);
+        assertSamePaths(
+          [yield* git(repo.checkout, ["rev-parse", "--show-toplevel"])],
+          [repo.checkout],
+        );
         assert.equal(yield* git(repo.checkout, ["status", "--porcelain"]), "");
-        assert.deepStrictEqual(repo.returnedPaths, [worktreePath]);
+        assertSamePaths(repo.returnedPaths, [worktreePath]);
       }),
   );
 
@@ -187,8 +201,11 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
 
         yield* assertCheckedOutInPlace(first, { gitDir: repo.gitDir, sparse: true });
         yield* assertCheckedOutInPlace(second, { gitDir: repo.gitDir, sparse: true });
-        assert.deepStrictEqual(yield* repo.hookRoots(), [first, second]);
-        assert.equal(yield* git(repo.checkout, ["rev-parse", "--show-toplevel"]), repo.checkout);
+        assertSamePaths(yield* repo.hookRoots(), [first, second]);
+        assertSamePaths(
+          [yield* git(repo.checkout, ["rev-parse", "--show-toplevel"])],
+          [repo.checkout],
+        );
         assert.equal(yield* git(repo.checkout, ["status", "--porcelain"]), "");
       }),
   );
@@ -226,6 +243,53 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
         yield* repo.updateSubmodule();
 
         yield* assertCheckedOutInPlace(child, { gitDir: repo.gitDir, sparse: true });
+      }),
+  );
+
+  it.effect(
+    "only a root left in the shared config needs git hook run to check out apart (#799)",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const repo = yield* makeSubmoduleCheckout(false);
+        const decide = (cwd: string, hookRunSupported: boolean) =>
+          readWorktreeRoot(
+            (operation, gitCwd, args, options) =>
+              driver.execute({ operation, cwd: gitCwd, args, ...options }),
+            path,
+            cwd,
+            Effect.succeed(hookRunSupported),
+          );
+        // Linked worktrees ignore the shared root while extensions.worktreeConfig is off.
+        assert.deepStrictEqual(yield* decide(repo.checkout, false), {
+          pin: true,
+          checkoutApart: false,
+        });
+        // A sparse checkout moved the root into the main worktree's config.worktree.
+        const linked = path.join(repo.root, "linked");
+        yield* git(repo.checkout, [
+          "worktree",
+          "add",
+          "-q",
+          "--no-checkout",
+          "-b",
+          "linked",
+          linked,
+        ]);
+        yield* git(linked, ["sparse-checkout", "set", "--no-cone", "/*"]);
+        assert.equal(yield* repo.sharedRoot().pipe(Effect.orElseSucceed(() => "")), "");
+        for (const cwd of [repo.checkout, linked]) {
+          assert.deepStrictEqual(yield* decide(cwd, false), { pin: true, checkoutApart: false });
+        }
+        // git submodule update wrote it back, so a plain add would inherit it.
+        yield* repo.updateSubmodule();
+        assert.deepStrictEqual(yield* decide(repo.checkout, true), {
+          pin: true,
+          checkoutApart: true,
+        });
+        const refused: GitCommandError = yield* Effect.flip(decide(repo.checkout, false));
+        assert.include(refused.detail, "Git 2.36");
       }),
   );
 });

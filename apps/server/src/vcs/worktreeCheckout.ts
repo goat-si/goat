@@ -106,23 +106,28 @@ export const readWorktreeRoot = Effect.fn("GitVcsDriver.createWorktree.readWorkt
     const operation = "GitVcsDriver.createWorktree.readWorktreeRoot";
     const read = (args: readonly string[]) =>
       git(operation, cwd, args, lenient).pipe(Effect.map(output));
-    let pin = (yield* read(["config", "--get-all", "core.worktree"])) !== "";
-    if (!pin) {
-      const [gitDir = "", commonDir = ""] = (yield* read([
-        "rev-parse",
-        "--absolute-git-dir",
-        "--git-common-dir",
-      ])).split("\n");
-      const common = path.resolve(cwd, commonDir);
-      const mainConfig = path.join(common, "config.worktree");
-      pin =
-        commonDir !== "" &&
-        normalizeProjectPathForComparison(common) !== normalizeProjectPathForComparison(gitDir) &&
-        (yield* read(["config", "--file", mainConfig, "--get", "core.worktree"])) !== "";
+    const effective = (yield* read(["config", "--get-all", "core.worktree"])) !== "";
+    const [gitDir = "", commonDir = ""] = (yield* read([
+      "rev-parse",
+      "--absolute-git-dir",
+      "--git-common-dir",
+    ])).split("\n");
+    if (commonDir === "") return { pin: false, checkoutApart: false };
+    const common = path.resolve(cwd, commonDir);
+    const rootIn = (file: string) =>
+      read(["config", "--file", path.join(common, file), "--get", "core.worktree"]).pipe(
+        Effect.map((value) => value !== ""),
+      );
+    if (!effective) {
+      // A linked checkout does not read the main worktree's config.worktree.
+      const linked =
+        normalizeProjectPathForComparison(common) !== normalizeProjectPathForComparison(gitDir);
+      return { pin: linked && (yield* rootIn("config.worktree")), checkoutApart: false };
     }
-    if (!pin) return { pin, checkoutApart: false };
-    // Git applies its own boolean rules and precedence.
+    // Only a root left in the shared config redirects a plain add today. Git applies its own
+    // boolean rules and precedence.
     const checkoutApart =
+      (yield* rootIn("config")) &&
       (yield* read(["config", "--bool", "--get", "extensions.worktreeConfig"])) === "true";
     if (checkoutApart && !(yield* hookRunSupported)) {
       return yield* new GitCommandError({
@@ -133,7 +138,7 @@ export const readWorktreeRoot = Effect.fn("GitVcsDriver.createWorktree.readWorkt
           "This checkout's worktrees would check out and run post-checkout in its git dir, and this Git lacks git hook run to check out first; install Git 2.36 or later.",
       });
     }
-    return { pin, checkoutApart };
+    return { pin: true, checkoutApart };
   },
 );
 
