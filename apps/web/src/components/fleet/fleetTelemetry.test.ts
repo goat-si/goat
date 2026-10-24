@@ -1,4 +1,4 @@
-import type { FleetMachine } from "@goat/client-runtime/state/fleet";
+import { buildFleet, type FleetMachine, type FleetShell } from "@goat/client-runtime/state/fleet";
 import {
   EnvironmentId,
   type HostStatusEntry,
@@ -212,6 +212,87 @@ describe("fleetHostRows", () => {
       primaryEnvironmentId: studio,
     });
     expect(rows.map((row) => row.label)).toEqual(["studio", "mini", "devbox"]);
+  });
+
+  it("does not list a connected host again under the alias a same-machine server reports", () => {
+    const desktop = EnvironmentId.make("desktop");
+    const headless = EnvironmentId.make("headless");
+    const lidge = EnvironmentId.make("lidge");
+    // The headless server launched this thread on lidge, which the desktop reaches as "lidge".
+    const liveThread: FleetShell = {
+      environmentId: lidge,
+      id: ThreadId.make("ws10"),
+      title: "WS10",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtime: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      pendingSubagentRequest: null,
+      pendingBackgroundTasks: [],
+      nativeSubagents: [],
+      archivedAt: null,
+      deletedAt: null,
+      sideChatOf: null,
+      lineage: {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: ThreadId.make("ws10"),
+      },
+      createdAt: "2026-10-24T09:00:00.000Z",
+      updatedAt: "2026-10-24T09:00:00.000Z",
+      source: {},
+    };
+    const fleet = buildFleet({
+      environments: [
+        {
+          environmentId: desktop,
+          label: "MacBook",
+          sshAliases: [],
+          machineId: "mbp",
+          machineUserId: "jun",
+        },
+        {
+          environmentId: headless,
+          label: "Headless",
+          sshAliases: [],
+          machineId: "mbp",
+          machineUserId: "jun",
+        },
+        { environmentId: lidge, label: "lidge-AI-AI", sshAliases: ["lidge"], machineId: "lidge" },
+      ],
+      primaryEnvironmentId: desktop,
+      shells: [liveThread],
+      remote: [
+        {
+          dispatcherEnvironmentId: headless,
+          launches: [
+            {
+              host: "lidge-ts",
+              threadId: ThreadId.make("ws10"),
+              title: null,
+              launcherThreadId: ThreadId.make("launcher"),
+              source: "thread",
+              state: "running",
+              latest: null,
+              hostUnavailableSince: null,
+              updatedAt: "2026-10-24T09:30:00.000Z",
+            },
+          ],
+          cloudMachines: [],
+        },
+      ],
+    });
+    const rows = fleetHostRows({
+      machines: fleet.machines,
+      sshAliases: new Map([[lidge, ["lidge"]]]),
+      reports: reportsOf(
+        { environmentId: desktop, hosts: [entry(null)] },
+        { environmentId: headless, hosts: [entry(null), entry("lidge-ts")] },
+        { environmentId: lidge, hosts: [entry(null)] },
+      ),
+      primaryEnvironmentId: desktop,
+    });
+    expect(rows.map((row) => row.label)).toEqual(["MacBook", "lidge-AI-AI"]);
   });
 
   it("uses the graph's matching and does not list a machine's alias entry again", () => {

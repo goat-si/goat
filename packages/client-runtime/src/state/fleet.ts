@@ -508,7 +508,39 @@ export function buildFleet(input: {
     });
   }
 
-  for (const source of input.remote) {
+  // Shells from disconnected environments must not resolve a launch: their
+  // state is stale, so the launch would vanish from both live and reported.
+  const reports = input.remote.map((source) => ({
+    source,
+    groups: presentRemoteLaunches({
+      dispatcherEnvironmentId: source.dispatcherEnvironmentId,
+      launches: source.launches,
+      shells: connectedShells,
+    }),
+  }));
+  const cachedShellOf = (dispatcher: EnvironmentId, launch: RemoteLaunch) =>
+    launch.threadId === null ? null : findRemoteShell(cachedShells, dispatcher, launch.threadId);
+  // What an alias names in one SSH config, learned from any server reading it: live threads
+  // first, then cached ones, so the order servers report in does not matter.
+  const hostKey = (dispatcher: EnvironmentId, alias: string) =>
+    JSON.stringify([scopeOf(dispatcher), alias]);
+  const resolvedHosts = new Map<string, EnvironmentId>();
+  for (const { source, groups } of reports) {
+    for (const group of groups) {
+      const key = hostKey(source.dispatcherEnvironmentId, group.host);
+      if (group.environmentId !== null && !resolvedHosts.has(key))
+        resolvedHosts.set(key, group.environmentId);
+    }
+  }
+  for (const { source } of reports) {
+    for (const launch of source.launches) {
+      const cached = cachedShellOf(source.dispatcherEnvironmentId, launch);
+      const key = hostKey(source.dispatcherEnvironmentId, launch.host);
+      if (cached !== null && !resolvedHosts.has(key)) resolvedHosts.set(key, cached.environmentId);
+    }
+  }
+
+  for (const { source, groups } of reports) {
     const dispatcher = source.dispatcherEnvironmentId;
     const dispatcherLabel = labelOf.get(dispatcher) ?? null;
     const dispatcherOwner = owners.get(dispatcher) ?? dispatcher;
@@ -516,26 +548,8 @@ export function buildFleet(input: {
     const sharesClientAliases =
       input.primaryEnvironmentId !== null &&
       scopeOf(dispatcher) === scopeOf(input.primaryEnvironmentId);
-    // Shells from disconnected environments must not resolve a launch: their
-    // state is stale, so the launch would vanish from both live and reported.
-    const groups = presentRemoteLaunches({
-      dispatcherEnvironmentId: dispatcher,
-      launches: source.launches,
-      shells: connectedShells,
-    });
-    const cachedShellOf = (launch: RemoteLaunch) =>
-      launch.threadId === null ? null : findRemoteShell(cachedShells, dispatcher, launch.threadId);
-    const resolvedHosts = new Map<string, EnvironmentId>();
-    for (const group of groups) {
-      if (group.environmentId !== null) resolvedHosts.set(group.host, group.environmentId);
-    }
-    for (const launch of source.launches) {
-      const cached = cachedShellOf(launch);
-      if (cached !== null && !resolvedHosts.has(launch.host))
-        resolvedHosts.set(launch.host, cached.environmentId);
-    }
     const resolveAlias = (alias: string) =>
-      resolvedHosts.get(alias) ??
+      resolvedHosts.get(hostKey(dispatcher, alias)) ??
       (sharesClientAliases ? environmentBySshAlias.get(alias) : undefined);
     const hostMachine = (alias: string, kind: "ssh" | "cloud", label: string) => {
       const named = (machine: MutableMachine) => {
@@ -594,13 +608,16 @@ export function buildFleet(input: {
     }
 
     groups.forEach((group) => {
+      // A host some server resolved is that machine under this alias too, even when every
+      // launch on it is a live thread counted above.
+      if (resolveAlias(group.host) !== undefined) hostMachine(group.host, "ssh", group.host);
       group.launches.forEach((presented, index) => {
         const launch = presented.launch;
         // A launch whose thread is loaded here is that live thread, idle or not.
         if (presented.ref !== null) return;
         if (launch.state !== "launching" && launch.state !== "running") return;
         if (launch.hostUnavailableSince !== null) return;
-        const cached = cachedShellOf(launch);
+        const cached = cachedShellOf(dispatcher, launch);
         const machine = hostMachine(group.host, "ssh", group.host);
         // A cached shell names the agent; whether the run still goes is the dispatcher's word,
         // since the two machines' clocks cannot order a stale shell against a resumed run.

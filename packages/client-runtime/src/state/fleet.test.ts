@@ -731,6 +731,33 @@ describe("buildFleet machine identity", () => {
     ]);
   });
 
+  it("puts an alias one server resolved on that machine for every server reading its SSH config", () => {
+    const fleet = buildFleet({
+      environments,
+      primaryEnvironmentId: mac,
+      shells: [shell(lidge, "ws10", { title: "GCU WS10" })],
+      remote: [
+        // The desktop's own report names lidge-ts with work this client has never loaded.
+        {
+          dispatcherEnvironmentId: mac,
+          launches: [launch({ host: "lidge-ts", title: "Other work" })],
+          cloudMachines: [],
+        },
+        headlessReports,
+      ],
+      provider,
+    });
+    expect(fleet.machines.map((machine) => [machine.label, machine.reported])).toEqual([
+      ["jun's MacBook Pro", 0],
+      ["MINI", 1],
+      ["lidge-AI-AI", 2],
+    ]);
+    expect(fleet.machines[2]!.reportedAliases).toEqual([
+      { via: mac, alias: "lidge-ts" },
+      { via: headless, alias: "lidge-ts" },
+    ]);
+  });
+
   it("counts one agent across a machine's servers only when both name the same provider", () => {
     const work = ProviderInstanceId.make("work");
     const providers = new Map([
