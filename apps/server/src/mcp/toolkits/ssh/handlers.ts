@@ -249,14 +249,17 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
       }),
     ),
   ),
-  goat_ssh_runtime_update: McpToolAccess.writesEnvironment((input, check) =>
-    Effect.gen(function* () {
-      const caller = yield* check;
-      const setup = yield* SshHostSetup.SshHostSetup;
-      return yield* setup
-        .update(input, { kind: "mcp", scope: caller.scope })
-        .pipe(Effect.mapError(toSetupFailure("capability_denied")));
-    }),
+  goat_ssh_runtime_update: McpToolAccess.writesEnvironment(
+    (input, check) =>
+      Effect.gen(function* () {
+        const caller = yield* check;
+        yield* McpToolAccess.admit(input);
+        const setup = yield* SshHostSetup.SshHostSetup;
+        return yield* setup
+          .update(input, { kind: "mcp", scope: caller.scope })
+          .pipe(Effect.mapError(toSetupFailure("capability_denied")));
+      }),
+    { admission: "handler" },
   ),
   // Reading ~/.ssh/config changes nothing; probing logs in but runs only `true`.
   goat_ssh_host_list: McpToolAccess.reads((input) =>
@@ -270,38 +273,42 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     }),
   ),
   // Linking stores a session that reaches another machine, like saving a connection.
-  goat_host_link_create: McpToolAccess.writesEnvironment((input, check) =>
-    Effect.gen(function* () {
-      yield* requireOrchestration;
-      const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
-      const sshHosts = yield* dispatch
-        .listHosts({ probe: false })
-        .pipe(Effect.orElseSucceed((): ReadonlyArray<SshRemoteDispatch.SshDispatchHost> => []));
-      if (sshHosts.some((host) => host.alias === input.name.trim())) {
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message: `${input.name} is already an SSH host on this machine; pick another name for the link.`,
-        });
-      }
-      const environment = yield* ServerEnvironment.ServerEnvironment;
-      const descriptor = yield* environment.getDescriptor;
-      const linkedHosts = yield* linkedHostsService;
-      const linked = yield* linkedHosts
-        .link({
-          name: input.name,
-          url: input.url,
-          code: input.code,
-          access: input.access ?? "approval-required",
-          beforeSave: check.pipe(Effect.asVoid),
-          clientName: `GOAT on ${descriptor.label}`,
-        })
-        .pipe(
-          Effect.mapError((error) =>
-            error instanceof LinkedHosts.LinkedHostError ? toLinkFailure(error) : error,
-          ),
-        );
-      return { host: linked.host, replaced: linked.replaced };
-    }),
+  goat_host_link_create: McpToolAccess.writesEnvironment(
+    (input, check) =>
+      Effect.gen(function* () {
+        yield* requireOrchestration;
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        const sshHosts = yield* dispatch
+          .listHosts({ probe: false })
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<SshRemoteDispatch.SshDispatchHost> => []));
+        if (sshHosts.some((host) => host.alias === input.name.trim())) {
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: `${input.name} is already an SSH host on this machine; pick another name for the link.`,
+          });
+        }
+        const environment = yield* ServerEnvironment.ServerEnvironment;
+        const descriptor = yield* environment.getDescriptor;
+        const linkedHosts = yield* linkedHostsService;
+        yield* check;
+        yield* McpToolAccess.admit(input);
+        const linked = yield* linkedHosts
+          .link({
+            name: input.name,
+            url: input.url,
+            code: input.code,
+            access: input.access ?? "approval-required",
+            beforeSave: check.pipe(Effect.asVoid),
+            clientName: `GOAT on ${descriptor.label}`,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              error instanceof LinkedHosts.LinkedHostError ? toLinkFailure(error) : error,
+            ),
+          );
+        return { host: linked.host, replaced: linked.replaced };
+      }),
+    { admission: "handler" },
   ),
   goat_host_link_list: McpToolAccess.reads(() =>
     Effect.gen(function* () {
