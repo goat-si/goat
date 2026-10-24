@@ -131,8 +131,9 @@ export class CloudMachineService extends Context.Service<
     /** Whether this server manages the alias; reads only the local catalog. */
     readonly owns: (alias: string) => Effect.Effect<boolean>;
     /**
-     * Whether the machine was deleted or forgotten: the catalog no longer lists it or Boat accepted
-     * its delete. Fails when the catalog cannot be read, so an unknown answer is never "removed".
+     * Whether the machine was deleted or forgotten: the catalog no longer lists it, Boat accepted
+     * its delete, or Boat answers that it no longer exists. Fails when the catalog cannot be read,
+     * and an unanswered Boat check is "not removed", so an unknown answer never counts as gone.
      */
     readonly isRemoved: (alias: string) => Effect.Effect<boolean, CloudMachineError>;
     /**
@@ -611,12 +612,14 @@ const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => false),
       ),
     isRemoved: (alias) =>
-      readCatalog.pipe(
-        Effect.map((catalog) => {
-          const machine = catalog.machines.find((entry) => entry.alias === alias);
-          return machine === undefined || machine.deletePending;
-        }),
-      ),
+      Effect.gen(function* () {
+        const machine = (yield* readCatalog).machines.find((entry) => entry.alias === alias);
+        if (machine === undefined || machine.deletePending) return true;
+        // A delete Boat accepted just before GOAT stopped leaves the entry unmarked; only Boat's
+        // own 404 proves it gone. The read never wakes the machine.
+        if (!(yield* isConfigured)) return false;
+        return (yield* remoteOf(yield* apiKey, machine)).presence === "not_found";
+      }),
     onRemoving: (listener) => Effect.sync(() => void removingListeners.push(listener)),
     onAliasInvalidated: (listener) => Effect.sync(() => void listeners.push(listener)),
     onReady: (listener) => Effect.sync(() => void readyListeners.push(listener)),

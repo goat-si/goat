@@ -590,7 +590,6 @@ const make = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       const status = yield* homeLinks();
       if (status === undefined) return homeUnavailable("join", alias, steps);
-      yield* provisioned.settle(alias, status);
       if (status.role === "child")
         return result(
           "join",

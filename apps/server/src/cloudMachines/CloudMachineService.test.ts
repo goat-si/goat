@@ -3,6 +3,7 @@ import { CloudMachineError, type CloudMachineState } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -386,6 +387,27 @@ describe("CloudMachineService lifecycle", () => {
           expect((yield* service.list()).machines).toMatchObject([
             { alias: ALIAS, deletePending: false },
           ]);
+        }),
+      );
+    }),
+  );
+
+  it.effect("a delete Boat accepted counts as removed once Boat no longer shows it", () =>
+    Effect.gen(function* () {
+      const world = makeWorld();
+      yield* withService(world, { ownedState: "running" }, (service) =>
+        Effect.gen(function* () {
+          // GOAT stops right after recording the removal, before the catalog marks the delete.
+          yield* service.onRemoving(() => Effect.interrupt);
+          expect(Exit.hasInterrupts(yield* service.delete(ALIAS).pipe(Effect.exit))).toBe(true);
+          expect((yield* service.list()).machines[0]?.deletePending).toBe(false);
+          expect(yield* service.isRemoved(ALIAS)).toBe(false);
+          world.missing.add(ID);
+          expect(yield* service.isRemoved(ALIAS)).toBe(true);
+          // A key that cannot see the machine proves nothing.
+          world.missing.delete(ID);
+          world.failures.set("get", "scope_denied");
+          expect(yield* service.isRemoved(ALIAS)).toBe(false);
         }),
       );
     }),

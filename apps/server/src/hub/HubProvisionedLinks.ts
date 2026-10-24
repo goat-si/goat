@@ -18,9 +18,11 @@ import { type HubOcxError, SAFE_ALIAS } from "./HubOcx.ts";
  * person added, or one that later took the alias over, stays. A release stays pending until the
  * Home shows the link and its tunnel gone, so a failed one is retried after a restart.
  *
- * Every join takes the hub permit and reads link status first, and so does a release. That makes
- * an add whose outcome GOAT never learned (a lost response, a crash) safe to settle on the next
- * read: no one else could have linked the alias in between.
+ * Every join holds the hub permit from its first link status read, which found no link under the
+ * alias, through `ocx link add` and the status read after it. Whatever link holds the alias then is
+ * the one GOAT just added, even when the add's own answer was lost. An add that GOAT never saw
+ * finish (it stopped, or status was unreadable) is never claimed later: by then a person could
+ * have linked the alias, so its release revokes nothing and is audited as unproven.
  */
 
 interface HomeLink {
@@ -69,21 +71,6 @@ export const makeProvisionedLinks = Effect.gen(function* () {
     sql<Row>`SELECT link_id, tunnel_port, adding_since, release_requested_at, released_at
       FROM hub_provisioned_links WHERE alias = ${alias}`.pipe(Effect.map((rows) => rows[0]));
 
-  const recordAdded = (alias: string, linkId: string | undefined) =>
-    linkId === undefined
-      ? sql`UPDATE hub_provisioned_links SET adding_since = NULL WHERE alias = ${alias}`
-      : sql`UPDATE hub_provisioned_links
-          SET link_id = ${linkId}, tunnel_port = NULL, adding_since = NULL WHERE alias = ${alias}`;
-
-  /** Settles an unfinished add: the link under the alias, if any, is the one GOAT was adding. */
-  const settle = Effect.fn("HubProvisionedLinks.settle")(function* (
-    alias: string,
-    status: NonNullable<HomeLinks>,
-  ) {
-    if ((yield* read(alias))?.adding_since == null) return;
-    yield* recordAdded(alias, status.links.find((entry) => entry.alias === alias)?.id);
-  }, Effect.mapError(storageFailure));
-
   /**
    * Under the hub permit, before `ocx link add` for a machine GOAT created. False when that machine
    * is being removed; otherwise notes the attempt so its outcome is settled even if it is lost.
@@ -95,18 +82,25 @@ export const makeProvisionedLinks = Effect.gen(function* () {
     return true;
   }, Effect.mapError(storageFailure));
 
-  /** After `ocx link add`; without an id from it, the Home's link status decides. */
+  /** After `ocx link add`, still under the permit: records the added link and its tunnel port. */
   const finishAdd = Effect.fn("HubProvisionedLinks.finishAdd")(function* (
     alias: string,
     linkId: string | undefined,
     homeLinks: Effect.Effect<HomeLinks, HubOcxError>,
   ) {
-    if (linkId !== undefined)
-      return yield* recordAdded(alias, linkId).pipe(Effect.mapError(storageFailure));
-    // Unreadable status leaves the attempt noted for the next read to settle.
     const status = yield* homeLinks.pipe(Effect.orElseSucceed((): HomeLinks => undefined));
-    if (status !== undefined) yield* settle(alias, status);
-  });
+    // Neither the add nor status said what happened, so the attempt stays unresolved.
+    if (linkId === undefined && status === undefined) return;
+    const added = status?.links.find((entry) =>
+      linkId === undefined ? entry.alias === alias : entry.id === linkId,
+    );
+    const id = linkId ?? added?.id;
+    yield* id === undefined
+      ? sql`UPDATE hub_provisioned_links SET adding_since = NULL WHERE alias = ${alias}`
+      : sql`UPDATE hub_provisioned_links
+          SET link_id = ${id}, tunnel_port = ${added?.tunnelPort ?? null}, adding_since = NULL
+          WHERE alias = ${alias}`;
+  }, Effect.mapError(storageFailure));
 
   const releases = (home: {
     readonly permit: Semaphore.Semaphore;
@@ -124,7 +118,7 @@ export const makeProvisionedLinks = Effect.gen(function* () {
       steps: HubDeviceStep[],
     ) => Effect.Effect<boolean, HubOcxError>;
     readonly homeTunnels: (
-      alias: string,
+      alias: string | undefined,
       tunnelPort: number | undefined,
     ) => Effect.Effect<number | undefined>;
   }): ProvisionedLinkReleases => {
@@ -150,11 +144,13 @@ export const makeProvisionedLinks = Effect.gen(function* () {
       steps,
       transport: "remote-link",
     });
-    const finish = (alias: string, audited: boolean) =>
+    /** Ends the release; the audit row and the completion commit together. */
+    const finish = (alias: string, outcome: "ready" | "unproven" | undefined) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
-            if (audited) yield* home.audit(CLOUD_CALLER, "hub.release", alias, "ready", undefined);
+            if (outcome !== undefined)
+              yield* home.audit(CLOUD_CALLER, "hub.release", alias, outcome, undefined);
             yield* sql`UPDATE hub_provisioned_links
               SET link_id = NULL, tunnel_port = NULL, adding_since = NULL, released_at = ${yield* now}
               WHERE alias = ${alias}`;
@@ -170,7 +166,7 @@ export const makeProvisionedLinks = Effect.gen(function* () {
       if (before?.release_requested_at == null || before.released_at !== null)
         return result(alias, "ready", "No release is pending for this machine.", steps);
       if (before.link_id === null && before.adding_since === null) {
-        yield* finish(alias, false);
+        yield* finish(alias, undefined);
         return result(alias, "ready", "GOAT added no link for this machine.", steps);
       }
       const status = yield* home.homeLinks;
@@ -178,13 +174,12 @@ export const makeProvisionedLinks = Effect.gen(function* () {
         steps.push({ step: "revoke", outcome: "failed", detail: "Link status is unavailable." });
         return undefined;
       }
-      yield* settle(alias, status);
-      const row = yield* read(alias).pipe(Effect.mapError(storageFailure));
-      if (row?.link_id == null) {
-        yield* finish(alias, false);
-        return result(alias, "ready", "GOAT's add left no link for this machine.", steps);
-      }
-      const recorded = status.links.find((entry) => entry.id === row.link_id);
+      const port = before.tunnel_port ?? undefined;
+      const recorded =
+        before.link_id === null
+          ? undefined
+          : status.links.find((entry) => entry.id === before.link_id);
+      const holder = status.links.find((entry) => entry.alias === alias);
       let gone: boolean;
       if (recorded !== undefined) {
         if (recorded.alias !== alias) {
@@ -200,31 +195,42 @@ export const makeProvisionedLinks = Effect.gen(function* () {
           yield* sql`UPDATE hub_provisioned_links SET tunnel_port = ${recorded.tunnelPort}
             WHERE alias = ${alias}`.pipe(Effect.mapError(storageFailure));
         gone = yield* home.revokeOnHome(alias, recorded, steps);
-      } else if (status.links.some((entry) => entry.alias === alias)) {
-        // Another link took the alias over, which only a leave or re-link that revoked and
-        // checked GOAT's link can do; that link is not GOAT's to touch.
-        steps.push({
-          step: "revoke",
-          outcome: "ok",
-          detail: `${row.link_id} was already replaced.`,
-        });
-        gone = true;
       } else {
-        // No link names the alias, so any tunnel to it is what is left of GOAT's.
-        const tunnels = yield* home.homeTunnels(alias, row.tunnel_port ?? undefined);
+        if (
+          holder !== undefined &&
+          (before.adding_since !== null || port === undefined || holder.tunnelPort === port)
+        ) {
+          // A link GOAT cannot prove is its own holds the alias, and its tunnel cannot be told
+          // apart from GOAT's old one. Both stay; the audit says so.
+          steps.push({
+            step: "revoke",
+            outcome: "deferred",
+            detail: `Link ${holder.id} holds ${alias}, and GOAT cannot prove it or its tunnel is GOAT's.`,
+          });
+          yield* finish(alias, "unproven");
+          return result(
+            alias,
+            "degraded",
+            `GOAT left link ${holder.id} on ${alias} in place: it cannot prove it added it.`,
+            steps,
+          );
+        }
+        // GOAT's link record is gone. With no link under the alias any tunnel to it is GOAT's;
+        // with a newer link there, only GOAT's old port is.
+        const tunnels = yield* home.homeTunnels(holder === undefined ? alias : undefined, port);
         gone = tunnels === 0;
         steps.push({
           step: "link_removed",
           outcome: gone ? "ok" : "failed",
           detail: gone
-            ? `${row.link_id} is already gone, with no ssh -R tunnel left.`
+            ? "GOAT's link is already gone, with no ssh -R tunnel left."
             : tunnels === undefined
               ? "This Home's ssh tunnels could not be listed."
               : `${tunnels} ssh -R tunnel for the old link is still running.`,
         });
       }
       if (!gone) return undefined;
-      yield* finish(alias, true);
+      yield* finish(alias, "ready");
       return result(alias, "ready", `The link GOAT added for ${alias} is revoked.`, steps);
     });
 
@@ -276,5 +282,5 @@ export const makeProvisionedLinks = Effect.gen(function* () {
     };
   };
 
-  return { beginAdd, finishAdd, settle, releases };
+  return { beginAdd, finishAdd, releases };
 });

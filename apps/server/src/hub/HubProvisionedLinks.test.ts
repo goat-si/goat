@@ -11,12 +11,13 @@ import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as HubMembership from "./HubMembership.ts";
-import { HubOcx, type HubOcxError, type OcxOutput } from "./HubOcx.ts";
+import { HubOcx, HubOcxError, type OcxOutput } from "./HubOcx.ts";
 import * as HubParity from "./HubParity.ts";
 
 const PINNED = "SHA256:pinnedpinnedpinnedpinnedpinnedpinnedpinned0";
 const GOAT_LINK = "lnk_fedcba9876543210";
 const PERSON_LINK = "lnk_0123456789abcdef";
+const portOf = (id: string) => (id === GOAT_LINK ? 42255 : 42256);
 const scope: McpInvocationScope = {
   environmentId: EnvironmentId.make("hub"),
   capabilities: new Set(["orchestration"]),
@@ -33,7 +34,9 @@ interface Fixture {
   readonly revokeExit?: number;
   /** `ocx link add` links the device but its answer is lost. */
   readonly addLost?: boolean;
-  /** An ssh -R tunnel to the alias keeps running after its link record is gone. */
+  /** OpenCodex is unreachable when GOAT runs `ocx link add`, so GOAT never learns what it did. */
+  readonly addUnreachable?: boolean;
+  /** A revoked link's ssh -R tunnel keeps running after its record is gone. */
   readonly strayTunnel?: boolean;
   /** The database a previous instance used, to model a GOAT restart. */
   readonly database?: SqlClient.SqlClient;
@@ -43,6 +46,8 @@ interface Fixture {
 const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fixture = {}) {
   const calls: string[] = [];
   const links = new Map((fixture.linked ?? []).map((alias) => [alias, PERSON_LINK]));
+  /** Running ssh -R tunnels, by forwarded port. */
+  const tunnels = new Map([...links].map(([alias, id]) => [portOf(id), alias]));
   const json = (value: unknown): OcxOutput => ({ code: 0, stdout: JSON.stringify(value) });
   const home = (args: ReadonlyArray<string>): Effect.Effect<OcxOutput, HubOcxError> => {
     calls.push(`home ${args.join(" ")}`);
@@ -51,13 +56,18 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
       return Effect.succeed(
         json({
           role: "home",
-          links: [...links].map(([name, id]) => ({ id, alias: name, tunnelPort: 42255 })),
+          links: [...links].map(([name, id]) => ({ id, alias: name, tunnelPort: portOf(id) })),
         }),
       );
     if (command === "probe")
       return Effect.succeed(json({ alias, fingerprint: PINNED, keyType: "ssh-ed25519" }));
     if (command === "add") {
+      if (fixture.addUnreachable)
+        return Effect.fail(
+          new HubOcxError({ reason: "unreachable", message: "OpenCodex is down." }),
+        );
       links.set(alias!, GOAT_LINK);
+      tunnels.set(portOf(GOAT_LINK), alias!);
       return Effect.succeed(
         fixture.addLost ? { code: 124, stdout: "" } : json({ linkId: GOAT_LINK }),
       );
@@ -65,6 +75,7 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
     if (command === "revoke") {
       if (fixture.revokeExit) return Effect.succeed({ code: fixture.revokeExit, stdout: "" });
       for (const [name, id] of links) if (id === args[3]) links.delete(name);
+      if (!fixture.strayTunnel) tunnels.delete(portOf(args[3]!));
       return Effect.succeed(json({ linkId: args[3] }));
     }
     return Effect.die(`unexpected ocx ${args.join(" ")}`);
@@ -87,7 +98,10 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
             homeTunnels: (alias, port) =>
               Effect.sync(() => {
                 calls.push(`tunnels ${alias} ${port}`);
-                return links.has(alias) || fixture.strayTunnel ? 1 : 0;
+                return [...tunnels].filter(
+                  ([forwarded, name]) =>
+                    forwarded === port || (alias !== undefined && name === alias),
+                ).length;
               }),
           }),
         ),
@@ -116,6 +130,12 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
     calls,
     sql,
     links,
+    tunnels,
+    /** A person links the alias anew after GOAT's link was revoked. */
+    replace: (alias: string) => {
+      links.set(alias, PERSON_LINK);
+      tunnels.set(portOf(PERSON_LINK), alias);
+    },
     audit: sql<{ action: string; target: string; outcome: string }>`SELECT action, target, outcome
       FROM audit_events WHERE action LIKE 'hub.%' ORDER BY id`,
   };
@@ -171,7 +191,10 @@ it.effect(
         // Not replaced: a person linked the alias first, so GOAT's setup reused that link.
         const hub = yield* setup({ linked: replaced ? [] : ["boat-builder"] });
         yield* hub.membership.joinProvisioned(scope, "boat-builder");
-        if (replaced) hub.links.set("boat-builder", PERSON_LINK);
+        if (replaced) {
+          hub.tunnels.delete(portOf(GOAT_LINK));
+          hub.replace("boat-builder");
+        }
         hub.calls.length = 0;
         yield* hub.membership.requestRelease("boat-builder");
         // The link GOAT recorded is already gone, which counts as released.
@@ -205,6 +228,7 @@ it.effect("a revoke that fails stays pending and is retried after GOAT restarts"
 
     const restarted = yield* setup({ database: hub.sql });
     restarted.links.set("boat-builder", GOAT_LINK);
+    restarted.tunnels.set(portOf(GOAT_LINK), "boat-builder");
     expect(yield* restarted.membership.pendingReleases).toEqual(["boat-builder"]);
     expect((yield* restarted.membership.releaseProvisioned("boat-builder")).state).toBe("ready");
     expect(restarted.calls).toContain(
@@ -236,4 +260,40 @@ it.effect(
       });
       expect(yield* restarted.membership.pendingReleases).toEqual([]);
     }),
+);
+
+it.effect("a replacement link does not hide the tunnel GOAT's revoked link left running", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ strayTunnel: true });
+    yield* hub.membership.joinProvisioned(scope, "boat-builder");
+    yield* hub.membership.requestRelease("boat-builder");
+    expect((yield* hub.membership.releaseProvisioned("boat-builder")).state).toBe("failed");
+    hub.replace("boat-builder");
+    hub.calls.length = 0;
+    expect((yield* hub.membership.releaseProvisioned("boat-builder")).state).toBe("failed");
+    // Counted by GOAT's old port alone, so the replacement's own tunnel does not count.
+    expect(hub.calls).toEqual(["home link status --json", "tunnels undefined 42255"]);
+    hub.tunnels.delete(portOf(GOAT_LINK));
+    expect((yield* hub.membership.releaseProvisioned("boat-builder")).state).toBe("ready");
+    expect(hub.links.get("boat-builder")).toBe(PERSON_LINK);
+    expect(hub.tunnels.get(portOf(PERSON_LINK))).toBe("boat-builder");
+    expect(yield* hub.membership.pendingReleases).toEqual([]);
+  }),
+);
+
+it.effect("an add GOAT never saw finish claims nothing: a link a person made later stays", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ addUnreachable: true });
+    expect((yield* hub.membership.joinProvisioned(scope, "boat-builder")).state).toBe("failed");
+    // While GOAT was down, a person linked the alias.
+    hub.replace("boat-builder");
+    yield* hub.membership.requestRelease("boat-builder");
+    hub.calls.length = 0;
+    const released = yield* hub.membership.releaseProvisioned("boat-builder");
+    expect(released.state).toBe("degraded");
+    expect(hub.calls).toEqual(["home link status --json"]);
+    expect(hub.links.get("boat-builder")).toBe(PERSON_LINK);
+    expect((yield* hub.audit).at(-1)).toMatchObject({ action: "hub.release", outcome: "unproven" });
+    expect(yield* hub.membership.pendingReleases).toEqual([]);
+  }),
 );
