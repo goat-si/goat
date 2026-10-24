@@ -10,6 +10,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
+import { interruptibleTurns } from "../mcp/hostStatusModel.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -98,7 +99,7 @@ export class HubOcx extends Context.Service<
     ) => Effect.Effect<OcxOutput, HubOcxError>;
     /** False when `ssh -G` shows a jump chain or proxy command, or cannot resolve the alias. */
     readonly directAlias: (alias: string) => Effect.Effect<boolean>;
-    /** Running turns on the device; undefined when it cannot be read. */
+    /** Running turns on the device, subagents included; undefined when it cannot be read. */
     readonly runningTurns: (
       alias: string,
       scope: McpInvocationScope,
@@ -359,9 +360,9 @@ const make = Effect.gen(function* () {
           decodeStatus,
         );
         const entry = status.hosts.find(({ host }) => host === null);
-        return entry?.reachability === "ok" && !entry.lastKnown
-          ? entry.metrics?.threads.running
-          : undefined;
+        const threads =
+          entry?.reachability === "ok" && !entry.lastKnown ? entry.metrics?.threads : undefined;
+        return threads === undefined ? undefined : interruptibleTurns(threads);
       },
       Effect.orElseSucceed(() => undefined),
     ),

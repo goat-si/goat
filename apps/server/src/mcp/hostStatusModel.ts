@@ -36,6 +36,16 @@ export function runningSubagents(threads: ReadonlyArray<HostThreadCountSource>):
   ).length;
 }
 
+/**
+ * Turns a runtime restart would interrupt on a host: top-level and subagent. Undefined when the
+ * host predates `subagentsRunning`, because it cannot show its children are idle.
+ */
+export function interruptibleTurns(threads: HostThreadCounts): number | undefined {
+  return threads.subagentsRunning === undefined
+    ? undefined
+    : threads.running + threads.subagentsRunning;
+}
+
 export function countHostThreads(threads: ReadonlyArray<HostThreadCountSource>): HostThreadCounts {
   const counts = { running: 0, waiting: 0, queued: 0 };
   for (const thread of threads) {
