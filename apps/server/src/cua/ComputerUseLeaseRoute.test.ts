@@ -28,6 +28,8 @@ const fixture = Effect.fnUntraced(function* () {
     channelOrigin: () => Effect.succeed(undefined),
     state: () => Effect.die("unused"),
     control: () => Effect.die("unused"),
+    everyAppControl: () => Effect.die("unused"),
+    serializeAdmission: (effect) => effect,
     controlState: () =>
       Effect.gen(function* () {
         if (yield* Ref.get(revoked)) return { _tag: "ended", reason: "revoked" } as const;
@@ -44,13 +46,16 @@ const fixture = Effect.fnUntraced(function* () {
         } as const;
       }),
     stop: () => Effect.die("unused"),
+    setTarget: () => Effect.die("unused"),
+    humanInput: () => Effect.die("unused"),
+    agentInput: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
     turnEnded: () => Effect.die("unused"),
     settle: Effect.die("unused"),
     disable: Effect.die("unused"),
     grants: Effect.die("unused"),
     pause: () => Effect.die("unused"),
-    detection: Effect.succeed({ humanInput: true, privateMode: true }),
+    detection: Effect.succeed({ humanInput: true, privateMode: true, frames: false }),
     resume: Effect.die("unused"),
     sessions: Effect.die("unused"),
     subscribe: PubSub.subscribe(signals),

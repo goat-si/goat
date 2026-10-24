@@ -16,6 +16,7 @@ import * as Stream from "effect/Stream";
 import { HttpBody } from "effect/http";
 
 import * as Settings from "../serverSettings.ts";
+import { advertisesMemoryTools } from "../sshRemote/remoteToolNames.ts";
 import { type ListedTool, serveCatalogOverHttp } from "./agentSurface.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { filterToolsListBody, listingChanges } from "./toolListing.ts";
@@ -26,17 +27,21 @@ const base = {
   capabilities: new Set(["orchestration", "worktree", "pull-requests", "preview"] as const),
   issuedAt: 0,
 };
-const callers: Readonly<Record<"thread" | "client" | "readOnly", McpInvocationScope>> = {
+const thread: McpInvocationScope = {
+  ...base,
+  requestNamespace: "provider:thread",
   thread: {
-    ...base,
-    requestNamespace: "provider:thread",
-    thread: {
-      threadId: ThreadId.make("thread"),
-      providerSessionId: "provider:thread",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-    },
-    client: undefined,
+    threadId: ThreadId.make("thread"),
+    providerSessionId: "provider:thread",
+    providerInstanceId: ProviderInstanceId.make("codex"),
   },
+  client: undefined,
+};
+const callers: Readonly<
+  Record<"thread" | "deviceThread" | "client" | "readOnly", McpInvocationScope>
+> = {
+  thread,
+  deviceThread: { ...thread, capabilities: new Set([...base.capabilities, "device"]) },
   client: {
     ...base,
     requestNamespace: "client:full",
@@ -65,6 +70,8 @@ const refusalMessage = (result: { readonly content: ReadonlyArray<unknown> }) =>
 
 /** What a thread's model sees of the core listing: name, description and input schema. */
 const CORE_LISTING_BUDGET_BYTES = 6 * 1024;
+/** What an outside agent's MCP config sends on every request to ask for the core listing. */
+const asksForCore = { "x-goat-tool-listing": "core" };
 
 it.effect(
   "lists threads only the core tools, and keeps for clients the launch arguments another host's dispatch reads",
@@ -84,6 +91,97 @@ it.effect(
       );
       // A client that keeps the full listing still learns which listing agents get.
       expect((yield* http.listResultMeta("client"))?.[AGENT_TOOL_LISTING_META_KEY]).toBe("core");
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect.each(["core", "full"] as const)(
+  "lists an outside client that asks for the core listing only goat_describe and goat_call, and keeps every other caller's listing (setting %s)",
+  (setting) =>
+    Effect.gen(function* () {
+      const http = yield* serveCatalogOverHttp(
+        {
+          ...callers,
+          asking: callers.client,
+          askingReadOnly: callers.readOnly,
+          askingFull: callers.client,
+          askingUnknown: callers.client,
+          askingThread: callers.thread,
+        },
+        setting,
+        {
+          asking: asksForCore,
+          askingReadOnly: { "x-goat-tool-listing": " CoRe " },
+          askingFull: { "x-goat-tool-listing": "full" },
+          askingUnknown: { "x-goat-tool-listing": "core,full" },
+          askingThread: asksForCore,
+        },
+      );
+      for (const caller of ["asking", "askingReadOnly"])
+        expect(names(yield* http.listTools(caller)), `${setting} ${caller}`).toEqual([
+          "goat_call",
+          "goat_describe",
+        ]);
+      // The result still names the listing agents get, which the D8 runner reads.
+      expect((yield* http.listResultMeta("asking"))?.[AGENT_TOOL_LISTING_META_KEY]).toBe(setting);
+      // Remote dispatch sends no header: it reads launch arguments and memory tools from here.
+      expect(advertisesMemoryTools(yield* http.listTools("client")), setting).toBe(true);
+      for (const caller of ["client", "askingFull", "askingUnknown"])
+        expect(names(yield* http.listTools(caller)), `${setting} ${caller}`).toEqual(
+          listed((entry) => entry.requires !== "thread"),
+        );
+      // A thread's listing follows the server setting, whatever its harness sends.
+      expect(names(yield* http.listTools("askingThread")), setting).toEqual(
+        setting === "core"
+          ? ["goat_call", "goat_describe"]
+          : listed((entry) => entry.requires !== "client" && entry.resource !== "device"),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("lists a client by the header of each tools/list, within one session", () =>
+  Effect.gen(function* () {
+    const sent: Record<string, string> = {};
+    const http = yield* serveCatalogOverHttp({ client: callers.client }, "core", { client: sent });
+    const full = listed((entry) => entry.requires !== "thread");
+    expect(names(yield* http.listTools("client"))).toEqual(full);
+    sent["x-goat-tool-listing"] = "core";
+    expect(names(yield* http.listTools("client"))).toEqual(["goat_call", "goat_describe"]);
+    sent["x-goat-tool-listing"] = "";
+    expect(names(yield* http.listTools("client"))).toEqual(full);
+  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "answers every call from a client that asks for the core listing as it would without",
+  () =>
+    Effect.gen(function* () {
+      const http = yield* serveCatalogOverHttp(
+        { ...callers, asking: callers.client, askingReadOnly: callers.readOnly },
+        "core",
+        { asking: asksForCore, askingReadOnly: asksForCore },
+      );
+      // With valid arguments, so an argument check cannot stand in for the read-only refusal.
+      const interrupt = { threadId: "thread" };
+      for (const caller of ["readOnly", "askingReadOnly"]) {
+        const direct = yield* http.callTool(caller, "goat_thread_interrupt", interrupt);
+        const called = yield* http.callTool(caller, "goat_call", {
+          path: "thread.interrupt",
+          args: interrupt,
+        });
+        for (const result of [direct, called])
+          expect(textOf(result), caller).toContain("approved for read-only access");
+      }
+      for (const entry of entries.filter((entry) => entry.requires !== "thread"))
+        for (const [plain, asking] of [
+          ["client", "asking"],
+          ["readOnly", "askingReadOnly"],
+        ] as const) {
+          const name = listedToolName(entry);
+          expect(
+            textOf(yield* http.callTool(asking, name, { goat_probe: 1 })),
+            `${asking} ${name}`,
+          ).toBe(textOf(yield* http.callTool(plain, name, { goat_probe: 1 })));
+        }
     }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 
@@ -138,8 +236,14 @@ it.effect(
 it.effect("lists every tool a caller can use in the full listing and hides the rest", () =>
   Effect.gen(function* () {
     const http = yield* serveCatalogOverHttp(callers, "full");
-    expect(names(yield* http.listTools("thread"))).toEqual(
+    const device = listed((entry) => entry.resource === "device");
+    expect(device).not.toEqual([]);
+    expect(names(yield* http.listTools("deviceThread"))).toEqual(
       listed((entry) => entry.requires !== "client"),
+    );
+    // A thread lists device tools only when the user granted it the device capability.
+    expect(names(yield* http.listTools("thread"))).toEqual(
+      listed((entry) => entry.requires !== "client" && entry.resource !== "device"),
     );
     expect(names(yield* http.listTools("client"))).toEqual(
       listed((entry) => entry.requires !== "thread"),
@@ -200,7 +304,10 @@ it.effect("filters a tools/list answer sent as SSE, buffered or streamed", () =>
       HttpBody.text(event, "text/event-stream"),
       HttpBody.stream(Stream.make(new TextEncoder().encode(event)), "text/event-stream"),
     ]) {
-      const filtered = yield* filterToolsListBody(body, callers.thread, "core");
+      const filtered = yield* filterToolsListBody(body, callers.thread, {
+        listed: "core",
+        agents: "core",
+      });
       const text = filtered._tag === "Uint8Array" ? new TextDecoder().decode(filtered.body) : "";
       const data = text.split("\n").find((line) => line.startsWith("data:")) ?? "";
       const result = JSON.parse(data.slice(5)) as { result: { tools: ReadonlyArray<ListedTool> } };

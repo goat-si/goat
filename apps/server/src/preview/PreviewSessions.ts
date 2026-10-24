@@ -17,6 +17,7 @@ import {
   type PreviewSessionControl,
   type PreviewSessionControlInput,
   type PreviewSessionControlResult,
+  type PreviewSessionFramesInput,
   type PreviewSessionPlatform,
   type PreviewSessionsSnapshot,
   ThreadId,
@@ -34,6 +35,7 @@ import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import { makeComputerUseRpcHandlers, stopAllComputerUse } from "../cua/ComputerUseRpcHandlers.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as DesktopFrames from "./DesktopFrames.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import type { ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
 
@@ -47,6 +49,8 @@ export class PreviewSessions extends Context.Service<
       input: PreviewSessionControlInput,
       sessionId: AuthSessionId,
     ) => Effect.Effect<PreviewSessionControlResult>;
+    /** One viewer's live picture of a desktop session (#1370). */
+    readonly frames: DesktopFrames.DesktopFrames["Service"]["frames"];
   }
 >()("goat/preview/PreviewSessions") {}
 
@@ -72,8 +76,12 @@ export const browserSession = (
   tab: ServerBrowserSessionView,
 ): PreviewSession | undefined => {
   if (tab.agentId === null) return undefined;
-  const status =
-    tab.private || tab.humanControls ? "paused" : tab.agentStopped ? "stopped" : "acting";
+  // A stopped agent stays stopped while a person holds the tab or types a secret in it.
+  const status = tab.agentStopped
+    ? "stopped"
+    : tab.private || tab.humanControls
+      ? "paused"
+      : "acting";
   const controls: ReadonlyArray<PreviewSessionControl> = tab.agentStopped
     ? ["handBack", "stopAll"]
     : tab.humanControls
@@ -121,6 +129,9 @@ export const desktopSession = (
     threadId: control.threadId,
     target: {
       kind: "desktop",
+      ...(control.target === undefined
+        ? {}
+        : { pid: control.target.pid, windowId: control.target.windowId }),
       title:
         scope === undefined
           ? "Computer use"
@@ -159,7 +170,7 @@ export const desktopSession = (
           : state._tag === "paused"
             ? ["handBack", "stop", "stopAll"]
             : ["takeover", "stop", "stopAll"],
-      frames: false,
+      frames: detection.frames,
       privateMode: detection.privateMode,
       humanInput: detection.humanInput,
     },
@@ -169,6 +180,7 @@ export const desktopSession = (
 const make = Effect.gen(function* () {
   const browser = yield* Effect.serviceOption(ServerBrowser.ServerBrowser);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+  const desktopFrames = yield* DesktopFrames.DesktopFrames;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const handoffs = yield* Handoffs.Handoffs;
   const host = yield* HostProcess.Hostname;
@@ -221,8 +233,11 @@ const make = Effect.gen(function* () {
     if (input.control === "stopAll") {
       // Control first, and nothing a stuck page could hold up: no titles or URLs are read.
       if (Option.isSome(browser)) yield* browser.value.stopAllAgents;
-      yield* stopAllComputerUse(leases, handoffs, sessionId);
-      return { applied: true };
+      const { failed } = yield* stopAllComputerUse(leases, handoffs, sessionId);
+      // A grant left alive lets its thread take the screen again on its next turn.
+      return failed === 0
+        ? { applied: true }
+        : ({ applied: false, reason: "not_allowed" } as const);
     }
     if (input.control === "requestHandoff")
       return { applied: false, reason: "not_allowed" } as const;
@@ -251,10 +266,10 @@ const make = Effect.gen(function* () {
     return { applied: true };
   });
 
-  return PreviewSessions.of({ snapshot, changes, control });
+  return PreviewSessions.of({ snapshot, changes, control, frames: desktopFrames.frames });
 });
 
-export const layer = Layer.effect(PreviewSessions, make);
+export const layer = Layer.effect(PreviewSessions, make).pipe(Layer.provide(DesktopFrames.layer));
 
 /** The preview session RPCs, with the computer use controls they build on. */
 export const makePreviewSessionRpcHandlers = Effect.fn("PreviewSessions.rpcHandlers")(function* (
@@ -266,5 +281,7 @@ export const makePreviewSessionRpcHandlers = Effect.fn("PreviewSessions.rpcHandl
     [WS_METHODS.previewSessionsSubscribe]: (_input: {}) => sessions.changes,
     [WS_METHODS.previewSessionsControl]: (input: PreviewSessionControlInput) =>
       sessions.control(input, sessionId),
+    [WS_METHODS.previewSessionsFrames]: (input: PreviewSessionFramesInput) =>
+      sessions.frames(input),
   } as const;
 });

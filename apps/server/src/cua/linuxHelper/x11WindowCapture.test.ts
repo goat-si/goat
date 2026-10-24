@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeZlib from "node:zlib";
 
 import { describe, expect, it } from "vite-plus/test";
 
@@ -10,11 +11,13 @@ import { pngColors } from "./linuxSession.ts";
 import {
   BUSY_CAPTURE,
   captureX11Window,
+  coverage,
   parseSetup,
   RESIZED_CAPTURE,
   rgbToPng,
   SHARED_CAPTURE,
   shrinkRgb,
+  STILL_DRAWING,
   UNREDIRECTED_CAPTURE,
   zpixmapToRgb,
 } from "./x11WindowCapture.ts";
@@ -105,6 +108,8 @@ interface FakeWindow {
 
 const ROOT = 0x2b;
 const COMPOSITE = 140;
+const DAMAGE = 150;
+const DAMAGE_NOTIFY = 91;
 const CLIENT_LIST = 301;
 
 /**
@@ -123,6 +128,21 @@ async function scriptedServer(
     readonly grows?: { readonly width: number; readonly height: number };
     /** The root's _NET_CLIENT_LIST, the windows a window manager manages; none is no manager. */
     readonly managed?: ReadonlyArray<number>;
+    /** How the app redraws when asked: all of it (default), half of it, or not at all. */
+    readonly redraw?: "whole" | "half" | "none";
+    /**
+     * The compositor stops and starts redirecting the frame right after the redraw, which
+     * replaces its backing pixmap with one filled red from behind, unless a client still
+     * redirects it meanwhile.
+     */
+    readonly compositorToggles?: boolean;
+    /** Structure events the server sends right after the redraw: [code, watched, window]. */
+    readonly afterRedraw?: ReadonlyArray<readonly [number, number, number]>;
+    /**
+     * A child the app creates in this window just as its children are first listed: too late
+     * for the listing, so only a client already watching the window hears of it.
+     */
+    readonly createdWhileListed?: { readonly parent: number; readonly child: number };
   },
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
@@ -142,7 +162,14 @@ async function scriptedServer(
     let started = false;
     let geometries = 0;
     const sizes = new Map<number, number>();
-    let named: number | undefined;
+    /** Named pixmaps, each with the backing pixmap generation it names. */
+    const named = new Map<number, number>();
+    let damage: { readonly id: number; readonly drawable: number } | undefined;
+    let pinned = false;
+    let replaced = false;
+    /** Windows this client asked for SubstructureNotify on. */
+    const watching = new Set<number>();
+    let listedOnce = false;
     const reply = (extra: Buffer, data = 0) => {
       const head = Buffer.alloc(32);
       head[0] = 1;
@@ -174,11 +201,57 @@ async function scriptedServer(
         buffer = buffer.subarray(length);
         const window = (at: number) => windows[body.readUInt32LE(at)];
         const payload = (size: number) => Buffer.alloc(size);
+        const damageNotify = (drawable: number, w: number, h: number) => {
+          const event = Buffer.alloc(32);
+          event[0] = DAMAGE_NOTIFY;
+          event.writeUInt16LE(requests.length & 0xffff, 2);
+          event.writeUInt32LE(drawable, 4);
+          event.writeUInt32LE(damage?.id ?? 0, 8);
+          event.writeUInt16LE(w, 20);
+          event.writeUInt16LE(h, 22);
+          socket.write(event);
+        };
         if (op === 98) {
+          const name = body.subarray(8, 8 + body.readUInt16LE(4)).toString();
           const extra = payload(24);
           extra[0] = 1;
-          extra[1] = COMPOSITE;
+          extra[1] = name === "DAMAGE" ? DAMAGE : COMPOSITE;
+          extra[2] = name === "DAMAGE" ? DAMAGE_NOTIFY : 0;
           reply(extra);
+        } else if (op === DAMAGE && minor === 0) {
+          const extra = payload(24);
+          extra.writeUInt32LE(1, 0);
+          extra.writeUInt32LE(1, 4);
+          reply(extra);
+        } else if (op === DAMAGE && minor === 1) {
+          damage = { id: body.readUInt32LE(4), drawable: body.readUInt32LE(8) };
+          const found = windows[damage.drawable];
+          // Creating it reports the whole window at once, which is not a redraw.
+          if (found) damageNotify(damage.drawable, found.width, found.height);
+        } else if (op === 25) {
+          if (options.compositorToggles && !pinned) replaced = true;
+          const found = damage && windows[damage.drawable];
+          const redraw = options.redraw ?? "whole";
+          if (damage && found && redraw !== "none")
+            damageNotify(
+              damage.drawable,
+              found.width,
+              redraw === "half" ? Math.floor(found.height / 2) : found.height,
+            );
+          for (const [code, watched, changed] of damage ? (options.afterRedraw ?? []) : []) {
+            const event = Buffer.alloc(32);
+            event[0] = code;
+            event.writeUInt16LE(requests.length & 0xffff, 2);
+            event.writeUInt32LE(watched, 4);
+            event.writeUInt32LE(changed, 8);
+            const size = windows[changed];
+            // A ConfigureNotify carries the window's size as it is now.
+            if (code === 22 && size) {
+              event.writeUInt16LE(size.width, 20);
+              event.writeUInt16LE(size.height, 22);
+            }
+            socket.write(event);
+          }
         } else if (op === COMPOSITE && minor === 0) {
           const extra = payload(24);
           extra.writeUInt32LE(0, 0);
@@ -186,8 +259,13 @@ async function scriptedServer(
           reply(extra);
         } else if (op === COMPOSITE && minor === 6) {
           const target = body.readUInt32LE(4);
-          if (options.redirected.includes(target)) named = body.readUInt32LE(8);
+          if (options.redirected.includes(target))
+            named.set(body.readUInt32LE(8), replaced ? 1 : 0);
           else error();
+        } else if (op === COMPOSITE && minor === 1) {
+          pinned = true;
+        } else if (op === 14 && named.has(body.readUInt32LE(4))) {
+          reply(Buffer.alloc(24), 24);
         } else if (op === 14) {
           geometries++;
           if (geometries === options.closeOnGeometry) return void socket.destroy();
@@ -211,6 +289,24 @@ async function scriptedServer(
         } else if (op === 15) {
           const found = window(4);
           if (!found) return error();
+          const created = options.createdWhileListed;
+          // The first listing of it once the client has started watching windows, as it walks the tree.
+          if (
+            created &&
+            !listedOnce &&
+            watching.size > 0 &&
+            body.readUInt32LE(4) === created.parent
+          ) {
+            listedOnce = true;
+            if (watching.has(created.parent)) {
+              const event = Buffer.alloc(32);
+              event[0] = 16;
+              event.writeUInt16LE(requests.length & 0xffff, 2);
+              event.writeUInt32LE(created.parent, 4);
+              event.writeUInt32LE(created.child, 8);
+              socket.write(event);
+            }
+          }
           const extra = payload(24 + found.children.length * 4);
           extra.writeUInt32LE(ROOT, 0);
           extra.writeUInt32LE(found.parent, 4);
@@ -236,6 +332,9 @@ async function scriptedServer(
           extra.writeUInt32LE(list.length, 8);
           list.forEach((window, index) => extra.writeUInt32LE(window, 24 + index * 4));
           reply(extra, 32);
+        } else if (op === 2) {
+          if ((body.readUInt32LE(8) & (1 << 11)) !== 0 && (body.readUInt32LE(12) & (1 << 19)) !== 0)
+            watching.add(body.readUInt32LE(4));
         } else if (op === 3) {
           const found = window(4);
           if (!found) return error();
@@ -247,13 +346,14 @@ async function scriptedServer(
           reply(extra);
         } else if (op === 73) {
           if (options.stallImage) continue;
-          if (body.readUInt32LE(4) !== named) return error();
+          const generation = named.get(body.readUInt32LE(4));
+          if (generation === undefined) return error();
           const width = body.readUInt16LE(12);
           const height = body.readUInt16LE(14);
           const extra = payload(24 + width * height * 4);
           extra.writeUInt32LE(0x21, 0);
           for (let pixel = 0; pixel < width * height; pixel++)
-            extra.writeUInt32LE(0x808080, 24 + pixel * 4);
+            extra.writeUInt32LE(generation === 0 ? 0x808080 : 0xff0000, 24 + pixel * 4);
           reply(extra, 24);
         }
       }
@@ -279,6 +379,15 @@ const FRAMED: Record<number, FakeWindow> = {
   0x400001: { parent: ROOT, children: [0x200001], x: 10, y: 10, width: 100, height: 100 },
   0x200001: { parent: 0x400001, children: [], x: 10, y: 30, width: 100, height: 80 },
 };
+
+/** The first pixel of an unfiltered RGB PNG, as rgbToPng writes them. */
+function firstPixel(png: Uint8Array): ReadonlyArray<number> {
+  const bytes = Buffer.from(png);
+  const idat = bytes.indexOf("IDAT");
+  const length = bytes.readUInt32BE(idat - 4);
+  const raw = NodeZlib.inflateSync(bytes.subarray(idat + 4, idat + 4 + length));
+  return [raw[1] ?? -1, raw[2] ?? -1, raw[3] ?? -1];
+}
 
 describe("X11 window capture against a scripted server", () => {
   it("captures a window inside its redirected frame, at the driver's size", async () => {
@@ -394,6 +503,107 @@ describe("X11 window capture against a scripted server", () => {
     ).toEqual({ refused: SHARED_CAPTURE });
   });
 
+  it("refuses, as transient, a window its app has not redrawn whole when asked (#1381)", async () => {
+    // Undrawn parts of a window without a background keep what Composite copied in from behind.
+    for (const redraw of ["none", "half"] as const) {
+      await using server = await scriptedServer(FRAMED, { redirected: [0x400001], redraw });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toEqual({ refused: STILL_DRAWING, transient: true });
+    }
+  });
+
+  it("counts drawing as tiles: rectangles that together cover the window are a whole redraw", () => {
+    const covered = (rects: ReadonlyArray<{ x: number; y: number; w: number; h: number }>) => {
+      const drawn = coverage(100, 80);
+      for (const rect of rects) drawn.add(rect);
+      return drawn.whole();
+    };
+    const tiles = [
+      { x: 50, y: 0, w: 50, h: 40 },
+      { x: 0, y: 0, w: 60, h: 80 },
+      { x: 50, y: 40, w: 50, h: 40 },
+    ];
+    expect(covered(tiles)).toBe(true);
+    expect(covered(tiles.slice(0, 2))).toBe(false);
+    expect(covered([{ x: 1, y: 0, w: 99, h: 80 }])).toBe(false);
+    // Drawing that spills past the window counts only where it is inside.
+    expect(covered([{ x: -10, y: -10, w: 200, h: 200 }])).toBe(true);
+  });
+
+  it("refuses when the window tree read through changes between the redraw and the read", async () => {
+    // Each leaves pixels in the pixmap that the app's redraw never covered (#1390 review).
+    const MAP = 19;
+    const UNMAP = 18;
+    const CREATE = 16;
+    const CONFIGURE = 22;
+    for (const afterRedraw of [
+      // Another app's window mapped inside the target.
+      [[MAP, 0x200001, 0x600001]],
+      // The app adds a child, which is not watched, so anything inside it would go unseen.
+      [[CREATE, 0x200001, 0x200009]],
+      // The target unmapped and mapped again gets a new pixmap, filled from behind it.
+      [
+        [UNMAP, 0x200001, 0x200001],
+        [MAP, 0x200001, 0x200001],
+      ],
+      // Another app's window mapped beside the target, inside its frame.
+      [[MAP, 0x400001, 0x600001]],
+      // A window beside the target moved over it and away again (#1390 review r3).
+      [[CONFIGURE, 0x400001, 0x400005]],
+      // The frame's own window mapped: whatever it holds was never checked (#1390 review r3).
+      [[MAP, 0x400001, 0x400005]],
+    ] as const) {
+      await using server = await scriptedServer(FRAMED, { redirected: [0x400001], afterRedraw });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toEqual({ refused: STILL_DRAWING, transient: true });
+    }
+    // Moving the whole frame on screen keeps its pixmap.
+    await using moved = await scriptedServer(FRAMED, {
+      redirected: [0x400001],
+      afterRedraw: [[22, 0x400001, 0x400001]],
+    });
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: moved.path }),
+    ).toMatchObject({ width: 100 });
+  });
+
+  it("hears of a child added while the tree is first listed, because each window is watched before it is listed (#1400 review r7)", async () => {
+    // Listing first and watching after would miss a child created in between, and anything
+    // later mapped inside it would go unseen.
+    await using server = await scriptedServer(FRAMED, {
+      redirected: [0x400001],
+      createdWhileListed: { parent: 0x200001, child: 0x200009 },
+    });
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toEqual({ refused: STILL_DRAWING, transient: true });
+  });
+
+  it("a compositor toggling redirection cannot swap the pixmap read: the frame stays redirected while it is read", async () => {
+    // A replaced pixmap is filled from what is behind the frame (#1390 review r4b, #1400 r5).
+    await using server = await scriptedServer(FRAMED, {
+      redirected: [0x400001],
+      compositorToggles: true,
+    });
+    const capture = await captureX11Window(environment, 0x200001, shot, {
+      socketPath: server.path,
+    });
+    if (!("png" in capture)) throw new Error(JSON.stringify(capture));
+    // The app's own gray, never the red behind the frame.
+    expect(firstPixel(capture.png)).toEqual([0x80, 0x80, 0x80]);
+  });
+
+  it("bounds the redraw bookkeeping: drawing in many slivers is not waited on", () => {
+    const drawn = coverage(3840, 2160);
+    let accepted = true;
+    for (let stripe = 0; stripe < 1_000 && accepted; stripe++)
+      accepted = drawn.add({ x: stripe * 3, y: 0, w: 1, h: 2160 });
+    expect(accepted).toBe(false);
+    expect(drawn.whole()).toBe(false);
+  });
+
   it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {
     await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
     expect(
@@ -403,7 +613,7 @@ describe("X11 window capture against a scripted server", () => {
         { ...shot, windowHeight: 90 },
         { socketPath: server.path },
       ),
-    ).toEqual({ refused: RESIZED_CAPTURE });
+    ).toEqual({ refused: RESIZED_CAPTURE, transient: true });
   });
 
   it("holds the server from the size check through the pixel read, and only for that", async () => {
@@ -453,7 +663,7 @@ describe("X11 window capture against a scripted server", () => {
       grabLimitMs: 1,
       onGrab: (ms) => held.push(ms),
     });
-    expect(capture).toEqual({ refused: BUSY_CAPTURE });
+    expect(capture).toEqual({ refused: BUSY_CAPTURE, transient: true });
     // The server sees the connection end, which releases the hold.
     await server.ended;
     expect(held).toHaveLength(1);
@@ -485,7 +695,7 @@ describe("X11 window capture against a scripted server", () => {
           { ...shot, ...changed },
           { socketPath: server.path },
         ),
-      ).toEqual({ refused: RESIZED_CAPTURE });
+      ).toEqual({ refused: RESIZED_CAPTURE, transient: true });
   });
 
   it("a connection lost in the middle ends the capture instead of leaving it waiting", async () => {

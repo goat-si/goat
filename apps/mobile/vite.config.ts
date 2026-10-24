@@ -17,6 +17,7 @@ const reactTests = [
   "src/features/goat-bot/useMobileGoatBotSession.test.tsx",
   "src/features/goat-bot/useReplying.test.tsx",
   "src/features/settings/MemorySyncDiagnostics.test.tsx",
+  "src/features/settings/SettingsDecisionInboxRouteScreen.test.tsx",
   "src/features/settings/SettingsMemoryRouteScreen.test.tsx",
   "src/features/threads/HumanHandoffCard.test.tsx",
   "src/features/threads/SubagentRow.memory.test.tsx",

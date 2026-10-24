@@ -6,6 +6,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 vi.mock("../settings/MemorySettings", () => ({ MemorySettingsEntry: () => null }));
 // The notes button has its own tests; its data layer stays out of the header render.
 vi.mock("../../notes/ThreadNotesButton", () => ({ ThreadNotesButton: () => null }));
+vi.mock("../preview/sessions/AgentScreenCardsToggle", () => ({
+  AgentScreenCardsToggle: () => null,
+}));
 
 vi.mock("~/hooks/useThreadActionMenu", () => ({
   useThreadActionMenu: () => ({ openMenu: () => {}, closeMenu: () => {} }),

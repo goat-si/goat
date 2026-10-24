@@ -80,6 +80,11 @@ function EnvironmentDecisions({
           {query.error}
         </p>
       ) : null}
+      {query.data?.unavailableHosts.map((failure) => (
+        <p key={failure.host} role="alert" className="px-4 pb-3 text-sm text-destructive">
+          {failure.host}: {failure.message}
+        </p>
+      ))}
       {!query.data ? (
         <p className="px-4 pb-3 text-sm text-muted-foreground">
           {query.error ? "Could not load decisions. Try Refresh." : "Loading decisions…"}
@@ -92,18 +97,19 @@ function EnvironmentDecisions({
         <ul className="divide-y divide-border/50">
           {query.data.items.map((item) => (
             <DecisionRow
-              key={item.id}
+              key={JSON.stringify([
+                item.from.environmentId ?? environmentId,
+                item.from.host,
+                item.id,
+              ])}
               item={item}
               environmentId={environmentId}
-              onAnswered={query.refresh}
             />
           ))}
         </ul>
       )}
-      {query.data?.items.length === 100 ? (
-        <p className="px-4 py-2 text-xs text-muted-foreground">
-          Showing the most recent 100 decisions.
-        </p>
+      {query.data?.truncated ? (
+        <p className="px-4 py-2 text-xs text-muted-foreground">Some decisions are not shown.</p>
       ) : null}
     </div>
   );
@@ -112,14 +118,13 @@ function EnvironmentDecisions({
 function DecisionRow({
   item,
   environmentId,
-  onAnswered,
 }: {
   readonly item: DecisionItem;
   readonly environmentId: EnvironmentId;
-  readonly onAnswered: () => void;
 }) {
   const allowed = useAtomValue(serverEnvironment.answerDecision.permissionAtom(environmentId));
   const answer = useAtomCommand(serverEnvironment.answerDecision, { reportFailure: false });
+  const getDecision = useAtomCommand(serverEnvironment.getDecision, { reportFailure: false });
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,14 +137,32 @@ function DecisionRow({
     item.source === "decision" ||
     item.pending?.approval !== undefined ||
     simpleQuestion !== undefined;
-  const threadId = item.from.threadId ?? item.pending?.threadId;
+  const local =
+    !item.from.host && (!item.from.environmentId || item.from.environmentId === environmentId);
+  const threadId = local ? (item.from.threadId ?? item.pending?.threadId) : undefined;
   const submit = async (input: Omit<DecisionAnswerInput, "id" | "reason">) => {
     if (saving || !allowed || !reason.trim()) return;
     setSaving(true);
     setError(null);
+    const target = { id: item.id, ...(item.from.host ? { host: item.from.host } : {}) };
+    const current = await getDecision({ environmentId, input: target });
+    if (current._tag === "Failure") {
+      setSaving(false);
+      const failure = squashAtomCommandFailure(current);
+      setError(failure instanceof Error ? failure.message : String(failure));
+      return;
+    }
+    if (
+      current.value.status !== "open" ||
+      (item.from.environmentId && current.value.from.environmentId !== item.from.environmentId)
+    ) {
+      setSaving(false);
+      setError("This decision changed. Refresh before answering.");
+      return;
+    }
     const result = await answer({
       environmentId,
-      input: { ...input, id: item.id, reason: reason.trim() },
+      input: { ...input, ...target, reason: reason.trim() },
     });
     setSaving(false);
     if (result._tag === "Failure") {
@@ -147,10 +170,9 @@ function DecisionRow({
       setError(failure instanceof Error ? failure.message : String(failure));
       return;
     }
-    onAnswered();
   };
   const disabled = saving || !allowed || !reason.trim();
-  const reasonId = `decision-reason-${environmentId}-${item.id}`;
+  const reasonId = `decision-reason-${encodeURIComponent(JSON.stringify([item.from.environmentId ?? environmentId, item.from.host, item.id]))}`;
   return (
     <li className="space-y-2 px-4 py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -171,7 +193,9 @@ function DecisionRow({
           <p className="text-sm">
             Answered:{" "}
             {item.options.find((option) => option.id === item.answer)?.label ?? item.answer}
-            {item.answeredBy ? ` · ${item.answeredBy}` : ""}
+            {(item.answeredByLabel ?? item.answeredBy)
+              ? ` · ${item.answeredByLabel ?? item.answeredBy}`
+              : ""}
           </p>
         ) : null
       ) : canAnswer ? (

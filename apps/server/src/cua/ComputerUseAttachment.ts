@@ -4,6 +4,7 @@ import {
   type CuaDriverMcpConfiguration,
   type ProviderDriverKind,
   type ProviderInteractionMode,
+  type RuntimeMode,
   type ThreadId,
   type TurnCapability,
 } from "@goat/contracts";
@@ -27,6 +28,8 @@ export type ComputerUseRefusal =
   | "read-only"
   | "unavailable"
   | "needs-approval"
+  /** Another thread holds the screen for unattended work; one does at a time. */
+  | "held"
   /** Unattended work needs a helper that reports a person's input and secret fields (#1235). */
   | "detection-unsupported";
 
@@ -59,6 +62,8 @@ export interface ComputerUseAttachmentInput {
   readonly threadId: ThreadId;
   readonly driver: ProviderDriverKind | undefined;
   readonly interactionMode: ProviderInteractionMode | undefined;
+  /** The thread's mode; full access may skip grants when the host allows it. */
+  readonly runtimeMode?: RuntimeMode | undefined;
   readonly readOnly: boolean;
   readonly origin: ComputerUseOrigin;
   /** Absent only in test assemblies, where no turn gets computer use. */
@@ -87,12 +92,24 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   if (Option.isNone(cua) || !(yield* cua.value.enabled)) return none("disabled", unattended);
   if (input.interactionMode === "plan") return none("plan", unattended);
   if (input.readOnly) return none("read-only", unattended);
+  // Unreadable settings keep every default: the built-in skills on and grants required.
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const current = Option.isNone(settings)
+    ? undefined
+    : yield* settings.value.getSettings.pipe(Effect.orElseSucceed(() => undefined));
+  const everyApp = input.runtimeMode === "full-access" && current?.cuaFullAccessAutoAdmit === true;
   const leases = input.leases;
   const lease =
-    unattended && Option.isSome(leases)
+    unattended && !everyApp && Option.isSome(leases)
       ? yield* leases.value.active(input.threadId).pipe(Effect.orElseSucceed(() => Option.none()))
       : Option.none<ComputerUseLeases.ComputerUseLease>();
-  if (unattended && Option.isNone(lease)) return none("needs-approval", true);
+  if (unattended && !everyApp && Option.isNone(lease)) return none("needs-approval", true);
+  if (unattended && everyApp && Option.isSome(leases)) {
+    const held = yield* leases.value
+      .holder(input.threadId)
+      .pipe(Effect.orElseSucceed(() => Option.some(undefined)));
+    if (Option.isSome(held)) return none("held", true);
+  }
   if (unattended && Option.isSome(leases)) {
     const detection = yield* leases.value.detection;
     if (!detection.humanInput || !detection.privateMode) return none("detection-unsupported", true);
@@ -104,19 +121,21 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   if (Option.isNone(mcp)) return none("unavailable", unattended);
   const x11Display =
     cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;
-  // Names this build does not know are ignored; unreadable settings keep the default on.
-  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-  const disabled = Option.isNone(settings)
-    ? []
-    : yield* settings.value.getSettings.pipe(
-        Effect.map((value) => value.disabledBuiltInSkills.filter(Schema.is(BuiltInSkillName))),
-        Effect.orElseSucceed(() => []),
-      );
+  // Names this build does not know are ignored.
+  const disabled = current?.disabledBuiltInSkills.filter(Schema.is(BuiltInSkillName)) ?? [];
+  // Claimed only now, so a turn that cannot get the driver holds nothing; the claim itself
+  // refuses unattended work that lost a race for the screen.
+  const control = everyApp
+    ? yield* leases.value
+        .everyAppControl(input.threadId, unattended)
+        .pipe(Effect.orElseSucceed(() => Option.none()))
+    : Option.some(yield* leases.value.control(input.threadId, lease));
+  if (Option.isNone(control)) return none("held", unattended);
   return {
     _tag: "proxied",
     mcp: mcp.value,
     ...(Option.isSome(x11Display) ? { x11Display: x11Display.value } : {}),
-    control: yield* leases.value.control(input.threadId, lease),
+    control: control.value,
     proxy: leases.value.proxy,
     // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
     overrideUserConfig: true,

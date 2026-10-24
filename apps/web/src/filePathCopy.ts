@@ -34,11 +34,24 @@ export function resolveFilePathCopyTargets(input: {
   };
 }
 
-/** Reports success only after either the Clipboard API or its fallback succeeds. */
-export async function copyFilePath(path: string, kind: "Relative path" | "Full path") {
+export type FilePathCopyKind = "Relative path" | "Full path";
+
+/**
+ * Reports success only after either the Clipboard API or its fallback succeeds.
+ * Several paths go on separate lines, as VS Code and Zed copy a multi-selection.
+ */
+export async function copyFilePath(path: string | readonly string[], kind: FilePathCopyKind) {
+  const paths = typeof path === "string" ? [path] : path;
+  if (paths.length === 0) return;
+  const text = paths.join("\n");
   try {
-    if (!(await writeTextToClipboard(path, kind.toLowerCase()))) return;
-    toastManager.add({ type: "success", title: `${kind} copied`, description: path });
+    if (!(await writeTextToClipboard(text, kind.toLowerCase()))) return;
+    toastManager.add({
+      type: "success",
+      title:
+        paths.length === 1 ? `${kind} copied` : `${paths.length} ${kind.toLowerCase()}s copied`,
+      description: text,
+    });
   } catch (error) {
     toastManager.add({
       type: "error",

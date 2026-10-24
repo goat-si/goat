@@ -1,26 +1,15 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { BUILTIN_SKILLS, type EnvironmentId } from "@goat/contracts";
-import { useContext, useEffect, useEffectEvent, useState } from "react";
+import type { EnvironmentId } from "@goat/contracts";
+import { useContext, useEffect, useEffectEvent } from "react";
 
 import { isElectron } from "../../env";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { ComputerUseReadiness } from "../computerUse/ComputerUseReadiness";
-import { Button } from "../ui/button";
-import { Switch } from "../ui/switch";
-import { cuaReadinessGrantSlot, useCuaGrants } from "./CuaGrantSteps";
+import { ComputerUsePanel, type ComputerUseSettingsPatch } from "./ComputerUsePanel";
 import { CuaSetupDialog } from "./CuaSetupDialog";
-import {
-  CUA_PERMISSIONS,
-  computerUseStatusText,
-  computerUseUnavailable,
-  cuaGranted,
-  readCuaGrants,
-  withLiveGrants,
-  type CuaPermission,
-} from "./CuaSetupDialog.logic";
+import { readCuaGrants, type CuaPermission } from "./CuaSetupDialog.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -32,6 +21,10 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
   const disabledSkills = useEnvironmentSettings(
     environmentId,
     (settings) => settings.disabledBuiltInSkills,
+  );
+  const fullAccessAutoAdmit = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.cuaFullAccessAutoAdmit,
   );
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
@@ -58,10 +51,7 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     typeof bridge.checkSystemPermission === "function" &&
     typeof bridge.verifyCuaDriver === "function";
 
-  const save = async (patch: {
-    readonly enableCua?: boolean;
-    readonly disabledBuiltInSkills?: ReadonlyArray<string>;
-  }): Promise<string | null> => {
+  const save = async (patch: ComputerUseSettingsPatch): Promise<string | null> => {
     if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId)))
       return "This connection cannot change settings on this host.";
     const result = await update({ environmentId, input: { patch } });
@@ -71,6 +61,7 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
   return {
     enabled,
     disabledSkills,
+    fullAccessAutoAdmit,
     canConfigure,
     status: query.data,
     error: query.error,
@@ -156,147 +147,30 @@ function ComputerUseControls({
   local: boolean;
 }) {
   const host = useComputerUseHost(environmentId, local);
-  const [setupOpen, setSetupOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  // The pane opened from the readiness list, so its grant is rechecked quickly until it is on.
-  const [opened, setOpened] = useState<CuaPermission | null>(null);
-  const [opening, setOpening] = useState(false);
-  // A grant revoked in System Settings shows here while the setting stays on.
-  // Each check starts a helper process, so the row rechecks slowly and whenever GOAT regains focus.
-  const grants = useCuaGrants(
-    checkGrants,
-    host.localMac && host.enabled && !setupOpen,
-    opened ? 1500 : 15_000,
-  );
-  const current = host.localMac && host.enabled ? grants.grants : null;
-  const live = current && current.principal !== "unusable" ? current : null;
-  // Waiting ends once this Mac reads the opened grant as on, which also ends the quick rechecks.
-  if (opened !== null && live !== null && cuaGranted(live, opened)) setOpened(null);
-  const missingGrants =
-    current && current.principal !== "unusable"
-      ? CUA_PERMISSIONS.filter((id) => !cuaGranted(current, id))
-      : [];
-  const supported = host.status !== null && !computerUseUnavailable(host.status);
-  const statusText =
-    saveError ??
-    (current?.principal === "unusable" ? current.message : null) ??
-    computerUseStatusText({
-      enabled: host.enabled,
-      status: host.status,
-      error: host.error,
-      missingGrants,
-    });
-
+  const bridge = window.desktopBridge;
   return (
-    <>
-      <SettingsRow
-        {...searchableSetting("computer-use")}
-        serverScoped
-        settingKeys={["enableCua"]}
-        description={`Let agents see and use apps on ${hostLabel} in the background, without taking over your cursor. Agents get the tools from their next turn; turning this off stops computer use right away.`}
-        status={statusText ? <span role="status">{statusText}</span> : undefined}
-        control={
-          <div className="flex items-center gap-2">
-            {host.enabled && supported ? (
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={saving || !host.canConfigure}
-                onClick={() => setSetupOpen(true)}
-              >
-                {host.localMac ? "Set up" : "Requirements"}
-              </Button>
-            ) : null}
-            <Switch
-              aria-label="Computer use"
-              checked={host.enabled}
-              disabled={saving || !host.canConfigure || (!host.enabled && !supported)}
-              onCheckedChange={(checked) => {
-                setSaveError(null);
-                if (checked) {
-                  setSetupOpen(true);
-                  return;
-                }
-                setSaving(true);
-                void host.save({ enableCua: false }).then((failure) => {
-                  setSaving(false);
-                  setSaveError(failure);
-                });
-              }}
-            />
-          </div>
-        }
-      />
-      <ComputerUseReadiness
-        platform={host.status?.platform}
-        readiness={withLiveGrants(host.status?.readiness, live)}
-        tools={host.status?.tools}
-        signals={host.status?.signals}
-        {...(live
-          ? {
-              renderGrantAction: cuaReadinessGrantSlot({
-                live,
-                opened,
-                busy: opening,
-                onOpen: (permission) => {
-                  setOpening(true);
-                  setSaveError(null);
-                  void openGuide(permission).then(
-                    () => {
-                      setOpening(false);
-                      setOpened(permission);
-                    },
-                    () => {
-                      setOpening(false);
-                      setSaveError("Could not open System Settings. Try again.");
-                    },
-                  );
-                },
-              }),
-            }
-          : {})}
-      />
-      {host.enabled ? <BuiltInSkillRows host={host} /> : null}
-      {setupOpen && host.canConfigure ? (
-        <ComputerUseSetup host={host} hostLabel={hostLabel} onClose={() => setSetupOpen(false)} />
-      ) : null}
-    </>
+    <ComputerUsePanel
+      environmentId={environmentId}
+      hostLabel={hostLabel}
+      enabled={host.enabled}
+      canConfigure={host.canConfigure}
+      status={host.status}
+      error={host.error}
+      localMac={host.localMac}
+      disabledSkills={host.disabledSkills}
+      fullAccessAutoAdmit={host.fullAccessAutoAdmit}
+      save={host.save}
+      bridge={{
+        checkGrants,
+        openGuide,
+        verify: async () => {
+          const verifyDriver = window.desktopBridge?.verifyCuaDriver;
+          if (!verifyDriver) throw new Error("This desktop app cannot check computer use.");
+          return verifyDriver().finally(host.refresh);
+        },
+        relaunch: bridge?.relaunchForCuaGrants,
+        reveal: bridge?.revealCuaGrantTarget,
+      }}
+    />
   );
-}
-
-function BuiltInSkillRows({ host }: { host: ComputerUseHost }) {
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  return BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => {
-    const on = !host.disabledSkills.includes(skill.name);
-    return (
-      <SettingsRow
-        key={skill.name}
-        {...searchableSetting("computer-use-skill")}
-        serverScoped
-        settingKeys={["disabledBuiltInSkills"]}
-        description="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
-        status={saveError ? <span role="status">{saveError}</span> : undefined}
-        control={
-          <Switch
-            aria-label={`${skill.displayName} skill`}
-            checked={on}
-            disabled={saving || !host.canConfigure}
-            onCheckedChange={(checked) => {
-              setSaveError(null);
-              setSaving(true);
-              const others = host.disabledSkills.filter((name) => name !== skill.name);
-              void host
-                .save({ disabledBuiltInSkills: checked ? others : [...others, skill.name] })
-                .then((failure) => {
-                  setSaving(false);
-                  setSaveError(failure);
-                });
-            }}
-          />
-        }
-      />
-    );
-  });
 }

@@ -98,6 +98,8 @@ export const fixture = Effect.fn(function* (
     helper?: HelperAnswer | "unusable";
     /** A helper build from before the watch method: its hello lists no features. */
     helperWithoutWatch?: boolean;
+    /** A helper build whose agent connections do not report a person's input. */
+    helperWithoutInput?: boolean;
     /** The helper refuses to list apps, as it does for a driver that fails its seal check. */
     helperAppsFail?: boolean;
   } = {},
@@ -204,6 +206,10 @@ export const fixture = Effect.fn(function* (
       let listener: ((event: HelperEvent["event"]) => void) | undefined;
       const session = {
         canWatch: options.helperWithoutWatch !== true,
+        reportsInput: options.helperWithoutWatch !== true && options.helperWithoutInput !== true,
+        canFrame: false,
+        frames: async () => undefined,
+        onFrame: () => () => undefined,
         watch: async (_watchId: string) => {
           Queue.offerUnsafe(helperWatches, "watch");
           // A watch's first state follows its answer.
@@ -392,6 +398,8 @@ export const fixture = Effect.fn(function* (
       Effect.sync(() => {
         readiness.push(report);
       }),
+    cuaFrames: Stream.empty,
+    publishCuaFrame: () => Effect.void,
     publishCuaSafety: (report) =>
       Effect.sync(() => {
         if (report.type === "cuaPrivateMode") safety.push(report);

@@ -19,6 +19,7 @@ import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "~/components/sol
 import { memo, type ReactNode, Suspense, use } from "react";
 
 import { useRenderedAppearance } from "../../hooks/useTheme";
+import type { DiffPanelSourceItem, OpenTurnDiff } from "../../diffPanelStore";
 import { cn } from "../../lib/utils";
 import { resolveDiffThemeName } from "../../lib/diffRendering";
 import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
@@ -40,7 +41,7 @@ interface V2ItemInspectorProps {
   readonly cwd?: string | undefined;
   readonly workspaceRoot?: string | undefined;
   readonly onOpenThread: (threadId: ThreadId) => void;
-  readonly onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  readonly onOpenTurnDiff: OpenTurnDiff;
   readonly onRollbackCheckpoint?: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -50,14 +51,29 @@ interface V2ItemInspectorProps {
   readonly hideFileChangeSummary?: boolean;
 }
 
-/** The diff a file-change summary opens: the whole run for multi-file edits, else that file. */
-export function fileChangeDiffTarget(
-  item: Extract<OrchestrationV2TurnItem, { type: "file_change" }>,
-): { readonly runId: RunId; readonly filePath: string | undefined } | null {
-  if (item.runId === null) return null;
+/**
+ * The diff a file-change summary opens: the whole run for multi-file edits, else that file. An
+ * edit whose patch the server holds names itself too, so the panel can show it before the run's
+ * checkpoint exists.
+ */
+export function fileChangeDiffTarget(projectedItem: OrchestrationV2ProjectedTurnItem): {
+  readonly runId: RunId;
+  readonly filePath: string | undefined;
+  readonly sourceItem: DiffPanelSourceItem | undefined;
+} | null {
+  const item = projectedItem.item;
+  if (item.type !== "file_change" || item.runId === null) return null;
   return {
     runId: item.runId,
     filePath: item.changes !== undefined && item.changes.length > 1 ? undefined : item.fileName,
+    sourceItem:
+      item.patchOmitted === true
+        ? {
+            threadId: projectedItem.sourceThreadId,
+            itemId: projectedItem.sourceItemId,
+            revision: turnItemDetailRevision(item),
+          }
+        : undefined,
   };
 }
 
@@ -250,17 +266,19 @@ function ToolCallBody(
 }
 
 function FileChangeDetail({
+  projectedItem,
   item,
   workspaceRoot,
   hideSummary,
   onOpenTurnDiff,
 }: {
+  readonly projectedItem: OrchestrationV2ProjectedTurnItem;
   readonly item: Extract<OrchestrationV2TurnItem, { type: "file_change" }>;
   readonly workspaceRoot: string | undefined;
   readonly hideSummary: boolean;
   readonly onOpenTurnDiff: V2ItemInspectorProps["onOpenTurnDiff"];
 }) {
-  const diffTarget = fileChangeDiffTarget(item);
+  const diffTarget = fileChangeDiffTarget(projectedItem);
   const failedDiff = item.status === "failed" && item.diffStr?.trim() ? item.diffStr : null;
   const changes = item.changes ?? [];
   const path = formatWorkspaceRelativePath(item.fileName, workspaceRoot);
@@ -286,7 +304,9 @@ function FileChangeDetail({
             <Button
               size="xs"
               variant="outline"
-              onClick={() => onOpenTurnDiff(diffTarget.runId, diffTarget.filePath)}
+              onClick={() =>
+                onOpenTurnDiff(diffTarget.runId, diffTarget.filePath, diffTarget.sourceItem)
+              }
             >
               Open diff
             </Button>
@@ -360,6 +380,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
 
       {item.type === "file_change" ? (
         <FileChangeDetail
+          projectedItem={props.projectedItem}
           item={item}
           workspaceRoot={props.workspaceRoot}
           hideSummary={props.hideFileChangeSummary === true}

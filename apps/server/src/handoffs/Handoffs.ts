@@ -345,7 +345,7 @@ const make = Effect.gen(function* () {
     return handoff;
   });
   const clientLabel = Effect.fn("Handoffs.clientLabel")(function* (
-    input: HandoffReadInput,
+    input: HandoffReadInput & { readonly action?: HandoffRespondInput["action"] },
     sessionId: AuthSessionId,
   ) {
     const record = yield* read(input);
@@ -364,8 +364,10 @@ const make = Effect.gen(function* () {
           : record.target.path.startsWith("provider.")
             ? ("providers:manage" as const)
             : // Admitting an unattended thread to the screen, or changing the hub's members, is as
-              // strong as changing this environment's settings.
-              record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH ||
+              // strong as changing this environment's settings. Ending a screen grant only narrows
+              // what agents may do, so whoever may stop agents can end it (Stop all).
+              (record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+                  input.action !== "cancelled") ||
                 isHubDeviceHandoffPath(record.target.path)
               ? ("settings:write" as const)
               : ("orchestration:operate" as const);
@@ -385,47 +387,52 @@ const make = Effect.gen(function* () {
     }
     return session!.client.label ?? "GOAT client";
   });
-  const respond = Effect.fn("Handoffs.respond")(function* (
-    input: HandoffRespondInput,
-    sessionId: AuthSessionId,
-  ) {
-    const label = yield* clientLabel(input, sessionId);
-    const record = yield* read(input);
-    const isComputerUseGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
-    // One unattended thread per host holds the screen; a second approval waits for it to end.
-    if (isComputerUseGrant && input.action === "completed" && isHandoffPending(record.state)) {
-      const held = Option.isNone(computerUseLeases)
-        ? Option.none()
-        : yield* computerUseLeases.value
-            .holder(record.requestedBy.threadId)
-            .pipe(Effect.mapError(unavailable));
-      if (Option.isSome(held)) return yield* new HandoffError({ reason: "conflict" });
-    }
-    if (
-      input.action === "completed" &&
-      (record.target.path.startsWith("ssh.") || isProviderContinuationPath(record.target.path)) &&
-      isHandoffPending(record.state)
-    ) {
-      const payload = yield* loadPrivate(input.handoffId);
-      if (payload === null || !("kind" in payload) || payload.kind !== "continuation")
-        return yield* new HandoffError({ reason: "unavailable" });
-      // Approvals asked before a path became a continuation path carry no namespace yet.
-      const namespace = isProviderContinuationPath(record.target.path)
-        ? { namespace: record.target.path }
-        : {};
-      yield* savePrivate(
-        input.handoffId,
-        { ...payload, ...namespace, approvedBySessionId: sessionId },
-        true,
-      );
-    }
-    const result = yield* transition(input, input.action, { type: "client", label });
-    if (isComputerUseGrant && Option.isSome(computerUseLeases))
-      yield* computerUseLeases.value.changed;
-    if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
-    if (result.state !== input.action) return yield* new HandoffError({ reason: "conflict" });
-    return result;
-  }, lock.withPermits(1));
+  const respond = Effect.fn("Handoffs.respond")(
+    function* (input: HandoffRespondInput, sessionId: AuthSessionId) {
+      const label = yield* clientLabel(input, sessionId);
+      const record = yield* read(input);
+      const isComputerUseGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+      // One unattended thread per host holds the screen; a second approval waits for it to end.
+      if (isComputerUseGrant && input.action === "completed" && isHandoffPending(record.state)) {
+        const held = Option.isNone(computerUseLeases)
+          ? Option.none()
+          : yield* computerUseLeases.value
+              .holder(record.requestedBy.threadId)
+              .pipe(Effect.mapError(unavailable));
+        if (Option.isSome(held)) return yield* new HandoffError({ reason: "conflict" });
+      }
+      if (
+        input.action === "completed" &&
+        (record.target.path.startsWith("ssh.") || isProviderContinuationPath(record.target.path)) &&
+        isHandoffPending(record.state)
+      ) {
+        const payload = yield* loadPrivate(input.handoffId);
+        if (payload === null || !("kind" in payload) || payload.kind !== "continuation")
+          return yield* new HandoffError({ reason: "unavailable" });
+        // Approvals asked before a path became a continuation path carry no namespace yet.
+        const namespace = isProviderContinuationPath(record.target.path)
+          ? { namespace: record.target.path }
+          : {};
+        yield* savePrivate(
+          input.handoffId,
+          { ...payload, ...namespace, approvedBySessionId: sessionId },
+          true,
+        );
+      }
+      const result = yield* transition(input, input.action, { type: "client", label });
+      if (isComputerUseGrant && Option.isSome(computerUseLeases))
+        yield* computerUseLeases.value.changed;
+      if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
+      if (result.state !== input.action) return yield* new HandoffError({ reason: "conflict" });
+      return result;
+    },
+    lock.withPermits(1),
+    // A computer use grant's holder check and commit must not straddle an unattended claim.
+    (effect) =>
+      Option.isSome(computerUseLeases)
+        ? computerUseLeases.value.serializeAdmission(effect)
+        : effect,
+  );
   const open = Effect.fn("Handoffs.open")(function* (
     input: HandoffReadInput,
     sessionId: AuthSessionId,

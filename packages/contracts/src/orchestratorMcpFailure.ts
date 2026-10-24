@@ -45,6 +45,8 @@ export const OrchestratorMcpFailureCode = Schema.Literals([
   // A fleet goal (or another named record) that does not exist, or a stale expectedGeneration.
   "not_found",
   "conflict",
+  // A channel workstream's descendant budget is full; the message says what to finish or stop.
+  "capacity_exceeded",
   // GOAT Bot runs on another environment in this cluster; the message names it.
   "not_home",
   // fleet.pressure.admission is "block" and the target host is critical.

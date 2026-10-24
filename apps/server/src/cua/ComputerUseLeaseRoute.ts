@@ -2,14 +2,22 @@
  * The control stream a computer use proxy holds open: the current state of the control it was
  * started with, then a new line whenever that may have changed, ending with the line that ends
  * it. It authenticates with the thread's own GOAT MCP credential, so a proxy only ever learns
- * about its own thread.
+ * about its own thread. A POST to the same route reports, for that thread's live control only,
+ * the window the proxy's latest admitted call named, its own input calls, or a person's input
+ * its helper saw.
  *
  * @module ComputerUseLeaseRoute
  */
-import { COMPUTER_USE_LEASE_ROUTE, ComputerUseLeaseUpdate } from "@goat/contracts";
+import {
+  COMPUTER_USE_LEASE_ROUTE,
+  ComputerUseLeaseReport,
+  ComputerUseLeaseUpdate,
+} from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -88,20 +96,61 @@ export const leaseUpdates = (input: {
     }),
   );
 
-export const layer = HttpRouter.add(
+/** The thread a proxy's MCP credential belongs to, or undefined. */
+const threadOf = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const registry = yield* McpSessionRegistry.McpSessionRegistry;
+  const authorization = request.headers.authorization;
+  const token =
+    authorization?.startsWith("Bearer ") === true
+      ? authorization.slice("Bearer ".length).trim()
+      : "";
+  const invocation = token.length === 0 ? undefined : yield* registry.resolve(token);
+  return invocation?.thread?.threadId;
+});
+
+const decodeReport = Schema.decodeUnknownEffect(Schema.fromJsonString(ComputerUseLeaseReport));
+
+/**
+ * The window a proxy's latest admitted call named (#1370), or a person's own input (#1235). A
+ * report for a control that is not the thread's live one, such as an old proxy's after its
+ * control was replaced, changes nothing.
+ */
+export const reportLayer = HttpRouter.add(
+  "POST",
+  COMPUTER_USE_LEASE_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const threadId = yield* threadOf;
+    if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
+    const report = yield* request.text.pipe(Effect.flatMap(decodeReport), Effect.option);
+    if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const value = report.value;
+    if ("humanInput" in value) {
+      const outcome = yield* leases.humanInput(threadId, value.controlId, value.humanInput.at);
+      // 204 only when it paused the agents: the proxy stops reporting for that helper then, and
+      // keeps reporting after a 202 (another agent's input) or a 409.
+      return HttpServerResponse.empty({
+        status: outcome === "paused" ? 204 : outcome === "agents" ? 202 : 409,
+      });
+    }
+    const recorded =
+      "agentInput" in value
+        ? yield* leases.agentInput(threadId, value.controlId, value.agentInput)
+        : yield* leases.setTarget(threadId, value.controlId, value);
+    return HttpServerResponse.empty({ status: recorded ? 204 : 409 });
+  }),
+);
+
+const streamLayer = HttpRouter.add(
   "GET",
   COMPUTER_USE_LEASE_ROUTE,
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const registry = yield* McpSessionRegistry.McpSessionRegistry;
-    const authorization = request.headers.authorization;
-    const token =
-      authorization?.startsWith("Bearer ") === true
-        ? authorization.slice("Bearer ".length).trim()
-        : "";
-    const invocation = token.length === 0 ? undefined : yield* registry.resolve(token);
+    const threadId = yield* threadOf;
     const controlId = new URL(request.url, "http://local").searchParams.get("control");
-    if (invocation?.thread === undefined || !controlId)
+    if (threadId === undefined || !controlId)
       return HttpServerResponse.text(
         encodeUpdate({ state: "ended", reason: "unauthorized" }) + "\n",
         { status: 401, contentType: "application/x-ndjson" },
@@ -110,7 +159,7 @@ export const layer = HttpRouter.add(
       ComputerUseLeases.ComputerUseLeases | ServerSettings.ServerSettingsService
     >();
     return HttpServerResponse.stream(
-      leaseUpdates({ threadId: invocation.thread.threadId, controlId }).pipe(
+      leaseUpdates({ threadId, controlId }).pipe(
         Stream.map((update) => encodeUpdate(update) + "\n"),
         Stream.encodeText,
         Stream.provideContext(context),
@@ -119,3 +168,5 @@ export const layer = HttpRouter.add(
     );
   }),
 );
+
+export const layer = Layer.mergeAll(streamLayer, reportLayer);

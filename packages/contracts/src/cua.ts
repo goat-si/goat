@@ -8,6 +8,7 @@ import {
   type ComputerUseRefusalReason,
 } from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
+import { PreviewSessionNoPicture } from "./previewSession.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
 export const CuaDriverMcpConfiguration = Schema.Struct({
@@ -39,6 +40,101 @@ export const DesktopCuaWatch = Schema.Struct({
   active: Schema.Boolean,
 });
 export type DesktopCuaWatch = typeof DesktopCuaWatch.Type;
+
+/**
+ * Server -> desktop: the windows whose live picture viewers want now (#1370), keyed by preview
+ * session. Only windows of an active agent control, named by the agent's own calls, ever appear;
+ * an empty list stops every capture. seq grows with every change, and a frame answers the seq it
+ * was captured for, so the server drops any frame from before a stop or a change of window.
+ * apps is the control's approved bundle ids (absent for the whole screen): the helper captures
+ * only a window whose owning app is one of them, and answers appNotApproved otherwise.
+ */
+export const DesktopCuaFrames = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaFrames"),
+  seq: Schema.Int,
+  targets: Schema.Array(
+    Schema.Struct({
+      key: TrimmedNonEmptyString,
+      pid: Schema.Int,
+      windowId: Schema.Int,
+      apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+      maxWidth: Schema.Int,
+      intervalMs: Schema.Int,
+    }),
+  ),
+});
+export type DesktopCuaFrames = typeof DesktopCuaFrames.Type;
+
+/** Desktop -> server: one JPEG of a requested window, or why there is none. */
+export const DesktopCuaFrame = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    type: Schema.Literal("cuaFrame"),
+    seq: Schema.Int,
+    key: TrimmedNonEmptyString,
+    width: Schema.Int,
+    height: Schema.Int,
+    mime: Schema.Literal("image/jpeg"),
+    data: Schema.String,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    type: Schema.Literal("cuaFrameUnavailable"),
+    seq: Schema.Int,
+    key: TrimmedNonEmptyString,
+    reason: PreviewSessionNoPicture,
+  }),
+]);
+export type DesktopCuaFrame = typeof DesktopCuaFrame.Type;
+
+/**
+ * Proxy -> server, on its own lease route: the window an agent's admitted call just named. The
+ * proxy forwards only calls inside the control's approved apps, so a reported window is one the
+ * agent may act on.
+ */
+export const ComputerUseLeaseTarget = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  pid: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  windowId: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+});
+export type ComputerUseLeaseTarget = typeof ComputerUseLeaseTarget.Type;
+
+/** Milliseconds since the Unix epoch on the host's clock, which the proxy and server share. */
+const EpochMillis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
+/**
+ * Proxy -> server, on the same route: a keyboard or pointer event at `at` that the lease
+ * proxy's helper saw while the control was live, outside the proxy's own input calls (#1235).
+ * The server drops it when another agent's input covers `at`, else every agent pauses. Only the
+ * kind of input, never what was typed or where.
+ */
+export const ComputerUseLeaseHumanInput = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  humanInput: Schema.Struct({ source: ComputerUseHumanInputSource, at: EpochMillis }),
+});
+export type ComputerUseLeaseHumanInput = typeof ComputerUseLeaseHumanInput.Type;
+
+/**
+ * Proxy -> server: one of the proxy's calls that can post input started or ended at `at`, so a
+ * person's input reported by any agent's helper can be told apart from every agent's own.
+ */
+export const ComputerUseLeaseAgentInput = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  agentInput: Schema.Struct({
+    call: TrimmedNonEmptyString,
+    state: Schema.Literals(["start", "end"]),
+    at: EpochMillis,
+  }),
+});
+export type ComputerUseLeaseAgentInput = typeof ComputerUseLeaseAgentInput.Type;
+
+export const ComputerUseLeaseReport = Schema.Union([
+  ComputerUseLeaseTarget,
+  ComputerUseLeaseHumanInput,
+  ComputerUseLeaseAgentInput,
+]);
+export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 
 export const DesktopCuaDriverReport = Schema.Union([
   Schema.Struct({
@@ -288,6 +384,8 @@ export const DesktopCuaReadinessReport = Schema.Struct({
   generation: Schema.Int,
   readiness: ComputerUseReadiness,
   signals: ComputerUseCapabilities.fields.signals,
+  /** Whether the helper sends live frames of one window (#1370); absent from older helpers. */
+  frames: Schema.optionalKey(Schema.Boolean),
 });
 export type DesktopCuaReadinessReport = typeof DesktopCuaReadinessReport.Type;
 

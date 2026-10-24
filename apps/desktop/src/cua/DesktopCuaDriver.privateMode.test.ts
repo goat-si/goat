@@ -35,7 +35,7 @@ describe("DesktopCuaDriver private mode", () => {
           assert.equal((yield* test.next).status, "ready");
           assert.deepEqual(test.readiness.at(-1)?.signals, {
             privateMode: "supported",
-            humanInput: "unsupported",
+            humanInput: "supported",
           });
 
           yield* test.setWatching(true);
@@ -59,5 +59,25 @@ describe("DesktopCuaDriver private mode", () => {
           );
         }),
       ),
+  );
+});
+
+describe("DesktopCuaDriver human input", () => {
+  it.effect("claims a person's input only for a macOS helper whose connections report it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        for (const [options, humanInput] of [
+          [{ platform: "darwin" }, "supported"],
+          [{ platform: "darwin", helperWithoutInput: true }, "unsupported"],
+          // Windows agents reach the driver through the desktop's helper, which sees no input.
+          [{ platform: "win32" }, "unsupported"],
+        ] as const) {
+          const test = yield* fixture({ ...options, helper: { granted: true } });
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          assert.equal(test.readiness.at(-1)?.signals.humanInput, humanInput);
+        }
+      }),
+    ),
   );
 });

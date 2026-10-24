@@ -87,6 +87,7 @@ import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import { imageToolFailure, imageToolSuccess, previewSnapshotFailure } from "./imageToolResult.ts";
+import { decodeAsAdvertised } from "./decodeAsAdvertised.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -615,17 +616,6 @@ const saveScreenshot = Effect.fn("McpHttpServer.saveScreenshot")(function* (
  * Tools that advertise a raw JSON Schema (the memory tools) decode their strict
  * contracts in the handler, so they keep that schema.
  */
-const decodeAsAdvertised = <Tools extends Record<string, Tool.Any>>(
-  toolkit: Toolkit.Toolkit<Tools>,
-): Toolkit.Toolkit<Tools> =>
-  // The clones keep each tool's id, name and decoded parameter type, so handlers still match.
-  Toolkit.make(
-    ...Object.values(toolkit.tools).map((tool) =>
-      Tool.isDynamic(tool) && tool.jsonSchema !== undefined
-        ? tool
-        : tool.setParameters(Schema.toCodecJson(tool.parametersSchema)),
-    ),
-  ) as unknown as Toolkit.Toolkit<Tools>;
 
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;

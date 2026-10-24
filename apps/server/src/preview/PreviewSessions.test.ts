@@ -1,8 +1,16 @@
-import { AuthSessionId, EnvironmentId, previewSessionChip, ThreadId } from "@goat/contracts";
+import {
+  AuthSessionId,
+  EnvironmentId,
+  HandoffError,
+  previewSessionChip,
+  ThreadId,
+  TurnItemId,
+} from "@goat/contracts";
 import { it as effectIt } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -30,7 +38,7 @@ const control = {
   threadId,
   expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
 };
-const detected = { humanInput: true, privateMode: true } as const;
+const detected = { humanInput: true, privateMode: true, frames: true } as const;
 const active = {
   _tag: "active",
   expiresAt: control.expiresAt,
@@ -94,7 +102,11 @@ describe("preview sessions", () => {
     const secret = desktopSession(base, control, { _tag: "paused", reason: "private" }, detected)!;
     expect([previewSessionChip(secret), secret.status]).toEqual(["Private (paused)", "paused"]);
     // A host whose helper cannot detect these says so instead of implying protection.
-    const blind = desktopSession(base, control, active, { humanInput: false, privateMode: false })!;
+    const blind = desktopSession(base, control, active, {
+      humanInput: false,
+      privateMode: false,
+      frames: false,
+    })!;
     expect(blind.capabilities).toMatchObject({ privateMode: false, humanInput: false });
     expect(previewSessionChip(ended)).toBe("Stopped");
   });
@@ -137,6 +149,18 @@ describe("preview sessions", () => {
     });
   });
 
+  it("shows a stopped agent as stopped while a person holds the tab or types a secret in it", () => {
+    for (const held of [{ humanControls: true }, { private: true }]) {
+      const session = browserSession(base, { ...tab, ...held, agentStopped: true })!;
+      // Stop all after a takeover must still leave a card that says stopped and can close.
+      expect(session.status).toBe("stopped");
+      expect(session.capabilities.controls).toEqual(["handBack", "stopAll"]);
+    }
+    expect(browserSession(base, { ...tab, private: true, agentStopped: true })!.owner).toBe(
+      "private",
+    );
+  });
+
   effectIt.effect("stops every agent without waiting on a page that never answers", () => {
     const stopped: Array<string> = [];
     const layer = PreviewSessions.layer.pipe(
@@ -150,6 +174,8 @@ describe("preview sessions", () => {
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
             stopAll: Effect.sync(() => (stopped.push("desktop"), [])),
             grants: Effect.succeed([]),
+            // The live picture service listens for control changes from the start.
+            subscribe: PubSub.unbounded<void>().pipe(Effect.flatMap(PubSub.subscribe)),
             proxy: undefined,
           }),
           Layer.mock(Handoffs.Handoffs)({}),
@@ -162,6 +188,38 @@ describe("preview sessions", () => {
       const result = yield* sessions.control({ control: "stopAll" }, AuthSessionId.make("session"));
       expect(result).toEqual({ applied: true });
       expect(stopped).toEqual(["browser", "desktop"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  effectIt.effect("says Stop all did not apply when a screen grant stays alive", () => {
+    const layer = PreviewSessions.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ServerBrowser.ServerBrowser)({ stopAllAgents: Effect.void }),
+          Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            stopAll: Effect.succeed([]),
+            grants: Effect.succeed([
+              {
+                threadId,
+                handoffId: TurnItemId.make("handoff:kept"),
+                expiresAt: control.expiresAt,
+              },
+            ]),
+            subscribe: PubSub.unbounded<void>().pipe(Effect.flatMap(PubSub.subscribe)),
+            proxy: undefined,
+          }),
+          // The grant cannot be ended, so its thread could take the screen again next turn.
+          Layer.mock(Handoffs.Handoffs)({
+            respond: () => Effect.fail(new HandoffError({ reason: "unavailable" })),
+          }),
+          Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const sessions = yield* PreviewSessions.PreviewSessions;
+      const result = yield* sessions.control({ control: "stopAll" }, AuthSessionId.make("session"));
+      expect(result).toEqual({ applied: false, reason: "not_allowed" });
     }).pipe(Effect.provide(layer));
   });
 });
