@@ -429,9 +429,9 @@ const make = Effect.gen(function* () {
       uses: 0,
     };
     controls.set(threadId, next);
-    yield* kick;
-    // A proxy still holding the previous id hears it was replaced.
-    if (existing !== undefined && existing.ended === undefined) yield* changed;
+    // Session lists show a new thread's control at once, and a proxy still holding a previous id
+    // hears it was replaced. Reuse above publishes nothing, so tool calls cause no churn.
+    yield* changed;
     return next as ComputerUseControl;
   });
 

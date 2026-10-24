@@ -69,7 +69,9 @@ export const layer = McpToolAccess.toLayer(FleetHealthToolkit, {
         input.host,
         "No new goal work is placed on " +
           input.host +
-          ". Goal attempts already there keep running there; move one with goat_thread_reschedule.",
+          ". Goal workers run only on this machine for now, so draining moves no goal attempt." +
+          " goat_thread_reschedule moves another thread by hand; a goal keeps following the" +
+          " original thread, not the moved one.",
       );
     }),
   ),
