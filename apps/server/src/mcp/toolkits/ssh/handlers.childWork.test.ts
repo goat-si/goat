@@ -211,12 +211,21 @@ interface LaunchCapture {
   readonly correlationId: string | undefined;
 }
 
+interface LaunchFailures {
+  /** 0-based coordinator.launch call indexes that refuse before anything started remotely. */
+  readonly refuseLaunchOnCalls?: ReadonlyArray<number>;
+  /** 0-based validateLaunchAttachments call indexes that fail before any launch is attempted. */
+  readonly failValidationOnCalls?: ReadonlyArray<number>;
+}
+
 /** Runs goat_ssh_thread_launch with a channel-owned caller over one shared in-memory database. */
-const launchFromWorker = (messages: ReadonlyArray<string>) =>
+const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailures = {}) =>
   Effect.scoped(
     Effect.gen(function* () {
       const launches: Array<LaunchCapture> = [];
       const rows: Array<{ readonly state: string; readonly remoteThreadId: string | null }> = [];
+      let launchCalls = 0;
+      let validationCalls = 0;
       const caller = {
         id: callerThreadId,
         title: "Bot worker",
@@ -282,12 +291,34 @@ const launchFromWorker = (messages: ReadonlyArray<string>) =>
         Layer.mock(SshHostSetup.SshHostSetup)({}),
         Layer.mock(CloudMachineService.CloudMachineService)({}),
         Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
-          validateLaunchAttachments: (requested) => Effect.succeed(requested),
+          validateLaunchAttachments: (requested) => {
+            const call = validationCalls;
+            validationCalls += 1;
+            return failures.failValidationOnCalls?.includes(call) === true
+              ? Effect.fail(
+                  new SshRemoteDispatch.SshRemoteDispatchError({
+                    reason: "invalid_request",
+                    message: "attachment refused",
+                  }),
+                )
+              : Effect.succeed(requested);
+          },
         }),
         Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
-          launch: (input, beforeLaunch) =>
-            Effect.sync(() => {
-              launches.push({ correlationId: input.correlationId });
+          launch: (input, beforeLaunch) => {
+            const call = launchCalls;
+            launchCalls += 1;
+            launches.push({ correlationId: input.correlationId });
+            if (failures.refuseLaunchOnCalls?.includes(call) === true) {
+              return Effect.fail(
+                new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "remote_refused",
+                  message: "box refused the launch",
+                  launchMayHaveStarted: false,
+                }),
+              );
+            }
+            return Effect.sync(() => {
               rows.push({ state: "running", remoteThreadId: remoteResult.threadId });
             }).pipe(
               Effect.andThen(beforeLaunch),
@@ -298,7 +329,8 @@ const launchFromWorker = (messages: ReadonlyArray<string>) =>
                   reportsSupported: true,
                 }),
               ),
-            ),
+            );
+          },
           get: (correlationId) =>
             Effect.sync(() => {
               const row = rows.at(0);
@@ -402,4 +434,56 @@ it.effect("the descendant budget refuses a third distinct launch with capacity_e
     expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
     expect(responses[2]).toMatchObject({ code: "capacity_exceeded" });
   }),
+);
+
+it.effect("a refusal before the remote started returns the slot, so two more launches fit", () =>
+  Effect.gen(function* () {
+    const { responses, launches, records } = yield* launchFromWorker(
+      ["Refused audit", "Audit one", "Audit two", "Audit three"],
+      { refuseLaunchOnCalls: [0] },
+    );
+    expect(responses[0]).toMatchObject({ code: "orchestration_error" });
+    expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
+    expect(responses[2]).toMatchObject({ threadId: "remote-thread" });
+    expect(responses[3]).toMatchObject({ code: "capacity_exceeded" });
+    expect(launches).toHaveLength(3);
+    expect(records).toHaveLength(3);
+    expect(records.filter((record) => record.state === "released")).toHaveLength(1);
+    expect(records.filter((record) => record.state === "bound")).toHaveLength(2);
+  }),
+);
+
+it.effect("a failure before the launch attempt releases the reservation", () =>
+  Effect.gen(function* () {
+    const { responses, launches, records } = yield* launchFromWorker(
+      ["Bad attachment", "Audit one", "Audit two", "Audit three"],
+      { failValidationOnCalls: [0] },
+    );
+    expect(responses[0]).toMatchObject({ code: "invalid_request" });
+    expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
+    expect(responses[2]).toMatchObject({ threadId: "remote-thread" });
+    expect(responses[3]).toMatchObject({ code: "capacity_exceeded" });
+    // The validation failure never reached the coordinator.
+    expect(launches).toHaveLength(2);
+    expect(records).toHaveLength(3);
+    expect(records.filter((record) => record.state === "released")).toHaveLength(1);
+    expect(records.filter((record) => record.state === "bound")).toHaveLength(2);
+  }),
+);
+
+it.effect(
+  "a retry of a safely released request conflicts instead of double-spending capacity",
+  () =>
+    Effect.gen(function* () {
+      const { responses, launches, records } = yield* launchFromWorker(
+        ["Refused audit", "Refused audit"],
+        { refuseLaunchOnCalls: [0] },
+      );
+      expect(responses[0]).toMatchObject({ code: "orchestration_error" });
+      expect(responses[1]).toMatchObject({ code: "conflict" });
+      expect(JSON.stringify(responses[1])).toContain("released");
+      expect(launches).toHaveLength(1);
+      expect(records).toHaveLength(1);
+      expect(records[0]!.state).toBe("released");
+    }),
 );

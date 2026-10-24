@@ -392,6 +392,28 @@ describe("ChannelChildWork admission", () => {
       assert.strictEqual((yield* store.listForTask(taskId)).length, 2);
     }).pipe(Effect.provide(makeLayer())),
   );
+
+  it.effect("releaseReserved frees a reservation but never settles launched work", () =>
+    Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const first = yield* admit("reserved one");
+      const second = yield* admit("reserved two");
+      if (first._tag !== "admitted" || second._tag !== "admitted")
+        return yield* Effect.die("expected admissions");
+      yield* childWork.releaseReserved(first.record);
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      assert.strictEqual((yield* store.get(taskId, first.record.childWorkId))?.state, "released");
+      yield* childWork.markLaunched(second.record, { threadId: childThread });
+      yield* childWork.releaseReserved(second.record);
+      assert.strictEqual((yield* store.get(taskId, second.record.childWorkId))?.state, "launched");
+      // The first slot came back and the second stays held: exactly one more admission fits.
+      const third = yield* admit("three");
+      assert.strictEqual(third._tag, "admitted");
+      const fourth = yield* Effect.flip(admit("four"));
+      assert.strictEqual(fourth.reason, "at_capacity");
+    }).pipe(Effect.provide(makeLayer())),
+  );
 });
 
 describe("ChannelChildWork reconcile", () => {
@@ -471,5 +493,52 @@ describe("ChannelChildWork reconcile", () => {
       const refused = yield* Effect.flip(admit("third remote", { surface: "delegate_remote" }));
       assert.strictEqual(refused.reason, "at_capacity");
     }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect(
+    "keeps a launched remote record whose dispatch row is not yet visible while the task is live",
+    () =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const admission = yield* admit("remote in flight", { surface: "delegate_remote" });
+        if (admission._tag === "not_channel_owned") return yield* Effect.die("expected ownership");
+        const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+        // markLaunched precedes the dispatch-row insert inside the launch call, so a reconcile
+        // pass racing that window must hold the record and its capacity.
+        yield* childWork.markLaunched(admission.record, { correlationId, host: "box" });
+        assert.strictEqual(yield* childWork.reconcile, 0);
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        assert.strictEqual(
+          (yield* store.get(taskId, admission.record.childWorkId))?.state,
+          "launched",
+        );
+        const second = yield* admit("second remote", { surface: "delegate_remote" });
+        assert.strictEqual(second._tag, "admitted");
+        const refused = yield* Effect.flip(admit("third remote", { surface: "delegate_remote" }));
+        assert.strictEqual(refused.reason, "at_capacity");
+      }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect(
+    "releases a launched remote record whose dispatch row never landed once the task settles",
+    () =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const admission = yield* admit("remote lost pre-row", { surface: "delegate_remote" });
+        if (admission._tag === "not_channel_owned") return yield* Effect.die("expected ownership");
+        const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+        yield* childWork.markLaunched(admission.record, { correlationId, host: "box" });
+        yield* move(taskId, { type: "task.cancelled", payload: { reason: "Stop" } });
+        assert.strictEqual(yield* childWork.reconcile, 1);
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        assert.strictEqual(
+          (yield* store.get(taskId, admission.record.childWorkId))?.state,
+          "released",
+        );
+        const next = yield* admit("after release", { surface: "delegate_remote" });
+        assert.strictEqual(next._tag, "admitted");
+      }).pipe(Effect.provide(makeLayer())),
   );
 });

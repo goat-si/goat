@@ -120,6 +120,8 @@ export class ChannelChildWork extends Context.Service<
     ) => Effect.Effect<void, never>;
     /** The launch never happened; capacity returns. */
     readonly markReleased: (record: ChannelChildWorkRecord) => Effect.Effect<void, never>;
+    /** The launch was never attempted; capacity returns. A record past reserved is untouched. */
+    readonly releaseReserved: (record: ChannelChildWorkRecord) => Effect.Effect<void, never>;
     /** The outcome is uncertain; capacity stays reserved until reconciliation resolves it. */
     readonly markUnknown: (record: ChannelChildWorkRecord) => Effect.Effect<void, never>;
     /** One reconcile pass over active records; returns how many changed state. */
@@ -270,21 +272,28 @@ const make = Effect.gen(function* () {
   const markReleased = (record: ChannelChildWorkRecord) =>
     transition(record, ["reserved", "launched", "unknown"], "released");
 
+  const releaseReserved = (record: ChannelChildWorkRecord) =>
+    transition(record, ["reserved"], "released");
+
   const markUnknown = (record: ChannelChildWorkRecord) =>
     transition(record, ["launched", "bound"], "unknown");
 
-  const reconcileReserved = Effect.fnUntraced(function* (record: ChannelChildWorkRecord) {
+  /** The owning task is gone, terminal, or a newer generation: its reservations may release. */
+  const owningTaskSettled = Effect.fnUntraced(function* (record: ChannelChildWorkRecord) {
     const stored = yield* ledger.getTask(record.taskId).pipe(Effect.mapError(() => undefined));
     const task = stored?.task;
-    if (
+    return (
       task === undefined ||
       isChannelTaskTerminal(task.status) ||
       task.generation !== record.generation
-    ) {
-      yield* transition(record, ["reserved"], "released");
-      return true;
-    }
-    return false;
+    );
+  });
+
+  const reconcileReserved = Effect.fnUntraced(function* (record: ChannelChildWorkRecord) {
+    const settled = yield* owningTaskSettled(record);
+    if (!settled) return false;
+    yield* transition(record, ["reserved"], "released");
+    return true;
   });
 
   const reconcileLocal = Effect.fnUntraced(function* (
@@ -323,8 +332,11 @@ const make = Effect.gen(function* () {
     `.pipe(Effect.mapError(() => undefined));
     if (rows === undefined) return false;
     if (rows[0] === undefined) {
-      // No dispatch row: the launch never persisted. Only a pre-launch reservation may release.
+      // No dispatch row yet: the row is inserted inside the launch call, so a launched record
+      // without one is mid-launch while its task lives. Only a settled task's may release.
       if (record.state === "launched") {
+        const settled = yield* owningTaskSettled(record);
+        if (!settled) return false;
         yield* transition(record, ["launched"], "released");
         return true;
       }
@@ -391,6 +403,7 @@ const make = Effect.gen(function* () {
     markBound,
     markTerminal,
     markReleased,
+    releaseReserved,
     markUnknown,
     reconcile,
   });

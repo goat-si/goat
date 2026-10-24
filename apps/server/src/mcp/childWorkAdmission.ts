@@ -181,3 +181,37 @@ export const bindChildWork = (
 /** The correlation id an admitted caller's remote launch persists under. */
 export const admissionCorrelationId = (admission: ChannelChildAdmission | undefined) =>
   admission === undefined ? undefined : childWorkCorrelationIdFor(admission.record.childWorkId);
+
+/**
+ * The conflict a surface raises for an "existing" admission: whatever state the record is in,
+ * this request already had its one admission, so launching again would double-spend capacity.
+ */
+export const existingChildWorkConflict = (admission: ChannelChildAdmission) => {
+  const record = admission.record;
+  const destination = record.destination;
+  const pointer =
+    destination?.threadId !== undefined
+      ? ", thread " + destination.threadId
+      : destination?.correlationId !== undefined
+        ? ", correlation id " + destination.correlationId
+        : record.destinationHint === undefined
+          ? ""
+          : ", destination " + record.destinationHint;
+  return new OrchestratorMcpFailure({
+    code: "conflict",
+    message:
+      "This exact request was already admitted (state " +
+      record.state +
+      pointer +
+      "). Follow the existing child work, or change the request to launch anew.",
+  });
+};
+
+/**
+ * Releases the admission's reservation on a failure path, but only while the record is still
+ * reserved: once a launch was attempted, the launch paths' own classification decides.
+ */
+export const releaseReservation = (
+  childWork: Option.Option<ChannelChildWork.ChannelChildWork["Service"]>,
+  admission: ChannelChildAdmission | undefined,
+) => settleChildWork(childWork, admission, (child, record) => child.releaseReserved(record));
