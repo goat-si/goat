@@ -246,6 +246,7 @@ export const buildWindowsComputerUseHelper = Effect.fn("buildWindowsComputerUseH
       "/r:" + path.join(framework, "WPF", "UIAutomationTypes.dll"),
       "/r:" + path.join(framework, "WPF", "WindowsBase.dll"),
       "/r:" + path.join(framework, "System.Web.Extensions.dll"),
+      "/r:" + path.join(framework, "System.Drawing.dll"),
       ...sources,
       buildInfo,
     ]);

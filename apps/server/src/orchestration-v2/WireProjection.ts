@@ -5,6 +5,7 @@ import type {
   OrchestrationV2TurnItem,
 } from "@goat/contracts";
 import { resolveGoatMcpShippedToolId } from "@goat/shared/goatMcpToolPresentation";
+import { redactComputerUseTypedText } from "@goat/shared/toolActivity";
 import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import {
   compactDynamicToolOutput,
@@ -136,9 +137,10 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
     case "dynamic_tool": {
       const { output: rawOutput, ...projected } = item;
       const output = compactDynamicToolOutput(rawOutput);
+      const input = redactComputerUseTypedText(item.toolName, item.input);
       return {
         ...projected,
-        input: projectDynamicInput(item),
+        input: projectDynamicInput({ ...item, input }),
         ...(output === undefined ? {} : { output }),
         ...(hasDynamicValue(rawOutput) ? { outputOmitted: true } : {}),
       };
@@ -226,7 +228,7 @@ export function projectTurnItemForDetail(item: OrchestrationV2TurnItem): Orchest
     case "dynamic_tool":
       return {
         ...item,
-        input: boundDynamicValue(item.input),
+        input: boundDynamicValue(redactComputerUseTypedText(item.toolName, item.input)),
         output: boundToolOutput(item.output),
       };
     case "subagent":
@@ -248,6 +250,16 @@ export function projectTurnItemForDetail(item: OrchestrationV2TurnItem): Orchest
     default:
       return item;
   }
+}
+
+/** A transcript row a client exports keeps typed computer-use text redacted, as the wire does. */
+export function projectTranscriptRowForClient<R extends { readonly item: OrchestrationV2TurnItem }>(
+  row: R,
+): R {
+  const item = row.item;
+  if (item.type !== "dynamic_tool") return row;
+  const input = redactComputerUseTypedText(item.toolName, item.input);
+  return input === item.input ? row : { ...row, item: { ...item, input } };
 }
 
 export function projectContextHandoffForWire(

@@ -429,7 +429,10 @@
         "apps/desktop/src/app/DesktopClerk.ts",
         "apps/desktop/src/cua/",
         "scripts/build-desktop-artifact.ts",
-        "patches/@ubjs__node@0.31.0-3.patch"
+        "patches/@ubjs__node@0.31.0-3.patch",
+        "apps/desktop/native/computer-use-helper/",
+        "scripts/build-computer-use-helper.ts",
+        "scripts/desktop-artifact-computer-use.ts"
       ]
     },
     {
@@ -501,6 +504,14 @@
           "anchor": "state-roots"
         },
         "dependents": ["overview.md", "server.md", "desktop.md", "ssh.md"]
+      },
+      {
+        "id": "computer-use",
+        "owner": {
+          "document": "server.md",
+          "anchor": "computer-use"
+        },
+        "dependents": ["desktop.md", "shared.md"]
       }
     ]
   },

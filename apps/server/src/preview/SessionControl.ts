@@ -39,6 +39,12 @@ export class SessionControl {
   private activeAgentAction: AbortController | undefined;
   /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
   private activeAgentCut: AbortController | undefined;
+  /** The running agent action's work, and whether its input already passed the gate. */
+  private activeAgentWork: Promise<unknown> | undefined;
+  private activeAgentDispatching = false;
+  private readonly dispatchCutListeners = new Set<(work: Promise<unknown>) => void>();
+  /** Input an earlier action left running, such as a click that opened a dialog. */
+  private readonly lingering = new Set<Promise<unknown>>();
 
   constructor(agentId: string | null, onGenerationChange: () => void = () => {}) {
     this.agentId = agentId;
@@ -94,8 +100,18 @@ export class SessionControl {
   }
 
   private cut(reason: BrowserControlInterrupted) {
+    // Input already past its gate cannot be recalled, so the page must ignore it until it ends.
+    const held = [...this.lingering];
+    if (this.activeAgentDispatching && this.activeAgentWork) held.push(this.activeAgentWork);
+    for (const work of held) for (const listener of this.dispatchCutListeners) listener(work);
     this.activeAgentAction?.abort(reason);
     this.activeAgentCut?.abort(reason);
+  }
+
+  /** Calls back when Stop or a secret cuts an action whose input already passed its gate. */
+  onDispatchCut(listener: (work: Promise<unknown>) => void) {
+    this.dispatchCutListeners.add(listener);
+    return () => void this.dispatchCutListeners.delete(listener);
   }
 
   resumeAgents() {
@@ -122,10 +138,17 @@ export class SessionControl {
    */
   dispatchGate() {
     const epoch = this.epoch;
-    return () => {
+    const gate = () => {
       this.assertAgentMayDispatch();
       if (this.epoch !== epoch) throw new BrowserControlInterrupted();
+      this.activeAgentDispatching = true;
     };
+    const linger = (work: Promise<unknown>) => {
+      this.lingering.add(work);
+      const done = () => void this.lingering.delete(work);
+      work.then(done, done);
+    };
+    return Object.assign(gate, { linger });
   }
 
   private agentBlocked() {
@@ -216,7 +239,10 @@ export class SessionControl {
         const cut = new AbortController();
         this.activeAgentAction = action;
         this.activeAgentCut = cut;
+        // Reset first: run() can pass its gate before it returns.
+        this.activeAgentDispatching = false;
         const work = run(action.signal);
+        this.activeAgentWork = work;
         // Later actions still wait for it, even after its caller has been answered.
         this.track(work);
         const aborted = new Promise<never>((_, reject) =>
@@ -228,6 +254,8 @@ export class SessionControl {
         } finally {
           this.activeAgentAction = undefined;
           this.activeAgentCut = undefined;
+          this.activeAgentWork = undefined;
+          this.activeAgentDispatching = false;
           void aborted.catch(() => undefined);
         }
       },

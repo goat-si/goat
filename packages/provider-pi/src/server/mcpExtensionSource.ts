@@ -395,6 +395,18 @@ async function readCuaGate(): Promise<boolean> {
   }
 }
 
+// Beside the gate, so an extension from an older build keeps reading the gate unchanged.
+async function readCuaSkill(): Promise<boolean> {
+  const path = env(CUA_GATE_ENV);
+  if (path === undefined) return true;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    return (await readFile(path + ".skill", "utf8")).trim() !== "off";
+  } catch {
+    return true;
+  }
+}
+
 function cuaSpec(): StdioMcpSpec | undefined {
   const raw = env(CUA_ENV);
   if (raw === undefined) return undefined;
@@ -704,7 +716,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
       }
       cuaOpen = open;
     }
-    const withComputerUse = computerUse && cuaOpen;
+    const withComputerUse = computerUse && cuaOpen && (await readCuaSkill());
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
       // A full prompt override bypasses Pi's later section rendering.

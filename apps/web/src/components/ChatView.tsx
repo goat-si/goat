@@ -223,7 +223,7 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { threadEnvironment } from "../state/threads";
-import { resolveProviderSkillsForCwd } from "@goat/client-runtime/providerSkills";
+import { providerSkillsWithBuiltIns } from "./chat/providerSkillsWithBuiltIns";
 import { vcsEnvironment } from "../state/vcs";
 import {
   type EnvironmentPresentation,
@@ -397,7 +397,6 @@ const EMPTY_HELD_TURN_DIFF_SUMMARIES: readonly never[] = [];
 import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
-const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_AUTO_UPDATE_ENVIRONMENTS: ReadonlyArray<EnvironmentPresentation> = [];
 
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
@@ -2950,9 +2949,7 @@ export default function ChatView(props: ChatViewProps) {
     isDesktop: isElectron,
   });
   const getShortcutContextStable = useStableCallback(getShortcutContext);
-  const timelineSkills = activeProviderStatus
-    ? resolveProviderSkillsForCwd(activeProviderStatus, gitCwd)
-    : EMPTY_PROVIDER_SKILLS;
+  const timelineSkills = providerSkillsWithBuiltIns(activeProviderStatus, gitCwd, settings);
   const threadFindControlsRef = useRef<ThreadFindControls | null>(null);
   const [isThreadFindActive, setIsThreadFindActive] = useState(false);
   const openThreadFind = () => threadFindControlsRef.current?.open();

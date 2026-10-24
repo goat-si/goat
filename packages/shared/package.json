@@ -27,6 +27,10 @@
       "types": "./src/computerUseObservation.ts",
       "import": "./src/computerUseObservation.ts"
     },
+    "./computerUseWindows": {
+      "types": "./src/computerUseWindows.ts",
+      "import": "./src/computerUseWindows.ts"
+    },
     "./cuaDriverManifest": {
       "types": "./src/cuaDriverManifest.ts",
       "import": "./src/cuaDriverManifest.ts"
@@ -338,6 +342,10 @@
     "./composerContextReferences": {
       "types": "./src/composerContextReferences.ts",
       "import": "./src/composerContextReferences.ts"
+    },
+    "./turnCapabilities": {
+      "types": "./src/turnCapabilities.ts",
+      "import": "./src/turnCapabilities.ts"
     },
     "./composerContextLegacy": {
       "types": "./src/composerContextLegacy.ts",

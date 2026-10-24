@@ -9,6 +9,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import type { NamedWindow } from "./x11WindowPlacement.ts";
 import {
   LEASE_END_MESSAGES,
   leaseUpdateLines,
@@ -41,6 +42,10 @@ const harness = Effect.fn(function* (
     readonly expiresAt?: string;
     /** Stands in for `cua-driver revoke`; defaults to recording and returning at once. */
     readonly revoke?: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
+    /** Pids whose windows are not on GOAT's screen; with it, the proxy checks every window. */
+    readonly elsewhere?: ReadonlySet<number>;
+    /** Holds every placement answer until it is done, as a slow X server would. */
+    readonly placementGate?: Deferred.Deferred<void>;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -50,6 +55,7 @@ const harness = Effect.fn(function* (
   const started = yield* Queue.unbounded<FakeDriver>();
   const revokeCalled = yield* Deferred.make<void>();
   const revoked: Array<ReadonlyArray<string>> = [];
+  const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const proxy = yield* runLeaseProxy({
     controlId: CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
@@ -72,6 +78,23 @@ const harness = Effect.fn(function* (
         ),
       };
     }),
+    ...(options.elsewhere === undefined
+      ? {}
+      : {
+          placement: (windows: ReadonlyArray<NamedWindow>) =>
+            Queue.offer(checking, windows).pipe(
+              Effect.andThen(
+                options.placementGate === undefined
+                  ? Effect.void
+                  : Deferred.await(options.placementGate),
+              ),
+              Effect.as(
+                windows.some((window) => options.elsewhere?.has(window.pid))
+                  ? ("other" as const)
+                  : ("same" as const),
+              ),
+            ),
+        }),
     revokeSessions: (sessions) =>
       Effect.sync(() => void revoked.push(sessions)).pipe(
         Effect.andThen(Deferred.succeed(revokeCalled, undefined)),
@@ -87,6 +110,8 @@ const harness = Effect.fn(function* (
     push: (update: ComputerUseLeaseUpdate) => Queue.offer(updates, update),
     failLeaseStream: Queue.fail(updates, "connection reset"),
     reply: (line: string) => Queue.offer(current().fromDriver, line),
+    /** The driver's output ends without the proxy killing it, as when the helper restarts. */
+    driverExits: Effect.suspend(() => Queue.end(current().fromDriver)),
     nextToDriver: Effect.suspend(() => Queue.take(current().toDriver)).pipe(Effect.map(json)),
     nextToProvider: Queue.take(output).pipe(Effect.map(json)),
     providerQueued: Queue.size(output),
@@ -95,6 +120,8 @@ const harness = Effect.fn(function* (
     isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
     restarted: Queue.take(started),
     revokeCalled: Deferred.await(revokeCalled),
+    /** The windows of the next placement check, once it has started. */
+    checking: Queue.take(checking),
     revoked,
     proxy,
   };
@@ -208,6 +235,22 @@ describe("ComputerUseLeaseProxy", () => {
       assert.deepEqual((yield* h.nextToProvider).id, 1);
       assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "expired"));
     }),
+  );
+
+  it.effect(
+    "tells the agent the helper stopped or restarted when the driver exits on its own (#1233)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        yield* h.send(call(1, "click"));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.driverExits;
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "helper_restarted"));
+        yield* h.send(call(2, "get_window_state"));
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "helper_restarted"));
+        assert.equal(computerUseRefusalReason("helper_restarted"), "helperUnavailable");
+      }),
   );
 
   it.effect("fails closed when the lease stream drops, and before any confirmation", () =>
@@ -345,7 +388,6 @@ describe("ComputerUseLeaseProxy", () => {
           },
         );
         for (const [id, name, args] of [
-          [3, "get_desktop_state", {}],
           [4, "press_key", { key: "return" }],
           [5, "run_script", { script: "click()" }],
         ] as const) {
@@ -364,6 +406,34 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.send(call(6, "list_windows"));
         assert.equal((yield* h.nextToDriver).id, 6);
         assert.equal(yield* h.driverQueued, 0);
+      }),
+  );
+
+  it.effect(
+    "never screenshots the whole display, even for a thread approved for the whole screen",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        // No app list: this thread may act on anything the screen shows.
+        yield* h.push(active());
+        yield* h.send(call(1, "get_desktop_state", { max_image_dimension: 800 }));
+        const refused = yield* h.nextToProvider;
+        assert.equal(refused.id, 1);
+        const result = refused.result as {
+          content: ReadonlyArray<{ type: string; text?: string }>;
+          structuredContent: object;
+        };
+        assert.deepInclude(result.structuredContent, {
+          refused: "targetRefused",
+          detail: "desktop_capture_off",
+        });
+        assert.isFalse(result.content.some((part) => part.type === "image"));
+        assert.include(result.content[0]?.text ?? "", "get_window_state");
+        assert.equal(yield* h.driverQueued, 0);
+
+        // One window's screenshot still goes to the driver.
+        yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
+        assert.equal((yield* h.nextToDriver).id, 2);
       }),
   );
 
@@ -472,6 +542,180 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.send(call(2, "list_windows"));
         assert.equal((yield* h.nextToDriver).id, 2);
       }),
+  );
+
+  it.effect(
+    "a driver that names windows from another display is cut off: a typed refusal, and the driver killed",
+    () =>
+      Effect.gen(function* () {
+        // The person's own desktop runs pid 900; GOAT gave the driver another screen (#1358).
+        const h = yield* harness({ elsewhere: new Set([900]) });
+        yield* h.push(active());
+        yield* h.send(call(1, "list_windows"));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { content: [], structuredContent: { windows: [{ pid: 900, window_id: 5 }] } },
+          }),
+        );
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "wrong_display"));
+        yield* h.killed;
+        // Nothing after it runs either.
+        yield* h.send(call(2, "list_windows"));
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "wrong_display"));
+      }),
+  );
+
+  it.effect("a call naming a window that is not on GOAT's screen never reaches the driver", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ elsewhere: new Set([900]) });
+      yield* h.push(active());
+      // Flat or nested inside a target, the window is checked before anything is sent.
+      yield* h.send(call(1, "click", { pid: 900, window_id: 5, x: 1, y: 1 }));
+      yield* h.send(call(2, "click", { target: { kind: "window", pid: 900, window_id: 5 } }));
+      for (const id of [1, 2]) {
+        const refused = yield* h.nextToProvider;
+        assert.equal(refused.id, id);
+        assert.deepInclude((refused.result as { structuredContent: object }).structuredContent, {
+          detail: "wrong_display",
+        });
+      }
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect(
+    "nothing acts until the driver has shown its windows are on GOAT's screen (#1358)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ elsewhere: new Set([900]) });
+        yield* h.push(active());
+        // A call naming no window at all still waits for the proof.
+        yield* h.send(call(1, "type_text", { pid: 10, text: "hi" }));
+        const asked = yield* h.nextToDriver;
+        assert.deepEqual(asked.params, { name: "list_windows", arguments: {} });
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: asked.id,
+            result: { content: [], structuredContent: { windows: [{ pid: 10, window_id: 20 }] } },
+          }),
+        );
+        assert.equal((yield* h.nextToDriver).id, 1);
+
+        // A driver that lists another screen's windows is cut off, and the call never runs.
+        const wrong = yield* harness({ elsewhere: new Set([900]) });
+        yield* wrong.push(active());
+        yield* wrong.send(call(1, "type_text", { pid: 10, text: "hi" }));
+        const listed = yield* wrong.nextToDriver;
+        yield* wrong.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: listed.id,
+            result: { content: [], structuredContent: { windows: [{ pid: 900, window_id: 5 }] } },
+          }),
+        );
+        assert.deepEqual(yield* wrong.nextToProvider, refusedCall(1, "wrong_display"));
+        yield* wrong.killed;
+        assert.equal(yield* wrong.driverQueued, 0);
+      }),
+  );
+
+  it.effect("a filtered list_windows that finds nothing does not prove the screen", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ elsewhere: new Set([900]) });
+      yield* h.push(active());
+      yield* h.send(call(1, "list_windows", { pid: 2147483647 }));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { content: [], structuredContent: { windows: [] } },
+        }),
+      );
+      assert.equal((yield* h.nextToProvider).id, 1);
+      // The action still waits for the proxy's own, unfiltered listing.
+      yield* h.send(call(2, "type_text", { pid: 900, text: "hi" }));
+      assert.deepEqual((yield* h.nextToDriver).params, { name: "list_windows", arguments: {} });
+    }),
+  );
+
+  it.effect("a call waiting on its window check when the person takes over never runs", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({ elsewhere: new Set([900]), placementGate: gate });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 10, window_id: 20, x: 1, y: 1 }));
+      yield* h.checking;
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+      yield* h.push(active());
+      yield* h.restarted;
+      yield* Deferred.succeed(gate, undefined);
+      // The replacement child proves its screen, yet the click from before the takeover is refused.
+      const asked = yield* h.nextToDriver;
+      assert.deepEqual(asked.params, { name: "list_windows", arguments: {} });
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: asked.id,
+          result: { content: [], structuredContent: { windows: [{ pid: 10, window_id: 20 }] } },
+        }),
+      );
+      const refused = yield* h.nextToProvider;
+      assert.equal(refused.id, 1);
+      assert.deepInclude((refused.result as { structuredContent: object }).structuredContent, {
+        detail: "waiting_for_human",
+      });
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect("a reply still being checked when the person stops is never delivered", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({ elsewhere: new Set([900]), placementGate: gate });
+      yield* h.push(active());
+      yield* h.send(call(1, "list_windows"));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { content: [], structuredContent: { windows: [{ pid: 10, window_id: 20 }] } },
+        }),
+      );
+      yield* h.push({ state: "ended", reason: "stopped" });
+      assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "stopped"));
+      yield* Deferred.succeed(gate, undefined);
+      yield* h.killed;
+      assert.equal(yield* h.providerQueued, 0);
+    }),
+  );
+
+  it.effect("drops a driver reply to a request the provider cancelled or never made", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.send(call(3, "list_apps"));
+      assert.equal((yield* h.nextToDriver).id, 3);
+      const cancel = {
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: 3 },
+      };
+      yield* h.send(JSON.stringify(cancel));
+      assert.deepEqual(yield* h.nextToDriver, cancel);
+      // Driver lines arrive in order, so the next reply reaching the provider proves these dropped.
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { content: [] } }));
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 99, result: { content: [] } }));
+      yield* h.send(call(4, "list_apps"));
+      assert.equal((yield* h.nextToDriver).id, 4);
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 4, result: { content: [] } }));
+      assert.equal((yield* h.nextToProvider).id, 4);
+    }),
   );
 
   it.effect("reads NDJSON lease lines and drops ones it cannot decode", () =>

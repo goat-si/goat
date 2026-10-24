@@ -229,6 +229,113 @@ layer("CommandOutputHub", (it) => {
       ),
   );
 
+  it.effect("a live viewer never sees the GOAT MCP token an env dump prints", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hub = yield* CommandOutputHub.CommandOutputHub;
+        const threadId = yield* seedThread;
+        yield* writeCommandItem(threadId, { status: "running" });
+        const secret = "SyntheticMcpTokenNotARealCredential00000000";
+        // The chunk boundary falls inside the token.
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: "PWD=/work\nGOAT_ACP_MCP_AUTHORIZATION=Bearer testtag0Synthetic",
+        });
+        const frames = yield* subscribeFrames(threadId);
+        let client = applyFrame(EMPTY_TERMINAL_OUTPUT, yield* takeFrame(frames));
+        yield* hub.append({ threadId, itemId: ITEM_ID, chunk: secret.slice(9) + "\nTERM=xterm" });
+        yield* TestClock.adjust("1 second");
+        client = applyFrame(client, yield* takeFrame(frames));
+
+        assert.equal(
+          client.text,
+          "PWD=/work\nGOAT_ACP_MCP_AUTHORIZATION=Bearer [redacted]\nTERM=xterm",
+        );
+      }),
+    ),
+  );
+
+  it.effect("a token split across chunks stays hidden after its tail is evicted", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hub = yield* CommandOutputHub.CommandOutputHub;
+        const threadId = yield* seedThread;
+        yield* writeCommandItem(threadId, { status: "running" });
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: "before\nGOAT_ACP_MCP_AUTHORIZATION=Bearer ",
+        });
+        for (let index = 0; index < 64; index += 1) {
+          const itemId = TurnItemId.make(`turn-item:other-${index}`);
+          yield* hub.append({ threadId, itemId, chunk: "busy\n" });
+        }
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: "otherrunSyntheticMcpTokenNotARealCredential00000000\n",
+        });
+
+        const frames = yield* subscribeFrames(threadId);
+        const client = applyFrame(EMPTY_TERMINAL_OUTPUT, yield* takeFrame(frames));
+        assert.equal(client.text, "GOAT_ACP_MCP_AUTHORIZATION=Bearer [redacted]\n");
+      }),
+    ),
+  );
+
+  it.effect("a command whose held-back output is evicted streams nothing more", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hub = yield* CommandOutputHub.CommandOutputHub;
+        const threadId = yield* seedThread;
+        yield* writeCommandItem(threadId, { status: "running" });
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: "GOAT_ACP_MCP_AUTHORIZATION=Bearer othe",
+        });
+        // More commands hold back output than the hub keeps context for.
+        for (let index = 0; index < 256; index += 1) {
+          const itemId = TurnItemId.make(`turn-item:carry-${index}`);
+          yield* hub.append({ threadId, itemId, chunk: "export GOAT_ACP_MCP_AUTHORIZATION=" });
+        }
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: "rrunSyntheticMcpTokenNotARealCredential00000000\n",
+        });
+
+        const frames = yield* subscribeFrames(threadId);
+        const client = applyFrame(EMPTY_TERMINAL_OUTPUT, yield* takeFrame(frames));
+        assert.notInclude(client.text, "Credential");
+      }),
+    ),
+  );
+
+  it.effect("a live viewer never sees a token that ends in a label", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hub = yield* CommandOutputHub.CommandOutputHub;
+        const threadId = yield* seedThread;
+        yield* writeCommandItem(threadId, { status: "running" });
+        // Synthetic, shaped like a token another server minted.
+        const token = `${"f".repeat(44)}-Bearer`;
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: `Authorization: Bearer ${token} ${"x".repeat(52)}GOA`,
+        });
+        yield* hub.append({ threadId, itemId: ITEM_ID, chunk: "\n" });
+
+        const frames = yield* subscribeFrames(threadId);
+        const client = applyFrame(EMPTY_TERMINAL_OUTPUT, yield* takeFrame(frames));
+        assert.notInclude(client.text, "ffff");
+        assert.include(client.text, "Authorization: Bearer [redacted]");
+      }),
+    ),
+  );
+
   it.effect("a row that is not a known command fails instead of waiting forever", () =>
     Effect.gen(function* () {
       const hub = yield* CommandOutputHub.CommandOutputHub;

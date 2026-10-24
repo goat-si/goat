@@ -42,7 +42,9 @@ the thread and names the apps, such as Calculator or Notes, and until when;
 approve it in a GOAT app and the agent may use those apps' windows in that
 thread until then. Until it has an approval, the agent can list apps and
 windows but not look inside or type into them. A request for the whole screen
-says so; approving it lets the agent act on anything the screen shows.
+says so; approving it lets the agent act on anything the screen shows. Agents
+cannot screenshot the whole display; they look at one window at a time. On
+Windows, a window's screenshot can still include other windows that cover it.
 
 **Stop** on a thread also stops its computer use at once, even in the middle of
 an action sequence. The agent gets the screen back on its next turn, within the
@@ -62,6 +64,17 @@ at the top of the stack stops every agent on this computer, including approved
 work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
 use the page until you leave that field.
+
+## The Computer Use skill
+
+Every turn that gets the computer use tools also gets GOAT's built-in
+**Computer Use** skill. It tells agents to work in one window at a time, check
+the result of each step, stop when you take over or press Stop, and hand
+sign-ins, payments, and other private steps to you. It appears as a built-in
+skill in the composer's `$` menu.
+
+To keep the tools without the skill, turn off **Computer Use skill** under
+**Computer use** in the same settings.
 
 ## Work that runs on its own
 
@@ -116,6 +129,10 @@ works with fewer apps, and your desktop may ask you to approve screen capture.
 A headless server with Xvfb also works. Without AT-SPI (the `at-spi2-core`
 package) and a D-Bus session, agents can take screenshots and use the mouse and
 keyboard but cannot read app controls.
+Window screenshots on Linux need a desktop that composites its windows (a bare
+Xvfb needs a compositor such as xcompmgr); in a Wayland session other than
+Hyprland, agents read app controls but get no window screenshots. A window that
+has just opened or is still redrawing can briefly show part of the app behind it.
 
 ## Other computers
 

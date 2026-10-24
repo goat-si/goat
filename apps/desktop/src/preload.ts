@@ -8,13 +8,20 @@ import type {
   DesktopPreviewTabState,
   DesktopSnapShotEvent,
 } from "@goat/contracts";
-import { DesktopSshPreparationProgressEventSchema } from "@goat/contracts";
+import {
+  DesktopWindowMaterialState,
+  DesktopSshPreparationProgressEventSchema,
+  DesktopPreviewSessionStackState,
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
 import { mergeLegacyLocalStorage } from "./legacyLocalStorageMerge.ts";
+
+const decodeWindowMaterialState = Schema.decodeUnknownOption(DesktopWindowMaterialState);
 
 const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
@@ -84,6 +91,18 @@ const decodeSshPreparationProgress = Schema.decodeUnknownOption(
 );
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  previewSessionStack: {
+    request: (input) => ipcRenderer.invoke(IpcChannels.PREVIEW_SESSION_STACK_CHANNEL, input),
+    onState: (listener) => {
+      const decode = Schema.decodeUnknownOption(DesktopPreviewSessionStackState);
+      const handler = (_event: Electron.IpcRendererEvent, raw: unknown) => {
+        const state = decode(raw);
+        if (state._tag === "Some") listener(state.value);
+      };
+      ipcRenderer.on(IpcChannels.PREVIEW_SESSION_STACK_CHANNEL, handler);
+      return () => ipcRenderer.removeListener(IpcChannels.PREVIEW_SESSION_STACK_CHANNEL, handler);
+    },
+  },
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {
@@ -259,6 +278,13 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   restartCuaDriver: () => ipcRenderer.invoke(IpcChannels.RESTART_CUA_DRIVER_CHANNEL, undefined),
   verifyCuaDriver: () => ipcRenderer.invoke(IpcChannels.VERIFY_CUA_DRIVER_CHANNEL, undefined),
+  checkCuaGrants: () => ipcRenderer.invoke(IpcChannels.CHECK_CUA_GRANTS_CHANNEL, undefined),
+  openCuaPermissionGuide: (pane: string) =>
+    ipcRenderer.invoke(IpcChannels.OPEN_CUA_PERMISSION_GUIDE_CHANNEL, pane),
+  relaunchForCuaGrants: () =>
+    ipcRenderer.invoke(IpcChannels.RELAUNCH_FOR_CUA_GRANTS_CHANNEL, undefined),
+  revealCuaGrantTarget: () =>
+    ipcRenderer.invoke(IpcChannels.REVEAL_CUA_GRANT_TARGET_CHANNEL, undefined),
   checkSystemPermission: (pane: string) =>
     ipcRenderer.invoke(IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL, pane),
   openSystemSettings: (pane: string) =>
@@ -324,6 +350,22 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(IpcChannels.QUIT_SHORTCUT_CHANNEL, wrappedListener);
     };
+  },
+  getWindowMaterialState: async () => {
+    const decoded = decodeWindowMaterialState(
+      await ipcRenderer.invoke(IpcChannels.GET_WINDOW_MATERIAL_STATE_CHANNEL),
+    );
+    if (Option.isNone(decoded)) throw new Error("Invalid desktop window material state.");
+    return decoded.value;
+  },
+  onWindowMaterialStateChanged: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      const decoded = decodeWindowMaterialState(value);
+      if (Option.isSome(decoded)) listener(decoded.value);
+    };
+    ipcRenderer.on(IpcChannels.WINDOW_MATERIAL_STATE_CHANNEL, wrappedListener);
+    return () =>
+      ipcRenderer.removeListener(IpcChannels.WINDOW_MATERIAL_STATE_CHANNEL, wrappedListener);
   },
   getWindowFullscreenState: () =>
     ipcRenderer.sendSync(IpcChannels.GET_WINDOW_FULLSCREEN_STATE_CHANNEL) === true,

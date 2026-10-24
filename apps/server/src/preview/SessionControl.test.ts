@@ -241,6 +241,33 @@ describe("SessionControl", () => {
     await expect(observing).rejects.toMatchObject({ reason: "privateMode" });
   });
 
+  it("holds input from a gate passed before the action returned, and from a click left on a dialog", async () => {
+    const control = new SessionControl("agent");
+    const held: Array<Promise<unknown>> = [];
+    control.onDispatchCut((work) => held.push(work));
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const lateClick = Promise.withResolvers<void>();
+    const acting = control.agent("agent", () => {
+      // A key press passes its gate synchronously, before run() returns its promise.
+      const gate = control.dispatchGate();
+      gate();
+      gate.linger(lateClick.promise);
+      started.resolve();
+      return finish.promise;
+    });
+    await started.promise;
+    control.setPrivate(true);
+    expect(held).toHaveLength(2);
+    await expect(acting).rejects.toMatchObject({ reason: "privateMode" });
+    finish.resolve();
+    // The action is over, but the click it left on the dialog is still covered.
+    control.setPrivate(false);
+    control.stopAgents();
+    expect(held).toHaveLength(3);
+    lateClick.resolve();
+  });
+
   it("keeps an action's input cancelled after a brief secret ends", async () => {
     const control = new SessionControl("agent");
     const gate = control.dispatchGate();

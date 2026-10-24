@@ -46,6 +46,16 @@ const decodeHostForget = Schema.decodeUnknownSync(WsSshHostForgetRpc.payloadSche
  */
 
 describe("WebSocket RPC contracts", () => {
+  it("streams non-negative integer computer use revisions", () => {
+    const rpc = WsRpcGroup.requests.get(WS_METHODS.computerUseStatusChanges);
+    if (rpc === undefined || !RpcSchema.isStreamSchema(rpc.successSchema)) {
+      throw new Error("Computer use status changes must be a streaming RPC");
+    }
+    const decode = Schema.decodeUnknownSync(rpc.successSchema.success);
+    expect(decode({ revision: 0 })).toEqual({ revision: 0 });
+    expect(decode({ revision: 1 })).toEqual({ revision: 1 });
+    for (const revision of [-1, 0.5, "1"]) expect(() => decode({ revision })).toThrow();
+  });
   it("declares alias status and authenticated handoff progress payloads", () => {
     expect(WsSshHostStatusRpc._tag).toBe(WS_METHODS.sshHostStatus);
     expect(WsSshHostHandoffProgressRpc._tag).toBe(WS_METHODS.sshHostHandoffProgress);

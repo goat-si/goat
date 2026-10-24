@@ -1,3 +1,4 @@
+import * as StackPopout from "../preview/PreviewSessionPopout.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -5,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
 
@@ -33,16 +35,18 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
+import {
+  getInitialWindowBackgroundColor,
+  getWindowTitleBarOptions,
+  MACOS_WORKSPACE_TOPBAR_HEIGHT,
+  MACOS_WINDOW_BUTTON_RADIUS,
+} from "./DesktopWindowAppearance.ts";
+import * as DesktopWindowMaterial from "./material/DesktopWindowMaterial.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
 
 const MIN_MAIN_WINDOW_WIDTH = 840;
 const MIN_MAIN_WINDOW_HEIGHT = 620;
-const TITLEBAR_HEIGHT = 40;
-// Matches --workspace-topbar-height in apps/web/src/index.css. Native macOS
-// buttons are 14 points tall and do not scale with the renderer's zoom.
-const MACOS_WORKSPACE_TOPBAR_HEIGHT = 52;
-const MACOS_WINDOW_BUTTON_RADIUS = 7;
 
 function syncMacosWindowButtons(window: Electron.BrowserWindow): void {
   if (window.isDestroyed() || window.isFullScreen()) return;
@@ -55,9 +59,6 @@ function syncMacosWindowButtons(window: Electron.BrowserWindow): void {
   });
 }
 
-const TITLEBAR_COLOR = "#01000000"; // #00000000 does not work correctly on Linux
-const TITLEBAR_LIGHT_SYMBOL_COLOR = "#1f2937";
-const TITLEBAR_DARK_SYMBOL_COLOR = "#f8fafc";
 const MAIN_WINDOW_BOUNDS_PERSIST_DEBOUNCE_MS = 500;
 const DEVELOPMENT_LOAD_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 const RENDERER_RECOVERY_RELOAD_DELAY_MS = 500;
@@ -65,12 +66,8 @@ const RENDERER_RECOVERY_MAX_ATTEMPTS = 3;
 const RENDERER_RECOVERY_WINDOW_MS = 60_000;
 const DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES = new Set([-2, -7, -9, -102, -105, -106, -118]);
 
-type WindowTitleBarOptions = Pick<
-  Electron.BrowserWindowConstructorOptions,
-  "titleBarOverlay" | "titleBarStyle" | "trafficLightPosition"
->;
-
 type DesktopWindowRuntimeServices =
+  | DesktopWindowMaterial.DesktopWindowMaterial
   | DesktopEnvironment.DesktopEnvironment
   | DesktopState.DesktopState
   | DesktopAssets.DesktopAssets
@@ -133,10 +130,6 @@ function getIconOption(
     onNone: () => ({}),
     onSome: (icon) => ({ icon }),
   });
-}
-
-function getInitialWindowBackgroundColor(shouldUseDarkColors: boolean): string {
-  return shouldUseDarkColors ? "#171717" : "#ffffff";
 }
 
 type DisplayBounds = Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
@@ -391,48 +384,6 @@ function concealPendingQuitWindow(
   window.setOpacity(0);
 }
 
-function getWindowTitleBarOptions(
-  shouldUseDarkColors: boolean,
-  platform: NodeJS.Platform,
-): WindowTitleBarOptions {
-  if (platform === "darwin") {
-    return {
-      titleBarStyle: "hiddenInset",
-      trafficLightPosition: {
-        x: 16,
-        y: MACOS_WORKSPACE_TOPBAR_HEIGHT / 2 - MACOS_WINDOW_BUTTON_RADIUS,
-      },
-    };
-  }
-
-  return {
-    titleBarStyle: "hidden",
-    titleBarOverlay: {
-      color: TITLEBAR_COLOR,
-      height: TITLEBAR_HEIGHT,
-      symbolColor: shouldUseDarkColors ? TITLEBAR_DARK_SYMBOL_COLOR : TITLEBAR_LIGHT_SYMBOL_COLOR,
-    },
-  };
-}
-
-function syncWindowAppearance(
-  window: Electron.BrowserWindow,
-  shouldUseDarkColors: boolean,
-  platform: NodeJS.Platform,
-): Effect.Effect<void> {
-  return Effect.sync(() => {
-    if (window.isDestroyed()) {
-      return;
-    }
-
-    window.setBackgroundColor(getInitialWindowBackgroundColor(shouldUseDarkColors));
-    const { titleBarOverlay } = getWindowTitleBarOptions(shouldUseDarkColors, platform);
-    if (typeof titleBarOverlay === "object") {
-      window.setTitleBarOverlay(titleBarOverlay);
-    }
-  });
-}
-
 type RevealSubscription = (listener: () => void) => void;
 
 function bindFirstRevealTrigger(
@@ -452,7 +403,10 @@ function bindFirstRevealTrigger(
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
+  const material = yield* DesktopWindowMaterial.DesktopWindowMaterial;
+  const materialScope = yield* Effect.scope;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const installPopout = yield* StackPopout.makePreviewSessionPopoutInstaller(environment.platform);
   const desktopState = yield* DesktopState.DesktopState;
   const assets = yield* DesktopAssets.DesktopAssets;
   const electronMenu = yield* ElectronMenu.ElectronMenu;
@@ -578,6 +532,7 @@ export const make = Effect.gen(function* () {
       return Option.none();
     }
 
+    yield* material.attach(window).pipe(Effect.provideService(Scope.Scope, materialScope));
     yield* rendererHistory.register(window.webContents, { surface: "main" });
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);
@@ -767,7 +722,8 @@ export const make = Effect.gen(function* () {
           }),
         );
       });
-      contents.on("did-create-window", (popup) => {
+      contents.on("did-create-window", (popup, details) => {
+        if (details.frameName === StackPopout.PREVIEW_SESSION_STACK_WINDOW_NAME) return;
         installContextMenu(popup, popup.webContents);
       });
     };
@@ -777,12 +733,7 @@ export const make = Effect.gen(function* () {
       void runPromise(previewManager.prepareWebview(contents));
     });
 
-    window.webContents.setWindowOpenHandler(({ url }) => {
-      if (Option.isSome(ElectronShell.parseSafeExternalUrl(url))) {
-        void runPromise(electronShell.openExternal(url));
-      }
-      return { action: "deny" };
-    });
+    yield* installPopout(window);
     window.webContents.on("will-navigate", (event, url) => {
       if (
         isSameOriginRendererNavigation({
@@ -998,7 +949,22 @@ export const make = Effect.gen(function* () {
       if (persistedSettings.mainWindowMaximized) {
         window.maximize();
       }
-      void runPromise(Effect.andThen(electronWindow.reveal(window), dismissConnectingSplash));
+      void runPromise(
+        electronWindow
+          .reveal(window)
+          .pipe(
+            Effect.andThen(
+              material
+                .afterReveal(window)
+                .pipe(
+                  Effect.catchCause((cause) =>
+                    logWindowWarning("window material reveal failed", { cause }),
+                  ),
+                ),
+            ),
+            Effect.andThen(dismissConnectingSplash),
+          ),
+      );
     });
 
     loadApplication();
@@ -1210,7 +1176,7 @@ export const make = Effect.gen(function* () {
     syncAppearance: Effect.gen(function* () {
       const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
       yield* electronWindow.syncAllAppearance((window) =>
-        syncWindowAppearance(window, shouldUseDarkColors, environment.platform),
+        material.syncAppearance(window, shouldUseDarkColors),
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
   });

@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
+import { computerUseReady, type ComputerUseReadiness } from "@goat/contracts";
 
 import {
+  CUA_DESKTOP_UPDATE_NEEDED,
   computerUseStatusText,
   computerUseUnavailable,
   hostComputerUseText,
+  readCuaGrants,
+  withLiveGrants,
 } from "./CuaSetupDialog.logic";
 
 const mac = { platform: "darwin", running: true } as const;
@@ -124,5 +128,54 @@ describe("hostComputerUseText", () => {
         reason: "GOAT runs in Windows Session 0.",
       }),
     ).toBe("Unavailable. GOAT runs in Windows Session 0.");
+  });
+});
+
+describe("readCuaGrants", () => {
+  it("asks an older desktop to update instead of trusting GOAT's own grants", async () => {
+    // Such a desktop may already run computer use through the helper.
+    expect(await readCuaGrants({})).toEqual({
+      principal: "unusable",
+      message: CUA_DESKTOP_UPDATE_NEEDED,
+    });
+    expect(await readCuaGrants(undefined)).toEqual({
+      principal: "unusable",
+      message: CUA_DESKTOP_UPDATE_NEEDED,
+    });
+  });
+});
+
+describe("withLiveGrants", () => {
+  const reported: ComputerUseReadiness = {
+    grants: { accessibility: "granted", screenCapture: "granted" },
+    helper: "authenticated",
+    capture: "ready",
+    tree: "ready",
+    input: "background",
+    blockers: [],
+    reasons: [],
+  };
+  const live = (accessibility: boolean, screenRecording: boolean) =>
+    ({
+      principal: "helper",
+      name: "GOAT Computer Use",
+      bundleId: "si.goat.desktop.computer-use",
+      accessibility,
+      screenRecording,
+    }) as const;
+
+  it("shows a grant revoked since the helper's last report as denied, so the host is not ready", () => {
+    const merged = withLiveGrants(reported, live(false, true));
+    expect(merged?.grants).toEqual({ accessibility: "denied", screenCapture: "granted" });
+    expect(computerUseReady(merged!)).toBe(false);
+    expect(computerUseReady(reported)).toBe(true);
+  });
+
+  it("never marks a grant granted that the report has not proven", () => {
+    const pending = {
+      ...reported,
+      grants: { accessibility: "pending", screenCapture: "unknown" },
+    } as const;
+    expect(withLiveGrants(pending, live(true, true))?.grants).toEqual(pending.grants);
   });
 });

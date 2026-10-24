@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off -- A trap driver script on a real temporary directory proves what runs.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,6 +11,7 @@ import {
   admittedCuaApplications,
   cuaDriverCapabilityManifest,
   isCuaDriverStartupRefusal,
+  prepareCuaDriverCapabilityManifest,
 } from "./cuaDriverManifest.ts";
 
 describe("cuaDriverManifest", () => {
@@ -27,6 +33,8 @@ describe("cuaDriverManifest", () => {
       "browser_set_input_files",
       "clipboard_read",
       "kill_app",
+      // A whole-display screenshot shows every other app (#1321).
+      "get_desktop_state",
     ])
       expect(Object.keys(CUA_DRIVER_EXCLUDED_TOOLS)).toContain(tool);
   });
@@ -86,5 +94,64 @@ describe("cuaDriverManifest", () => {
         new Error("embedded cua-driver exited before readiness (code=Some(1))"),
       ),
     ).toBe(false);
+  });
+});
+
+describe("cuaDriverManifest app listing", () => {
+  /** A stand-in driver that only leaves a mark when something runs it. */
+  const trap = (onTestFinished: (cleanup: () => void) => void) => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-manifest-"));
+    onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+    const marker = NodePath.join(directory, "ran");
+    const binaryPath = NodePath.join(directory, "cua-driver");
+    NodeFS.writeFileSync(binaryPath, "#!/bin/sh\ntouch '" + marker + "'\nexit 3\n", {
+      mode: 0o755,
+    });
+    return {
+      ran: () => NodeFS.existsSync(marker),
+      input: {
+        binaryPath,
+        platform: "darwin" as const,
+        environment: { PATH: "/usr/bin:/bin" },
+        hostBundleIds: ["si.goat.desktop"],
+        path: NodePath.join(directory, "manifest.yaml"),
+      },
+    };
+  };
+
+  it("lists through the hook and never runs the driver itself", async ({ onTestFinished }) => {
+    const driver = trap(onTestFinished);
+    const path = await prepareCuaDriverCapabilityManifest({
+      ...driver.input,
+      listApplications: async () => [
+        { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
+        { bundle_id: "si.goat.desktop", name: "GOAT" },
+      ],
+    });
+    expect(driver.ran()).toBe(false);
+    const manifest = NodeFS.readFileSync(path, "utf8");
+    expect(manifest).toContain("com.apple.TextEdit");
+    expect(manifest).not.toContain("si.goat.desktop");
+  });
+
+  it("fails when the hook fails, without falling back to running the driver", async ({
+    onTestFinished,
+  }) => {
+    const driver = trap(onTestFinished);
+    await expect(
+      prepareCuaDriverCapabilityManifest({
+        ...driver.input,
+        listApplications: async () => {
+          throw new Error("driver_untrusted");
+        },
+      }),
+    ).rejects.toThrow("driver_untrusted");
+    expect(driver.ran()).toBe(false);
+  });
+
+  it("runs the driver itself when no hook is given", async ({ onTestFinished }) => {
+    const driver = trap(onTestFinished);
+    await expect(prepareCuaDriverCapabilityManifest(driver.input)).rejects.toThrow();
+    expect(driver.ran()).toBe(true);
   });
 });

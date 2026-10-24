@@ -1,7 +1,12 @@
 import * as Schema from "effect/Schema";
 
 import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { type ComputerUseRefusalReason } from "./computerUseProtocol.ts";
+import {
+  ComputerUseCapabilities,
+  ComputerUseHumanInputSource,
+  ComputerUseReadiness,
+  type ComputerUseRefusalReason,
+} from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
@@ -20,6 +25,20 @@ export const DesktopCuaDriverRequest = Schema.Struct({
   enabled: Schema.Boolean,
 });
 export type DesktopCuaDriverRequest = typeof DesktopCuaDriverRequest.Type;
+
+/**
+ * Whether any agent controls this host right now; the desktop's helper watches for secret
+ * fields and a person's input only while it does (D7, #1235). seq grows with every change the
+ * server sends, so the desktop drops one that arrives after a newer one; the server sends the
+ * current value again whenever the desktop reconnects.
+ */
+export const DesktopCuaWatch = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaWatch"),
+  seq: Schema.Int,
+  active: Schema.Boolean,
+});
+export type DesktopCuaWatch = typeof DesktopCuaWatch.Type;
 
 export const DesktopCuaDriverReport = Schema.Union([
   Schema.Struct({
@@ -58,6 +77,9 @@ export const CuaDisplayCapability = Schema.Struct({
 });
 export type CuaDisplayCapability = typeof CuaDisplayCapability.Type;
 
+export const CuaToolsAvailability = Schema.Literals(["available", "off", "unavailable"]);
+export type CuaToolsAvailability = typeof CuaToolsAvailability.Type;
+
 /** Driver readiness on one host, independent of the enableCua setting. */
 export const CuaHostStatus = Schema.Struct({
   platform: Schema.Literals(["darwin", "linux", "win32", "other"]),
@@ -68,6 +90,15 @@ export const CuaHostStatus = Schema.Struct({
   wayland: Schema.optionalKey(Schema.Boolean),
   /** Older hosts omit it; they predate the check, so clients fall back to the platform. */
   display: ForwardCompatibleOptional(CuaDisplayCapability),
+  /**
+   * Each readiness step of the host's computer use helper, as it last reported them. Older
+   * hosts and hosts whose helper has not answered yet omit it: not known, never "ready".
+   */
+  readiness: ForwardCompatibleOptional(ComputerUseReadiness),
+  /** Which safety signals that helper raises; absent means neither (#1235). */
+  signals: ForwardCompatibleOptional(ComputerUseCapabilities.fields.signals),
+  /** Decided by the server's setting and running driver, never by the helper. */
+  tools: ForwardCompatibleOptional(CuaToolsAvailability),
 });
 export type CuaHostStatus = typeof CuaHostStatus.Type;
 
@@ -105,6 +136,26 @@ export const DesktopCuaVerification = Schema.Struct({
   steps: Schema.Array(CuaVerificationStep),
 });
 export type DesktopCuaVerification = typeof DesktopCuaVerification.Type;
+
+/**
+ * The macOS grants of whichever app computer use runs as. helper: GOAT Computer Use.app, read
+ * from a fresh helper process; app: GOAT itself, for builds without the helper; unusable: the
+ * helper ships and cannot run, so no other app may stand in for it.
+ */
+export const DesktopCuaGrants = Schema.Union([
+  Schema.Struct({
+    principal: Schema.Literals(["helper", "app"]),
+    /** The name the app has in System Settings' lists. */
+    name: Schema.String,
+    /** Where the app that needs the grants lives, so the person can tell it from older copies. */
+    bundlePath: Schema.optionalKey(Schema.String),
+    bundleId: Schema.String,
+    accessibility: Schema.Boolean,
+    screenRecording: Schema.Boolean,
+  }),
+  Schema.Struct({ principal: Schema.Literal("unusable"), message: Schema.String }),
+]);
+export type DesktopCuaGrants = typeof DesktopCuaGrants.Type;
 
 /**
  * Why a computer use control stopped. stopped: a person pressed Stop on the thread's turn.
@@ -164,10 +215,16 @@ export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
 export const ComputerUseRefusalDetail = Schema.Literals([
   "app_not_approved",
   "desktop_not_approved",
+  /** Whole-display screenshots are off; an agent looks at one window at a time (#1321). */
+  "desktop_capture_off",
   "waiting_for_human",
   "private_mode",
   ...ComputerUseControlEnd.literals,
   "lost",
+  /** The driver went away under the proxy: GOAT Computer Use stopped, crashed or was updated. */
+  "helper_restarted",
+  /** The driver named a window that is not on the screen GOAT gave it (#1358). */
+  "wrong_display",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 
@@ -182,6 +239,8 @@ export const computerUseRefusalReason = (
       return "userIntervened";
     case "app_not_approved":
       return "appNotAllowed";
+    case "helper_restarted":
+      return "helperUnavailable";
     default:
       return "targetRefused";
   }
@@ -198,8 +257,8 @@ export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
 export const DesktopCuaHumanInputReport = Schema.Struct({
   version: Schema.Literal(1),
   type: Schema.Literal("cuaHumanInput"),
-  /** unknown: the helper saw a person's input but not which device sent it. */
-  source: Schema.Literals(["keyboard", "pointer", "unknown"]),
+  /** The same sources the helper's own humanInput event carries (computerUseProtocol.ts). */
+  source: ComputerUseHumanInputSource,
 });
 export type DesktopCuaHumanInputReport = typeof DesktopCuaHumanInputReport.Type;
 
@@ -217,21 +276,25 @@ export const DesktopCuaPrivateModeReport = Schema.Struct({
 export type DesktopCuaPrivateModeReport = typeof DesktopCuaPrivateModeReport.Type;
 
 /**
- * Which of the two safety reports the helper sends at all, announced when it starts. Unattended
- * turns run only where both are reported (#1235); a host that never says so has neither.
+ * The desktop host's computer use helper: each readiness step and which safety signals it
+ * raises, sent when either changes and again for every helper launch. generation counts the
+ * desktop's helper launches, so a report from an earlier launch that arrives late is dropped.
+ * The signals here are the only word on what the host detects: unattended turns run only where
+ * both are supported (#1235), and a host that never reports has neither.
  */
-export const DesktopCuaDetectionReport = Schema.Struct({
+export const DesktopCuaReadinessReport = Schema.Struct({
   version: Schema.Literal(1),
-  type: Schema.Literal("cuaDetection"),
-  humanInput: Schema.Boolean,
-  privateMode: Schema.Boolean,
+  type: Schema.Literal("cuaReadiness"),
+  generation: Schema.Int,
+  readiness: ComputerUseReadiness,
+  signals: ComputerUseCapabilities.fields.signals,
 });
-export type DesktopCuaDetectionReport = typeof DesktopCuaDetectionReport.Type;
+export type DesktopCuaReadinessReport = typeof DesktopCuaReadinessReport.Type;
 
 export type DesktopCuaSafetyReport =
   | DesktopCuaHumanInputReport
   | DesktopCuaPrivateModeReport
-  | DesktopCuaDetectionReport;
+  | DesktopCuaReadinessReport;
 
 export const ComputerUseStopInput = Schema.Struct({ threadId: ThreadId });
 export const ComputerUseStopResult = Schema.Struct({ stopped: Schema.Boolean });
@@ -287,3 +350,21 @@ export const ComputerUseRequestResult = Schema.Union([
   }),
 ]);
 export type ComputerUseRequestResult = typeof ComputerUseRequestResult.Type;
+
+/**
+ * Providers whose agent process runs on this host and can spawn the driver's
+ * stdio MCP server. Cloud providers run elsewhere, and the driver would
+ * operate this host's desktop on their behalf; Muse only accepts HTTP session
+ * servers. See ADR-0022 for the per-adapter table. Clients read it to say why
+ * `@computer` cannot run before a turn is sent.
+ */
+export const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
+  "claudeAgent",
+  "codex",
+  "cursor",
+  "grok",
+  "antigravity",
+  "acpRegistry",
+  "opencode",
+  "pi",
+]);

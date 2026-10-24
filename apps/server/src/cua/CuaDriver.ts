@@ -2,6 +2,7 @@ import * as NodeModule from "node:module";
 
 import {
   CuaDriverMcpConfiguration,
+  type ComputerUseReadiness,
   type CuaDisplayCapability,
   type CuaHostStatus,
   type HostComputerUse,
@@ -39,6 +40,7 @@ import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetry
 import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
+import * as LinuxReadiness from "./LinuxReadiness.ts";
 
 export class CuaDriverStartError extends Schema.TaggedError<CuaDriverStartError>()(
   "CuaDriverStartError",
@@ -115,8 +117,32 @@ export class CuaDriver extends Context.Service<
      * screen went away still go through; the next start reports the problem instead.
      */
     readonly admitEnable: Effect.Effect<void, CuaDriverHostError>;
+    /**
+     * The X display the running driver was started on (its DISPLAY and XAUTHORITY), so the lease
+     * proxy can check every window the driver names is really there (#1358). None when the
+     * driver is not running or has no X display.
+     */
+    readonly x11Display?: Effect.Effect<Option.Option<CuaX11Display>>;
   }
 >()("goat/cua/CuaDriver") {}
+
+export interface CuaX11Display {
+  readonly DISPLAY: string;
+  readonly XAUTHORITY?: string;
+}
+
+/** The X display among the variables a driver was started with. */
+const x11DisplayOf = (
+  environment: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
+): Option.Option<CuaX11Display> => {
+  const value = (name: string) => environment.find((variable) => variable.name === name)?.value;
+  const display = value("DISPLAY");
+  if (display === undefined || display.trim() === "") return Option.none();
+  const xauthority = value("XAUTHORITY");
+  return Option.some(
+    xauthority === undefined ? { DISPLAY: display } : { DISPLAY: display, XAUTHORITY: xauthority },
+  );
+};
 
 interface Acquisition {
   readonly result: Deferred.Deferred<Option.Option<CuaDriverMcpConfiguration>>;
@@ -126,6 +152,7 @@ interface Acquisition {
   revoked: boolean;
   running?: boolean;
   mcp?: CuaDriverMcpConfiguration;
+  displayEnvironment?: ReadonlyArray<CuaDisplay.CuaDisplayVariable>;
   /** What this daemon last said about the macOS grants; a failed check clears it. */
   grants?: CuaDisplay.MacGrants | null;
 }
@@ -142,12 +169,24 @@ const withoutEnvironment = (probe: CuaDisplay.CuaDisplayProbe): CuaDisplayCapabi
 });
 
 export interface CuaDriverOptions {
+  readonly observeReadiness?: (
+    mcp: CuaDriverMcpConfiguration,
+    display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
+  ) => Effect.Effect<Pick<CuaHostStatus, "readiness" | "signals"> | undefined>;
   /** The verified install, run when computer use is turned on; absent where the driver ships. */
   readonly install?: Effect.Effect<void, CuaDriverHostError>;
   /** The running daemon's own view of the macOS grants; null when it does not say. */
   readonly observeGrants?: (
     mcp: CuaDriverMcpConfiguration,
   ) => Effect.Effect<CuaDisplay.MacGrants | null>;
+  /**
+   * What the host's computer use helper last reported: its readiness steps and the safety
+   * signals it raises. The desktop host's helper reports through desktop telemetry; a server
+   * that runs its own helper (Linux, #1223) passes that helper's answer here.
+   */
+  readonly helperReadiness?: Effect.Effect<
+    Option.Option<Pick<CuaHostStatus, "readiness" | "signals">>
+  >;
 }
 
 export const make = Effect.fn("CuaDriver.make")(function* (
@@ -230,6 +269,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       if (display.capability === "unavailable")
         return yield* new CuaDriverHostError({ operation: "display", cause: display.reason });
       if (entry.revoked) return;
+      entry.displayEnvironment = display.environment;
       entry.host = yield* factory(display.environment);
       if (entry.revoked) {
         yield* stop(entry);
@@ -325,22 +365,53 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   );
   return CuaDriver.of({
     acquire,
+    x11Display: Effect.sync(() =>
+      active?.running && active.displayEnvironment !== undefined
+        ? x11DisplayOf(active.displayEnvironment)
+        : Option.none(),
+    ),
     enabled,
     lastFailure: Effect.sync(() => failure),
-    status: reported.pipe(
-      Effect.map((display) => ({
+    status: Effect.gen(function* () {
+      const display = yield* reported;
+      // The helper's own report (desktop telemetry) wins; the server-run Linux helper is read
+      // only when nothing reported.
+      const reportedByHelper = options.helperReadiness ?? Effect.succeedNone;
+      const first = yield* reportedByHelper;
+      const entry = active;
+      const observe =
+        Option.isNone(first) && entry?.running && entry.mcp ? options.observeReadiness : undefined;
+      const observed =
+        observe && entry?.mcp
+          ? yield* observe(entry.mcp, entry.displayEnvironment ?? []).pipe(
+              Effect.timeoutOrElse({
+                duration: "15 seconds",
+                orElse: () => Effect.succeed(undefined),
+              }),
+            )
+          : undefined;
+      // A report that arrived while the Linux helper was read is newer, so it still wins, even
+      // when that read failed or timed out.
+      const helper = observe ? yield* reportedByHelper : first;
+      const isEnabled = yield* enabled;
+      return {
         platform:
           platform === "darwin" || platform === "linux" || platform === "win32"
             ? platform
             : ("other" as const),
         running: running(),
+        tools: !isEnabled ? "off" : running() ? "available" : "unavailable",
+        ...(isEnabled && entry === active && entry?.running && observed && Option.isNone(helper)
+          ? observed
+          : {}),
         ...(Option.isSome(failure) ? { failure: failure.value.message } : {}),
         ...(platform === "linux"
           ? { wayland: hostEnvironment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" }
           : {}),
         display,
-      })),
-    ),
+        ...(Option.isSome(helper) ? helper.value : {}),
+      } satisfies CuaHostStatus;
+    }),
     computerUse: Effect.all([enabled, reported]).pipe(
       Effect.map(([isEnabled, display]) => ({
         enabled: isEnabled,
@@ -550,6 +621,15 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
   },
 );
 
+/** The desktop host's helper readiness, as desktop telemetry last carried it. */
+const desktopHelperReadiness = Effect.map(
+  DesktopTelemetryReceiver.DesktopTelemetryReceiver,
+  (receiver) =>
+    receiver.cuaReadiness.pipe(
+      Effect.map(Option.map(({ readiness, signals }) => ({ readiness, signals }))),
+    ),
+);
+
 export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactory")(function* () {
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
   const crypto = yield* Crypto.Crypto;
@@ -630,10 +710,14 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const platform = yield* HostProcess.Platform;
     const environment = yield* HostProcess.Environment;
-    const { factory, install } =
+    const { factory, install, helperReadiness } =
       config.mode === "desktop"
         ? // The desktop app ships its driver, so there is nothing to install.
-          { factory: yield* makeDesktopHostFactory(), install: undefined }
+          {
+            factory: yield* makeDesktopHostFactory(),
+            install: undefined,
+            helperReadiness: yield* desktopHelperReadiness,
+          }
         : yield* Effect.gen(function* () {
             const installation = yield* CuaDriverInstallation.makeCuaDriverInstallation({
               baseDir: config.baseDir,
@@ -661,7 +745,7 @@ export const layer = Layer.effect(
                       new CuaDriverHostError({ operation: "install", cause: error.message }),
                   ),
                 );
-            return { factory, install };
+            return { factory, install, helperReadiness: undefined };
           });
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -675,7 +759,9 @@ export const layer = Layer.effect(
     );
     return yield* make(factory, probe, {
       ...(install ? { install } : {}),
+      ...(helperReadiness ? { helperReadiness } : {}),
       ...(platform === "darwin" ? { observeGrants: yield* makeMacGrantObserver() } : {}),
+      ...(platform === "linux" ? { observeReadiness: yield* LinuxReadiness.makeObserver() } : {}),
     });
   }),
 );

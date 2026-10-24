@@ -9,6 +9,9 @@
 //
 // The helper runs exactly one embedded Cua Driver daemon from the files this build pinned, in
 // a job object that ends with the helper. stdin EOF means the host is gone.
+//
+// Started with arguments ("mcp ..." or "revoke ..."), it is instead the agent's way to the
+// driver: it runs the pinned driver with those arguments and relays its stdio (McpRelay.cs).
 
 using System;
 using System.Collections.Generic;
@@ -22,6 +25,8 @@ namespace Goat.ComputerUse
     {
         const int ProtocolVersion = 1;
         const int MaxLineBytes = 1 << 20;
+        /// <summary>Names this helper process; replies and events are trusted only with it.</summary>
+        public static readonly string Generation = Guid.NewGuid().ToString("N");
         static readonly object OutputLock = new object();
         static readonly Stream Output = Console.OpenStandardOutput();
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = MaxLineBytes };
@@ -43,10 +48,25 @@ namespace Goat.ComputerUse
             return message;
         }
 
-        static int Main()
+        static int Main(string[] arguments)
         {
             string executable = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
             string refusal = WindowsFacts.ParentRefusal(BuildInfo.AllowAnyParent, executable, BuildInfo.ParentExecutable);
+            if (arguments.Length > 0)
+            {
+                // Relay mode: stdout carries the driver's MCP lines, so problems go to stderr.
+                if (refusal != null)
+                {
+                    Console.Error.WriteLine(refusal);
+                    return 77;
+                }
+                try { return new DriverService(executable, delegate { }).Relay(arguments); }
+                catch (HelperException error)
+                {
+                    Console.Error.WriteLine(error.Message);
+                    return 78;
+                }
+            }
             if (refusal != null)
             {
                 var refused = Message("refused");
@@ -55,13 +75,16 @@ namespace Goat.ComputerUse
                 Emit(refused);
                 return 77;
             }
-            var service = new DriverService(Path.GetDirectoryName(executable), Emit);
+            var service = new DriverService(executable, Emit);
+            var signals = new Signals(Emit);
             var hello = Message("hello");
             hello["protocol"] = ProtocolVersion;
             hello["pid"] = System.Diagnostics.Process.GetCurrentProcess().Id;
             hello["bundleId"] = BuildInfo.HelperId;
             hello["version"] = BuildInfo.Version;
             hello["platform"] = "windows";
+            hello["generation"] = Generation;
+            hello["signals"] = Signals.Capabilities();
             Emit(hello);
 
             Stream input = Console.OpenStandardInput();
@@ -81,7 +104,7 @@ namespace Goat.ComputerUse
                         start = i + 1;
                         byte[] line = buffer.ToArray();
                         buffer.SetLength(0);
-                        if (line.Length > 0) Handle(service, new UTF8Encoding(false, true).GetString(line));
+                        if (line.Length > 0) Handle(service, signals, new UTF8Encoding(false, true).GetString(line));
                     }
                     buffer.Write(chunk, start, read - start);
                     if (buffer.Length > MaxLineBytes)
@@ -95,11 +118,17 @@ namespace Goat.ComputerUse
                 }
             }
             catch (IOException) { }
-            service.Stop();
+            finally
+            {
+                // The host is gone. Nothing more is written (a helper that exits clears every
+                // target of its generation), and the driver stops even if listening does not.
+                try { signals.Shutdown(); }
+                finally { service.Stop(); }
+            }
             return 0;
         }
 
-        static void Handle(DriverService service, string line)
+        static void Handle(DriverService service, Signals signals, string line)
         {
             Dictionary<string, object> request = null;
             try { request = Json.DeserializeObject(line) as Dictionary<string, object>; }
@@ -124,11 +153,26 @@ namespace Goat.ComputerUse
             {
                 switch ((string)method)
                 {
+                    // The signals queue writes the answer in order: after the clears it owes the
+                    // old watch, before the new watch's state.
+                    case "watch":
+                        reply["result"] = new Dictionary<string, object>();
+                        object watchId;
+                        if (!parameters.TryGetValue("watchId", out watchId) || !(watchId is string) || ((string)watchId).Trim().Length == 0)
+                            throw new HelperException("bad_request", "watch needs a watchId.");
+                        signals.Watch((string)watchId, Targets(parameters), reply);
+                        return;
+                    case "unwatch":
+                        reply["result"] = new Dictionary<string, object>();
+                        signals.Unwatch(reply);
+                        return;
                     // Windows has no grant to prompt for; "prompt" is accepted and ignored.
                     case "permissions": reply["result"] = WindowsFacts.Readiness(); break;
                     case "start": reply["result"] = service.Start(parameters); break;
+                    case "listApps": reply["result"] = service.ListApps(); break;
                     case "stop": service.Stop(); reply["result"] = new Dictionary<string, object>(); break;
                     case "window": reply["result"] = Window(parameters); break;
+                    case "elementStates": reply["result"] = ElementStatesOf(parameters); break;
                     default: throw new HelperException("unknown_method", "Unknown method " + method + ".");
                 }
             }
@@ -141,6 +185,15 @@ namespace Goat.ComputerUse
                 reply["error"] = Failure("internal", error.GetType().Name + ": " + error.Message);
             }
             Emit(reply);
+        }
+
+        static Dictionary<string, object> ElementStatesOf(Dictionary<string, object> parameters)
+        {
+            object pid, windowId;
+            if (!parameters.TryGetValue("pid", out pid) || !(pid is int) ||
+                !parameters.TryGetValue("windowId", out windowId) || !(windowId is int || windowId is long))
+                throw new HelperException("bad_request", "elementStates needs an integer pid and windowId.");
+            return ElementStates.Read((int)pid, Convert.ToInt64(windowId));
         }
 
         static Dictionary<string, object> Window(Dictionary<string, object> parameters)
@@ -158,6 +211,27 @@ namespace Goat.ComputerUse
             failure["code"] = code;
             failure["message"] = message;
             return failure;
+        }
+
+        /// <summary>watch's targets, at least one, each an exact window of a process.</summary>
+        static List<Signals.Target> Targets(Dictionary<string, object> parameters)
+        {
+            object raw;
+            if (!parameters.TryGetValue("targets", out raw) || !(raw is object[]) || ((object[])raw).Length == 0)
+                throw new HelperException("bad_request", "watch needs targets: [{pid, windowId}, ...].");
+            var targets = new List<Signals.Target>();
+            var seen = new HashSet<string>();
+            foreach (object entry in (object[])raw)
+            {
+                var target = entry as Dictionary<string, object>;
+                object pid, windowId;
+                if (target == null || !target.TryGetValue("pid", out pid) || !(pid is int) ||
+                    !target.TryGetValue("windowId", out windowId) || !(windowId is int || windowId is long))
+                    throw new HelperException("bad_request", "Each watch target needs an integer pid and windowId.");
+                var next = new Signals.Target { Pid = (int)pid, WindowId = Convert.ToInt64(windowId) };
+                if (seen.Add(next.Key)) targets.Add(next);
+            }
+            return targets;
         }
     }
 }

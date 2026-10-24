@@ -55,8 +55,9 @@ const session = (endpoint: string): McpProviderSessionConfig => ({
 });
 
 const CORE = ["goat_call", "goat_describe"];
+// The thread has no device grant, so its listing withholds the device tools (#1196).
 const threadTools = Object.values(agentSurfaceRegistry)
-  .filter((entry) => entry.requires !== "client")
+  .filter((entry) => entry.requires !== "client" && entry.resource !== "device")
   .map(listedToolName);
 
 /** The served tools a harness keeps, checked against the listing it was given. */

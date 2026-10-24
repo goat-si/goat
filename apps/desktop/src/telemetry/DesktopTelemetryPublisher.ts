@@ -3,6 +3,9 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   type DesktopCuaDriverRequest,
   type DesktopCuaDriverReport,
+  type DesktopCuaReadinessReport,
+  type DesktopCuaHumanInputReport,
+  type DesktopCuaPrivateModeReport,
   type DesktopHostTelemetrySnapshot,
   type DesktopTelemetryControlMessage,
   type DesktopTelemetryCancelDesktopUpdate,
@@ -69,7 +72,25 @@ export class DesktopTelemetryPublisher extends Context.Service<
     readonly encoded: Stream.Stream<Uint8Array>;
     readonly encodedForSource: (sourceId: string) => Stream.Stream<Uint8Array>;
     readonly cuaRequests: Stream.Stream<DesktopCuaDriverRequest>;
+    /**
+     * Whether agents control this host, as this host's own server last said: the current value,
+     * then each change. Losing that server reads as false.
+     */
+    readonly cuaWatch: Stream.Stream<boolean>;
     readonly publishCuaReport: (report: DesktopCuaDriverReport) => Effect.Effect<void>;
+    /**
+     * The helper's readiness, for this host's own server only. The latest report goes to every
+     * server connection that starts later, so a restarted server learns it without asking.
+     */
+    readonly publishCuaReadiness: (report: DesktopCuaReadinessReport) => Effect.Effect<void>;
+    /**
+     * The helper's safety reports, for this host's own server only and never dropped. A secret
+     * field still focused is told again to a server that connects later, so its agents stay
+     * paused.
+     */
+    readonly publishCuaSafety: (
+      report: DesktopCuaPrivateModeReport | DesktopCuaHumanInputReport,
+    ) => Effect.Effect<void>;
     readonly handleControlForSource: (
       sourceId: string,
       message: DesktopTelemetryControlMessage,
@@ -182,16 +203,36 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const updateCommitQueue = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
   const cuaRequestQueue = yield* Queue.unbounded<DesktopCuaDriverRequest>();
+  const latestCuaReadiness = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
+  // Readiness is state: a connection that falls behind needs only the newest report.
+  const cuaReadinessChanges = yield* PubSub.sliding<DesktopCuaReadinessReport>(1);
+  const activePrivateMode = yield* Ref.make(Option.none<DesktopCuaPrivateModeReport>());
+  const cuaSafetyReports = yield* PubSub.unbounded<
+    DesktopCuaPrivateModeReport | DesktopCuaHumanInputReport
+  >();
   interface CuaSource {
     readonly reports: PubSub.PubSub<DesktopCuaDriverReport>;
     requestId?: string;
+    /** The newest cuaWatch seq from this connection; an older one arrived late. */
+    watchSeq?: number;
   }
   let cuaSource: CuaSource | undefined;
+  const cuaWatching = yield* Ref.make(false);
+  const cuaWatchChanges = yield* PubSub.sliding<boolean>(1);
+  const setCuaWatching = (active: boolean) =>
+    Ref.getAndSet(cuaWatching, active).pipe(
+      Effect.flatMap((previous) =>
+        previous === active ? Effect.void : PubSub.publish(cuaWatchChanges, active),
+      ),
+      Effect.asVoid,
+    );
   const detachCuaSource = Effect.fn("DesktopTelemetryPublisher.detachCuaSource")(function* (
     source: CuaSource,
   ) {
     if (cuaSource !== source) return;
     cuaSource = undefined;
+    // No server, no agent controlling this host through it.
+    yield* setCuaWatching(false);
     if (source.requestId)
       yield* Queue.offer(cuaRequestQueue, {
         version: 1,
@@ -381,6 +422,14 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         return Queue.offer(updateCommitQueue, message).pipe(Effect.asVoid);
       case "cancelDesktopUpdate":
         return Queue.offer(updateCancellationQueue, message).pipe(Effect.asVoid);
+      case "cuaWatch":
+        return Effect.suspend(() => {
+          const source = cuaSource;
+          if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !source) return Effect.void;
+          if (source.watchSeq !== undefined && message.seq < source.watchSeq) return Effect.void;
+          source.watchSeq = message.seq;
+          return setCuaWatching(message.active);
+        });
     }
   };
   const removeControlSource: DesktopTelemetryPublisher["Service"]["removeControlSource"] =
@@ -463,7 +512,25 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           Stream.filter(() => cuaSource === source),
           Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)),
         );
-        return Stream.merge(encoded, privateReports);
+        const readinessSubscription = yield* PubSub.subscribe(cuaReadinessChanges);
+        const readiness = Stream.concat(
+          Option.match(yield* Ref.get(latestCuaReadiness), {
+            onNone: () => Stream.empty,
+            onSome: Stream.make,
+          }),
+          Stream.fromSubscription(readinessSubscription),
+        ).pipe(Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)));
+        const safetySubscription = yield* PubSub.subscribe(cuaSafetyReports);
+        const safety = Stream.concat(
+          Option.match(yield* Ref.get(activePrivateMode), {
+            onNone: () => Stream.empty,
+            onSome: Stream.make,
+          }),
+          Stream.fromSubscription(safetySubscription),
+        ).pipe(Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)));
+        return Stream.mergeAll([encoded, privateReports, readiness, safety], {
+          concurrency: "unbounded",
+        });
       }),
     );
   };
@@ -474,12 +541,31 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     encoded,
     encodedForSource,
     cuaRequests: Stream.fromQueue(cuaRequestQueue),
+    cuaWatch: Stream.unwrap(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(cuaWatchChanges);
+        return Stream.concat(
+          Stream.make(yield* Ref.get(cuaWatching)),
+          Stream.fromSubscription(subscription),
+        );
+      }),
+    ),
     publishCuaReport: (report) =>
       Effect.suspend(() =>
         cuaSource && cuaSource.requestId === report.requestId
           ? PubSub.publish(cuaSource.reports, report).pipe(Effect.asVoid)
           : Effect.void,
       ),
+    publishCuaReadiness: (report) =>
+      Ref.set(latestCuaReadiness, Option.some(report)).pipe(
+        Effect.andThen(PubSub.publish(cuaReadinessChanges, report)),
+        Effect.asVoid,
+      ),
+    publishCuaSafety: (report) =>
+      (report.type === "cuaPrivateMode"
+        ? Ref.set(activePrivateMode, report.active ? Option.some(report) : Option.none())
+        : Effect.void
+      ).pipe(Effect.andThen(PubSub.publish(cuaSafetyReports, report)), Effect.asVoid),
     handleControlForSource,
     removeControlSource,
     publishUpdateReport,

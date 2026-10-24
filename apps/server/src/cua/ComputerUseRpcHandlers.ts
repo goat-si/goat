@@ -9,7 +9,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as ComputerUseStatusChanges from "./ComputerUseStatusChanges.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
 /** The kill switch: ends every control, then every approved admission, so no later turn picks the screen up. */
@@ -46,8 +48,11 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
   const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const handoffs = yield* Handoffs.Handoffs;
+  const receiver = yield* Effect.serviceOption(DesktopTelemetryReceiver.DesktopTelemetryReceiver);
 
   return {
+    [WS_METHODS.computerUseStatusChanges]: (_input: {}) =>
+      ComputerUseStatusChanges.statusChanges(receiver),
     [WS_METHODS.serverCheckComputerUse]: (_input: {}) =>
       Option.isNone(driver)
         ? Effect.succeed({ platform: "other", running: false } as const)

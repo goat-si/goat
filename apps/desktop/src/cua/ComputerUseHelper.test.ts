@@ -21,7 +21,12 @@ const BUNDLE_ID = "si.goat.desktop.dev.computer-use";
 /** A scripted helper on in-memory pipes: greets, then answers each request with reply(). */
 function fakeHelper(options: {
   readonly greeting?: object;
-  readonly reply?: (request: { id: string; method: string; params: unknown }) => object | undefined;
+  /** write sends an unrequested line before the reply goes out; after() runs once it has. */
+  readonly reply?: (
+    request: { id: string; method: string; params: unknown },
+    write: (line: object) => void,
+  ) => object | undefined;
+  readonly after?: (request: { id: string; method: string }, write: (line: object) => void) => void;
 }) {
   const stdin = new NodeStream.PassThrough();
   const stdout = new NodeStream.PassThrough();
@@ -37,11 +42,13 @@ function fakeHelper(options: {
     stdinEnded = true;
     die();
   });
+  const write = (line: object) => stdout.write(JSON.stringify(line) + "\n");
   NodeReadline.createInterface({ input: stdin }).on("line", (line) => {
     const request = JSON.parse(line) as { id: string; method: string; params: unknown };
     received.push({ method: request.method, params: request.params });
-    const answer = options.reply?.(request);
+    const answer = options.reply?.(request, write);
     if (answer) stdout.write(JSON.stringify({ id: request.id, ...answer }) + "\n");
+    options.after?.(request, write);
   });
   stdout.write(
     JSON.stringify(
@@ -115,6 +122,61 @@ describe("ComputerUseHelper protocol", () => {
     await session.close();
   });
 
+  it("can watch only when the helper's hello says so", async () => {
+    const hello = { type: "hello", protocol: 1, pid: 99, bundleId: BUNDLE_ID };
+    const older = await openHelperSession(fakeHelper({ greeting: hello }).process, BUNDLE_ID);
+    const newer = await openHelperSession(
+      fakeHelper({ greeting: { ...hello, features: ["watch"] } }).process,
+      BUNDLE_ID,
+    );
+    expect([older.canWatch, newer.canWatch]).toEqual([false, true]);
+    await Promise.all([older.close(), newer.close()]);
+  });
+
+  it("delivers the events of the watch in force, switching watches as the answer is read", async () => {
+    const target = (windowId: number) => ({ pid: 7, windowId });
+    const event = (watchId: string, active: boolean, windowId: number) => ({
+      type: "event",
+      watchId,
+      event: { type: "privateMode", active, target: target(windowId) },
+    });
+    const helper = fakeHelper({
+      reply: (request, write) => {
+        const params = request.params as { watchId?: string };
+        // The old watch clears its active field before the new watch is answered.
+        if (request.method === "watch" && params.watchId === "w2") write(event("w1", false, 1));
+        // A stray event of a watch that is not in force.
+        if (request.method === "watch") write(event("other", true, 9));
+        return { result: { watchId: params.watchId } };
+      },
+      after: (request, write) => {
+        const params = request as unknown as { params: { watchId?: string } };
+        if (request.method === "watch")
+          write(event(params.params.watchId ?? "", true, params.params.watchId === "w1" ? 1 : 2));
+      },
+    });
+    const session = await openHelperSession(helper.process, BUNDLE_ID);
+    const seen: Array<{ active: boolean; windowId: number }> = [];
+    const done = new Promise<void>((resolve) =>
+      session.onEvent((delivered) => {
+        if (delivered.type !== "privateMode") return;
+        seen.push({ active: delivered.active, windowId: delivered.target.windowId });
+        if (seen.length === 3) resolve();
+      }),
+    );
+    await session.watch("w1");
+    await session.watch("w2");
+    await done;
+    // w1's first state, w1's clearing under the old watch, then w2's first state.
+    expect(seen).toEqual([
+      { active: true, windowId: 1 },
+      { active: false, windowId: 1 },
+      { active: true, windowId: 2 },
+    ]);
+    expect(helper.received.map(({ method }) => method)).toEqual(["watch", "watch"]);
+    await session.close();
+  });
+
   it("fails a request in flight when the helper exits, and reports the session ended", async () => {
     const helper = fakeHelper({});
     const session = await openHelperSession(helper.process, BUNDLE_ID);
@@ -127,6 +189,35 @@ describe("ComputerUseHelper protocol", () => {
 });
 
 describe("ComputerUseHelper daemon admission", () => {
+  it("hands an agent connection the helper's own --mcp command and starts no daemon", async () => {
+    const helper = fakeHelper({ reply: () => ({ result: {} }) });
+    const bundlePath = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
+    const host = makeHelperHost({
+      bundle: {
+        bundlePath,
+        executable: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+        driverPath: bundlePath + "/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: "0.37.0",
+      capabilityManifestPath: "/state/cua-driver/agents.yaml",
+      environment: [{ name: "CUA_DRIVER_KEY_GAP_MS", value: "20" }],
+      spawn: () => helper.process,
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+      direct: true,
+    });
+    const connection = await host.start();
+    expect(connection.mcp).toEqual({
+      command: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+      args: ["--mcp", "--capability-manifest", "/state/cua-driver/agents.yaml"],
+      environment: [{ name: "CUA_DRIVER_KEY_GAP_MS", value: "20" }],
+    });
+    // No socket and no daemon: the driver exists only under each connection's helper.
+    expect(connection.socketPath).toBe("");
+    expect(helper.received).toEqual([]);
+    await host.stop();
+  });
+
   const expected = { pid: 700, bundleId: BUNDLE_ID, driverVersion: "0.37.0" };
   const metadata = {
     driverVersion: "0.37.0",
@@ -189,6 +280,51 @@ describe("ComputerUseHelper daemon admission", () => {
     );
     assert.isTrue(helper.stdinEnded());
     assert.isUndefined(host.servicePid());
+  });
+
+  it.each([
+    { name: "the helper's relay where screenshots are guarded (Windows)", through: true },
+    { name: "the driver itself elsewhere", through: false },
+  ])("hands agents $name as the MCP command, with the same route", async ({ through }) => {
+    const helper = fakeHelper({
+      reply: ({ method, params }) =>
+        method === "start"
+          ? {
+              result: {
+                socketPath: (params as { socketPath: string }).socketPath,
+                driverPid: 700,
+                hostBundleId: BUNDLE_ID,
+              },
+            }
+          : { result: {} },
+    });
+    const bundle = {
+      bundlePath: "C:/GOAT/resources/computer-use-helper",
+      executable: "C:/GOAT/resources/computer-use-helper/GOAT Computer Use.exe",
+      driverPath: "C:/GOAT/resources/computer-use-helper/cua-driver/cua-driver.exe",
+      bundleId: BUNDLE_ID,
+    };
+    const host = makeHelperHost({
+      bundle,
+      driverVersion: "0.37.0",
+      capabilityManifestPath: "C:/state/manifest.yaml",
+      environment: [],
+      spawn: () => helper.process,
+      readMetadata: async () => metadata,
+      socket: async () => ({ path: "\\\\.\\pipe\\goat-cu-test", release: async () => {} }),
+      mcpThroughHelper: through,
+    });
+    const connection = await host.start();
+    assert.equal(connection.mcp.command, through ? bundle.executable : bundle.driverPath);
+    expect(connection.mcp.args).toEqual([
+      "mcp",
+      "--embedded",
+      "--socket",
+      "\\\\.\\pipe\\goat-cu-test",
+      "--host-bundle-id",
+      BUNDLE_ID,
+    ]);
+    await host.stop();
   });
 });
 

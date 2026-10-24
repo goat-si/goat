@@ -57,7 +57,7 @@ import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
-import { projectTurnItemForDetail } from "./WireProjection.ts";
+import { projectTranscriptRowForClient, projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
@@ -180,6 +180,7 @@ export interface ThreadManagementSendInput {
   readonly memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling;
   readonly senderThreadId?: ThreadId;
   readonly text: string;
+  readonly context?: import("@goat/contracts").OrchestrationMessageContext | undefined;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly modelSelection?: ModelSelection;
   readonly mode: ThreadManagementSendMode;
@@ -929,7 +930,7 @@ const make = Effect.gen(function* () {
         threadId: projection.thread.id,
         title: projection.thread.title,
         updatedAt: projection.updatedAt,
-        items: projection.visibleTurnItems,
+        items: projection.visibleTurnItems.map(projectTranscriptRowForClient),
       };
       let sizeBytes = Buffer.byteLength(
         threadTranscriptHeader(yield* environment.getEnvironmentId, transcript),
@@ -1178,6 +1179,7 @@ const make = Effect.gen(function* () {
         ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
         ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
         text: input.text,
+        ...(input.context === undefined ? {} : { context: input.context }),
         attachments: input.attachments,
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
         dispatchMode,
@@ -1517,9 +1519,7 @@ const make = Effect.gen(function* () {
       messageIds: [input.messageId],
     });
     if (target.thread.archivedAt !== null) {
-      return yield* new ThreadManagementThreadArchivedError({
-        threadId: input.threadId,
-      });
+      return yield* new ThreadManagementThreadArchivedError({ threadId: input.threadId });
     }
 
     if (target.messages.some((message) => message.id === input.messageId)) {
