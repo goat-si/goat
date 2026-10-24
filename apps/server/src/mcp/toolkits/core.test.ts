@@ -54,6 +54,7 @@ import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapter
 import * as ThreadLaunchService from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
+import * as Sqlite from "../../persistence/Sqlite.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
@@ -189,6 +190,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
   }
   expect([...names].filter((name) => name.startsWith("goat_")).sort()).toEqual([
     "goat_attachment_discard",
+    "goat_attachment_pending_list",
     "goat_attachment_prepare_upload",
     "goat_cloud_holders",
     "goat_cloud_launch",
@@ -226,6 +228,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_hub_device_repair",
     "goat_hub_device_verify",
     "goat_origin_report",
+    "goat_origin_report_receipt",
     "goat_origin_reports_wait",
     "goat_pending_request_list",
     "goat_pending_request_read",
@@ -320,7 +323,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(176);
+  expect(names.size).toBe(178);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);
@@ -1227,6 +1230,8 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
         Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+        // Pending-upload ownership is stored; without a database prepare refuses by design.
+        Layer.provide(Sqlite.layerMemory),
         Layer.provide(ServerSecretStore.layer),
         Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" })),
         Layer.provide(NodeServices.layer),
