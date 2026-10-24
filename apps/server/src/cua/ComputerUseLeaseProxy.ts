@@ -580,6 +580,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         // Known at once, before the update waits for the lock: a call judged meanwhile is
         // refused before it reaches any child.
         stopping = stop;
+        // Likewise another thread's grant: only denies, so it may land early; only the ordered
+        // activation below clears it.
+        if (stop === undefined && update.state === "active" && update.shared === true)
+          shared = true;
         yield* lifecycle.withPermits(1)(
           (stop !== undefined && "end" in stop
             ? end(stop.end)

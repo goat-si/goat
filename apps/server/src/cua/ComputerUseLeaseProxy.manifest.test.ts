@@ -68,4 +68,42 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         assert.notInclude(h.log, "send click");
       }),
   );
+
+  it.effect(
+    "another thread's grant that waits behind a refresh still refuses a call that takes the screen",
+    () =>
+      Effect.gen(function* () {
+        let manifest = "v1";
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({ manifestStamp: () => manifest, firstKillGate: gate });
+        yield* h.push(active());
+        manifest = "v2";
+        const forwarded = yield* h
+          .send(call(1, "move_cursor", { x: 1, y: 1 }))
+          .pipe(Effect.forkChild);
+        assert.equal(yield* h.taken, "active");
+        assert.equal(yield* h.applied, "active");
+        // The refresh is stopping the old child when another thread's grant arrives.
+        yield* h.killed;
+        yield* h.push({
+          state: "active",
+          controlId: CONTROL,
+          expiresAt: "1970-01-01T00:30:00.000Z",
+          shared: true,
+        });
+        assert.equal(yield* h.taken, "active");
+        yield* Deferred.succeed(gate, undefined);
+        // Either the provider hears a refusal or the new child gets the call.
+        const outcome = yield* h.nextToProvider.pipe(
+          Effect.map((answer) => ({ sent: false, answer })),
+          Effect.raceFirst(h.nextToDriver.pipe(Effect.as({ sent: true, answer: undefined }))),
+        );
+        assert.isFalse(outcome.sent, "the call reached the driver");
+        assert.deepInclude(
+          (outcome.answer?.result as Record<string, unknown>).structuredContent as object,
+          { detail: "screen_shared" },
+        );
+        yield* Fiber.join(forwarded);
+      }),
+  );
 });
