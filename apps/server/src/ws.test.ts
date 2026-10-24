@@ -126,6 +126,7 @@ import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
@@ -670,6 +671,7 @@ it.effect(
           streamChanges: Stream.unwrap(settingsChanges),
           subscribeChanges: settingsChanges,
         }),
+        Layer.mock(PreviewSessions.PreviewSessions)({}),
       );
       const server = yield* RpcServer.makeNoSerialization(
         RpcGroup.make(WsSubscribeServerConfigRpc),

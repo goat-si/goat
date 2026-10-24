@@ -286,7 +286,9 @@ it.effect.each([
           tabId: alternateTabId,
           threadId,
         });
-        expect(event.request.input).toEqual({});
+        // Only a shown or saved image needs the browser to capture one.
+        // The seventh call is a default one after six in this mode.
+        expect(event.request.input).toEqual({ captureImage: requests <= 6 && images });
         return broker.respond({
           clientId: "mcp-image-option-client",
           connectionId: event.connectionId,
@@ -391,7 +393,7 @@ it.effect("saves full-page captures without replaying images and keeps clipping 
       const inputs = yield* serveSnapshots("mcp-fullpage-client", fullPage);
       const saved = yield* callSnapshot({ fullPage: true, save: true });
       expect(saved.isError).toBe(false);
-      expect(inputs).toEqual([{ fullPage: true }]);
+      expect(inputs).toEqual([{ fullPage: true, captureImage: true }]);
       expect(saved.content.map((content) => content.type)).toEqual(["text"]);
       expect(saved.structuredContent).toEqual({
         url: snapshotResult.url,

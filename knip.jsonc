@@ -31,6 +31,9 @@
         "export-brand-icons.ts",
         "goat-rename.ts",
         "sign-macos.ts",
+        // Local Linux computer use helper build and its live check.
+        "build-computer-use-helper-linux.ts",
+        "computer-use-linux-smoke.ts",
         "verify-windows-desktop-artifact.ts",
       ],
       "ignoreDependencies": ["esbuild"],
@@ -44,7 +47,7 @@
       "entry": [
         "src/bin.ts!",
         "src/claude-history-worker.ts!",
-        // The Linux computer use helper, run as its own process beside the Cua Driver payload.
+        // The Linux computer use helper, bundled on its own by scripts/build-computer-use-helper-linux.ts.
         "src/cua/linuxHelper/main.ts!",
         "scripts/cli.ts",
         "scripts/evaluate-thread-titles.ts",

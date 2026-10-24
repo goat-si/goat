@@ -8,7 +8,6 @@ import {
   type ComputerUseElement,
   type ComputerUseObservation,
   type ComputerUseRefusal,
-  type ComputerUseReadiness,
   type ComputerUseRefusalReason,
   type ComputerUseWindow,
   type ComputerUseWindowTarget,
@@ -23,16 +22,12 @@ import {
 } from "@goat/shared/computerUseObservation";
 import * as Schema from "effect/Schema";
 
+import { readLinuxReadiness } from "./readiness.ts";
 import type { SecureFocus } from "./atspiFocus.ts";
 import type { DriverClient, DriverImage, DriverToolResult } from "./CuaDriverMcp.ts";
 import { driverRefusalCode, linuxActionResult, linuxDriverCall } from "./linuxActions.ts";
 import type { SignalMonitor } from "./linuxSignals.ts";
-import {
-  linuxReadiness,
-  pngColors,
-  type LinuxSession,
-  type ReadinessFacts,
-} from "./linuxSession.ts";
+import type { LinuxSession } from "./linuxSession.ts";
 
 /**
  * What the Linux helper does with each protocol request (WS10 #1138). It owns one Cua Driver
@@ -77,8 +72,6 @@ export interface LinuxHelper {
 
 const SECURE_ROLE = "password text";
 const ACTIONS: ReadonlySet<string> = new Set(COMPUTER_USE_ACTIONS);
-/** Shown windows readiness tries before it settles for the best answer it has. */
-const READINESS_WINDOWS = 5;
 
 const refusal = (reason: ComputerUseRefusalReason, message: string): ComputerUseRefusal => ({
   outcome: "refused",
@@ -119,7 +112,6 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
   let queue: Promise<unknown> = Promise.resolve();
   let closed = false;
   let closing: Promise<void> | undefined;
-  const blocked = deps.session.unavailable ?? deps.session.unsupported;
 
   const ensureDriver = () => {
     if (closed) return Promise.reject(new Error("The helper is shutting down."));
@@ -321,61 +313,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     return image ? { result: observation, image } : { result: observation };
   };
 
-  const readiness = async (deadlineMs: number): Promise<ComputerUseReadiness> => {
-    const facts: { -readonly [K in keyof ReadinessFacts]: ReadinessFacts[K] } = {
-      session: deps.session,
-      driver: null,
-      capture: "unproven",
-      tree: "unavailable",
-      uinputWritable: await deps.uinputWritable(),
-    };
-    if (blocked === undefined) {
-      const permissions = await call("check_permissions", {}, deadlineMs);
-      if (typeof permissions !== "string" && !isRefusal(permissions)) {
-        const flag = (name: string) => field(permissions.structured, name) === true;
-        facts.driver = { x11: flag("x11"), wayland: flag("wayland"), atspi: flag("atspi") };
-        const list = await windows(deadlineMs);
-        const shown = isRefusal(list)
-          ? []
-          : list.filter((entry) => entry.is_on_screen !== false).slice(0, READINESS_WINDOWS);
-        if (shown.length === 0) facts.capture = isRefusal(list) ? "failed" : "noWindow";
-        // One window does not speak for the desktop: an app without accessibility, or a covered
-        // window that captures blank. The best answer among a few shown windows wins.
-        const captureRank = { varied: 3, uniform: 2, failed: 1, noWindow: 0, unproven: 0 } as const;
-        const treeRank = { ready: 2, empty: 1, unavailable: 0 } as const;
-        for (const window of shown) {
-          if (facts.capture !== "varied") {
-            // display_only: a readiness capture never stands in for the agent's own observation.
-            const capture = await call(
-              "get_window_state",
-              {
-                pid: window.pid,
-                window_id: window.window_id,
-                include_accessibility_tree: false,
-                display_only: true,
-                max_image_dimension: 256,
-              },
-              deadlineMs,
-            );
-            const image =
-              typeof capture === "string" || isRefusal(capture) ? undefined : capture.images[0];
-            const colors = image ? pngColors(Buffer.from(image.data, "base64")) : undefined;
-            const found = image === undefined ? "failed" : (colors ?? "failed");
-            if (captureRank[found] > captureRank[facts.capture]) facts.capture = found;
-          }
-          if (facts.tree !== "ready") {
-            // The tree is proven through AT-SPI directly: a driver read would replace the
-            // snapshot the agent's element tokens belong to.
-            const focus = await deps.secureFocus(window.pid);
-            const found = !focus.known ? "unavailable" : focus.windows > 0 ? "ready" : "empty";
-            if (treeRank[found] > treeRank[facts.tree]) facts.tree = found;
-          }
-          if (facts.capture === "varied" && facts.tree === "ready") break;
-        }
-      }
-    }
-    return linuxReadiness(facts);
-  };
+  const readiness = (deadlineMs: number) => readLinuxReadiness({ ...deps, call }, deadlineMs);
 
   const act = async (
     method: ComputerUseMethod,
