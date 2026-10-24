@@ -772,6 +772,14 @@ describe("Pi Cua Driver bridge", () => {
         await NodeFSP.writeFile(gate, "on");
         assert.include((await turn()).goat_computer_use, "<computer_use>");
         assert.include(bridge.getActiveTools(), name);
+
+        // The skill switched off in Settings: the tools stay, the skill text goes.
+        await NodeFSP.writeFile(`${gate}.skill`, "off");
+        assert.isUndefined((await turn()).goat_computer_use);
+        assert.include(bridge.getActiveTools(), name);
+        await NodeFSP.writeFile(`${gate}.skill`, "on");
+        assert.include((await turn()).goat_computer_use, "<computer_use>");
+
         // The closed connection starts again with a fresh handshake.
         const output = await tool.execute("capture", { window_id: 8 });
         assert.deepEqual(output.content[0], { type: "text", text: "window 8" });
