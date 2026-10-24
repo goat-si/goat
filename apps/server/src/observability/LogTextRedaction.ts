@@ -314,8 +314,9 @@ function shellWordEnd(text: string, start: number): number {
 }
 
 const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => string)]> = [
-  // Cookie and Set-Cookie headers hold every cookie up to the end of the line.
-  [/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/gi, `$1${MASK}`],
+  // Cookie and Set-Cookie headers hold every cookie up to the end of the header, including
+  // folded continuation lines (a line break followed by a space or tab).
+  [/\b((?:set-)?cookie\s*:\s*)[^\r\n]+(?:(?:\r?\n|\r)[ \t][^\r\n]*)*/gi, `$1${MASK}`],
   // A JWT or JWE: dotted base64url parts led by one that decodes to a JSON header, whatever
   // whitespace the header holds. Each part of a dotted run is tried, so a dotted prefix cannot
   // hide a token, and dotted names such as serverLogger.test.ts are left alone.
@@ -328,8 +329,9 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   [/\b(?:sk|rk)-[A-Za-z0-9_-]{16,}/g, MASK],
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
   [/\b(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, `$1 ${MASK}`],
-  // An Authorization header holds its scheme and every parameter up to the end of the line.
-  [/\b(authorization\s*:\s*)[^\r\n]+/gi, `$1${MASK}`],
+  // An Authorization header holds its scheme and every parameter up to the end of the header,
+  // including folded continuation lines.
+  [/\b(authorization\s*:\s*)[^\r\n]+(?:(?:\r?\n|\r)[ \t][^\r\n]*)*/gi, `$1${MASK}`],
 ];
 
 const MAX_STRING = 32_000;

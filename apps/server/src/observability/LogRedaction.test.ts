@@ -78,6 +78,9 @@ describe("redactLogText", () => {
     ["Authorization: Basic dTpw", "Authorization: ***"],
     ["Authorization: Negotiate CANARY\nnext", "Authorization: ***\nnext"],
     ['Authorization: Digest username="u", nonce="CANARY", response="CANARY"', "Authorization: ***"],
+    // A folded header continues on lines that start with a space or tab.
+    ['Authorization: Digest username="u",\r\n nonce="CANARY"\nnext', "Authorization: ***\nnext"],
+    ["Cookie: sid=one;\n\ttheme=CANARY\r\nnext", "Cookie: ***\r\nnext"],
     ["csrfToken=CANARY authToken=CANARY", "csrfToken=*** authToken=***"],
     [
       "bearerToken: CANARY xsrf_token=CANARY cookie=CANARY",
