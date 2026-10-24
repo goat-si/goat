@@ -68,7 +68,7 @@ export const COMPUTER_USE_PLATFORM_NOTES: Readonly<Partial<Record<NodeJS.Platfor
   win32: `<computer_use_host os="Windows">
 - Computer use needs a signed-in desktop. GOAT started over SSH or as a service runs in Session 0, which has no screen; report computer use as unavailable instead of working around it.
 - The control tree comes from UI Automation. Custom-drawn apps and games expose little of it; fall back to the screenshot there.
-- With the default background delivery, \`type_text\` with an \`element_token\` sets the control's value to its current value plus your text, whatever the caret or selection. To insert mid-text, or to replace after select-all, type into the focused field without an element token (some apps, such as WPF ones, refuse that in the background), then read the value back.
+- With the default background delivery, \`type_text\` with an \`element_token\` may set the control's value to its current value plus your text, ignoring the caret and selection, or may type at the caret; you cannot tell which in advance. To insert mid-text, or to replace after select-all, type into the focused field without an element token (some apps, such as WPF ones, refuse that in the background), and always read the value back.
 - When GOAT's desktop app runs computer use, window screenshots and zoom images are its own capture of that window and any other image is withheld. A GOAT server without the desktop app passes the driver's images on, and they can show more of the screen.
 - Windows of elevated apps, UAC prompts, and the secure desktop are out of reach. Ask the person to handle them, and never try to elevate yourself.
 - Password boxes are private fields (see above).
