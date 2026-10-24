@@ -180,7 +180,8 @@ const webhookTask: ScheduledTask = {
 const updateFixture = () => {
   const upserts: Array<ScheduledTaskUpsertInput> = [];
   const parked: { next?: Deferred.Deferred<void> } = {};
-  const stored = { task: webhookTask };
+  // failNext: the next save fails after the store has used its secretRef.
+  const stored: { task: ScheduledTask; failNext?: boolean } = { task: webhookTask };
   const services = Layer.mergeAll(
     NodeServices.layer,
     ServerSettings.layerTest(),
@@ -205,6 +206,12 @@ const updateFixture = () => {
       upsert: (input) =>
         Effect.suspend(() => {
           upserts.push(input);
+          if (stored.failNext === true) {
+            delete stored.failNext;
+            return Effect.fail(
+              new ScheduledTasks.ScheduledTaskError({ message: "Could not save schedule task." }),
+            );
+          }
           const park = parked.next;
           if (park !== undefined)
             return Effect.andThen(Deferred.succeed(park, undefined), Effect.never);
@@ -338,6 +345,28 @@ it.effect(
         }),
       ]);
       expect(upserts).toHaveLength(1);
+    }).pipe(Effect.provide(served));
+  },
+);
+
+it.effect(
+  "an update_scheduled_task whose save failed after using its secretRef stays unknown and never saves again",
+  () => {
+    const { upserts, stored, served } = updateFixture();
+    return Effect.gen(function* () {
+      stored.failNext = true;
+      const args = { ...rotation, clientRequestId: "update-failed" };
+      const failed = yield* callTool("goat_schedule_update", args);
+      expect(failed.isError).toBe(true);
+      const retried = yield* callTool("goat_schedule_update", args);
+      expect(retried.content).toEqual([
+        expect.objectContaining({ text: expect.stringContaining("outcome_unknown") }),
+      ]);
+      expect(upserts).toHaveLength(1);
+      // The list shows the rotation did not save, so the caller asks for a new secret.
+      const listed = yield* callTool("goat_schedule_list", {});
+      expect(listed.structuredContent).toMatchObject({ tasks: [{ webhookSignature: "none" }] });
+      expect(JSON.stringify(listed.structuredContent)).not.toContain("secret-ref-1");
     }).pipe(Effect.provide(served));
   },
 );

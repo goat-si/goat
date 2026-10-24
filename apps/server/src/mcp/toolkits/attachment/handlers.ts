@@ -50,7 +50,10 @@ const uploadOwner = McpInvocationContext.McpInvocationContext.pipe(
   Effect.map((scope) => scope.thread?.threadId ?? scope.requestNamespace),
 );
 
-/** Whether a pending upload's bytes arrived; claiming it for a thread moves the file away. */
+/**
+ * Whether a pending upload's bytes arrived; claiming it for a thread moves the file away. A lookup
+ * that fails is an error, never "not uploaded", which would invite a second upload.
+ */
 const uploaded = Effect.fn("mcp.attachment.uploaded")(function* (attachmentId: string) {
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
@@ -59,7 +62,7 @@ const uploaded = Effect.fn("mcp.attachment.uploaded")(function* (attachmentId: s
     attachmentId,
   });
   for (const candidate of candidates) {
-    if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) return true;
+    if (yield* fs.exists(candidate).pipe(Effect.mapError(unavailable))) return true;
   }
   return false;
 });

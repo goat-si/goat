@@ -455,3 +455,22 @@ it.effect("a replayed upload after a restart stays the caller's to list and disc
     }).pipe(Effect.provide(after.served));
   }).pipe(Effect.provide(Sqlite.layerMemory));
 });
+
+it.effect("goat_attachment_pending_list fails when it cannot tell whether bytes arrived", () => {
+  const { served } = fixture();
+  return Effect.gen(function* () {
+    const upload = { name: "image.png", mimeType: "image/png", sizeBytes: 4 };
+    yield* call("goat_attachment_prepare_upload", { upload, clientRequestId: "unreadable-1" });
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
+    // An unreadable directory must not read as "no bytes", which would invite a second upload.
+    const listed = yield* Effect.acquireUseRelease(
+      fs.chmod(config.attachmentsDir, 0o000),
+      () => call("goat_attachment_pending_list", {}),
+      () => fs.chmod(config.attachmentsDir, 0o755).pipe(Effect.orDie),
+    );
+    expect(listed.isError).toBe(true);
+    expect(JSON.stringify(listed.content)).toContain("orchestration_error");
+  }).pipe(Effect.provide(served));
+});
