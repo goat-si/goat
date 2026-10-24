@@ -4,6 +4,7 @@ import {
   type CuaVerificationStep,
   type CuaVerificationStepId,
   type DesktopCuaDriverRequest,
+  type DesktopCuaGrants,
   type DesktopCuaVerification,
 } from "@goat/contracts";
 import {
@@ -33,6 +34,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { cuaGrantTarget, readCuaGrants, type CuaGrantTarget } from "./DesktopCuaGrants.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import {
   HELPER_SIGNALS,
@@ -47,6 +49,7 @@ import {
 } from "./helperReadiness.ts";
 import {
   classifyHelperBundle,
+  ComputerUseHelperError,
   helperBundle,
   makeHelperHost,
   listHelperApplications,
@@ -288,6 +291,9 @@ export class DesktopCuaDriver extends Context.Service<
     readonly listen: Effect.Effect<void, never, import("effect/Scope").Scope>;
     readonly restart: Effect.Effect<void>;
     readonly verify: Effect.Effect<DesktopCuaVerification>;
+    readonly grantTarget: Effect.Effect<CuaGrantTarget>;
+    /** The target's grants without prompting; each call asks a fresh helper process. */
+    readonly grants: Effect.Effect<DesktopCuaGrants, ComputerUseHelperError>;
   }
 >()("@goat/desktop/cua/DesktopCuaDriver") {}
 
@@ -939,9 +945,28 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     }),
   );
 
+  const grantTarget = Effect.gen(function* () {
+    const chosen = environment.platform === "darwin" ? yield* engine() : undefined;
+    return cuaGrantTarget({
+      platform: environment.platform,
+      engine: chosen,
+      appBundleId: environment.appUserModelId,
+      readHelper: () =>
+        chosen !== undefined && typeof chosen !== "string"
+          ? engineGrants(chosen, false)
+          : Promise.reject(new Error("no helper")),
+      readApp: native.checkGrants,
+    });
+  }).pipe(Effect.withSpan("desktop.cua.grantTarget"));
+  const grants = grantTarget.pipe(
+    Effect.flatMap((target) => readCuaGrants(target, environment.displayName)),
+  );
+
   return DesktopCuaDriver.of({
     restart,
     verify,
+    grantTarget,
+    grants,
     listen: Effect.gen(function* () {
       yield* Stream.runForEach(publisher.cuaRequests, handleRequest).pipe(Effect.forkScoped);
       yield* Effect.forever(

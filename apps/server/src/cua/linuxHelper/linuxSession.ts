@@ -128,25 +128,29 @@ export const readGnomeShellVersion = (environment: NodeJS.ProcessEnv): string | 
   }
 };
 
-/** Methods this helper does not serve yet: the safety-signal watch (#1235). */
-const NOT_YET: ReadonlySet<string> = new Set(["watch", "unwatch"]);
-
-export function linuxCapabilities(session: LinuxSession): ComputerUseCapabilities {
+export function linuxCapabilities(
+  session: LinuxSession,
+  /** Whether the helper can see a person's own input devices on this desktop. */
+  personInput: boolean,
+): ComputerUseCapabilities {
+  const usable = session.unavailable === undefined && session.unsupported === undefined;
   return {
     protocol: COMPUTER_USE_PROTOCOL_VERSION,
     platform: "linux",
     methods: Object.fromEntries(
       COMPUTER_USE_METHODS.map((method) => [
         method,
-        NOT_YET.has(method) ||
-        (session.unsupported !== undefined && method !== "capabilities" && method !== "permissions")
+        session.unsupported !== undefined && method !== "capabilities" && method !== "permissions"
           ? "unsupported"
           : "supported",
       ]),
     ) as ComputerUseCapabilities["methods"],
-    backgroundDelivery: session.unavailable === undefined && session.unsupported === undefined,
-    // No watch yet, so neither signal; the server refuses unattended use until both are here.
-    signals: { privateMode: "unsupported", humanInput: "unsupported" },
+    backgroundDelivery: usable,
+    signals: {
+      // AT-SPI focus, read the same way observation reads it.
+      privateMode: usable ? "supported" : "unsupported",
+      humanInput: usable && personInput ? "supported" : "unsupported",
+    },
   };
 }
 

@@ -265,6 +265,13 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   restartCuaDriver: () => ipcRenderer.invoke(IpcChannels.RESTART_CUA_DRIVER_CHANNEL, undefined),
   verifyCuaDriver: () => ipcRenderer.invoke(IpcChannels.VERIFY_CUA_DRIVER_CHANNEL, undefined),
+  checkCuaGrants: () => ipcRenderer.invoke(IpcChannels.CHECK_CUA_GRANTS_CHANNEL, undefined),
+  openCuaPermissionGuide: (pane: string) =>
+    ipcRenderer.invoke(IpcChannels.OPEN_CUA_PERMISSION_GUIDE_CHANNEL, pane),
+  relaunchForCuaGrants: () =>
+    ipcRenderer.invoke(IpcChannels.RELAUNCH_FOR_CUA_GRANTS_CHANNEL, undefined),
+  revealCuaGrantTarget: () =>
+    ipcRenderer.invoke(IpcChannels.REVEAL_CUA_GRANT_TARGET_CHANNEL, undefined),
   checkSystemPermission: (pane: string) =>
     ipcRenderer.invoke(IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL, pane),
   openSystemSettings: (pane: string) =>
