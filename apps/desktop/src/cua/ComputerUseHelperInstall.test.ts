@@ -242,7 +242,12 @@ describe("ComputerUseHelperInstall", () => {
   });
 
   it("kills a tool that outlives its deadline instead of waiting on it", async () => {
-    const failure = await runBounded("/bin/sleep", ["30"], 200).then(
+    // A Node child that never exits on its own, so the test runs on every platform.
+    const failure = await runBounded(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      200,
+    ).then(
       () => undefined,
       (error: NodeJS.ErrnoException & { killed?: boolean; signal?: string }) => error,
     );
