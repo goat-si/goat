@@ -1,3 +1,5 @@
+import * as NodeUtil from "node:util";
+
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -29,10 +31,14 @@ const DEFECT_SUMMARY_MAX_CHARS = 2_000;
 /**
  * An Error from this realm or another: vm contexts and workers build Errors that fail
  * `instanceof Error` but carry the native Error slot. A Proxy of an Error passes `instanceof`
- * only, and may throw doing so, so callers guard this check.
+ * only, and may throw doing so, so callers guard this check. Node 22 and 23 lack Error.isError;
+ * util.types.isNativeError reads the same slot there, also without running the value's code.
  */
 function isError(value: unknown): value is Error {
-  return value instanceof Error || Error.isError(value);
+  if (value instanceof Error) return true;
+  return typeof Error.isError === "function"
+    ? Error.isError(value)
+    : NodeUtil.types.isNativeError(value);
 }
 
 /** What died, for one log line: an Error's stack or message, never its fields. */
@@ -384,13 +390,15 @@ function sanitize(value: unknown, depth: number, budget: Budget): unknown {
 }
 
 function sanitizeObject(value: object, depth: number, budget: Budget): unknown {
-  if (Cause.isCause(value)) return fit(Cause.pretty(redactCause(value)), budget);
   // Rendered like a cause, so the sanitized Error cause chain shows as Effect would print it.
+  // Checked before the Cause brand, which any object can carry, so an Error never loses its
+  // diagnostics to fields that merely look like a cause's reasons.
   if (isError(value))
     return fit(
       Cause.pretty(Cause.fromReasons([Cause.makeDieReason(sanitizedError(value))])),
       budget,
     );
+  if (Cause.isCause(value)) return fit(Cause.pretty(redactCause(value)), budget);
   if (value instanceof Date) return dateText(value);
   if (Redactable.isRedactable(value)) {
     // The hook decides what the value shows; what it returns is still sanitized.

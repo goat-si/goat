@@ -238,6 +238,19 @@ describe("errors from another realm", () => {
       expect(text).not.toContain("canary-realm-extra");
     }
   });
+
+  it("still recognizes errors on runtimes without Error.isError, such as Node 22", () => {
+    const isError = Object.getOwnPropertyDescriptor(Error, "isError");
+    Reflect.deleteProperty(Error, "isError");
+    try {
+      expect(defectSummary(foreign())).toContain("TypeError: cross-realm failure");
+      expect(Cause.pretty(redactCause(Cause.fail("upstream unavailable")))).toContain(
+        "upstream unavailable",
+      );
+    } finally {
+      if (isError !== undefined) Object.defineProperty(Error, "isError", isError);
+    }
+  });
 });
 
 describe("redactCause", () => {
@@ -595,6 +608,16 @@ describe("redactLogMessage", () => {
       revoked: "[Uninspectable]",
       forged: "[Uninspectable]",
     });
+  });
+
+  it("treats an Error field that carries the Cause brand as an Error", () => {
+    const error = Object.assign(new Error("expected root"), {
+      [Cause.TypeId]: Cause.TypeId,
+      reasons: [Cause.makeDieReason("canary-brand-reason")],
+    });
+    const printed = JSON.stringify(redactLogMessage({ error }));
+    expect(printed).toContain("expected root");
+    expect(printed).not.toContain("canary-brand-reason");
   });
 
   it("shows an Error field's cause chain", () => {
