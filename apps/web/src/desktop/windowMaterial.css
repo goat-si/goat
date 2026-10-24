@@ -23,10 +23,11 @@ html[data-desktop-client]:is(
     [data-desktop-window-material="windows-mica"],
     [data-desktop-window-material="macos-glass"]
   ) {
-  background: transparent;
+  /* useTheme's browser-chrome sync writes inline page colors; they would cover the material. */
+  background: transparent !important;
 
   body {
-    background: transparent;
+    background: transparent !important;
   }
 
   :is(

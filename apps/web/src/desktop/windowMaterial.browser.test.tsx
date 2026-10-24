@@ -143,6 +143,22 @@ function assertOpaque(container: HTMLElement) {
   }
 }
 
+it("clears the theme-synced inline page background while native material is active", async () => {
+  using _fixture = materialBridge();
+  const root = document.documentElement;
+  // syncBrowserChromeTheme writes these inline colors for the browser chrome.
+  root.style.backgroundColor = "rgb(23, 23, 23)";
+  document.body.style.backgroundColor = "rgb(23, 23, 23)";
+  try {
+    await using _screen = await render(<Shell />);
+    expect(alpha(root)).toBe(0);
+    expect(alpha(document.body)).toBe(0);
+  } finally {
+    root.style.removeProperty("background-color");
+    document.body.style.removeProperty("background-color");
+  }
+});
+
 it("leaves browser glass and root attributes unchanged without a desktop bridge", async () => {
   using _fixture = materialBridge();
   delete window.desktopBridge;
