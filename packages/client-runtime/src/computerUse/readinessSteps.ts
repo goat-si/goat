@@ -146,8 +146,9 @@ const windowsRemedies: Partial<Record<Blocker, string>> = {
 };
 const WINDOWS_ELEVATED =
   "Apps running as administrator stay out of reach: GOAT never runs its helper as administrator.";
+// Smart App Control has no per-app exceptions, so only a signed build gets past it.
 const WINDOWS_APP_CONTROL =
-  "If Windows blocked GOAT Computer Use (Smart App Control or your organization's app control policy), allow it or ask your administrator, then restart GOAT.";
+  "If Windows blocked GOAT Computer Use: under your organization's app control policy, ask your administrator to allow it; under Smart App Control, which allows no exceptions, install a signed GOAT release. Then restart GOAT.";
 
 const combine = (states: ReadonlyArray<ReadinessStepState>): ReadinessStepState => {
   for (const state of ["blocked", "unsupported", "unknown", "pending"] as const) {
