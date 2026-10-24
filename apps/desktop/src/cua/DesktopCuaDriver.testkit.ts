@@ -224,6 +224,7 @@ export const fixture = Effect.fn(function* (
       });
       const exit = Promise.withResolvers<void>();
       let running = false;
+      let readinessClient: ReturnType<typeof createClient> | undefined;
       let listener: ((event: HelperEvent["event"]) => void) | undefined;
       const session = {
         canWatch: options.helperWithoutWatch !== true,
@@ -249,11 +250,25 @@ export const fixture = Effect.fn(function* (
       };
       return {
         servicePid: () => (running ? HELPER_PID : undefined),
-        readinessPeer: () => (helper.verify && running ? createClient() : undefined),
+        readinessPeer: () => readinessClient,
         session: () => (running ? session : undefined),
         start: async () => {
           starts++;
           running = true;
+          if (helper.verify) {
+            const peer = createClient();
+            let closed = false;
+            readinessClient = {
+              ...peer,
+              uniffiDestroy: () => {
+                if (closed) return;
+                closed = true;
+                peer.uniffiDestroy?.();
+                running = false;
+                exit.resolve();
+              },
+            };
+          }
           Deferred.doneUnsafe(starting, Exit.void);
           // As makeHelperHost: an agent connection gets the helper's own command, no socket.
           if (helper.direct)
@@ -287,6 +302,8 @@ export const fixture = Effect.fn(function* (
         stop: async () => {
           stops++;
           running = false;
+          readinessClient?.uniffiDestroy?.();
+          readinessClient = undefined;
           exit.resolve();
         },
         waitForExit: (_generation, operation) => {

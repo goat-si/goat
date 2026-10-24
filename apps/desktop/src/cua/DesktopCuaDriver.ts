@@ -484,9 +484,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     }
     record("restart", undefined);
 
+    const helperMcp = selected.kind === "helper" && environment.platform === "darwin";
     const client = yield* Effect.acquireRelease(
       Effect.tryPromise(() => {
-        if (selected.kind === "helper" && environment.platform === "darwin") {
+        if (helperMcp) {
           const peer = checkHost?.host.readinessPeer?.();
           return peer ? Promise.resolve(peer) : Promise.reject(new Error("MCP helper unavailable"));
         }
@@ -494,7 +495,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       }).pipe(Effect.option),
       (client) =>
         Effect.sync(() => {
-          if (Option.isSome(client)) client.value.uniffiDestroy?.();
+          // The stdio peer ends its helper. Retire must cancel the exit monitor first, or
+          // closing a successful check would be recorded as a crash and erase its proof.
+          if (!helperMcp && Option.isSome(client)) client.value.uniffiDestroy?.();
         }),
     );
     if (Option.isNone(client)) {
