@@ -23,6 +23,7 @@ import {
 } from "~/components/solar";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { selectActiveRightPanel, useRightPanelStore } from "~/rightPanelStore";
@@ -161,24 +162,20 @@ function useMiniPlayerTop(frame: unknown) {
   const [top, setTop] = useState<number | null>(null);
   useEffect(() => {
     const player = frame === null ? null : document.querySelector("[data-preview-mini-player]");
-    if (player === null) {
-      setTop(null);
-      return;
-    }
+    if (player === null) return;
     const measure = () => {
       const rect = player.getBoundingClientRect();
       setTop(rect.right > window.innerWidth - STACK_SPAN_PX ? rect.top : null);
     };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(player);
+    // Observing delivers the current size first, which measures it once.
+    const stopObserving = observeResize(player, measure);
     window.addEventListener("resize", measure);
     return () => {
-      observer.disconnect();
+      stopObserving();
       window.removeEventListener("resize", measure);
     };
   }, [frame]);
-  return top;
+  return frame === null ? null : top;
 }
 
 /**
