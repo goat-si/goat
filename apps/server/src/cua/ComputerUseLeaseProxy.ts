@@ -39,6 +39,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { admissionScopeRefusal } from "./ComputerUseLeaseCallPermissions.ts";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
@@ -67,6 +68,7 @@ import {
   parse,
   replyPlacement,
   sendUnlessShared,
+  DISPLAY_PROOF_FREE,
 } from "./ComputerUseLeaseProtocol.ts";
 import {
   type Interruption,
@@ -94,22 +96,6 @@ import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 
 const WRONG_DISPLAY =
   "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
-/**
- * Tools that act on no app: they run before the driver has shown it is on GOAT's screen. Every
- * other tool waits for that proof (#1358).
- */
-const PROOF_FREE: ReadonlySet<string> = new Set([
-  "check_permissions",
-  "get_guide",
-  "list_apps",
-  "list_windows",
-  "get_screen_size",
-  "get_cursor_position",
-  "start_session",
-  "get_session",
-  "list_sessions",
-  "get_agent_cursor_state",
-]);
 
 const decodeUpdate = Schema.decodeUnknownOption(ComputerUseLeaseUpdate);
 
@@ -758,7 +744,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (refreshed !== undefined) admitted = refreshed;
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       const needsProof =
-        options.placement !== undefined && (tool === undefined || !PROOF_FREE.has(tool));
+        options.placement !== undefined && (tool === undefined || !DISPLAY_PROOF_FREE.has(tool));
       if (options.placement !== undefined && finished === undefined && paused === undefined) {
         // A window that is not on GOAT's screen is never acted on, whatever the driver would do.
         const targets = namedWindows(message.params?.arguments);
@@ -875,6 +861,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       }
     }
     let reservationId: string | undefined;
+    let permissionDeadline = Infinity;
     if (isRequest && message?.method === "tools/call") {
       const focusNow = yield* Clock.currentTimeMillis;
       const focusGrant = requiresForeground({
@@ -903,12 +890,30 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         return yield* options.output(refusal(id, message.method, detail, why, undefined, holder));
       }
       reservationId = decision.reservationId ?? undefined;
+      permissionDeadline = Math.min(
+        decision.permissions?.validUntilMillis ?? Infinity,
+        focusGrant?.expiresAtMillis ?? Infinity,
+      );
       if (!stillCurrent()) {
         if (reservationId !== undefined)
           yield* release({ reservationId, connectionId: current.connectionId });
         return yield* options.output(notSent(id));
       }
+      const scopeRefusal = admissionScopeRefusal(
+        id,
+        message,
+        decision.permissions,
+        listed,
+        options.bundleIds === true,
+      );
+      if (scopeRefusal !== undefined) {
+        if (reservationId !== undefined)
+          yield* release({ reservationId, connectionId: current.connectionId });
+        yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
+        return yield* options.output(scopeRefusal);
+      }
     }
+
     const kinds =
       isRequest && message?.method === "tools/call"
         ? inputKinds(
@@ -950,6 +955,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       sharedNow,
       stillCurrent,
       register.pipe(Effect.andThen(current.driver.send(line))),
+      permissionDeadline,
     );
     if (outcome !== "sent" && id !== undefined && id !== null && isRequest) {
       const key = JSON.stringify(id);
@@ -962,7 +968,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       return yield* options.output(
         outcome === "shared"
           ? refusal(id, message?.method, "screen_shared", SCREEN_SHARED)
-          : notSent(id),
+          : outcome === "expired"
+            ? refusal(
+                id,
+                message?.method,
+                "expired",
+                "This call’s permission expired before dispatch, so it did not run. Observe the current approval before trying again.",
+              )
+            : notSent(id),
       );
     }
   });

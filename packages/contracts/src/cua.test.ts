@@ -39,6 +39,25 @@ const metrics = {
 };
 
 describe("computer use on the wire", () => {
+  it("preserves the admitted app scope and rejects malformed permission deadlines", () => {
+    const admitted = { status: "admitted", reservationId: "ticket" };
+    expect(decodeCallAdmission(admitted)).toEqual(admitted);
+    for (const apps of [undefined, [], ["com.example.AppA"]]) {
+      const permission = {
+        ...admitted,
+        permissions: { ...(apps === undefined ? {} : { apps }), validUntilMillis: 300_000 },
+      };
+      expect(decodeCallAdmission(permission)).toEqual(permission);
+    }
+    for (const permissions of [
+      { apps: [7], validUntilMillis: 1 },
+      {},
+      ...[-1, 0.5, Infinity, Number.MAX_SAFE_INTEGER + 1].map((validUntilMillis) => ({
+        validUntilMillis,
+      })),
+    ])
+      expect(() => decodeCallAdmission({ ...admitted, permissions })).toThrow();
+  });
   it("preserves optional foreground authority and rejects malformed grant identities and expiry", () => {
     const grant = {
       handoffId: "handoff:foreground",

@@ -47,11 +47,8 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import {
-  callResource,
-  makeCallReservations,
-  requiresForeground,
-} from "./ComputerUseCallReservations.ts";
+import { callResource, makeCallReservations } from "./ComputerUseCallReservations.ts";
+import { allowsForegroundCall, withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseForeground.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
 import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
@@ -520,7 +517,11 @@ const make = Effect.gen(function* () {
     if (record.handoffId !== undefined) {
       const grant = yield* state(threadId, record.handoffId);
       if (grant._tag === "ended") return grant;
-      return active(grant.lease.apps, DateTime.toEpochMillis(record.expiresAt));
+      // A shorter desktop approval widens scope only while bound to this control.
+      return active(
+        focus.length > 0 ? undefined : grant.lease.apps,
+        DateTime.toEpochMillis(record.expiresAt),
+      );
     }
     // An interactive thread controls the apps its grants name, and only the safe reads without one.
     return active(
@@ -826,20 +827,15 @@ const make = Effect.gen(function* () {
           if (DateTime.toEpochMillis(current.expiresAt) <= now || state.wakeAt <= now)
             return { status: "refused", detail: "expired" } as const;
           if (
-            requiresForeground(call) &&
-            (call.foregroundGrantId === undefined ||
-              !foreground.bound(call.foregroundGrantId, threadId, call.controlId) ||
-              !state.foreground?.some(
-                (grant) =>
-                  grant.handoffId === call.foregroundGrantId && grant.expiresAtMillis > now,
-              ))
+            !allowsForegroundCall(call, state.foreground, now, (id) =>
+              foreground.bound(id, threadId, call.controlId),
+            )
           )
             return { status: "refused", detail: "foreground_not_approved" } as const;
-          // Judged here, under the admission lock, with the grants as they are now: the proxy
-          // hears of another thread's grant through its lease stream, which can lag.
+          // Admission and its scope are sampled together; streamed updates may lag.
           if (state.shared === true && takesScreen(call.name, call.args))
             return { status: "refused", detail: "screen_shared" } as const;
-          return reservations.reserve(threadId, call);
+          return withCallPermissions(reservations.reserve(threadId, call), state);
         }),
       );
     }),
