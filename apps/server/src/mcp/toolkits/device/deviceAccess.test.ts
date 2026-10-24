@@ -200,7 +200,7 @@ const call = (threadId: ThreadId, name: string, args: Record<string, unknown> = 
   );
 
 const refusal = (result: {
-  readonly isError?: boolean;
+  readonly isError?: boolean | undefined;
   readonly content: ReadonlyArray<unknown>;
 }) => (result.isError === true ? JSON.stringify(result.content) : "not refused");
 
