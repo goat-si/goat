@@ -90,7 +90,7 @@ it("labels multi-file counts as a total and opens the complete diff", async () =
   expect(container.textContent).toContain("update workspace/src/a.ts");
   expect(container.textContent).toContain("update workspace/src/b.ts");
   await act(() => container.querySelector("button")!.click());
-  expect(onOpenTurnDiff).toHaveBeenCalledWith(runId, undefined);
+  expect(onOpenTurnDiff).toHaveBeenCalledWith(runId, undefined, undefined);
 });
 
 it.each([undefined, [], [{ operation: "update", path: "/workspace/src/a.ts" }]])(
@@ -101,7 +101,7 @@ it.each([undefined, [], [{ operation: "update", path: "/workspace/src/a.ts" }]])
     expect(container.textContent).toContain("src/a.ts");
     expect(container.textContent).toContain("+101 -2");
     await act(() => container.querySelector("button")!.click());
-    expect(onOpenTurnDiff).toHaveBeenCalledWith(runId, "/workspace/src/a.ts");
+    expect(onOpenTurnDiff).toHaveBeenCalledWith(runId, "/workspace/src/a.ts", undefined);
   },
 );
 
