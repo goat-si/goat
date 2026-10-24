@@ -9,6 +9,8 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -88,21 +90,39 @@ const call = (name: string, args: Record<string, unknown>, invocation = scope) =
   );
 
 /** Real registrations and admission; only the domain effects are counted substitutes. */
-const fixture = () => {
+/** With sharedDatabase the caller provides SQLite, so two fixtures act as one server restarting. */
+const fixture = (options: { readonly sharedDatabase?: boolean } = {}) => {
   const performed: Array<unknown> = [];
   const capabilities = new Set(["orchestration"] as const);
+  // The scope every handler reads; a test swaps its caller to act as someone else.
+  const invocation: {
+    -readonly [
+      K in keyof McpInvocationContext.McpInvocationScope
+    ]: McpInvocationContext.McpInvocationScope[K];
+  } = {
+    ...scope,
+    capabilities,
+  };
+  // Set to park the next thread command after it is recorded, as a call cut off mid-write.
+  const parked: { next?: Deferred.Deferred<void> } = {};
   const record = (input: unknown) => performed.push(input);
   const dependencies = Layer.mergeAll(
     layerPermissionProfilesOff,
     ServerSettings.layerTest(),
     NodeCrypto.layer,
-    Layer.succeed(McpInvocationContext.McpInvocationContext, { ...scope, capabilities }),
+    Layer.succeed(McpInvocationContext.McpInvocationContext, invocation),
     Layer.mock(Threads.ThreadManagementService)({
       getThreadShell: (id) => Effect.succeed(liveThreadShell(id)),
       getProjectThreadRecords: ({ threadId }) =>
         Effect.succeed(idleThreadProjection(liveThreadShell(threadId))),
       dispatch: (input) =>
-        Effect.sync(() => ({ sequence: record(input), storedEvents: [], replayed: false })),
+        Effect.suspend(() => {
+          const sequence = record(input);
+          const park = parked.next;
+          return park === undefined
+            ? Effect.succeed({ sequence, storedEvents: [], replayed: false })
+            : Effect.andThen(Deferred.succeed(park, undefined), Effect.never);
+        }),
       sendToThread: (input) =>
         Effect.sync(() => {
           const sequence = record(input);
@@ -183,11 +203,11 @@ const fixture = () => {
   ).pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(dependencies),
-    Layer.provideMerge(Sqlite.layerMemory),
+    Layer.provideMerge(options.sharedDatabase === true ? Layer.empty : Sqlite.layerMemory),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-retry-keys-" })),
     Layer.provideMerge(NodeServices.layer),
   );
-  return { performed, served, capabilities };
+  return { performed, served, capabilities, parked, invocation };
 };
 
 const requests = [
@@ -204,6 +224,11 @@ const requests = [
   {
     name: "goat_thread_configure",
     args: { modelSelection: { instanceId: "codex", model: "gpt-5" } },
+    result: { sequence: 1 },
+  },
+  {
+    name: "goat_thread_organize",
+    args: { action: "pin" },
     result: { sequence: 1 },
   },
   {
@@ -241,7 +266,7 @@ it.effect.each(requests)(
   },
 );
 
-it.effect.each(requests.slice(0, 3))(
+it.effect.each(requests.slice(0, 4))(
   "$name checks the orchestration credential before replay",
   ({ name, args: request }) => {
     const { performed, served, capabilities } = fixture();
@@ -288,4 +313,145 @@ it.effect("attachment sends reuse the first message and claimed files on a keyed
     ]);
     expect(performed).toHaveLength(2);
   }).pipe(Effect.provide(served));
+});
+
+it.effect("goat_thread_organize refuses a key reused for another action", () => {
+  const { performed, served } = fixture();
+  return Effect.gen(function* () {
+    yield* call("goat_thread_organize", { action: "pin", clientRequestId: "organize-1" });
+    const reused = yield* call("goat_thread_organize", {
+      action: "unpin",
+      clientRequestId: "organize-1",
+    });
+    expect(reused.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("idempotency_mismatch") }),
+    ]);
+    expect(performed).toHaveLength(1);
+  }).pipe(Effect.provide(served));
+});
+
+it.effect("an interrupted goat_thread_organize never runs again and names goat_thread_read", () => {
+  const { performed, served, parked } = fixture();
+  return Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    parked.next = started;
+    const args = { action: "snooze", snoozedUntil: "2026-11-01T00:00:00.000Z" };
+    const first = yield* Effect.forkChild(
+      call("goat_thread_organize", { ...args, clientRequestId: "organize-lost" }),
+    );
+    yield* Deferred.await(started);
+    yield* Fiber.interrupt(first);
+    delete parked.next;
+    const retried = yield* call("goat_thread_organize", {
+      ...args,
+      clientRequestId: "organize-lost",
+    });
+    expect(retried.content).toEqual([
+      expect.objectContaining({
+        text: expect.stringMatching(/Read goat_thread_read[\s\S]*"reconcile":"thread\.read"/),
+      }),
+    ]);
+    expect(performed).toHaveLength(1);
+  }).pipe(Effect.provide(served));
+});
+
+it.effect(
+  "goat_attachment_prepare_upload replays the first upload and reconciles through the caller's pending list",
+  () => {
+    const { served, invocation } = fixture();
+    return Effect.gen(function* () {
+      const upload = { name: "image.png", mimeType: "image/png", sizeBytes: 4 };
+      const pending = () =>
+        call("goat_attachment_pending_list", {}).pipe(
+          Effect.map((result) => (result.structuredContent as { uploads: Array<unknown> }).uploads),
+        );
+      expect(yield* pending()).toEqual([]);
+      const first = yield* call("goat_attachment_prepare_upload", {
+        upload,
+        clientRequestId: "upload-1",
+      });
+      const prepared = yield* decodeUpload(first.structuredContent);
+      // Reconcile: the caller sees the upload it prepared, but never its bearer URL.
+      const listed = yield* pending();
+      expect(listed).toEqual([
+        {
+          attachmentId: prepared.attachmentId,
+          type: "image",
+          name: "image.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+          expiresAt: prepared.expiresAt,
+          uploaded: false,
+        },
+      ]);
+      expect(JSON.stringify(listed)).not.toContain(prepared.relativeUrl.split("/").at(-1));
+      const repeated = yield* call("goat_attachment_prepare_upload", {
+        upload,
+        clientRequestId: "upload-1",
+      });
+      expect(repeated.content).toEqual(first.content);
+      expect(yield* pending()).toHaveLength(1);
+      const reused = yield* call("goat_attachment_prepare_upload", {
+        upload: { ...upload, sizeBytes: 5 },
+        clientRequestId: "upload-1",
+      });
+      expect(reused.content).toEqual([
+        expect.objectContaining({ text: expect.stringContaining("idempotency_mismatch") }),
+      ]);
+      const other = yield* decodeUpload(
+        (yield* call("goat_attachment_prepare_upload", { upload, clientRequestId: "upload-2" }))
+          .structuredContent,
+      );
+      expect(other.attachmentId).not.toBe(prepared.attachmentId);
+      expect(yield* pending()).toHaveLength(2);
+      // Another caller's list never shows this caller's uploads, and it cannot discard them.
+      invocation.requestNamespace = "stranger-session";
+      invocation.thread = { ...scope.thread!, threadId: ThreadId.make("stranger") };
+      expect(yield* pending()).toEqual([]);
+      const refused = yield* call("goat_attachment_discard", {
+        attachmentId: prepared.attachmentId,
+      });
+      expect(refused.content).toEqual([
+        expect.objectContaining({ text: expect.stringContaining("Only the caller") }),
+      ]);
+      invocation.requestNamespace = scope.requestNamespace;
+      invocation.thread = scope.thread;
+      yield* call("goat_attachment_discard", { attachmentId: prepared.attachmentId });
+      expect(yield* pending()).toEqual([
+        expect.objectContaining({ attachmentId: other.attachmentId }),
+      ]);
+    }).pipe(Effect.provide(served));
+  },
+);
+
+it.effect("a replayed upload after a restart stays the caller's to list and discard", () => {
+  const before = fixture({ sharedDatabase: true });
+  const after = fixture({ sharedDatabase: true });
+  const upload = { name: "image.png", mimeType: "image/png", sizeBytes: 4 };
+  const args = { upload, clientRequestId: "restart-1" };
+  return Effect.gen(function* () {
+    const first = yield* call("goat_attachment_prepare_upload", args).pipe(
+      Effect.provide(before.served),
+    );
+    // A new server process over the same database: no state survives but what is stored.
+    yield* Effect.gen(function* () {
+      const replayed = yield* call("goat_attachment_prepare_upload", args);
+      expect(replayed.content).toEqual(first.content);
+      const { attachmentId } = yield* decodeUpload(replayed.structuredContent);
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig.ServerConfig;
+      yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fs.writeFile(`${config.attachmentsDir}/${attachmentId}.png`, new Uint8Array(4));
+      const listed = yield* call("goat_attachment_pending_list", {});
+      expect(listed.structuredContent).toEqual({
+        uploads: [expect.objectContaining({ attachmentId, uploaded: true })],
+      });
+      const discarded = yield* call("goat_attachment_discard", { attachmentId });
+      expect(discarded.isError).not.toBe(true);
+      expect(yield* fs.exists(`${config.attachmentsDir}/${attachmentId}.png`)).toBe(false);
+      expect((yield* call("goat_attachment_pending_list", {})).structuredContent).toEqual({
+        uploads: [],
+      });
+    }).pipe(Effect.provide(after.served));
+  }).pipe(Effect.provide(Sqlite.layerMemory));
 });

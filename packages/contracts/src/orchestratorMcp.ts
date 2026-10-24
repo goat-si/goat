@@ -736,6 +736,15 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  /**
+   * When the thread was last snoozed, kept after activity wakes it early, so a caller can tell a
+   * snooze that landed and woke from one that never landed. Missing on older servers.
+   */
+  snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** Missing on older servers, which means unknown, not false. */
+  pinned: Schema.optional(Schema.Boolean),
+  /** Its latest run finished after the last visit. Missing on older servers: unknown. */
+  unread: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1152,6 +1161,10 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   }),
   webhookSignature: Schema.optional(Schema.Literals(["none", "set"])).annotate({
     description: "Whether requests must carry a valid signature.",
+  }),
+  webhookSignatureSecretRef: Schema.optional(Schema.String).annotate({
+    description:
+      "The secretRef the signing secret was saved from. A ref is used once, so an update that passed it saved its secret exactly when this shows it.",
   }),
 });
 export type OrchestratorMcpScheduledTask = typeof OrchestratorMcpScheduledTask.Type;

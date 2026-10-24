@@ -243,6 +243,11 @@ export interface OrchestratorMcpServiceShape {
   readonly updateScheduledTask: (
     scope: McpInvocationScope,
     input: OrchestratorMcpUpdateScheduledTaskInput,
+    /**
+     * Admits a keyed call once the caller may change this task, before it saves, so a replay
+     * passes these checks again and never consumes a secretRef twice.
+     */
+    admit?: Effect.Effect<void>,
   ) => Effect.Effect<OrchestratorMcpScheduleTaskResult, OrchestratorMcpFailure>;
   readonly deleteScheduledTask: (
     scope: McpInvocationScope,
@@ -452,6 +457,9 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     ...(task.webhook === undefined
       ? {}
       : { webhookSignature: task.webhook.hasSecret ? "set" : "none" }),
+    ...(task.webhook?.secretRef === undefined
+      ? {}
+      : { webhookSignatureSecretRef: task.webhook.secretRef }),
   };
 }
 
@@ -1029,8 +1037,26 @@ function threadDetail(
     archived: projection.thread.archivedAt !== null,
     ...threadSettlement(projection.thread),
     ...threadSnooze(shell, nowMs),
+    ...threadOrganization(projection.thread, latest),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
     updatedAt: DateTime.formatIso(projection.thread.updatedAt),
+  };
+}
+
+/** What goat_thread_organize changes beyond archive, settle and snooze, so a caller can reconcile it. */
+function threadOrganization(
+  thread: OrchestrationV2ThreadProjection["thread"],
+  latest: OrchestrationV2Run | undefined,
+): Pick<OrchestratorMcpThreadDetail, "snoozedAt" | "pinned" | "unread"> {
+  const completedAt = latest?.completedAt ?? null;
+  return {
+    snoozedAt: thread.snoozedAt == null ? null : DateTime.formatIso(thread.snoozedAt),
+    pinned: thread.pinnedAt != null,
+    // The sidebar's rule; thread.mark-unread rewinds lastVisitedAt to just before completion.
+    unread:
+      completedAt !== null &&
+      thread.lastVisitedAt !== null &&
+      DateTime.isGreaterThan(completedAt, thread.lastVisitedAt),
   };
 }
 
@@ -2233,65 +2259,68 @@ const make = Effect.gen(function* () {
         };
       },
     ),
-    updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(
-      function* (scope, input) {
-        const { parent, limits } = yield* loadCaller(scope);
-        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
-        yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
-        if (
-          input.bindToCurrentThread === true &&
-          (parent === undefined || parent.thread.projectId !== existing.projectId)
-        ) {
-          return yield* failure(
-            "invalid_request",
-            parent === undefined
-              ? "bindToCurrentThread needs an agent running inside a GOAT thread."
-              : "bindToCurrentThread binds to this thread, which belongs to a different project.",
-          );
-        }
-        const threadId =
-          input.bindToCurrentThread === undefined
-            ? existing.threadId
-            : input.bindToCurrentThread && parent !== undefined
-              ? parent.thread.id
-              : null;
-        // Rebinding changes where runs execute, so the workspace strategy must
-        // follow: unbinding a root-strategy task would otherwise run loose
-        // prompts in the shared project checkout.
-        const workspaceStrategy =
-          input.bindToCurrentThread === undefined
-            ? existing.workspaceStrategy
-            : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
-        const upsertInput: ScheduledTaskUpsertInput = {
-          id: existing.id,
-          title: input.title ?? existing.title,
-          prompt: input.prompt ?? existing.prompt,
-          enabled: input.enabled ?? existing.enabled,
-          schedule: input.schedule ?? existing.schedule,
-          projectId: existing.projectId,
-          threadId,
-          workspaceStrategy,
-          modelSelection: existing.modelSelection,
-          runtimeMode: existing.runtimeMode,
-          interactionMode: existing.interactionMode,
-          createdBy: existing.createdBy,
-          creationSource: existing.creationSource,
-        };
-        const memoryGrantCeiling = yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
-          Effect.mapError(() =>
-            failure("invalid_request", "Caller memory authority is no longer available."),
+    updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(function* (
+      scope,
+      input,
+      admit = Effect.void,
+    ) {
+      const { parent, limits } = yield* loadCaller(scope);
+      const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
+      yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
+      if (
+        input.bindToCurrentThread === true &&
+        (parent === undefined || parent.thread.projectId !== existing.projectId)
+      ) {
+        return yield* failure(
+          "invalid_request",
+          parent === undefined
+            ? "bindToCurrentThread needs an agent running inside a GOAT thread."
+            : "bindToCurrentThread binds to this thread, which belongs to a different project.",
+        );
+      }
+      const threadId =
+        input.bindToCurrentThread === undefined
+          ? existing.threadId
+          : input.bindToCurrentThread && parent !== undefined
+            ? parent.thread.id
+            : null;
+      // Rebinding changes where runs execute, so the workspace strategy must
+      // follow: unbinding a root-strategy task would otherwise run loose
+      // prompts in the shared project checkout.
+      const workspaceStrategy =
+        input.bindToCurrentThread === undefined
+          ? existing.workspaceStrategy
+          : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
+      const upsertInput: ScheduledTaskUpsertInput = {
+        id: existing.id,
+        title: input.title ?? existing.title,
+        prompt: input.prompt ?? existing.prompt,
+        enabled: input.enabled ?? existing.enabled,
+        schedule: input.schedule ?? existing.schedule,
+        projectId: existing.projectId,
+        threadId,
+        workspaceStrategy,
+        modelSelection: existing.modelSelection,
+        runtimeMode: existing.runtimeMode,
+        interactionMode: existing.interactionMode,
+        createdBy: existing.createdBy,
+        creationSource: existing.creationSource,
+      };
+      const memoryGrantCeiling = yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
+        Effect.mapError(() =>
+          failure("invalid_request", "Caller memory authority is no longer available."),
+        ),
+      );
+      yield* admit;
+      const { task } = yield* scheduledTasks
+        .upsert(upsertInput, { memoryGrantCeiling })
+        .pipe(
+          Effect.mapError((error) =>
+            failure("orchestration_error", `Could not update scheduled task: ${error.message}`),
           ),
         );
-        const { task } = yield* scheduledTasks
-          .upsert(upsertInput, { memoryGrantCeiling })
-          .pipe(
-            Effect.mapError((error) =>
-              failure("orchestration_error", `Could not update scheduled task: ${error.message}`),
-            ),
-          );
-        return yield* summarizeScheduledTask(scope, { parent, limits }, task);
-      },
-    ),
+      return yield* summarizeScheduledTask(scope, { parent, limits }, task);
+    }),
     deleteScheduledTask: Effect.fn("OrchestratorMcpService.deleteScheduledTask")(
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope);

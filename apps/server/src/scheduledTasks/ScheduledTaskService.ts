@@ -5,6 +5,7 @@ import {
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
+  SecretRef,
   ScheduledTaskWebhookDeliveryId,
   ThreadId,
   type MemoryTaskGrantCeiling,
@@ -216,6 +217,7 @@ interface ScheduledTaskRow {
   readonly run_count: number;
   readonly webhook_token: string | null;
   readonly webhook_secret: string | null;
+  readonly webhook_secret_ref: string | null;
 }
 
 interface WebhookDeliveryRow {
@@ -322,7 +324,10 @@ function webhookPath(taskId: string, token: string): string {
 }
 
 function webhookEndpoint(
-  row: Pick<ScheduledTaskRow, "task_id" | "webhook_token" | "webhook_secret">,
+  row: Pick<
+    ScheduledTaskRow,
+    "task_id" | "webhook_token" | "webhook_secret" | "webhook_secret_ref"
+  >,
   origin: WebhookOrigin | null,
 ): ScheduledTask["webhook"] {
   if (row.webhook_token === null) return undefined;
@@ -333,6 +338,9 @@ function webhookEndpoint(
     url: base === null ? null : `${base}/${encodeURIComponent(row.task_id)}/${row.webhook_token}`,
     ...(reason === undefined ? {} : { urlUnavailableReason: reason }),
     hasSecret: row.webhook_secret !== null,
+    ...(row.webhook_secret === null || row.webhook_secret_ref === null
+      ? {}
+      : { secretRef: SecretRef.make(row.webhook_secret_ref) }),
   };
 }
 
@@ -498,7 +506,8 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        webhook_secret_ref
       FROM scheduled_tasks
       -- Not updated_at: toggles, runs and edits rewrite it, and clients render
       -- this order as-is, so rows would move under the pointer.
@@ -536,7 +545,8 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        webhook_secret_ref
       FROM scheduled_tasks
       WHERE task_id = ${id}
     `.pipe(NodeSqliteClient.readOnly);
@@ -589,6 +599,8 @@ export const layer = Layer.effect(
         readonly token: string | null;
         readonly secret: string | null;
         readonly secretChanged: boolean;
+        /** The secretRef the new secret came from; null for an inline secret or none. */
+        readonly secretRef: string | null;
       },
     ) =>
       sql<{ task_id: string }>`
@@ -615,7 +627,8 @@ export const layer = Layer.effect(
           last_run_error,
           run_count,
           webhook_token,
-          webhook_secret
+          webhook_secret,
+          webhook_secret_ref
         )
         SELECT
           ${task.id},
@@ -640,7 +653,8 @@ export const layer = Layer.effect(
           ${task.lastRunError},
           ${task.runCount},
           ${webhook.token},
-          ${webhook.secret}
+          ${webhook.secret},
+          ${webhook.secretRef}
         WHERE ${requireExisting ? 0 : 1} = 1
            OR EXISTS (SELECT 1 FROM scheduled_tasks WHERE task_id = ${task.id})
         ON CONFLICT (task_id)
@@ -668,6 +682,10 @@ export const layer = Layer.effect(
           webhook_secret = CASE
             WHEN ${webhook.secretChanged ? 1 : 0} = 1 THEN excluded.webhook_secret
             ELSE scheduled_tasks.webhook_secret
+          END,
+          webhook_secret_ref = CASE
+            WHEN ${webhook.secretChanged ? 1 : 0} = 1 THEN excluded.webhook_secret_ref
+            ELSE scheduled_tasks.webhook_secret_ref
           END
         RETURNING task_id
       `.pipe(
@@ -1209,9 +1227,13 @@ export const layer = Layer.effect(
                   taskId: id,
                 });
               }
-              return { token, secret, secretChanged };
+              const secretRef =
+                signature?.secretRef !== undefined && fromRef !== undefined
+                  ? signature.secretRef
+                  : null;
+              return { token, secret, secretChanged, secretRef };
             })
-          : { token: null, secret: null, secretChanged: true };
+          : { token: null, secret: null, secretChanged: true, secretRef: null };
       const workspaceStrategy: ScheduledTask["workspaceStrategy"] =
         input.workspaceStrategy.type === "worktree" &&
         (yield* managedFolders.isScratchProject(input.projectId))

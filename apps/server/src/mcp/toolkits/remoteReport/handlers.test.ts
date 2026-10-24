@@ -20,6 +20,7 @@ const expected: Record<
   invalid_request: "invalid_request",
   relay_unsupported: "invalid_request",
   relay_queue_full: "invalid_request",
+  idempotency_mismatch: "conflict",
 };
 
 it.each(Object.entries(expected))("maps %s to %s", (reason, code) => {
