@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  CUA_DESKTOP_UPDATE_NEEDED,
   computerUseStatusText,
   computerUseUnavailable,
   hostComputerUseText,
+  readCuaGrants,
 } from "./CuaSetupDialog.logic";
 
 const mac = { platform: "darwin", running: true } as const;
@@ -124,5 +126,19 @@ describe("hostComputerUseText", () => {
         reason: "GOAT runs in Windows Session 0.",
       }),
     ).toBe("Unavailable. GOAT runs in Windows Session 0.");
+  });
+});
+
+describe("readCuaGrants", () => {
+  it("asks an older desktop to update instead of trusting GOAT's own grants", async () => {
+    // Such a desktop may already run computer use through the helper.
+    expect(await readCuaGrants({})).toEqual({
+      principal: "unusable",
+      message: CUA_DESKTOP_UPDATE_NEEDED,
+    });
+    expect(await readCuaGrants(undefined)).toEqual({
+      principal: "unusable",
+      message: CUA_DESKTOP_UPDATE_NEEDED,
+    });
   });
 });

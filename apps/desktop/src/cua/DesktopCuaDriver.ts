@@ -82,7 +82,6 @@ const TRANSIENT_HELPER_FAILURES: ReadonlySet<string> = new Set([
   "no_hello",
   "helper_exited",
   "timeout",
-  "grantsUnreadable",
 ]);
 
 /**
@@ -874,12 +873,13 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return { principal: "unusable", message: target.message } satisfies DesktopCuaGrants;
     const read = yield* Effect.tryPromise({
       try: target.read,
+      // A reply that does not decode is a helper speaking another protocol, not a hiccup.
       catch: (cause) =>
         cause instanceof ComputerUseHelperError
           ? cause
           : new ComputerUseHelperError(
-              "grantsUnreadable",
-              cause instanceof Error ? cause.message : "Could not read the permissions.",
+              "malformed_reply",
+              "its answer about permissions could not be read.",
             ),
     }).pipe(
       Effect.map((value) => ({ ok: true as const, value })),

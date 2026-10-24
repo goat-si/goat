@@ -29,11 +29,14 @@ export function useCuaGrants(
     if (!enabled) return;
     let disposed = false;
     let checking = false;
+    // A helper that cannot be used stays that way, so only the person coming back asks again.
+    let unusable = false;
     const refresh = async () => {
       if (disposed || checking || document.visibilityState === "hidden") return;
       checking = true;
       await checkLatest().then(
         (next) => {
+          unusable = next.principal === "unusable";
           if (disposed) return;
           setGrants(next);
           setError(null);
@@ -45,7 +48,9 @@ export function useCuaGrants(
       checking = false;
     };
     void refresh();
-    const timer = window.setInterval(() => void refresh(), intervalMs);
+    const timer = window.setInterval(() => {
+      if (!unusable) void refresh();
+    }, intervalMs);
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
     return () => {

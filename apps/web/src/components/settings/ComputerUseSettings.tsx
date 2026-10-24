@@ -1,9 +1,8 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import type { DesktopCuaGrants, EnvironmentId } from "@goat/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 import { useContext, useEffect, useEffectEvent, useState } from "react";
 
 import { isElectron } from "../../env";
-import { readLocalApi } from "../../localApi";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -17,6 +16,7 @@ import {
   computerUseStatusText,
   computerUseUnavailable,
   cuaGranted,
+  readCuaGrants,
   type CuaPermission,
 } from "./CuaSetupDialog.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -72,33 +72,11 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
 
 export type ComputerUseHost = ReturnType<typeof useComputerUseHost>;
 
-/**
- * The grants of the app computer use runs as. A desktop from before the helper only knows its
- * own grants, which were then the ones that mattered.
- */
-const checkGrants = async (): Promise<DesktopCuaGrants> => {
-  const bridge = window.desktopBridge;
-  if (bridge?.checkCuaGrants) return bridge.checkCuaGrants();
-  const check = (permission: CuaPermission) =>
-    bridge?.checkSystemPermission?.(permission) ?? Promise.resolve(false);
-  return {
-    principal: "app",
-    name: "GOAT",
-    bundleId: "",
-    accessibility: await check("accessibility"),
-    screenRecording: await check("screen-recording"),
-  };
-};
+const checkGrants = () => readCuaGrants(window.desktopBridge);
 
 const openGuide = async (permission: CuaPermission) => {
   const guide = window.desktopBridge?.openCuaPermissionGuide;
-  if (guide) {
-    if (!(await guide(permission))) throw new Error("Unable to open System Settings.");
-    return;
-  }
-  const api = readLocalApi();
-  if (!api) throw new Error("Unable to open System Settings.");
-  await api.shell.openSystemSettings(permission);
+  if (!guide || !(await guide(permission))) throw new Error("Unable to open System Settings.");
 };
 
 const revealGrantTarget = window.desktopBridge?.revealCuaGrantTarget;

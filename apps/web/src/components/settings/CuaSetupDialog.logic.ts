@@ -1,6 +1,7 @@
 import type {
   CuaHostStatus,
   CuaVerificationStepId,
+  DesktopBridge,
   DesktopCuaGrants,
   DesktopCuaVerification,
   HostComputerUse,
@@ -8,6 +9,22 @@ import type {
 
 export type CuaPermission = "accessibility" | "screen-recording";
 export const CUA_PERMISSIONS: readonly CuaPermission[] = ["accessibility", "screen-recording"];
+
+export const CUA_DESKTOP_UPDATE_NEEDED =
+  "Update GOAT on this Mac to set up computer use: this version cannot tell which app needs the permissions.";
+
+/**
+ * The grants of the app computer use runs as. A desktop without this call may already run computer
+ * use through the helper, so its own grants prove nothing; it is asked to update instead.
+ */
+export function readCuaGrants(
+  bridge: Pick<DesktopBridge, "checkCuaGrants"> | undefined,
+): Promise<DesktopCuaGrants> {
+  return (
+    bridge?.checkCuaGrants?.() ??
+    Promise.resolve({ principal: "unusable", message: CUA_DESKTOP_UPDATE_NEEDED })
+  );
+}
 
 /** The grants of an app that can hold them; an unusable helper has none to show. */
 export type CuaGrantHolder = Exclude<DesktopCuaGrants, { principal: "unusable" }>;

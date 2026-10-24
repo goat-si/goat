@@ -626,7 +626,7 @@ describe("DesktopCuaDriver grants for setup", () => {
   );
 
   it.effect(
-    "reports a helper that answers as another app as unusable, and retries one that vanished",
+    "reports a helper that answers as another app or garbled as unusable, and retries one that vanished",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -655,6 +655,17 @@ describe("DesktopCuaDriver grants for setup", () => {
           });
           const exit = yield* Effect.exit(vanished.grants);
           assert.isTrue(Exit.isFailure(exit));
+
+          // decodeGrants throws a plain schema error for an answer of the wrong shape.
+          const malformed = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true, fails: new Error('Expected boolean, got "yes"') },
+          });
+          assert.deepEqual(yield* malformed.grants, {
+            principal: "unusable",
+            message:
+              "GOAT Computer Use cannot be used: its answer about permissions could not be read.",
+          });
         }),
       ),
   );

@@ -250,3 +250,20 @@ it("explains a remote Wayland host's needs and turns on without macOS checks", a
   expect(f.onCheck).not.toHaveBeenCalled();
   expect(f.onClose).toHaveBeenCalledWith("enabled");
 });
+
+it("stops asking a broken helper on a timer and asks again when GOAT regains focus", async () => {
+  const message = "GOAT Computer Use cannot be used: protocol mismatch.";
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    const f = fixture({ unusable: message });
+    await using _screen = await dialog(f);
+    await vi.waitFor(() => expect(text()).toContain(message));
+    const calls = f.onCheck.mock.calls.length;
+    await act(() => vi.advanceTimersByTime(6000));
+    expect(f.onCheck).toHaveBeenCalledTimes(calls);
+    await refocus();
+    expect(f.onCheck).toHaveBeenCalledTimes(calls + 1);
+  } finally {
+    vi.useRealTimers();
+  }
+});

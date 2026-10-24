@@ -56,16 +56,43 @@ function run() {
   }
 }`;
 
-export function settingsHelperBounds(settings: NonNullable<SettingsWindow>): Electron.Rectangle {
-  const sidebarWidth = 216;
-  const inset = 16;
-  const width = Math.min(560, settings.width - sidebarWidth - inset * 2);
-  return {
-    x: Math.round(settings.x + sidebarWidth + (settings.width - sidebarWidth - width) / 2),
-    y: Math.round(settings.y + settings.height - 140 - inset),
-    width: Math.round(width),
-    height: 140,
-  };
+const PANEL_WIDTH = 560;
+const PANEL_HEIGHT = 140;
+const GAP = 8;
+const SIDEBAR_WIDTH = 216;
+const TOOLBAR_HEIGHT = 52;
+
+/**
+ * Where the drag panel goes beside System Settings: below the window, else to its right, else to
+ * its left, within the display. The list's last rows and its + and − buttons stay uncovered,
+ * because removing a stale entry is part of the guidance; with no room outside, the panel sits
+ * under the toolbar over the pane's description instead.
+ */
+export function settingsHelperBounds(
+  settings: NonNullable<SettingsWindow>,
+  workArea: Electron.Rectangle,
+): Electron.Rectangle {
+  const width = Math.min(PANEL_WIDTH, workArea.width);
+  const right = workArea.x + workArea.width;
+  const bottom = workArea.y + workArea.height;
+  const clampX = (x: number) => Math.min(Math.max(x, workArea.x), right - width);
+  const clampY = (y: number) => Math.min(Math.max(y, workArea.y), bottom - PANEL_HEIGHT);
+  const listCenter = settings.x + SIDEBAR_WIDTH + (settings.width - SIDEBAR_WIDTH) / 2;
+  const place = (x: number, y: number, w = width): Electron.Rectangle => ({
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.round(w),
+    height: PANEL_HEIGHT,
+  });
+  const below = settings.y + settings.height + GAP;
+  if (below + PANEL_HEIGHT <= bottom) return place(clampX(listCenter - width / 2), below);
+  const besideY = clampY(settings.y + settings.height - PANEL_HEIGHT);
+  const toRight = settings.x + settings.width + GAP;
+  if (toRight + width <= right) return place(toRight, besideY);
+  const toLeft = settings.x - GAP - width;
+  if (toLeft >= workArea.x) return place(toLeft, besideY);
+  const inner = Math.min(width, settings.width - SIDEBAR_WIDTH - 2 * GAP);
+  return place(listCenter - inner / 2, settings.y + TOOLBAR_HEIGHT, inner);
 }
 
 export function watchMacSettingsWindow(
