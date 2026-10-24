@@ -1,14 +1,16 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@goat/contracts";
+import { type DesktopCuaReadinessReport, ThreadId } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { runMigrations } from "../persistence/Migrations.ts";
+import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
@@ -89,3 +91,59 @@ layer("ComputerUseLeases blocked turns", (it) => {
     ),
   );
 });
+
+it.effect("a blocked turn names only the grants still missing, and leaves once all return", () =>
+  Effect.gen(function* () {
+    const accepted = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
+    const report = (
+      accessibility: "granted" | "denied",
+      screenCapture: "granted" | "denied",
+    ): DesktopCuaReadinessReport => ({
+      version: 1,
+      type: "cuaReadiness",
+      generation: 1,
+      readiness: {
+        grants: { accessibility, screenCapture },
+        helper: "authenticated",
+        capture: "pending",
+        tree: "unavailable",
+        input: "unavailable",
+        blockers: [],
+        reasons: [],
+      },
+      signals: { privateMode: "unsupported", humanInput: "unsupported" },
+    });
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const thread = ThreadId.make("thread-blocked-grants");
+      const block = {
+        reason: "permissionsNotGranted",
+        missing: ["accessibility", "screenRecording"],
+        holder: "helper",
+      } as const;
+      yield* Ref.set(accepted, Option.some(report("denied", "denied")));
+      yield* leases.blocked(thread, block);
+      assert.deepEqual(yield* leases.blockedTurns, [{ threadId: thread, block }]);
+      yield* Ref.set(accepted, Option.some(report("granted", "denied")));
+      assert.deepEqual(yield* leases.blockedTurns, [
+        { threadId: thread, block: { ...block, missing: ["screenRecording"] } },
+      ]);
+      // Every grant is back while the turn still runs: the preview has nothing to show.
+      yield* Ref.set(accepted, Option.some(report("granted", "granted")));
+      assert.deepEqual(yield* leases.blockedTurns, []);
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({ cuaReadiness: Ref.get(accepted) }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
