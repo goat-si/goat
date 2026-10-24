@@ -13,6 +13,72 @@ import {
 } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("proxy execution ownership", () => {
+  it.effect.each(["missing", "empty", "substituted", "no-permissions"] as const)(
+    "refuses %s execution ticket authority without forwarding or retaining input cover",
+    (invalid) =>
+      Effect.gen(function* () {
+        const h = yield* harness({
+          humanInput: true,
+          overlay: true,
+          reservation: (request) =>
+            Effect.succeed(
+              request.action === "reserve"
+                ? {
+                    status: "admitted",
+                    reservationId:
+                      invalid === "missing" ? null : invalid === "empty" ? "" : "original",
+                  }
+                : request.action === "validate"
+                  ? {
+                      status: "admitted",
+                      reservationId:
+                        invalid === "substituted" ? "replacement" : request.reservationId,
+                      ...(invalid === "no-permissions"
+                        ? {}
+                        : { permissions: { validUntilMillis: 1_800_000 } }),
+                    }
+                  : { status: "released" },
+            ),
+        });
+        yield* h.push(active());
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        const observed = yield* Effect.raceFirst(
+          h.nextToDriver.pipe(Effect.map((message) => ({ kind: "dispatched", message }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "answer", message }))),
+        );
+        assert.equal(observed.kind, "answer");
+        assert.deepInclude(
+          (observed.message.result as { structuredContent: object }).structuredContent,
+          { detail: "unauthorized" },
+        );
+        assert.equal((yield* h.nextReservation).action, "reserve");
+        if (invalid === "missing" || invalid === "empty") {
+          assert.equal(yield* h.agentCallsQueued, 0);
+          assert.equal(h.reservations.length, 1);
+        } else {
+          assert.equal(yield* h.agentCall, "start 1");
+          assert.equal(yield* h.agentCall, "end 1");
+          const validation = yield* h.nextValidation;
+          const released = yield* h.nextReservation;
+          assert.deepEqual(validation, {
+            action: "validate",
+            controlId: CONTROL,
+            connectionId: validation.connectionId,
+            reservationId: "original",
+          });
+          assert.deepEqual(released, { ...validation, action: "release" });
+          assert.deepEqual(
+            h.reservations.map((request) => request.action),
+            ["reserve", "validate", "release"],
+          );
+        }
+        assert.include(
+          h.log.findLast((entry) => entry.startsWith("draw ")),
+          '"phase":"resting"',
+        );
+      }),
+  );
+
   it.effect(
     "settles the acting overlay when a cancelled call receives its terminal reply (#1490)",
     () =>
@@ -61,7 +127,7 @@ describe("proxy execution ownership", () => {
           agentInputGate: gate,
           reservation: (request) =>
             Effect.succeed(
-              request.action === "reserve"
+              request.action === "reserve" || request.action === "validate"
                 ? {
                     status: "admitted" as const,
                     reservationId: "expiry-ticket",
@@ -255,7 +321,8 @@ describe("proxy execution ownership", () => {
         }),
       );
       yield* h.nextToDriver;
-      assert.deepEqual(h.reservations, [acquired]);
+      const validated = yield* h.nextValidation;
+      assert.deepEqual(h.reservations, [acquired, validated]);
       yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
       assert.equal((yield* h.nextReservation).action, "close");
       assert.equal(yield* h.agentCall, "end 1");
@@ -438,7 +505,8 @@ describe("proxy execution ownership", () => {
           }),
         );
         yield* h.nextToDriver;
-        assert.deepEqual(h.reservations, [acquired]);
+        const validated = yield* h.nextValidation;
+        assert.deepEqual(h.reservations, [acquired, validated]);
         assert.equal(yield* h.agentCallsQueued, 0);
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
         assert.equal((yield* h.nextReservation).action, "release");

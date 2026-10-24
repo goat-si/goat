@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderDriverKind, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -57,6 +58,7 @@ const layer = (fullAccess: boolean) =>
 const attach = Effect.fn("foreground.attachFixture")(function* (
   fullAccess: boolean,
   liveUpdates = true,
+  agentInputGate?: Deferred.Deferred<void>,
 ) {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const sql = yield* SqlClient.SqlClient;
@@ -92,6 +94,9 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
     Stream.provideService(ServerSettings.ServerSettingsService, settings),
   );
   const h = yield* harness({
+    humanInput: agentInputGate !== undefined,
+    ...(agentInputGate === undefined ? {} : { agentInputGate }),
+    overlay: true,
     controlId: attachment.control.controlId,
     expiresAt: DateTime.formatIso(attachment.control.expiresAt),
     leaseUpdates: liveUpdates ? updates : updates.pipe(Stream.take(1), Stream.concat(Stream.never)),
@@ -101,6 +106,107 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
 });
 
 describe("foreground through real computer-use attachment", () => {
+  it.effect.each(["foreground", "background"] as const)(
+    "refuses revoked %s authority after the input-start report while lease updates stall",
+    (delivery) =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        yield* foregroundGrant(threadId, "handoff:report-background", {
+          foreground: false,
+          minutes: 10,
+          apps: ["com.example.AppA"],
+        });
+        const grant = yield* foregroundGrant(threadId, "handoff:report-foreground", { minutes: 5 });
+        const gate = yield* Deferred.make<void>();
+        const { h, leases } = yield* attach(false, false, gate);
+        const competitor = ThreadId.make("thread:report-competitor");
+        const competingControl = yield* leases.control(competitor, Option.none());
+        const competingCall = {
+          action: "reserve" as const,
+          controlId: competingControl.controlId,
+          connectionId: "driver:competitor",
+          callId: "same-window",
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "type_text",
+          args: { pid: 43, window_id: 8, text: "competing work" },
+        };
+        yield* h.send(call(1, "list_apps"));
+        yield* h.nextToDriver;
+        yield* h.nextReservation;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: {
+              structuredContent: {
+                apps: [
+                  { pid: 42, bundle_id: "com.example.AppA" },
+                  { pid: 43, bundle_id: "com.example.AppB" },
+                ],
+              },
+            },
+          }),
+        );
+        yield* h.nextToProvider;
+        yield* h.send(
+          call(2, "type_text", {
+            pid: 43,
+            window_id: 8,
+            text: "revoked work",
+            delivery_mode: delivery,
+          }),
+        );
+        assert.equal((yield* h.nextReservation).action, "reserve");
+        assert.equal(yield* h.agentCall, "start 2");
+        assert.equal(yield* h.driverQueued, 0);
+        assert.deepEqual(yield* leases.callReservation(competitor, competingCall), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: threadId,
+        });
+        yield* revokeForegroundGrant(grant.handoffId);
+        yield* Deferred.succeed(gate, undefined);
+        const observed = yield* Effect.raceFirst(
+          h.nextToDriver.pipe(Effect.map((message) => ({ kind: "dispatched", message }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "answer", message }))),
+        );
+        assert.equal(
+          observed.kind,
+          "answer",
+          "Cancelled authority must not dispatch after the report",
+        );
+        const result = observed.message.result as { structuredContent: { detail: string } };
+        assert.equal(
+          result.structuredContent.detail,
+          delivery === "foreground" ? "foreground_not_approved" : "app_not_approved",
+        );
+        assert.equal((yield* h.nextValidation).action, "validate");
+        assert.equal((yield* h.nextReservation).action, "release");
+        assert.equal(yield* h.agentCall, "end 2");
+        const available = yield* leases.callReservation(competitor, competingCall);
+        if (available.status !== "admitted" || available.reservationId === null)
+          return assert.fail("denied confirmation must release the original window ownership");
+        yield* leases.callReservation(competitor, {
+          action: "release",
+          controlId: competingControl.controlId,
+          connectionId: competingCall.connectionId,
+          reservationId: available.reservationId,
+        });
+        assert.include(
+          h.log.findLast((entry) => entry.startsWith("draw ")),
+          '"phase":"resting"',
+        );
+        yield* h.send(call(3, "type_text", { pid: 42, window_id: 7, text: "approved background" }));
+        assert.equal((yield* h.nextToDriver).id, 3);
+        assert.equal((yield* h.nextReservation).action, "reserve");
+        assert.equal((yield* h.nextValidation).action, "validate");
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 3);
+        assert.equal((yield* h.nextReservation).action, "release");
+      }).pipe(Effect.provide(layer(false))),
+  );
+
   it.effect.each(["expiry", "cancel"] as const)(
     "keeps background app scope after foreground %s while lease updates stall",
     (ending) =>

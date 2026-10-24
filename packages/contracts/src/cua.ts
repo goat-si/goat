@@ -1,4 +1,7 @@
 import * as Schema from "effect/Schema";
+import * as SchemaAST from "effect/SchemaAST";
+import * as SchemaParser from "effect/SchemaParser";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import {
   ForwardCompatibleOptional,
@@ -441,6 +444,27 @@ const ComputerUseCallOwner = {
   connectionId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
 };
 
+// Validation carries only ticket identity; replacement call authority is never accepted.
+const ticketValidation = Schema.Struct({
+  ...ComputerUseCallOwner,
+  action: Schema.Literal("validate"),
+  reservationId: TrimmedNonEmptyString,
+});
+const strictTicketValidation = Schema.declareConstructor<
+  typeof ticketValidation.Type,
+  typeof ticketValidation.Encoded
+>()(
+  [ticketValidation],
+  ([codec]) => {
+    const decode = SchemaParser.decodeUnknownEffect(codec);
+    return (input, _ast, options) => decode(input, { ...options, onExcessProperty: "error" });
+  },
+  {
+    toCodec: ([codec]) => new SchemaAST.Link(codec.ast, SchemaTransformation.passthrough()),
+    toCodecJson: () => undefined,
+  },
+);
+
 /** A proxy reserves execution before dispatch, and closes a driver generation after cutoff. */
 export const ComputerUseCallReservation = Schema.Union([
   Schema.Struct({
@@ -453,6 +477,7 @@ export const ComputerUseCallReservation = Schema.Union([
     args: Schema.Unknown,
     foregroundGrantId: Schema.optionalKey(TurnItemId),
   }),
+  strictTicketValidation,
   Schema.Struct({
     ...ComputerUseCallOwner,
     action: Schema.Literal("release"),

@@ -4,13 +4,15 @@ import { ThreadId, type ComputerUseCallReservation } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Statement from "effect/sql/Statement";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
-import { foregroundGrant } from "./ComputerUseForeground.testkit.ts";
+import { foregroundGrant, revokeForegroundGrant } from "./ComputerUseForeground.testkit.ts";
 import { grant } from "./ComputerUseLeases.projection.testkit.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
@@ -61,6 +63,166 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
 });
 
 describe("server computer-use call reservations", () => {
+  it.effect(
+    "validates only the original ticket owner and retains the same conflicting execution",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const original = yield* f.reserve();
+        if (original.status !== "admitted" || original.reservationId === null)
+          return assert.fail("expected execution ticket");
+        const validation = {
+          action: "validate" as const,
+          controlId: f.first.controlId,
+          connectionId: "driver:1",
+          reservationId: original.reservationId,
+        };
+        assert.deepEqual(yield* f.leases.callReservation(f.a, validation), original);
+        for (const [owner, request] of [
+          [f.b, validation],
+          [f.a, { ...validation, controlId: f.second.controlId }],
+          [f.a, { ...validation, connectionId: "driver:forged" }],
+          [f.a, { ...validation, reservationId: "ticket:forged" }],
+        ] as const)
+          assert.deepEqual(yield* f.leases.callReservation(owner, request), {
+            status: "refused",
+            detail: "replaced",
+          });
+        assert.deepEqual(yield* f.reserve(f.b), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        yield* f.release(f.a, original.reservationId);
+        assert.deepEqual(yield* f.leases.callReservation(f.a, validation), {
+          status: "refused",
+          detail: "replaced",
+        });
+        const next = yield* f.reserve();
+        if (next.status !== "admitted" || next.reservationId === null)
+          return assert.fail("expected next ticket");
+        yield* f.close();
+        assert.deepEqual(
+          yield* f.leases.callReservation(f.a, {
+            ...validation,
+            reservationId: next.reservationId,
+          }),
+          { status: "refused", detail: "replaced" },
+        );
+        assert.equal((yield* f.reserve(f.b)).status, "admitted");
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
+    "confirmation cannot substitute a safe call or fresh grant for cancelled foreground authority",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const grant = yield* foregroundGrant(f.a, "handoff:confirm-original");
+        const original = yield* f.reserve(
+          f.a,
+          { pid: 42, window_id: 7, dispatch: "foreground" },
+          "click",
+          "driver:1",
+          0,
+          grant.handoffId,
+        );
+        if (original.status !== "admitted" || original.reservationId === null)
+          return assert.fail("expected ticket");
+        yield* revokeForegroundGrant(grant.handoffId);
+        const fresh = yield* foregroundGrant(f.a, "handoff:confirm-unrelated");
+        const forged = {
+          action: "validate" as const,
+          controlId: f.first.controlId,
+          connectionId: "driver:1",
+          reservationId: original.reservationId,
+          name: "list_apps",
+          args: {},
+          foregroundGrantId: fresh.handoffId,
+        };
+        assert.deepEqual(yield* f.leases.callReservation(f.a, forged), {
+          status: "refused",
+          detail: "foreground_not_approved",
+        });
+        assert.deepEqual(yield* f.reserve(f.b, { pid: 99, window_id: 8 }), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        yield* f.release(f.a, original.reservationId);
+        assert.equal((yield* f.reserve(f.b, { pid: 99, window_id: 8 })).status, "admitted");
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect.each(["release", "close"] as const)(
+    "refuses confirmation when %s removes its ticket during a yielding state read",
+    (ending) =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const original = yield* f.reserve();
+        if (original.status !== "admitted" || original.reservationId === null)
+          return assert.fail("expected ticket");
+        const entered = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        const validation = {
+          action: "validate" as const,
+          controlId: f.first.controlId,
+          connectionId: "driver:1",
+          reservationId: original.reservationId,
+        };
+        const confirmed = yield* f.leases.callReservation(f.a, validation).pipe(
+          Effect.provideService(Statement.CurrentTransformer, (statement) =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(gate)),
+              Effect.as(statement),
+            ),
+          ),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(entered);
+        if (ending === "release") yield* f.release(f.a, original.reservationId);
+        else yield* f.close();
+        yield* Deferred.succeed(gate, undefined);
+        assert.deepEqual(yield* Fiber.join(confirmed), { status: "refused", detail: "replaced" });
+        assert.equal((yield* f.reserve(f.b)).status, "admitted");
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect("confirmation repeats shared-screen admission without releasing the held desktop", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* grant(f.a, "grant:confirm-a", ["app.a"]);
+      const focus = yield* foregroundGrant(f.a, "grant:confirm-focus");
+      const original = yield* f.reserve(
+        f.a,
+        { pid: 42, window_id: 7, dispatch: "foreground" },
+        "click",
+        "driver:1",
+        0,
+        focus.handoffId,
+      );
+      if (original.status !== "admitted" || original.reservationId === null)
+        return assert.fail("expected desktop ticket");
+      yield* grant(f.b, "grant:confirm-b", ["app.b"]);
+      assert.deepEqual(
+        yield* f.leases.callReservation(f.a, {
+          action: "validate",
+          controlId: f.first.controlId,
+          connectionId: "driver:1",
+          reservationId: original.reservationId,
+        }),
+        { status: "refused", detail: "screen_shared" },
+      );
+      assert.deepEqual(yield* f.reserve(f.b, { pid: 99, window_id: 8 }), {
+        status: "refused",
+        detail: "target_busy",
+        holderThreadId: f.a,
+      });
+      yield* f.release(f.a, original.reservationId);
+      assert.equal((yield* f.reserve(f.b, { pid: 99, window_id: 8 })).status, "admitted");
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
   it.effect("does not borrow another thread's foreground scope for background input", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

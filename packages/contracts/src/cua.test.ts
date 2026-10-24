@@ -110,6 +110,35 @@ describe("computer use on the wire", () => {
     for (const foreground of ["true", 1, {}])
       expect(() => request({ purpose: "Check", foreground })).toThrow();
   });
+  it("decodes ticket confirmation strictly without accepting replacement authority", () => {
+    const validation = {
+      action: "validate",
+      controlId: "control:one",
+      connectionId: "driver:one",
+      reservationId: "ticket:one",
+    };
+    expect(decodeCallReservation(validation)).toEqual(validation);
+    for (const invalid of [
+      ...[null, "", " ", 0, false].map((reservationId) => ({ ...validation, reservationId })),
+      { ...validation, controlId: "" },
+      { ...validation, connectionId: "" },
+      { ...validation, threadId: "thread:forged" },
+      { ...validation, name: "list_apps" },
+      { ...validation, args: {} },
+      { ...validation, foregroundGrantId: "handoff:fresh" },
+    ])
+      expect(() => decodeCallReservation(invalid)).toThrow();
+    for (const action of ["release", "close"]) {
+      const request = {
+        action,
+        controlId: validation.controlId,
+        connectionId: validation.connectionId,
+        ...(action === "release" ? { reservationId: validation.reservationId } : {}),
+      };
+      expect(decodeCallReservation(request)).toEqual(request);
+    }
+  });
+
   it("roundtrips execution ownership and refuses malformed or unknown reservation actions", () => {
     const decode = Schema.decodeUnknownSync(ComputerUseCallReservation);
     const request = {

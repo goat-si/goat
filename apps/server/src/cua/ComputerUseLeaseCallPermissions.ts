@@ -7,7 +7,7 @@ import type {
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import { refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
-import { scopeMessage } from "./ComputerUseLeaseMessages.ts";
+import { reservationRefusal, scopeMessage } from "./ComputerUseLeaseMessages.ts";
 import { approvedApps, scopeVerdict, type ListedApp } from "./ComputerUseScope.ts";
 
 type Permissions = NonNullable<
@@ -44,7 +44,7 @@ export const withCallPermissions = (
     : decision;
 
 /** A delayed reply judges only its call; it must not overwrite a newer streamed scope. */
-export const admissionScopeRefusal = (
+const admissionScopeRefusal = (
   id: JsonRpcId,
   message: Envelope,
   permissions: Permissions | undefined,
@@ -71,4 +71,40 @@ export const admissionScopeRefusal = (
       : scopeMessage(verdict.reason, verdict.app, verdict.opaque, verdict.launch),
     app,
   );
+};
+
+/** Confirmation cannot replace a ticket or omit the current scope that justified it. */
+export const proxyCallAdmission = (
+  id: JsonRpcId,
+  message: Envelope,
+  decision: ComputerUseCallAdmission,
+  listed: ReadonlyMap<number, ListedApp>,
+  bundleIds: boolean,
+  expectedTicket?: string,
+) => {
+  if (
+    decision.status !== "admitted" ||
+    (expectedTicket !== undefined &&
+      (decision.reservationId !== expectedTicket || decision.permissions === undefined))
+  ) {
+    const detail = decision.status === "refused" ? decision.detail : "unauthorized";
+    const holder = decision.status === "refused" ? decision.holderThreadId : undefined;
+    return {
+      refused: refusal(
+        id,
+        message.method,
+        detail,
+        reservationRefusal(detail, holder),
+        undefined,
+        holder,
+      ),
+      reservationId: undefined,
+      deadline: Infinity,
+    };
+  }
+  return {
+    refused: admissionScopeRefusal(id, message, decision.permissions, listed, bundleIds),
+    reservationId: decision.reservationId ?? undefined,
+    deadline: decision.permissions?.validUntilMillis ?? Infinity,
+  };
 };

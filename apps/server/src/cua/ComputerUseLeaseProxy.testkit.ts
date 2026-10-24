@@ -117,17 +117,26 @@ export const harness = Effect.fn(function* (
   const hidFeeds: Array<Queue.Queue<{ source: ComputerUseHumanInputSource; at: number }>> = [];
   const reservations: Array<ComputerUseCallReservation> = [];
   const reservationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
+  const validationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
   const proxy = yield* runLeaseProxy({
     connectionId: "proxy:test",
     reservation: (call) =>
       Effect.sync(() => void reservations.push(call)).pipe(
-        Effect.andThen(Queue.offer(reservationEvents, call)),
+        Effect.andThen(
+          Queue.offer(call.action === "validate" ? validationEvents : reservationEvents, call),
+        ),
         Effect.andThen(
           options.reservation?.(call) ??
             Effect.succeed<ComputerUseCallAdmission>(
               call.action === "reserve"
                 ? { status: "admitted", reservationId: `ticket:${call.callId}` }
-                : { status: "released" },
+                : call.action === "validate"
+                  ? {
+                      status: "admitted",
+                      reservationId: call.reservationId,
+                      permissions: { validUntilMillis: 1_800_000 },
+                    }
+                  : { status: "released" },
             ),
         ),
       ),
@@ -322,6 +331,7 @@ export const harness = Effect.fn(function* (
     agentCallsQueued: Queue.size(agentCalls),
     reservations,
     nextReservation: Queue.take(reservationEvents),
+    nextValidation: Queue.take(validationEvents),
     revoked,
     log,
     proxy,

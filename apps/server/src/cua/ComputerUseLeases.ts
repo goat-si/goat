@@ -47,13 +47,13 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { callResource, makeCallReservations } from "./ComputerUseCallReservations.ts";
-import { allowsForegroundCall, withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
+import { makeCallReservations } from "./ComputerUseCallReservations.ts";
+import { withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseForeground.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
 import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
 import { appsOf, overlap, type ComputerUseHolder } from "./computerUseGrants.ts";
-import { takesScreen } from "./ComputerUseScope.ts";
+import { callAdmissionRefusal } from "./ComputerUseLeaseAdmission.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
@@ -795,47 +795,45 @@ const make = Effect.gen(function* () {
       blocked: () => paused !== undefined || privateHost,
       changed,
     }),
-    callReservation: Effect.fn("ComputerUseLeases.callReservation")(function* (threadId, call) {
-      if (call.action !== "reserve") {
+    callReservation: Effect.fn("ComputerUseLeases.callReservation")(function* (threadId, request) {
+      if (request.action === "release" || request.action === "close") {
         const current = controls.get(threadId);
         return reservations.release(
           threadId,
-          call,
-          current?.controlId === call.controlId && current.ended === undefined,
+          request,
+          current?.controlId === request.controlId && current.ended === undefined,
         );
       }
       return yield* admission.withPermits(1)(
         Effect.gen(function* () {
+          const call =
+            request.action === "validate" ? reservations.lookup(threadId, request) : request;
+          if (call === undefined) return { status: "refused", detail: "replaced" } as const;
           const before = controls.get(threadId);
           const state = yield* controlState(threadId, call.controlId);
           const now = DateTime.toEpochMillis(yield* DateTime.now);
-          const current = controls.get(threadId);
-          if (state._tag === "ended") return { status: "refused", detail: state.reason } as const;
-          if (state._tag === "paused" || paused !== undefined || privateHost)
-            return { status: "refused", detail: "waiting_for_human" } as const;
-          if (current?.idle === true && callResource(call) !== "read")
-            return { status: "refused", detail: "control_idle" } as const;
-          if (
-            current === undefined ||
-            current.controlId !== call.controlId ||
-            current.ended !== undefined ||
-            current.uses !== before?.uses ||
-            interruptions.count !== call.interruptions ||
-            (current.idleEpoch ?? 0) !== call.idleEpoch
-          )
+          // Release and close do not wait on admission: neither can resurrect a yielding validation.
+          if (request.action === "validate" && reservations.lookup(threadId, request) !== call)
             return { status: "refused", detail: "replaced" } as const;
-          if (DateTime.toEpochMillis(current.expiresAt) <= now || state.wakeAt <= now)
-            return { status: "refused", detail: "expired" } as const;
-          if (
-            !allowsForegroundCall(call, state.foreground, now, (id) =>
-              foreground.bound(id, threadId, call.controlId),
-            )
-          )
-            return { status: "refused", detail: "foreground_not_approved" } as const;
-          // Admission and its scope are sampled together; streamed updates may lag.
-          if (state.shared === true && takesScreen(call.name, call.args))
-            return { status: "refused", detail: "screen_shared" } as const;
-          return withCallPermissions(reservations.reserve(threadId, call), state);
+          const detail = callAdmissionRefusal({
+            call,
+            state,
+            current: controls.get(threadId),
+            beforeUses: before?.uses,
+            blocked: paused !== undefined || privateHost,
+            interruptions: interruptions.count,
+            now,
+            bound: (id) => foreground.bound(id, threadId, call.controlId),
+          });
+          if (detail !== undefined) return { status: "refused", detail } as const;
+          if (state._tag !== "active") return { status: "refused", detail: "replaced" } as const;
+          // Confirmation retains the original ticket and its conflict coverage until cleanup.
+          return withCallPermissions(
+            request.action === "validate"
+              ? { status: "admitted", reservationId: request.reservationId }
+              : reservations.reserve(threadId, call),
+            state,
+          );
         }),
       );
     }),

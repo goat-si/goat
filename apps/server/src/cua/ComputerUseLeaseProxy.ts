@@ -39,8 +39,9 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { admissionScopeRefusal } from "./ComputerUseLeaseCallPermissions.ts";
+import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
+import { reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 
@@ -77,7 +78,6 @@ import {
   FOREGROUND_NOT_APPROVED,
   LEASE_END_MESSAGES,
   PAUSE_MESSAGES,
-  reservationRefusal,
   scopeMessage,
   SCREEN_SHARED,
 } from "./ComputerUseLeaseMessages.ts";
@@ -91,6 +91,7 @@ import {
   pausedDetail,
   refusal,
   reservedIdAnswer,
+  unsentCallRefusal,
 } from "./ComputerUseLeaseResponses.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 
@@ -528,7 +529,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       // Another thread's grant only denies, so it counts as soon as it is taken.
       if (update?.state === "active" && update.controlId === options.controlId)
         sharedTaken = update.shared === true;
-      const fence = update === undefined ? fences.lost() : fences.take(update, apps);
+      const fence = update === undefined ? fences.lost() : fences.take(update, apps, foreground);
       return Queue.offer(applying, { update, fence });
     });
   yield* options.leaseUpdates.pipe(
@@ -799,43 +800,24 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const current = lifecycle.current;
     // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
     // holds the lock (#1416), counts as applied: the call never reaches a child.
-    const notSent = (requestId: JsonRpcId) => {
-      const pending = fences.pending();
-      const ending =
-        finished ?? (pending !== undefined && "end" in pending ? pending.end : undefined);
-      const pausing =
-        paused ?? (pending !== undefined && "pause" in pending ? pending.pause : undefined);
-      return ending !== undefined
-        ? refusal(requestId, message?.method, ending, LEASE_END_MESSAGES[ending])
-        : pausing !== undefined
-          ? refusal(requestId, message?.method, pausedDetail(pausing), PAUSE_MESSAGES[pausing])
-          : idle || (pending !== undefined && "idle" in pending)
-            ? refusal(
-                requestId,
-                message?.method,
-                "control_idle",
-                "This thread's turn has ended. Computer use is idle until its next turn.",
-              )
-            : pending !== undefined && "narrowed" in pending
-              ? refusal(
-                  requestId,
-                  message?.method,
-                  "app_not_approved",
-                  "The apps this thread may control changed while this call waited, so it did not run. Observe again, then act only on an app that is still approved.",
-                )
-              : refusal(
-                  requestId,
-                  message?.method,
-                  interruptionDetail(lastInterruption),
-                  interruptionRefusal(lastInterruption),
-                );
-    };
+    let selectedForeground: ComputerUseForegroundGrant | undefined;
+    const notSent = (requestId: JsonRpcId) =>
+      unsentCallRefusal(requestId, message?.method, {
+        pending: fences.pending(),
+        finished,
+        paused,
+        idle,
+        lastInterruption,
+        foregroundRevoked:
+          selectedForeground !== undefined && !fences.allowsForeground(selectedForeground),
+      });
     const stillCurrent = () =>
       lifecycle.current === current &&
       !idle &&
       paused === undefined &&
       finished === undefined &&
-      fences.clear();
+      fences.clear() &&
+      (selectedForeground === undefined || fences.allowsForeground(selectedForeground));
     if (isRequest && message?.method === "tools/call") {
       // Before the call reaches the driver: a capture must not see the overlay (#1321).
       yield* drawOverlay({
@@ -863,54 +845,24 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     let reservationId: string | undefined;
     let permissionDeadline = Infinity;
     if (isRequest && message?.method === "tools/call") {
-      const focusNow = yield* Clock.currentTimeMillis;
-      const focusGrant = requiresForeground({
-        name: typeof message.params?.name === "string" ? message.params.name : "unknown",
-        args: message.params?.arguments,
-      })
-        ? foreground.find((grant) => grant.expiresAtMillis > focusNow)
-        : undefined;
-      const decision = yield* options.reservation({
-        action: "reserve",
-        controlId: options.controlId,
+      const admission = yield* reserveProxyCall(options, {
+        id,
+        message,
         connectionId: current.connectionId,
         callId: String(ownRequests++),
         interruptions: interruptionsSeen ?? 0,
         idleEpoch: idleEpochSeen ?? 0,
-        ...(focusGrant === undefined ? {} : { foregroundGrantId: focusGrant.handoffId }),
-        name: typeof message.params?.name === "string" ? message.params.name : "unknown",
-        args: message.params?.arguments ?? {},
-      });
-      if (decision.status !== "admitted") {
-        const detail = decision.status === "refused" ? decision.detail : "unauthorized";
-        const holder = decision.status === "refused" ? decision.holderThreadId : undefined;
-        const why = reservationRefusal(detail, holder);
-        // Drawn as acting above; it never reaches the driver, so no reply will settle it.
-        yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
-        return yield* options.output(refusal(id, message.method, detail, why, undefined, holder));
-      }
-      reservationId = decision.reservationId ?? undefined;
-      permissionDeadline = Math.min(
-        decision.permissions?.validUntilMillis ?? Infinity,
-        focusGrant?.expiresAtMillis ?? Infinity,
-      );
-      if (!stillCurrent()) {
-        if (reservationId !== undefined)
-          yield* release({ reservationId, connectionId: current.connectionId });
-        return yield* options.output(notSent(id));
-      }
-      const scopeRefusal = admissionScopeRefusal(
-        id,
-        message,
-        decision.permissions,
+        foreground,
         listed,
-        options.bundleIds === true,
-      );
-      if (scopeRefusal !== undefined) {
+      });
+      selectedForeground = admission.selectedForeground;
+      reservationId = admission.reservationId;
+      permissionDeadline = admission.deadline;
+      if (!stillCurrent() || admission.refused !== undefined) {
         if (reservationId !== undefined)
           yield* release({ reservationId, connectionId: current.connectionId });
         yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
-        return yield* options.output(scopeRefusal);
+        return yield* options.output(admission.refused ?? notSent(id));
       }
     }
 
@@ -922,6 +874,17 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           )
         : [];
     if (isRequest && kinds.length > 0) {
+      if (options.onAgentInput !== undefined && !reservationId) {
+        yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
+        return yield* options.output(
+          refusal(
+            id,
+            message?.method,
+            "unauthorized",
+            "The input call has no execution ticket, so it did not run.",
+          ),
+        );
+      }
       yield* agentInput.started(JSON.stringify(id), kinds);
       // The start report waits on the server; a pause or end meanwhile must not let the call
       // reach the child that replaced the one it was admitted under.
@@ -929,7 +892,37 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         yield* agentInput.ended(JSON.stringify(id));
         if (reservationId !== undefined)
           yield* release({ reservationId, connectionId: current.connectionId });
+        yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
         return yield* options.output(notSent(id));
+      }
+    }
+    if (
+      isRequest &&
+      message?.method === "tools/call" &&
+      kinds.length > 0 &&
+      options.onAgentInput !== undefined &&
+      reservationId !== undefined
+    ) {
+      const decision = yield* options.reservation({
+        action: "validate",
+        controlId: options.controlId,
+        connectionId: current.connectionId,
+        reservationId,
+      });
+      const confirmation = proxyCallAdmission(
+        id,
+        message,
+        decision,
+        listed,
+        options.bundleIds,
+        reservationId,
+      );
+      permissionDeadline = Math.min(permissionDeadline, confirmation.deadline);
+      if (!stillCurrent() || confirmation.refused !== undefined) {
+        yield* release({ reservationId, connectionId: current.connectionId });
+        yield* agentInput.ended(JSON.stringify(id));
+        yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
+        return yield* options.output(confirmation.refused ?? notSent(id));
       }
     }
     // The last checks, the call's registration and the write run as one step with no scheduler

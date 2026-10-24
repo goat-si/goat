@@ -185,6 +185,25 @@ describe("computer use lease route", () => {
         const response = yield* request({ ...call, threadId: "thread:forged" }, "Bearer fixture");
         assert.equal(response.status, 200);
         assert.deepEqual(received, [{ threadId, call }]);
+        const validation = {
+          action: "validate" as const,
+          controlId,
+          connectionId: "driver:1",
+          reservationId: "reservation:test",
+        };
+        assert.equal((yield* request(validation)).status, 401);
+        for (const invalid of [
+          { ...validation, reservationId: "" },
+          { ...validation, reservationId: null },
+          { ...validation, threadId: "thread:forged" },
+          { ...validation, name: "list_apps", args: {} },
+        ])
+          assert.equal((yield* request(invalid, "Bearer fixture")).status, 400);
+        assert.equal((yield* request(validation, "Bearer fixture")).status, 200);
+        assert.deepEqual(received, [
+          { threadId, call },
+          { threadId, call: validation },
+        ]);
       }).pipe(Effect.scoped),
   );
   it.layer(ServerSettings.layerTest())("streams", (it) => {

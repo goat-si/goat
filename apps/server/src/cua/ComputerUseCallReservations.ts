@@ -127,13 +127,26 @@ export const makeCallReservations = () => {
       tickets.set(reservationId, { threadId, call, resource });
       return { status: "admitted", reservationId };
     },
+    lookup(
+      threadId: ThreadId,
+      call: Extract<ComputerUseCallReservation, { action: "validate" }>,
+    ): Call | undefined {
+      const ticket = tickets.get(call.reservationId);
+      if (
+        closed.has(connectionKey(threadId, call)) ||
+        ticket === undefined ||
+        connectionKey(ticket.threadId, ticket.call) !== connectionKey(threadId, call)
+      )
+        return undefined;
+      return ticket.call;
+    },
     forgetClosed(threadId: ThreadId, controlId: string) {
       for (const [key, owner] of closed)
         if (owner.threadId === threadId && owner.controlId === controlId) closed.delete(key);
     },
     release(
       threadId: ThreadId,
-      call: Exclude<ComputerUseCallReservation, Call>,
+      call: Extract<ComputerUseCallReservation, { action: "release" | "close" }>,
       rememberClosed: boolean,
     ): ComputerUseCallAdmission {
       const key = connectionKey(threadId, call);
