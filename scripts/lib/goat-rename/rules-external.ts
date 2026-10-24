@@ -376,7 +376,7 @@ const nativeTypePaths = new Set([
 
 const mobileNativePaths = new Set([
   "apps/mobile/.swiftlint.yml",
-  "apps/mobile/deps/react-native-screens-5.0.0-t3.37.tgz",
+  "apps/mobile/deps/react-native-screens-5.0.0-t3.43.tgz",
   "apps/mobile/modules/t3-agent-notifications/android/build.gradle",
   "apps/mobile/modules/t3-agent-notifications/android/src/main/AndroidManifest.xml",
   "apps/mobile/modules/t3-agent-notifications/android/src/main/java/expo/modules/t3agentnotifications/AgentActivityPresentation.kt",
@@ -410,6 +410,7 @@ const mobileNativePaths = new Set([
   "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_new_thread.xml",
   "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_pull_requests.xml",
   "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_settings.xml",
+  "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_usage.xml",
   "apps/mobile/modules/t3-native-controls/expo-module.config.json",
   "apps/mobile/modules/t3-native-controls/ios/T3FrostedCutoutView.swift",
   "apps/mobile/modules/t3-native-controls/ios/T3KeyboardCommandsModule.swift",
