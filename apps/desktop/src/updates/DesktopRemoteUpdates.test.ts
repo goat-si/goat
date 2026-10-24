@@ -63,6 +63,8 @@ function runRemoteUpdatesTest(
         publishCuaReport: () => Effect.void,
         publishCuaReadiness: () => Effect.void,
         publishCuaSafety: () => Effect.void,
+        cuaFrames: Stream.empty,
+        publishCuaFrame: () => Effect.void,
         handleControlForSource: () => Effect.void,
         removeControlSource: () => Effect.void,
         publishUpdateReport: (report) =>

@@ -750,6 +750,7 @@ export const layerWithOptions = (
                     Effect.orElseSucceed(() => undefined),
                   ),
                   interactionMode: preparedInput.interactionMode,
+                  ...(usableThread ? { runtimeMode: thread.value.runtimeMode } : {}),
                   readOnly,
                   origin: computerUseOrigin,
                   leases: computerUseLeases,
