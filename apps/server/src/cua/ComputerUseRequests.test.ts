@@ -69,6 +69,7 @@ const requestFrom = (
   orchestrator: Parameters<Parameters<typeof withHarness>[0]>[0]["orchestrator"],
   signals: Signals | undefined,
   request: ComputerUseRequestInput = { purpose: "Check the build status window", minutes: 30 },
+  failure: Option.Option<CuaDriver.CuaDriverError> = Option.none(),
 ) =>
   Effect.gen(function* () {
     const environmentId = EnvironmentId.make("test-environment");
@@ -86,7 +87,10 @@ const requestFrom = (
         Layer.mergeAll(
           Layer.succeed(Handoffs.Handoffs, handoffs),
           leasesDetecting(signals),
-          Layer.mock(CuaDriver.CuaDriver)({ enabled: Effect.succeed(true) }),
+          Layer.mock(CuaDriver.CuaDriver)({
+            enabled: Effect.succeed(true),
+            block: Effect.succeed(CuaDriver.agentBlock(failure)),
+          }),
           Layer.mock(Environment.ServerEnvironment)({
             getEnvironmentId: Effect.succeed(environmentId),
           }),
@@ -116,6 +120,33 @@ it.effect(
         }
         const allowed = yield* yield* requestFrom(orchestrator, supported);
         assert.equal(allowed.kind, "needs_human");
+      }),
+    ),
+);
+
+it.effect(
+  "refuses with the missing grant when the desktop would not start the driver for it (#1399)",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const block = {
+          reason: "permissionsNotGranted",
+          missing: ["screenRecording"],
+          holder: "helper",
+        } as const;
+        const result = yield* yield* requestFrom(
+          orchestrator,
+          supported,
+          undefined,
+          Option.some(new CuaDriver.CuaDriverHostError({ operation: "desktop", block })),
+        );
+        assert.deepEqual(result, {
+          kind: "refused",
+          reason: "not_granted",
+          block,
+          message:
+            "Computer use cannot start: macOS has not allowed GOAT Computer Use in Screen & System Audio Recording. A person turns it on in System Settings > Privacy & Security.",
+        });
       }),
     ),
 );

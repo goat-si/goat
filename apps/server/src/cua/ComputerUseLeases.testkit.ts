@@ -23,6 +23,7 @@ export const layerInteractive = (input: {
         enabled: input.enabled,
         acquire: input.acquire.pipe(Effect.map(Option.some)),
         lastFailure: Effect.succeed(Option.none()),
+        block: Effect.succeed(undefined),
         status: Effect.succeed({ platform: "darwin", running: true }),
         computerUse: Effect.die("unused"),
         admitEnable: Effect.die("unused"),

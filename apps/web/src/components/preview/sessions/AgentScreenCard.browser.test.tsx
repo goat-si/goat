@@ -564,6 +564,24 @@ it("shows a desktop thread's live frames, drops them in private mode, and keeps 
   expect(picture()?.getAttribute("src")).toBe("data:image/jpeg;base64,BBBB");
 });
 
+it("tells a turn left without computer use which grant to allow, and watches no picture (#1399)", async () => {
+  setup([]);
+  const desk = desktopApp({
+    status: "permission-needed",
+    // Frames on, so only the guard keeps the card from watching a picture.
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+    target: {
+      kind: "desktop",
+      title: "Allow Screen & System Audio Recording for GOAT Computer Use",
+    },
+  });
+  await using screen = await render(cardView(desk).element);
+  await expect
+    .element(screen.getByText(/No computer use yet\. Allow Screen & System Audio Recording/))
+    .toBeVisible();
+  expect(state.frameRequests.filter((id) => id !== null)).toEqual([]);
+});
+
 it("never mounts a picture for a session the list already marks private", async () => {
   setup([]);
   await using screen = await render(cardView(browserTab({ owner: "private" })).element);

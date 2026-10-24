@@ -210,6 +210,7 @@ export function ComputerUsePanel({
     readiness: withLiveGrants(status?.readiness, setup.holder),
     tools: status?.tools,
     signals: status?.signals,
+    block: status?.block,
   };
   const line = statusLine({
     setup,
