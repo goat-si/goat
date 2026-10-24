@@ -1053,7 +1053,7 @@ const make = Effect.gen(function* () {
               originThreadId: input.originThreadId,
               readKeyHash: NodeCrypto.createHash("sha256").update(readKey).digest("hex"),
               // Delegated tasks report to their parent task and do not relay.
-              ...(input.kind === "thread" ? { relaySend: true } : {}),
+              ...(input.kind === "thread" ? { relaySend: true, relayCapabilities: true } : {}),
             },
           },
           register,

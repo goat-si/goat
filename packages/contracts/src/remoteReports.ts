@@ -30,6 +30,11 @@ export const RemoteReportBindingInput = Schema.Struct({
    * reach. Only an origin that reads relay reports sets it; an older remote drops it.
    */
   relaySend: Schema.optional(Schema.Boolean),
+  /**
+   * The origin also delivers a relayed send's turn capabilities. Without it a relay that asks
+   * for them is refused instead of losing them on the way.
+   */
+  relayCapabilities: Schema.optional(Schema.Boolean),
 });
 export type RemoteReportBindingInput = typeof RemoteReportBindingInput.Type;
 /** A goat_thread_send the remote thread asked its origin to deliver on its behalf. */

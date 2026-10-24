@@ -384,12 +384,17 @@ const make = Effect.gen(function* () {
           })
           .pipe(
             Effect.mapError((error) =>
-              error.reason === "relay_queue_full"
+              error.reason === "relay_unsupported" && (input.capabilities?.length ?? 0) > 0
                 ? failure(
                     "invalid_request",
-                    `${originLabel} has not collected this thread's earlier relayed sends yet; nothing was sent. Try again once it has.`,
+                    `${originLabel} runs a GOAT that cannot relay turn capabilities; nothing was sent. Send without capabilities, or update ${originLabel}.`,
                   )
-                : failure("orchestration_error", `Could not hand the send to ${originLabel}.`),
+                : error.reason === "relay_queue_full"
+                  ? failure(
+                      "invalid_request",
+                      `${originLabel} has not collected this thread's earlier relayed sends yet; nothing was sent. Try again once it has.`,
+                    )
+                  : failure("orchestration_error", `Could not hand the send to ${originLabel}.`),
             ),
           );
         return {
