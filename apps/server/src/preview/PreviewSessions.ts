@@ -85,7 +85,10 @@ export const blockedSession = (
   kind: "desktop",
   ...base,
   threadId,
-  target: { kind: "desktop", title: `Allow ${cuaAgentBlockLists(block)}` },
+  target: {
+    kind: "desktop",
+    title: `Allow ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}`,
+  },
   owner: "agent",
   status: "permission-needed",
   reason: "permissionsNotGranted",

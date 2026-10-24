@@ -58,6 +58,14 @@ export function PreviewSessionThumbnail(props: {
         className="size-full"
       />
     );
+  // A turn the desktop gave no driver: say what a person must allow (#1399).
+  if (session.status === "permission-needed")
+    return (
+      <Placeholder
+        icon="lock"
+        text={`No computer use yet. ${session.target.kind === "desktop" ? session.target.title : "Allow it"} (System Settings > Privacy & Security).`}
+      />
+    );
   return (
     <Placeholder
       icon="monitor"

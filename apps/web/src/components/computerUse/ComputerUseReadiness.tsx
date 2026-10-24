@@ -16,6 +16,8 @@ export interface ComputerUseReadinessProps {
   readonly platform?: CuaHostStatus["platform"] | undefined;
   readonly tools?: CuaHostStatus["tools"];
   readonly signals?: CuaHostStatus["signals"];
+  /** Why agents got no driver, when it was a grant macOS has not given (#1399). */
+  readonly block?: CuaHostStatus["block"];
   /** The host's name, so the Linux guide says which machine to act on. */
   readonly machine?: string;
   readonly renderGrantAction?: (
