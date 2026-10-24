@@ -2326,7 +2326,15 @@ describe("SSH dispatch launch lineage", () => {
       expect(attempts).toBe(allowed ? 1 : 0);
       expect(result._tag).toBe(allowed ? "Success" : "Failure");
       if (result._tag === "Failure") {
-        expect(result.failure).toMatchObject({
+        // A thread launch refused before any remote write arrives wrapped as stage "authorize",
+        // so its launcher releases the capacity it reserved; the refusal is the cause.
+        if (kind === "thread")
+          expect(result.failure).toMatchObject({ _tag: "RemoteDispatchError", stage: "authorize" });
+        const refusal =
+          kind === "thread"
+            ? (result.failure as { readonly cause?: unknown }).cause
+            : result.failure;
+        expect(refusal).toMatchObject({
           reason: "remote_refused",
           remoteCode: SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED,
         });
