@@ -927,6 +927,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                   : Effect.succeed(
                       undeclaredArgumentsResult(
                         registration.tool.name,
+                        payload,
                         undeclared,
                         Object.keys(properties),
                       ),

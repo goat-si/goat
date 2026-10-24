@@ -142,7 +142,7 @@
   "apps/server/src/auth/SessionStore.ts": { "lines": 1282 },
   "apps/server/src/auth/mcpOAuthHtml.ts": { "nonNull": 1 },
   "apps/server/src/channels/ChannelDispatcher.ts": { "lines": 1381, "nonNull": 2 },
-  "apps/server/src/channels/ChannelLedger.ts": { "lines": 2127, "nonNull": 1 },
+  "apps/server/src/channels/ChannelLedger.ts": { "lines": 2078, "nonNull": 1 },
   "apps/server/src/channels/ChannelReceptionService.ts": { "lines": 1925, "nonNull": 3 },
   "apps/server/src/channels/ChannelRemoteWorkers.test.ts": { "lines": 4533 },
   "apps/server/src/channels/ChannelRemoteWorkers.ts": { "lines": 3122, "nonNull": 16 },
