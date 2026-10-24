@@ -92,6 +92,7 @@ import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { inputFence } from "./PreviewInputFence.ts";
+import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
@@ -1012,7 +1013,7 @@ const make = Effect.gen(function* () {
           `Upload file not found or not readable: ${path}`,
         );
       });
-    if (await ServerBrowserPage.setInputFiles(tab.page, tab.cdp, input, gate)) return undefined;
+    if (await PreviewUpload.setInputFiles(tab.page, tab.cdp, input, gate)) return undefined;
     const open = tab.fileChooser;
     if (!open)
       throw new ServerBrowserPage.ServerBrowserOperationError(
@@ -1027,7 +1028,7 @@ const make = Effect.gen(function* () {
     if (input.paths.length > 0) {
       const element = await open.chooser.element();
       try {
-        await ServerBrowserPage.uploadInto(tab.cdp, element, input.paths, gate);
+        await PreviewUpload.uploadInto(tab.cdp, element, input.paths, gate);
       } finally {
         void element.dispose().catch(constVoid);
       }

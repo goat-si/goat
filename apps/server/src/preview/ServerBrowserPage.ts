@@ -20,14 +20,7 @@ import {
 } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
-import type {
-  CDPSession,
-  ConsoleMessage,
-  ElementHandle,
-  Frame,
-  Locator,
-  Page,
-} from "playwright-core";
+import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 const MAX_EVALUATION_BYTES = 64_000;
@@ -74,7 +67,7 @@ export const toOperationError = (cause: unknown): ServerBrowserOperationError =>
   return new ServerBrowserOperationError("PreviewAutomationExecutionError", firstLine);
 };
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+export const DEFAULT_TIMEOUT_MS = 15_000;
 
 /** Real Chromium history, including same-document entries whose response is null. */
 export const navigateHistory = async (
@@ -146,7 +139,7 @@ const refsFor = (page: Page) => {
   return state;
 };
 
-const targetLocator = (
+export const targetLocator = (
   page: Page,
   input: { readonly locator?: string | undefined; readonly selector?: string | undefined },
 ): Locator | null => {
@@ -203,7 +196,7 @@ const targetChanged = () =>
   );
 
 /** The target's element, after Playwright's wait for it; a detached target is a changed one. */
-const elementOf = async (locator: Locator, timeout: number) => {
+export const elementOf = async (locator: Locator, timeout: number) => {
   const handle = await locator.elementHandle({ timeout });
   if (handle === null) throw targetChanged();
   return handle;
@@ -1038,74 +1031,6 @@ export const drag = async (
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
   gate();
   await source.dragTo(target, dispatched);
-};
-
-/**
- * Puts files into a file input (or the one its label names) with a single CDP call after the gate.
- * Playwright's setter prepares the files and the frame after any check made before it, so a cut
- * could still let it land. Inputs in a child frame are refused until #1302 gives them this path.
- */
-export const uploadInto = async (
-  cdp: CDPSession,
-  handle: ElementHandle,
-  paths: ReadonlyArray<string>,
-  gate: DispatchGate,
-) => {
-  const key = `__goatUploadTarget_${NodeCrypto.randomUUID().replaceAll("-", "")}`;
-  try {
-    const multiple = await handle.evaluate((element, name) => {
-      type FileInput = { tagName?: string; type?: string; multiple?: boolean; disabled?: boolean };
-      const target = (
-        element.tagName === "LABEL" ? (element as unknown as { control: unknown }).control : element
-      ) as FileInput | null;
-      if (target?.tagName !== "INPUT" || target.type !== "file" || target.disabled) return null;
-      (globalThis as unknown as Record<string, unknown>)[name] = target;
-      return target.multiple === true;
-    }, key);
-    if (multiple === null)
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationTargetNotEditableError",
-        "This element is not an enabled file input.",
-      );
-    if (paths.length > 1 && !multiple)
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        "This file input accepts one file.",
-      );
-    // Read from the main frame: a framed input's global is not there, so it is refused below.
-    const found = await cdp.send("Runtime.evaluate", { expression: `globalThis.${key}` });
-    const objectId = found.result.subtype === "node" ? found.result.objectId : undefined;
-    if (objectId === undefined)
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        "Uploading into a file input inside a frame is not available yet. Open the frame's page in its own tab and upload there.",
-      );
-    const { node } = await cdp.send("DOM.describeNode", { objectId });
-    gate();
-    await cdp.send("DOM.setFileInputFiles", {
-      files: [...paths],
-      backendNodeId: node.backendNodeId,
-    });
-  } finally {
-    void cdp.send("Runtime.evaluate", { expression: `delete globalThis.${key}` }).catch(constVoid);
-  }
-};
-
-export const setInputFiles = async (
-  page: Page,
-  cdp: CDPSession,
-  input: PreviewAutomationUploadInput,
-  gate: DispatchGate = open,
-) => {
-  const locator = targetLocator(page, input);
-  if (locator === null) return false;
-  const handle = await elementOf(locator, input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  try {
-    await uploadInto(cdp, handle, input.paths, gate);
-  } finally {
-    void handle.dispose().catch(constVoid);
-  }
-  return true;
 };
 
 export const press = async (

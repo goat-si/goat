@@ -13,6 +13,7 @@ import {
 } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import { inputFence } from "./PreviewInputFence.ts";
+import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { SessionControl } from "./SessionControl.ts";
@@ -218,7 +219,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     ).rejects.toThrow("stopped");
     expect(await page.evaluate("s.value")).toBe("a");
 
-    const uploading = ServerBrowserPage.setInputFiles(
+    const uploading = PreviewUpload.setInputFiles(
       page,
       cdp,
       { locator: "#f", paths: [NodePath.join(NodeOS.tmpdir(), "missing-upload.txt")] },
@@ -238,13 +239,13 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       '<label id="l">Attach <input id="f" type="file"></label><iframe srcdoc="<input id=g type=file>"></iframe><script>window.changes = 0; f.addEventListener("change", () => changes++)</script>',
     );
     let gates = 0;
-    await ServerBrowserPage.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, () => {
+    await PreviewUpload.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, () => {
       gates++;
     });
     expect(gates).toBe(1);
     expect(await page.evaluate("[f.files[0]?.name, window.changes]")).toEqual(["note.txt", 1]);
     await expect(
-      ServerBrowserPage.setInputFiles(
+      PreviewUpload.setInputFiles(
         page,
         cdp,
         { locator: "iframe >> internal:control=enter-frame >> #g", paths: [file] },
