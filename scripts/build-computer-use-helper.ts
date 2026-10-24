@@ -65,17 +65,20 @@ export type SigningChoice =
 /**
  * The identity to sign with: an explicit one, else the first Developer ID Application in
  * `security find-identity` output. Ad-hoc needs `adHoc` and the dev channel, because a
- * release helper verifies its parent by Developer ID team and an ad-hoc one has none.
+ * release helper verifies its parent by Developer ID team and an ad-hoc one has none. The one
+ * exception is `unsignedPackage`: an unsigned local GOAT.app (build-desktop-artifact.ts
+ * --computer-use-helper) has no team either, so its helper is ad-hoc and serves any parent.
  */
 export function chooseSigningIdentity(input: {
   readonly channel: HelperChannel;
   readonly explicit: string | undefined;
   readonly adHoc: boolean;
+  readonly unsignedPackage?: boolean;
   readonly findIdentityOutput: string;
 }): SigningChoice {
   const explicit = input.explicit?.trim() || undefined;
   if (input.adHoc) {
-    if (input.channel !== "dev")
+    if (input.channel !== "dev" && !input.unsignedPackage)
       return { error: "Only a dev helper may be signed ad-hoc; drop --ad-hoc." };
     if (explicit !== undefined && explicit !== "-")
       return { error: "Pass either --identity or --ad-hoc, not both." };
@@ -140,12 +143,12 @@ function signingFailure(target: string, stderr: string): string {
 
 export function renderHelperInfoPlist(
   template: string,
-  input: { readonly bundleId: string; readonly version: string; readonly channel: HelperChannel },
+  input: { readonly bundleId: string; readonly version: string; readonly allowAnyParent: boolean },
 ): string {
   return template
     .replaceAll("@BUNDLE_ID@", input.bundleId)
     .replaceAll("@VERSION@", input.version)
-    .replaceAll("@ALLOW_ANY_PARENT@", input.channel === "dev" ? "<true/>" : "<false/>");
+    .replaceAll("@ALLOW_ANY_PARENT@", input.allowAnyParent ? "<true/>" : "<false/>");
 }
 
 const fail = (problem: string) => new ReleaseVerificationError({ problems: [problem] });
@@ -159,6 +162,7 @@ export const resolveSigningIdentity = Effect.fn("resolveSigningIdentity")(functi
     readonly channel: HelperChannel;
     readonly identity: string | undefined;
     readonly adHoc: boolean;
+    readonly unsignedPackage?: boolean;
   },
 ) {
   const identities = yield* runner("security", ["find-identity", "-v", "-p", "codesigning"]);
@@ -176,6 +180,7 @@ export const resolveSigningIdentity = Effect.fn("resolveSigningIdentity")(functi
     channel: input.channel,
     explicit: input.identity,
     adHoc: input.adHoc,
+    ...(input.unsignedPackage ? { unsignedPackage: true } : {}),
     findIdentityOutput: identities.stdout,
   });
   if ("error" in choice) return yield* fail(choice.error);
@@ -234,6 +239,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
   readonly channel: HelperChannel;
   readonly identity: string | undefined;
   readonly adHoc: boolean;
+  readonly unsignedPackage?: boolean;
   readonly notaryProfile: string | undefined;
   readonly runner?: ReleaseCommandRunner;
 }) {
@@ -330,7 +336,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
     renderHelperInfoPlist(template, {
       bundleId,
       version: desktopPackageJson.version,
-      channel: input.channel,
+      // An ad-hoc helper has no team to compare its parent's with.
+      allowAnyParent: input.channel === "dev" || !("team" in choice),
     }),
   );
   // macOS shows this icon in System Settings' privacy lists and the permission drag panel,
@@ -431,7 +438,7 @@ export const buildComputerUseHelperCommand = Command.make(
           path.join(repoRoot, "apps/desktop/.computer-use-helper"),
         ),
         identity: Option.getOrUndefined(identity),
-        adHoc,
+        adHoc: Option.getOrElse(adHoc, () => false),
         notaryProfile: Option.getOrUndefined(notaryProfile),
       });
       yield* Effect.log(
