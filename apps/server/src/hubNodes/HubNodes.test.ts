@@ -183,6 +183,8 @@ const fixture = Effect.gen(function* () {
     dismissUnconfirmedCreates: forbidden,
     ensureReady: forbidden,
     owns: (alias) => Effect.succeed(state.machines.some((entry) => entry.alias === alias)),
+    isRemoved: (alias) => Effect.succeed(!state.machines.some((entry) => entry.alias === alias)),
+    onRemoving: () => Effect.void,
     onAliasInvalidated: (listener) =>
       Effect.sync(() => {
         listeners.push(listener);
