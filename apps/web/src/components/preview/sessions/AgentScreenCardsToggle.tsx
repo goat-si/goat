@@ -12,7 +12,7 @@ import { selectAgentCardsShown, usePreviewSessionStack } from "./previewSessionS
 import { useAgentScreenSessions, useStopAllAgents } from "./useAgentScreenCards";
 
 /**
- * The header's agents-on-screen controls, beside the thread details toggle: Aside's list button
+ * The thread header's agents-on-screen controls, among its buttons: Aside's list button
  * shows or hides the cards (in a narrow pane it shows them over the thread), and Stop all ends
  * every agent on the screen without opening them. They exist only while there is a card to show.
  * The route names the environment and thread, as it does for the cards themselves.

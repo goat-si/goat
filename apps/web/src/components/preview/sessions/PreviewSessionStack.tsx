@@ -88,9 +88,9 @@ export function PreviewSessionStack(props: {
     [
       threadKey ?? "",
       miniPlayer ? previewMiniPlayerSourceKey(miniPlayer.source) : "",
-      panelOpen,
       detailsOpen === true,
     ].join("|"),
+    props.environmentId !== null && sessions.length > 0 && !panelOpen,
   );
   const focusedId =
     focus === null ? null : (sessions.find((session) => matchesFocus(session, focus))?.id ?? null);

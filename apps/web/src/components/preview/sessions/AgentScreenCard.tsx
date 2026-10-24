@@ -55,6 +55,13 @@ const TONE: Record<Chip, { readonly dot: string; readonly ring: string }> = {
   Stopped: { dot: "bg-muted-foreground/40", ring: "ring-border" },
 };
 
+/**
+ * Faded and inert until the card is hovered or holds focus. CSS knows both exactly, even when the
+ * focused control is swapped out (Enlarge, Shrink) and no blur event fires.
+ */
+const HIDDEN_UNTIL_HOVER =
+  "pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/card:pointer-events-auto group-focus-within/card:opacity-100";
+
 type Corner = "top-left" | "top-left-2" | "top-right" | "bottom-left" | "bottom-right";
 
 const CORNER: Record<Corner, string> = {
@@ -92,7 +99,7 @@ function CornerButton(props: {
               "absolute flex size-7 items-center justify-center rounded-lg bg-black/65 text-white shadow-sm outline-none backdrop-blur-sm transition-[opacity,background-color] duration-150 hover:bg-black/85 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:text-white/40 motion-reduce:transition-none",
               props.destructive && "text-destructive hover:bg-destructive hover:text-white",
               CORNER[props.corner],
-              props.shown ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
+              props.shown ? "pointer-events-auto opacity-100" : HIDDEN_UNTIL_HOVER,
             )}
           />
         }
@@ -176,15 +183,14 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
     .join(" · ");
   const card = useRef<HTMLElement>(null);
   const surface = useRef<ServerBrowserHandle | null>(null);
-  const [hovered, setHovered] = useState(false);
-  const [focusWithin, setFocusWithin] = useState(false);
+  // A touch screen has no hover: the first tap reveals the controls.
   const [revealed, setRevealed] = useState(false);
   const [stream, setStream] = useState<PreviewStreamControl | null>(null);
   // A takeover asked for and not yet answered by the stream.
   const pendingTakeover = useRef(false);
   // A tap that reveals the controls must not also open the preview under them.
   const swallowClick = useRef(false);
-  const shown = hovered || focusWithin || revealed;
+  const shown = revealed;
 
   useEffect(() => {
     if (!revealed) return;
@@ -294,22 +300,8 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
       data-size={large ? "large" : "card"}
       aria-label={`${name}: ${chip}`}
       style={props.width === undefined ? undefined : { width: props.width }}
-      className={cn(
-        // Clipped content would otherwise let the scrolling list squeeze a card instead of scrolling.
-        "pointer-events-auto shrink-0 overflow-hidden rounded-2xl border bg-popover/95 p-1.5 text-popover-foreground shadow-lg backdrop-blur-sm",
-        props.focused && "ring-2 ring-ring",
-      )}
-      onPointerEnter={(event) => event.pointerType === "mouse" && setHovered(true)}
-      onPointerLeave={(event) => event.pointerType === "mouse" && setHovered(false)}
-      onFocus={() => setFocusWithin(true)}
-      onBlur={(event) => {
-        if (
-          !(
-            event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)
-          )
-        )
-          setFocusWithin(false);
-      }}
+      // Clipped content would otherwise let the scrolling list squeeze a card instead of scrolling.
+      className="group/card pointer-events-auto shrink-0 overflow-hidden rounded-2xl border bg-popover/95 p-1.5 text-popover-foreground shadow-lg backdrop-blur-sm"
     >
       <div className="flex h-7 items-center gap-2 px-1.5 pb-1">
         {props.icon ?? <KindIcon session={session} />}
@@ -323,7 +315,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
           <span
             className={cn(
               "flex shrink-0 transition-opacity motion-reduce:transition-none",
-              shown ? "opacity-100" : "pointer-events-none opacity-0",
+              shown ? "opacity-100" : HIDDEN_UNTIL_HOVER,
             )}
           >
             {props.headerAction}

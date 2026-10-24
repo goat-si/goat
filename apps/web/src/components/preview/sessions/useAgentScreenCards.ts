@@ -134,22 +134,26 @@ const sameLayout = (a: AgentScreenLayout | null, b: AgentScreenLayout) =>
 /**
  * Measures the thread pane under `[data-chat-header]` and the conversation width that `probe`
  * resolves from `--chat-content-max-width`, and records whether the pane is too narrow for
- * cards. `layoutKey` names what replaces the header or what floats beside it, such as another
- * thread or a mini player opening.
+ * cards. It runs only while there are cards (`active`). `layoutKey` names a change that moves
+ * what floats beside the cards without resizing anything, such as the details panel opening.
  */
 export function useAgentCardsPlacement(
   probe: RefObject<HTMLElement | null>,
   layoutKey: string,
+  active: boolean,
 ): AgentScreenLayout | null {
   const setNarrow = usePreviewSessionStack((state) => state.setNarrow);
   const [layout, setLayout] = useState<AgentScreenLayout | null>(null);
   useEffect(() => {
-    const header = document.querySelector<HTMLElement>("[data-chat-header]");
-    const watched = new Set<Element>();
-    const stops: Array<() => void> = [];
-    const find = () =>
-      OBSTACLES.flatMap((selector) => Array.from(document.querySelectorAll<HTMLElement>(selector)));
+    if (!active) return;
+    const elements = () => ({
+      header: document.querySelector<HTMLElement>("[data-chat-header]"),
+      obstacles: OBSTACLES.flatMap((selector) =>
+        Array.from(document.querySelectorAll<HTMLElement>(selector)),
+      ),
+    });
     const measure = () => {
+      const { header, obstacles } = elements();
       const viewport = { width: window.innerWidth, height: window.innerHeight };
       const rect = header?.getBoundingClientRect();
       const pane = rect
@@ -159,39 +163,56 @@ export function useAgentCardsPlacement(
       const next = layoutAgentScreen({
         pane,
         viewport,
-        obstacles: find()
-          .filter((element) => element.isConnected)
-          .map((element) => element.getBoundingClientRect()),
+        obstacles: obstacles.map((element) => element.getBoundingClientRect()),
       });
       setLayout((current) => (sameLayout(current, next) ? current : next));
     };
-    // A floating view moves by its style (a drag, the composer growing) as well as by resizing.
+    const watched = new Set<Element>();
+    const stops: Array<() => void> = [];
+    let present: ReadonlyArray<Element> = [];
+    // Each element is watched once: resizing moves the column, and a floating view also moves by
+    // its style (a drag, the composer growing).
     const watch = () => {
-      for (const element of find()) {
+      const { header, obstacles } = elements();
+      present = header ? [header, ...obstacles] : obstacles;
+      for (const element of present) {
         if (watched.has(element)) continue;
         watched.add(element);
         stops.push(observeResize(element, measure));
+        if (element === header) continue;
         const moves = new MutationObserver(measure);
         moves.observe(element, { attributes: true, attributeFilter: ["style"] });
         stops.push(() => moves.disconnect());
       }
     };
-    watch();
-    // The mini player sizes itself after mounting, so it can appear a frame after this effect.
-    const retry = requestAnimationFrame(() => {
-      watch();
-      measure();
+    let frame = 0;
+    // The header and what floats beside the cards mount with the thread view, and a wider pane
+    // pins the details card, often after the change that caused it. Added and removed nodes are
+    // checked once a frame, and only a different set of those elements is measured again.
+    const tree = new MutationObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const { header, obstacles } = elements();
+        const now = header ? [header, ...obstacles] : obstacles;
+        if (now.length === present.length && now.every((element, i) => element === present[i]))
+          return;
+        watch();
+        measure();
+      });
     });
-    if (header) stops.push(observeResize(header, measure));
-    else measure();
+    tree.observe(document.body, { childList: true, subtree: true });
+    watch();
+    measure();
     window.addEventListener("resize", measure);
     return () => {
-      cancelAnimationFrame(retry);
+      cancelAnimationFrame(frame);
+      tree.disconnect();
       for (const stop of stops) stop();
       window.removeEventListener("resize", measure);
     };
   }, [
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A new layoutKey means the header or what floats beside it was replaced, so it measures and watches the new elements.
+    active,
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A new layoutKey moves what floats beside the cards without resizing anything, so it measures again.
     layoutKey,
     probe,
     setNarrow,
