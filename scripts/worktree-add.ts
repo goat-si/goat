@@ -127,6 +127,11 @@ function run(cwd: string, args: ReadonlyArray<string>): void {
   ) {
     throw new WorktreeAddError("Creating a worktree from this checkout needs Git 2.36 or later.");
   }
+  if (rest.some((arg) => arg.startsWith("--o"))) {
+    throw new WorktreeAddError(
+      "Git refuses --orphan with the --no-checkout this checkout needs; add the worktree, then run git switch --orphan in it.",
+    );
+  }
   const hooks = NodePath.resolve(cwd, gitRequired(cwd, ["rev-parse", "--git-path", "hooks"]));
   // First, so no caller option can take it as its value.
   gitVisible(cwd, ["worktree", "add", "--no-checkout", worktree, ...rest]);

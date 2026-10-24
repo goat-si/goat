@@ -179,6 +179,9 @@ describe("worktree-add", () => {
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("always checks out");
     }
+    const orphan = fixture.worktreeAdd(checkout, ["../feature", "--orphan", "-b", "feature"]);
+    expect(orphan.status).not.toBe(0);
+    expect(orphan.stderr).toContain("git switch --orphan");
     expect(NodeFS.existsSync(NodePath.join(NodePath.dirname(checkout), "feature"))).toBe(false);
     expect(fixture.git(checkout, "branch", "--list", "feature")).toBe("");
     expect(fixture.hookRuns()).toEqual([]);
