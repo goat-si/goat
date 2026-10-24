@@ -58,6 +58,28 @@ describe("agentInputLog", () => {
     }
   });
 
+  it("a call forgotten while open does not cut off another call's tail", () => {
+    const log = makeAgentInputLog();
+    log.started("A", 1_000, ["pointer"]);
+    log.started("B", 10_700, ["pointer"]);
+    log.ended("B", 10_900);
+    // A never answers and is forgotten; B's tail still runs to 11 400.
+    log.prune(11_001);
+    log.started("C", 11_200, ["pointer"]);
+    // C continues the run that began at 950, so it is past ten seconds.
+    assert.isFalse(log.isAgents(11_200, "pointer"));
+  });
+
+  it("a start repeated for one call leaves no run open once its calls end", () => {
+    const log = makeAgentInputLog();
+    log.started("x", 1_000, ["pointer"]);
+    log.started("x", 1_100, ["pointer"]);
+    log.endAll(1_200);
+    log.prune(30_000);
+    log.started("y", 40_000, ["pointer"]);
+    assert.isTrue(log.isAgents(40_100, "pointer"));
+  });
+
   it("names the kinds a call can post from its tool and arguments", () => {
     for (const tool of ["get_window_state", "list_apps", "zoom", "invoke_menu", "launch_app"])
       assert.isFalse(postsInput(tool));
@@ -67,6 +89,10 @@ describe("agentInputLog", () => {
     // Without a point, scroll focuses the element and presses Page Down or arrow keys.
     assert.deepEqual(inputKinds("scroll", { direction: "down", by: "page" }), ["keyboard"]);
     assert.deepEqual(inputKinds("scroll", { direction: "down", x: 5, y: 5 }), ["pointer"]);
+    // An element target turns the wheel over that element.
+    assert.deepEqual(inputKinds("scroll", { direction: "down", element_token: "s1:4" }), [
+      "pointer",
+    ]);
     assert.deepEqual(inputKinds("type_text", { text: "a" }), ["keyboard"]);
     assert.deepEqual(inputKinds("type_text", { text: "a", x: 1, y: 1 }), ["keyboard", "pointer"]);
     for (const tool of ["run_script", "run_steps", "some_new_tool"])
