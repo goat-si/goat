@@ -56,13 +56,13 @@ const decodeRpc = Schema.decodeUnknownSync(
     }),
   ),
 );
-const repos = (value: string) => [
+const repos = (value: string, offered = "example/project") => [
   {
     id: "repos",
     name: "Repositories",
     type: "select",
     currentValue: value,
-    options: [{ name: "Project", value: "example/project" }],
+    options: [{ name: "Project", value: offered }],
   },
 ];
 const metadata = (title: string) => ({
@@ -74,7 +74,7 @@ const metadata = (title: string) => ({
 });
 
 /** The fake is the external CLI process; ACP encoding, relay and adapter remain real. */
-const makePeer = Effect.gen(function* () {
+const makePeer = Effect.fnUntraced(function* (offered = "example/project") {
   const output = yield* Queue.unbounded<Uint8Array>();
   const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
   const prompted = yield* Deferred.make<void>();
@@ -113,7 +113,7 @@ const makePeer = Effect.gen(function* () {
         } else if (rpc.method === "session/new") {
           assert.deepEqual(rpc.params?.mcpServers, []);
           yield* notify("Early session title");
-          yield* reply({ sessionId: NATIVE_ID, configOptions: repos("") });
+          yield* reply({ sessionId: NATIVE_ID, configOptions: repos("", offered) });
         } else if (rpc.method === "session/set_config_option") {
           assert.equal(rpc.params?.value, "example/project");
           yield* reply({ configOptions: repos("example/project") });
@@ -214,10 +214,10 @@ const makePeer = Effect.gen(function* () {
   };
 });
 
-const makeFixture = Effect.fnUntraced(function* (name: string) {
+const makeFixture = Effect.fnUntraced(function* (name: string, offered?: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-devin-relay-" });
-  const peer = yield* makePeer;
+  const peer = yield* makePeer(offered);
   const settings = yield* (yield* ServerSettings.ServerSettingsService).getSettings;
   const configured = {
     ...settings,
@@ -484,6 +484,77 @@ it.effect("persists real Devin relay results and late metadata through manager a
       assert.isAtLeast(yield* Ref.get(callbackCount), 1);
     }).pipe(Effect.provide(runtime));
   }).pipe(Effect.provide(Layer.merge(ServerSettings.layerTest(), NodeServices.layer))),
+);
+
+it.effect(
+  "a repository Devin does not offer fails the run with its reason instead of an unknown task",
+  () =>
+    Effect.gen(function* () {
+      const { peer, runtime, projectId } = yield* makeFixture(
+        "devin-relay-unoffered-repository",
+        "other/project",
+      );
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = ThreadId.make("thread:devin-unoffered");
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("command:devin-unoffered-create"),
+          threadId,
+          projectId,
+          title: "Devin unoffered repository",
+          modelSelection: { instanceId: INSTANCE, model: "default" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: "main",
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const failed = yield* orchestrator
+          .streamStoredEventsFrom({ threadId, eventType: "run.updated" })
+          .pipe(
+            Stream.filter(
+              (stored) =>
+                stored.event.type === "run.updated" && stored.event.payload.status === "failed",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkChild,
+          );
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("command:devin-unoffered-start"),
+          threadId,
+          messageId: MessageId.make("message:devin-unoffered-start"),
+          text: "Read the published source",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+          dispatchMode: { type: "start_immediately" },
+        });
+        yield* worker.drain();
+        yield* Fiber.join(failed);
+        yield* worker.drain();
+        const settled = yield* orchestrator.getThreadProjection(threadId);
+        const run = settled.runs[0]!;
+        const task = settled.providerThreads[0]!.cloudTask!;
+        // Nothing reached Devin, so the task is definitely failed: no "remote work may continue".
+        assert.equal(run.status, "failed");
+        assert.equal(task.status, "failed");
+        assert.equal(task.taskId, NATIVE_ID);
+        assert.include(task.error, "not offered by this Devin organization");
+        const result = settled.messages.find(
+          (message) => message.id === `message:cloud-result:${run.id}`,
+        );
+        assert.include(result?.text, "not offered by this Devin organization");
+        assert.include(result?.text, "before any prompt was sent");
+        assert.notInclude(result?.text, "Cloud task unknown");
+        assert.equal(peer.methods.filter((method) => method === "session/new").length, 1);
+        assert.equal(peer.methods.filter((method) => method === "session/prompt").length, 0);
+      }).pipe(Effect.provide(runtime));
+    }).pipe(Effect.provide(Layer.merge(ServerSettings.layerTest(), NodeServices.layer))),
 );
 
 it.effect(

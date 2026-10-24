@@ -470,9 +470,26 @@ export const makeTaskObserver = Effect.fn("DevinCloud.makeTaskObserver")(functio
           yield* updateTask({
             status: "failed",
             error: detail,
-            summary: "Repository configuration failed before any prompt was sent.",
+            summary: `Repository configuration failed before any prompt was sent: ${detail}`,
             progress: detail.slice(0, MAX_PROGRESS),
           });
+          // startTurn fails next, and the base stops ingesting before this thread's event lands.
+          // Without a durable commit it would finalize the stale running task as unknown.
+          if (input?.commitCloudTask && thread?.cloudTask) {
+            yield* input
+              .commitCloudTask(thread.cloudTask, {
+                nativeThreadRef: thread.nativeThreadRef,
+                nativeConversationHeadRef: thread.nativeConversationHeadRef,
+              })
+              .pipe(
+                Effect.catch(() =>
+                  Effect.logWarning("Devin cloud source rejection could not be persisted", {
+                    runId: input!.runId,
+                    providerThreadId: thread!.id,
+                  }),
+                ),
+              );
+          }
           yield* onUncertain(detail);
           // startTurn returns the error; base owns its start-failure terminal.
         }),
