@@ -44,6 +44,7 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
+import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import {
   initialOverlayState,
   type OverlayEvent,
@@ -124,6 +125,11 @@ export interface LeaseProxyOptions<EU, ED> {
    * where there is no X display to check. Anything but "same" refuses.
    */
   readonly placement?: (windows: ReadonlyArray<NamedWindow>) => Effect.Effect<WindowPlacement>;
+  /**
+   * Tells the server the window a forwarded call names, the one a live picture shows (#1370);
+   * true when the server took it. Reported only on a change, observations included.
+   */
+  readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
 }
 
 const WRONG_DISPLAY =
@@ -300,6 +306,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
   const listed = new Map<number, ListedApp>();
   const sessions = new Set<string>();
+  // The control's window survives pauses: the server keeps it until the control ends.
+  let reported: ComputerUseCallTarget | undefined;
   let overlay = initialOverlayState;
 
   /** Updates what the overlay shows and waits until the helper has drawn it. */
@@ -722,6 +730,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       });
     const cancelled = cancelledRequestKey(line);
     if (cancelled !== undefined) outstanding.delete(cancelled);
+    if (isRequest && message?.method === "tools/call" && options.onTarget !== undefined) {
+      const target = targetOf(message.params?.arguments);
+      if (
+        target !== undefined &&
+        (target.pid !== reported?.pid || target.windowId !== reported.windowId) &&
+        (yield* options.onTarget(target))
+      )
+        reported = target;
+    }
     yield* running.driver.send(line);
   });
 
