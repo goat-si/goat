@@ -26,6 +26,20 @@ export const DesktopCuaDriverRequest = Schema.Struct({
 });
 export type DesktopCuaDriverRequest = typeof DesktopCuaDriverRequest.Type;
 
+/**
+ * Whether any agent controls this host right now; the desktop's helper watches for secret
+ * fields and a person's input only while it does (D7, #1235). seq grows with every change the
+ * server sends, so the desktop drops one that arrives after a newer one; the server sends the
+ * current value again whenever the desktop reconnects.
+ */
+export const DesktopCuaWatch = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaWatch"),
+  seq: Schema.Int,
+  active: Schema.Boolean,
+});
+export type DesktopCuaWatch = typeof DesktopCuaWatch.Type;
+
 export const DesktopCuaDriverReport = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),

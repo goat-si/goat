@@ -21,6 +21,7 @@ import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -168,6 +169,176 @@ layer("ComputerUseLeases controls", (it) => {
       }),
   );
 });
+
+it.effect(
+  "tells the desktop to watch from the first live control until the last one ends or expires",
+  () =>
+    Effect.gen(function* () {
+      const sent = yield* Queue.unbounded<boolean>();
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* leases.control(thread, Option.none());
+        assert.isTrue(yield* Queue.take(sent));
+        // A second agent does not change what the desktop hears.
+        yield* leases.control(other, Option.none());
+        yield* leases.stop(thread);
+        assert.equal(yield* Queue.size(sent), 0);
+        yield* leases.stop(other);
+        assert.isFalse(yield* Queue.take(sent));
+
+        yield* leases.control(thread, Option.none());
+        assert.isTrue(yield* Queue.take(sent));
+        // An interactive control lapses after an hour without anyone ending it.
+        yield* TestClock.adjust("61 minutes");
+        assert.isFalse(yield* Queue.take(sent));
+      }).pipe(
+        Effect.provide(
+          ComputerUseLeases.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                database,
+                NodeServices.layer,
+                DesktopTelemetryReceiver.layerTest({
+                  setCuaWatch: (active) => Queue.offer(sent, active).pipe(Effect.asVoid),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
+);
+
+it.effect("tells the desktop again after a failed write, without waiting for it to reconnect", () =>
+  Effect.gen(function* () {
+    const attempts = yield* Queue.unbounded<boolean>();
+    let failures = 1;
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* leases.control(thread, Option.none());
+      assert.isTrue(yield* Queue.take(attempts));
+      yield* TestClock.adjust("1 second");
+      assert.isTrue(yield* Queue.take(attempts));
+      // Delivered now: nothing more until something changes.
+      yield* TestClock.adjust("1 second");
+      assert.equal(yield* Queue.size(attempts), 0);
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                setCuaWatch: (active) =>
+                  Queue.offer(attempts, active).pipe(
+                    Effect.andThen(
+                      Effect.suspend(() =>
+                        failures-- > 0
+                          ? Effect.fail(
+                              new DesktopTelemetryReceiver.DesktopTelemetryControlFailed({
+                                fd: 4,
+                                operation: "write",
+                                cause: "EAGAIN",
+                              }),
+                            )
+                          : Effect.void,
+                      ),
+                    ),
+                  ),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect("after a failed write, a later control is sent even when the desktop last heard it", () =>
+  Effect.gen(function* () {
+    const attempts = yield* Queue.unbounded<boolean>();
+    let failNext = false;
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* leases.control(thread, Option.none());
+      assert.isTrue(yield* Queue.take(attempts));
+      failNext = true;
+      yield* leases.stop(thread);
+      assert.isFalse(yield* Queue.take(attempts));
+      // The desktop may still be watching or may have stopped; it is told again either way.
+      yield* leases.control(thread, Option.none());
+      assert.isTrue(yield* Queue.take(attempts));
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                setCuaWatch: (active) =>
+                  Queue.offer(attempts, active).pipe(
+                    Effect.andThen(
+                      Effect.suspend(() => {
+                        if (!failNext) return Effect.void;
+                        failNext = false;
+                        return Effect.fail(
+                          new DesktopTelemetryReceiver.DesktopTelemetryControlFailed({
+                            fd: 4,
+                            operation: "write",
+                            cause: "EAGAIN",
+                          }),
+                        );
+                      }),
+                    ),
+                  ),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect("stops watching when the grant behind the last control is cancelled", () =>
+  Effect.gen(function* () {
+    const sent = yield* Queue.unbounded<boolean>();
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const sql = yield* SqlClient.SqlClient;
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* grant(other, "handoff:watched");
+      yield* leases.control(other, yield* leases.active(other));
+      assert.isTrue(yield* Queue.take(sent));
+      const proxies = yield* leases.subscribe;
+      yield* sql`DELETE FROM orchestration_v2_projection_turn_items WHERE turn_item_id = 'handoff:watched'`;
+      yield* leases.changed;
+      yield* PubSub.take(proxies);
+      assert.isFalse(yield* Queue.take(sent));
+      // Ending it here tells proxies too, so one held on a pause does not wait on.
+      yield* PubSub.take(proxies);
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                setCuaWatch: (active) => Queue.offer(sent, active).pipe(Effect.asVoid),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
 
 it.effect(
   "follows the helper's reports: what it detects, and a secret field that pauses every agent until it loses focus",
