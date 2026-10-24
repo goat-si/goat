@@ -139,11 +139,17 @@ async function scriptedServer(options: { readonly minor: number }) {
   };
 }
 
-/** Lets the socket deliver what the server wrote, and any read it starts, to settle. */
-const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
-const settled = async () => {
-  for (let round = 0; round < 10; round++) await settle();
-};
+/** Resolves on the next device list the source applies, held input included. */
+function lists() {
+  let next = Promise.withResolvers<void>();
+  return {
+    onListed: () => {
+      next.resolve();
+      next = Promise.withResolvers<void>();
+    },
+    next: () => next.promise,
+  };
+}
 
 describe("XInput2 human input", () => {
   it("reads every device from a query reply, classes skipped", () => {
@@ -170,7 +176,9 @@ describe("XInput2 human input", () => {
 
   it("refuses a server that negotiates XI 2.0, whose raw events name no device", async () => {
     const server = await scriptedServer({ minor: 0 });
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 1, server.path);
+    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 1, {
+      socketPath: server.path,
+    });
     expect(source).toBeUndefined();
     server.close();
   });
@@ -178,19 +186,25 @@ describe("XInput2 human input", () => {
   it("a keyboard plugged in after the source opened is the person's; the driver's devices never are", async () => {
     const server = await scriptedServer({ minor: 2 });
     let clock = 0;
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => ++clock, server.path);
+    const listed = lists();
+    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => ++clock, {
+      socketPath: server.path,
+      onListed: listed.onListed,
+    });
     if (!source) throw new Error("no source");
     // The driver adds its devices and types through them: not a person.
     server.setDevices([...XVFB, ...DRIVER]);
+    let applied = listed.next();
     server.send(xiEvent(HIERARCHY));
     server.send(xiEvent(RAW_KEY, 11));
-    await settled();
+    await applied;
     expect(source.latest()).toBeUndefined();
     // A person plugs in a keyboard, which gets an id the driver's keyboard had before.
     server.setDevices([...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }]);
+    applied = listed.next();
     server.send(xiEvent(HIERARCHY));
     server.send(xiEvent(RAW_KEY, 11));
-    await settled();
+    await applied;
     expect(source.latest()).toMatchObject({ source: "keyboard" });
     source.close();
     server.close();
@@ -198,12 +212,17 @@ describe("XInput2 human input", () => {
 
   it("input from a device the list does not have yet waits for the next list", async () => {
     const server = await scriptedServer({ minor: 2 });
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 5, server.path);
+    const listed = lists();
+    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 5, {
+      socketPath: server.path,
+      onListed: listed.onListed,
+    });
     if (!source) throw new Error("no source");
     // The raw event arrives before the hierarchy event that announces its device.
     server.setDevices([...XVFB, { id: 20, use: 4, name: "Bluetooth Keyboard" }]);
+    const applied = listed.next();
     server.send(xiEvent(RAW_KEY, 20));
-    await settled();
+    await applied;
     expect(source.latest()).toEqual({ at: 5, source: "keyboard" });
     source.close();
     server.close();
@@ -211,10 +230,14 @@ describe("XInput2 human input", () => {
 
   it("a server that goes away leaves the source lost", async () => {
     const server = await scriptedServer({ minor: 2 });
-    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 1, server.path);
+    const lost = Promise.withResolvers<void>();
+    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 1, {
+      socketPath: server.path,
+      onLost: () => lost.resolve(),
+    });
     if (!source) throw new Error("no source");
     server.close();
-    await settled();
+    await lost.promise;
     expect(source.lost()).toBe(true);
   });
 });

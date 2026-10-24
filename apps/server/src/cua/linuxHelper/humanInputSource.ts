@@ -129,7 +129,7 @@ export function parseDevices(reply: Uint8Array): ReadonlyArray<XiDevice> {
 }
 
 /** Whether a device carries a person's input: a slave that is neither XTEST nor Cua Driver's. */
-export const isPersonDevice = (device: XiDevice) =>
+const isPersonDevice = (device: XiDevice) =>
   SLAVE_USES.has(device.use) && !/xtest/iu.test(device.name) && !device.name.startsWith("CUA ");
 
 /** Every device by id, as the person's or not. */
@@ -137,7 +137,7 @@ export const classifyDevices = (devices: ReadonlyArray<XiDevice>) =>
   new Map(devices.map((device) => [device.id, isPersonDevice(device)]));
 
 /** True for an XI2 event saying devices were added, removed or changed. */
-export const isHierarchyChanged = (message: Uint8Array, major: number) =>
+const isHierarchyChanged = (message: Uint8Array, major: number) =>
   ((message[0] ?? 0) & 0x7f) === GENERIC_EVENT &&
   message[1] === major &&
   message.byteLength >= 10 &&
@@ -178,8 +178,12 @@ const messageLength = (bytes: Uint8Array) => {
 export async function openX11HumanInput(
   environment: { readonly DISPLAY?: string | undefined; readonly XAUTHORITY?: string | undefined },
   now: () => number,
-  /** The display's socket; tests point it at a scripted server. */
-  socketPath?: string,
+  /** For tests: a scripted server's socket, and when a device list or the connection ends. */
+  observe: {
+    readonly socketPath?: string;
+    readonly onListed?: () => void;
+    readonly onLost?: () => void;
+  } = {},
 ): Promise<HumanInputSource | undefined> {
   const display = localDisplayNumber(environment.DISPLAY);
   if (display === null) return undefined;
@@ -188,7 +192,7 @@ export async function openX11HumanInput(
     (bytes) => xauthorityCookie(bytes, display),
     () => null,
   );
-  const socket = NodeNet.createConnection(socketPath ?? "/tmp/.X11-unix/X" + display);
+  const socket = NodeNet.createConnection(observe.socketPath ?? "/tmp/.X11-unix/X" + display);
   let buffer = new Uint8Array(0);
   let closed = false;
   let latest: HumanInput | undefined;
@@ -207,6 +211,7 @@ export async function openX11HumanInput(
     if (closed) return;
     closed = true;
     socket.destroy();
+    observe.onLost?.();
     setup?.(undefined);
     for (const wake of waiting.splice(0)) wake(undefined);
   };
@@ -285,7 +290,7 @@ export async function openX11HumanInput(
     }
     refreshing = true;
     try {
-      do {
+      for (;;) {
         refreshAgain = false;
         // Requests are answered in order, so this list reflects every change announced so far.
         const covers = changes;
@@ -301,7 +306,9 @@ export async function openX11HumanInput(
           // not to be a person, so it counts as one.
           if (person !== false && (latest === undefined || input.at > latest.at)) latest = input;
         }
-      } while (refreshAgain && !closed);
+        observe.onListed?.();
+        if (!refreshAgain || closed) break;
+      }
     } finally {
       refreshing = false;
     }

@@ -150,7 +150,7 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
       targets = [...next];
       // A retained target keeps its state until its first reading under this watch, so an
       // unwatch before then still clears it.
-      for (const key of [...active.keys()]) if (!kept.has(key)) active.delete(key);
+      for (const key of Array.from(active.keys())) if (!kept.has(key)) active.delete(key);
       // Input from before this watch is not its concern.
       lastInputAt = deps.now();
       lastEventAt = -Infinity;
