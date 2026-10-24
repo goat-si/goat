@@ -26,8 +26,10 @@ var frameCaptureAvailable: Bool {
 
 struct FrameTarget {
   let key: String
-  let pid: pid_t
-  let windowId: CGWindowID
+  // Kept as sent and compared widened: a value past pid_t or CGWindowID matches no window
+  // (windowGone) instead of trapping on a narrowing conversion.
+  let pid: Int
+  let windowId: Int
   /// Bundle ids the control approved; nil when every app the driver admits is allowed.
   let apps: [String]?
   let maxWidth: Int
@@ -43,8 +45,8 @@ struct FrameTarget {
     else { return nil }
     if let apps = object["apps"], !(apps is [String]) { return nil }
     self.key = key
-    self.pid = pid_t(pid)
-    self.windowId = CGWindowID(windowId)
+    self.pid = pid
+    self.windowId = windowId
     self.apps = object["apps"] as? [String]
     self.maxWidth = min(maxWidth, frameMaxWidth)
     self.intervalMs = max(intervalMs, frameMinIntervalMs)
@@ -114,8 +116,8 @@ final class FrameCapture {
       self.queue.async {
         // A replaced request's lookup touches nothing: busy belongs to the request in force.
         guard self.framesId == framesId else { return }
-        guard let window = content?.windows.first(where: { $0.windowID == target.windowId }),
-          let owner = window.owningApplication, owner.processID == target.pid
+        guard let window = content?.windows.first(where: { Int($0.windowID) == target.windowId }),
+          let owner = window.owningApplication, Int(owner.processID) == target.pid
         else {
           self.busy.remove(target.key)
           return self.unavailable(target, "windowGone", framesId: framesId)
@@ -137,7 +139,7 @@ final class FrameCapture {
   /// A secure text field has focus in the window's app; its windows are not pictured at all.
   private func isPrivate(_ target: FrameTarget) -> Bool {
     guard let secure = focusedSecureField() else { return false }
-    return secure.pid == Int(target.pid)
+    return secure.pid == target.pid
   }
 
   @available(macOS 14.0, *)

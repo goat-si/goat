@@ -215,6 +215,15 @@ export const observeWorker = (input: {
       }),
 });
 
+/** Run states that have ended; anything else may still start or run. */
+export const ENDED_RUN_STATUSES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "rolled_back",
+]);
+
 /** Whether a failed thread read means the thread does not exist, rather than a read that failed. */
 export const isThreadMissing = (error: unknown): boolean => {
   let current: unknown = error;

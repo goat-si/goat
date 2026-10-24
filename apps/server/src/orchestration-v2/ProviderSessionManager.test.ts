@@ -8,21 +8,18 @@ import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ChannelDispatcher from "../channels/ChannelDispatcher.ts";
+import { channelDispatcherIdleServices } from "../channels/testkit/channelDispatcherIdleServices.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
-import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
-import * as SlackChannelSettings from "../channels/SlackChannelSettings.ts";
 import * as Receipts from "./CommandReceiptStore.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
-import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
-import * as ProjectStore from "./ProjectStore.ts";
-import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerConfig from "../config.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as Path from "effect/Path";
@@ -5245,11 +5242,7 @@ it.effect.each(turnStartMemoryCases)(
                         })
                         .pipe(Effect.as({ threadId } as never)),
                   }),
-                  Layer.mock(ProjectStore.ProjectStoreV2)({}),
-                  Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
-                  Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
-                  Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
-                  Layer.mock(SlackChannelSettings.SlackChannelSettings)({}),
+                  channelDispatcherIdleServices,
                   Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment),
                   settingsLayer,
                   ServerConfig.layerTest(process.cwd(), { prefix: "memory-channel-" }).pipe(

@@ -238,6 +238,36 @@ describe("DesktopTelemetryPublisher", () => {
   );
 
   it.effect(
+    "hands its own server's window capture requests to the helper, and clears them when that server goes away",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const heard = yield* Queue.unbounded<number>();
+        yield* publisher.cuaFrames.pipe(
+          Stream.runForEach((request) => Queue.offer(heard, request.targets.length)),
+          Effect.forkScoped,
+        );
+        assert.equal(yield* Queue.take(heard), 0);
+        const frames = (seq: number) =>
+          ({
+            version: 1,
+            type: "cuaFrames",
+            seq,
+            targets: [
+              { key: "desktop:control:a", pid: 7, windowId: 3, maxWidth: 320, intervalMs: 500 },
+            ],
+          }) as const;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* publisher.handleControlForSource("ssh:remote", frames(9));
+        yield* publisher.handleControlForSource("primary", frames(7));
+        assert.equal(yield* Queue.take(heard), 1);
+        yield* Fiber.interrupt(primary.fiber);
+        assert.equal(yield* Queue.take(heard), 0);
+        assert.equal(yield* Queue.size(heard), 0);
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
     "sends the helper's readiness only to its own server, newest first to one that connects later",
     () =>
       Effect.gen(function* () {

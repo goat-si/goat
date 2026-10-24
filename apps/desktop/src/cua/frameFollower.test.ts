@@ -19,16 +19,27 @@ const request = (
 function fakeSession(
   calls: Array<string>,
   name: string,
-  options: { readonly canFrame?: boolean; readonly fail?: number } = {},
+  options: {
+    readonly canFrame?: boolean;
+    readonly fail?: number;
+    /** Holds each nonempty request's answer until the test releases it. */
+    readonly hold?: boolean;
+  } = {},
 ) {
   let listener: ((frame: HelperFrame) => void) | undefined;
   let failures = options.fail ?? 0;
   let last = 0;
+  const held: Array<{ release: () => void; reject: () => void }> = [];
   return {
+    held,
     canFrame: options.canFrame ?? true,
     frames: async (framesId: number, targets: DesktopCuaFrames["targets"]) => {
       calls.push(name + ":frames:" + framesId + ":" + targets.length);
       if (targets.length > 0) last = framesId;
+      if (options.hold === true && targets.length > 0)
+        await new Promise<void>((release, reject) =>
+          held.push({ release, reject: () => reject(new Error("timed out")) }),
+        );
       if (failures-- > 0) throw new Error("timed out");
     },
     onFrame: (next: (frame: HelperFrame) => void) => {
@@ -116,7 +127,6 @@ describe("frameFollower", () => {
       { version: 1, type: "cuaFrameUnavailable", seq: 6, key: target.key, reason: "captureFailed" },
     ]);
     retries.shift()?.();
-    await follower.setRequest(request(6));
     expect(calls).toEqual(["h1:frames:1:1", "h1:frames:2:1"]);
     follower.detach();
     await follower.attach(fakeSession(calls, "h2"));
@@ -139,5 +149,55 @@ describe("frameFollower", () => {
     await follower.attach(fakeSession(calls, "h2"));
     await follower.setRequest(request(1, []));
     expect(calls.filter((call) => call.startsWith("h2") && !call.endsWith(":0"))).toEqual([]);
+  });
+
+  it("stops at once while a capture request is still unanswered, and drops its frames", async () => {
+    const calls: Array<string> = [];
+    const { follower, published } = follow();
+    const helper = fakeSession(calls, "h1", { hold: true });
+    await follower.attach(helper);
+    void follower.setRequest(request(4));
+    await follower.setRequest(request(5, []));
+    expect(calls).toEqual(["h1:frames:1:1", "h1:frames:2:0"]);
+    helper.sendLast();
+    expect(published).toEqual([]);
+    helper.held.shift()?.release();
+  });
+
+  it("still stops a capture whose first request timed out, though it may have started", async () => {
+    const calls: Array<string> = [];
+    const { follower, published, retries } = follow();
+    const helper = fakeSession(calls, "h1", { hold: true });
+    // Asked for before the generation attached, so its first request is the capture itself.
+    await follower.setRequest(request(4));
+    const first = follower.attach(helper);
+    helper.held.shift()?.reject();
+    await first;
+    await follower.setRequest(request(5, []));
+    expect(calls.at(-1)).toBe("h1:frames:2:0");
+    for (const retry of retries.splice(0)) retry();
+    helper.sendLast();
+    expect(published.filter((frame) => frame.type === "cuaFrame")).toEqual([]);
+  });
+
+  it("never reports a failure of an attempt a newer one already replaced", async () => {
+    const calls: Array<string> = [];
+    const { follower, published, retries } = follow();
+    const helper = fakeSession(calls, "h1", { hold: true });
+    await follower.attach(helper);
+    const a = follower.setRequest(request(4));
+    helper.held.shift()?.reject();
+    await a;
+    // B starts, then A's retry sends B again; the second attempt is answered first.
+    void follower.setRequest(request(5));
+    for (const retry of retries.splice(0)) retry();
+    helper.held.pop()?.release();
+    await Promise.resolve();
+    published.length = 0;
+    helper.held.shift()?.reject();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(published).toEqual([]);
+    expect(retries).toEqual([]);
   });
 });

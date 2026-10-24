@@ -112,6 +112,21 @@ function accessibilityStep(readiness: ComputerUseReadiness): ComputerUseSetupSte
         "AT-SPI answers, but the app GOAT checked shows it no windows. Open the app you want GOAT to use.",
       guidance: [],
     };
+  // AT-SPI is proven by reading a window; with none open there was nothing to read, so it is
+  // not known to be off (#1394).
+  if (readiness.capture === "noWindow")
+    return {
+      id: "accessibility",
+      status: "waiting",
+      title: "App controls",
+      detail:
+        "Open any app window. GOAT reads app controls through AT-SPI, the Linux accessibility service, and checks it on an open window.",
+      guidance: [
+        text(
+          "If AT-SPI does not answer once a window is open, the next check says how to turn it on.",
+        ),
+      ],
+    };
   return {
     id: "accessibility",
     status: "action",
