@@ -195,6 +195,58 @@ describe("planGoal", () => {
     ]);
   });
 
+  it("stops orphaned earlier attempts before launching the attempts that wait on them", () => {
+    const goal = testGoal("goal_order", {
+      spec: testSpec({ workers: { ...testSpec().workers, count: 3 } }),
+    });
+    const successors = [0, 1, 2].map((slot) => newWorker(goal, slot, null, 2));
+    const orphans = [0, 1, 2].map((slot) => running(goal, ORPHAN_SLOT_BASE + slot));
+    const plan = planGoal(
+      goal,
+      [...successors, ...orphans],
+      observe({
+        workers: new Map(
+          orphans.map((worker) => [
+            worker.slot,
+            seen({ terminal: false, runStatus: "running", result: null }),
+          ]),
+        ),
+      }),
+    );
+    expect(
+      plan.actions.map((action) => [action.type, "slot" in action ? action.slot : null]),
+    ).toEqual([
+      ["interrupt", ORPHAN_SLOT_BASE],
+      ["interrupt", ORPHAN_SLOT_BASE + 1],
+      ["interrupt", ORPHAN_SLOT_BASE + 2],
+    ]);
+    expect(plan.truncated).toBe(true);
+  });
+
+  it("gives each run of an orphan its own interrupt, so a run that started later is stopped too", () => {
+    const goal = testGoal("goal_reruns");
+    const orphan = running(goal, ORPHAN_SLOT_BASE);
+    const idFor = (runId: string) =>
+      planGoal(
+        goal,
+        [orphan],
+        observe({
+          workers: new Map([
+            [
+              ORPHAN_SLOT_BASE,
+              seen({ terminal: false, runStatus: "running", runId: RunId.make(runId) }),
+            ],
+          ]),
+        }),
+      ).actions.find((action) => action.type === "interrupt");
+    expect(idFor("run:1")).toMatchObject({
+      actionId: "goal:goal_reruns:s10000:a1:run:1:interrupt",
+    });
+    expect(idFor("run:2")).toMatchObject({
+      actionId: "goal:goal_reruns:s10000:a1:run:2:interrupt",
+    });
+  });
+
   it("succeeds when every doneWhen holds and stops acting", () => {
     const goal = testGoal("goal_f", {
       spec: testSpec({
@@ -254,7 +306,7 @@ describe("planGoal", () => {
       }),
     );
     expect(shrink.actions).toEqual([
-      { type: "interrupt", slot: 1, attempt: 1, actionId: "goal:goal_h:s1:a1:interrupt" },
+      { type: "interrupt", slot: 1, attempt: 1, actionId: "goal:goal_h:s1:a1:run:1:interrupt" },
     ]);
     // It stays live until the interrupt is confirmed.
     expect(shrink.workers[1]!.state).toBe("running");
@@ -263,7 +315,7 @@ describe("planGoal", () => {
       planGoal(deleting, [running(deleting, 0)], observe({ workers: new Map([[0, live]]) }))
         .actions,
     ).toEqual([
-      { type: "interrupt", slot: 0, attempt: 1, actionId: "goal:goal_h:s0:a1:interrupt" },
+      { type: "interrupt", slot: 0, attempt: 1, actionId: "goal:goal_h:s0:a1:run:1:interrupt" },
     ]);
     expect(
       planGoal(deleting, [running(deleting, 0)], observe({ workers: new Map([[0, seen()]]) }))
@@ -429,7 +481,7 @@ describe("planGoal", () => {
         type: "interrupt",
         slot: ORPHAN_SLOT_BASE,
         attempt: 1,
-        actionId: "goal:goal_n:s10000:a1:interrupt",
+        actionId: "goal:goal_n:s10000:a1:run:1:interrupt",
       },
     ]);
   });
