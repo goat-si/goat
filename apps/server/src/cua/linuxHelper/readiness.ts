@@ -25,6 +25,9 @@ const Windows = Schema.Struct({
   ),
 });
 
+const decodePermissions = Schema.decodeUnknownOption(Permissions);
+const decodeWindows = Schema.decodeUnknownOption(Windows);
+
 /** Shared by the helper and host status; never creates a second driver or replaces its tree. */
 export async function readLinuxReadiness(
   deps: {
@@ -52,11 +55,11 @@ export async function readLinuxReadiness(
   };
   if (deps.session.unavailable === undefined && deps.session.unsupported === undefined) {
     const permissions = await call("check_permissions", {});
-    const decoded = Schema.decodeUnknownOption(Permissions)(permissions?.structured);
+    const decoded = decodePermissions(permissions?.structured);
     if (decoded._tag === "Some") {
       facts.driver = decoded.value;
       const list = await call("list_windows", {});
-      const windows = Schema.decodeUnknownOption(Windows)(list?.structured);
+      const windows = decodeWindows(list?.structured);
       const shown =
         windows._tag === "Some"
           ? windows.value.windows.find((entry) => entry.is_on_screen !== false)

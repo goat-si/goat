@@ -102,7 +102,6 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
   let queue: Promise<unknown> = Promise.resolve();
   let closed = false;
   let closing: Promise<void> | undefined;
-  const blocked = deps.session.unavailable ?? deps.session.unsupported;
 
   const ensureDriver = () => {
     if (closed) return Promise.reject(new Error("The helper is shutting down."));

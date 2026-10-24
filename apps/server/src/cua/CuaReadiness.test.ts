@@ -93,7 +93,9 @@ it.effect("discards a helper answer from a driver retired while status was being
     yield* settings.updateSettings({ enableCua: false });
     yield* Deferred.await(stopped);
     yield* Deferred.succeed(answer, readiness);
-    expect(yield* Fiber.join(status)).toMatchObject({ tools: "off", running: false });
+    const reported = yield* Fiber.join(status);
+    expect(reported).toMatchObject({ tools: "off", running: false });
+    expect(reported.readiness).toBeUndefined();
     expect((yield* service.status).readiness).toBeUndefined();
   }).pipe(
     Effect.provide(ServerSettings.layerTest()),

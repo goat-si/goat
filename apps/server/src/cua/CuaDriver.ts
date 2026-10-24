@@ -128,6 +128,7 @@ interface Acquisition {
   revoked: boolean;
   running?: boolean;
   mcp?: CuaDriverMcpConfiguration;
+  displayEnvironment?: ReadonlyArray<CuaDisplay.CuaDisplayVariable>;
   /** What this daemon last said about the macOS grants; a failed check clears it. */
   grants?: CuaDisplay.MacGrants | null;
 }
@@ -146,6 +147,7 @@ const withoutEnvironment = (probe: CuaDisplay.CuaDisplayProbe): CuaDisplayCapabi
 export interface CuaDriverOptions {
   readonly observeReadiness?: (
     mcp: CuaDriverMcpConfiguration,
+    display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
   ) => Effect.Effect<ComputerUseReadiness | undefined>;
   /** The verified install, run when computer use is turned on; absent where the driver ships. */
   readonly install?: Effect.Effect<void, CuaDriverHostError>;
@@ -235,6 +237,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       if (display.capability === "unavailable")
         return yield* new CuaDriverHostError({ operation: "display", cause: display.reason });
       if (entry.revoked) return;
+      entry.displayEnvironment = display.environment;
       entry.host = yield* factory(display.environment);
       if (entry.revoked) {
         yield* stop(entry);
@@ -337,7 +340,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       const entry = active;
       const readiness =
         options.observeReadiness && entry?.running && entry.mcp
-          ? yield* options.observeReadiness(entry.mcp).pipe(
+          ? yield* options.observeReadiness(entry.mcp, entry.displayEnvironment ?? []).pipe(
               Effect.timeoutOrElse({
                 duration: "15 seconds",
                 orElse: () => Effect.succeed(undefined),

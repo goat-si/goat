@@ -10,8 +10,10 @@ import * as Schema from "effect/Schema";
 
 import { gdbusRunner, makeSecureFocusProbe } from "./linuxHelper/atspiFocus.ts";
 import { detectLinuxSession } from "./linuxHelper/linuxSession.ts";
+import type { CuaDisplayVariable } from "./CuaDisplayCapability.ts";
 import { readLinuxReadiness } from "./linuxHelper/readiness.ts";
 
+const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const requireDriver = NodeModule.createRequire(import.meta.url);
 type ClientModule = {
   readonly CuaDriver: {
@@ -30,26 +32,30 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const environment = yield* HostProcess.Environment;
-  const session = detectLinuxSession({
-    display: environment.DISPLAY,
-    waylandDisplay: environment.WAYLAND_DISPLAY,
-    sessionBus: environment.DBUS_SESSION_BUS_ADDRESS,
-    currentDesktop: environment.XDG_CURRENT_DESKTOP,
-    gnomeShellMajor: null,
-  });
-  const secureFocus = makeSecureFocusProbe(
-    gdbusRunner(
-      Object.fromEntries(
-        Object.entries(environment).filter(
-          (entry): entry is [string, string] => entry[1] !== undefined,
-        ),
-      ),
-    ),
-  );
   return Effect.fn("LinuxReadiness.observe")(
-    function* (mcp: CuaDriverMcpConfiguration) {
+    function* (mcp: CuaDriverMcpConfiguration, display: ReadonlyArray<CuaDisplayVariable>) {
       const socketPath = mcp.socketPath;
       if (!socketPath) return undefined;
+      const sessionEnvironment = {
+        ...environment,
+        ...Object.fromEntries(display.map(({ name, value }) => [name, value])),
+      };
+      const session = detectLinuxSession({
+        display: sessionEnvironment.DISPLAY,
+        waylandDisplay: sessionEnvironment.WAYLAND_DISPLAY,
+        sessionBus: sessionEnvironment.DBUS_SESSION_BUS_ADDRESS,
+        currentDesktop: sessionEnvironment.XDG_CURRENT_DESKTOP,
+        gnomeShellMajor: null,
+      });
+      const secureFocus = makeSecureFocusProbe(
+        gdbusRunner(
+          Object.fromEntries(
+            Object.entries(sessionEnvironment).filter(
+              (entry): entry is [string, string] => entry[1] !== undefined,
+            ),
+          ),
+        ),
+      );
       for (const lookup of requireDriver.resolve.paths("@trycua/cua-driver") ?? []) {
         const directory = path.join(lookup, "@trycua", "cua-driver");
         if (!(yield* fs.exists(path.join(directory, "package.json")))) continue;
@@ -76,9 +82,7 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
                     structured:
                       result.structuredJson === undefined
                         ? undefined
-                        : Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(
-                            result.structuredJson,
-                          ),
+                        : decodeJson(result.structuredJson),
                     images: result.images.map((image) => ({
                       mimeType: image.mimeType,
                       data: image.dataBase64,
