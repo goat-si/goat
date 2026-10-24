@@ -62,6 +62,7 @@ const fakeLeases = (input: {
               expiresAt: DateTime.makeUnsafe("2026-10-21T13:00:00.000Z"),
             });
       }),
+    serializeAdmission: (effect) => effect,
     control: (threadId, grant) =>
       Effect.sync(() => {
         minted.push(grant);

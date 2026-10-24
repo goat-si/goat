@@ -29,6 +29,7 @@ const fixture = Effect.fnUntraced(function* () {
     state: () => Effect.die("unused"),
     control: () => Effect.die("unused"),
     everyAppControl: () => Effect.die("unused"),
+    serializeAdmission: (effect) => effect,
     controlState: () =>
       Effect.gen(function* () {
         if (yield* Ref.get(revoked)) return { _tag: "ended", reason: "revoked" } as const;

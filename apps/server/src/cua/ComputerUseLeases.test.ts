@@ -13,6 +13,7 @@ import {
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -680,6 +681,32 @@ it.effect(
         _tag: "ended",
         reason: "revoked",
       });
+      yield* leases.stopAll;
+    }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect(
+  "waits for a grant approval in progress before claiming the screen for unattended work",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const scheduled = ThreadId.make("thread-scheduled-serial");
+      const approved = ThreadId.make("thread-approved-serial");
+      yield* threadIn(scheduled, "full-access");
+      const claiming = yield* leases.serializeAdmission(
+        Effect.gen(function* () {
+          // The approval found no holder and has not committed yet.
+          assert.isTrue(Option.isNone(yield* leases.holder(approved)));
+          const claim = yield* leases
+            .everyAppControl(scheduled, true)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          assert.isUndefined(claim.pollUnsafe());
+          yield* grant(approved, "handoff:approved-serial");
+          return claim;
+        }),
+      );
+      assert.isTrue(Option.isNone(yield* Fiber.join(claiming)));
       yield* leases.stopAll;
     }).pipe(Effect.provide(everyAppLayer)),
 );

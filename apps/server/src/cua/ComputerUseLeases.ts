@@ -32,6 +32,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
@@ -152,6 +153,14 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       unattended: boolean,
     ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
+    /**
+     * Runs a grant approval's holder check through its commit with unattended claims held off,
+     * so neither lands between the other's check and its commit and two unattended threads
+     * never act on the screen at once.
+     */
+    readonly serializeAdmission: <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E, R>;
     /** Where one control stands, for the proxy started with it. */
     readonly controlState: (
       threadId: ThreadId,
@@ -253,6 +262,7 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
   const controls = new Map<ThreadId, ControlRecord>();
+  const admission = yield* Semaphore.make(1);
   let paused: ComputerUsePauseReason | undefined;
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
 
@@ -360,10 +370,14 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     unattended: boolean,
   ) {
-    if (unattended && (yield* live()).some((lease) => lease.threadId !== threadId))
-      return Option.none<ComputerUseControl>();
-    return Option.fromNullishOr(
-      yield* mint(threadId, Option.none(), unattended ? "unattended" : "interactive"),
+    if (!unattended)
+      return Option.fromNullishOr(yield* mint(threadId, Option.none(), "interactive"));
+    return yield* admission.withPermits(1)(
+      Effect.gen(function* () {
+        if ((yield* live()).some((lease) => lease.threadId !== threadId))
+          return Option.none<ComputerUseControl>();
+        return Option.fromNullishOr(yield* mint(threadId, Option.none(), "unattended"));
+      }),
     );
   });
 
@@ -612,6 +626,7 @@ const make = Effect.gen(function* () {
     state,
     control,
     everyAppControl,
+    serializeAdmission: (effect) => admission.withPermits(1)(effect),
     controlState,
     stop: (threadId) =>
       Effect.sync(() => end(threadId, "stopped")).pipe(
