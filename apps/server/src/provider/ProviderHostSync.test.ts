@@ -7,6 +7,8 @@ import {
   ProviderInstanceId,
 } from "@goat/contracts";
 import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
+import { resolveSpawnCommand } from "@goat/shared/shell";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
@@ -369,7 +371,13 @@ it.effect("installs with the official argv and never relays the installer's outp
     expect(started.kind).toBe("started");
     if (started.kind !== "started") return;
     const done = yield* sync.awaitDone(started.sync.syncId);
-    expect(state.spawned.at(-1)?.args).toEqual(["install", "-g", "@xai-official/grok@1.2.3"]);
+    // Windows launches npm.cmd through cmd.exe, which folds the argv into one quoted command line.
+    const official = yield* resolveSpawnCommand("npm", [
+      "install",
+      "-g",
+      "@xai-official/grok@1.2.3",
+    ]).pipe(Effect.provide(NodeServices.layer));
+    expect(state.spawned.at(-1)).toEqual({ command: official.command, args: official.args });
     expect(done.done).toBe(true);
     expect(done.hosts[0]).toMatchObject({ host: null, phase: "failed" });
     const wire = JSON.stringify(done);
