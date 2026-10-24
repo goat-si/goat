@@ -30,6 +30,11 @@ import {
   checkpointWorkspace,
   makeCheckpointWorkspace,
 } from "@goat/provider-testing/replayWorkspace";
+import { removeInheritedGitEnv } from "@goat/shared/testing/gitEnv";
+
+// Started from a git hook, this run inherits GIT_DIR, which would point git in its fixture
+// workspace, and in every server or provider child it starts, at the developer's checkout (#1114).
+removeInheritedGitEnv(process.env);
 
 /**
  * Keeps the user's skills, templates and context files out of the recording.
