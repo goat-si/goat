@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - a one-off maintenance script with no Effect runtime.
 // Regenerates src/cli/mcpClientSkill.ts from the installable skill after editing
 // skills/goat-mcp/SKILL.md. Run it after `vp fmt`, which reflows the markdown.
 import * as NodeFS from "node:fs";
