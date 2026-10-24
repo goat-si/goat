@@ -475,6 +475,42 @@ export const writesEnvironment = <P, A, E, R>(
 
 type CheckServices = Effect.Services<typeof orchestratingCaller>;
 
+const setsUpProjectsRequired =
+  "Creating or cloning a project needs a live full-access/default caller, or, with goatclaw on, a live auto/default calling thread whose profile allows worktree.create.";
+
+/**
+ * goatclaw's worker and manager agents set up the projects they work in (#858), and the worker
+ * profile caps them at auto, so an auto/default calling thread is enough when its goatclaw profile
+ * allows worktree.create. Anyone else still needs full access. Without the profile service that
+ * grant cannot be checked, so the full-access requirement stands.
+ */
+const assertSetsUpProjects = Effect.fn("McpToolAccess.assertSetsUpProjects")(function* (
+  caller: Caller,
+) {
+  const { runtimeMode, interactionMode } = caller.limits;
+  if (interactionMode === "default" && runtimeMode === "full-access") return;
+  const permissions = yield* Effect.serviceOption(Profiles.PermissionProfiles);
+  if (
+    caller.scope.thread === undefined ||
+    interactionMode !== "default" ||
+    runtimeMode !== "auto" ||
+    Option.isNone(permissions)
+  )
+    return yield* capabilityRefused(setsUpProjectsRequired);
+  const result = yield* permissions.value.check(caller.scope, "worktree.create");
+  if (!result.ok) return yield* capabilityRefused(`${setsUpProjectsRequired} ${result.reason}`);
+  if (!result.effective.enabled) return yield* capabilityRefused(setsUpProjectsRequired);
+});
+
+/** Creates or clones a project: `writesEnvironment`, except as `assertSetsUpProjects` allows. */
+export const setsUpProjects = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+  declare("write", (params: P) =>
+    orchestratingCaller.pipe(
+      Effect.tap(assertSetsUpProjects),
+      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
+    ),
+  );
+
 const removesCheckoutsRequired =
   "Removing worktrees needs a live full-access/default calling thread or a full-access client.";
 

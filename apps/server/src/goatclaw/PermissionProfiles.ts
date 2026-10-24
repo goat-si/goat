@@ -1,5 +1,6 @@
 import {
-  type GoatclawRole,
+  GOATCLAW_ROLE_PROFILES,
+  GoatclawRole,
   type GoatclawSettings,
   OrchestratorMcpFailure,
   PermissionProfile,
@@ -64,6 +65,10 @@ interface CheckContext {
   readonly host?: string | undefined;
   readonly lanesRunning?: number | undefined;
   readonly runtimeMode?: RuntimeMode | undefined;
+}
+interface RecheckContext extends CheckContext {
+  /** The role the launch claimed, so the recheck compares the same grant claim made. */
+  readonly role?: GoatclawRole | undefined;
 }
 interface ClaimInput {
   readonly id: string;
@@ -154,7 +159,7 @@ export class PermissionProfiles extends Context.Service<
     readonly recheck: (
       scope: McpInvocationScope,
       initial: PermissionProfileView,
-      context?: CheckContext,
+      context?: RecheckContext,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
     /**
      * A cloud launch bills a paid account, so with goatclaw on the `cloud.launch` capability is
@@ -367,6 +372,19 @@ export const layer = Layer.effect(
     ) {
       return yield* admit(yield* check(scope, capability, context));
     });
+    /** What a role launch holds under the caller's current profile; claim and recheck share it. */
+    const roleGrant = Effect.fn("PermissionProfiles.roleGrant")(function* (
+      role: GoatclawRole,
+      caller: EffectiveProfile,
+    ) {
+      const { profileId } = goatclawRoleTemplate(role);
+      const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
+      const named = policy.profiles[profileId];
+      if (named === undefined)
+        return yield* refusal(`Permission profile ${profileId} does not exist.`);
+      // roleProfile keeps the role profile's id, so the child is bound under the role's profile.
+      return { named, profile: roleProfile(role, named, caller) };
+    });
     const assertTarget = Effect.fn("PermissionProfiles.assertTarget")(function* (
       scope: McpInvocationScope,
       threadId: ThreadId,
@@ -377,18 +395,25 @@ export const layer = Layer.effect(
       const caller = yield* resolve(scope, callerMode, forwarded);
       if (!caller.enabled) return;
       const target = yield* resolve(scope, targetMode, undefined, threadId);
-      if (
-        encodeProfile(intersectProfiles(target.profile, caller.profile)) !==
-        encodeProfile(target.profile)
-      )
-        return yield* refusal(
-          "The target thread's permission profile exceeds the caller's ceiling.",
-        );
+      const within = (ceiling: PermissionProfile) =>
+        encodeProfile(intersectProfiles(target.profile, ceiling)) === encodeProfile(target.profile);
+      if (within(caller.profile)) return;
+      // A role thread holds what its role keeps beyond the caller's profile; the caller can still
+      // reach it while that role's grant from the caller now covers it, as a launch would.
+      for (const role of GoatclawRole.literals) {
+        if (
+          GOATCLAW_ROLE_PROFILES[role] === target.narrowing?.named.id &&
+          goatclawRoleTemplate(role).keeps.length > 0 &&
+          within((yield* roleGrant(role, caller)).profile)
+        )
+          return;
+      }
+      return yield* refusal("The target thread's permission profile exceeds the caller's ceiling.");
     });
     const recheck = Effect.fn("PermissionProfiles.recheck")(function* (
       scope: McpInvocationScope,
       initial: PermissionProfileView,
-      context: CheckContext = {},
+      { role, ...context }: RecheckContext = {},
     ) {
       if (!initial.enabled) return;
       const current = yield* require(scope, "threads.launch", {
@@ -397,8 +422,10 @@ export const layer = Layer.effect(
       });
       if (!current.enabled) return;
       if (context.host !== undefined) yield* require(scope, "threads.remote", context);
+      const granted =
+        role === undefined ? current.profile : (yield* roleGrant(role, current)).profile;
       if (
-        encodeProfile(intersectProfiles(initial.profile, current.profile)) !==
+        encodeProfile(intersectProfiles(initial.profile, granted)) !==
         encodeProfile(initial.profile)
       )
         return yield* refusal(
@@ -488,13 +515,7 @@ export const layer = Layer.effect(
       // The profile the child is bound under before any ceiling narrows it.
       let base = effective.narrowing?.named ?? effective.profile;
       if (input.role !== undefined) {
-        const { profileId } = goatclawRoleTemplate(input.role);
-        const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
-        const named = policy.profiles[profileId];
-        if (named === undefined)
-          return yield* refusal(`Permission profile ${profileId} does not exist.`);
-        // roleProfile keeps the role profile's id, so the child is bound under the role's profile.
-        const profile = roleProfile(input.role, named, effective);
+        const { named, profile } = yield* roleGrant(input.role, effective);
         const missing = missingRoleCapabilities(input.role, profile);
         if (missing.length > 0) return yield* roleRefusal(input.role, missing);
         granted = { ...effective, profile, runtimeMode: profile.runtimeModeCeiling };

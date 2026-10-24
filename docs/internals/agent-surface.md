@@ -388,6 +388,14 @@ profile lacks it, so a person's worker thread can still get merges through one; 
 launch snapshot or forwarded ceiling without it still removes it. That is safe only
 while `pr.merge` gates nothing but role launches, so gating a tool on it would hand
 that tool to every supervisor.
+Every check that compares a role thread's grant with its caller's, such as the
+recheck before an SSH launch and a send's target check, derives it with the same
+`roleProfile`; comparing against the caller's plain profile reads the kept
+capability as a narrowing and refuses every such launch or send.
+Creating and cloning a project are the one environment write a calling thread at
+`auto` may run, because worker agents run at `auto` at most; that needs goatclaw on
+and a profile allowing `worktree.create`, and every other environment write still
+needs full access.
 With goatclaw on, the served handle refuses a GOAT thread whose effective profile
 lacks the declared capability, before arguments decode, so `goat_call` and anything
 else that calls through the server inherit the check
