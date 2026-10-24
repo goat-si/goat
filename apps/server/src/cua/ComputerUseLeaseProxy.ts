@@ -289,6 +289,9 @@ const refusal = (
   );
 };
 
+/** A lease update that stops the current child, by what it means for a call. */
+type Stopping = { readonly pause: ComputerUsePauseReason } | { readonly end: LeaseEnd };
+
 interface Running {
   readonly driver: LeaseProxyDriver;
   readonly scope: Scope.Closeable;
@@ -312,6 +315,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
    * replaces a child the other just started or stopped.
    */
   const lifecycle = yield* Semaphore.make(1);
+  /** A pause or end the proxy has taken from the lease stream but not applied yet. */
+  let stopping: Stopping | undefined;
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
   const handshake: Array<string> = [];
@@ -606,18 +611,29 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
 
   // The server is the authority: the first word for this control confirms it, anything else ends.
   yield* options.leaseUpdates.pipe(
-    Stream.runForEach((update) =>
-      lifecycle.withPermits(1)(
-        (update.state !== "ended" && update.controlId !== options.controlId
-          ? end("lost")
-          : update.state === "active"
-            ? activate(update)
-            : update.state === "paused"
-              ? pause(update.reason)
-              : end(update.reason === "unauthorized" ? "lost" : update.reason)
-        ).pipe(Effect.andThen(options.onLeaseUpdateApplied?.(update) ?? Effect.void)),
-      ),
-    ),
+    Stream.runForEach((update) => {
+      const stop: Stopping | undefined =
+        update.state !== "ended" && update.controlId !== options.controlId
+          ? { end: "lost" }
+          : update.state === "paused"
+            ? { pause: update.reason }
+            : update.state === "ended"
+              ? { end: update.reason === "unauthorized" ? "lost" : update.reason }
+              : undefined;
+      return Effect.gen(function* () {
+        // Known at once, before the update waits for the lock: a call judged meanwhile is
+        // refused before it reaches any child.
+        stopping = stop;
+        yield* lifecycle.withPermits(1)(
+          (stop !== undefined && "end" in stop
+            ? end(stop.end)
+            : stop !== undefined
+              ? pause(stop.pause)
+              : activate(update as Extract<ComputerUseLeaseUpdate, { state: "active" }>)
+          ).pipe(Effect.andThen(options.onLeaseUpdateApplied?.(update) ?? Effect.void)),
+        );
+      }).pipe(Effect.ensuring(Effect.sync(() => void (stopping = undefined))));
+    }),
     Effect.catchCause(() => Effect.void),
     Effect.andThen(end("lost")),
     Effect.forkScoped,
@@ -825,17 +841,21 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         name: typeof message.params?.name === "string" ? message.params.name : "",
         args: message.params?.arguments,
       });
-      // A pause or end that came while drawing: refuse, whether or not it has stopped the
-      // driver yet. This call never ran.
-      if (running !== current || paused !== undefined || finished !== undefined)
+      // A pause or end that came while drawing, or that is waiting for a refresh to let go of
+      // the lock: refuse, whether or not it has stopped the driver yet. This call never ran.
+      const ending =
+        finished ?? (stopping !== undefined && "end" in stopping ? stopping.end : undefined);
+      const pausing =
+        paused ?? (stopping !== undefined && "pause" in stopping ? stopping.pause : undefined);
+      if (running !== current || pausing !== undefined || ending !== undefined)
         return yield* options.output(
-          finished !== undefined
-            ? refusal(id, message.method, finished, LEASE_END_MESSAGES[finished])
+          ending !== undefined
+            ? refusal(id, message.method, ending, LEASE_END_MESSAGES[ending])
             : refusal(
                 id,
                 message.method,
-                pausedDetail(paused ?? "human_input"),
-                PAUSE_MESSAGES[paused ?? "human_input"],
+                pausedDetail(pausing ?? "human_input"),
+                PAUSE_MESSAGES[pausing ?? "human_input"],
               ),
         );
     }

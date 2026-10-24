@@ -700,7 +700,8 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.restarted;
         assert.equal(yield* h.startedQueued, 0);
         assert.equal(yield* h.liveDrivers, 1);
-        assert.equal(yield* h.driverQueued, 0);
+        // Refused before any child heard it, never sent and then cancelled.
+        assert.notInclude(h.log, "send click");
       }),
   );
 
