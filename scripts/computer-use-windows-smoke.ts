@@ -13,13 +13,19 @@
 // @effect-diagnostics nodeBuiltinImport:off -- A standalone harness around child processes and files.
 // @effect-diagnostics globalTimers:off -- Waits for windows the harness itself opened.
 // @effect-diagnostics globalConsole:off -- Prints progress to the person running it by hand.
+// @effect-diagnostics globalDate:off -- Times the gap between live frames the helper sends.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 import * as NodeURL from "node:url";
 
-import type { ComputerUseElement, ComputerUseObservation } from "@goat/contracts";
+import {
+  computerUseImageInfo,
+  PREVIEW_SESSION_FRAME_LIMITS,
+  type ComputerUseElement,
+  type ComputerUseObservation,
+} from "@goat/contracts";
 import {
   makeObservationTracker,
   type DriverWindowState,
@@ -81,6 +87,8 @@ const pidsOf = (image: string) => processes(["/fi", "imagename eq " + image]).ma
 
 interface Helper {
   readonly call: (method: string, params?: object) => Promise<unknown>;
+  /** frame and frameUnavailable lines; returns the unsubscribe. */
+  readonly onFrame: (listener: (message: Record<string, unknown>) => void) => () => void;
   readonly close: () => Promise<void>;
 }
 
@@ -90,16 +98,21 @@ async function openHelper(): Promise<Helper> {
     windowsHide: true,
   });
   const pending = new Map<string, (reply: { result?: unknown; error?: unknown }) => void>();
+  const frameListeners = new Set<(message: Record<string, unknown>) => void>();
   let greet: (hello: Record<string, unknown>) => void = () => undefined;
   const hello = new Promise<Record<string, unknown>>((resolve) => (greet = resolve));
   NodeReadline.createInterface({ input: child.stdout }).on("line", (line) => {
     const message = JSON.parse(line);
     if (message.type === "hello" || message.type === "refused") return greet(message);
+    if (message.type === "frame" || message.type === "frameUnavailable")
+      for (const listener of frameListeners) listener(message);
     if (typeof message.id === "string") pending.get(message.id)?.(message);
   });
   const greeting = await hello;
   record("hello", greeting);
   if (greeting.type !== "hello") fail("The helper refused: " + JSON.stringify(greeting));
+  if (!(greeting.features as ReadonlyArray<string> | undefined)?.includes("frames"))
+    fail("The helper does not offer live frames.");
   let next = 0;
   const call = async (method: string, params: object = {}) => {
     const id = String(++next);
@@ -113,6 +126,10 @@ async function openHelper(): Promise<Helper> {
   const exited = new Promise((resolve) => child.once("exit", resolve));
   return {
     call,
+    onFrame: (listener) => {
+      frameListeners.add(listener);
+      return () => frameListeners.delete(listener);
+    },
     close: async () => {
       child.stdin.end();
       await exited;
@@ -197,6 +214,72 @@ async function main(
       record("observe " + label, observation);
       return observation;
     };
+    let framesId = 0;
+    /**
+     * One frames request for one window (#1370), cleared again before returning. A frame must be
+     * a JPEG of exactly the size it claims, within the tile limits, and come no faster than the
+     * interval; a no-picture reason must be the expected one and be told once. Nothing may arrive
+     * for the request after it is cleared.
+     */
+    const frame = async (
+      label: string,
+      expected: string,
+      target: {
+        readonly pid: number;
+        readonly windowId: number;
+        readonly maxWidth: number;
+        readonly apps?: ReadonlyArray<string>;
+      },
+    ) => {
+      const id = ++framesId;
+      const seen: Array<{ readonly at: number; readonly message: Record<string, unknown> }> = [];
+      const unsubscribe = helper.onFrame((message) => {
+        if (message.framesId === id) seen.push({ at: Date.now(), message });
+      });
+      const params = { key: label, intervalMs: 500, ...target };
+      await helper.call("frames", { framesId: id, targets: [params] });
+      const wanted = expected === "frame" ? 2 : 1;
+      for (let attempt = 0; attempt < 60 && seen.length < wanted; attempt++) await sleep(250);
+      // A reason is told once, however many intervals pass.
+      if (expected !== "frame") await sleep(1_200);
+      await helper.call("frames", { framesId: ++framesId, targets: [] });
+      const cleared = seen.length;
+      await sleep(1_200);
+      unsubscribe();
+      const first = seen[0]?.message ?? fail("No frames answer for " + label + ".");
+      if (seen.length !== cleared) fail("Frames for " + label + " kept coming after the clear.");
+      if (first.type === "frameUnavailable") {
+        record("frame " + label, first);
+        if (first.reason !== expected || seen.length !== 1)
+          fail("frames " + label + " should be " + expected + " once, got " + JSON.stringify(seen));
+        return;
+      }
+      const data = String(first.data);
+      const bytes = Buffer.from(data, "base64");
+      const info = computerUseImageInfo(data);
+      const gap = (seen[1]?.at ?? Infinity) - (seen[0]?.at ?? 0);
+      record("frame " + label, {
+        width: first.width,
+        height: first.height,
+        bytes: bytes.length,
+        gap,
+      });
+      NodeFS.writeFileSync(NodePath.join(out, "frame-" + label + ".jpg"), bytes);
+      if (
+        expected !== "frame" ||
+        first.key !== label ||
+        info?.mimeType !== "image/jpeg" ||
+        info.width !== first.width ||
+        info.height !== first.height ||
+        info.width > Math.min(PREVIEW_SESSION_FRAME_LIMITS.maxWidth, params.maxWidth) ||
+        bytes.length > PREVIEW_SESSION_FRAME_LIMITS.maxBytes ||
+        // Two frames, at least about one interval apart.
+        !(gap >= 450 && gap < 5_000)
+      )
+        fail(
+          "frames " + label + " should be " + expected + ", got " + JSON.stringify({ info, gap }),
+        );
+    };
     /** One element action through a tracker ref. A refusal is returned and nothing is sent. */
     const act = async (
       name: string,
@@ -267,6 +350,37 @@ async function main(
         image: NodePath.basename(fixtureExe),
       });
       const fw = await windowOf([fixture.pid ?? 0], /GOAT computer use fixture/u);
+      const fixtureTarget = { pid: fw.pid, windowId: fw.window_id };
+      // The app name the driver lists for the fixture, which an approval would carry.
+      const listed = (
+        (await helper.call("listApps")) as { apps: Array<{ pid: number; name: string }> }
+      ).apps;
+      const fixtureApp =
+        listed.find((app) => app.pid === fw.pid)?.name ??
+        fail("list_apps does not name the fixture.");
+      await frame("fixture", "frame", { ...fixtureTarget, maxWidth: 480 });
+      await frame("fixture-narrow", "frame", { ...fixtureTarget, maxWidth: 200 });
+      await frame("fixture-approved", "frame", {
+        ...fixtureTarget,
+        maxWidth: 480,
+        apps: [fixtureApp],
+      });
+      await frame("fixture-other-app", "appNotApproved", {
+        ...fixtureTarget,
+        maxWidth: 480,
+        apps: ["Calculator"],
+      });
+      await frame("wrong-pid", "windowGone", {
+        pid: process.pid,
+        windowId: fw.window_id,
+        maxWidth: 480,
+      });
+      // Past a Windows pid's range: no process has it, so it is gone, not a malformed request.
+      await frame("pid-out-of-range", "windowGone", {
+        pid: 2 ** 40,
+        windowId: fw.window_id,
+        maxWidth: 480,
+      });
       const first = await observe("fixture-1", fw.pid, fw.window_id);
       const firstElements = fullElements(first);
       // State the driver gives (Agree's ToggleState) and what only the helper reads (#1286).
@@ -332,6 +446,7 @@ async function main(
         hidden.screenshot !== undefined
       )
         fail("A focused password field must withhold the whole window.");
+      await frame("fixture-private", "private", { ...fixtureTarget, maxWidth: 480 });
       await refused(
         "privateMode",
         "set_value",
