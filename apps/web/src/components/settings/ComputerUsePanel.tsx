@@ -28,11 +28,13 @@ import {
 } from "./useComputerUseAutoSetup";
 
 export const COMPUTER_USE_ADVANCED_STORAGE_KEY = "goat:settings:computer-use-advanced-open";
-const SKILL_TARGET = "computer-use-skill";
+// Settings search jumps that land on a row inside Advanced.
+const ADVANCED_TARGETS: ReadonlyArray<string> = ["computer-use-skill", "computer-use-full-access"];
 
 export interface ComputerUseSettingsPatch {
   readonly enableCua?: boolean;
   readonly disabledBuiltInSkills?: ReadonlyArray<string>;
+  readonly cuaFullAccessAutoAdmit?: boolean;
 }
 
 interface StatusLine {
@@ -103,7 +105,7 @@ function statusLine(input: {
   return { text: computerUseStatusText({ enabled: true, status, error }) ?? "" };
 }
 
-/** Closed by default and remembered; a settings search for the skill opens it for this visit. */
+/** Closed by default and remembered; a settings search for a row inside opens it for this visit. */
 function useAdvancedOpen() {
   const [stored, setStored] = useLocalStorage(
     COMPUTER_USE_ADVANCED_STORAGE_KEY,
@@ -113,8 +115,12 @@ function useAdvancedOpen() {
   const searchTargetId = useSettingsSearchTargetId();
   const [searchOpened, setSearchOpened] = useState(false);
   const [handled, setHandled] = useState<string | null>(null);
-  if (searchTargetId === SKILL_TARGET && handled !== SKILL_TARGET) {
-    setHandled(SKILL_TARGET);
+  if (
+    searchTargetId !== null &&
+    ADVANCED_TARGETS.includes(searchTargetId) &&
+    handled !== searchTargetId
+  ) {
+    setHandled(searchTargetId);
     setSearchOpened(true);
   }
   if (searchTargetId === null && handled !== null) setHandled(null);
@@ -133,6 +139,7 @@ export function ComputerUsePanel({
   error,
   localMac,
   disabledSkills,
+  fullAccessAutoAdmit,
   save,
   bridge,
 }: {
@@ -144,6 +151,7 @@ export function ComputerUsePanel({
   /** This desktop runs the host, so it can read, grant and prove its macOS permissions. */
   localMac: boolean;
   disabledSkills: ReadonlyArray<string>;
+  fullAccessAutoAdmit: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
   bridge: Omit<ComputerUseSetupActions, "save"> & {
     readonly reveal?: (() => Promise<void>) | undefined;
@@ -236,6 +244,15 @@ export function ComputerUsePanel({
                 ) : null}
               </div>
             ) : null}
+            <SettingSwitchRow
+              {...searchableSetting("computer-use-full-access")}
+              settingKey="cuaFullAccessAutoAdmit"
+              description={`Threads in full access mode use every app on ${hostLabel} without asking, including scheduled tasks and GOAT Bot. Stop and turning computer use off still end them.`}
+              label="Full access without approval"
+              checked={fullAccessAutoAdmit}
+              canConfigure={canConfigure}
+              onChange={(checked) => save({ cuaFullAccessAutoAdmit: checked })}
+            />
             <BuiltInSkillRows
               disabledSkills={disabledSkills}
               canConfigure={canConfigure}
@@ -314,37 +331,68 @@ function BuiltInSkillRows({
   canConfigure: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
 }) {
+  return BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => (
+    <SettingSwitchRow
+      key={skill.name}
+      {...searchableSetting("computer-use-skill")}
+      settingKey="disabledBuiltInSkills"
+      description="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+      label={`${skill.displayName} skill`}
+      checked={!disabledSkills.includes(skill.name)}
+      canConfigure={canConfigure}
+      onChange={(checked) => {
+        const others = disabledSkills.filter((name) => name !== skill.name);
+        return save({ disabledBuiltInSkills: checked ? others : [...others, skill.name] });
+      }}
+    />
+  ));
+}
+
+/** One server setting inside Advanced, with its own save state and error. */
+function SettingSwitchRow({
+  id,
+  title,
+  settingKey,
+  description,
+  label,
+  checked,
+  canConfigure,
+  onChange,
+}: {
+  id: string;
+  title: string;
+  settingKey: "disabledBuiltInSkills" | "cuaFullAccessAutoAdmit";
+  description: string;
+  label: string;
+  checked: boolean;
+  canConfigure: boolean;
+  onChange: (checked: boolean) => Promise<string | null>;
+}) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  return BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => {
-    const on = !disabledSkills.includes(skill.name);
-    return (
-      <SettingsRow
-        key={skill.name}
-        {...searchableSetting("computer-use-skill")}
-        serverScoped
-        settingKeys={["disabledBuiltInSkills"]}
-        description="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
-        status={saveError ? <span role="status">{saveError}</span> : undefined}
-        control={
-          <Switch
-            aria-label={`${skill.displayName} skill`}
-            checked={on}
-            disabled={saving || !canConfigure}
-            onCheckedChange={(checked) => {
-              setSaveError(null);
-              setSaving(true);
-              const others = disabledSkills.filter((name) => name !== skill.name);
-              void save({ disabledBuiltInSkills: checked ? others : [...others, skill.name] }).then(
-                (failure) => {
-                  setSaving(false);
-                  setSaveError(failure);
-                },
-              );
-            }}
-          />
-        }
-      />
-    );
-  });
+  return (
+    <SettingsRow
+      id={id}
+      title={title}
+      serverScoped
+      settingKeys={[settingKey]}
+      description={description}
+      status={saveError ? <span role="status">{saveError}</span> : undefined}
+      control={
+        <Switch
+          aria-label={label}
+          checked={checked}
+          disabled={saving || !canConfigure}
+          onCheckedChange={(next) => {
+            setSaveError(null);
+            setSaving(true);
+            void onChange(next).then((failure) => {
+              setSaving(false);
+              setSaveError(failure);
+            });
+          }}
+        />
+      }
+    />
+  );
 }

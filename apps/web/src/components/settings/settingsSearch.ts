@@ -252,14 +252,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Color scheme",
     to: "/settings/appearance",
     searchTerms: ["appearance light dark system mode"],
-    targetId: "appearance",
   },
   {
     id: "theme",
-    title: "Themes",
+    title: "Theme",
     to: "/settings/appearance",
-    searchTerms: ["appearance colors palette custom import"],
-    targetId: "appearance",
+    searchTerms: ["themes appearance colors palette custom create import duplicate export"],
   },
   {
     // Prefixed because the slider control already owns the `appearance-contrast` id.
@@ -853,6 +851,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [
       "built in builtin skill computer use instructions agents observe verify advanced readiness",
     ],
+  },
+  {
+    id: "computer-use-full-access",
+    title: "Full access without approval",
+    to: "/settings/integrations",
+    searchTerms: ["computer use approval grant admission allow every app full access unattended"],
   },
   {
     id: "goat-bot-home",

@@ -22,6 +22,10 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     environmentId,
     (settings) => settings.disabledBuiltInSkills,
   );
+  const fullAccessAutoAdmit = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.cuaFullAccessAutoAdmit,
+  );
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const query = useEnvironmentQuery(serverEnvironment.computerUse({ environmentId, input: {} }));
@@ -57,6 +61,7 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
   return {
     enabled,
     disabledSkills,
+    fullAccessAutoAdmit,
     canConfigure,
     status: query.data,
     error: query.error,
@@ -152,6 +157,7 @@ function ComputerUseControls({
       error={host.error}
       localMac={host.localMac}
       disabledSkills={host.disabledSkills}
+      fullAccessAutoAdmit={host.fullAccessAutoAdmit}
       save={host.save}
       bridge={{
         checkGrants,

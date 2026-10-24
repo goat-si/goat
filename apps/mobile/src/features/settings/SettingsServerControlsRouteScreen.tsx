@@ -477,16 +477,26 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     />
                     <ComputerUseAdvancedRow advanced={computerUseAdvanced} />
                     {computerUseAdvanced.expanded ? (
-                      <SettingsSwitchRow
-                        icon="desktopcomputer"
-                        label="Computer Use skill"
-                        subtitle="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
-                        value={computerUseSkillOn}
-                        disabled={disabledFor("disabledBuiltInSkills")}
-                        onValueChange={(value) =>
-                          writeEach(planMobileBuiltInSkillToggle(targets, "computer-use", value))
-                        }
-                      />
+                      <>
+                        <SettingsSwitchRow
+                          icon="desktopcomputer"
+                          label="Full access without approval"
+                          subtitle="Threads in full access mode use every app on these computers without asking, including scheduled tasks and GOAT Bot. Stop and turning computer use off still end them."
+                          value={uniform("cuaFullAccessAutoAdmit")}
+                          disabled={disabledFor("cuaFullAccessAutoAdmit")}
+                          onValueChange={(value) => write({ cuaFullAccessAutoAdmit: value })}
+                        />
+                        <SettingsSwitchRow
+                          icon="desktopcomputer"
+                          label="Computer Use skill"
+                          subtitle="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+                          value={computerUseSkillOn}
+                          disabled={disabledFor("disabledBuiltInSkills")}
+                          onValueChange={(value) =>
+                            writeEach(planMobileBuiltInSkillToggle(targets, "computer-use", value))
+                          }
+                        />
+                      </>
                     ) : null}
                   </SettingsSection>
                   <SettingsSection
