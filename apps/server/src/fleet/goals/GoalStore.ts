@@ -38,6 +38,12 @@ const WorkerDetail = Schema.Struct({
   followUps: NonNegativeInt,
   /** The run a follow-up was last sent about, so each run is nudged once. */
   followedUpRunId: Schema.NullOr(RunId),
+  /**
+   * The run whose recovery reached an outcome, so each run is recovered once. Kept apart from
+   * followedUpRunId: a steered run that later fails, and a row an earlier controller marked
+   * followed up after a refused move, still get their one recovery (#1452).
+   */
+  recoveredRunId: Schema.NullOr(RunId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** The usage-limited run the goal resumed after its reset, so it is resumed once. */
   resumedRunId: Schema.NullOr(RunId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** The run a stall was steered on, so a second stall reschedules. */
@@ -357,6 +363,7 @@ const make = Effect.gen(function* () {
         reported: worker.reported,
         followUps: worker.followUps,
         followedUpRunId: worker.followedUpRunId,
+        recoveredRunId: worker.recoveredRunId,
         steeredRunId: worker.steeredRunId,
         resumedRunId: worker.resumedRunId,
         lastRunId: worker.lastRunId,

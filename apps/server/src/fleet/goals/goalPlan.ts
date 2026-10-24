@@ -54,6 +54,13 @@ const resumeActionId = (
   attempt: number,
   runId: string,
 ) => "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":" + runId + ":resume";
+/** One reschedule per run, or per reason when no run is known; claimed as a launch. */
+export const rescheduleActionId = (
+  goal: Pick<FleetGoal, "id">,
+  slot: number,
+  attempt: number,
+  runOrReason: string,
+) => "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":" + runOrReason + ":reschedule";
 /** Names the run it stops: the id is the interrupt's command id, so a later run gets a new one. */
 const interruptActionId = (
   goal: Pick<FleetGoal, "id">,
@@ -203,6 +210,8 @@ export interface GoalObservation {
     string,
     { readonly claimedAt: number; readonly settled: boolean } | null
   >;
+  /** Reschedule action ids the Rescheduler refused. */
+  readonly refusedReschedules: ReadonlySet<string>;
   readonly pullRequests: ReadonlyMap<number, PullRequestObservation>;
   readonly issues: ReadonlyMap<number, "open" | "closed" | "unknown">;
   readonly turns: number;
@@ -302,6 +311,7 @@ export const newWorker = (
   reported: false,
   followUps: 0,
   followedUpRunId: null,
+  recoveredRunId: null,
   steeredRunId: null,
   resumedRunId: null,
   lastRunId: null,
@@ -399,6 +409,16 @@ export function planGoal(
       note: null,
     };
     const fresh = seen.runId !== null && worker.followedUpRunId !== seen.runId;
+    // Each run is recovered once. A row an earlier controller wrote marks a run followed up both
+    // after a same-thread fallback it sent and after a move it was refused; only the refused one
+    // was left without a way forward (#1452).
+    const unrecovered =
+      seen.runId !== null &&
+      worker.recoveredRunId !== seen.runId &&
+      (fresh ||
+        observation.refusedReschedules.has(
+          rescheduleActionId(goal, worker.slot, worker.attempt, seen.runId),
+        ));
     const followUp = (message: string): WorkerRecord => {
       if (seen.runId === null || !fresh) return worker;
       if (worker.followUps >= MAX_FOLLOW_UPS)
@@ -416,11 +436,11 @@ export function planGoal(
     const recover = (
       reason: "failed" | "stalled" | "host_unreachable",
       failureClass: OrchestrationV2ProviderFailureClass,
-      // A stall was already steered on this run, so it is no longer fresh; the reschedule's
-      // next-attempt launch id dedupes it instead.
-      requireFresh = true,
+      // A steered stall and a lost host ask again on every pass; the reschedule's next-attempt
+      // launch id dedupes them instead.
+      once = true,
     ) => {
-      if (fresh || !requireFresh)
+      if (!once || unrecovered)
         actions.push({
           type: "recover",
           slot: worker.slot,

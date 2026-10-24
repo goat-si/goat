@@ -10,6 +10,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import { HubDown, type HubDownShape, type PausedGoalWork } from "../../hub/HubDown.ts";
@@ -76,6 +77,15 @@ const running = (threadId: string, fake: Fake): WorkerReading =>
         lastActivityAt: null,
         result: null,
       };
+
+const failedRun = (runId: string): WorkerReading => ({
+  kind: "seen",
+  terminal: true,
+  runId: RunId.make(runId),
+  runStatus: "failed",
+  lastActivityAt: null,
+  result: null,
+});
 
 const makeFake = (): Fake => {
   const fake: Fake = {
@@ -626,6 +636,73 @@ describe("GoalController", () => {
       ]);
     }).pipe(Effect.provide(layerFor(fake)));
   });
+
+  it.effect(
+    "restarts once a failed slot an earlier controller left marked followed up after a refused move (#1452)",
+    () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        const sql = yield* SqlClient.SqlClient;
+        // Rows as the controller before #1472 wrote them: the run is marked followed up after a
+        // refused move, and after a hop whose message waits held behind the failed run.
+        const legacy = (
+          id: string,
+          actionId: string,
+          outcome: string,
+          host: string | null = null,
+        ) =>
+          Effect.gen(function* () {
+            yield* insert(testGoal(id));
+            yield* pass(id);
+            const nowIso = "1970-01-01T00:00:00.000Z";
+            yield* store.claim({
+              goalId: FleetGoalId.make(id),
+              generation: 1,
+              actionId,
+              kind: actionId.endsWith(":reschedule") ? "launch" : "fallback",
+              host: null,
+              slot: 0,
+              nowIso,
+            });
+            yield* store.settle(actionId, outcome, nowIso);
+            yield* sql`
+              UPDATE fleet_goal_workers
+              SET host = ${host}, detail_json = json_set(
+                json_remove(detail_json, '$.recoveredRunId'), '$.followedUpRunId', 'run:5'
+              )
+              WHERE goal_id = ${id}
+            `;
+          });
+        yield* legacy("goal_stranded", "goal:goal_stranded:s0:a1:run:5:reschedule", "refused");
+        yield* legacy("goal_hopped", "goal:goal_hopped:s0:a1:run:5:hub-hop", "switched");
+        // A slot on another host asks the Rescheduler, which refuses again; once is enough.
+        yield* legacy("goal_remote", "goal:goal_remote:s0:a1:run:5:reschedule", "refused", "box");
+        fake.reading = (threadId) =>
+          threadId === "thread:worker-4" ? running(threadId, fake) : failedRun("run:5");
+        healthOf = () => ({ _tag: "failed", failureClass: "unknown", runId: RunId.make("run:5") });
+        for (const id of ["goal_stranded", "goal_hopped", "goal_remote"])
+          for (let round = 0; round < 3; round += 1) yield* pass(id);
+        healthOf = () => ({ _tag: "healthy" });
+        expect(fake.launches.map((launch) => launch.actionId)).toEqual([
+          "goal:goal_stranded:s0:a1:launch",
+          "goal:goal_hopped:s0:a1:launch",
+          "goal:goal_remote:s0:a1:launch",
+          "goal:goal_stranded:s0:a2:launch",
+        ]);
+        expect((yield* record("goal_stranded")).workers[0]).toMatchObject({
+          attempt: 2,
+          threadId: "thread:worker-4",
+          state: "running",
+        });
+        expect((yield* record("goal_hopped")).workers[0]).toMatchObject({ attempt: 1 });
+        const refusals = (yield* store.events(FleetGoalId.make("goal_remote"), 50)).filter(
+          (event) => event.reason === "RescheduleRefused",
+        );
+        expect(refusals).toHaveLength(1);
+      }).pipe(Effect.provide(layerFor(fake)));
+    },
+  );
 
   describe("while the hub is unreachable", () => {
     const scriptedHub = (initial: HubWork) => {

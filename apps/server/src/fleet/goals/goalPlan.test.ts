@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { RunId, ThreadId } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 
 import {
   type GoalObservation,
@@ -11,7 +12,7 @@ import {
   repairWorkers,
   type SlotObservation,
 } from "./goalPlan.ts";
-import type { WorkerRecord } from "./GoalStore.ts";
+import { WorkerRecord } from "./GoalStore.ts";
 import { testGoal, testSpec } from "./goalTestkit.ts";
 
 const NOW = Date.parse("2026-10-20T01:00:00.000Z");
@@ -21,6 +22,7 @@ const observe = (overrides: Partial<GoalObservation> = {}): GoalObservation => (
   owner: { available: true },
   workers: new Map(),
   launchClaims: new Map(),
+  refusedReschedules: new Set(),
   pullRequests: new Map(),
   issues: new Map(),
   turns: 0,
@@ -556,5 +558,43 @@ describe("planGoal", () => {
         observe({ workers: new Map([[0, limited("2026-10-20T00:30:00.000Z")]]) }),
       ).actions,
     ).toEqual([]);
+  });
+
+  it("recovers once a failed run an earlier controller marked followed up after a refused move (#1452)", () => {
+    const goal = testGoal("goal_q");
+    // The row the controller before #1472 left behind: the run is recorded as followed up both
+    // when its reschedule was refused and when a same-thread fallback was sent.
+    const { recoveredRunId: _absent, ...legacy } = running(goal, 0);
+    const followedUp = Schema.decodeUnknownSync(WorkerRecord)({
+      ...legacy,
+      followedUpRunId: "run:1",
+      lastRunId: "run:1",
+    });
+    const failed = seen({
+      runStatus: "failed",
+      health: { _tag: "failed", failureClass: "unknown", runId: RunId.make("run:1") },
+      result: null,
+    });
+    const refused = observe({
+      workers: new Map([[0, failed]]),
+      refusedReschedules: new Set(["goal:goal_q:s0:a1:run:1:reschedule"]),
+    });
+    expect(planGoal(goal, [followedUp], refused).actions).toEqual([
+      {
+        type: "recover",
+        slot: 0,
+        attempt: 1,
+        runId: RunId.make("run:1"),
+        reason: "failed",
+        failureClass: "unknown",
+      },
+    ]);
+    // A sent fallback whose message waits held behind the failed run still shows that run.
+    expect(
+      planGoal(goal, [followedUp], observe({ workers: new Map([[0, failed]]) })).actions,
+    ).toEqual([]);
+    // Once this controller records the recovery's outcome, the run is not recovered again.
+    const settled = { ...followedUp, recoveredRunId: RunId.make("run:1") };
+    expect(planGoal(goal, [settled], refused).actions).toEqual([]);
   });
 });
