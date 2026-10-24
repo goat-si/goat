@@ -178,8 +178,10 @@ it.effect(
             conflict._tag === "HandoffError" ? conflict.reason : conflict._tag,
             "conflict",
           );
+          // A person reads this on the approval card: the holder by its title, not its id.
           assert.include(conflict.message, "com.kakao.KakaoTalk");
-          assert.include(conflict.message, threadId);
+          assert.include(conflict.message, '"Human handoff"');
+          assert.notInclude(conflict.message, threadId);
         }).pipe(
           Effect.provide(
             Handoffs.layer.pipe(

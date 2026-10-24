@@ -887,13 +887,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         // the child that replaced the one it was admitted under.
         if (!stillCurrent()) return yield* options.output(notSent(id));
       }
-      // Every wait is behind it now: another thread's grant that arrived meanwhile still refuses
-      // a call that would take the screen from it.
-      if (shared && takesScreen(message.params?.name, message.params?.arguments)) {
-        // Drawn as acting above; it never reaches the driver, so no reply will settle it.
-        yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
-        return yield* options.output(refusal(id, message.method, "screen_shared", SCREEN_SHARED));
-      }
     }
     const cancelled = cancelledRequestKey(line);
     if (cancelled !== undefined) {
@@ -907,12 +900,26 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
         unfiltered: Object.keys(message?.params?.arguments ?? {}).every((key) => key === "session"),
       });
+    const posts =
+      isRequest &&
+      message?.method === "tools/call" &&
+      postsInput(typeof message.params?.name === "string" ? message.params.name : "");
+    if (posts) yield* inputStarted(JSON.stringify(id));
+    // Checked last, with no wait before the send: another thread's grant that arrived during any
+    // step above still refuses a call that would take the screen from it.
     if (
       isRequest &&
       message?.method === "tools/call" &&
-      postsInput(typeof message.params?.name === "string" ? message.params.name : "")
-    )
-      yield* inputStarted(JSON.stringify(id));
+      shared &&
+      takesScreen(message.params?.name, message.params?.arguments)
+    ) {
+      const key = JSON.stringify(id);
+      outstanding.delete(key);
+      if (posts) yield* inputEnded(key);
+      // Drawn as acting above; it never reaches the driver, so no reply will settle it.
+      yield* drawOverlay({ type: "reply", id: key, failed: true });
+      return yield* options.output(refusal(id, message.method, "screen_shared", SCREEN_SHARED));
+    }
     yield* current.driver.send(line);
   });
 

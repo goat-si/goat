@@ -70,9 +70,19 @@ export interface ComputerUseHolder {
   readonly apps?: ReadonlyArray<string>;
 }
 
-/** Who holds what an admission would overlap, and until when, as one sentence. */
+const heldApps = (holder: ComputerUseHolder) =>
+  holder.apps === undefined ? "the whole screen" : holder.apps.join(", ");
+
+/** Who holds what an admission would overlap, and until when, as one sentence for an agent. */
 export const describeHolder = (holder: ComputerUseHolder) =>
-  `Thread ${holder.threadId} holds ${holder.apps === undefined ? "the whole screen" : holder.apps.join(", ")} on this host until ${DateTime.formatIso(holder.expiresAt)}.`;
+  `Thread ${holder.threadId} holds ${heldApps(holder)} on this host until ${DateTime.formatIso(holder.expiresAt)}.`;
+
+/**
+ * The same sentence for a person on an approval card: the holder by its title, and the end as a
+ * UTC clock time like the request's own text, since the server does not know the reader's zone.
+ */
+export const describeHolderForPerson = (holder: ComputerUseHolder, title: string | undefined) =>
+  `${title === undefined ? "Another thread" : `The thread "${title}"`} holds ${heldApps(holder)} on this host until ${DateTime.formatIso(holder.expiresAt).slice(11, 16)} UTC.`;
 
 /**
  * Whether the host's helper reports a person's input and secret fields at all: true only for a

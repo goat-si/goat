@@ -71,14 +71,17 @@ const targetPid = (args: Readonly<Record<string, unknown>> | undefined) => {
 
 /**
  * Whether a call takes the screen itself: it brings a window forward, moves the pointer, or
- * delivers input in the foreground. Background delivery posts to the target process without
+ * delivers input in the foreground. A script or batch cannot be read for that, so it counts. Background delivery posts to the target process without
  * either, which is what lets threads admitted to different apps act at once.
  */
 export function takesScreen(name: unknown, args: unknown): boolean {
-  if (typeof name === "string" && SCREEN_TOOLS.has(name)) return true;
+  if (typeof name === "string" && (SCREEN_TOOLS.has(name) || OPAQUE_TOOLS.has(name))) return true;
   const object = record(args);
-  return (
-    object?.delivery_mode === "foreground" || record(object?.target)?.delivery_mode === "foreground"
+  const target = record(object?.target);
+  // The driver also reads the legacy dispatch alias and ignores case, so any of these that says
+  // foreground counts, whichever the driver would prefer.
+  return [object?.delivery_mode, object?.dispatch, target?.delivery_mode, target?.dispatch].some(
+    (mode) => typeof mode === "string" && mode.trim().toLowerCase() === "foreground",
   );
 }
 

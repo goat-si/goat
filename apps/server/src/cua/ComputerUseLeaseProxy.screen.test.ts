@@ -84,6 +84,11 @@ it.effect(
         call(1, "bring_to_front", window),
         call(2, "click", { ...window, x: 5, y: 5, delivery_mode: "foreground" }),
         call(3, "move_cursor", { ...window, x: 5, y: 5 }),
+        // The driver also reads the legacy dispatch alias and ignores case.
+        call(4, "click", { ...window, x: 5, y: 5, dispatch: "foreground" }),
+        call(5, "click", { ...window, x: 5, y: 5, delivery_mode: "Foreground" }),
+        // A batch can hold any of those, and the driver runs its steps itself.
+        call(6, "run_steps", { steps: [{ tool: "click", args: { ...window, x: 5, y: 5 } }] }),
       ];
       for (const [index, line] of screenTaking.entries()) {
         yield* h.send(line);
@@ -95,8 +100,8 @@ it.effect(
         });
       }
       assert.equal(yield* h.driverQueued, 0);
-      yield* h.send(call(4, "click", { ...window, x: 5, y: 5 }));
-      assert.equal(yield* h.sentToDriver, 4);
+      yield* h.send(call(7, "click", { ...window, x: 5, y: 5 }));
+      assert.equal(yield* h.sentToDriver, 7);
     }),
 );
 

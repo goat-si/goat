@@ -18,7 +18,7 @@ export const DESKTOP_CAPTURE_OFF =
   "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";
 
 export const SCREEN_SHARED =
-  "Another thread is using other apps on this screen, so a call that brings a window forward, moves the pointer or sends foreground input did not run: it would take the screen from that thread. Act on this window in the background or through an element, or end your turn and ask the person.";
+  "Another thread is using other apps on this screen, so a script, a batch or a call that brings a window forward, moves the pointer or sends foreground input did not run: it would take the screen from that thread. Make single calls that act on this window in the background or through an element, or end your turn and ask the person.";
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
