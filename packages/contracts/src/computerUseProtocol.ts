@@ -556,11 +556,30 @@ export const ComputerUseReplyFrame = Schema.Struct({
 });
 export type ComputerUseReplyFrame = typeof ComputerUseReplyFrame.Type;
 
-/** Which windows the helper watches for the safety signals; only while an agent session runs (D7). */
+/**
+ * Which windows the helper watches for the safety signals, only while an agent session runs
+ * (D7). watchId names this watch; every event it raises carries it, so events from an earlier
+ * watch in the same helper process never reach the next one.
+ *
+ * Private mode has a lifecycle the server can rely on, since it pauses agents until it clears:
+ * right after watch, the helper reports the current state of every target, active or not;
+ * before a target leaves the watch (its window closes, a new watch drops it, or unwatch), the
+ * helper reports active:false for it if it was active, and only then answers unwatch. A helper
+ * that exits clears every target of its generation.
+ */
 export const ComputerUseWatchRequest = Schema.Struct({
+  watchId: TrimmedNonEmptyString,
   targets: Schema.Array(ComputerUseWindowTarget).check(Schema.isMinLength(1)),
 });
 export type ComputerUseWatchRequest = typeof ComputerUseWatchRequest.Type;
+
+/**
+ * Where a person's input came from. unknown: the platform saw input but not its device. The
+ * desktop-to-server cuaHumanInput report should reuse this schema so every value a helper can
+ * send reaches the server.
+ */
+export const ComputerUseHumanInputSource = Schema.Literals(["keyboard", "pointer", "unknown"]);
+export type ComputerUseHumanInputSource = typeof ComputerUseHumanInputSource.Type;
 
 /**
  * Something the helper noticed on its own, sent without a request id. The server maps
@@ -575,31 +594,34 @@ export const ComputerUseEvent = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("humanInput"),
-    source: Schema.Literals(["keyboard", "pointer", "unknown"]),
+    source: ComputerUseHumanInputSource,
   }),
 ]);
 export type ComputerUseEvent = typeof ComputerUseEvent.Type;
 
 export const ComputerUseEventFrame = Schema.Struct({
   generation: TrimmedNonEmptyString,
+  watchId: TrimmedNonEmptyString,
   event: ComputerUseEvent,
 });
 export type ComputerUseEventFrame = typeof ComputerUseEventFrame.Type;
 
 /**
- * Whether an event may reach the caller. Like replies, an event from another helper
- * generation, such as one that was stopped or replaced, is quarantined, and so is an oversized
- * frame.
+ * Whether an event may reach the caller. An event from another helper generation, from a watch
+ * that has ended, or over the agreed frame limit is quarantined, like a late reply.
  */
 export function admitComputerUseEvent(input: {
   readonly frame: ComputerUseEventFrame;
   readonly frameBytes: number;
   readonly maxFrameBytes: number;
   readonly generation: string;
-}): "deliver" | "wrongGeneration" | "frameTooLarge" {
+  /** The watch in force, or undefined when nothing is watched. */
+  readonly watchId: string | undefined;
+}): "deliver" | "wrongGeneration" | "notWatching" | "frameTooLarge" {
   if (input.frameBytes > Math.min(input.maxFrameBytes, COMPUTER_USE_MAX_FRAME_BYTES))
     return "frameTooLarge";
-  return input.frame.generation === input.generation ? "deliver" : "wrongGeneration";
+  if (input.frame.generation !== input.generation) return "wrongGeneration";
+  return input.frame.watchId === input.watchId ? "deliver" : "notWatching";
 }
 
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u;

@@ -361,36 +361,54 @@ describe("computer use safety signals", () => {
   it("accepts events only from the current helper generation and within the frame limit", () => {
     const frame = Schema.decodeUnknownSync(ComputerUseEventFrame)({
       generation: "g2",
+      watchId: "w1",
       event: { type: "privateMode", active: true, target: { pid: 10, windowId: 20 } },
     });
-    const admit = (generation: string, frameBytes = 120) =>
-      admitComputerUseEvent({ frame, frameBytes, maxFrameBytes: 64 * 1024, generation });
+    const admit = (generation: string, frameBytes = 120, watchId: string | undefined = "w1") =>
+      admitComputerUseEvent({ frame, frameBytes, maxFrameBytes: 64 * 1024, generation, watchId });
     expect(admit("g2")).toBe("deliver");
     expect(admit("g3")).toBe("wrongGeneration");
     expect(admit("g2", 70 * 1024)).toBe("frameTooLarge");
+    // A later watch in the same helper, or none at all, never sees this watch's events.
+    expect(admit("g2", 120, "w2")).toBe("notWatching");
+    expect(
+      admitComputerUseEvent({
+        frame,
+        frameBytes: 120,
+        maxFrameBytes: 64 * 1024,
+        generation: "g2",
+        watchId: undefined,
+      }),
+    ).toBe("notWatching");
     expect(
       decodes(ComputerUseEventFrame, {
         generation: "g2",
+        watchId: "w1",
         event: { type: "humanInput", source: "pointer" },
       }),
     ).toBe(true);
     expect(
       decodes(ComputerUseEventFrame, {
         generation: "g2",
+        watchId: "w1",
         event: { type: "humanInput", source: "touch" },
       }),
     ).toBe(false);
     // Events carry no content: a typed-text field does not survive decoding.
     const typed = Schema.decodeUnknownSync(ComputerUseEventFrame)({
       generation: "g2",
+      watchId: "w1",
       event: { type: "humanInput", source: "keyboard", text: "hunter2" },
     });
     expect(JSON.stringify(typed)).not.toContain("hunter2");
   });
 
   it("watches at least one window, and reports who the helper is to the OS", () => {
-    expect(decodes(ComputerUseWatchRequest, { targets: [{ pid: 1, windowId: 2 }] })).toBe(true);
-    expect(decodes(ComputerUseWatchRequest, { targets: [] })).toBe(false);
+    expect(
+      decodes(ComputerUseWatchRequest, { watchId: "w1", targets: [{ pid: 1, windowId: 2 }] }),
+    ).toBe(true);
+    expect(decodes(ComputerUseWatchRequest, { watchId: "w1", targets: [] })).toBe(false);
+    expect(decodes(ComputerUseWatchRequest, { targets: [{ pid: 1, windowId: 2 }] })).toBe(false);
     const diagnosed = {
       grants: { accessibility: "denied", screenCapture: "granted" },
       helper: "authenticated",
