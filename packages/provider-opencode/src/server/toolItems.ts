@@ -1,6 +1,8 @@
 import type { OrchestrationV2TurnItem } from "@goat/contracts";
 import { resolveGoatMcpToolId } from "@goat/shared/goatMcpToolPresentation";
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
+import { imageBlockFromDataUrl, MAX_TOOL_OUTPUT_IMAGES } from "@goat/shared/toolOutput";
+import type { ToolPart } from "@opencode-ai/sdk/v2";
 
 // Search results stay on the timeline wire, so keep their text a preview.
 const SEARCH_PREVIEW_MAX_CHARS = 8_000;
@@ -9,6 +11,43 @@ type ToolItemBase = Omit<
   Extract<OrchestrationV2TurnItem, { type: "dynamic_tool" }>,
   "type" | "toolName" | "input" | "output"
 >;
+
+/**
+ * OpenCode returns an MCP tool's images, such as computer-use screenshots, as file attachments
+ * beside the text output. Base64 data URLs become image blocks after the text; a path or remote
+ * URL is never fetched. Oversize images are left to the tool-output asset path, which strips them.
+ */
+export function openCodeToolOutputWithImages(
+  output: string | undefined,
+  fileUrls: ReadonlyArray<string> | undefined,
+): string | ReadonlyArray<unknown> | undefined {
+  const images = (fileUrls ?? [])
+    .flatMap((url) => imageBlockFromDataUrl(url) ?? [])
+    .slice(0, MAX_TOOL_OUTPUT_IMAGES);
+  if (images.length === 0) return output;
+  return [...(output ? [{ type: "text", text: output }] : []), ...images];
+}
+
+/** The text and attached file URLs of an OpenCode 1 tool state. */
+export function openCodeToolStateResult(state: ToolPart["state"]): {
+  readonly output: string | undefined;
+  readonly fileUrls: ReadonlyArray<string> | undefined;
+} {
+  if (state.status === "completed")
+    return { output: state.output, fileUrls: state.attachments?.map((file) => file.url) };
+  return { output: state.status === "error" ? state.error : undefined, fileUrls: undefined };
+}
+
+/** OpenCode 2 puts a tool's files in its content beside the text parts. */
+export const openCodeFileUris = (
+  content: ReadonlyArray<{ readonly type: string; readonly uri?: string }>,
+) => content.flatMap((part) => (part.type === "file" && part.uri ? [part.uri] : []));
+
+export interface OpenCodeToolResult {
+  readonly output: string | undefined;
+  readonly fileUrls?: ReadonlyArray<string>;
+  readonly metadata: unknown;
+}
 
 function openCodeToolProjectionKind(
   toolName: string,
@@ -87,6 +126,7 @@ export function openCodeToolTurnItem(
     readonly name: string;
     readonly input: Record<string, unknown>;
     readonly output: string | undefined;
+    readonly fileUrls?: ReadonlyArray<string> | undefined;
     readonly completedMetadata: unknown;
   },
 ): OrchestrationV2TurnItem {
@@ -157,8 +197,10 @@ export function openCodeToolTurnItem(
     }
     case "dynamic_tool": {
       const readPath = recordString(input, "filePath", "path", "file");
-      const cleanedOutput =
-        tool.name === "read" && output !== undefined ? nativeReadOutput(output) : output;
+      const cleanedOutput = openCodeToolOutputWithImages(
+        tool.name === "read" && output !== undefined ? nativeReadOutput(output) : output,
+        tool.fileUrls,
+      );
       return {
         ...base,
         title:
