@@ -13,6 +13,44 @@ import {
 } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("proxy execution ownership", () => {
+  it.effect(
+    "settles the acting overlay when a cancelled call receives its terminal reply (#1490)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ overlay: true });
+        yield* h.push(active());
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* h.nextToDriver;
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: 1 },
+          }),
+        );
+        yield* h.nextToDriver;
+        const shown = { op: "show", pid: 4, windowId: 9 };
+        assert.deepEqual(
+          [...h.log],
+          ["draw " + JSON.stringify({ ...shown, phase: "acting" }), "send click"],
+        );
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
+        yield* h.nextToDriver;
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 2);
+        assert.equal(yield* h.providerQueued, 0);
+        assert.deepEqual(
+          [...h.log],
+          [
+            "draw " + JSON.stringify({ ...shown, phase: "acting" }),
+            "send click",
+            "draw " + JSON.stringify({ ...shown, phase: "resting" }),
+          ],
+        );
+      }),
+  );
+
   it.effect("suppresses cancellation received after Stop while native closure is pending", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
@@ -315,6 +353,30 @@ describe("proxy execution ownership", () => {
         detail: "target_busy",
         holderThreadId: "thread:holder",
       });
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect("a call the server refuses to reserve leaves the agent cursor at rest", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({
+        overlay: true,
+        reservation: (request) =>
+          Effect.succeed(
+            request.action === "reserve"
+              ? { status: "refused", detail: "screen_shared" }
+              : { status: "released" },
+          ),
+      });
+      yield* h.push(foregroundActive());
+      yield* h.send(
+        call(1, "click", { pid: 42, window_id: 7, x: 1, y: 1, dispatch: "foreground" }),
+      );
+      const result = (yield* h.nextToProvider).result as { structuredContent: object };
+      assert.deepInclude(result.structuredContent, { detail: "screen_shared" });
+      const draws = h.log.filter((entry) => entry.startsWith("draw "));
+      assert.include(draws.at(0), '"phase":"acting"');
+      assert.include(draws.at(-1), '"phase":"resting"');
       assert.equal(yield* h.driverQueued, 0);
     }),
   );

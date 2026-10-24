@@ -54,7 +54,9 @@ import {
 } from "./ComputerUseCallReservations.ts";
 import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseForeground.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
-import { appsOf, decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
+import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
+import { appsOf, overlap, type ComputerUseHolder } from "./computerUseGrants.ts";
+import { takesScreen } from "./ComputerUseScope.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
@@ -73,12 +75,6 @@ export interface ComputerUseLease {
   /** Absent when the grant admits every app. */
   readonly apps?: ReadonlyArray<string>;
   readonly computerUseForeground?: NonNullable<Handoff["computerUseForeground"]>;
-}
-
-/** The thread holding this host's screen for unattended work, by grant or full access. */
-export interface ComputerUseHolder {
-  readonly threadId: ThreadId;
-  readonly expiresAt: DateTime.Utc;
 }
 
 /**
@@ -120,6 +116,11 @@ export type ComputerUseControlState =
       readonly apps: ReadonlyArray<string> | undefined;
       /** When this state can next change without a signal, epoch ms. */
       readonly wakeAt: number;
+      /**
+       * Another thread holds a grant on this screen, so this one must not raise windows or move
+       * the pointer over it.
+       */
+      readonly shared?: true;
       readonly idle?: true;
       readonly idleEpoch?: number;
       readonly foreground?: ReadonlyArray<ComputerUseForegroundGrant>;
@@ -154,9 +155,13 @@ export class ComputerUseLeases extends Context.Service<
     readonly active: (
       threadId: ThreadId,
     ) => Effect.Effect<Option.Option<ComputerUseLease>, ComputerUseLeaseError>;
-    /** The thread other than `except` holding this host's screen for unattended work. */
+    /**
+     * The thread other than `except` whose admission reaches an app `apps` names, or any app
+     * when `apps` is absent: a live grant, or unattended work admitted to every app.
+     */
     readonly holder: (
-      except?: ThreadId,
+      except: ThreadId | undefined,
+      apps: ReadonlyArray<string> | undefined,
     ) => Effect.Effect<Option.Option<ComputerUseHolder>, ComputerUseLeaseError>;
     /** Whether the thread is the GOAT Bot thread. Channel workers are known by their id. */
     readonly channelOrigin: (
@@ -478,66 +483,53 @@ const make = Effect.gen(function* () {
       if (end(threadId, "revoked")) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
+    const grants = yield* live();
+    const others = grants.filter((lease) => lease.threadId !== threadId);
     // An approval that checked holder() before this claim can commit after it. A person's
     // approval wins: the screen is the approved thread's, and Handoffs signals on commit.
-    if (
-      record.everyApp === "unattended" &&
-      (yield* live()).some((lease) => lease.threadId !== threadId)
-    ) {
+    if (record.everyApp === "unattended" && others.length > 0) {
       if (end(threadId, "revoked")) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
-    const grants =
-      (record.everyApp === undefined && record.handoffId === undefined) ||
-      foreground.hasThread(threadId)
-        ? yield* live(threadId)
-        : [];
-    const focus = foreground.grants(threadId, controlId, grants, DateTime.toEpochMillis(now));
+    const own = grants.filter((lease) => lease.threadId === threadId);
+    const focus = foreground.grants(threadId, controlId, own, DateTime.toEpochMillis(now));
     const focusState = focus.length === 0 ? {} : { foreground: focus };
     const focusWake = Math.min(...focus.map((grant) => grant.expiresAtMillis));
-    if (record.everyApp !== undefined)
-      return {
+    // Other threads' grants hold apps on this screen until they end, which this state outlasts.
+    const active = (apps: ReadonlyArray<string> | undefined, wakeAt: number) =>
+      ({
         _tag: "active",
         expiresAt: record.expiresAt,
         interruptions,
-        apps: scoped(record, undefined),
-        wakeAt: Math.min(DateTime.toEpochMillis(record.expiresAt), focusWake),
+        apps: scoped(record, apps),
+        wakeAt: Math.min(
+          wakeAt,
+          focusWake,
+          ...others.map((lease) => DateTime.toEpochMillis(lease.expiresAt)),
+        ),
         ...focusState,
-        ...(record.idle === true ? { idle: true as const } : {}),
+        ...(others.length === 0 ? {} : ({ shared: true } as const)),
+        ...(record.idle === true ? ({ idle: true } as const) : {}),
         ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
-      };
+      }) as const;
+    if (record.everyApp !== undefined)
+      return active(undefined, DateTime.toEpochMillis(record.expiresAt));
     if (record.handoffId !== undefined) {
       const grant = yield* state(threadId, record.handoffId);
       if (grant._tag === "ended") return grant;
-      return {
-        _tag: "active",
-        expiresAt: record.expiresAt,
-        interruptions,
-        apps: scoped(record, grant.lease.apps),
-        wakeAt: Math.min(DateTime.toEpochMillis(record.expiresAt), focusWake),
-        ...focusState,
-        ...(record.idle === true ? { idle: true as const } : {}),
-        ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
-      };
+      return active(grant.lease.apps, DateTime.toEpochMillis(record.expiresAt));
     }
     // An interactive thread controls the apps its grants name, and only the safe reads without one.
-    return {
-      _tag: "active",
-      expiresAt: record.expiresAt,
-      interruptions,
-      apps: scoped(record, grants.length === 0 ? [] : appsOf(grants)),
-      wakeAt: Math.min(
+    return active(
+      own.length === 0 ? [] : appsOf(own),
+      Math.min(
         DateTime.toEpochMillis(record.expiresAt),
-        focusWake,
-        ...grants.map((grant) => DateTime.toEpochMillis(grant.expiresAt)),
+        ...own.map((grant) => DateTime.toEpochMillis(grant.expiresAt)),
       ),
-      ...(record.idle === true ? { idle: true as const } : {}),
-      ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
-      ...focusState,
-    };
+    );
   });
 
   const end = (threadId: ThreadId, reason: ComputerUseControlEnd) => {
@@ -762,9 +754,20 @@ const make = Effect.gen(function* () {
   return ComputerUseLeases.of({
     active: (threadId) =>
       live(threadId).pipe(Effect.map((leases) => Option.fromNullishOr(leases[0]))),
-    holder: Effect.fn("ComputerUseLeases.holder")(function* (except?: ThreadId) {
-      const lease = (yield* live()).find((grant) => grant.threadId !== except);
-      if (lease !== undefined) return Option.some<ComputerUseHolder>(lease);
+    holder: Effect.fn("ComputerUseLeases.holder")(function* (
+      except: ThreadId | undefined,
+      apps: ReadonlyArray<string> | undefined,
+    ) {
+      for (const lease of yield* live()) {
+        if (lease.threadId === except) continue;
+        const shared = overlap(lease.apps, apps);
+        if (shared !== undefined)
+          return Option.some<ComputerUseHolder>({
+            threadId: lease.threadId,
+            expiresAt: lease.expiresAt,
+            ...shared,
+          });
+      }
       const admitted = unattendedEveryApp(except, yield* DateTime.now);
       return admitted === undefined
         ? Option.none<ComputerUseHolder>()
@@ -832,6 +835,10 @@ const make = Effect.gen(function* () {
               ))
           )
             return { status: "refused", detail: "foreground_not_approved" } as const;
+          // Judged here, under the admission lock, with the grants as they are now: the proxy
+          // hears of another thread's grant through its lease stream, which can lag.
+          if (state.shared === true && takesScreen(call.name, call.args))
+            return { status: "refused", detail: "screen_shared" } as const;
           return reservations.reserve(threadId, call);
         }),
       );

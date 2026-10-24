@@ -1,6 +1,9 @@
 // @effect-diagnostics preferSchemaOverJson:off -- Reads only the raw MCP fields the lease proxy uses.
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
-import type { NamedWindow } from "./x11WindowPlacement.ts";
+import * as Effect from "effect/Effect";
+import * as Scheduler from "effect/Scheduler";
+
+import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
 
 const MAX_NAMED_NODES = 4_096;
 
@@ -69,3 +72,47 @@ export const parse = (line: string): Envelope | undefined => {
     return undefined;
   }
 };
+
+/**
+ * Where a reply's windows are. "proof" is a reply that shows the driver is on GOAT's screen:
+ * windows it names are all there, or an unfiltered list_windows saw none (a filtered one that
+ * finds nothing says nothing about the screen).
+ */
+export const replyPlacement = Effect.fnUntraced(function* (
+  placement: ((windows: ReadonlyArray<NamedWindow>) => Effect.Effect<WindowPlacement>) | undefined,
+  message: Envelope,
+  tool: string | undefined,
+  unfiltered: boolean,
+) {
+  if (placement === undefined || message.result?.isError === true) return "same" as const;
+  const content = message.result?.structuredContent;
+  const windows = namedWindows(content);
+  if (windows === undefined) return "unknown" as const;
+  const where = yield* placement(windows);
+  if (where !== "same") return where;
+  const listed =
+    tool === "list_windows" &&
+    unfiltered &&
+    Array.isArray((content as { windows?: unknown })?.windows);
+  return windows.length > 0 || listed ? ("proof" as const) : ("same" as const);
+});
+
+/**
+ * Runs a call's registration and write unless its child is no longer current ("stale") or it
+ * takes the screen while another thread shares it ("shared"); the caller answers either as not
+ * run. The checks and the write run with no scheduler yield between them (#1496), so neither a
+ * pause, a narrowed approval nor the update that shares the screen can land in between.
+ */
+export const sendUnlessShared = (
+  takesScreen: boolean,
+  shared: () => boolean,
+  current: () => boolean,
+  send: Effect.Effect<void>,
+) =>
+  Effect.suspend(() =>
+    !current()
+      ? Effect.succeed("stale" as const)
+      : takesScreen && shared()
+        ? Effect.succeed("shared" as const)
+        : send.pipe(Effect.as("sent" as const)),
+  ).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));

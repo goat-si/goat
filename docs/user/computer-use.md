@@ -96,8 +96,12 @@ GOAT app; a reply in a chat channel does not count.
 Such work only gets the screen on a computer whose GOAT can tell when you type a
 password or use the keyboard or mouse yourself; elsewhere the request is refused
 and says why. Approving admits that thread until the time shown. It does not approve each
-action. Only one such thread uses the screen at a time, and threads you run
-yourself can still use it meanwhile, so the two may get in each other's way.
+action. Threads approved for different apps work at the same time, each in its
+own apps. An app belongs to one thread at a time, and approving the whole screen
+waits until no other thread holds an app. While another thread holds apps, an
+agent works on its windows in the background and does not bring them to the
+front or move the pointer. Threads you run yourself can still use the screen
+meanwhile, so they may get in each other's way.
 Choose **End computer use** on the request in the thread to stop it early;
 turning computer use off also stops it. When the time runs out or you end it,
 GOAT stops the agent's computer use right away, even in the middle of an action

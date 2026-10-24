@@ -1,3 +1,4 @@
+import { describeHolderForPerson } from "../cua/computerUseGrants.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import {
   EnvironmentAuthorizationError,
@@ -397,14 +398,24 @@ const make = Effect.gen(function* () {
       const label = yield* clientLabel(input, sessionId);
       const record = yield* read(input);
       const isComputerUseGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
-      // One unattended thread per host holds the screen; a second approval waits for it to end.
+      // An app, or the whole screen, is one thread's; an overlapping approval waits for it to end.
       if (isComputerUseGrant && input.action === "completed" && isHandoffPending(record.state)) {
         const held = Option.isNone(computerUseLeases)
           ? Option.none()
           : yield* computerUseLeases.value
-              .holder(record.requestedBy.threadId)
+              .holder(record.requestedBy.threadId, record.apps)
               .pipe(Effect.mapError(unavailable));
-        if (Option.isSome(held)) return yield* new HandoffError({ reason: "conflict" });
+        if (Option.isSome(held)) {
+          const rows = yield* sql<{ readonly title: string | null }>`
+            SELECT title FROM orchestration_v2_projection_threads
+            WHERE thread_id = ${held.value.threadId}
+          `.pipe(Effect.orElseSucceed(() => []));
+          const title = rows[0]?.title?.trim();
+          return yield* new HandoffError({
+            reason: "conflict",
+            detail: `${describeHolderForPerson(held.value, title || undefined)} End that admission first, or deny this one.`,
+          });
+        }
       }
       if (
         input.action === "completed" &&

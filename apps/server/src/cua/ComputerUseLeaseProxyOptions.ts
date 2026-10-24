@@ -1,14 +1,21 @@
+/**
+ * What the computer use lease proxy (ComputerUseLeaseProxy.ts) is given: its driver child, the
+ * server's word on the control, and the reports it sends back.
+ *
+ * @module ComputerUseLeaseProxyOptions
+ */
 import type {
-  ComputerUseHumanInputSource,
-  ComputerUseOverlayCommand,
-  ComputerUseLeaseUpdate,
   ComputerUseCallAdmission,
   ComputerUseCallReservation,
+  ComputerUseHumanInputSource,
+  ComputerUseLeaseUpdate,
+  ComputerUseOverlayCommand,
 } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
+
 import type { AgentInputReport } from "./agentInputReports.ts";
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
@@ -39,6 +46,8 @@ export interface LeaseProxyOptions<EU, ED> {
   ) => Effect.Effect<ComputerUseCallAdmission>;
   readonly controlId: string;
   readonly expiresAt: DateTime.Utc;
+  /** This host's apps have bundle ids (macOS); see scopeVerdict. */
+  readonly bundleIds: boolean;
   /** Lines the provider writes. The proxy stops when this ends. */
   readonly input: Stream.Stream<string>;
   readonly output: (line: string) => Effect.Effect<void>;

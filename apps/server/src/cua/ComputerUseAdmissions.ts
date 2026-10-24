@@ -24,15 +24,3 @@ export const leaseOf = (handoff: Handoff, now: DateTime.Utc): Option.Option<Comp
           : { computerUseForeground: handoff.computerUseForeground }),
       })
     : Option.none();
-
-/** The apps a thread's live grants admit together; absent when one of them admits every app. */
-export const appsOf = (
-  leases: ReadonlyArray<ComputerUseLease>,
-): ReadonlyArray<string> | undefined => {
-  const apps = new Set<string>();
-  for (const lease of leases) {
-    if (lease.apps === undefined) return undefined;
-    for (const app of lease.apps) apps.add(app);
-  }
-  return [...apps].sort();
-};

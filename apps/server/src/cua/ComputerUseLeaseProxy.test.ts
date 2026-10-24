@@ -6,12 +6,8 @@ import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import {
-  LEASE_END_MESSAGES,
-  leaseUpdateLines,
-  MAY_HAVE_ACTED,
-  PAUSE_MESSAGES,
-} from "./ComputerUseLeaseProxy.ts";
+import { leaseUpdateLines } from "./ComputerUseLeaseProxy.ts";
+import { LEASE_END_MESSAGES, MAY_HAVE_ACTED, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
 import {
   active,
   call,

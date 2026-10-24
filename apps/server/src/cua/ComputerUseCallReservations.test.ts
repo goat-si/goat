@@ -11,6 +11,7 @@ import { runMigrations } from "../persistence/Migrations.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { foregroundGrant } from "./ComputerUseForeground.testkit.ts";
+import { grant } from "./ComputerUseLeases.projection.testkit.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const serviceLayer = ComputerUseLeases.layer.pipe(
@@ -88,6 +89,82 @@ describe("server computer-use call reservations", () => {
       }
       assert.equal((yield* f.reserve(f.b)).status, "admitted");
     }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
+    "refuses a call that takes the screen once another thread holds a grant, whatever the proxy has heard",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        // Disjoint grants: both admitted, so the screen is shared.
+        yield* grant(f.a, "grant:a", ["app.a"]);
+        const focus = yield* foregroundGrant(f.a, "grant:focus");
+        yield* grant(f.b, "grant:b", ["app.b"]);
+        const window = { pid: 42, window_id: 7, x: 1, y: 1 };
+        assert.deepEqual(
+          yield* f.reserve(
+            f.a,
+            { ...window, delivery_mode: "foreground" },
+            "click",
+            "driver:1",
+            0,
+            focus.handoffId,
+          ),
+          { status: "refused", detail: "screen_shared" },
+        );
+        assert.equal((yield* f.reserve(f.a, window, "click")).status, "admitted");
+        yield* f.close(f.a);
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
+    "a foreground call admitted before another thread's grant keeps every other thread off the desktop until it ends",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        yield* grant(f.a, "grant:a", ["app.a"]);
+        const focus = yield* foregroundGrant(f.a, "grant:focus");
+        const click = { pid: 42, window_id: 7, x: 1, y: 1 };
+        const first = yield* f.reserve(
+          f.a,
+          { ...click, dispatch: "Foreground" },
+          "click",
+          "driver:1",
+          0,
+          focus.handoffId,
+        );
+        if (first.status !== "admitted" || first.reservationId === null)
+          return assert.fail("a foreground click reserves the desktop");
+        // B is approved while A's click is on its way: B acts on nothing until it ends.
+        yield* grant(f.b, "grant:b", ["app.b"]);
+        assert.deepEqual(yield* f.reserve(f.b, { pid: 9, window_id: 3, x: 1, y: 1 }, "click"), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        yield* f.release(f.a, first.reservationId);
+        // A's next call that would take the screen meets the shared screen.
+        assert.deepEqual(
+          yield* f.reserve(
+            f.a,
+            { ...click, dispatch: "Foreground" },
+            "click",
+            "driver:1",
+            0,
+            focus.handoffId,
+          ),
+          {
+            status: "refused",
+            detail: "screen_shared",
+          },
+        );
+        assert.equal(
+          (yield* f.reserve(f.b, { pid: 9, window_id: 3, x: 1, y: 1 }, "click")).status,
+          "admitted",
+        );
+        yield* f.close(f.a);
+        yield* f.close(f.b);
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );
 
   it.effect(
