@@ -29,6 +29,14 @@ type Events = Ref.Ref<Array<OrchestrationV2DomainEvent>>;
  * The Orchestrator closures that promotion needs. The Orchestrator passes its
  * error classes in so this module never imports it at runtime.
  */
+/** A delegated task its parent still owns: started by the app and not promoted to a thread. */
+export const isOwnedDelegatedTask = (task: {
+  readonly origin: string;
+  readonly childThreadId: unknown;
+  readonly promotedAt?: unknown;
+}): boolean =>
+  task.origin === "app_owned" && task.childThreadId !== null && task.promotedAt === undefined;
+
 export interface ThreadPromotionDeps {
   readonly projectionStore: ProjectionStoreV2Shape;
   readonly emit: (

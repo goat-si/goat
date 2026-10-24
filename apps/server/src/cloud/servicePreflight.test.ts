@@ -15,7 +15,9 @@ it.each([1])("blocks legacy launcher protocol %i with exact recovery steps", (la
   const reason = result.status === "blocked" ? result.reason : "";
   expect(reason).toMatch(new RegExp(`\\b${launcherProtocol}\\b`));
   expect(reason).toMatch(new RegExp(`\\b${SERVICE_LAUNCHER_PROTOCOL}\\b`));
-  expect(reason).toContain("curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | GOAT_VERSION=9.8.7 sh");
+  expect(reason).toContain(
+    "curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | GOAT_VERSION=9.8.7 sh",
+  );
   expect(reason).toContain("~/.local/bin/goat service install");
   expect(reason).toContain("goat --version");
   expect(reason).toContain("which -a goat");

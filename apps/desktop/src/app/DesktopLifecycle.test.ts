@@ -563,6 +563,7 @@ describe("DesktopLifecycle", () => {
         isDevelopment: false,
       } as DesktopEnvironment.DesktopEnvironment["Service"]);
       const layer = DesktopLifecycle.layer.pipe(
+        Layer.provideMerge(layerUpdates()),
         Layer.provideMerge(layerElectronApp(appListeners, Effect.void, exit)),
         Layer.provideMerge(layerElectronTheme),
         Layer.provideMerge(layerElectronWindow()),

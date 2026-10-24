@@ -174,7 +174,7 @@ export interface EventSinkV2Shape {
     readonly acceptedAt: DateTime.Utc;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
-    /** Recover runtime work without changing projections; requires at least one effect. */
+    /** Queue runtime work without changing projections; requires at least one effect. */
     readonly allowEffectOnly?: boolean;
     readonly cancelUnsettledEffects?: {
       readonly effectTypes: ReadonlyArray<EffectOutbox.OrchestrationEffectRequestV2["type"]>;
@@ -829,7 +829,11 @@ const layerBase: Layer.Layer<
             events: normalized,
           });
           let sequence = storedEvents.at(-1)?.sequence;
-          if (sequence === undefined && input.effects.length > 0) {
+          if (
+            sequence === undefined &&
+            input.allowEffectOnly === true &&
+            input.effects.length > 0
+          ) {
             // Effect-only commits (recovery, or a Stop that changes nothing but still queues the
             // stop of its delegated tasks) observe the current thread high-water mark. The receipt
             // and outbox still commit together, and retries reuse this receipt without enqueueing.

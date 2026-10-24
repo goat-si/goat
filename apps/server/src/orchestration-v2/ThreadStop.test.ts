@@ -1535,9 +1535,9 @@ it.effect("Stop still stops the thread when a delegated child cannot be read", (
 );
 
 // A turn interrupt leaves async tasks running (#9); thread.stop stops everything under the thread.
-it.effect.each(["thread.stop"] as const)(
-  "%s ends watches, holds queues, and stops the delegated tasks under the thread",
-  (type) =>
+it.effect(
+  "thread.stop ends watches, holds queues, and stops the delegated tasks under the thread",
+  () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -1562,20 +1562,13 @@ it.effect.each(["thread.stop"] as const)(
         payload: { ...firstRun, status: "completed", completedAt: now },
       });
       yield* send(parentThreadId, "second", "start_immediately");
-      const secondRun = (yield* orchestrator.getThreadProjection(parentThreadId)).runs.at(-1)!;
 
       const stopCommandId = CommandId.make("stop-parent");
-      yield* orchestrator.dispatch(
-        type === "thread.stop"
-          ? { type, commandId: stopCommandId, threadId: parentThreadId }
-          : {
-              type,
-              commandId: stopCommandId,
-              threadId: parentThreadId,
-              runId: secondRun.id,
-              holdQueue: true,
-            },
-      );
+      yield* orchestrator.dispatch({
+        type: "thread.stop",
+        commandId: stopCommandId,
+        threadId: parentThreadId,
+      });
 
       assert.deepEqual(yield* threadState(parentThreadId), {
         runs: ["completed", "interrupted"],

@@ -171,7 +171,7 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
-import { makeThreadPromotion } from "./goat/ThreadPromotion.ts";
+import { isOwnedDelegatedTask, makeThreadPromotion } from "./goat/ThreadPromotion.ts";
 import {
   OrchestratorQuestionAlreadyAnsweredError,
   questionAlreadyAnswered,
@@ -633,6 +633,7 @@ function delegatedTasksStopEffect(command: {
   readonly commandId: CommandId;
   readonly threadId: ThreadId;
   readonly reason?: string | undefined;
+  readonly childThreadIds?: ReadonlyArray<ThreadId>;
 }): PendingOrchestrationEffectV2 {
   return {
     id: `effect:${command.commandId}:delegated-tasks.stop`,
@@ -640,6 +641,7 @@ function delegatedTasksStopEffect(command: {
     threadId: command.threadId,
     request: {
       type: "delegated-tasks.stop",
+      ...(command.childThreadIds === undefined ? {} : { childThreadIds: command.childThreadIds }),
       ...(command.reason === undefined ? {} : { reason: command.reason }),
     },
   };
@@ -10323,16 +10325,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             // Runs after commit: a command holds only its own thread's lock.
             yield* Ref.update(effects, (existing) => [
               ...existing,
-              {
-                id: `effect:${command.commandId}:delegated-tasks.stop`,
-                commandId: command.commandId,
-                threadId: command.threadId,
-                request: {
-                  type: "delegated-tasks.stop",
-                  childThreadIds: waitChildThreadIds,
-                  ...(command.reason === undefined ? {} : { reason: command.reason }),
-                },
-              } satisfies PendingOrchestrationEffectV2,
+              delegatedTasksStopEffect({ ...command, childThreadIds: waitChildThreadIds }),
             ]);
           });
 
@@ -10807,11 +10800,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     // Queued after the interrupt, since a thread's effects run in order.
     const stopDelegatedTasks =
-      command.stopDelegatedTasks === false ||
-      !projection.subagents.some(
-        (task) =>
-          task.origin === "app_owned" && task.childThreadId !== null && task.promotedAt === undefined,
-      )
+      command.stopDelegatedTasks === false || !projection.subagents.some(isOwnedDelegatedTask)
         ? Effect.void
         : Ref.update(effects, (existing) => [...existing, delegatedTasksStopEffect(command)]);
     const latestRun = projection.runs.findLast((run) => run.status !== "queued");
@@ -12564,6 +12553,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         acceptedAt,
         events: plan.events,
         effects: plan.effects,
+        allowEffectOnly: command.type === "thread.stop",
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
