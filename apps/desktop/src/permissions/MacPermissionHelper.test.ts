@@ -143,7 +143,7 @@ it("offers the helper app, under its own name, as the file dragged into System S
     { bundlePath: helperApp, name: "GOAT Computer Use" },
   );
   const page = decodeURIComponent(String(mocks.loadURL.mock.calls[0]?.[0]));
-  expect(page).toContain("Drag GOAT Computer Use into the System Settings list");
+  expect(page).toContain("Drag GOAT Computer Use into the list, then turn it on");
   expect(page).not.toContain("Drag GOAT into");
   expect(mocks.createThumbnailFromPath).toHaveBeenCalledWith(helperApp, expect.anything());
 

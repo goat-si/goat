@@ -56,7 +56,7 @@ function helperHtml(permission: MacPermission, icon: string, name: string) {
 html { background: transparent; }
 body { margin: 0; background: transparent; color: var(--text); font: 15px/22px -apple-system, BlinkMacSystemFont, sans-serif; user-select: none; }
 #panel { position: relative; margin: 2px; padding: 20px; height: 136px; border: 1px solid var(--line); border-radius: 24px; background: var(--base); }
-header { font-weight: 600; white-space: nowrap; }
+header { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 button { font: inherit; color: inherit; }
 button:focus-visible { outline: 2px solid #007aff; outline-offset: -2px; }
 #close { position: absolute; right: 8px; top: 6px; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: var(--base); font-size: 18px; cursor: pointer; opacity: 0; }
@@ -67,7 +67,7 @@ button:focus-visible { outline: 2px solid #007aff; outline-offset: -2px; }
 img { width: 32px; height: 32px; pointer-events: none; }
 </style></head><body><main id="panel">
 <button id="close" aria-label="Close permission helper">×</button>
-<header>Drag ${label} into the System Settings list, then turn it on</header>
+<header>Drag ${label} into the list, then turn it on</header>
 <button id="app" draggable="true" aria-label="Drag ${label} to System Settings, or click to reveal in Finder"><img src="${escapeHtml(icon)}" alt="" draggable="false">${label}<span>Click to show in Finder</span></button>
 </main></body></html>`;
 }
