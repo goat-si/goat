@@ -112,6 +112,7 @@ import {
 } from "./goat/PullRequestAutoWatch.ts";
 import {
   dropQueuedPullRequestWakes as dropQueuedWakes,
+  endingWakeText,
   pullRequestWatchNote,
   takeHeldPullRequestContext,
 } from "./goat/PullRequestDigest.ts";
@@ -2059,7 +2060,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       yield* writeSystemEvents(
         [
-          ...(held?.events ?? []),
           ...(selectionChanged
             ? [
                 {
@@ -2187,6 +2187,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             occurredAt: now,
             payload: startingRun,
           },
+          // Last: a selection change above rewrites the whole thread from the stored projection.
+          ...(held?.events ?? []),
         ],
         [
           ...sessionsToDetach.map((session) => ({
@@ -2767,7 +2769,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandId: command.commandId,
           threadId: command.threadId,
           messageId: command.wake.messageId,
-          text: command.wake.text,
+          // An ending watch tells what it kept, as stored now rather than when the host was read.
+          text:
+            command.watch === null
+              ? endingWakeText(command.wake.text, link.watch)
+              : command.wake.text,
           notification: command.wake.notification,
           attachments: [],
           dispatchMode: { type: "queue_after_active" },
@@ -5522,6 +5528,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           now: yield* DateTime.now,
         });
     for (const event of held?.events ?? []) yield* emit(events, command)(event);
+    // Later thread events spread this projection; reread it so they keep the watches cleared.
+    if (held !== undefined)
+      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
     const startText = held?.text ?? dispatchText;
     // A message the user sends from a client means they are back, so the
     // queue a stop or a restart held runs again, in its order, rather than

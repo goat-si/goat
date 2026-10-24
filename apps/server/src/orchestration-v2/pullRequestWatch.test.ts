@@ -11,6 +11,7 @@ import {
   PULL_REQUEST_WATCH_WAKE_LIMIT,
   evaluatePullRequestWatch,
   mergeHeldContext,
+  settleHeldContext,
   pullRequestWatchOutcome,
 } from "./pullRequestWatch.ts";
 
@@ -326,7 +327,6 @@ describe("pull request watch policy", () => {
       url: "https://github.com/o/r/pull/7",
       baseBranch: "main",
       report: later,
-      heldContext: held.next?.heldContext ?? [],
     });
     // The next notice turn to start carries it, whichever pull request or lane it is about.
     assert.notInclude(woken.wake?.text ?? "", "all 1 check passed");
@@ -345,24 +345,28 @@ describe("pull request watch policy", () => {
     ]);
   });
 
-  it("tells what was kept with the wake a watch ends on", () => {
-    const chatty = evaluate(
-      watch({ headSha: "aaaaaaaaaa", wakes: PULL_REQUEST_WATCH_WAKE_LIMIT - 1 }),
-      detail(),
-      [remark("reviewer", "2026-10-02T12:10:00Z")],
-    );
-    const ending = pullRequestWatchOutcome({
-      number: 7,
-      url: "https://github.com/o/r/pull/7",
-      baseBranch: "main",
-      report: chatty,
-      heldContext: ["conflicts with main"],
-    });
-    assert.isNull(ending.next);
-    assert.include(
-      ending.wake?.text ?? "",
-      "Also kept as context without waking you: conflicts with main",
-    );
+  it("drops kept context the pull request has moved past", () => {
+    const comment = '1 new comment, latest from bot: "ready"';
+    const kept = ["conflicts with main", "all 2 checks passed on aaaaaaa", comment];
+    assert.deepEqual(settleHeldContext(kept, { conflicting: true, headMoved: false }), kept);
+    // A clean merge clears the conflict; a push makes the old head's checks stale.
+    assert.deepEqual(settleHeldContext(kept, { conflicting: false, headMoved: true }), [comment]);
+  });
+
+  it("reads context kept before the digest as one fragment per kind", () => {
+    const stored = [
+      "- Checks failed on aaaaaaa:",
+      "  - lint https://ci.example/lint",
+      "- The branch now conflicts with main.",
+    ];
+    assert.deepEqual(mergeHeldContext(stored), [
+      "checks failed on aaaaaaa: lint https://ci.example/lint",
+      "conflicts with main",
+    ]);
+    assert.deepEqual(mergeHeldContext(stored, ["all 1 check passed on bbbbbbb"]), [
+      "conflicts with main",
+      "all 1 check passed on bbbbbbb",
+    ]);
   });
 
   it("names the head of a wake that reports only check results, so a push can drop it", () => {

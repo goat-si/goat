@@ -14,7 +14,7 @@ import * as Effect from "effect/Effect";
 
 import type { OrchestratorDispatchError, OrchestratorV2Error } from "../Orchestrator.ts";
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
-import { mergeHeldContext } from "../pullRequestWatch.ts";
+import { mergeHeldContext, settleHeldContext } from "../pullRequestWatch.ts";
 
 /** A watch starting now. An automatic one wakes the agent but does not keep the thread working. */
 export function newPullRequestWatch(
@@ -53,14 +53,19 @@ export function explicitPullRequestWatch(watch: ThreadPullRequestWatch): ThreadP
 /**
  * Recorded progress on the current watch, which keeps its own automatic flag. The reader sends
  * only what this pass kept as context; it is merged here, under the thread lock, so fragments a
- * starting turn told and cleared while the host was read are not written back.
+ * starting turn told and cleared while the host was read are not written back. Fragments the
+ * new state contradicts (a cleared conflict, checks of a replaced head) are dropped first.
  */
 export function syncedPullRequestWatch(
   current: ThreadPullRequestWatch,
   observed: ThreadPullRequestWatch,
 ): ThreadPullRequestWatch {
   const { heldContext: kept, ...progress } = explicitPullRequestWatch(observed);
-  const heldContext = mergeHeldContext(current.heldContext, kept);
+  const settled = settleHeldContext(current.heldContext, {
+    conflicting: progress.conflicting,
+    headMoved: progress.headSha !== current.headSha,
+  });
+  const heldContext = mergeHeldContext(settled, kept);
   return {
     ...progress,
     ...(heldContext.length === 0 ? {} : { heldContext }),

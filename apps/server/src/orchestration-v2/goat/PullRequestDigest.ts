@@ -26,7 +26,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
-import { heldContextLine } from "../pullRequestWatch.ts";
+import { heldContextLine, mergeHeldContext, withHeldContext } from "../pullRequestWatch.ts";
 import { foldNotice, isNoticeMessage, parseNotices, renderDigest } from "../TurnDigest.ts";
 import {
   pullRequestHeldNoticeId,
@@ -73,7 +73,7 @@ export function takeHeldPullRequestContext(input: {
     (digest, { link, heldContext }) =>
       foldNotice(digest, {
         id: pullRequestHeldNoticeId(link),
-        text: heldContextLine(link, heldContext),
+        text: heldContextLine(link, mergeHeldContext(heldContext)),
       }),
     parseNotices(message.id, message.text),
   );
@@ -217,3 +217,12 @@ export const pullRequestWatchNote = (
     ...note,
   },
 });
+
+/**
+ * The text of the wake a watch ends on, with what the watch still kept. It is read under the
+ * thread lock: a notice turn that started while the host was read has already told the rest.
+ */
+export const endingWakeText = (
+  text: string,
+  watch: { readonly heldContext?: ReadonlyArray<string> },
+) => withHeldContext(text, mergeHeldContext(watch.heldContext));

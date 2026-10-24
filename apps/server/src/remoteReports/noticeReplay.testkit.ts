@@ -1,4 +1,12 @@
-import { type PullRequestComment, RunId, ThreadId } from "@goat/contracts";
+import {
+  MessageId,
+  type PullRequestComment,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+  type ThreadPullRequestLink,
+} from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 
 import { finishedWake, newLaunchWatch } from "../mcp/launchWatch.ts";
 import {
@@ -13,15 +21,12 @@ import {
   turnText,
 } from "../orchestration-v2/TurnDigest.ts";
 import {
-  heldContextLine,
-  mergeHeldContext,
   type PullRequestWatchChange,
   pullRequestWatchOutcome,
 } from "../orchestration-v2/pullRequestWatch.ts";
-import {
-  pullRequestHeldNoticeId,
-  pullRequestWakeMessageId,
-} from "../orchestration-v2/goat/PullRequestWatchWakes.ts";
+import { syncedPullRequestWatch } from "../orchestration-v2/goat/PullRequestAutoWatch.ts";
+import { takeHeldPullRequestContext } from "../orchestration-v2/goat/PullRequestDigest.ts";
+import { pullRequestWakeMessageId } from "../orchestration-v2/goat/PullRequestWatchWakes.ts";
 import { framePendingReports, frameRemoteReport } from "./reportFrame.ts";
 
 /**
@@ -305,14 +310,14 @@ export function overnightPullRequestStream(lanes = 30): ReadonlyArray<PullReques
 /**
  * Delivery after #1055, on the same busy model as replayNoticeDigest but with the orchestrator's
  * source-kind rule: run ends fold apart from monitor notices (pressure and pull request wakes).
- * A pull request's kept fragments merge per kind and ride the next turn to start, one line per
- * pull request. Returns each turn's bytes and the kept lines no turn carried.
+ * Kept context goes through the orchestrator's own merge and fold: each pass's fragments merge
+ * into the watch, and the next notice turn to start takes them as one line per pull request and
+ * clears them. Returns each turn's text and the pull requests still holding context at the end.
  */
 export function replayPullRequestDigest(
   events: ReadonlyArray<PullRequestStreamEvent>,
   busyFor = 4,
-): { readonly turns: ReadonlyArray<number>; readonly untold: number } {
-  const bytes = (text: string) => new TextEncoder().encode(text).length;
+): { readonly turns: ReadonlyArray<string>; readonly untold: number } {
   let inbox: Array<{
     lane: string;
     report: string;
@@ -323,21 +328,35 @@ export function replayPullRequestDigest(
     text: string;
   }> = [];
   const queue: Array<{ kind: string; notices: ReadonlyArray<Notice> }> = [];
-  const held = new Map<number, { url: string; fragments: ReadonlyArray<string> }>();
+  const links = new Map<number, ThreadPullRequestLink>();
+  const thread = () => ({
+    id: SUPERVISOR,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    pullRequests: [...links.values()],
+  });
   let busyUntil = -1;
-  const turns: number[] = [];
+  const turns: string[] = [];
   const startTurn = (notices: ReadonlyArray<Notice>, at: number) => {
     const [first] = notices;
     if (first === undefined) return;
-    const withHeld = [...held].reduce(
-      (digest, [number, { url, fragments }]) =>
-        foldNotice(digest, {
-          id: pullRequestHeldNoticeId({ host: "github.com", repository: "acme/app", number, url }),
-          text: heldContextLine({ number, url }, fragments),
-        }),
-      notices,
-    );
-    held.clear();
+    const message = {
+      id: MessageId.make(first.id),
+      text: renderDigest(first.id, notices),
+      createdBy: "agent" as const,
+      creationSource: "server" as const,
+      notification: {
+        source: { kind: "monitor" as const },
+        outcome: "updated" as const,
+        summary: "",
+      },
+    };
+    const held = takeHeldPullRequestContext({
+      thread: thread(),
+      message,
+      now: DateTime.makeUnsafe(0),
+    });
+    for (const event of held?.events ?? [])
+      if ("repository" in event.payload) links.set(event.payload.number, event.payload);
     const drained: typeof inbox = [];
     let characters = 0;
     for (const row of inbox) {
@@ -346,9 +365,7 @@ export function replayPullRequestDigest(
       drained.push(row);
       characters += size;
     }
-    turns.push(
-      bytes(turnText({ messageId: first.id, text: renderDigest(first.id, withHeld) }, drained)),
-    );
+    turns.push(turnText({ messageId: first.id, text: held?.text ?? message.text }, drained));
     inbox = inbox.slice(drained.length);
     busyUntil = at + busyFor;
   };
@@ -372,26 +389,40 @@ export function replayPullRequestDigest(
       const kind = event.id.startsWith(HOST_PRESSURE_MESSAGE_PREFIX) ? "monitor" : "task";
       return enqueue(kind, { id: event.id, text: event.text }, index);
     }
+    const report = pullRequestReport(event);
     const outcome = pullRequestWatchOutcome({
       number: event.number,
       url: event.url,
       baseBranch: "main",
-      report: pullRequestReport(event),
+      report,
+    });
+    const link = links.get(event.number) ?? {
+      host: "github.com",
+      repository: "acme/app",
+      number: event.number,
+      url: event.url,
+      source: "agent" as const,
+      linkedAt: report.next.startedAt,
+      snapshot: null,
+      stack: null,
+      watch: report.next,
+    };
+    const watch = link.watch ?? report.next;
+    links.set(event.number, {
+      ...link,
+      watch: outcome.next === null ? watch : syncedPullRequestWatch(watch, outcome.next),
     });
     if (outcome.wake !== undefined) {
-      const link = { host: "github.com", repository: "acme/app", number: event.number };
       const id = pullRequestWakeMessageId(link, `wake-${index}`, outcome.wake.checksOn);
-      return enqueue("monitor", { id, text: outcome.wake.text }, index);
+      enqueue("monitor", { id, text: outcome.wake.text }, index);
     }
-    const previous = held.get(event.number)?.fragments;
-    held.set(event.number, {
-      url: event.url,
-      fragments: mergeHeldContext(previous, outcome.next?.heldContext),
-    });
   });
   for (const turn of queue.splice(0)) startTurn(turn.notices, events.length);
   while (inbox.length > 0) startTurn([{ id: "message:next-turn", text: "" }], events.length);
-  return { turns, untold: held.size };
+  return {
+    turns,
+    untold: [...links.values()].filter((link) => (link.watch?.heldContext?.length ?? 0) > 0).length,
+  };
 }
 
 /** A watch report carrying one change, sorted the way the stream's policy sorts it. */

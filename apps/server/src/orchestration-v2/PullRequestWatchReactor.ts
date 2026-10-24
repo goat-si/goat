@@ -40,7 +40,6 @@ import {
   evaluatePullRequestWatch,
   pullRequestWatchOutcome,
   type PullRequestWatchWake,
-  withHeldContext,
 } from "./pullRequestWatch.ts";
 import { pullRequestWakeMessageId } from "./goat/PullRequestWatchWakes.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
@@ -310,10 +309,7 @@ export const make = Effect.gen(function* () {
 
   const giveUp = (target: WatchTarget) =>
     record(target, null, {
-      text: withHeldContext(
-        `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call ${goatCallText("pull_request.watch")} to watch it again.`,
-        target.watch.heldContext,
-      ),
+      text: `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call ${goatCallText("pull_request.watch")} to watch it again.`,
       notification: {
         source: { kind: "monitor" },
         outcome: "failed",
@@ -419,10 +415,7 @@ export const make = Effect.gen(function* () {
       target,
       null,
       {
-        text: withHeldContext(
-          `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call ${goatCallText("pull_request.watch")} if it reopens.`,
-          target.watch.heldContext,
-        ),
+        text: `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call ${goatCallText("pull_request.watch")} if it reopens.`,
         notification: {
           source: { kind: "monitor" },
           outcome: "updated",
@@ -592,9 +585,6 @@ export const make = Effect.gen(function* () {
         url: target.link.url,
         baseBranch: detail.baseBranch,
         report,
-        ...(target.watch.heldContext === undefined
-          ? {}
-          : { heldContext: target.watch.heldContext }),
       });
       if (outcome.wake !== undefined) {
         return record(target, outcome.next, outcome.wake, undefined, outcome.endedWatch).pipe(

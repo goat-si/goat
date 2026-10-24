@@ -10,6 +10,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  RunId,
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -39,6 +40,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
 import { pullRequestWakeMessageId } from "./goat/PullRequestWatchWakes.ts";
 import { HOST_PRESSURE_MESSAGE_PREFIX } from "../fleet/pressure/pressureModel.ts";
+import { finishedWake, newLaunchWatch } from "../mcp/launchWatch.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -471,6 +473,138 @@ const threadWithKeptContext = (name: string) =>
   });
 
 describe("pull request updates kept as context (#1055)", () => {
+  it.effect("a queued notice on another model tells kept context once", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, startedText, heldLeft } =
+        yield* threadWithKeptContext("model");
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("pr-kept-model-work"),
+        threadId,
+        messageId: MessageId.make("message:pr-kept-model-work"),
+        text: "Keep working.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const lane = finishedWake({
+        watch: newLaunchWatch({
+          launcherThreadId: threadId,
+          host: null,
+          threadId: ThreadId.make("thread:lane-a"),
+          projectId: null,
+          title: "lane-a",
+          incarnation: "test",
+          notifyWebhook: false,
+          now: 0,
+        }),
+        runId: RunId.make("run:lane-a"),
+        status: "completed",
+        title: "lane-a",
+        branch: null,
+        worktreePath: null,
+        excerpt: "lane-a is done.",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("pr-kept-model-lane"),
+        threadId,
+        messageId: lane.messageId,
+        text: lane.text,
+        attachments: [],
+        notification: lane.notification,
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+      });
+      // The run end keeps the model it was queued on, so starting it changes the selection.
+      yield* orchestrator.dispatch({
+        type: "thread.model-selection.set",
+        commandId: CommandId.make("pr-kept-model-switch"),
+        threadId,
+        modelSelection: { ...modelSelection, model: "gpt-5.5" },
+      });
+      const { runs } = yield* orchestrator.getThreadRecords(threadId, ["runs"]);
+      const work = runs.find((run) => run.userMessageId === "message:pr-kept-model-work")!;
+      const now = yield* DateTime.now;
+      yield* (yield* EventSinkV2).write({
+        events: [
+          {
+            id: EventId.make("event:pr-kept-model-work-ended"),
+            type: "run.updated",
+            threadId,
+            runId: work.id,
+            occurredAt: now,
+            payload: { ...work, status: "interrupted", startedAt: now, completedAt: now },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("pr-kept-model-resume"),
+        threadId,
+      });
+      const told = (yield* startedText).find((text) => text?.includes("lane-a is done."));
+      expect(told).toContain("all 3 checks passed on aaaaaaa");
+      expect(told).toContain("Preview ready");
+      expect(yield* heldLeft).toEqual([]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a closing watch tells only what no turn has told yet", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, links, heldLeft } = yield* threadWithKeptContext("closing");
+      // A notice turn tells both pull requests' context while the host read is under way.
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("pr-kept-closing-pressure"),
+        threadId,
+        messageId: MessageId.make(`${HOST_PRESSURE_MESSAGE_PREFIX}box-a:wake:1`),
+        text: "Resource pressure: box-a is elevated.",
+        attachments: [],
+        notification: { source: { kind: "monitor" }, outcome: "updated", summary: "box-a" },
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+      });
+      expect(yield* heldLeft).toEqual([]);
+      const link = links.find((candidate) => candidate.number === 7)!;
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      const watch = shell?.pullRequests?.find((candidate) => candidate.number === 7)?.watch;
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-kept-closing-hold"),
+        threadId,
+        ...key,
+        startedAt: watch!.startedAt,
+        watch: { ...watch!, conflicting: true, heldContext: ["conflicts with main"] },
+        note: { source: { kind: "monitor" }, outcome: "updated", summary: "#7: kept as context" },
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-kept-closing-end"),
+        threadId,
+        ...key,
+        startedAt: watch!.startedAt,
+        watch: null,
+        dropQueuedWakes: true,
+        wake: {
+          messageId: pullRequestWakeMessageId(link, "closing"),
+          text: "Pull request #7 was closed, so GOAT stopped watching it.",
+          notification,
+        },
+      });
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      const closing = messages.find(
+        (message) => message.id === pullRequestWakeMessageId(link, "closing"),
+      )?.text;
+      expect(closing).toContain("Also kept as context without waking you: conflicts with main");
+      expect(closing).not.toContain("all 3 checks passed");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("a queued notice turn carries what was kept while it waited", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, link, watch, statusOf } = yield* watchWithQueuedWake("wait");

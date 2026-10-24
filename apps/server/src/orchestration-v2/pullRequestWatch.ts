@@ -260,29 +260,62 @@ const commentCount = (count: number) => `${count} new ${count === 1 ? "comment" 
 const HELD_KINDS = [
   ["checks", /^(checks failed|all \d+ (required )?checks? passed)/],
   ["conflict", /^conflicts with /],
-  ["comments", /^\d+ new comments?,/],
+  ["comments", /^\d+ new comments?[,:]/],
 ] as const;
 
 const heldKind = (fragment: string) =>
   HELD_KINDS.find(([, pattern]) => pattern.test(fragment))?.[0];
+
+/** Watches kept before #1055 stored bulleted lines; each bullet with its items is one fragment. */
+function fromBullets(entries: ReadonlyArray<string>): ReadonlyArray<string> {
+  const fragments: Array<string> = [];
+  for (const entry of entries) {
+    const last = fragments.at(-1);
+    if (entry.startsWith("  - ") && last !== undefined) {
+      fragments[fragments.length - 1] =
+        `${last}${last.endsWith(":") ? " " : ", "}${entry.slice(4)}`;
+    } else if (entry.startsWith("- ")) {
+      const text = entry
+        .slice(2)
+        .replace(/\.$/, "")
+        .replace(/^The branch now /, "");
+      fragments.push(text.charAt(0).toLowerCase() + text.slice(1));
+    } else fragments.push(entry);
+  }
+  return fragments;
+}
 
 /** Folds newly kept fragments into the ones not told yet, keeping one per kind. */
 export function mergeHeldContext(
   existing: ReadonlyArray<string> = [],
   incoming: ReadonlyArray<string> = [],
 ): ReadonlyArray<string> {
-  let merged = [...existing];
-  for (const fragment of incoming) {
+  let merged: Array<string> = [];
+  for (const fragment of [...fromBullets(existing), ...fromBullets(incoming)]) {
     const kind = heldKind(fragment);
     const previous = kind === undefined ? undefined : merged.find((f) => heldKind(f) === kind);
     merged = merged.filter((f) => f !== previous);
     if (kind !== "comments" || previous === undefined) merged.push(fragment);
     else {
       const count = Number.parseInt(previous, 10) + Number.parseInt(fragment, 10);
-      merged.push(commentCount(count) + fragment.slice(fragment.indexOf(",")));
+      merged.push(commentCount(count) + fragment.replace(/^\d+ new comments?/, ""));
     }
   }
   return merged;
+}
+
+/**
+ * Drops kept fragments the pull request has since moved past: a conflict once it merges cleanly,
+ * and check results once a push replaced the head they ran on.
+ */
+export function settleHeldContext(
+  heldContext: ReadonlyArray<string> | undefined,
+  state: { readonly conflicting: boolean; readonly headMoved: boolean },
+): ReadonlyArray<string> {
+  return mergeHeldContext(heldContext).filter((fragment) => {
+    const kind = heldKind(fragment);
+    return !(kind === "conflict" && !state.conflicting) && !(kind === "checks" && state.headMoved);
+  });
 }
 
 /** The one line a digest carries for a pull request's kept context. */
@@ -309,7 +342,7 @@ function pullRequestWatchMessage(input: {
   readonly baseBranch: string;
   readonly headSha: string | null;
   readonly report: PullRequestWatchReport;
-  /** What the watch kept as context, told with the wake it ends on. */
+  /** What this pass kept, told with the wake a watch ends on. */
   readonly heldContext?: ReadonlyArray<string>;
 }): PullRequestWatchWake {
   const { changes, exhausted } = input.report;
@@ -365,15 +398,13 @@ export interface PullRequestWatchWake {
  * timeline note for updates kept as context. The watch carries only this pass's kept fragments;
  * the orchestrator merges them into the ones not told yet and folds those into the next notice
  * turn that starts (#1055). A watch that spent its comment limit ends with its wake, which tells
- * what it kept.
+ * what this pass kept; the orchestrator adds what the watch kept before, read under its lock.
  */
 export function pullRequestWatchOutcome(input: {
   readonly number: number;
   readonly url: string;
   readonly baseBranch: string;
   readonly report: PullRequestWatchReport;
-  /** Kept fragments the watch has not told yet. */
-  readonly heldContext?: ReadonlyArray<string>;
 }): {
   readonly next: ThreadPullRequestWatch | null;
   /** An ending watch keeps what this pass saw, so watching again starts from it. */
@@ -398,7 +429,7 @@ export function pullRequestWatchOutcome(input: {
         baseBranch: input.baseBranch,
         headSha: next.headSha,
         report,
-        ...(report.exhausted ? { heldContext: mergeHeldContext(input.heldContext, held) } : {}),
+        ...(report.exhausted ? { heldContext: held } : {}),
       }),
     };
   }
