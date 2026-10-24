@@ -110,9 +110,9 @@
     protocol version are checked. Signing in CI is a separate proposal for maintainers; this epic
     adds local scripts only.
 - **Reasons.**
-  - A separate identity is the only way the grant can name what it allows, survive GOAT updates
-    under a stable designated requirement, and stay off the provider processes GOAT starts. Aside
-    and the Codex app ship the same shape.
+  - A separate identity is the only way the grant can name what it allows and survive GOAT updates
+    under a stable designated requirement, and it means computer use no longer needs any grant on
+    GOAT.app. Aside and the Codex app ship the same shape.
   - Disclaiming in the helper and spawning the driver embedded is the one arrangement pinned 0.37.0
     accepts without patching its identity checks. It also gives standalone servers on macOS an app
     identity to launch, which removes #1174 by construction.
@@ -124,6 +124,10 @@
 - **Tradeoffs.**
   - The first run after the change asks for macOS grants again, under the new name; grants on
     GOAT.app no longer enable computer use.
+  - The helper does not revoke grants already on GOAT.app, and SnapShot still asks GOAT.app for
+    Screen Recording and Accessibility. While GOAT.app holds them, processes it starts without
+    disclaiming responsibility, provider CLIs included, can still use them. Isolating those
+    processes is separate work (#1208).
   - Ad-hoc signed development builds change their code hash on every build, so TCC asks again after
     each rebuild. That is expected in development and documented, not worked around with
     `tccutil reset`.

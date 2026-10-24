@@ -19,7 +19,13 @@ provider (Codex, Claude, ...)
                            └─ OS accessibility, capture and input
 ```
 
-- The helper is the only process that holds OS grants. On macOS it disclaims responsibility at its
+- The helper is the only process that holds OS grants for computer use. It does not take grants
+  away from GOAT.app: SnapShot (`apps/desktop/src/snapShot/DesktopSnapShot.ts`) asks GOAT.app for
+  Screen Recording and Accessibility, grants given to GOAT.app under ADR-0022 stay until a person
+  removes them, and processes GOAT starts without disclaiming responsibility, provider CLIs
+  included, still run under whatever GOAT.app holds. Keeping provider processes off GOAT.app's
+  grants is separate work (#1208).
+- On macOS the helper disclaims responsibility at its
   own start by re-executing itself once, before it touches any TCC-protected API, and keeps the
   stdio pipes it inherited. The first process stays alive as a waiter and forwards the exit status,
   so the launcher's child handle still tracks the real helper. After that, whoever launched it
@@ -249,7 +255,10 @@ PreviewSession {
   it moves into the helper. The permission guide drags the helper bundle into System Settings
   (`apps/desktop/src/permissions/MacPermissionHelper.ts` points at GOAT.app today).
 - **Migration.** A person who granted GOAT.app under ADR-0022 sees one prompt explaining that
-  computer use now has its own app and grants again. GOAT does not remove the old entries.
+  computer use now has its own app and grants again. GOAT never removes or resets grants. The
+  prompt also says that the old GOAT entries stay on, that only SnapShot still needs them, and
+  that while they are on, processes GOAT starts can use them; it opens the System Settings pane so
+  a person who does not use SnapShot can turn them off.
 - **Usage strings.** The helper's `Info.plist` carries the Accessibility, Screen Recording and
   Apple Events usage descriptions (GOAT.app lacks them today, #1175).
 - **Development builds.** Ad-hoc signatures change the code hash on every build, and TCC keys
@@ -260,8 +269,11 @@ PreviewSession {
   Capture frame. Elevated windows are out of reach of a non-elevated helper; they return
   `target_refused` and the helper is never elevated to reach them.
 - **Linux.** X11 needs a reachable display, a session bus and an AT-SPI bus that answer (the
-  existing probe). Wayland needs the portal consent for screen cast and remote desktop, kept with
-  a restore token, and reports `partial` until the person grants it.
+  existing probe). Background input on X11 also needs an Xorg server that accepts hotplugged
+  devices and a writable `/dev/uinput`; without them readiness reports `partial`, and input falls
+  back to foreground delivery under a lease that allows it, never to synthetic events presented
+  as background. Wayland needs the portal consent for screen cast and remote desktop, kept with a
+  restore token, and reports `partial` until the person grants it.
 - Readiness is four separate answers, shown separately: the OS grant, an authenticated helper,
   a real capture and tree, and the tools available to the model this turn. Pending, denied,
   abandoned and intervened are distinct states; a closed prompt never reads as granted.
@@ -292,8 +304,10 @@ PreviewSession {
   carries a newer seed goes through the same switch. TCC keys
   grants to the designated requirement, not the path, so grants should survive a switch; that,
   and a revoked grant being noticed, are negative qualification cases (#1162).
-- Windows and Linux helpers are signed with the existing platform signing paths and staged beside
-  the driver.
+- The Windows helper is signed through the existing Windows signing path and staged beside the
+  driver. Linux desktop artifacts are not signed today, so signing the Linux helper and verifying
+  its signature before launch is new work for WS10 and WS4, and its CI part is a proposal like
+  the rest.
 - This epic adds local build and signing scripts. Wiring them into CI and release workflows is a
   separate proposal issue for maintainers.
 - Telemetry stays off. The helper reports nothing to anyone, and the driver keeps ADR-0022's
@@ -339,30 +353,30 @@ One protocol, three helpers. Every method is implemented or returns a typed `uns
 reason; nothing fails with an untyped error. "Fallback" means the method works through a
 different route that the result reports.
 
-| Protocol method or surface                                  | macOS                       | Windows                             | Linux X11                      | Linux Wayland                                                                            |
-| ----------------------------------------------------------- | --------------------------- | ----------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------- |
-| `hello` / version handshake                                 | yes                         | yes                                 | yes                            | yes                                                                                      |
-| readiness (real tree + non-blank capture)                   | yes                         | yes                                 | yes                            | after portal consent where the compositor supports discovery and capture; else `partial` |
-| request permission                                          | TCC prompts                 | `unsupported` (none needed)         | `unsupported`                  | portal consent                                                                           |
-| list apps / windows                                         | yes                         | yes                                 | yes                            | compositor dependent, else `unsupported`                                                 |
-| observe full (tree + screenshot)                            | yes                         | yes                                 | yes                            | where the target can be captured; else tree only with `partial`                          |
-| observe diff                                                | yes (helper computed)       | yes (helper computed)               | yes (helper computed)          | yes (helper computed)                                                                    |
-| observe text-only                                           | yes                         | yes                                 | yes                            | yes                                                                                      |
-| stale id → `stale_element`                                  | yes                         | yes                                 | yes                            | yes                                                                                      |
-| wait for settle                                             | accessibility notifications | UIA events                          | AT-SPI events                  | AT-SPI events                                                                            |
-| semantic actions                                            | AX actions                  | UIA patterns                        | AT-SPI actions                 | AT-SPI actions                                                                           |
-| background pointer and keys                                 | yes                         | partial, foreground fallback        | yes (XInput2)                  | `unsupported`; foreground with lease                                                     |
-| foreground delivery under lease                             | yes                         | yes                                 | yes                            | yes                                                                                      |
-| set value / select text                                     | yes                         | yes                                 | yes                            | yes                                                                                      |
-| cancel by request id                                        | yes                         | yes                                 | yes                            | yes                                                                                      |
-| end session + held-input release + cleanup report           | yes                         | yes                                 | yes                            | yes                                                                                      |
-| private mode detection                                      | `AXSecureTextField`         | `IsPassword`                        | AT-SPI password role           | AT-SPI password role                                                                     |
-| lock, sleep and session-switch events                       | yes                         | session change notifications        | logind and screensaver signals | logind and screensaver signals                                                           |
-| human input collision                                       | HID idle time               | last-input time, own input filtered | X idle time                    | `unsupported`; exclusive lease                                                           |
-| physical kill switch                                        | Escape tap (optional grant) | low-level keyboard hook             | XInput2 raw keys               | `unsupported`; Stop controls only                                                        |
-| preview frames                                              | yes                         | yes                                 | yes                            | through the portal screen cast where granted; else last observation only                 |
-| `takeover`, `handBack`, `requestHandoff`, `stop`, `stopAll` | yes                         | yes                                 | yes                            | yes                                                                                      |
-| onboarding flow, panel, chips, controls                     | same                        | same                                | same                           | same                                                                                     |
+| Protocol method or surface                                  | macOS                       | Windows                             | Linux X11                                                                           | Linux Wayland                                                                            |
+| ----------------------------------------------------------- | --------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `hello` / version handshake                                 | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
+| readiness (real tree + non-blank capture)                   | yes                         | yes                                 | yes                                                                                 | after portal consent where the compositor supports discovery and capture; else `partial` |
+| request permission                                          | TCC prompts                 | `unsupported` (none needed)         | `unsupported`                                                                       | portal consent                                                                           |
+| list apps / windows                                         | yes                         | yes                                 | yes                                                                                 | compositor dependent, else `unsupported`                                                 |
+| observe full (tree + screenshot)                            | yes                         | yes                                 | yes                                                                                 | where the target can be captured; else tree only with `partial`                          |
+| observe diff                                                | yes (helper computed)       | yes (helper computed)               | yes (helper computed)                                                               | yes (helper computed)                                                                    |
+| observe text-only                                           | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
+| stale id → `stale_element`                                  | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
+| wait for settle                                             | accessibility notifications | UIA events                          | AT-SPI events                                                                       | AT-SPI events                                                                            |
+| semantic actions                                            | AX actions                  | UIA patterns                        | AT-SPI actions                                                                      | AT-SPI actions                                                                           |
+| background pointer and keys                                 | yes                         | partial, foreground fallback        | with Xorg hotplug and writable `/dev/uinput`; else `partial`, foreground with lease | `unsupported`; foreground with lease                                                     |
+| foreground delivery under lease                             | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
+| set value / select text                                     | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
+| cancel by request id                                        | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
+| end session + held-input release + cleanup report           | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
+| private mode detection                                      | `AXSecureTextField`         | `IsPassword`                        | AT-SPI password role                                                                | AT-SPI password role                                                                     |
+| lock, sleep and session-switch events                       | yes                         | session change notifications        | logind and screensaver signals                                                      | logind and screensaver signals                                                           |
+| human input collision                                       | HID idle time               | last-input time, own input filtered | X idle time                                                                         | `unsupported`; exclusive lease                                                           |
+| physical kill switch                                        | Escape tap (optional grant) | low-level keyboard hook             | XInput2 raw keys                                                                    | `unsupported`; Stop controls only                                                        |
+| preview frames                                              | yes                         | yes                                 | yes                                                                                 | through the portal screen cast where granted; else last observation only                 |
+| `takeover`, `handBack`, `requestHandoff`, `stop`, `stopAll` | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
+| onboarding flow, panel, chips, controls                     | same                        | same                                | same                                                                                | same                                                                                     |
 
 Tests enforce it: the contracts package declares the method list, and a conformance suite runs the
 same fixture requests against each platform helper, failing when a method is missing or a refusal
