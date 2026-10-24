@@ -8,7 +8,7 @@ import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 
 import { COMPUTER_USE_HELPER_NAME } from "@goat/shared/cuaDriverRelease";
-import { ComputerUseEvent } from "@goat/contracts";
+import { ComputerUseEvent, type DesktopCuaFrames, PreviewSessionNoPicture } from "@goat/contracts";
 import type { CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
 import type { EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
 import * as Schema from "effect/Schema";
@@ -17,7 +17,7 @@ import * as Schema from "effect/Schema";
  * Line-delimited JSON spoken with "GOAT Computer Use.app" over its stdio
  * (apps/desktop/native/computer-use-helper/main.swift). The helper's first line is hello or a
  * refusal; requests carry an id and get exactly one reply. Unrequested lines are driverExited
- * and, while a watch is in force, its events.
+ * and, while a watch is in force, its events, and while frames are requested, those frames.
  */
 const HELPER_PROTOCOL_VERSION = 1;
 
@@ -51,7 +51,25 @@ const HelperEvent = Schema.Struct({
   event: ComputerUseEvent,
 });
 export type HelperEvent = typeof HelperEvent.Type;
-const Message = Schema.Union([Hello, Refused, DriverExited, HelperEvent, Reply]);
+/** One window's picture or why there is none, for the frames request framesId names (#1370). */
+const HelperFrame = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("frame"),
+    framesId: Schema.Int,
+    key: Schema.String,
+    width: Schema.Int,
+    height: Schema.Int,
+    data: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("frameUnavailable"),
+    framesId: Schema.Int,
+    key: Schema.String,
+    reason: PreviewSessionNoPicture,
+  }),
+]);
+export type HelperFrame = typeof HelperFrame.Type;
+const Message = Schema.Union([Hello, Refused, DriverExited, HelperEvent, HelperFrame, Reply]);
 const decodeMessage = Schema.decodeUnknownOption(Schema.fromJsonString(Message));
 
 export const HelperGrants = Schema.Struct({
@@ -157,6 +175,11 @@ export interface HelperSession {
   /** Whether this helper can watch for a focused secure field (#1235). */
   readonly canWatch: boolean;
   /**
+   * Whether an agent connection started from this helper's bundle reports a person's input to
+   * its lease proxy (#1235, macOS --mcp).
+   */
+  readonly reportsInput: boolean;
+  /**
    * Starts watching every window for a focused secure field, replacing any earlier watch. The
    * new watch is in force from its answer: events the old one sends before it still arrive,
    * and the new one's first state follows it.
@@ -166,6 +189,14 @@ export interface HelperSession {
   readonly unwatch: () => Promise<void>;
   /** Events of the watch in force; returns the unsubscribe. */
   readonly onEvent: (listener: (event: HelperEvent["event"]) => void) => () => void;
+  /** Whether this helper captures single windows for the live picture (#1370). */
+  readonly canFrame: boolean;
+  /**
+   * Replaces the windows the helper captures; none stops it. Frames and no-picture answers
+   * carry framesId, and those of an earlier request never reach onFrame once this one is sent.
+   */
+  readonly frames: (framesId: number, targets: DesktopCuaFrames["targets"]) => Promise<void>;
+  readonly onFrame: (listener: (frame: HelperFrame) => void) => () => void;
   /** Ends stdin, the helper's ownership signal, and waits for exit; kills it after a deadline. */
   readonly close: () => Promise<void>;
   /** Settles when the driver exits on its own or the helper goes away. */
@@ -188,6 +219,8 @@ export async function openHelperSession(
   const watchChanges = new Map<string, string | undefined>();
   let watching: string | undefined;
   const eventListeners = new Set<(event: HelperEvent["event"]) => void>();
+  const frameListeners = new Set<(frame: HelperFrame) => void>();
+  let framing: number | undefined;
   let gone = false;
   let markEnded!: () => void;
   const ended = new Promise<void>((resolve) => (markEnded = resolve));
@@ -215,6 +248,8 @@ export async function openHelperSession(
       else if (value.type === "event") {
         if (value.watchId === watching)
           for (const listener of eventListeners) listener(value.event);
+      } else if (value.type === "frame" || value.type === "frameUnavailable") {
+        if (value.framesId === framing) for (const listener of frameListeners) listener(value);
       } else markEnded();
       return;
     }
@@ -298,6 +333,7 @@ export async function openHelperSession(
       await request("stop");
     },
     canWatch: hello.features?.includes("watch") === true,
+    reportsInput: hello.features?.includes("humanInput") === true,
     watch: async (watchId) => {
       await request("watch", { watchId, targets: [] }, { to: watchId });
     },
@@ -308,6 +344,16 @@ export async function openHelperSession(
     onEvent: (listener) => {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
+    },
+    canFrame: hello.features?.includes("frames") === true,
+    frames: async (framesId, targets) => {
+      // In force as it is sent: an older request's frames still in the pipe are dropped.
+      framing = framesId;
+      await request("frames", { framesId, targets });
+    },
+    onFrame: (listener) => {
+      frameListeners.add(listener);
+      return () => frameListeners.delete(listener);
     },
     close,
     ended,

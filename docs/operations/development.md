@@ -29,6 +29,13 @@ Git reads the hook from the checkout that runs `git worktree add`, so that check
 `vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree
 created without the hook, run `node scripts/setup-worktree.ts` from its root.
 
+Create worktrees by hand with `node scripts/worktree-add.ts <path> [git worktree add arguments]`.
+When GOAT is checked out as a submodule with `extensions.worktreeConfig` on, a plain
+`git worktree add` inherits the submodule's `core.worktree`: the new worktree resolves to the git
+directory, the hook finds no setup script there, and `git status` reports the git directory's
+files. The script gives the new worktree its own `core.worktree` before checking out and running
+the hook, as GOAT does for its thread worktrees, and runs a plain `git worktree add` everywhere else.
+
 GOAT's own thread worktrees skip the hook: GOAT sets `GOAT_WORKTREE_SETUP=0` because it runs the
 same script as the `goat.json` setup action, with its output in the launch view. They also leave
 `.repos/` out through sparse checkout, which cut a Windows checkout from 29,631 files to 7,797.
@@ -53,7 +60,9 @@ The first start in a worktree seeds its empty database from a read-only copy of
 Never run a development server against the live `~/.goat/userdata` or `~/.t3/userdata`.
 See [test data](../../AGENTS.md#test-data) for copying a consistent database snapshot.
 
-When an unsigned `vp run dev:desktop` instance launched from a terminal or agent has no OS keyring access (`safeStorage` encryption unavailable) and cannot save connections, set `GOAT_DEV_INSECURE_SECRET_STORAGE=1` alongside an isolated home (such as a worktree default or `--home-dir <path>` outside `~/.goat` and `~/.t3`). Packaged builds and default homes ignore this flag and refuse to read its development-plaintext blobs.
+An unsigned `vp run dev:desktop` build has a different code identity in each worktree and after each launcher rebuild, so macOS asks for the login keychain password whenever it reads the shared `GOAT Dev Safe Storage` item, and a build started from a terminal or agent may have no keyring access at all. To start without the OS key store, for example for automated UI checks, set `GOAT_DEV_INSECURE_SECRET_STORAGE=1` with an isolated home (a worktree default or `--home-dir <path>` outside `~/.goat` and `~/.t3`). GOAT's own secret storage then leaves the macOS Keychain and Linux Secret Service alone: it saves secrets as development-plaintext blobs and skips the startup key migration and sibling-key recovery. Importing cookies from another browser still reads that browser's key from the OS key store, and only when you start the import.
+
+Secrets saved through the keychain before you set the flag stay on disk but do not open; unset the flag to read them. With the flag on, enter the connections again: GOAT copies the unreadable catalog to a `connection-catalog.unreadable-<hash>.backup.json` file before it saves the new one. One case blocks saving: a saved-environment registry from builds before the connection catalog cannot be migrated while the flag is on. Start once without the flag so the catalog is created, then turn the flag back on and enter the connections again. Packaged builds and default homes ignore the flag and refuse to read development-plaintext blobs.
 
 Read ports from the `[dev-runner]` output. Worktrees derive stable preferences from their paths,
 but occupied ports can shift them. `GOAT_PORT_OFFSET` or `GOAT_DEV_INSTANCE` can select a

@@ -167,12 +167,29 @@ function listedApps(value: unknown, depth = 0): ReadonlyArray<NamedApp> {
   if (object === undefined) return [];
   return Object.entries(object).flatMap(([key, nested]) =>
     key === "apps" && Array.isArray(nested)
-      ? nested.flatMap((item) => namedApp(item) ?? [])
+      ? nested.flatMap((item) => listedApp(item) ?? [])
       : typeof nested === "object" && nested !== null
         ? listedApps(nested, depth + 1)
         : [],
   );
 }
+
+/**
+ * One `apps` entry. Without a bundle id (a Linux process with no desktop file) the app is named
+ * by its own windows' app name, which is the app's title rather than the command that runs it
+ * (#1430); only the entry's windows of the same pid count.
+ */
+const listedApp = (value: unknown): NamedApp | undefined => {
+  const entry = namedApp(value);
+  const object = record(value);
+  if (entry === undefined || text(object?.bundle_id) !== undefined) return entry;
+  const windows = Array.isArray(object?.windows) ? object.windows : [];
+  const titled = windows
+    .map(record)
+    .find((window) => window?.pid === entry.pid && text(window?.app_name) !== undefined);
+  const id = text(titled?.app_name);
+  return id === undefined ? entry : { ...entry, id, name: id };
+};
 
 /** Every object in an answer that names an app with its pid. */
 function namedApps(value: unknown, depth = 0): ReadonlyArray<NamedApp> {

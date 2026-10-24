@@ -266,6 +266,7 @@ let privacyEnvironment = [
 final class DriverService {
   let queue = DispatchQueue(label: "si.goat.computer-use.service")
   let privateMode = PrivateModeWatch()
+  let frames = FrameCapture()
   let bundleId = Bundle.main.bundleIdentifier ?? ""
   var driver: Process?
   var liveness: Pipe?
@@ -341,6 +342,11 @@ final class DriverService {
       case "listApps": result = try listApps()
       case "watch": result = try privateMode.watch(params)
       case "unwatch": result = try privateMode.unwatch(params)
+      case "frames":
+        guard frameCaptureAvailable else {
+          throw HelperError(code: "unknown_method", message: "This macOS cannot capture windows.")
+        }
+        result = try frames.frames(params)
       case "stop":
         stop()
         result = [:]
@@ -661,6 +667,7 @@ final class DriverService {
   func shutDown() -> Never {
     queue.sync {
       privateMode.end()
+      frames.end()
       stop()
     }
     exit(0)
@@ -805,7 +812,10 @@ func runService() -> Never {
     "type": "hello", "protocol": protocolVersion, "pid": Int(getpid()),
     "bundleId": service.bundleId,
     // Methods beyond the protocol's first set, so the host never relies on one this build lacks.
-    "features": ["watch"],
+    // Agent connections already report a person's input (InputActivity), but "humanInput" is
+    // not advertised until a signed helper has been checked live on a real Mac (#1235, D7):
+    // advertising it lets unattended turns run.
+    "features": frameCaptureAvailable ? ["watch", "frames"] : ["watch"],
     "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
       ?? "",
   ])

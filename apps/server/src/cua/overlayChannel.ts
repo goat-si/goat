@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The channel is a Node socket the lease proxy's child process inherits as fd 3.
 import type * as NodeStream from "node:stream";
 
-import { ComputerUseOverlayCommand } from "@goat/contracts";
+import { ComputerUseHumanInputSource, ComputerUseOverlayCommand } from "@goat/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -9,6 +9,15 @@ import * as Schema from "effect/Schema";
 
 const decodeAck = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ ack: Schema.Number })),
+);
+const HelperHumanInput = Schema.Struct({
+  source: ComputerUseHumanInputSource,
+  ageMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+});
+/** The helper saw a keyboard or pointer event `ageMs` before it wrote this; nothing more. */
+export type HelperHumanInput = typeof HelperHumanInput.Type;
+const decodeHumanInput = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ humanInput: HelperHumanInput })),
 );
 const encodeLine = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ seq: Schema.Number, command: ComputerUseOverlayCommand })),
@@ -25,8 +34,14 @@ export const OVERLAY_ACK_TIMEOUT_MS = 250;
  *
  * Losing the overlay never stops computer use. A closed channel or a late ack makes send
  * return after the timeout.
+ *
+ * The helper also writes {humanInput: {source, ageMs}} lines on it while it runs (#1235): every
+ * new keyboard or pointer event the system had, the agent's own included, for the proxy to sort.
  */
-export function overlayChannel(socket: NodeStream.Duplex) {
+export function overlayChannel(
+  socket: NodeStream.Duplex,
+  onHumanInput: (input: HelperHumanInput) => void = () => undefined,
+) {
   let seq = 0;
   let buffered = "";
   const waiting = new Map<number, () => void>();
@@ -38,6 +53,8 @@ export function overlayChannel(socket: NodeStream.Duplex) {
       buffered = buffered.slice(end + 1);
       const ack = decodeAck(line);
       if (Option.isSome(ack)) waiting.get(ack.value.ack)?.();
+      const input = decodeHumanInput(line);
+      if (Option.isSome(input)) onHumanInput(input.value.humanInput);
     }
   });
   const release = () => {

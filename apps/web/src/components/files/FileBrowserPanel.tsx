@@ -4,6 +4,7 @@ import type {
   ContextMenuOpenContext as TreeContextMenuOpenContext,
 } from "@pierre/trees";
 import type { EnvironmentId, ProjectEntry } from "@goat/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { FileTree, useFileTree, useFileTreeSearch, useFileTreeSelector } from "@pierre/trees/react";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import { serializeComposerFileLink } from "@goat/shared/composerTrigger";
@@ -27,8 +28,16 @@ import { useFileContextMenu, type FileContextMenuAction } from "~/fileContextMen
 import { readLocalApi } from "~/localApi";
 import { GOAT_PIERRE_ICONS } from "~/pierre-icons";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
+import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { joinHostPath } from "./filePath";
+import {
+  copyFilePathsForCommand,
+  filePathCopyCommandForEvent,
+  fileTreeCopyPaths,
+  hasRelativeCopyPaths,
+  type FilePathCopyCommand,
+} from "./filePathCopyShortcut";
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
 import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "./fileTreeExpansion";
 import { buildFileTreePathUpdates } from "./fileTreePathReconciliation";
@@ -161,6 +170,11 @@ export default function FileBrowserPanel({
   const { resolvedTheme } = useTheme();
   const composerRef = useComposerHandleContext();
   const fileContextMenu = useFileContextMenu(environmentId);
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  // Copies resolve against the thread's workspace root, so a host folder's
+  // rows copy host paths and offer a relative path only inside the workspace.
+  const copyTreePaths = (command: FilePathCopyCommand, rows: readonly string[]) =>
+    copyFilePathsForCommand(command, rows.map(panelPath), workspaceRoot);
   const {
     entries: directoryEntries,
     load,
@@ -182,6 +196,7 @@ export default function FileBrowserPanel({
   const previousTreePathsRef = useRef<readonly string[] | null>(null);
   const syncingSelectionRef = useRef(false);
   const treeSelectionPathRef = useRef<string | null>(null);
+  const selectedTreePathsRef = useRef<readonly string[]>([]);
   const handledRevealRef = useRef<{ path: string; revealId: number } | null>(null);
 
   // The tree renders rows in shadow DOM and its anchor rect is unreliable, so
@@ -212,17 +227,45 @@ export default function FileBrowserPanel({
         ? { x: pointer.x, y: pointer.y }
         : { x: anchorRect.left, y: anchorRect.bottom };
       const fileTarget = { environmentId, filePath: relativePath, workspaceRoot: cwd };
-      const fileMenuItems = fileContextMenu.buildItems(fileTarget);
+      const fileMenuItems = fileContextMenu
+        .buildItems(fileTarget)
+        .filter((entry) => entry.id !== "copy-relative" && entry.id !== "copy-full");
+      // Right-clicking inside a multi-selection copies all of it, as in VS Code.
+      const selectedPaths = selectedTreePathsRef.current;
+      const copyRows =
+        selectedPaths.length > 1 && selectedPaths.includes(item.path)
+          ? selectedPaths.map((path) => path.replace(/\/$/, ""))
+          : [relativePath];
+      const plural = copyRows.length > 1 ? "s" : "";
+      // Native menus have no tooltips, so the label names the root relative paths start at.
+      const workspaceName = workspaceRoot.split(/[\\/]/).findLast(Boolean) ?? workspaceRoot;
+      const hasRelativePath = hasRelativeCopyPaths(copyRows.map(panelPath), workspaceRoot);
       void settlePromise(async () => {
         const clicked = await api.contextMenu.show(
           [
             ...fileMenuItems,
+            ...(hasRelativePath
+              ? [
+                  {
+                    id: "copy-relative",
+                    label: `Copy relative path${plural} (from ${workspaceName})`,
+                  },
+                ]
+              : []),
+            { id: "copy-full", label: `Copy full path${plural}` },
             { id: "copy-mention", label: "Copy mention" },
             { id: "add-to-chat", label: "Add to chat" },
           ],
           position,
         );
         if (clicked === null) return;
+        if (clicked === "copy-relative" || clicked === "copy-full") {
+          await copyTreePaths(
+            clicked === "copy-full" ? "files.copyPath" : "files.copyRelativePath",
+            copyRows,
+          );
+          return;
+        }
         // "Open with" submenu selections report the child id ("editor:<id>"),
         // which is not present in the top-level item list.
         const isFileMenuAction =
@@ -293,6 +336,7 @@ export default function FileBrowserPanel({
     initialExpansion: "closed",
     icons: GOAT_PIERRE_ICONS,
     onSelectionChange: (selectedPaths) => {
+      selectedTreePathsRef.current = selectedPaths;
       // The drag controller's selection cache must track every change,
       // including reveal-driven ones, or drags act on a stale selection.
       dragMention.handleSelectionChange(selectedPaths);
@@ -509,6 +553,21 @@ export default function FileBrowserPanel({
       panel.removeEventListener("dragend", handleDragEnd);
     };
   }, [dragMention, model]);
+  // Rows live in the tree's shadow root and key events retarget to its host,
+  // so the panel sees them; the tree leaves modified letter keys unhandled.
+  const handlePathCopyShortcut = useStableCallback((event: KeyboardEvent) => {
+    const command = filePathCopyCommandForEvent(event, keybindings);
+    if (command === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) void copyTreePaths(command, fileTreeCopyPaths(model));
+  });
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    panel.addEventListener("keydown", handlePathCopyShortcut);
+    return () => panel.removeEventListener("keydown", handlePathCopyShortcut);
+  }, [handlePathCopyShortcut]);
 
   return (
     <div

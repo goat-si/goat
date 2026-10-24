@@ -1,182 +1,13 @@
 import { assert, describe, it } from "@effect/vitest";
-import {
-  type ComputerUseLeaseUpdate,
-  type ComputerUseOverlayCommand,
-  computerUseRefusalReason,
-} from "@goat/contracts";
-import type * as Cause from "effect/Cause";
-import * as DateTime from "effect/DateTime";
+import { type ComputerUseLeaseUpdate, computerUseRefusalReason } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import type { NamedWindow } from "./x11WindowPlacement.ts";
-import {
-  LEASE_END_MESSAGES,
-  leaseUpdateLines,
-  PAUSE_MESSAGES,
-  runLeaseProxy,
-} from "./ComputerUseLeaseProxy.ts";
-
-const CONTROL = "control:one";
-const call = (id: number | string, name: string, args: object = {}) =>
-  JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
-const active = (
-  expiresAt = "1970-01-01T00:30:00.000Z",
-  apps?: ReadonlyArray<string>,
-): ComputerUseLeaseUpdate => ({
-  state: "active",
-  controlId: CONTROL,
-  expiresAt,
-  ...(apps === undefined ? {} : { apps }),
-});
-
-interface FakeDriver {
-  readonly toDriver: Queue.Queue<string>;
-  readonly fromDriver: Queue.Queue<string, Cause.Done>;
-  readonly killed: Deferred.Deferred<void>;
-}
-
-/** A proxy over in-memory stdio, lease stream and drivers, on the TestClock (epoch 0). */
-const harness = Effect.fn(function* (
-  options: {
-    readonly expiresAt?: string;
-    /** Stands in for `cua-driver revoke`; defaults to recording and returning at once. */
-    readonly revoke?: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
-    /**
-     * Gives each driver an overlay channel; draws and sends land in `log` in order. With a gate,
-     * every "show" signals `entered` and then waits for `gate`, like a helper slow to draw.
-     */
-    readonly overlay?: boolean | ((command: ComputerUseOverlayCommand) => Effect.Effect<void>);
-    /** Pids whose windows are not on GOAT's screen; with it, the proxy checks every window. */
-    readonly elsewhere?: ReadonlySet<number>;
-    /** Holds every placement answer until it is done, as a slow X server would. */
-    readonly placementGate?: Deferred.Deferred<void>;
-    /** Answers each window report; reports land in `targets`. */
-    readonly onTarget?: (target: { pid: number; windowId: number }) => boolean;
-  } = {},
-) {
-  const input = yield* Queue.unbounded<string, Cause.Done>();
-  const output = yield* Queue.unbounded<string>();
-  const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done | string>();
-  const drivers: Array<FakeDriver> = [];
-  const started = yield* Queue.unbounded<FakeDriver>();
-  const revokeCalled = yield* Deferred.make<void>();
-  const revoked: Array<ReadonlyArray<string>> = [];
-  const log: Array<string> = [];
-  const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
-  const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
-  const proxy = yield* runLeaseProxy({
-    controlId: CONTROL,
-    expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
-    bundleIds: true,
-    input: Stream.fromQueue(input),
-    output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
-    ...(options.onTarget === undefined
-      ? {}
-      : {
-          onTarget: (target: { pid: number; windowId: number }) =>
-            Queue.offer(targets, target).pipe(Effect.as(options.onTarget?.(target) ?? true)),
-        }),
-    leaseUpdates: Stream.fromQueue(updates),
-    startDriver: Effect.gen(function* () {
-      const driver: FakeDriver = {
-        toDriver: yield* Queue.unbounded<string>(),
-        fromDriver: yield* Queue.unbounded<string, Cause.Done>(),
-        killed: yield* Deferred.make<void>(),
-      };
-      drivers.push(driver);
-      yield* Queue.offer(started, driver);
-      return {
-        send: (line: string) =>
-          Effect.sync(() => {
-            const params = (JSON.parse(line) as { params?: { name?: unknown } }).params;
-            if (typeof params?.name === "string") log.push("send " + params.name);
-          }).pipe(Effect.andThen(Queue.offer(driver.toDriver, line)), Effect.asVoid),
-        lines: Stream.fromQueue(driver.fromDriver),
-        kill: Deferred.succeed(driver.killed, undefined).pipe(
-          Effect.andThen(Queue.end(driver.fromDriver)),
-        ),
-        ...(options.overlay
-          ? {
-              overlay: (command: ComputerUseOverlayCommand) =>
-                (typeof options.overlay === "function"
-                  ? options.overlay(command)
-                  : Effect.void
-                ).pipe(
-                  Effect.andThen(
-                    Effect.sync(() => void log.push("draw " + JSON.stringify(command))),
-                  ),
-                ),
-            }
-          : {}),
-      };
-    }),
-    ...(options.elsewhere === undefined
-      ? {}
-      : {
-          placement: (windows: ReadonlyArray<NamedWindow>) =>
-            Queue.offer(checking, windows).pipe(
-              Effect.andThen(
-                options.placementGate === undefined
-                  ? Effect.void
-                  : Deferred.await(options.placementGate),
-              ),
-              Effect.as(
-                windows.some((window) => options.elsewhere?.has(window.pid))
-                  ? ("other" as const)
-                  : ("same" as const),
-              ),
-            ),
-        }),
-    revokeSessions: (sessions) =>
-      Effect.sync(() => void revoked.push(sessions)).pipe(
-        Effect.andThen(Deferred.succeed(revokeCalled, undefined)),
-        Effect.andThen(options.revoke?.(sessions) ?? Effect.void),
-      ),
-  }).pipe(Effect.scoped, Effect.forkChild);
-  const first = yield* Queue.take(started);
-  const current = () => drivers.at(-1) ?? first;
-  const json = (line: string) => JSON.parse(line) as Record<string, unknown>;
-  return {
-    send: (line: string) => Queue.offer(input, line),
-    close: Queue.end(input),
-    push: (update: ComputerUseLeaseUpdate) => Queue.offer(updates, update),
-    failLeaseStream: Queue.fail(updates, "connection reset"),
-    reply: (line: string) => Queue.offer(current().fromDriver, line),
-    /** The driver's output ends without the proxy killing it, as when the helper restarts. */
-    driverExits: Effect.suspend(() => Queue.end(current().fromDriver)),
-    nextToDriver: Effect.suspend(() => Queue.take(current().toDriver)).pipe(Effect.map(json)),
-    nextToProvider: Queue.take(output).pipe(Effect.map(json)),
-    providerQueued: Queue.size(output),
-    driverQueued: Effect.suspend(() => Queue.size(current().toDriver)),
-    killed: Effect.suspend(() => Deferred.await(first.killed)),
-    isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
-    restarted: Queue.take(started),
-    revokeCalled: Deferred.await(revokeCalled),
-    /** The windows of the next placement check, once it has started. */
-    checking: Queue.take(checking),
-    /** The next window the proxy reported to the server. */
-    reported: Queue.take(targets),
-    reportedQueued: Queue.size(targets),
-    revoked,
-    log,
-    proxy,
-  };
-});
-
-const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES) => ({
-  jsonrpc: "2.0",
-  id,
-  result: {
-    content: [{ type: "text", text: LEASE_END_MESSAGES[reason] }],
-    structuredContent: { refused: computerUseRefusalReason(reason), detail: reason },
-    isError: true,
-  },
-});
+import { LEASE_END_MESSAGES, leaseUpdateLines, PAUSE_MESSAGES } from "./ComputerUseLeaseProxy.ts";
+import { active, call, CONTROL, harness, refusedCall } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("ComputerUseLeaseProxy", () => {
   it.effect(
@@ -747,6 +578,67 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.nextToProvider;
         assert.equal(yield* h.reportedQueued, 0);
       }),
+  );
+
+  it.effect(
+    "reports a person's input once, and never the agent's own input during or just after its call",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ humanInput: true });
+        yield* h.push(active());
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        // The click's own events, while it runs and as they surface after its answer.
+        yield* h.hid("pointer");
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        yield* h.nextToProvider;
+        yield* h.hid("pointer");
+        yield* TestClock.adjust(1_000);
+        // Reported a second late, but from the click's moment.
+        yield* h.hid("pointer", 800);
+        // A person's key well after the click: the first thing that reaches the server.
+        yield* h.hid("keyboard");
+        assert.equal(yield* h.person, "keyboard");
+      }),
+  );
+
+  it.effect("a report the server did not take is offered again with the next event", () =>
+    Effect.gen(function* () {
+      let accepted = false;
+      const h = yield* harness({ humanInput: true, acceptHuman: () => accepted });
+      yield* h.push(active());
+      yield* h.hid("keyboard");
+      assert.equal(yield* h.person, "keyboard");
+      accepted = true;
+      yield* h.hid("pointer");
+      assert.equal(yield* h.person, "pointer");
+    }),
+  );
+
+  it.effect("tells the server when each call that can post input starts and ends", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ humanInput: true });
+      yield* h.push(active());
+      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
+      yield* h.nextToDriver;
+      yield* h.send(call(2, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      yield* h.nextToDriver;
+      assert.equal(yield* h.agentCall, "start 2");
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+      yield* h.nextToProvider;
+      assert.equal(yield* h.agentCall, "end 2");
+    }),
+  );
+
+  it.effect("a call that only reads never hides a person's input", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ humanInput: true });
+      yield* h.push(active());
+      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.hid("pointer");
+      assert.equal(yield* h.person, "pointer");
+    }),
   );
 
   it.effect("pauses for a secret field with a private refusal and resumes by itself", () =>
