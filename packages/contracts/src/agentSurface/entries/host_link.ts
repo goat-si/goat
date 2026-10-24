@@ -60,6 +60,8 @@ export const hostLinkEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "LinkedHosts.unlink removes the catalog entry by name under its lock; a missing name is refused without another effect. The remote session and remote threads remain untouched.",
     annotations: {
       title: "Remove a linked GOAT host",
       idempotentHint: true,

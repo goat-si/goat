@@ -451,6 +451,10 @@
       "types": "./src/work-log/itemDetail.ts",
       "default": "./src/work-log/itemDetail.ts"
     },
+    "./work-log/computer-use": {
+      "types": "./src/work-log/computerUse.ts",
+      "default": "./src/work-log/computerUse.ts"
+    },
     "./work-log/file-change-diff": {
       "types": "./src/work-log/fileChangeDiff.ts",
       "default": "./src/work-log/fileChangeDiff.ts"

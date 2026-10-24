@@ -2,9 +2,14 @@ import { state, setupSshComposer, id, store, result, deferred } from "~/test/ssh
 import { act } from "../../../test/render";
 import type { ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
+const { reportMockFactoryFailure } = await vi.hoisted(
+  () => import("../../../test/reportMockFactoryFailure"),
+);
 vi.mock("./MessagesTimeline", () => ({ MessagesTimeline: () => null }));
 vi.mock("./ChatComposer", async (original) => {
-  const actual = await original<typeof import("./ChatComposer")>();
+  const actual = await reportMockFactoryFailure("./ChatComposer", () =>
+    original<typeof import("./ChatComposer")>(),
+  );
   return {
     ...actual,
     ChatComposer: (props: ComponentProps<typeof actual.ChatComposer>) => {

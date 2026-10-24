@@ -1,6 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { FleetOwnerKey, type HostStatusEntry, type RuntimeMode, ThreadId } from "@goat/contracts";
+import {
+  BUILTIN_PERMISSION_PROFILES,
+  FleetOwnerKey,
+  type HostStatusEntry,
+  type RuntimeMode,
+  ThreadId,
+} from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -46,6 +52,8 @@ interface World {
   readonly failing: Set<string>;
   /** The next launch creates its thread, then the answer is lost (SSH dropped mid-call). */
   loseNextLaunchResponse: boolean;
+  /** Hosts whose GOAT cannot bind a goatclaw ceiling to a launched thread. */
+  readonly noCeilingHosts: Set<string>;
 }
 
 const newWorld = (): World => ({
@@ -57,6 +65,7 @@ const newWorld = (): World => ({
   oldHosts: new Set(),
   failing: new Set(),
   loseNextLaunchResponse: false,
+  noCeilingHosts: new Set(),
 });
 
 const unavailable = (host: string) =>
@@ -209,6 +218,12 @@ const fakeDispatch = (world: World) =>
         yield* beforeLaunch;
         const host = input.host ?? "local";
         if (world.reachable[host] !== true) return yield* unavailable(host);
+        if (input.permissionProfileCeiling !== undefined && world.noCeilingHosts.has(host))
+          return yield* new SshRemoteDispatch.SshRemoteDispatchError({
+            reason: "remote_refused",
+            remoteCode: "permission_profile_unsupported",
+            message: "Remote GOAT cannot preserve a permission profile ceiling.",
+          });
         world.launches.push(input);
         const threadId = ThreadId.make("thread:" + host + world.launches.length);
         world.threads.push({ host, threadId, title: input.title, phase: "running" });
@@ -575,6 +590,52 @@ describe("Rescheduler", () => {
       expect(world.launches).toHaveLength(0);
       expect(world.calls.filter((call) => call.tool === "goat_thread_interrupt")).toHaveLength(0);
     }),
+  );
+
+  testScoped("regression #969: binds the caller's goatclaw ceiling on the destination", (world) =>
+    Effect.gen(function* () {
+      const rescheduler = yield* Rescheduler.Rescheduler;
+      yield* loseA(world);
+      const ceiling = BUILTIN_PERMISSION_PROFILES.worker!;
+      const synced: Array<string> = [];
+      const moved = yield* rescheduler.reschedule(
+        request({
+          permissionProfileCeiling: ceiling,
+          prepareCeiling: (host) =>
+            Effect.sync(() => {
+              // The destination's policy is synced before anything launches there.
+              expect(world.launches).toHaveLength(0);
+              synced.push(host);
+            }),
+        }),
+      );
+      expect(moved).toMatchObject({ _tag: "Rescheduled", host: "B" });
+      expect(synced).toEqual(["B"]);
+      expect(world.launches.map((launch) => launch.permissionProfileCeiling)).toEqual([ceiling]);
+    }),
+  );
+
+  testScoped(
+    "regression #969: refuses a destination that cannot hold the ceiling, then places again",
+    (world) =>
+      Effect.gen(function* () {
+        const rescheduler = yield* Rescheduler.Rescheduler;
+        yield* loseA(world);
+        world.noCeilingHosts.add("B");
+        const bounded = request({ permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.worker! });
+        expect(yield* rescheduler.reschedule(bounded)).toMatchObject({
+          _tag: "Refused",
+          reason: "unsupported_remote",
+          message: expect.stringContaining("permission_profile_unsupported"),
+        });
+        expect(world.launches).toEqual([]);
+        // Nothing launched, so the request is free to place once the destination updates.
+        world.noCeilingHosts.delete("B");
+        expect(yield* rescheduler.reschedule(bounded)).toMatchObject({
+          _tag: "Rescheduled",
+          host: "B",
+        });
+      }),
   );
 
   testScoped("drains between runs and never interrupts a running turn", (world) =>

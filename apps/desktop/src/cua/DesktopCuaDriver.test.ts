@@ -33,6 +33,9 @@ const descriptor = {
 };
 
 const HOST_PID = 4242;
+const HELPER_PID = 5151;
+const HELPER_ID = "codes.t3.host-test.computer-use";
+const HELPER_BUNDLE = "/Helpers/GOAT Computer Use.app";
 
 const toolResult = (structured: unknown, images: ToolResult["images"] = []): ToolResult => ({
   text: "",
@@ -79,6 +82,8 @@ const fixture = Effect.fn(function* (
     tools?: Record<string, ToolResult>;
     blankCapture?: boolean;
     refuseStart?: boolean;
+    /** Ship the GOAT Computer Use helper; its grants are separate from Electron's. */
+    helper?: { readonly granted: boolean } | "unusable";
   } = {},
 ) {
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
@@ -108,6 +113,13 @@ const fixture = Effect.fn(function* (
   let destroys = 0;
   const toolCalls: Array<{ name: string; input: unknown }> = [];
   let clientsOpen = 0;
+  const helperProbes: Array<{ bundleId: string; prompt: boolean }> = [];
+  const helperLaunches: Array<{
+    bundleId: string;
+    driverPath: string;
+    manifestPath: string;
+    environment: ReadonlyArray<{ name: string; value: string }>;
+  }> = [];
   const dependencies: DesktopCuaDriverDependencies = {
     connect: async () => {
       clientsOpen++;
@@ -124,6 +136,70 @@ const fixture = Effect.fn(function* (
       };
     },
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
+    helperGrants: async (bundle, prompt) => {
+      helperProbes.push({ bundleId: bundle.bundleId, prompt });
+      const granted = typeof options.helper === "object" && options.helper.granted;
+      return { accessibility: granted, screenRecording: granted };
+    },
+    helperBundlePath: async () =>
+      options.helper === "unusable"
+        ? { kind: "unusable", message: "GOAT Computer Use at /Helpers cannot be used (EACCES)." }
+        : options.helper
+          ? { kind: "found", path: HELPER_BUNDLE }
+          : { kind: "absent" },
+    helperHost: (helper) => {
+      helperLaunches.push({
+        bundleId: helper.bundle.bundleId,
+        driverPath: helper.bundle.driverPath,
+        manifestPath: helper.capabilityManifestPath,
+        environment: helper.environment,
+      });
+      const manifest = prepared.get(helper.capabilityManifestPath);
+      launches.push({
+        scope: manifest?.scope ?? "none",
+        hostBundleIds: manifest?.hostBundleIds ?? [],
+        manifestPath: helper.capabilityManifestPath,
+        permissionMode: 0,
+        approved: true,
+      });
+      const exit = Promise.withResolvers<void>();
+      let running = false;
+      return {
+        servicePid: () => (running ? HELPER_PID : undefined),
+        start: async () => {
+          starts++;
+          running = true;
+          Deferred.doneUnsafe(starting, Exit.void);
+          return {
+            socketPath: "/tmp/goat-cu-x/driver.sock",
+            pid: 777,
+            generation: String(starts),
+            driverVersion: "0.37.0",
+            contractVersion: "0.8.0",
+            mcpProtocolVersion: "2025-06-18",
+            mcp: {
+              command: helper.bundle.driverPath,
+              args: ["mcp", "--embedded", "--socket", "/tmp/goat-cu-x/driver.sock"],
+              environment: [],
+            },
+          };
+        },
+        stop: async () => {
+          stops++;
+          running = false;
+          exit.resolve();
+        },
+        waitForExit: (_generation, operation) => {
+          exits.push(() => exit.resolve());
+          operation.signal.addEventListener("abort", () => exit.resolve(), { once: true });
+          return exit.promise;
+        },
+        uniffiDestroy: () => {
+          destroys++;
+          Queue.offerUnsafe(destroyed, undefined);
+        },
+      };
+    },
     imageHasContent: async () => !options.blankCapture,
     prepareManifest: async (input) => {
       const path = `${input.directory}/${input.scope}.yaml`;
@@ -263,6 +339,8 @@ const fixture = Effect.fn(function* (
     crash: Effect.sync(() => exits.at(-1)!()),
     constructors,
     launches,
+    helperProbes,
+    helperLaunches,
     counts: () => ({ starts, stops, destroys }),
   };
 });
@@ -706,4 +784,156 @@ describe("DesktopCuaDriver verification", () => {
     for (let offset = 0; offset < content.length; offset += 4 * 20) content[offset + 1] = 200;
     assert.isTrue(bitmapHasContent(content));
   });
+});
+
+describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
+  const helperTools = (identity: { bundle: string; parent: number }) => ({
+    ...healthyTools(),
+    health_report: toolResult({
+      checks: [
+        {
+          name: "bundle_identity",
+          status: "pass",
+          data: {
+            bundle_identifier: identity.bundle,
+            identity_source: "parent_application",
+            parent_process_id: identity.parent,
+          },
+        },
+      ],
+    }),
+  });
+
+  it.effect("asks the helper for grants and lets it own the driver agents cannot target", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Electron's own grants no longer matter once the helper owns the TCC identity.
+        const test = yield* fixture({
+          platform: "darwin",
+          denyPermissions: true,
+          helper: { granted: true },
+        });
+        yield* test.request("agent");
+        const report = yield* test.next;
+        assert.equal(report.status, "ready");
+        assert.equal(
+          report.status === "ready" ? report.mcp.command : "",
+          `${HELPER_BUNDLE}/Contents/Resources/cua-driver/cua-driver`,
+        );
+        assert.deepEqual(test.helperProbes, [{ bundleId: HELPER_ID, prompt: true }]);
+        assert.isEmpty(test.constructors);
+        assert.deepEqual(
+          test.helperLaunches.map(({ bundleId, driverPath }) => ({ bundleId, driverPath })),
+          [
+            {
+              bundleId: HELPER_ID,
+              driverPath: `${HELPER_BUNDLE}/Contents/Resources/cua-driver/cua-driver`,
+            },
+          ],
+        );
+        assert.deepEqual(test.helperLaunches[0]?.environment, privacyEnvironment);
+        assert.deepEqual(test.launches[0]?.scope, "agents");
+        assert.include(test.launches[0]?.hostBundleIds ?? [], HELPER_ID);
+        assert.include(test.launches[0]?.hostBundleIds ?? [], "codes.t3.host-test");
+      }),
+    ),
+  );
+
+  it.effect("refuses to start without the helper's grants and names the helper", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: false } });
+        yield* test.request("agent");
+        const report = yield* test.next;
+        assert.equal(report.status, "unavailable");
+        assert.match(
+          report.status === "unavailable" ? (report.message ?? "") : "",
+          /for GOAT Computer Use in System Settings/,
+        );
+        assert.isEmpty(test.helperLaunches);
+      }),
+    ),
+  );
+
+  it.effect("verifies the helper's grants and the helper as the driver's parent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          denyPermissions: true,
+          helper: { granted: true },
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+        });
+        assert.deepEqual(yield* test.verify, {
+          verified: true,
+          steps: VERIFICATION_IDS.map((id) => ({ id, ok: true })),
+        });
+        assert.deepEqual(test.helperProbes, [{ bundleId: HELPER_ID, prompt: false }]);
+        assert.equal(test.launches[0]?.scope, "verify");
+      }),
+    ),
+  );
+
+  it.effect.each([
+    {
+      name: "Electron is the parent",
+      identity: { bundle: "codes.t3.host-test", parent: HOST_PID },
+    },
+    { name: "another helper process is the parent", identity: { bundle: HELPER_ID, parent: 1 } },
+  ])("fails identity when $name", ({ identity }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          tools: helperTools(identity),
+        });
+        const result = yield* test.verify;
+        assert.isFalse(result.verified);
+        assert.deepEqual(result.steps.at(-1)?.id, "identity");
+        assert.isFalse(result.steps.at(-1)?.ok ?? true);
+      }),
+    ),
+  );
+
+  it.effect("names the helper when its grants are off", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: false } });
+        const result = yield* test.verify;
+        assert.deepEqual(result.steps, [
+          {
+            id: "grants",
+            ok: false,
+            detail: "Accessibility and Screen Recording are off for GOAT Computer Use.",
+          },
+        ]);
+      }),
+    ),
+  );
+});
+
+describe("DesktopCuaDriver when the helper cannot be used", () => {
+  it.effect("keeps computer use off instead of running it under GOAT's own grants", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // GOAT itself holds the grants here; falling back would silently use them.
+        const test = yield* fixture({ platform: "darwin", helper: "unusable" });
+        yield* test.request("agent");
+        const report = yield* test.next;
+        assert.equal(report.status, "unavailable");
+        assert.match(report.status === "unavailable" ? (report.message ?? "") : "", /EACCES/);
+        assert.isEmpty(test.constructors);
+        assert.isEmpty(test.helperLaunches);
+        const result = yield* test.verify;
+        assert.deepEqual(result.steps, [
+          {
+            id: "grants",
+            ok: false,
+            detail: "GOAT Computer Use at /Helpers cannot be used (EACCES).",
+          },
+        ]);
+      }),
+    ),
+  );
 });

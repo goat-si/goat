@@ -56,3 +56,6 @@ node_modules/
 # gitignore, which would make git add, lint-staged and vp fmt skip it. Patterns that match paths
 # inside it, such as "devlog/*", still apply.
 !/devlog/
+
+# Locally built macOS computer use helper (scripts/build-computer-use-helper.ts)
+apps/desktop/.computer-use-helper/
