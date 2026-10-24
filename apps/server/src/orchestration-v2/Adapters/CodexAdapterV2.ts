@@ -172,6 +172,11 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { codexFileChangeLineCounts } from "../fileChangeLineCounts.ts";
 import { codexFileChangePatch } from "../fileChangePatch.ts";
+import {
+  codexExhaustionHttpStatus,
+  codexRetryFailureClass,
+  codexTerminalFailure,
+} from "./CodexFailureClass.ts";
 
 const decodeRouteCatalogArg = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
@@ -1177,41 +1182,6 @@ function codexFailureClassification(code: string | null | undefined) {
 }
 
 type CodexErrorInfo = CodexSchema.ServerNotification__CodexErrorInfo;
-
-/**
- * Retry exhaustion only says why it failed through the last attempt's HTTP
- * status. Exhaustion on 429 is a usage or rate limit, so it keeps the Limited
- * state and resume controls; other statuses stay provider or transport errors.
- */
-function codexExhaustionHttpStatus(errorInfo: CodexErrorInfo | null | undefined): number | null {
-  if (
-    typeof errorInfo !== "object" ||
-    errorInfo === null ||
-    !("responseTooManyFailedAttempts" in errorInfo)
-  ) {
-    return null;
-  }
-  // Codex 0.164 accepts unknown error variants as arbitrary JSON, so the
-  // nested value is only trusted once it has the known shape.
-  const attempts = errorInfo.responseTooManyFailedAttempts;
-  return typeof attempts === "object" &&
-    attempts !== null &&
-    "httpStatusCode" in attempts &&
-    typeof attempts.httpStatusCode === "number"
-    ? attempts.httpStatusCode
-    : null;
-}
-
-function codexUsageLimitError(
-  code: string | null,
-  errorInfo: CodexErrorInfo | null | undefined,
-): boolean {
-  return (
-    code === "usageLimitExceeded" ||
-    code === "rateLimitExceeded" ||
-    codexExhaustionHttpStatus(errorInfo) === 429
-  );
-}
 
 /**
  * ChatGPT sharing reports its own reason inside Codex's generic turn error, so
@@ -5159,9 +5129,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     message: payload.error.additionalDetails?.trim() || payload.error.message,
                     code: notificationCode,
                     ...codexFailureClassification(notificationCode),
-                    class: codexUsageLimitError(notificationCode, payload.error.codexErrorInfo)
-                      ? "usage_limit"
-                      : "provider_error",
+                    ...codexTerminalFailure(
+                      notificationCode,
+                      payload.error.codexErrorInfo,
+                      payload.error.message,
+                    ),
                   }),
                   payload.error,
                 ),
@@ -5186,11 +5158,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     : additionalDetails,
                 code,
                 ...codexFailureClassification(code),
-                class: codexUsageLimitError(code, payload.error.codexErrorInfo)
-                  ? "usage_limit"
-                  : code?.startsWith("http") === true || code?.startsWith("responseStream") === true
-                    ? "transport_error"
-                    : "provider_error",
+                class: codexRetryFailureClass(
+                  code,
+                  payload.error.codexErrorInfo,
+                  payload.error.message,
+                ),
                 retryable: true,
               }),
               payload.error,
@@ -6281,9 +6253,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 input.failureErrorInfo === undefined
                   ? undefined
                   : codexErrorInfoCode(input.failureErrorInfo);
-              const failureClass = codexUsageLimitError(failureCode ?? null, input.failureErrorInfo)
-                ? "usage_limit"
-                : "provider_error";
+              const terminalFailure = codexTerminalFailure(
+                failureCode ?? null,
+                input.failureErrorInfo,
+                input.failureMessage,
+              );
+              const failureClass = terminalFailure.class;
               // The notification carries the richer message, so it wins when the
               // completion repeats it. An explicit exhaustion status on the
               // completion still decides the class; a missing one is not evidence.
@@ -6300,7 +6275,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         message: input.failureMessage,
                         code: failureCode,
                         ...codexFailureClassification(failureCode),
-                        class: failureClass,
+                        ...terminalFailure,
                       }),
                       input.failureMessage,
                     );

@@ -73,7 +73,10 @@ export type NextDecision =
 export function decideNext(input: NextInput): NextDecision {
   const { chain, current } = input;
   const on = chain.on ?? DEFAULT_FALLBACK_ON;
-  if (!(on as ReadonlyArray<string>).includes(input.failure))
+  // A route that refuses the model for this account (a 403, a plan without it) cannot serve it
+  // however often it is retried: for a chain it is a step that cannot be used (#1205).
+  const trigger = input.failure === "permission_error" ? "unavailable" : input.failure;
+  if (!(on as ReadonlyArray<string>).includes(trigger))
     return { _tag: "Exhausted", reason: input.failure + " is not one of this chain's triggers" };
   const tried = new Set([...input.tried.map(stepKey), stepKey(current)]);
   const hopsUsed = tried.size - 1;
