@@ -12,6 +12,8 @@ import { notesLayer as layer } from "./NotesTestkit.ts";
 
 // External writers racing the service's own filesystem calls, injected at the syscall it makes.
 type Promises = typeof NodeFS.promises;
+/** Paths and messages with `/` separators, so the selectors below also match on Windows. */
+const posix = (target: unknown) => String(target).replaceAll("\\", "/");
 /** Replaces a node:fs/promises function the service imports, for the scope's lifetime. */
 const replaceFs = <K extends "link" | "copyFile" | "unlink" | "rename" | "open" | "realpath">(
   key: K,
@@ -35,7 +37,7 @@ const replaceFs = <K extends "link" | "copyFile" | "unlink" | "rename" | "open" 
 const editBeforeRemoval = (name: string, contents: string) => {
   let armed = true;
   const edit = async (target: unknown) => {
-    if (!armed || !String(target).endsWith(`/${name}`)) return;
+    if (!armed || !posix(target).endsWith(`/${name}`)) return;
     armed = false;
     await NodeFS.promises.writeFile(String(target), contents);
   };
@@ -112,7 +114,7 @@ it.effect("a file created at an edited note's path meanwhile is kept, and so is 
     const { notesDir } = yield* Config.ServerConfig;
     const initial = yield* notes.write({ path: "a.md", body: "# A\n", baseRevision: null }, "user");
     yield* replaceFs("rename", (original) => async (from, to) => {
-      if (!String(from).endsWith("/a.md")) return original(from, to);
+      if (!posix(from).endsWith("/a.md")) return original(from, to);
       await NodeFS.promises.writeFile(String(from), "# Terminal\n");
       await original(from, to);
       await NodeFS.promises.writeFile(String(from), "# Other\n");
@@ -124,7 +126,7 @@ it.effect("a file created at an edited note's path meanwhile is kept, and so is 
     assert.strictEqual(yield* fs.readFileString(`${notesDir}/a.md`), "# Other\n");
     const captured = yield* capturedNote(notesDir);
     assert.strictEqual(captured.contents, "# Terminal\n");
-    assert.include(failed.message, captured.location);
+    assert.include(posix(failed.message), captured.location);
     assert.deepStrictEqual(
       captured.entries.filter((entry) => !entry.startsWith(".")),
       ["a.md"],
@@ -147,7 +149,7 @@ it.effect(
       yield* replaceFs(
         "rename",
         (original) => (from, to) =>
-          String(from).endsWith("/a.md")
+          posix(from).endsWith("/a.md")
             ? Promise.reject(Object.assign(new Error("cross-device link"), { code: "EXDEV" }))
             : original(from, to),
       );
@@ -175,7 +177,7 @@ it.effect(
       yield* replaceFs(
         "link",
         (original) => (source, target) =>
-          String(target).endsWith("/a.md")
+          posix(target).endsWith("/a.md")
             ? Promise.reject(Object.assign(new Error("no hard links"), { code: "ENOTSUP" }))
             : original(source, target),
       );
@@ -185,7 +187,7 @@ it.effect(
       assert.strictEqual(failed._tag === "NoteError" && failed.reason, "storage");
       const captured = yield* capturedNote(notesDir);
       assert.strictEqual(captured.contents, "# Terminal\n");
-      assert.include(failed.message, captured.location);
+      assert.include(posix(failed.message), captured.location);
       assert.strictEqual(captured.entries.length, 1);
     }).pipe(Effect.scoped, Effect.provide(layer())),
 );
@@ -201,7 +203,7 @@ it.effect("a set-aside note that cannot be read back is put back, never deleted"
       "open",
       (original) =>
         (target, ...rest) =>
-          String(target).endsWith("/removed.md")
+          posix(target).endsWith("/removed.md")
             ? Promise.reject(Object.assign(new Error("i/o error"), { code: "EIO" }))
             : original(target, ...rest),
     );
@@ -223,7 +225,7 @@ it.effect("interrupting a delete after its note was set aside still puts the edi
     const renamed = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     yield* replaceFs("rename", (original) => async (from, to) => {
-      if (!String(from).endsWith("/a.md")) return original(from, to);
+      if (!posix(from).endsWith("/a.md")) return original(from, to);
       await NodeFS.promises.writeFile(String(from), "# Terminal\n");
       await original(from, to);
       renamed.resolve();
@@ -256,13 +258,18 @@ it.effect(
       let armed = false;
       yield* replaceFs("rename", (original) => async (from, to) => {
         await original(from, to);
-        armed = String(from).endsWith("/a.md");
+        armed = posix(from).endsWith("/a.md");
       });
-      yield* replaceFs("realpath", (original) => (target, options) => {
-        if (!armed || !String(target).includes("/.note-")) return original(target, options);
-        armed = false;
-        return Promise.reject(Object.assign(new Error("i/o error"), { code: "EIO" }));
-      });
+      // The service calls only the one-argument string form of the overloaded realpath.
+      yield* replaceFs(
+        "realpath",
+        (original) =>
+          ((target: NodeFS.PathLike) => {
+            if (!armed || !posix(target).includes("/.note-")) return original(target);
+            armed = false;
+            return Promise.reject(Object.assign(new Error("i/o error"), { code: "EIO" }));
+          }) as typeof original,
+      );
       yield* notes
         .move({ from: "a.md", to: "b.md", baseRevision: initial.revision }, "user")
         .pipe(Effect.flip);
@@ -283,9 +290,9 @@ it.effect(
         "user",
       );
       yield* replaceFs("rename", (original) => async (from, to) => {
-        const edit = String(from).endsWith("/a.md")
+        const edit = posix(from).endsWith("/a.md")
           ? "# Terminal\n"
-          : String(from).endsWith("/b.md")
+          : posix(from).endsWith("/b.md")
             ? "# Destination edit\n"
             : undefined;
         if (edit !== undefined) await NodeFS.promises.writeFile(String(from), edit);
@@ -294,7 +301,7 @@ it.effect(
       yield* replaceFs(
         "link",
         (original) => (source, target) =>
-          String(source).endsWith("/removed.md") && String(target).endsWith("/b.md")
+          posix(source).endsWith("/removed.md") && posix(target).endsWith("/b.md")
             ? Promise.reject(Object.assign(new Error("no hard links"), { code: "ENOTSUP" }))
             : original(source, target),
       );
@@ -305,7 +312,7 @@ it.effect(
       assert.strictEqual(yield* fs.readFileString(`${notesDir}/a.md`), "# Terminal\n");
       const captured = yield* capturedNote(notesDir);
       assert.strictEqual(captured.contents, "# Destination edit\n");
-      assert.include(failed.message, captured.location);
+      assert.include(posix(failed.message), captured.location);
     }).pipe(Effect.scoped, Effect.provide(layer())),
 );
 
