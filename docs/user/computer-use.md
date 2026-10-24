@@ -138,9 +138,10 @@ A headless server with Xvfb also works. Without AT-SPI (the `at-spi2-core`
 package) and a D-Bus session, agents can take screenshots and use the mouse and
 keyboard but cannot read app controls.
 Window screenshots on Linux need a desktop that composites its windows (a bare
-Xvfb needs a compositor such as xcompmgr); in a Wayland session other than
-Hyprland, agents read app controls but get no window screenshots. A window that
-has just opened or is still redrawing can briefly show part of the app behind it.
+Xvfb needs a compositor such as xcompmgr). In a Wayland session without
+XWayland, other than Hyprland, agents read app controls but get no window
+screenshots. Before each screenshot the app is asked to redraw its window, and
+an app that does not redraw all of it promptly gets no screenshot that time.
 
 ## Other computers
 

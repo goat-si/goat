@@ -21,12 +21,14 @@ import { makeSignalMonitor } from "./linuxSignals.ts";
 import {
   detectLinuxSession,
   linuxCapabilities,
+  linuxReadiness,
   linuxSessionFacts,
   pngColors,
+  type ReadinessFacts,
 } from "./linuxSession.ts";
 import { readLinuxReadiness } from "./readiness.ts";
 import { CROPPED_CAPTURE } from "./windowCapture.ts";
-import { UNREDIRECTED_CAPTURE, type DriverShot } from "./x11WindowCapture.ts";
+import { STILL_DRAWING, UNREDIRECTED_CAPTURE, type DriverShot } from "./x11WindowCapture.ts";
 
 describe("Linux session facts", () => {
   it("refuses Wayland GNOME 50 for readiness as the helper does, without probing the driver", async () => {
@@ -65,6 +67,35 @@ describe("Linux session facts", () => {
     // Only Wayland GNOME reads the version; X11 never runs gnome-shell.
     linuxSessionFacts({ DISPLAY: ":0", XDG_CURRENT_DESKTOP: "GNOME" }, gnomeShellVersion);
     expect(versionReads).toBe(1);
+  });
+});
+
+describe("Linux readiness grants (#1392)", () => {
+  const session = detectLinuxSession(
+    linuxSessionFacts({ DISPLAY: ":0", DBUS_SESSION_BUS_ADDRESS: "unix:path=/tmp/bus" }, () => ""),
+  );
+  const facts = (overrides: Partial<ReadinessFacts>): ReadinessFacts => ({
+    session,
+    driver: { x11: true, wayland: false, atspi: true },
+    capture: "varied",
+    tree: "ready",
+    uinputWritable: false,
+    captureRefused: undefined,
+    ...overrides,
+  });
+
+  it("AT-SPI is granted only after a real read answered, never while it does not answer", () => {
+    const silent = linuxReadiness(
+      facts({ driver: { x11: true, wayland: false, atspi: false }, tree: "unavailable" }),
+    );
+    expect(silent.grants.accessibility).toBe("unknown");
+    expect(silent.reasons.join(" ")).toMatch(/AT-SPI does not answer/);
+    // AT-SPI is up, but no window has been read through it yet.
+    const unread = linuxReadiness(facts({ capture: "noWindow", tree: "unavailable" }));
+    expect(unread.grants.accessibility).toBe("unknown");
+    expect(unread.reasons.join(" ")).toMatch(/No window is open to read app controls/);
+    expect(linuxReadiness(facts({})).grants.accessibility).toBe("granted");
+    expect(linuxReadiness(facts({ tree: "empty" })).grants.accessibility).toBe("granted");
   });
 });
 
@@ -565,6 +596,22 @@ describe("Linux computer use helper conformance", () => {
     expect(readiness).toMatchObject({ capture: "unavailable", tree: "ready" });
     expect(readiness.reasons).toContain(UNREDIRECTED_CAPTURE);
     expect(computerUseReady(readiness)).toBe(false);
+    await helper.close();
+  });
+
+  it("a capture that may succeed on the next read is refused as busy, so the agent observes again", async () => {
+    const helper = await connect({
+      capture: {
+        route: "own",
+        capture: async () => ({ refused: STILL_DRAWING, transient: true }),
+      },
+    });
+    const shot = await helper.request("observe", {
+      target: { pid: 10, windowId: 20 },
+      screenshot: true,
+    });
+    expect(shot.result).toMatchObject({ outcome: "refused", reason: "busy" });
+    expect(shot.image).toBeUndefined();
     await helper.close();
   });
 

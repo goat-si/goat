@@ -64,6 +64,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.computerUseResume]: "server",
   [WS_METHODS.previewSessionsSubscribe]: "server",
   [WS_METHODS.previewSessionsControl]: "server",
+  [WS_METHODS.previewSessionsFrames]: "server",
   [WS_METHODS.serverGetConfig]: "server",
   [WS_METHODS.serverRefreshProviders]: "server",
   [WS_METHODS.serverUpdateProvider]: "server",

@@ -651,9 +651,13 @@ const make = Effect.gen(function* () {
             stored,
             {
               type: "task.progress",
-              payload: { generation: task.generation, summary: input.summary },
+              payload: {
+                generation: task.generation,
+                summary: input.summary,
+                ...(input.milestone === undefined ? {} : { milestone: input.milestone }),
+              },
             },
-            { actor: "agent", eventId },
+            { actor: "agent", eventId, narrate: input.milestone === true },
           );
           return;
         case "waiting_input":

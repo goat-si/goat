@@ -79,6 +79,28 @@ describe("linuxComputerUseSetup", () => {
     expect(status(declined)).toMatchObject({ capture: "action" });
   });
 
+  it("Wayland capture that is not proven yet does not promise a dialog that may never come", () => {
+    // The helper reports pending both while consent is unanswered and when the compositor
+    // cannot capture one window at all.
+    const unproven: ComputerUseReadiness = {
+      ...READY,
+      grants: { accessibility: "granted", screenCapture: "pending" },
+      capture: "pending",
+      input: "foregroundOnly",
+      platform: { linux: { displayServer: "wayland" } },
+    };
+    const step = linuxComputerUseSetup(unproven, "lidge-ai").steps.find(
+      (entry) => entry.id === "capture",
+    );
+    const words = [
+      step?.title,
+      step?.detail,
+      ...(step?.guidance ?? []).map((line) => line.text),
+    ].join(" ");
+    expect(words).toContain("If no dialog appears");
+    expect(words).not.toContain("appears at that machine.");
+  });
+
   it("a proven machine that is blocked is not ready and says what blocks it", () => {
     const locked = { ...READY, blockers: ["screenLocked"] } as const;
     const setup = linuxComputerUseSetup(locked, "lidge-ai");
@@ -107,5 +129,25 @@ describe("linuxComputerUseSetup", () => {
     const steps = linuxComputerUseSetup(gnome50, "lidge-ai").steps;
     expect(steps.some((step) => step.status === "done")).toBe(false);
     expect(JSON.stringify(steps)).not.toContain("can still read and use app controls");
+  });
+
+  it("with no window open yet, it asks for a window instead of turning AT-SPI on", () => {
+    // AT-SPI is proven only by reading a window, so with none open the tree is unavailable
+    // whether or not AT-SPI answers; capture reports the missing window.
+    const noWindow: ComputerUseReadiness = {
+      ...READY,
+      grants: { accessibility: "unknown", screenCapture: "granted" },
+      capture: "noWindow",
+      tree: "unavailable",
+    };
+    const step = linuxComputerUseSetup(noWindow, "lidge-ai").steps.find(
+      (entry) => entry.id === "accessibility",
+    );
+    expect(step).toMatchObject({ status: "waiting", title: "App controls" });
+    expect(step?.detail).toContain("Open any app window");
+    expect(JSON.stringify(step)).not.toContain("gsettings");
+    // A window that was read and still got no answer is AT-SPI being off.
+    const silent = { ...noWindow, capture: "ready" } as const;
+    expect(status(silent)).toMatchObject({ accessibility: "action" });
   });
 });

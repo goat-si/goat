@@ -1,5 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
-import { type ComputerUseLeaseUpdate, computerUseRefusalReason } from "@goat/contracts";
+import {
+  type ComputerUseLeaseUpdate,
+  type ComputerUseOverlayCommand,
+  computerUseRefusalReason,
+} from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -42,10 +46,17 @@ const harness = Effect.fn(function* (
     readonly expiresAt?: string;
     /** Stands in for `cua-driver revoke`; defaults to recording and returning at once. */
     readonly revoke?: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
+    /**
+     * Gives each driver an overlay channel; draws and sends land in `log` in order. With a gate,
+     * every "show" signals `entered` and then waits for `gate`, like a helper slow to draw.
+     */
+    readonly overlay?: boolean | ((command: ComputerUseOverlayCommand) => Effect.Effect<void>);
     /** Pids whose windows are not on GOAT's screen; with it, the proxy checks every window. */
     readonly elsewhere?: ReadonlySet<number>;
     /** Holds every placement answer until it is done, as a slow X server would. */
     readonly placementGate?: Deferred.Deferred<void>;
+    /** Answers each window report; reports land in `targets`. */
+    readonly onTarget?: (target: { pid: number; windowId: number }) => boolean;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -55,12 +66,20 @@ const harness = Effect.fn(function* (
   const started = yield* Queue.unbounded<FakeDriver>();
   const revokeCalled = yield* Deferred.make<void>();
   const revoked: Array<ReadonlyArray<string>> = [];
+  const log: Array<string> = [];
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
+  const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
   const proxy = yield* runLeaseProxy({
     controlId: CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     input: Stream.fromQueue(input),
     output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
+    ...(options.onTarget === undefined
+      ? {}
+      : {
+          onTarget: (target: { pid: number; windowId: number }) =>
+            Queue.offer(targets, target).pipe(Effect.as(options.onTarget?.(target) ?? true)),
+        }),
     leaseUpdates: Stream.fromQueue(updates),
     startDriver: Effect.gen(function* () {
       const driver: FakeDriver = {
@@ -71,11 +90,28 @@ const harness = Effect.fn(function* (
       drivers.push(driver);
       yield* Queue.offer(started, driver);
       return {
-        send: (line: string) => Queue.offer(driver.toDriver, line).pipe(Effect.asVoid),
+        send: (line: string) =>
+          Effect.sync(() => {
+            const params = (JSON.parse(line) as { params?: { name?: unknown } }).params;
+            if (typeof params?.name === "string") log.push("send " + params.name);
+          }).pipe(Effect.andThen(Queue.offer(driver.toDriver, line)), Effect.asVoid),
         lines: Stream.fromQueue(driver.fromDriver),
         kill: Deferred.succeed(driver.killed, undefined).pipe(
           Effect.andThen(Queue.end(driver.fromDriver)),
         ),
+        ...(options.overlay
+          ? {
+              overlay: (command: ComputerUseOverlayCommand) =>
+                (typeof options.overlay === "function"
+                  ? options.overlay(command)
+                  : Effect.void
+                ).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => void log.push("draw " + JSON.stringify(command))),
+                  ),
+                ),
+            }
+          : {}),
       };
     }),
     ...(options.elsewhere === undefined
@@ -122,7 +158,11 @@ const harness = Effect.fn(function* (
     revokeCalled: Deferred.await(revokeCalled),
     /** The windows of the next placement check, once it has started. */
     checking: Queue.take(checking),
+    /** The next window the proxy reported to the server. */
+    reported: Queue.take(targets),
+    reportedQueued: Queue.size(targets),
     revoked,
+    log,
     proxy,
   };
 });
@@ -138,6 +178,190 @@ const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES) => ({
 });
 
 describe("ComputerUseLeaseProxy", () => {
+  it.effect(
+    "draws the overlay before each call, and hides it before a capture reaches the driver",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ overlay: true });
+        yield* h.push(active());
+        const png = Buffer.alloc(24);
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png);
+        png.write("IHDR", 12, "latin1");
+        png.writeUInt32BE(1000, 16);
+        png.writeUInt32BE(500, 20);
+        const window = { pid: 4, window_id: 9 };
+        yield* h.send(call(1, "get_window_state", window));
+        yield* h.nextToDriver;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: {
+              content: [{ type: "image", mimeType: "image/png", data: png.toString("base64") }],
+            },
+          }),
+        );
+        yield* h.nextToProvider;
+        yield* h.send(call(2, "click", { ...window, x: 500, y: 250 }));
+        yield* h.nextToDriver;
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+        yield* h.nextToProvider;
+        yield* h.send(call(3, "get_window_state", window));
+        yield* h.nextToDriver;
+        const shown = { op: "show", pid: 4, windowId: 9, point: { fx: 0.5, fy: 0.5 } };
+        assert.deepEqual(h.log, [
+          "draw " + JSON.stringify({ op: "hide", reason: "capture" }),
+          "send get_window_state",
+          "draw " + JSON.stringify({ op: "hide", reason: "idle" }),
+          "draw " + JSON.stringify({ ...shown, phase: "acting" }),
+          "send click",
+          "draw " + JSON.stringify({ ...shown, phase: "resting" }),
+          "draw " + JSON.stringify({ op: "hide", reason: "capture" }),
+          "send get_window_state",
+        ]);
+      }),
+  );
+
+  it.effect("refuses a call whose draw a pause interrupted, and never forwards it", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const entered = yield* Deferred.make<void>();
+      const h = yield* harness({
+        overlay: (command) =>
+          command.op === "show"
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+            : Effect.void,
+      });
+      yield* h.push(active());
+      yield* h.send(call(5, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      yield* Deferred.await(entered);
+      // The click's draw is still waiting when the person takes over.
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+      yield* h.killed;
+      yield* Deferred.succeed(gate, undefined);
+      const answer = yield* h.nextToProvider;
+      assert.equal(answer.id, 5);
+      assert.include(JSON.stringify(answer), PAUSE_MESSAGES.takeover);
+      assert.notInclude(h.log, "send click");
+    }),
+  );
+
+  it.effect(
+    "refuses a call whose reply was still being drawn when Stop came, and drops the reply",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const entered = yield* Deferred.make<void>();
+        const h = yield* harness({
+          overlay: (command) =>
+            command.op === "show" && command.phase === "resting"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+              : Effect.void,
+        });
+        yield* h.push(active());
+        yield* h.send(call(6, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* h.nextToDriver;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 6,
+            result: { content: [{ type: "text", text: "clicked" }] },
+          }),
+        );
+        // The reply's draw is waiting when the person presses Stop.
+        yield* Deferred.await(entered);
+        yield* h.push({ state: "ended", reason: "stopped" });
+        yield* h.killed;
+        yield* Deferred.succeed(gate, undefined);
+        const answer = yield* h.nextToProvider;
+        assert.deepEqual(answer, refusedCall(6, "stopped"));
+        assert.notInclude(JSON.stringify(answer), "clicked");
+      }),
+  );
+
+  it.effect(
+    "drops a reply drawn while a pause is still hiding the overlay; the pause refuses the call",
+    () =>
+      Effect.gen(function* () {
+        const reply = {
+          gate: yield* Deferred.make<void>(),
+          entered: yield* Deferred.make<void>(),
+          resumed: yield* Deferred.make<void>(),
+        };
+        const hide = { gate: yield* Deferred.make<void>(), entered: yield* Deferred.make<void>() };
+        const h = yield* harness({
+          overlay: (command) =>
+            command.op === "show" && command.phase === "resting"
+              ? Deferred.succeed(reply.entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(reply.gate)),
+                  Effect.andThen(Deferred.succeed(reply.resumed, undefined)),
+                )
+              : command.op === "hide" && command.reason === "takeover"
+                ? Deferred.succeed(hide.entered, undefined).pipe(
+                    Effect.andThen(Deferred.await(hide.gate)),
+                  )
+                : Effect.void,
+        });
+        yield* h.push(active());
+        yield* h.send(call(7, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* h.nextToDriver;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 7,
+            result: { content: [{ type: "text", text: "clicked" }] },
+          }),
+        );
+        yield* Deferred.await(reply.entered);
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+        yield* Deferred.await(hide.entered);
+        // The reply's draw finishes first, while the pause is still hiding the overlay.
+        yield* Deferred.succeed(reply.gate, undefined);
+        yield* Deferred.await(reply.resumed);
+        yield* Deferred.succeed(hide.gate, undefined);
+        const answer = yield* h.nextToProvider;
+        assert.notInclude(JSON.stringify(answer), "clicked");
+        assert.include(JSON.stringify(answer), PAUSE_MESSAGES.takeover);
+      }),
+  );
+
+  it.effect(
+    "refuses a call drawn while a pause is still hiding the overlay, before the driver stops",
+    () =>
+      Effect.gen(function* () {
+        const show = { gate: yield* Deferred.make<void>(), entered: yield* Deferred.make<void>() };
+        const hide = { gate: yield* Deferred.make<void>(), entered: yield* Deferred.make<void>() };
+        const hold = (step: typeof show) =>
+          Deferred.succeed(step.entered, undefined).pipe(Effect.andThen(Deferred.await(step.gate)));
+        const h = yield* harness({
+          overlay: (command) =>
+            command.op === "show"
+              ? hold(show)
+              : command.op === "hide" && command.reason === "takeover"
+                ? hold(hide)
+                : Effect.void,
+        });
+        yield* h.push(active());
+        yield* h.send(call(5, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* Deferred.await(show.entered);
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+        // The pause is waiting for its hide to land; the driver is still running.
+        yield* Deferred.await(hide.entered);
+        yield* Deferred.succeed(show.gate, undefined);
+        const first = yield* Effect.raceFirst(
+          h.nextToDriver.pipe(Effect.as("driver" as const)),
+          h.nextToProvider.pipe(Effect.map((answer) => answer)),
+        );
+        // Released before asserting: the pause cannot be interrupted, so a failure must not leave
+        // it waiting.
+        yield* Deferred.succeed(hide.gate, undefined);
+        assert.notEqual(first, "driver");
+        assert.include(JSON.stringify(first), PAUSE_MESSAGES.takeover);
+        yield* h.killed;
+        assert.notInclude(h.log, "send click");
+      }),
+  );
+
   it.effect("holds a call until the server confirms the lease, then forwards it", () =>
     Effect.gen(function* () {
       const h = yield* harness();
@@ -489,6 +713,38 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.send(call(2, "list_windows"));
         // The fresh child sees only the new call; the held click is gone.
         assert.equal((yield* h.nextToDriver).id, 2);
+      }),
+  );
+
+  it.effect(
+    "reports the window each forwarded call names to the server once per change, observations included",
+    () =>
+      Effect.gen(function* () {
+        let accept = false;
+        const h = yield* harness({ onTarget: () => accept });
+        yield* h.push(active());
+        // A rejected report is not remembered, so the same window is reported again.
+        yield* h.send(call(1, "zoom", { pid: 4, window_id: 9 }));
+        assert.deepEqual(yield* h.reported, { pid: 4, windowId: 9 });
+        assert.equal((yield* h.nextToDriver).id, 1);
+        accept = true;
+        yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
+        assert.deepEqual(yield* h.reported, { pid: 4, windowId: 9 });
+        assert.equal((yield* h.nextToDriver).id, 2);
+        yield* h.send(call(3, "click", { target: { kind: "window", pid: 4, window_id: 9 } }));
+        yield* h.send(call(4, "list_apps"));
+        assert.equal((yield* h.nextToDriver).id, 3);
+        assert.equal((yield* h.nextToDriver).id, 4);
+        assert.equal(yield* h.reportedQueued, 0);
+        yield* h.send(call(5, "click", { pid: 6, window_id: 2 }));
+        assert.deepEqual(yield* h.reported, { pid: 6, windowId: 2 });
+        assert.equal((yield* h.nextToDriver).id, 5);
+        // A refused call names nothing: it never ran.
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "private" });
+        yield* h.killed;
+        yield* h.send(call(6, "click", { pid: 8, window_id: 1 }));
+        yield* h.nextToProvider;
+        assert.equal(yield* h.reportedQueued, 0);
       }),
   );
 

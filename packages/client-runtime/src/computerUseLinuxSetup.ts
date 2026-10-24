@@ -112,6 +112,21 @@ function accessibilityStep(readiness: ComputerUseReadiness): ComputerUseSetupSte
         "AT-SPI answers, but the app GOAT checked shows it no windows. Open the app you want GOAT to use.",
       guidance: [],
     };
+  // AT-SPI is proven by reading a window; with none open there was nothing to read, so it is
+  // not known to be off (#1394).
+  if (readiness.capture === "noWindow")
+    return {
+      id: "accessibility",
+      status: "waiting",
+      title: "App controls",
+      detail:
+        "Open any app window. GOAT reads app controls through AT-SPI, the Linux accessibility service, and checks it on an open window.",
+      guidance: [
+        text(
+          "If AT-SPI does not answer once a window is open, the next check says how to turn it on.",
+        ),
+      ],
+    };
   return {
     id: "accessibility",
     status: "action",
@@ -159,12 +174,18 @@ function captureStep(readiness: ComputerUseReadiness): ComputerUseSetupStep {
     return {
       id: "capture",
       status: "waiting",
-      title: "Allow screen sharing",
+      title: "Screen sharing",
+      // The helper reports pending both while consent is unanswered and when the compositor
+      // cannot capture one window, so neither is promised.
       detail:
-        "On Wayland your desktop asks before any app can see the screen. A sharing dialog for GOAT Computer Use appears at that machine.",
+        "GOAT has not captured a window yet. On Wayland your desktop asks before any app can see the screen, and some desktops cannot show GOAT a single window at all.",
       guidance: [
         text(
-          "Choose the screen or window GOAT should see and allow it. If the dialog offers to remember the choice, keep it on so it does not ask every time.",
+          "If a sharing dialog for GOAT Computer Use is open at that machine, choose the screen or window GOAT should see and allow it. If the dialog offers to remember the choice, keep it on so it does not ask every time.",
+        ),
+        text(
+          "If no dialog appears, this desktop may not support capturing one window." +
+            (readiness.tree === "ready" ? " GOAT can still read and use app controls." : ""),
         ),
       ],
     };

@@ -8,6 +8,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeReadline from "node:readline";
+import * as NodeStream from "node:stream";
 
 import { CuaDriverMcpConfiguration } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -20,9 +21,12 @@ import * as Stream from "effect/Stream";
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { leaseUpdateLines, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
+import { overlayChannel } from "./overlayChannel.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
+/** A window report waits this long at most; the call it rides on goes ahead either way. */
+const TARGET_REPORT_TIMEOUT_MS = 2_000;
 const decodeX11Display = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({ DISPLAY: Schema.String, XAUTHORITY: Schema.optionalKey(Schema.String) }),
@@ -44,6 +48,25 @@ async function* responseLines(response: Response): AsyncGenerator<string> {
       yield buffer.slice(0, newline);
       buffer = buffer.slice(newline + 1);
     }
+  }
+}
+
+/** Tells the lease route which window the control acts on; true when the server took it. */
+async function reportTarget(
+  url: string,
+  authorization: string,
+  body: { readonly controlId: string; readonly pid: number; readonly windowId: number },
+): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TARGET_REPORT_TIMEOUT_MS),
+    });
+    return response.status === 204;
+  } catch {
+    return false;
   }
 }
 
@@ -77,6 +100,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   const childEnvironment: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.values(LEASE_PROXY_ENV)) delete childEnvironment[name];
   for (const variable of descriptor.environment) childEnvironment[variable.name] = variable.value;
+  // The macOS helper in agent connection mode draws the cursor overlay from fd 3 (#1214).
+  const drawsOverlay = platform === "darwin" && descriptor.args.includes("--mcp");
 
   const leaseUrl = new URL(url);
   leaseUrl.searchParams.set("control", controlId);
@@ -91,6 +116,14 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         () => undefined,
       ).pipe(Stream.catchCause(() => Stream.empty)),
       output: (line) => Effect.sync(() => void process.stdout.write(line + "\n")),
+      onTarget: (target) =>
+        Effect.promise(() =>
+          reportTarget(url, authorization, {
+            controlId,
+            pid: target.pid,
+            windowId: target.windowId,
+          }),
+        ),
       leaseUpdates: leaseUpdateLines(
         Stream.fromAsyncIterable(
           (async function* () {
@@ -110,6 +143,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
             descriptor.command,
             descriptor.args,
             childEnvironment,
+            drawsOverlay,
           );
           drivers.add(child);
           child.once("exit", () => drivers.delete(child));
@@ -118,6 +152,9 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         (child) => Effect.sync(() => killDriverGroup(platform, child, "SIGTERM")),
       ).pipe(
         Effect.map((child) => ({
+          ...(drawsOverlay && child.stdio[3] instanceof NodeStream.Duplex
+            ? { overlay: overlayChannel(child.stdio[3]) }
+            : {}),
           send: (line: string) =>
             Effect.sync(() => {
               if (child.stdin.writable) child.stdin.write(line + "\n");
