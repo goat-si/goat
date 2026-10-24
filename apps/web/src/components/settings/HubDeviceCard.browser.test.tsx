@@ -16,7 +16,7 @@ vi.mock("~/environments/primary", () => ({
 }));
 vi.mock("~/state/session", () => ({ readEnvironmentScope: () => state.permitted }));
 vi.mock("./settingsSearch", () => ({
-  searchableSetting: () => ({ id: "hub-device", title: "Use this device as a hub" }),
+  searchableSetting: () => ({ id: "hub-device", title: "Connect your phone" }),
 }));
 vi.mock("./settingsLayout", () => ({
   SettingsSection: ({
