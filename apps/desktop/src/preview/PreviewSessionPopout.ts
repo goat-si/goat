@@ -85,8 +85,10 @@ export class PreviewSessionPopout {
     owner.webContents.on("did-create-window", (window, details) => {
       if (details.frameName === PREVIEW_SESSION_STACK_WINDOW_NAME) this.adopt(window);
     });
-    owner.webContents.on("did-start-navigation", (_event, _url, _inPlace, mainFrame) => {
-      if (mainFrame) this.suspend();
+    // Only a new document tears the stack down: in-app routing (pushState, hash) fires no
+    // did-finish-load, so suspending on it would leave the pop-out closed for good.
+    owner.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+      if (mainFrame && !inPlace) this.suspend();
     });
     owner.webContents.on("did-finish-load", () => {
       this.tearingDown = false;
@@ -139,16 +141,29 @@ export class PreviewSessionPopout {
       this.owner.webContents.send(PREVIEW_SESSION_STACK_CHANNEL, this.state);
   }
 
+  /**
+   * Clicks pass through to the app below except on a tile. That needs the OS to forward mouse
+   * movement while ignoring it (macOS, Windows); elsewhere the small stack stays clickable.
+   */
+  private passThrough(window: Electron.BrowserWindow) {
+    if (this.state.mouseEventForwarding) window.setIgnoreMouseEvents(true, { forward: true });
+  }
+
   private adopt(window: Electron.BrowserWindow) {
     this.window = window;
     this.state = { ...this.state, open: true };
     // macOS uses the floating level; Windows stays above normal windows. Linux depends on
     // its window manager (and cannot forward ignored mouse movement to the renderer).
     window.setAlwaysOnTop(true, "floating");
+    // skipTransformProcessType keeps GOAT in the Dock; without it macOS turns the whole app
+    // into a UI element when a window joins every workspace.
     if (this.platform !== "win32")
-      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      window.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true,
+        skipTransformProcessType: true,
+      });
     if (this.platform === "darwin" || this.platform === "win32") window.setContentProtection(true);
-    window.setIgnoreMouseEvents(true, { forward: true });
+    this.passThrough(window);
     window.webContents.setZoomFactor(1);
     window.webContents.setBackgroundThrottling(true);
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -174,7 +189,7 @@ export class PreviewSessionPopout {
   private updateVisible() {
     const visible = this.window?.isVisible() ?? false;
     if (visible === this.state.visible) return;
-    if (!visible) this.window?.setIgnoreMouseEvents(true, { forward: true });
+    if (!visible) if (this.window) this.passThrough(this.window);
     this.state = { ...this.state, visible };
     this.emit();
   }
@@ -213,7 +228,8 @@ export class PreviewSessionPopout {
         this.place();
         break;
       case "interactive":
-        this.window?.setIgnoreMouseEvents(!input.interactive, { forward: true });
+        if (this.state.mouseEventForwarding)
+          this.window?.setIgnoreMouseEvents(!input.interactive, { forward: true });
         break;
       case "pointer": {
         if (!this.window) break;
@@ -266,7 +282,7 @@ export class PreviewSessionPopout {
     const blocked = points.some((point) => contains(bounds, point));
     window.setBounds(bounds, false);
     // Moving a hovered tile must not leave its old input region intercepting the next click.
-    window.setIgnoreMouseEvents(true, { forward: true });
+    this.passThrough(window);
     if (this.height === 0 || blocked || !this.state.poppedOut) window.hide();
     else if (!window.isVisible()) window.showInactive();
     this.state = { ...this.state, maxHeight: area.height, visible: window.isVisible() };

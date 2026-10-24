@@ -124,8 +124,10 @@ it("creates an inactive transparent panel on the owner's display and protects it
   expect(native.getDisplayMatching).toHaveBeenCalledWith(fixture.owner.getBounds());
   fixture.attach();
   expect(fixture.child.setAlwaysOnTop).toHaveBeenCalledWith(true, "floating");
+  // skipTransformProcessType keeps GOAT in the macOS Dock.
   expect(fixture.child.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, {
     visibleOnFullScreen: true,
+    skipTransformProcessType: true,
   });
   expect(fixture.child.setContentProtection).toHaveBeenCalledWith(true);
   expect(fixture.child.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true });
@@ -151,6 +153,19 @@ it.each([
   expect(state).toMatchObject({ captureProtection: capability });
   if (platform === "linux") expect(fixture.child.setContentProtection).not.toHaveBeenCalled();
   else expect(fixture.child.setContentProtection).toHaveBeenCalledWith(true);
+  // Without forwarded mouse movement the stack could never turn its controls back on.
+  if (platform === "linux") expect(fixture.child.setIgnoreMouseEvents).not.toHaveBeenCalled();
+  else expect(fixture.child.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true });
+});
+
+it("keeps the pop-out through in-app routing, and closes it for a new document", async () => {
+  using fixture = setup();
+  fixture.attach();
+  await fixture.request({ type: "layout", height: 100 });
+  fixture.owner.webContents.emit("did-start-navigation", {}, "goat://app/#/other", true, true);
+  expect(await fixture.request({ type: "state" })).toMatchObject({ open: true });
+  fixture.owner.webContents.emit("did-start-navigation", {}, "goat://app/", false, true);
+  expect(await fixture.request({ type: "state" })).toMatchObject({ open: false });
 });
 
 it("changes click-through only for interactive regions and resets it on hide", async () => {
