@@ -333,14 +333,19 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   session for the same thread waits for the cleanup report.
 - **Physical kill switch.** On macOS the helper can arm a listen-only Escape tap while an agent
   session is active. A keyboard event tap needs Input Monitoring, a third grant, so the switch is
-  optional: onboarding offers it, and without it the Stop controls remain.
+  optional: onboarding offers it, and without it the Stop controls remain. Not implemented yet
+  (#1505).
 - **Input collision.** When a person uses the same desktop while an agent acts, the agent pauses
-  and the session moves to `waiting-for-human`. On macOS each agent connection's helper samples
-  the HID system state's per-kind event age, which needs no extra grant, and reports every new
-  keyboard or pointer event to its lease proxy. The driver posts some input through that same
-  state, so the proxy drops events during, or within half a second after, its own input calls
-  (`apps/server/src/cua/agentInputLog.ts`) and reports the rest to the server, which pauses every
-  agent. Calls known only to read never hide a person's input.
+  and the session moves to `waiting-for-human`. On macOS each agent connection's helper reports
+  every mouse button press to its lease proxy with its own time, from a listen-only event tap
+  that needs no grant and reads only each event's type (#1488). Keys, moves, drags and scrolls
+  are only sampled, as the HID system state's newest event age per kind every 250 ms: a
+  keyboard tap would need Input Monitoring, which the helper does not use, and the dense pointer
+  streams would queue the reports. So a person's key, move or scroll right before an agent's of
+  the same kind can still hide behind it. The driver posts some input through the same system, so the
+  server takes an event for an agent's only while one of its input calls of that kind covers it
+  (`apps/server/src/cua/agentInputLog.ts`), and pauses every agent otherwise. Calls known only
+  to read never hide a person's input.
 - **Takeover and hand-back.** Takeover fences new agent input immediately and drops in-flight
   results by generation. Hand-back rechecks the lease and its expiry and requires a fresh
   observation before the next action. Disconnects and retries never hand control back by

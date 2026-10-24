@@ -5,6 +5,7 @@ import type {
 } from "@goat/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- ids are minted inside the atomic claim.
 import * as NodeCrypto from "node:crypto";
+import { movesPointer } from "./computerUseTarget.ts";
 
 const READS = new Set([
   "check_permissions",
@@ -64,12 +65,14 @@ export const foreground = (value: unknown, depth = 0): boolean => {
 };
 
 export const requiresForeground = (call: Pick<Call, "name" | "args">) =>
-  call.name === "run_steps" ||
-  call.name === "run_script" ||
-  call.name === "bring_to_front" ||
-  call.name === "launch_app" ||
-  call.name === "move_cursor" ||
-  foreground(call.args);
+  // Overlay moves ignore delivery mode; only the driver's desktop form moves the real pointer.
+  call.name === "move_cursor"
+    ? movesPointer(call.args)
+    : call.name === "run_steps" ||
+      call.name === "run_script" ||
+      call.name === "bring_to_front" ||
+      call.name === "launch_app" ||
+      foreground(call.args);
 
 /** Numeric identity is execution scope only; it never preserves approval across window reuse. */
 export const callResource = (call: Pick<Call, "name" | "args">): Resource | "read" | "invalid" => {

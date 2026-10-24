@@ -276,7 +276,7 @@ describe("proxy execution ownership", () => {
         const routes = [
           ["bring_to_front", { pid: 42, window_id: 7 }],
           ["launch_app", { bundle_id: "com.example.Build" }],
-          ["move_cursor", { x: 1, y: 1 }],
+          ["move_cursor", { scope: "desktop", x: 1, y: 1 }],
           ["click", { pid: 42, window_id: 7, delivery_mode: "foreground" }],
           ["click", { pid: 42, window_id: 7, delivery_mode: "FOREGROUND" }],
           ["press_key", { pid: 42, window_id: 7, delivery_mode: "FoReGrOuNd" }],

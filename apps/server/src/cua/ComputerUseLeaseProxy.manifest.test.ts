@@ -262,7 +262,7 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         yield* h.push(foregroundActive());
         manifest = "v2";
         const forwarded = yield* h
-          .send(call(1, "move_cursor", { x: 1, y: 1 }))
+          .send(call(1, "move_cursor", { scope: "desktop", x: 1, y: 1 }))
           .pipe(Effect.forkChild);
         assert.equal(yield* h.taken, "active");
         assert.equal(yield* h.applied, "active");

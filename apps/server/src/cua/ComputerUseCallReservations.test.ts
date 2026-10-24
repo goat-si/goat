@@ -64,6 +64,58 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
 
 describe("server computer-use call reservations", () => {
   it.effect(
+    "admits overlay cursor moves on a shared screen but refuses desktop moves (#1501)",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        yield* grant(f.a, "grant:a", ["app.a"]);
+        const focus = yield* foregroundGrant(f.a, "grant:cursor-focus");
+        yield* grant(f.b, "grant:b", ["app.b"]);
+        for (const args of [
+          { x: 1, y: 1 },
+          { scope: "window", x: 1, y: 1 },
+          { pid: 42, window_id: 7, x: 1, y: 1 },
+          { target: { kind: "window", pid: 42, window_id: 7 }, x: 1, y: 1 },
+        ]) {
+          assert.equal((yield* f.reserve(f.a, args, "move_cursor")).status, "admitted");
+        }
+        for (const args of [
+          { scope: "desktop", x: 1, y: 1 },
+          { target: { kind: "desktop", display_id: "primary" }, x: 1, y: 1 },
+        ])
+          assert.deepEqual(
+            yield* f.reserve(f.a, args, "move_cursor", "driver:1", 0, focus.handoffId),
+            {
+              status: "refused",
+              detail: "screen_shared",
+            },
+          );
+        yield* f.close(f.a);
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect("overlay delivery flags do not grant authority to move the real pointer", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      for (const args of [
+        { x: 1, y: 1, delivery_mode: "foreground" },
+        { pid: 42, window_id: 7, dispatch: "foreground" },
+        { scope: "desktop", pid: 42, window_id: 7, x: 1, y: 1 },
+      ])
+        assert.equal((yield* f.reserve(f.a, args, "move_cursor")).status, "admitted");
+      for (const args of [
+        { scope: "desktop", x: 1, y: 1 },
+        { target: { kind: "desktop", display_id: "primary" }, x: 1, y: 1 },
+      ])
+        assert.deepEqual(yield* f.reserve(f.a, args, "move_cursor"), {
+          status: "refused",
+          detail: "foreground_not_approved",
+        });
+      yield* f.close();
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
     "validates only the original ticket owner and retains the same conflicting execution",
     () =>
       Effect.gen(function* () {

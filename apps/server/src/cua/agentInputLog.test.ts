@@ -106,12 +106,20 @@ describe("agentInputLog", () => {
     assert.isTrue(log.isAgents(30_100, "pointer"));
   });
 
-  it("move_cursor covers a person's pointer only for desktop moves (#1486)", () => {
+  it("move_cursor covers a person's pointer only for desktop moves (#1486, #1500)", () => {
     for (const [target, kinds] of [
       [{ pid: 42, window_id: 7 }, []],
       [{ scope: "window" }, []],
       [{}, []],
       [{ target: { kind: "window", pid: 42, window_id: 7 } }, []],
+      [{ scope: "desktop", pid: 42 }, []],
+      [{ scope: "desktop", window_id: 7 }, []],
+      [{ scope: "desktop", pid: 42, window_id: 7 }, []],
+      // The driver refuses a typed target beside any legacy field, or one it does not accept.
+      [{ scope: "desktop", target: { kind: "window", pid: 42, window_id: 7 } }, []],
+      [{ scope: "desktop", target: { kind: "desktop", display_id: "primary" } }, []],
+      [{ pid: 42, target: { kind: "desktop", display_id: "primary" } }, []],
+      [{ target: { kind: "desktop", display_id: "secondary" } }, []],
       [{ scope: "desktop" }, ["pointer"]],
       [{ target: { kind: "desktop", display_id: "primary" } }, ["pointer"]],
     ] as const) {

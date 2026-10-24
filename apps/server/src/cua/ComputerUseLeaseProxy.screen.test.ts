@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
-import { foregroundActive } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active as backgroundActive, foregroundActive } from "./ComputerUseLeaseProxy.testkit.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 
 const call = (id: number, name: string, args: object) =>
@@ -85,7 +85,7 @@ it.effect(
       const screenTaking = [
         call(1, "bring_to_front", window),
         call(2, "click", { ...window, x: 5, y: 5, delivery_mode: "foreground" }),
-        call(3, "move_cursor", { ...window, x: 5, y: 5 }),
+        call(3, "move_cursor", { scope: "desktop", x: 5, y: 5 }),
         // The driver also reads the legacy dispatch alias and ignores case.
         call(4, "click", { ...window, x: 5, y: 5, dispatch: "foreground" }),
         call(5, "click", { ...window, x: 5, y: 5, delivery_mode: "Foreground" }),
@@ -93,6 +93,7 @@ it.effect(
         call(6, "click", { ...window, x: 5, y: 5, options: { use_foreground: true } }),
         // A batch can hold any of those, and the driver runs its steps itself.
         call(7, "run_steps", { steps: [{ tool: "click", args: { ...window, x: 5, y: 5 } }] }),
+        call(8, "move_cursor", { target: { kind: "desktop", display_id: "primary" }, x: 5, y: 5 }),
       ];
       for (const [index, line] of screenTaking.entries()) {
         yield* h.send(line);
@@ -104,9 +105,74 @@ it.effect(
         });
       }
       assert.equal(yield* h.driverQueued, 0);
-      yield* h.send(call(8, "click", { ...window, x: 5, y: 5 }));
-      assert.equal(yield* h.sentToDriver, 8);
+      yield* h.send(call(9, "click", { ...window, x: 5, y: 5 }));
+      assert.equal(yield* h.sentToDriver, 9);
     }),
+);
+
+it.effect(
+  "forwards overlay cursor moves without foreground approval but refuses real pointer moves",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(backgroundActive());
+      const overlays = [
+        { x: 5, y: 5 },
+        { ...window, x: 5, y: 5, delivery_mode: "foreground" },
+        { scope: "desktop", ...window, x: 5, y: 5 },
+        { target: { kind: "window", ...window }, x: 5, y: 5, dispatch: "foreground" },
+      ];
+      for (const [index, args] of overlays.entries()) {
+        yield* h.send(call(index + 1, "move_cursor", args));
+        assert.equal(yield* Effect.raceFirst(h.sentToDriver, h.answer), index + 1);
+      }
+      for (const args of [
+        { scope: "desktop", x: 5, y: 5 },
+        { target: { kind: "desktop", display_id: "primary" }, x: 5, y: 5 },
+      ]) {
+        yield* h.send(call(10, "move_cursor", args));
+        const answer = yield* h.answer;
+        assert.deepInclude(answer.result.structuredContent, { detail: "foreground_not_approved" });
+      }
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+);
+
+it.effect("forwards overlay cursor moves while another thread holds apps (#1501)", () =>
+  Effect.gen(function* () {
+    const h = yield* harness();
+    yield* h.push({ ...active, shared: true });
+    const overlays = [
+      { x: 5, y: 5 },
+      { scope: "window", x: 5, y: 5 },
+      { ...window, x: 5, y: 5 },
+      { target: { kind: "window", ...window }, x: 5, y: 5 },
+    ];
+    for (const [index, args] of overlays.entries()) {
+      yield* h.send(call(index + 1, "move_cursor", args));
+      // A refusal must fail here rather than leave the test waiting for driver input.
+      assert.equal(yield* Effect.raceFirst(h.sentToDriver, h.answer), index + 1);
+    }
+  }),
+);
+
+it.effect("forwards a window overlay move when sharing begins before the final send (#1501)", () =>
+  Effect.gen(function* () {
+    const reporting = yield* Deferred.make<void>();
+    const gate = yield* Deferred.make<void>();
+    const h = yield* harness(() =>
+      Deferred.succeed(reporting, undefined).pipe(
+        Effect.andThen(Deferred.await(gate)),
+        Effect.as(true),
+      ),
+    );
+    yield* h.push(active);
+    yield* h.send(call(1, "move_cursor", { ...window, x: 5, y: 5 }));
+    yield* Deferred.await(reporting);
+    yield* h.push({ ...active, shared: true });
+    yield* Deferred.succeed(gate, undefined);
+    assert.equal(yield* Effect.raceFirst(h.sentToDriver, h.answer), 1);
+  }),
 );
 
 it.effect(

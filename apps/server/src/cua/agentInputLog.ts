@@ -11,6 +11,7 @@
  *
  * @module agentInputLog
  */
+import { movesPointer } from "./computerUseTarget.ts";
 
 export type InputKind = "keyboard" | "pointer";
 
@@ -69,14 +70,7 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
 export function inputKinds(tool: string, args?: unknown): ReadonlyArray<InputKind> {
   if (READ_ONLY_TOOLS.has(tool) || SEMANTIC_TOOLS.has(tool)) return [];
   const given = record(args);
-  // Pinned cua-driver 0.37.0 moves only the overlay on macOS, Windows and Linux unless the
-  // scope is desktop (including a typed desktop target, which the driver normalizes to scope).
-  if (
-    tool === "move_cursor" &&
-    given?.scope !== "desktop" &&
-    record(given?.target)?.kind !== "desktop"
-  )
-    return [];
+  if (tool === "move_cursor" && !movesPointer(given)) return [];
   // A point makes a keyboard tool click there first; modifiers make a pointer tool press keys.
   const point = typeof given?.x === "number" || typeof given?.y === "number";
   // click, right_click and drag name their held keys `modifier`.
