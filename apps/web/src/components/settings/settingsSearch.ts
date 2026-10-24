@@ -823,10 +823,10 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "device-hub",
-    title: "Device hub",
+    title: "Simulators and emulators",
     to: "/settings/integrations",
     targetId: "devices",
-    searchTerms: ["simulator emulator ios android install start"],
+    searchTerms: ["device hub simulator emulator ios android install start"],
   },
   {
     id: "device-platform-support",
