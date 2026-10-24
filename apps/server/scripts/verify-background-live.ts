@@ -26,6 +26,7 @@ import {
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 
 const { values } = NodeUtil.parseArgs({
   options: {
@@ -111,19 +112,24 @@ const evidence = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-backgro
 const home = NodePath.join(evidence, "home");
 const project = NodePath.join(evidence, "project");
 NodeFS.mkdirSync(project);
-NodeChildProcess.execFileSync("git", ["init", "-q", project]);
-NodeChildProcess.execFileSync("git", [
-  "-C",
-  project,
-  "-c",
-  "user.name=Verifier",
-  "-c",
-  "user.email=verifier@localhost",
-  "commit",
-  "--allow-empty",
-  "-qm",
-  "initial",
-]);
+// Run from a hook, an inherited GIT_DIR would build this fixture in the developer's checkout (#1114).
+NodeChildProcess.execFileSync("git", ["init", "-q", project], { env: isolatedGitEnv() });
+NodeChildProcess.execFileSync(
+  "git",
+  [
+    "-C",
+    project,
+    "-c",
+    "user.name=Verifier",
+    "-c",
+    "user.email=verifier@localhost",
+    "commit",
+    "--allow-empty",
+    "-qm",
+    "initial",
+  ],
+  { env: isolatedGitEnv() },
+);
 console.log(`Evidence: ${evidence}`);
 NodeFS.copyFileSync(import.meta.filename, NodePath.join(evidence, "verifier.ts"));
 NodeFS.writeFileSync(

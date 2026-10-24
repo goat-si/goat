@@ -5,6 +5,8 @@ import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeUtil from "node:util";
 
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
+
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 
 export const SHOWCASE_PROJECT_ID = "t3code";
@@ -254,10 +256,11 @@ function minutesBefore(now: number, minutes: number): string {
 }
 
 async function runGit(workspaceRoot: string, args: ReadonlyArray<string>): Promise<void> {
-  await execFile("git", [...args], {
+  // Run from a hook, an inherited GIT_DIR would build this fixture in the developer's checkout (#1114).
+  await execFile("git", ["-C", workspaceRoot, ...args], {
     cwd: workspaceRoot,
     env: {
-      ...process.env,
+      ...isolatedGitEnv(),
       GIT_AUTHOR_NAME: "Alex Rivera",
       GIT_AUTHOR_EMAIL: "alex@lumen.test",
       GIT_COMMITTER_NAME: "Alex Rivera",

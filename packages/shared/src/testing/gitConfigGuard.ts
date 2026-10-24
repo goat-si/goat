@@ -31,18 +31,17 @@ const configFiles = (): ReadonlyArray<string> => {
   ];
 };
 
-const readEntries = (file: string): ReadonlySet<string> => {
-  if (!NodeFS.existsSync(file)) return new Set();
+// Ordered, because git applies the last of repeated keys: reordering them changes the value.
+const readEntries = (file: string): ReadonlyArray<string> => {
+  if (!NodeFS.existsSync(file)) return [];
   const output = NodeChildProcess.execFileSync("git", ["config", "--file", file, "--list", "-z"], {
     encoding: "utf8",
     env: isolatedGitEnv(),
   });
-  return new Set(
-    output
-      .split("\0")
-      .filter((entry) => entry !== "" && !entry.startsWith("branch."))
-      .map((entry) => entry.replace("\n", "=")),
-  );
+  return output
+    .split("\0")
+    .filter((entry) => entry !== "" && !entry.startsWith("branch."))
+    .map((entry) => entry.replace("\n", "="));
 };
 
 export function setup(): () => void {
@@ -50,11 +49,12 @@ export function setup(): () => void {
   return () => {
     const changes = snapshots.flatMap(({ file, before }) => {
       const after = readEntries(file);
+      if (after.join("\0") === before.join("\0")) return [];
       const lines = [
-        ...[...after].filter((entry) => !before.has(entry)).map((entry) => `  + ${entry}`),
-        ...[...before].filter((entry) => !after.has(entry)).map((entry) => `  - ${entry}`),
+        ...after.filter((entry) => !before.includes(entry)).map((entry) => `  + ${entry}`),
+        ...before.filter((entry) => !after.includes(entry)).map((entry) => `  - ${entry}`),
       ];
-      return lines.length === 0 ? [] : [file, ...lines];
+      return [file, ...(lines.length > 0 ? lines : ["  (entries reordered or repeated)"])];
     });
     if (changes.length === 0) return;
     throw new Error(
