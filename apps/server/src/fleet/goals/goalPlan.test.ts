@@ -195,6 +195,34 @@ describe("planGoal", () => {
     ]);
   });
 
+  it("stops orphaned earlier attempts before launching the attempts that wait on them", () => {
+    const goal = testGoal("goal_order", {
+      spec: testSpec({ workers: { ...testSpec().workers, count: 3 } }),
+    });
+    const successors = [0, 1, 2].map((slot) => newWorker(goal, slot, null, 2));
+    const orphans = [0, 1, 2].map((slot) => running(goal, ORPHAN_SLOT_BASE + slot));
+    const plan = planGoal(
+      goal,
+      [...successors, ...orphans],
+      observe({
+        workers: new Map(
+          orphans.map((worker) => [
+            worker.slot,
+            seen({ terminal: false, runStatus: "running", result: null }),
+          ]),
+        ),
+      }),
+    );
+    expect(
+      plan.actions.map((action) => [action.type, "slot" in action ? action.slot : null]),
+    ).toEqual([
+      ["interrupt", ORPHAN_SLOT_BASE],
+      ["interrupt", ORPHAN_SLOT_BASE + 1],
+      ["interrupt", ORPHAN_SLOT_BASE + 2],
+    ]);
+    expect(plan.truncated).toBe(true);
+  });
+
   it("succeeds when every doneWhen holds and stops acting", () => {
     const goal = testGoal("goal_f", {
       spec: testSpec({

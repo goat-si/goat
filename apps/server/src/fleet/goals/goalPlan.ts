@@ -740,7 +740,13 @@ export function planGoal(
               (action) => action.type === "interrupt" || action.type === "resolve_launch",
             )
           : actions;
-  const bounded = allowed.slice(0, MAX_ACTIONS_PER_GOAL);
+  // Stopping and finding earlier attempts goes first: a later attempt's launch waits on them.
+  const cleanup = (action: GoalAction) =>
+    action.type === "interrupt" || action.type === "resolve_launch";
+  const bounded = [
+    ...allowed.filter(cleanup),
+    ...allowed.filter((action) => !cleanup(action)),
+  ].slice(0, MAX_ACTIONS_PER_GOAL);
 
   if (phase !== goal.status.phase)
     event(
