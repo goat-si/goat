@@ -1284,8 +1284,8 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         });
       }
 
-      const currentShell = yield* threadManagement.getShellSnapshot({ location: "active" });
-      subagents = subagentShellState(currentShell.threads, highWater);
+      const activeSubagents = yield* threadManagement.listActiveSubagentThreadIds();
+      subagents = subagentShellState(activeSubagents, highWater);
 
       const loaded = yield* loadProjectMetadataSnapshot(highWater);
       const replay = toShellStream(

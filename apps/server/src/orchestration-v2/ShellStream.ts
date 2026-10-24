@@ -130,11 +130,21 @@ export const subagentLineageOrder = (through: number): SubagentLineageOrder => (
   appliedByThread: new Map(),
 });
 
-/** The subagent set of a shell snapshot taken through a sequence, with its lineage order. */
+/**
+ * The subagent set of a shell snapshot taken through a sequence, with its lineage order. Takes
+ * the snapshot's thread shells, or subagent ids already read.
+ */
 export const subagentShellState = (
-  threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
+  source: ReadonlyArray<string | Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
   through: number,
-) => ({ ids: subagentThreadIdsOf(threads), ...subagentLineageOrder(through) });
+) => ({
+  ids: new Set(
+    source.flatMap((entry) =>
+      typeof entry === "string" ? [entry] : [...subagentThreadIdsOf([entry])],
+    ),
+  ),
+  ...subagentLineageOrder(through),
+});
 
 /** Focused subagents receive these updates through their thread subscription. */
 export function shouldPublishShellApplicationEvent(
