@@ -71,4 +71,17 @@ describe("thread list project filter", () => {
       "running",
     ]);
   });
+
+  it("keeps a thread with messages queued on this device, whatever its project", () => {
+    const settled = { ...homeThread("queued"), settledOverride: "settled" as const };
+    const layout = buildThreadListV2Items({
+      threads: [settled],
+      environmentId: null,
+      projectRefs: [{ environmentId: localEnvironmentId, projectId: ProjectId.make("project-1") }],
+      searchQuery: "",
+      now: NOW,
+      queuedThreadKeys: new Set([`${homeEnvironmentId}:queued`]),
+    });
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["queued"]);
+  });
 });

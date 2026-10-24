@@ -630,10 +630,13 @@ export function buildThreadListV2Items(input: {
       continue;
     // The server stamps settledOverride for the tail.
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
+    const hasQueuedMessages =
+      queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
     if (
       projectKeys !== null &&
       !projectKeys.has(`${thread.environmentId}:${thread.projectId}`) &&
-      !isActiveThreadWork(thread)
+      !isActiveThreadWork(thread) &&
+      !hasQueuedMessages
     ) {
       continue;
     }
@@ -665,8 +668,6 @@ export function buildThreadListV2Items(input: {
       }
       continue;
     }
-    const hasQueuedMessages =
-      queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
     if (supportsSettlement && thread.settledOverride === "settled" && !hasQueuedMessages) {
       settled.push(thread);
     } else if (thread.pinnedAt != null) {
