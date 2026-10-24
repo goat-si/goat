@@ -168,18 +168,19 @@ command cannot reach the app, start or update the desktop app and try again.
 
 ## Mobile app
 
-Install GOAT from the
-[App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or
-[Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code).
-The phone connects to a server on another machine. Follow
+GOAT's mobile app for iPhone, iPad and Android is in development and is not in the
+App Store or Google Play yet. Today you can get it two ways:
+
+- **iPhone and iPad:** through TestFlight, which is invite-only for now.
+- **iPhone, iPad or Android:** build it from source and install it on your own
+  device, following the [mobile app README](../../apps/mobile/README.md).
+
+The phone connects to a GOAT server on another machine. Follow
 [remote access](./remote-access.md) to pair it directly or over Tailscale.
 
-Store links and QR codes are also available in **Settings → General → Mobile app**
-on web and desktop. The store apps work with both stable and Nightly servers. Test builds are optional:
-
-- **iPhone and iPad:** TestFlight is invite-only.
-- **Android:** download an APK from the
-  [Android beta releases](https://github.com/pingdotgg/t3code/releases?q=android-beta-).
+The "T3 Code" app in the App Store and Google Play belongs to T3 Code, the <!-- goat-rename: legacy -->
+project GOAT is forked from. It is not GOAT and cannot connect to a GOAT server,
+which runs a newer server protocol than that app.
 
 If the app crashes during launch, open Settings → Diagnostics on the next launch
 that succeeds. It lists startup crashes from the last 7 days with the error and
