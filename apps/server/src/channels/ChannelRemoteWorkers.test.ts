@@ -2393,18 +2393,19 @@ describe("Slack defaults for work on another machine", () => {
     destination.projects = machine.projects.map((project) => ({ ...project }));
     machine.peers.push(destination);
     return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reached = (check: (task: ChannelTask) => boolean) =>
+        Effect.flatMap(runtime.drain, () => writes.waitFor(check));
       yield* setupBot;
       yield* linkSlackUser();
       const gateway = yield* ChannelGateway.ChannelGateway;
       yield* gateway.ingest(slackInput("do@mac-studio: build it", "mv1"), slackContext);
-      const first = yield* until("asked", (task) => task.status === "waiting_input");
+      const first = yield* reached((task) => task.status === "waiting_input");
       // mac-studio stops answering, so this answer is never matched against its projects.
       machine.down = true;
       yield* gateway.ingest(slackInput("answer: goat-si/goat", "mv2"), slackContext);
-      yield* until(
-        "unreachable",
-        (task) => task.status === "waiting_input" && task.version > first.version,
-      );
+      yield* reached((task) => task.status === "waiting_input" && task.version > first.version);
       const ledger = yield* ChannelLedger.ChannelLedger;
       yield* commitTransition(ledger, (yield* ledger.getTask((yield* onlyTask).taskId))!, {
         type: "task.moved",
@@ -2417,14 +2418,15 @@ describe("Slack defaults for work on another machine", () => {
       });
       // mac-mini has a project with the same title; the answer for mac-studio still does not
       // pick it.
-      const asked = yield* until(
-        "asked on mac-mini",
-        (task) => task.generation === 2 && task.status === "waiting_input",
+      const asked = yield* reached(
+        (task) =>
+          task.generation === 2 && task.status !== "received" && task.status !== "dispatching",
       );
+      assert.strictEqual(asked.status, "waiting_input");
       assert.include(asked.openQuestions[0]?.text ?? "", "Which project on mac-mini");
       assert.strictEqual(destination.launches.length, 0);
       yield* gateway.ingest(slackInput("answer: goat-si/goat", "mv3"), slackContext);
-      yield* until("running", (task) => task.generation === 2 && task.status === "running");
+      yield* reached((task) => task.generation === 2 && task.status === "running");
       assert.strictEqual(destination.launches.length, 1);
       assert.strictEqual(machine.launches.length, 0);
     }).pipe(Effect.provide(harness.layer));
