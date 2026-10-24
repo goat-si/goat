@@ -119,3 +119,52 @@ it.effect("the agent block never waits on a readiness probe of the running drive
     Effect.scoped,
   ),
 );
+
+it.effect("a grant block names only the grants still missing once some return", () =>
+  Effect.gen(function* () {
+    const reported = yield* Ref.make(Option.none<HelperReadiness>());
+    const block = {
+      reason: "permissionsNotGranted",
+      missing: ["accessibility", "screenRecording"],
+      holder: "helper",
+    } as const;
+    const service = yield* CuaDriver.make(
+      () =>
+        Effect.succeed({
+          start: Effect.fail(new CuaDriver.CuaDriverHostError({ operation: "desktop", block })),
+          stop: Effect.void,
+          waitForExit: Effect.never,
+        }),
+      Effect.succeed({
+        capability: "available",
+        reason: "Uses this Mac's screen.",
+        environment: [],
+      }),
+      { helperReadiness: Ref.get(reported) },
+    );
+    expect(yield* service.acquire).toEqual(Option.none());
+    // The person grants Accessibility only.
+    yield* Ref.set(
+      reported,
+      Option.some({
+        readiness: {
+          grants: { accessibility: "granted", screenCapture: "pending" },
+          helper: "authenticated",
+          capture: "pending",
+          tree: "unavailable",
+          input: "unavailable",
+          blockers: [],
+          reasons: [],
+        },
+      }),
+    );
+    const left = { ...block, missing: ["screenRecording"] };
+    expect((yield* service.status).block).toEqual(left);
+    expect(yield* service.block).toEqual(left);
+  }).pipe(
+    Effect.provide(ServerSettings.layerTest({ enableCua: true })),
+    Effect.provideService(HostProcess.Platform, "darwin"),
+    Effect.provideService(HostProcess.Environment, {}),
+    Effect.scoped,
+  ),
+);

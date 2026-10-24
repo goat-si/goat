@@ -174,6 +174,25 @@ export const cuaAgentBlockLists = (block: CuaAgentBlock): string =>
 export const cuaAgentBlockMessage = (block: CuaAgentBlock): string =>
   `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security.`;
 
+/**
+ * What of a block newer readiness still bears out: only the grants it does not report granted,
+ * and nothing once every one is back, so no surface keeps naming a grant the person gave.
+ * Readiness is the helper's, so it only speaks for a block the helper holds; a block on GOAT
+ * itself stays as it was.
+ */
+export const cuaAgentBlockUnder = (
+  block: CuaAgentBlock,
+  readiness: typeof ComputerUseReadiness.Type,
+): CuaAgentBlock | undefined => {
+  if (block.holder !== "helper") return block;
+  const missing = block.missing.filter(
+    (grant) =>
+      readiness.grants[grant === "accessibility" ? "accessibility" : "screenCapture"] !== "granted",
+  );
+  if (missing.length === block.missing.length) return block;
+  return missing.length === 0 ? undefined : { ...block, missing };
+};
+
 export const DesktopCuaDriverReport = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),

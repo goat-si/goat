@@ -22,7 +22,7 @@ import {
   type ComputerUseHumanInputSource,
   type ComputerUsePauseReason,
   type CuaAgentBlock,
-  Handoff,
+  cuaAgentBlockUnder,
   type ThreadId,
   type TurnItemId,
 } from "@goat/contracts";
@@ -47,7 +47,8 @@ import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetry
 import * as ServerSettings from "../serverSettings.ts";
 import { callResource, makeCallReservations } from "./ComputerUseCallReservations.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
-import { approvedApps, takesScreen } from "./ComputerUseScope.ts";
+import { appsOf, decodeHandoff, leaseOf, overlap } from "./computerUseGrants.ts";
+import { takesScreen } from "./ComputerUseScope.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
@@ -292,50 +293,6 @@ export class ComputerUseLeases extends Context.Service<
     readonly proxy: SelfInvocation | undefined;
   }
 >()("goat/cua/ComputerUseLeases") {}
-
-const decodeHandoff = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.toCodecJson(Handoff)),
-);
-
-/** A completed grant before its expiry. A grant without an expiry is never live. */
-const leaseOf = (handoff: Handoff, now: DateTime.Utc): Option.Option<ComputerUseLease> =>
-  handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
-  handoff.state === "completed" &&
-  handoff.expiresAt !== null &&
-  DateTime.toEpochMillis(handoff.expiresAt) > DateTime.toEpochMillis(now)
-    ? Option.some({
-        threadId: handoff.requestedBy.threadId,
-        handoffId: handoff.handoffId,
-        expiresAt: handoff.expiresAt,
-        ...(handoff.apps === undefined ? {} : { apps: handoff.apps }),
-      })
-    : Option.none();
-
-/** The apps a thread's live grants admit together; absent when one of them admits every app. */
-const appsOf = (leases: ReadonlyArray<ComputerUseLease>): ReadonlyArray<string> | undefined => {
-  const apps = new Set<string>();
-  for (const lease of leases) {
-    if (lease.apps === undefined) return undefined;
-    for (const app of lease.apps) apps.add(app);
-  }
-  return [...apps].sort();
-};
-
-/**
- * The apps of `held` that `wanted` also reaches, matched as the proxy matches them (case aside);
- * undefined when they share none. Without a list an admission reaches every app, so it overlaps
- * every other: the driver acts under it on the whole desktop and in scripts.
- */
-const overlap = (
-  held: ReadonlyArray<string> | undefined,
-  wanted: ReadonlyArray<string> | undefined,
-): { readonly apps?: ReadonlyArray<string> } | undefined => {
-  if (held === undefined) return {};
-  const names = approvedApps(wanted);
-  if (names === undefined) return { apps: held };
-  const apps = held.filter((app) => names.has(app.toLowerCase()));
-  return apps.length === 0 ? undefined : { apps };
-};
 
 interface ControlRecord extends ComputerUseControl {
   readonly idleEpoch?: number;
@@ -986,8 +943,17 @@ const make = Effect.gen(function* () {
     proxy,
     blocked: (threadId, block) =>
       Effect.sync(() => void blockedTurns.set(threadId, block)).pipe(Effect.andThen(changed)),
-    blockedTurns: Effect.sync(() =>
-      [...blockedTurns].map(([threadId, block]) => ({ threadId, block })),
+    // Read against the helper's latest readiness: a grant that came back is no longer named, and a
+    // turn whose grants all came back has nothing to show. Its readiness report wakes the lists.
+    blockedTurns: (Option.isSome(desktop) ? desktop.value.cuaReadiness : Effect.succeedNone).pipe(
+      Effect.map((report) =>
+        [...blockedTurns].flatMap(([threadId, recorded]) => {
+          const block = Option.isSome(report)
+            ? cuaAgentBlockUnder(recorded, report.value.readiness)
+            : recorded;
+          return block === undefined ? [] : [{ threadId, block }];
+        }),
+      ),
     ),
   });
 });

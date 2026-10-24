@@ -179,6 +179,16 @@ it("hub device verify and membership changes need orchestration:operate", () => 
     expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
 });
 
+it("OpenCodex sync needs the same environment:maintain grant as its update check", () => {
+  for (const method of [
+    WS_METHODS.serverCheckOpenCodexUpdate,
+    WS_METHODS.serverPlanOpenCodexSync,
+    WS_METHODS.serverSyncOpenCodex,
+    WS_METHODS.serverSubscribeOpenCodexSync,
+  ])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["environment:maintain"]);
+});
+
 it("note mutations require orchestration operation permission", () => {
   for (const method of [
     WS_METHODS.notesWrite,

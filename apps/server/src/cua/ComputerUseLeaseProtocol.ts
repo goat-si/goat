@@ -98,10 +98,10 @@ export const replyPlacement = Effect.fnUntraced(function* (
 });
 
 /**
- * Writes a call to the driver unless its child is no longer current ("stale": the interrupt that
- * replaced it answers the call) or it takes the screen while another thread shares it ("shared").
- * The checks and the write run with no scheduler yield between them, so neither a pause nor the
- * update that makes the screen shared can land in between and let the call out anyway.
+ * Runs a call's registration and write unless its child is no longer current ("stale") or it
+ * takes the screen while another thread shares it ("shared"); the caller answers either as not
+ * run. The checks and the write run with no scheduler yield between them (#1496), so neither a
+ * pause, a narrowed approval nor the update that shares the screen can land in between.
  */
 export const sendUnlessShared = (
   takesScreen: boolean,

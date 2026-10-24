@@ -23,25 +23,20 @@
  */
 // JSON-RPC lines pass through unchanged; only the fields the proxy acts on are read.
 // @effect-diagnostics preferSchemaOverJson:off
-import {
-  type ComputerUseHumanInputSource,
-  type ComputerUseOverlayCommand,
-  ComputerUseLeaseUpdate,
-  type ComputerUsePauseReason,
-  type ComputerUseCallAdmission,
-  type ComputerUseCallReservation,
-} from "@goat/contracts";
+import { ComputerUseLeaseUpdate, type ComputerUsePauseReason } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
+import { makeLeaseFences } from "./leaseUpdateFences.ts";
 import {
   approvedApps,
   learnApps,
@@ -52,18 +47,13 @@ import {
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { inputKinds } from "./agentInputLog.ts";
-import {
-  type AgentInputReport,
-  forwardHelperInput,
-  makeAgentInputReports,
-} from "./agentInputReports.ts";
+import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
 import {
   initialOverlayState,
   type OverlayEvent,
   overlayStep,
   replyImageSize,
 } from "./ComputerUseOverlay.ts";
-import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
 import {
   type Envelope,
   namedWindows,
@@ -92,80 +82,7 @@ import {
   refusal,
   reservedIdAnswer,
 } from "./ComputerUseLeaseResponses.ts";
-
-export interface LeaseProxyDriver {
-  readonly send: (line: string) => Effect.Effect<void>;
-  readonly lines: Stream.Stream<string>;
-  readonly kill: Effect.Effect<void>;
-  /**
-   * The helper's cursor overlay channel, when this child draws one (#1214). Returns once the
-   * change is on screen, so a capture forwarded after a hide cannot contain the overlay.
-   */
-  readonly overlay?: (command: ComputerUseOverlayCommand) => Effect.Effect<void>;
-  /**
-   * Keyboard and pointer events the macOS helper saw, each with when it happened on this
-   * process's clock, every agent's own included (#1235). Absent where the child reports none.
-   */
-  readonly humanInput?: Stream.Stream<{
-    readonly source: ComputerUseHumanInputSource;
-    readonly at: number;
-  }>;
-}
-
-export interface LeaseProxyOptions<EU, ED> {
-  readonly connectionId: string;
-  readonly reservation: (
-    call: ComputerUseCallReservation,
-  ) => Effect.Effect<ComputerUseCallAdmission>;
-  readonly controlId: string;
-  readonly expiresAt: DateTime.Utc;
-  /** This host's apps have bundle ids (macOS); see scopeVerdict. */
-  readonly bundleIds: boolean;
-  /** Lines the provider writes. The proxy stops when this ends. */
-  readonly input: Stream.Stream<string>;
-  readonly output: (line: string) => Effect.Effect<void>;
-  /** The server's view of this thread's control, newest last. Ending or failing ends it. */
-  readonly leaseUpdates: Stream.Stream<ComputerUseLeaseUpdate, EU>;
-  /** Starts one driver child; run again after a pause, each time in its own scope. */
-  readonly startDriver: Effect.Effect<LeaseProxyDriver, ED, Scope.Scope>;
-  /**
-   * Identifies the driver's capability manifest file as it is now (#1416), where the driver
-   * reads one from a known path; absent elsewhere. A change starts a fresh driver child. It is
-   * synchronous on purpose: with no wait between reading it and acting on it, no pause, end or
-   * replacement can land in between.
-   */
-  readonly manifestStamp?: () => string | undefined;
-  /** Runs once a lease update has been applied, under the lifecycle lock; for tests. */
-  readonly onLeaseUpdateApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
-  /** Deny-only revocation of the driver sessions this connection named. */
-  readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
-  /**
-   * Where the windows the driver names are, against the X display GOAT gave it (#1358); absent
-   * where there is no X display to check. Anything but "same" refuses.
-   */
-  readonly placement?: (windows: ReadonlyArray<NamedWindow>) => Effect.Effect<WindowPlacement>;
-  /**
-   * Tells the server the window a forwarded call names, the one a live picture shows (#1370);
-   * true when the server took it. Reported only on a change, observations included.
-   */
-  readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
-  /**
-   * Tells the server of a keyboard or pointer event outside this agent's own input calls; the
-   * server drops it if another agent's input covers it, else pauses every agent. True when the
-   * server took it; until then each later event is offered again.
-   */
-  readonly onHumanInput?: (input: {
-    readonly source: ComputerUseHumanInputSource;
-    readonly at: number;
-  }) => Effect.Effect<boolean>;
-  /**
-   * Tells the server one of this agent's calls that can post input started or ended, and the
-   * kinds of event it can post, so another agent's helper seeing that input is not taken for a
-   * person. Reports go one at a time in order; a call reaches the driver only after its start
-   * report has answered, so the server knows the call before any helper can see its events.
-   */
-  readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<unknown>;
-}
+import type { LeaseProxyDriver, LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 
 const WRONG_DISPLAY =
   "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
@@ -192,11 +109,6 @@ const decodeUpdate = Schema.decodeUnknownOption(ComputerUseLeaseUpdate);
 const OWN_ID = "goat-proxy:";
 
 /** A lease update that stops the current child before another call may run. */
-type Stopping =
-  | { readonly pause: ComputerUsePauseReason }
-  | { readonly end: LeaseEnd }
-  | { readonly idle: true };
-
 interface Running {
   readonly driver: LeaseProxyDriver;
   readonly scope: Scope.Closeable;
@@ -224,8 +136,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
    * replaces a child the other just started or stopped.
    */
   const lifecycle = yield* Semaphore.make(1);
-  /** A pause or end the proxy has taken from the lease stream but not applied yet. */
-  let stopping: Stopping | undefined;
+  /** Lease updates taken but not applied yet, and what each holds back. */
+  const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
   let driverGeneration = 0;
   let interruptionsSeen: number | undefined;
@@ -554,35 +466,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   yield* Effect.addFinalizer(() => end("lost"));
   yield* start();
 
-  // The server is the authority: the first word for this control confirms it, anything else ends.
-  yield* options.leaseUpdates.pipe(
-    Stream.runForEach((update) => {
-      const stop: Stopping | undefined =
-        update.state !== "ended" && update.controlId !== options.controlId
-          ? { end: "lost" }
-          : update.state === "paused"
-            ? { pause: update.reason }
-            : update.state === "ended"
-              ? { end: update.reason === "unauthorized" ? "lost" : update.reason }
-              : update.state === "idle"
-                ? { idle: true }
-                : undefined;
-      return Effect.gen(function* () {
-        // Known before waiting for a manifest refresh: no call may pass a pending stop.
-        stopping = stop;
-        // Likewise another thread's grant: only denies, so it may land early; only the ordered
-        // activation below clears it.
-        if (
-          update.state === "active" &&
-          update.controlId === options.controlId &&
-          update.shared === true
-        )
-          shared = true;
-        yield* lifecycle.withPermits(1)(
-          (stop !== undefined && "end" in stop
-            ? end(stop.end)
-            : stop !== undefined && "pause" in stop
-              ? pause(stop.pause)
+  const apply = (
+    update: ComputerUseLeaseUpdate | undefined,
+    fence: ReturnType<typeof fences.take>,
+  ) =>
+    lifecycle
+      .withPermits(1)(
+        (update === undefined
+          ? end("lost")
+          : fence !== undefined && "end" in fence
+            ? end(fence.end)
+            : fence !== undefined && "pause" in fence
+              ? pause(fence.pause)
               : update.state === "idle"
                 ? Effect.sync(() => {
                     idle = true;
@@ -597,12 +492,42 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                     Effect.andThen(Deferred.succeed(confirmed, undefined)),
                   )
                 : activate(update as Extract<ComputerUseLeaseUpdate, { state: "active" }>)
-          ).pipe(Effect.andThen(options.onLeaseUpdateApplied?.(update) ?? Effect.void)),
-        );
-      }).pipe(Effect.ensuring(Effect.sync(() => void (stopping = undefined))));
-    }),
+        ).pipe(
+          Effect.andThen(
+            update === undefined
+              ? Effect.void
+              : (options.onLeaseUpdateApplied?.(update) ?? Effect.void),
+          ),
+        ),
+      )
+      .pipe(Effect.ensuring(Effect.sync(() => fences.release(fence))));
+  // The server is the authority: the first word for this control confirms it, anything else
+  // ends. Updates are taken here as they arrive and applied in order by one fiber, so a waiting
+  // update never keeps a later one's fence from going up. The stream ending applies as lost.
+  const applying = yield* Queue.unbounded<{
+    readonly update: ComputerUseLeaseUpdate | undefined;
+    readonly fence: ReturnType<typeof fences.take>;
+  }>();
+  yield* Queue.take(applying).pipe(
+    Effect.flatMap(({ update, fence }) => apply(update, fence)),
+    Effect.forever,
+    // A failed update ends the control as lost here: this fiber is the queue's only reader.
+    Effect.catchCause(() => end("lost")),
+    Effect.forkScoped,
+  );
+  const take = (update: ComputerUseLeaseUpdate | undefined) =>
+    Effect.suspend(() => {
+      // Another thread's grant only denies, so it counts as soon as it is taken; only the ordered
+      // activation clears it.
+      if (update?.state === "active" && update.controlId === options.controlId && update.shared)
+        shared = true;
+      const fence = update === undefined ? fences.lost() : fences.take(update, apps);
+      return Queue.offer(applying, { update, fence });
+    });
+  yield* options.leaseUpdates.pipe(
+    Stream.runForEach(take),
     Effect.catchCause(() => Effect.void),
-    Effect.andThen(end("lost")),
+    Effect.andThen(take(undefined)),
     Effect.forkScoped,
   );
 
@@ -852,34 +777,42 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
     // holds the lock (#1416), counts as applied: the call never reaches a child.
     const notSent = (requestId: JsonRpcId) => {
+      const pending = fences.pending();
       const ending =
-        finished ?? (stopping !== undefined && "end" in stopping ? stopping.end : undefined);
+        finished ?? (pending !== undefined && "end" in pending ? pending.end : undefined);
       const pausing =
-        paused ?? (stopping !== undefined && "pause" in stopping ? stopping.pause : undefined);
+        paused ?? (pending !== undefined && "pause" in pending ? pending.pause : undefined);
       return ending !== undefined
         ? refusal(requestId, message?.method, ending, LEASE_END_MESSAGES[ending])
         : pausing !== undefined
           ? refusal(requestId, message?.method, pausedDetail(pausing), PAUSE_MESSAGES[pausing])
-          : idle || (stopping !== undefined && "idle" in stopping)
+          : idle || (pending !== undefined && "idle" in pending)
             ? refusal(
                 requestId,
                 message?.method,
                 "control_idle",
                 "This thread's turn has ended. Computer use is idle until its next turn.",
               )
-            : refusal(
-                requestId,
-                message?.method,
-                interruptionDetail(lastInterruption),
-                interruptionRefusal(lastInterruption),
-              );
+            : pending !== undefined && "narrowed" in pending
+              ? refusal(
+                  requestId,
+                  message?.method,
+                  "app_not_approved",
+                  "The apps this thread may control changed while this call waited, so it did not run. Observe again, then act only on an app that is still approved.",
+                )
+              : refusal(
+                  requestId,
+                  message?.method,
+                  interruptionDetail(lastInterruption),
+                  interruptionRefusal(lastInterruption),
+                );
     };
     const stillCurrent = () =>
       running === current &&
       paused === undefined &&
       !idle &&
       finished === undefined &&
-      stopping === undefined;
+      fences.clear();
     if (isRequest && message?.method === "tools/call") {
       // Before the call reaches the driver: a capture must not see the overlay (#1321).
       yield* drawOverlay({
@@ -949,35 +882,43 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         return yield* options.output(notSent(id));
       }
     }
-    // Nothing waits from here to the send, so the checks above still hold when it goes out.
-    if (isRequest)
-      outstanding.set(JSON.stringify(id), {
-        id,
-        method: message!.method!,
-        ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
-        unfiltered: Object.keys(message?.params?.arguments ?? {}).every((key) => key === "session"),
-        connectionId: current.connectionId,
-        ...(reservationId === undefined ? {} : { reservationId }),
-      });
-    // Checked last, in one step with the write: see sendUnlessShared.
+    // The last checks, the call's registration and the write run as one step with no scheduler
+    // yield (sendUnlessShared, #1496): a pause, narrowing or another thread's grant that lands
+    // first keeps the call unsent and unregistered, so it is answered as not run.
+    const register = Effect.sync(() => {
+      if (isRequest)
+        outstanding.set(JSON.stringify(id), {
+          id,
+          method: message!.method!,
+          ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
+          unfiltered: Object.keys(message?.params?.arguments ?? {}).every(
+            (key) => key === "session",
+          ),
+          connectionId: current.connectionId,
+          ...(reservationId === undefined ? {} : { reservationId }),
+        });
+    });
     const outcome = yield* sendUnlessShared(
       isRequest &&
         message?.method === "tools/call" &&
         takesScreen(message.params?.name, message.params?.arguments),
       () => shared,
       stillCurrent,
-      current.driver.send(line),
+      register.pipe(Effect.andThen(current.driver.send(line))),
     );
-    if (outcome === "shared" && id !== undefined && id !== null) {
+    if (outcome !== "sent" && id !== undefined && id !== null && isRequest) {
       const key = JSON.stringify(id);
-      const request = outstanding.get(key);
-      outstanding.delete(key);
       // It never reached the driver: its window reservation goes with it (#1462).
-      if (request !== undefined) yield* release(request);
+      if (reservationId !== undefined)
+        yield* release({ reservationId, connectionId: current.connectionId });
       yield* agentInput.ended(key);
       // Drawn as acting above; it never reaches the driver, so no reply will settle it.
       yield* drawOverlay({ type: "reply", id: key, failed: true });
-      return yield* options.output(refusal(id, message?.method, "screen_shared", SCREEN_SHARED));
+      return yield* options.output(
+        outcome === "shared"
+          ? refusal(id, message?.method, "screen_shared", SCREEN_SHARED)
+          : notSent(id),
+      );
     }
   });
 
