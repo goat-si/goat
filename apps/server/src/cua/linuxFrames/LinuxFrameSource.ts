@@ -181,14 +181,15 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
       return { unavailable: "private" } satisfies FrameOutcome;
     if (target.apps !== undefined) {
       const listed = new Map<number, ListedApp>();
-      // The listing the proxy judges agent calls by: a desktop app by its desktop id, and a
-      // process without one by the app name of the windows list_apps nests under it (#1428).
-      learnApps(yield* io.listApps, listed);
+      // The listing the proxy judges agent calls by: an app by the desktop id its list_apps
+      // entry gives, or the entry's own name where it has none.
+      learnApps(yield* io.listApps, listed, true);
       const verdict = scopeVerdict({
         name: "get_window_state",
         args: { pid: target.pid, window_id: target.windowId },
         apps: approvedApps(target.apps),
         appOf: (pid) => listed.get(pid),
+        bundleIds: false,
       });
       if (verdict._tag !== "allow") return { unavailable: "appNotApproved" } satisfies FrameOutcome;
     }
