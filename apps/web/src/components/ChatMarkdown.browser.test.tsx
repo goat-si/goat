@@ -2,6 +2,7 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { type ReactElement } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import "../index.css";
@@ -92,6 +93,44 @@ function buttonsLabelled(container: HTMLElement, label: string) {
 }
 
 describe("ChatMarkdown context references", () => {
+  it("draws skill and file references as link text at the sentence's size and baseline", async () => {
+    setup();
+    await using screen = await renderText("Use $babysit on [notes.md](notes.md) today.", {
+      environmentId: EnvironmentId.make("env-local"),
+      skills: [{ name: "babysit" }],
+    });
+    const paragraph = screen.container.querySelector("p");
+    if (!paragraph) throw new Error("Paragraph did not render");
+    const references = [
+      ...paragraph.querySelectorAll<HTMLElement>("[data-context-chip-appearance=link]"),
+    ];
+    expect(references.map((reference) => reference.textContent)).toEqual(["Babysit", "notes.md"]);
+    const sentenceSize = getComputedStyle(paragraph).fontSize;
+    for (const reference of references) {
+      const style = getComputedStyle(reference);
+      expect(style.fontSize).toBe(sentenceSize);
+      expect(style.borderTopWidth).toBe("0px");
+      expect(style.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+      const before = reference.previousSibling;
+      if (!(before instanceof Text)) throw new Error("Expected text before the reference");
+      const letter = document.createRange();
+      letter.setStart(before, before.length - 2);
+      letter.setEnd(before, before.length - 1);
+      const label = reference.querySelector("[data-slot=context-chip-label]");
+      if (!label) throw new Error("Reference label did not render");
+      const middle = (rect: DOMRect) => (rect.top + rect.bottom) / 2;
+      expect(
+        Math.abs(middle(label.getBoundingClientRect()) - middle(letter.getBoundingClientRect())),
+      ).toBeLessThan(1);
+    }
+    const fileLink = references[1]!;
+    // Markdown styles every anchor, so the file link is the case that must still underline.
+    expect(fileLink.tagName).toBe("A");
+    expect(getComputedStyle(fileLink).textDecorationLine).toBe("none");
+    await userEvent.hover(fileLink);
+    await vi.waitFor(() => expect(getComputedStyle(fileLink).textDecorationLine).toBe("underline"));
+  });
+
   it.each(["t3", "goat"])(
     "renders %s text and image references through the chip renderer, with readable fallback",
     async (prefix) => {
