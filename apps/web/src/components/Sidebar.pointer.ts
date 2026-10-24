@@ -61,6 +61,8 @@ export class SidebarPointerSensor {
     this.document.removeEventListener("pointerdown", this.clearClickSuppression, { capture: true });
   };
   private suppressClick = (event: Event) => {
+    // Context drag handles can be links; suppress their native navigation too.
+    event.preventDefault();
     event.stopPropagation();
     this.clearClickSuppression();
   };

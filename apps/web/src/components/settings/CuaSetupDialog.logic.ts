@@ -57,6 +57,9 @@ const GRANT_STEP_COPY: Record<CuaPermission, { title: string; description: strin
   },
 };
 
+/** The grant's name as System Settings lists it. */
+export const cuaGrantTitle = (permission: CuaPermission) => GRANT_STEP_COPY[permission].title;
+
 /** One step per grant, in the order macOS is asked; only the first missing one is actionable. */
 export function cuaGrantSteps(
   grants: CuaGrantHolder,
@@ -180,19 +183,12 @@ export function computerUseStatusText(input: {
   readonly enabled: boolean;
   readonly status: CuaHostStatus | null;
   readonly error: string | null;
-  readonly missingGrants: readonly CuaPermission[];
 }): string | null {
   if (input.error) return `Could not check computer use: ${input.error}`;
   if (input.status === null) return "Checking this host…";
   if (input.status.platform === "other") return "Computer use is not available on this host.";
   const display = input.status.display;
   if (!input.enabled) return display && display.capability !== "available" ? display.reason : null;
-  if (input.missingGrants.length > 0) {
-    const names = input.missingGrants.map((permission) =>
-      permission === "accessibility" ? "Accessibility" : "Screen Recording",
-    );
-    return `${names.join(" and ")} ${names.length > 1 ? "are" : "is"} off. Choose Set up to allow it again.`;
-  }
   if (input.status.running)
     return display?.capability === "partial" ? `Running with limits. ${display.reason}` : "Running";
   return input.status.failure ?? "Starts with the next agent turn";
