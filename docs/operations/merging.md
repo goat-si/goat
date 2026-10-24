@@ -21,6 +21,11 @@ gh pr merge <pr> --admin --squash --match-head-commit <head-sha>
 merge fail if someone pushed after you read the checks. Read `goat-ci-result` only; it is the one
 check that covers every selected task ([CI](../../structure/ci.md#when-goat-ci-runs)).
 
+A pull request's run is quick by default: check, typecheck and the tests beside its changes. Add
+the `ci:full` label, or run `gh workflow run goat-ci.yml --ref <branch>`, before merging a change
+whose risk reaches past the files it touches, such as a shared contract, a dependency bump or a
+workflow change. The full pass on `dev` below catches the rest.
+
 A failure that also happens identically on `dev` does not block the merge. Record it in the pull
 request with a link to the matching `dev` run, then merge. Re-run jobs that failed from a flake or a
 cancellation (`gh run rerun <run-id> --failed`) instead of rebasing.

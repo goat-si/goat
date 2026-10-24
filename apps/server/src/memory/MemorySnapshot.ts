@@ -278,7 +278,9 @@ const make = Effect.gen(function* () {
         epoch: policy.policyEpoch,
         expires,
         bytes,
-        hasMore: snapshot.renderedText === Renderer.renderMemoryContext(snapshot.items, true),
+        hasMore:
+          snapshot.renderedText ===
+          Renderer.renderMemoryContext(snapshot.items, true, snapshot.protocolVersion),
         selected: snapshot.items.map((item) => ({
           memoryId: item.memoryId,
           revisionId: item.revisionId,
