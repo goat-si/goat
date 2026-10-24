@@ -63,6 +63,17 @@ work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
 use the page until you leave that field.
 
+## The Computer Use skill
+
+Every turn that gets the computer use tools also gets GOAT's built-in
+**Computer Use** skill. It tells agents to work in one window at a time, check
+the result of each step, stop when you take over or press Stop, and hand
+sign-ins, payments, and other private steps to you. It appears as a built-in
+skill in the composer's `$` menu.
+
+To keep the tools without the skill, turn off **Computer Use skill** under
+**Computer use** in the same settings.
+
 ## Work that runs on its own
 
 Work nobody is watching does not get computer use by itself: GOAT Bot, work
