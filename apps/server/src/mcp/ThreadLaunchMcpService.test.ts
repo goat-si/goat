@@ -2,6 +2,11 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import { expect, it } from "@effect/vitest";
 import {
+  ChannelDispatchTarget,
+  ChannelInboundMessage,
+  ChannelRequester,
+  ChannelTask,
+  ChannelTaskEvent,
   EnvironmentAuthorizationError,
   EnvironmentId,
   ProjectId,
@@ -13,12 +18,24 @@ import {
   type OrchestrationV2CloudSourceRestriction,
 } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as ThreadLaunchMcp from "./ThreadLaunchMcpService.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
+import * as ChannelChildWorkStore from "../channels/channelChildWorkStore.ts";
+import * as ChannelLedger from "../channels/ChannelLedger.ts";
+import {
+  bindingIdFor,
+  contentHashFor,
+  conversationIdFor,
+  inputIdFor,
+} from "../channels/channelIds.ts";
+import { prepareTransition, type ChannelTaskEventSpec } from "../channels/channelTaskWrites.ts";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
 import * as Adapters from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as Projects from "../project/ProjectService.ts";
@@ -59,14 +76,202 @@ const caller = {
   deletedAt: null,
 } as OrchestrationV2ThreadShell;
 
+const CHANNEL_NOW = "2026-10-12T00:00:00.000Z";
+const decodeChannelMessage = Schema.decodeUnknownSync(ChannelInboundMessage);
+const decodeChannelRequester = Schema.decodeUnknownSync(ChannelRequester);
+const decodeChannelTask = Schema.decodeUnknownSync(ChannelTask);
+const decodeChannelEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
+const decodeChannelTarget = Schema.decodeUnknownSync(ChannelDispatchTarget);
+
+const channelMessage = decodeChannelMessage({
+  kind: "slack",
+  connectionId: "slack-1",
+  conversationKey: "T1:C1:1760000000.000100",
+  externalMessageId: "1760000000.000200",
+  idempotencyKey: "T1:Ev-tlm-1",
+  actor: { externalActorId: "U1" },
+  replyAddress: {
+    kind: "slack",
+    connectionId: "slack-1",
+    teamId: "T1",
+    channelId: "C1",
+    rootTs: "1760000000.000100",
+  },
+  text: "Audit the cloud release.",
+  attachments: [],
+  receivedAt: CHANNEL_NOW,
+  intent: "message",
+});
+
+const channelRequester = decodeChannelRequester({
+  ownerId: "owner",
+  principalId: "owner",
+  displayName: "Jun",
+  originKind: "slack",
+  externalActorId: "U1",
+  runtimeModeCeiling: "approval-required",
+  grantedScopes: ["orchestration:read", "orchestration:operate"],
+});
+
+const channelTarget = decodeChannelTarget({
+  environmentId: "env-1",
+  projectId: "project-1",
+  modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" },
+  runtimeMode: "approval-required",
+  interactionMode: "default",
+  workspaceStrategy: { type: "root" },
+});
+
+const moveChannelTask = (taskId: ChannelTask["taskId"], spec: ChannelTaskEventSpec) =>
+  Effect.gen(function* () {
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const stored = yield* ledger.getTask(taskId);
+    if (stored === undefined) return yield* Effect.die("task missing");
+    const prepared = prepareTransition(stored, spec, CHANNEL_NOW, undefined);
+    if (!prepared.ok) return yield* Effect.die("transition rejected: " + prepared.reason);
+    yield* ledger.applyTaskEvent({
+      owner: "tlm-cw-owner",
+      write: prepared.write,
+      deliveries: prepared.deliveries,
+    });
+  });
+
+/** A channel task whose bound worker is the fixture's calling thread, so launches admit. */
+const seedChannelWorkerTask = Effect.gen(function* () {
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  yield* ledger.claimOwnership({
+    token: "tlm-cw-owner",
+    now: CHANNEL_NOW,
+    staleBefore: "2026-10-11T23:59:30.000Z",
+  });
+  const conversationId = conversationIdFor({
+    ownerId: "owner",
+    kind: channelMessage.kind,
+    connectionId: channelMessage.connectionId,
+    conversationKey: channelMessage.conversationKey,
+  });
+  const input = yield* ledger.acceptInput({
+    ownerId: "owner",
+    inputId: inputIdFor({
+      ownerId: "owner",
+      kind: channelMessage.kind,
+      connectionId: channelMessage.connectionId,
+      idempotencyKey: channelMessage.idempotencyKey,
+    }),
+    conversationId,
+    bindingId: bindingIdFor(conversationId, "root"),
+    message: channelMessage,
+    contentHash: contentHashFor(channelMessage),
+    requester: channelRequester,
+    acceptedAt: CHANNEL_NOW,
+  });
+  yield* ledger.beginReception({
+    owner: "tlm-cw-owner",
+    inputId: input.inputId,
+    receptionId: "tlm-cw-r" as never,
+    readAt: CHANNEL_NOW,
+  });
+  const task = decodeChannelTask({
+    taskId: "channel-task:tlm-cw-1",
+    conversationId: input.conversationId,
+    originBindingId: input.bindingId,
+    originAddress: channelMessage.replyAddress,
+    originInputId: input.inputId,
+    requester: channelRequester,
+    title: "Audit the cloud release.",
+    instruction: "Audit the cloud release.",
+    status: "received",
+    version: 1,
+    generation: 1,
+    openQuestions: [],
+    createdAt: CHANNEL_NOW,
+    updatedAt: CHANNEL_NOW,
+  });
+  const event = decodeChannelEvent({
+    eventId: "channel-task-event:tlm-cw-1",
+    sequence: 0,
+    taskId: task.taskId,
+    taskVersion: 1,
+    occurredAt: CHANNEL_NOW,
+    actor: "system",
+    type: "task.created",
+    payload: {
+      title: task.title,
+      instruction: task.instruction,
+      originInputId: input.inputId,
+    },
+  });
+  yield* ledger.completeReception({
+    owner: "tlm-cw-owner",
+    inputId: input.inputId,
+    receptionId: "tlm-cw-r" as never,
+    replyText: "Starting.",
+    decision: { replyText: "Starting.", action: { type: "report_only" } },
+    createdTask: { task, event },
+    deliveries: [],
+    now: CHANNEL_NOW,
+  });
+  yield* moveChannelTask(task.taskId, {
+    type: "task.dispatch.claimed",
+    payload: { generation: 1, target: channelTarget, leaseExpiresAt: CHANNEL_NOW },
+  });
+  yield* moveChannelTask(task.taskId, {
+    type: "task.worker.bound",
+    payload: {
+      worker: {
+        environmentId: "env-1" as never,
+        threadId: callerId as never,
+        runId: "run-1" as never,
+        generation: 1,
+      },
+    },
+  });
+  return task.taskId;
+});
+
+/**
+ * Builds the service as production builds it (the channel layer is fed in above its
+ * construction, so a construction-time capture of ChannelChildWork would see nothing), then
+ * seeds a channel task whose bound worker is the fixture's calling thread. Calls provided
+ * with callContext resolve the channel layer per call.
+ */
+const withChannelAdmission = (f: ReturnType<typeof fixture>) =>
+  Effect.gen(function* () {
+    const buildScope = yield* Effect.scope;
+    const serviceContext = yield* Layer.buildWithScope(f.layer, buildScope);
+    const channelStack = ChannelChildWork.layer.pipe(
+      Layer.provideMerge(ChannelChildWorkStore.layer),
+      Layer.provideMerge(ChannelLedger.layer),
+      Layer.provideMerge(
+        Layer.mock(ThreadManagement.ThreadManagementService)({
+          getThreadShell: () => Effect.succeed(caller),
+        }),
+      ),
+      Layer.provideMerge(Sqlite.layerMemory),
+    );
+    const channelContext = yield* Layer.buildWithScope(channelStack, buildScope);
+    const taskId = yield* seedChannelWorkerTask.pipe(Effect.provide(channelContext));
+    const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService.pipe(
+      Effect.provide(serviceContext),
+    );
+    return {
+      service,
+      callContext: Context.merge(serviceContext, channelContext),
+      channelContext,
+      taskId,
+    };
+  });
+
 function fixture(
   unpublished = false,
   sourceRestriction: OrchestrationV2CloudSourceRestriction = "published-ref",
   registered?: Layer.Layer<ProviderRegistry.ProviderRegistry>,
   profile?: string,
   callerOverrides: Partial<OrchestrationV2ThreadShell> = {},
+  behavior?: { readonly failLaunches?: boolean; readonly childThreadVisible?: boolean },
 ) {
   const launched: ThreadLaunch.ThreadLaunchInput[] = [];
+  const attempted: ThreadLaunch.ThreadLaunchInput[] = [];
   const sources: Parameters<CloudSource.CloudTaskSourceService["Service"]["resolve"]>[0][] = [];
   let routes = 0;
   const deps = Layer.mergeAll(
@@ -78,7 +283,12 @@ function fixture(
       Layer.provide(NodeServices.layer),
     ),
     Layer.mock(ThreadManagement.ThreadManagementService)({
-      getThreadShell: () => Effect.succeed({ ...caller, ...callerOverrides }),
+      getThreadShell: (threadId: ThreadId) =>
+        Effect.succeed(
+          behavior !== undefined && threadId !== callerId && behavior.childThreadVisible !== true
+            ? null
+            : ({ ...caller, ...callerOverrides } as OrchestrationV2ThreadShell),
+        ),
     }),
     Layer.mock(Adapters.ProviderAdapterRegistryV2)({
       get: () =>
@@ -148,22 +358,38 @@ function fixture(
       checkWorktreeBase: () => Effect.die("Cloud must bypass local branch collision checks"),
       launch: (input) =>
         Effect.sync(() => {
-          launched.push(input);
-          return {
-            threadId: input.threadId,
-            resumed: false,
-            projection: {
-              thread: { id: input.threadId, projectId, title: input.title, modelSelection },
-              runs: [
-                {
-                  id: "run:cloud-launched",
-                  userMessageId: input.initialMessage?.messageId,
-                  status: "starting",
-                },
-              ],
-            },
-          } as unknown as ThreadLaunch.ThreadLaunchResult;
-        }),
+          attempted.push(input);
+        }).pipe(
+          Effect.andThen(
+            behavior?.failLaunches === true
+              ? Effect.fail(
+                  new ThreadLaunch.ThreadLaunchError({
+                    operation:
+                      behavior.childThreadVisible === true ? "dispatch-message" : "resolve-project",
+                    commandId: input.commandId,
+                    projectId: input.projectId,
+                    cause: new Error("fixture launch failure"),
+                  }),
+                )
+              : Effect.sync(() => {
+                  launched.push(input);
+                  return {
+                    threadId: input.threadId,
+                    resumed: false,
+                    projection: {
+                      thread: { id: input.threadId, projectId, title: input.title, modelSelection },
+                      runs: [
+                        {
+                          id: "run:cloud-launched",
+                          userMessageId: input.initialMessage?.messageId,
+                          status: "starting",
+                        },
+                      ],
+                    },
+                  } as unknown as ThreadLaunch.ThreadLaunchResult;
+                }),
+          ),
+        ),
     }),
   );
   return {
@@ -172,6 +398,7 @@ function fixture(
       Layer.provideMerge(Sqlite.layerMemory),
     ),
     launched,
+    attempted,
     sources,
     routes: () => routes,
   };
@@ -540,4 +767,106 @@ it.effect("thread launch forwards the caller runtime ceiling despite a full-acce
     expect(f.launched).toHaveLength(1);
     expect(f.launched[0]?.runtimeMode).toBe("approval-required");
   }).pipe(Effect.provide(f.layer));
+});
+
+it.effect(
+  "a channel-owned caller admits launches against its descendant budget although the service was built without the channel layer",
+  () => {
+    const f = fixture();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const setup = yield* withChannelAdmission(f);
+        const launch = (message: string) =>
+          setup.service
+            .launch(
+              scope,
+              { title: "Cloud", message, standingInstructions: false },
+              { runtimeMode: "full-access", interactionMode: "default" },
+            )
+            .pipe(Effect.provide(setup.callContext));
+        yield* launch("Inspect one");
+        yield* launch("Inspect two");
+        const error = yield* Effect.flip(launch("Inspect three"));
+        expect(error).toMatchObject({ code: "capacity_exceeded" });
+        expect(f.launched).toHaveLength(2);
+      }),
+    );
+  },
+);
+
+it.effect(
+  "a launch failure after the thread committed keeps the slot bound instead of double-spending capacity",
+  () => {
+    const f = fixture(
+      false,
+      "published-ref",
+      undefined,
+      undefined,
+      {},
+      {
+        failLaunches: true,
+        childThreadVisible: true,
+      },
+    );
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const setup = yield* withChannelAdmission(f);
+        const launch = (message: string) =>
+          setup.service
+            .launch(
+              scope,
+              { title: "Cloud", message, standingInstructions: false },
+              { runtimeMode: "full-access", interactionMode: "default" },
+            )
+            .pipe(Effect.provide(setup.callContext));
+        const first = yield* Effect.flip(launch("Inspect one"));
+        const second = yield* Effect.flip(launch("Inspect two"));
+        expect(first).toMatchObject({ code: "orchestration_error" });
+        expect(second).toMatchObject({ code: "orchestration_error" });
+        // Both failures committed their threads, so both slots stay held.
+        const third = yield* Effect.flip(launch("Inspect three"));
+        expect(third).toMatchObject({ code: "capacity_exceeded" });
+        expect(f.attempted).toHaveLength(2);
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore.pipe(
+          Effect.provide(setup.channelContext),
+        );
+        const records = yield* store
+          .listForTask(setup.taskId)
+          .pipe(Effect.provide(setup.channelContext));
+        expect(records.map((record) => record.state)).toEqual(["bound", "bound"]);
+      }),
+    );
+  },
+);
+
+it.effect("a launch failure before the thread existed releases the reservation", () => {
+  const f = fixture(false, "published-ref", undefined, undefined, {}, { failLaunches: true });
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const setup = yield* withChannelAdmission(f);
+      const launch = (message: string) =>
+        setup.service
+          .launch(
+            scope,
+            { title: "Cloud", message, standingInstructions: false },
+            { runtimeMode: "full-access", interactionMode: "default" },
+          )
+          .pipe(Effect.provide(setup.callContext));
+      const first = yield* Effect.flip(launch("Inspect one"));
+      const second = yield* Effect.flip(launch("Inspect two"));
+      // Each pre-commit failure freed its slot, so a third launch is still admitted.
+      const third = yield* Effect.flip(launch("Inspect three"));
+      expect(first).toMatchObject({ code: "orchestration_error" });
+      expect(second).toMatchObject({ code: "orchestration_error" });
+      expect(third).toMatchObject({ code: "orchestration_error" });
+      expect(f.attempted).toHaveLength(3);
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore.pipe(
+        Effect.provide(setup.channelContext),
+      );
+      const records = yield* store
+        .listForTask(setup.taskId)
+        .pipe(Effect.provide(setup.channelContext));
+      expect(records.filter((record) => record.state === "released")).toHaveLength(3);
+    }),
+  );
 });

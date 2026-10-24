@@ -369,6 +369,9 @@ const layerMcpAppRequestsProvided = McpAppRequests.layer.pipe(
 export const layer = Layer.mergeAll(
   layerCommandOutputHubProvided,
   layerOrchestratorProvided,
+  // Exported (same memoized reference the event sink and thread management build from) so
+  // MCP services that resolve the receipt store per call find it in the server runtime.
+  layerCommandReceiptStoreProvided,
   layerMcpAppRequestsProvided,
   layerThreadManagementProvided,
   layerEffectWorkerProvided,

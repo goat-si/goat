@@ -59,13 +59,17 @@ export const HelperGrants = Schema.Struct({
   screenRecording: Schema.Boolean,
 });
 const decodeGrants = Schema.decodeUnknownSync(HelperGrants);
-/** list_apps entries as the driver reports them; extra fields are dropped. */
+/**
+ * list_apps entries as the driver reports them, with the executable the Windows helper adds for
+ * running apps (#1368); other fields are dropped.
+ */
 const decodeListedApps = Schema.decodeUnknownSync(
   Schema.Struct({
     apps: Schema.Array(
       Schema.Struct({
         bundle_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
         name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        executable: Schema.optionalKey(Schema.NullOr(Schema.String)),
       }),
     ),
   }),
