@@ -96,6 +96,26 @@ Agents without OAuth support can use a client token instead.
 The agent finds GOAT's capabilities with `goat_describe` and runs any of them with
 `goat_call {path, args}`, where `path` names the capability, such as `thread.read`.
 
+## Set up a client with the goat-mcp skill
+
+The `goat-mcp` skill is a step-by-step guide an agent can follow to connect its
+own client: finding the MCP URL, signing in or using a client token, the
+settings for Claude Code, Claude Desktop, Codex, Cursor, VS Code, OpenCode,
+Gemini CLI, ChatGPT and Grok, checking the connection, and fixing common
+errors. Clients that only start local stdio servers connect through the
+`mcp-remote` bridge it describes.
+
+`goat mcp skill` prints the skill. To install it for Claude Code or Codex:
+
+```sh
+mkdir -p ~/.claude/skills/goat-mcp && goat mcp skill > ~/.claude/skills/goat-mcp/SKILL.md
+mkdir -p ~/.codex/skills/goat-mcp && goat mcp skill > ~/.codex/skills/goat-mcp/SKILL.md
+```
+
+On a machine without GOAT, copy
+[skills/goat-mcp/SKILL.md](https://github.com/goat-si/goat/blob/dev/skills/goat-mcp/SKILL.md)
+from the GOAT repository into the client's skills folder.
+
 ## Long-running orchestrators
 
 A bot or script that drives GOAT for weeks, such as an orchestrator on another
@@ -109,6 +129,8 @@ goat auth client create --name "Grok Bot" --runtime-mode-ceiling approval-requir
 Send the token as `Authorization: Bearer <token>` to the MCP URL. It lasts 90
 days unless you pass `--ttl`. The `--runtime-mode-ceiling` works like the access
 you choose on the sign-in page. Without it, the client gets **Supervised**.
+Keep the token in an environment variable and let the client read it from
+there; the skill shows the setting for each client.
 
 Initialize MCP once and reuse the `mcp-session-id` header from that response
 for later calls, including long `thread.wait` polls. End the session with
