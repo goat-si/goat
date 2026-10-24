@@ -79,6 +79,10 @@ exported in a terminal.
 Replace \`<url>\` with the URL from step 1. Every entry uses streamable HTTP; GOAT does not serve
 the older HTTP+SSE transport.
 
+Each token entry below stores a reference to \`GOAT_MCP_TOKEN\`, which the client reads when it
+starts, so the token itself stays out of the config file. Keep the single quotes where shown:
+they stop the shell from expanding the reference while the server is added.
+
 ### Claude Code
 
 \`\`\`sh
@@ -86,7 +90,8 @@ the older HTTP+SSE transport.
 claude mcp add --transport http goat <url>
 claude mcp login goat
 # Client token
-claude mcp add --transport http goat <url> --header "Authorization: Bearer $GOAT_MCP_TOKEN"
+claude mcp add-json --scope user goat \\
+  '{"type":"http","url":"<url>","headers":{"Authorization":"Bearer \${GOAT_MCP_TOKEN}"}}'
 claude mcp list
 \`\`\`
 
@@ -126,7 +131,7 @@ bearer_token_env_var = "GOAT_MCP_TOKEN"
 
 ### VS Code
 
-\`.vscode/mcp.json\` or the user \`mcp.json\`. VS Code asks for the token once and stores it:
+\`.vscode/mcp.json\`, or the user \`mcp.json\`:
 
 \`\`\`json
 {
@@ -134,17 +139,9 @@ bearer_token_env_var = "GOAT_MCP_TOKEN"
     "goat": {
       "type": "http",
       "url": "<url>",
-      "headers": { "Authorization": "Bearer \${input:goat-token}" }
+      "headers": { "Authorization": "Bearer \${env:GOAT_MCP_TOKEN}" }
     }
-  },
-  "inputs": [
-    {
-      "type": "promptString",
-      "id": "goat-token",
-      "description": "GOAT client token",
-      "password": true
-    }
-  ]
+  }
 }
 \`\`\`
 
@@ -174,11 +171,12 @@ OpenCode V1 lists servers directly under \`mcp\` instead of \`mcp.servers\`. For
 ### Gemini CLI
 
 \`\`\`sh
-gemini mcp add --transport http --header "Authorization: Bearer $GOAT_MCP_TOKEN" goat <url>
+gemini mcp add --scope user --transport http \\
+  --header 'Authorization: Bearer \${GOAT_MCP_TOKEN}' goat <url>
 \`\`\`
 
-In \`~/.gemini/settings.json\` the server needs \`httpUrl\`; Gemini treats \`url\` as the old SSE
-transport. This stores the token in the settings file, so keep that file private.
+Written by hand in \`~/.gemini/settings.json\`, the server needs \`httpUrl\`; Gemini treats \`url\`
+as the old SSE transport.
 
 ### Claude Desktop
 
@@ -188,7 +186,7 @@ Claude Desktop.
 
 ### Clients that only start local stdio servers
 
-\`mcp-remote\` (Node.js 18 or newer) turns the HTTP endpoint into a stdio server. Most stdio
+\`mcp-remote\` (Node.js 20.18 or newer) turns the HTTP endpoint into a stdio server. Most stdio
 clients take this shape, for example Claude Desktop's \`claude_desktop_config.json\`:
 
 \`\`\`json
@@ -204,7 +202,9 @@ clients take this shape, for example Claude Desktop's \`claude_desktop_config.js
 \`\`\`
 
 Keeping \`Bearer <token>\` in one variable avoids a space inside \`args\`, which some clients
-split. For a plain \`http\` URL to anything other than \`localhost\`, add \`--allow-http\`.
+split. A desktop app does not see variables from a terminal, so this \`env\` block holds the
+token itself; keep the file private. For a plain \`http\` URL to anything other than
+\`localhost\`, add \`--allow-http\`.
 
 ### ChatGPT
 
@@ -243,8 +243,10 @@ Send \`initialize\` with protocol version \`2025-06-18\` and
 3. Without a client, check the token itself. A working token gets an index filtered for it:
 
 \`\`\`sh
-curl -fsS -H "Authorization: Bearer $GOAT_MCP_TOKEN" "\${GOAT_MCP_URL%/mcp}/llms.txt" | head -3
+curl -fsS -H "Authorization: Bearer $GOAT_MCP_TOKEN" "\${GOAT_MCP_URL%/mcp}/llms.txt" | grep '^Filtered'
 \`\`\`
+
+It prints \`Filtered for this MCP client credential.\`; a rejected token gets a 401 instead.
 
 ## 5. Rotate or revoke
 
@@ -253,9 +255,10 @@ goat auth client list                 # names, session ids and last use, never t
 goat auth client revoke <session-id>  # cuts the token off immediately
 \`\`\`
 
-To rotate, create a new token, update \`GOAT_MCP_TOKEN\` where the client reads it, restart the
-client, verify, then revoke the old session id. Clients that signed in with OAuth appear in
-**Settings → Connections**, where they can be revoked too.
+To rotate, create a new token and update \`GOAT_MCP_TOKEN\` where the client reads it. Where a
+config holds the token itself (the stdio bridge's \`env\` block, an xAI request), write the new
+value there. Restart the client, verify, then revoke the old session id. Clients that signed in
+with OAuth appear in **Settings → Connections**, where they can be revoked too.
 
 ## Remote and SSH hosts
 
@@ -266,17 +269,17 @@ issue a separate token on each environment a client connects to directly.
 
 ## Troubleshooting
 
-| Symptom                                             | Cause and fix                                                                                                                                                                                     |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Connection refused or timeout                       | Wrong host or port, or the environment is not running. Run the \`curl\` from step 1 on the client's machine.                                                                                        |
-| 401 on every request                                | The token is missing, revoked, expired, or from another environment. The header must be exactly \`Authorization: Bearer <token>\`, and the client process must see the variable. Issue a new token. |
-| Literal \`\${env:…}\` or \`{env:…}\` sent                | The client started without the variable. Start it from a shell that exports it, or set it system-wide, then restart.                                                                              |
-| Sign-in page cannot finish                          | The URL is plain \`http\` on a non-loopback address. Use Tailscale HTTPS, an SSH tunnel to \`127.0.0.1\`, or a client token.                                                                          |
-| 404 or 405 while connecting, or an SSE error        | The client uses the old SSE transport (\`"type": "sse"\`, Gemini \`url\`), or the path does not end in \`/mcp\`. Switch to streamable HTTP, or bridge with \`mcp-remote\`.                                |
-| "Session not found" after the environment restarted | Restart or reconnect the client so it initializes a new session.                                                                                                                                  |
-| \`initialize\` fails on the protocol version          | The client predates MCP \`2025-06-18\`. Update it, or bridge with \`mcp-remote\`.                                                                                                                     |
-| Tools refuse to change anything                     | The grant is read-only. Issue a token with the default scopes, or approve the sign-in with a permission mode.                                                                                     |
-| A hosted service cannot connect                     | It needs a public \`https\` address; \`localhost\` and tailnet names are private.                                                                                                                     |
+| Symptom                                                   | Cause and fix                                                                                                                                                                                     |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connection refused or timeout                             | Wrong host or port, or the environment is not running. Run the \`curl\` from step 1 on the client's machine.                                                                                        |
+| 401 on every request                                      | The token is missing, revoked, expired, or from another environment. The header must be exactly \`Authorization: Bearer <token>\`, and the client process must see the variable. Issue a new token. |
+| Literal \`\${env:…}\`, \`{env:…}\` or \`\${GOAT_MCP_TOKEN}\` sent | The client started without the variable. Start it from a shell that exports it, or set it system-wide, then restart.                                                                              |
+| Sign-in page cannot finish                                | The URL is plain \`http\` on a non-loopback address. Use Tailscale HTTPS, an SSH tunnel to \`127.0.0.1\`, or a client token.                                                                          |
+| 404 or 405 while connecting, or an SSE error              | The client uses the old SSE transport (\`"type": "sse"\`, Gemini \`url\`), or the path does not end in \`/mcp\`. Switch to streamable HTTP, or bridge with \`mcp-remote\`.                                |
+| 404 on every call after the environment restarted         | The client still sends its old \`mcp-session-id\`. Restart or reconnect the client so it initializes a new session.                                                                                 |
+| Client reports an unsupported protocol version            | GOAT answers every \`initialize\` with MCP \`2025-06-18\`. Update the client, or bridge with \`mcp-remote\`.                                                                                            |
+| Tools refuse to change anything                           | The grant is read-only. Issue a token with the default scopes, or approve the sign-in with a permission mode.                                                                                     |
+| A hosted service cannot connect                           | It needs a public \`https\` address; \`localhost\` and tailnet names are private.                                                                                                                     |
 
 \`goat mcp skill\` prints this guide on any machine with GOAT installed.
 `;
