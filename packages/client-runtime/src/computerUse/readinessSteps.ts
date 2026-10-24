@@ -284,7 +284,12 @@ export function computerUseReadinessSteps({
     };
   if (platform === "win32" && readiness) {
     const [, helperNow, captureNow] = steps;
-    if (helperNow && readiness.helper !== "authenticated")
+    // A helper that read a real window ran; only one that never got that far may be blocked.
+    const neverRan =
+      readiness.helper !== "authenticated" &&
+      readiness.capture !== "ready" &&
+      readiness.tree !== "ready";
+    if (helperNow && neverRan)
       steps[1] = { ...helperNow, detail: [...helperNow.detail, WINDOWS_APP_CONTROL] };
     if (captureNow) steps[2] = { ...captureNow, detail: [...captureNow.detail, WINDOWS_ELEVATED] };
   }

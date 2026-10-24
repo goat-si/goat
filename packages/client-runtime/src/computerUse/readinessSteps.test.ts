@@ -165,9 +165,17 @@ it("tells Windows users about the security prompt, administrator apps and a bloc
     "Apps running as administrator stay out of reach",
   );
   expect(healthy.steps[1]?.detail.join(" ")).not.toContain("Smart App Control");
+  const blocked = {
+    ...ready,
+    helper: "unauthenticated",
+    capture: "unavailable",
+    tree: "unavailable",
+  } as const;
+  expect(view(blocked, "win32").steps[1]?.detail.join(" ")).toContain("Smart App Control");
+  // Stopped after reading a real window: it ran, so nothing blocked it.
   expect(
     view({ ...ready, helper: "unauthenticated" }, "win32").steps[1]?.detail.join(" "),
-  ).toContain("Smart App Control");
+  ).not.toContain("Smart App Control");
   expect(view(ready, "darwin").steps[2]?.detail.join(" ")).not.toContain("administrator");
 });
 
