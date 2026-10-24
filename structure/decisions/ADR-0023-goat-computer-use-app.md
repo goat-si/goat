@@ -115,6 +115,15 @@
     while visible. The floating stack and the cursor overlay never appear in a capture and never
     cover an action's target; a helper that cannot keep them out runs without them, and an unsafe
     capture is refused with a typed reason. Requested by Jun on 2026-10-24 (#1215).
+  - **Built-in skill.** GOAT ships its own computer use skill, written clean room, as an OS-neutral
+    `SKILL.md` with one reference per platform. It sits in a built-in skills registry (scope
+    `builtin`), is on by default and attaches under the same gate as computer use (never in Plan,
+    a read-only sandbox, a cloud task or Muse). It is listed in the composer's `$` menu and in
+    Settings → Integrations → Computer use, where it can be turned off. Every adapter gets it
+    through the runtime instructions path, and providers that read skills natively also from a
+    GOAT-managed read-only directory. It replaces `COMPUTER_USE_INSTRUCTIONS` as the single source
+    of computer use guidance and teaches the observe-act-verify loop, typed results, private mode,
+    takeover, Stop and the mini-view stack. Requested by Jun on 2026-10-24 (#1230).
   - **Safety.** Per-app approvals and a time-bounded control lease. Unattended origins keep the
     ADR-0022 driver ceiling. Interactive turns also run through the GOAT proxy, so a per-thread
     Stop and the global kill switch end the transport at once. Human input on a shared desktop

@@ -284,6 +284,29 @@ browser.
   collapsed or hidden or the app is in the background. They reuse the session's frame stream,
   are downscaled on the server, and nothing in the stack animates continuously.
 
+## Built-in Computer Use skill
+
+Jun asked for this on 2026-10-24 (#1230, lead decision D12): GOAT ships its own computer use
+skill, on by default.
+
+- The skill is GOAT's own text, written clean room. The Codex app's computer use skill is
+  proprietary and Aside has none, so nothing is taken from either. It has an OS-neutral
+  `SKILL.md` and one reference per platform (`references/macos.md`, `references/windows.md`,
+  `references/linux.md`).
+- It teaches the behavior this page defines: observe, act, verify; typed results and no blind
+  retry (`computerUseNextStep`); private mode and handing a step to the person; takeover and
+  hand-back; Stop; and that the person watches the run in the mini-view stack
+  ([Mini-view stack](#mini-view-stack)).
+- It lives in a built-in skills registry with scope `builtin` and is enabled by default. It
+  attaches under exactly the gate that attaches computer use today: never in Plan, a read-only
+  sandbox, a cloud task or Muse (`apps/server/src/cua/ComputerUseAttachment.ts`). It appears in the
+  composer's `$` menu and in Settings → Integrations → Computer use, where a person turns it off.
+- Every adapter receives it through the runtime instructions path; an adapter whose provider
+  reads skills natively also gets it from a GOAT-managed read-only directory. It replaces the
+  one-paragraph `COMPUTER_USE_INSTRUCTIONS`
+  (`packages/provider-core/src/server/runtimeInstructions.ts`), so there is one source of
+  computer use guidance.
+
 ## Safety
 
 - **Approvals.** A person approves apps per thread, or always, through a handoff that needs
@@ -418,6 +441,7 @@ notice goes into the helper's third-party notices with them.
 - Never shipped, linked or copied: Cua Spaces, the viewer and media components (FSL), and the
   perception models and set-of-marks code (AGPL). See
   [open-source-licenses.md](open-source-licenses.md).
+- The built-in skill is GOAT's own text; no wording comes from the Codex app's proprietary skill.
 - Aside, the Codex app and Ego Lite's browser are proprietary. GOAT takes their product patterns
   (a separate helper identity, per-app approval, typed refusals, handoff) and writes its own code;
   nothing from their binaries, keys, names or reverse-engineered sources enters the repository,
@@ -500,16 +524,17 @@ Process for this epic (lead decision D9): pull requests target `dev` only, one t
 signing in CI is a proposal issue; UI pull requests carry real before and after screenshots; one
 thread at a time drives a machine's real GUI, assigned by the epic's lead.
 
-| Phase | Workstream                                       | Depends on      | Phase is done when                                                                                     |
-| ----- | ------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------------------------ |
-| P0    | WS1 #1127 transcript fidelity and run card       | —               | model and timeline see the same screenshot for every provider fixture; run card on web and mobile      |
-| P1    | WS2 #1128 this design and the protocol contracts | —               | ADR merged; preview session and helper protocol schemas in `packages/contracts` with the parity list   |
-| P2    | WS3 #1129 macOS helper core                      | WS2             | signed helper launches, disclaims, starts the driver, passes readiness, observes with diffs            |
-| P2    | WS4 #1131 packaging, signing, notarization       | WS3             | notarized GOAT.app with the helper; grants survive an update; notices complete                         |
-| P3    | WS5 #1133 action API                             | WS3             | typed results, no replay, exact targets, background first, on fixtures                                 |
-| P3    | WS6 #1134 safety rails                           | WS3, WS5        | every turn through the proxy; Stop and stop all with cleanup report; takeover, private mode, collision |
-| P4    | WS7 #1135 unified preview surface                | WS2, WS6        | one panel, chips and controls for browser and desktop on web, desktop and mobile                       |
-| P4    | WS8 #1136 onboarding parity and matrix tests     | WS3, WS7        | onboarding on the helper identity; conformance suite enforces the matrix                               |
-| P5    | WS9 #1137 Windows helper                         | WS2, WS5, WS6   | conformance suite green on Windows; unsupported cells typed                                            |
-| P5    | WS10 #1138 Linux helper                          | WS2, WS5, WS6   | conformance suite green on X11 and Wayland; unsupported cells typed                                    |
-| P6    | WS11 #1139 qualification and visual verification | runs throughout | hard gates met on a signed packaged build per platform; latency within budget                          |
+| Phase | Workstream                                       | Depends on      | Phase is done when                                                                                                 |
+| ----- | ------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| P0    | WS1 #1127 transcript fidelity and run card       | —               | model and timeline see the same screenshot for every provider fixture; run card on web and mobile                  |
+| P1    | WS2 #1128 this design and the protocol contracts | —               | ADR merged; preview session and helper protocol schemas in `packages/contracts` with the parity list               |
+| P2    | WS3 #1129 macOS helper core                      | WS2             | signed helper launches, disclaims, starts the driver, passes readiness, observes with diffs                        |
+| P2    | WS4 #1131 packaging, signing, notarization       | WS3             | notarized GOAT.app with the helper; grants survive an update; notices complete                                     |
+| P3    | WS5 #1133 action API                             | WS3             | typed results, no replay, exact targets, background first, on fixtures                                             |
+| P3    | WS6 #1134 safety rails                           | WS3, WS5        | every turn through the proxy; Stop and stop all with cleanup report; takeover, private mode, collision             |
+| P4    | WS7 #1135 unified preview surface                | WS2, WS6        | one panel, chips and controls for browser and desktop on web, desktop and mobile                                   |
+| P4    | WS8 #1136 onboarding parity and matrix tests     | WS3, WS7        | onboarding on the helper identity; conformance suite enforces the matrix                                           |
+| P5    | WS9 #1137 Windows helper                         | WS2, WS5, WS6   | conformance suite green on Windows; unsupported cells typed                                                        |
+| P5    | WS10 #1138 Linux helper                          | WS2, WS5, WS6   | conformance suite green on X11 and Wayland; unsupported cells typed                                                |
+| P4    | WS12 #1230 built-in computer use skill           | WS1, WS6, WS7   | skill in the builtin registry replaces the runtime paragraph for every adapter; real-task evidence on a ready host |
+| P6    | WS11 #1139 qualification and visual verification | runs throughout | hard gates met on a signed packaged build per platform; latency within budget                                      |
