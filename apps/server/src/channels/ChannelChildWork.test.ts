@@ -90,6 +90,7 @@ const threadsLayer = (runs: ReadonlyMap<string, ReadonlyArray<unknown>>) =>
     ThreadManagementService.ThreadManagementService.of({
       getLaunchedPendingQuestions: unused,
       assertReviewTaskSendAllowed: unused,
+      listActiveSubagentThreadIds: unused,
       getThreadShell: unused,
       getShellSnapshot: unused,
       readShellSnapshot: unused,
