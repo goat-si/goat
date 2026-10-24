@@ -150,6 +150,16 @@ function decideStablePromotion({ releases, openBlockers, hold, now, sha }) {
  * finish the steps after it.
  */
 function recheckStablePromotion({ releases, openBlockers, hold, shortSha, version, manual }) {
+  // A newer stable comes first: re-running an older one would publish its runtime release
+  // as latest on goat-si/goat after the newer one.
+  const newest = newestStable(
+    releases
+      .filter((release) => !release.draft && !release.prerelease && release.published_at)
+      .map((release) => release.tag_name),
+  );
+  if (newest !== undefined && compare(newest, parsePlain(version)) > 0) {
+    return { ok: false, reason: "a newer stable v" + format(newest) + " shipped during the build" };
+  }
   const published = releases.some(
     (release) =>
       !release.draft &&

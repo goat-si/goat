@@ -181,4 +181,14 @@ describe("recheckStablePromotion", () => {
     });
     assert.equal(recheck({ releases: published, version: "0.1.3" }).ok, false);
   });
+
+  it("stops a re-run of an older stable once a newer stable shipped, manual or not", () => {
+    const later = [
+      stable("0.1.3", "dddddddddddd", ago(HOUR / 2)),
+      stable("0.1.2", "bbbbbbbbbbbb", ago(HOUR)),
+      ...releases,
+    ];
+    assert.match(recheck({ releases: later }).reason, /newer stable v0\.1\.3/);
+    assert.equal(recheck({ releases: later, manual: true }).ok, false);
+  });
 });
