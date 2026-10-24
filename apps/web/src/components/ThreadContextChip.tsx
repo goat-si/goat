@@ -29,10 +29,9 @@ export function ThreadContextChip(props: {
             render={<Link to="/$environmentId/$threadId" params={{ environmentId, threadId }} />}
             aria-label={`Thread, ${title}`}
             data-markdown-copy={props.copyMarkdown}
-            className="no-underline"
           >
             {project ? (
-              <ProjectFavicon project={project} className="size-[1.17em] self-center" />
+              <ProjectFavicon project={project} className="size-[1em] self-center" />
             ) : (
               <MessagesSquareIcon />
             )}
