@@ -87,7 +87,7 @@ export function SshThreadHandoffDialog(props: {
                     disabled={candidate.disabledReason !== null}
                   >
                     {candidate.label}
-                    {candidate.disabledReason ? ` — ${candidate.disabledReason}` : ""}
+                    {candidate.disabledReason ? ` (${candidate.disabledReason})` : ""}
                   </SelectItem>
                 ))}
               </SelectPopup>

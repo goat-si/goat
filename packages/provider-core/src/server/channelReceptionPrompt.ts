@@ -271,11 +271,11 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
         "] " +
         (task.kind === "turn" ? "(your own turn) " : "") +
         task.title +
-        (task.resultSummary === undefined ? "" : " — " + task.resultSummary) +
+        (task.resultSummary === undefined ? "" : ": " + task.resultSummary) +
         (task.host === undefined ? "" : " (on " + task.host + ")") +
         (task.pullRequests === undefined || task.pullRequests.length === 0
           ? ""
-          : " — pull requests: " + task.pullRequests.join(", ")) +
+          : "; pull requests: " + task.pullRequests.join(", ")) +
         (questions === "" ? "" : "\n" + questions)
       );
     })

@@ -439,7 +439,7 @@ describe("shared SSH reconciliation", () => {
       const connection = presentConnectionState(snapshot({ sshPreparation }));
       const text =
         phase === "uploading"
-          ? "Installing GOAT runtime — first setup can take a few minutes"
+          ? "Installing GOAT runtime. First setup can take a few minutes"
           : phase === "checking"
             ? "Checking GOAT runtime"
             : phase === "starting"

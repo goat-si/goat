@@ -106,6 +106,75 @@ export type ShellApplicationEvent =
       readonly event: Pick<OrchestrationV2StoredEvent["event"], "threadId">;
     };
 
+const subagentThreadIdsOf = (
+  threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
+) =>
+  new Set<string>(
+    threads
+      .filter((thread) => thread.lineage.relationshipToParent === "subagent")
+      .map((thread) => thread.id),
+  );
+
+/**
+ * Which lineage events already shaped the subagent set. Replay and the live tail are filtered
+ * concurrently, so a lineage event older than the thread's last applied one, or than the snapshot
+ * that built the set, must not undo a newer classification such as a GOAT promotion.
+ */
+export interface SubagentLineageOrder {
+  readonly through: number;
+  readonly appliedByThread: Map<string, number>;
+}
+
+export const subagentLineageOrder = (through: number): SubagentLineageOrder => ({
+  through,
+  appliedByThread: new Map(),
+});
+
+/** The subagent set of a shell snapshot taken through a sequence, with its lineage order. */
+export const subagentShellState = (
+  threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
+  through: number,
+) => ({ ids: subagentThreadIdsOf(threads), ...subagentLineageOrder(through) });
+
+/** Focused subagents receive these updates through their thread subscription. */
+export function shouldPublishShellApplicationEvent(
+  stored: ApplicationStoredEvent,
+  subagentThreadIds: Set<string>,
+  order: SubagentLineageOrder = subagentLineageOrder(0),
+): boolean {
+  if ("aggregateKind" in stored) return true;
+  const { event } = stored;
+  // These carry the thread's lineage. Unarchiving restores a subagent the active snapshot left
+  // out, and GOAT promotion detaches a delegated task in place.
+  if (
+    event.type === "thread.created" ||
+    event.type === "thread.metadata-updated" ||
+    event.type === "thread.archived" ||
+    event.type === "thread.unarchived"
+  ) {
+    const applied = order.appliedByThread.get(event.threadId) ?? order.through;
+    if (stored.sequence <= applied) return true;
+    order.appliedByThread.set(event.threadId, stored.sequence);
+    if (event.payload.lineage.relationshipToParent === "subagent") {
+      subagentThreadIds.add(event.threadId);
+    } else {
+      subagentThreadIds.delete(event.threadId);
+    }
+    return true;
+  }
+  if (event.type === "thread.deleted") {
+    // Replay and the live tail overlap; keep known IDs so late events stay filtered.
+    return true;
+  }
+  return !(
+    subagentThreadIds.has(event.threadId) &&
+    (event.type === "node.updated" ||
+      event.type === "turn-item.updated" ||
+      event.type === "provider-turn.updated" ||
+      event.type === "message.updated")
+  );
+}
+
 /** Shell updates refetch an aggregate; drop transcript bodies before retaining an event. */
 export function toShellApplicationEvent(stored: ApplicationStoredEvent): ShellApplicationEvent {
   return "aggregateKind" in stored

@@ -48,6 +48,8 @@ Add `--browser` to open a browser automatically.
 
 Linked worktrees default to their own `.goat/userdata` (one created earlier keeps `.t3`), even when `GOAT_HOME` is set.
 The main checkout defaults to `~/.goat/dev` (`~/.t3/dev` while only that exists). An explicit `--home-dir` wins in both cases.
+The first start in a worktree seeds its empty database from a read-only copy of
+`~/.goat/userdata` (`~/.t3/userdata` when that database is absent); `--no-seed` or `GOAT_DEV_SEED=0` skips that.
 Never run a development server against the live `~/.goat/userdata` or `~/.t3/userdata`.
 See [test data](../../AGENTS.md#test-data) for copying a consistent database snapshot.
 
@@ -158,7 +160,6 @@ Install that browser once before running the browser suite locally, as CI does:
 TypeScript workspaces typecheck with `tsc`. The `typescript` catalog entry is
 `@tsc-rs/typescript`, the tsc-rs drop-in, with Effect diagnostics, quick fixes, and
 refactors built in. VS Code uses it through `js/ts.tsdk.path` in `.vscode/settings.json`.
-Marketing keeps `astro check` for Astro files.
 
 Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
 [ci.yml](../../.github/workflows/ci.yml) for its current jobs.
