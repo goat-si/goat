@@ -84,7 +84,7 @@ export function getDiffLineStat(files: ReadonlyArray<FileDiffMetadata>): DiffLin
 }
 
 interface RenderablePatchOptions {
-  ignoreWhitespace?: boolean;
+  ignoreWhitespace?: boolean | undefined;
   /**
    * Pierre's partial-patch parser keeps hunk render starts in source-file
    * coordinates. Its virtualizer iterates partial patches as compact rows, so
