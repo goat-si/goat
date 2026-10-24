@@ -252,6 +252,24 @@ For a cross-architecture or universal build, add the requested Rust targets:
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ```
 
+### macOS computer use helper
+
+On a Mac, computer use runs Cua Driver under `GOAT Computer Use.app` so its permissions belong
+to the helper, not to GOAT or your terminal. To try it from a dev checkout, build it and point the
+dev app at it:
+
+```sh
+node scripts/build-computer-use-helper.ts --channel dev
+GOAT_CUA_HELPER_PATH="$PWD/apps/desktop/.computer-use-helper/GOAT Computer Use.app" vp run dev
+```
+
+The script signs with the keychain's Developer ID Application identity when one is usable, and
+`--identity -` signs ad-hoc. An ad-hoc helper gets a new code hash on every build, so macOS asks
+for Accessibility and Screen Recording again after each rebuild. Only `--channel dev` may be
+ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the same team, launched them.
+Signing needs the login keychain of the signed-in user, so it fails over SSH or from an agent
+session that cannot unlock it (`errSecInternalComponent`).
+
 ### Windows installer prerequisites
 
 Install Rust, Python 3, and Visual Studio Build Tools with **Desktop development with C++**.

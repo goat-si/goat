@@ -38,6 +38,8 @@ export const environmentEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "The handler assigns supplied preference values and sets or removes project standing-instruction overrides by project id; repeating the same patch leaves the same preferences.",
     annotations: {
       idempotentHint: false,
       openWorldHint: true,

@@ -1,4 +1,5 @@
 import { entry } from "../entry.ts";
+import { SSH_HOST_ADD_CONVERGES } from "../idempotencyReasons.ts";
 
 export const sshEntries = {
   "ssh.host_add": entry({
@@ -17,6 +18,7 @@ export const sshEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["host_trust", "approval", "sign_in"],
+    idempotencyReason: SSH_HOST_ADD_CONVERGES,
     annotations: { idempotentHint: true, openWorldHint: true },
   }),
   "ssh.host_prepare": entry({
@@ -36,6 +38,8 @@ export const sshEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["sign_in"],
+    idempotencyReason:
+      "A repeat joins the setup already running for the host or starts it again; calling again is the documented way to retry setup.",
     annotations: { idempotentHint: true, openWorldHint: true },
   }),
   "ssh.host_forget": entry({
@@ -54,6 +58,8 @@ export const sshEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "Forgetting a host that is already gone changes nothing and reports it untrusted.",
     annotations: { idempotentHint: true, openWorldHint: true },
   }),
   "ssh.host_status": entry({
@@ -136,6 +142,8 @@ export const sshEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "Writes nothing to the folder; a repeat lists it again and only resumes a cloud machine the first call already resumed.",
     annotations: {
       title: "Browse folders over SSH",
       idempotentHint: false,

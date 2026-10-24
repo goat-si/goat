@@ -34,8 +34,18 @@ describe("toolActivity", () => {
     ).toEqual({ rawInput: { path: "src/a.ts", startLine: 4 } });
   });
 
-  it("recognizes computer-use REPL calls before result metadata exists", () => {
+  it("recognizes computer-use REPL and cua-driver calls before result metadata exists", () => {
     expect(dynamicToolSurface("cua_repl.js", {})).toBe("computer");
+    for (const name of [
+      "cua-driver.get_window_state",
+      "mcp__cua-driver__click",
+      "cua-driver_type_text",
+      "cua-driver-3f2a9c_scroll",
+    ]) {
+      expect(dynamicToolSurface(name, {})).toBe("computer");
+    }
+    expect(dynamicToolSurface("mcp__weather__get_weather", {})).toBeUndefined();
+    expect(dynamicToolSurface("my-cua-driver.click", {})).toBeUndefined();
     for (const name of ["node_repl.js", "js"]) {
       expect(dynamicToolSurface(name, { code: "await sky.get_app_state(app);" })).toBe("computer");
       expect(dynamicToolSurface(name, { code: "const sky = await import('@oai/sky');" })).toBe(

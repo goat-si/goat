@@ -1,6 +1,7 @@
 import {
   type FleetOwnerKey,
   type ModelSelection,
+  type PermissionProfile,
   type RuntimeMode,
   ThreadId,
 } from "@goat/contracts";
@@ -68,6 +69,10 @@ export interface RescheduleRequest {
    * right before every remote write; a lower mode than runtimeMode, or a failure, stops the move.
    */
   readonly authorize?: Effect.Effect<RuntimeMode, RescheduleNotAllowed>;
+  /** The caller's goatclaw profile, bound to the moved thread on the destination. */
+  readonly permissionProfileCeiling?: PermissionProfile;
+  /** Brings the destination's goatclaw policy up to date before the ceiling is forwarded to it. */
+  readonly prepareCeiling?: (host: string) => Effect.Effect<void>;
 }
 
 export type RescheduleRefusal =
@@ -326,6 +331,9 @@ const make = Effect.gen(function* () {
         title,
         branch,
       });
+      const ceiling = request.permissionProfileCeiling;
+      if (ceiling !== undefined && request.prepareCeiling !== undefined)
+        yield* request.prepareCeiling(target);
       const launched = yield* dispatch
         .launchThread(
           {
@@ -353,6 +361,7 @@ const make = Effect.gen(function* () {
             modelSelection,
             runtimeMode: request.runtimeMode,
             callerRuntimeMode: request.runtimeMode,
+            ...(ceiling === undefined ? {} : { permissionProfileCeiling: ceiling }),
           },
           recheck(request).pipe(Effect.asVoid),
         )
@@ -379,6 +388,16 @@ const make = Effect.gen(function* () {
       if (error instanceof RescheduleNotAllowed) {
         yield* claims.release(request.clientRequestId);
         return refused("not_allowed", error.message);
+      }
+      // Refused before launching, so the request may place again once the destination updates.
+      if (error.remoteCode === "permission_profile_unsupported") {
+        yield* claims.release(request.clientRequestId);
+        return refused(
+          "unsupported_remote",
+          target +
+            " cannot hold the caller's goatclaw ceiling (permission_profile_unsupported): " +
+            clip(error.message),
+        );
       }
       // Only a launch that provably never started frees the request to place again.
       if (error.launchMayHaveStarted === false) yield* claims.release(request.clientRequestId);

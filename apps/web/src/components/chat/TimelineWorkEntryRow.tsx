@@ -22,6 +22,7 @@ import {
   turnItemHasDetail,
   turnItemNeedsDetailFetch,
 } from "@goat/client-runtime/work-log/item-detail";
+import { computerUseRun, computerUseRunStatus } from "@goat/client-runtime/work-log/computer-use";
 import { claudeSkillInvocation } from "@goat/shared/toolActivity";
 import { memo, use, useState, type KeyboardEvent } from "react";
 import {
@@ -47,6 +48,7 @@ import { cn } from "~/lib/utils";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { FetchedToolOutput, V2ItemInspector, fileChangeDiffTarget } from "./V2ItemInspector";
 import { FileChangeInlineDiff } from "./FileChangeInlineDiff";
+import { ComputerUseRunCard } from "./ComputerUseRunCard";
 import { fileChangeTargetPaths } from "@goat/client-runtime/work-log/file-change-diff";
 import { fileChangeRowLabel } from "./fileChangeInlineDiff.logic";
 import { fileChangeLineCounts } from "@goat/client-runtime/work-log/line-counts";
@@ -291,6 +293,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       ? undefined
       : (workEntry.toolIcon ?? workEntry.toolSource?.icon);
   const isReasoning = workEntry.itemType === "reasoning";
+  const computerUse = computerUseRun(workEntry.projectedItem?.item);
   const questionHeading = workEntry.questionAnswer
     ? getQuestionTextPreview(workEntry.questionAnswer)
     : "";
@@ -300,7 +303,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         ? "Thinking"
         : "Thought"
       : questionHeading ||
-        (displayLabel ??
+        (computerUse?.summary ??
+          displayLabel ??
           // Like Codex: verb and file name; the tooltip keeps every full path.
           (workEntry.projectedItem?.item.type === "file_change"
             ? fileChangeRowLabel(workEntry.projectedItem.item)
@@ -574,6 +578,17 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         </>
       }
     >
+      {computerUse && workEntry.projectedItem && (expanded || computerUse.observes) ? (
+        // Expanded, the inspector below shows the screenshots with the rest of the output.
+        <ComputerUseRunCard
+          run={computerUse}
+          status={computerUseRunStatus(workEntry.toolLifecycleStatus)}
+          projectedItem={workEntry.projectedItem}
+          environmentId={ctx.activeThreadEnvironmentId}
+          showScreenshots={!expanded}
+          onImageExpand={onImageExpand}
+        />
+      ) : null}
       {expanded && viewedImage && threadRef ? (
         <WorkLogDetails kind="media">
           <ChatMarkdownAssetImage

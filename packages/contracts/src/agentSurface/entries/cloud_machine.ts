@@ -29,7 +29,7 @@ export const cloudMachineEntries = {
     toolkit: "ssh",
     summary: "Create a cloud machine",
     description:
-      "Create a Boat cloud machine, billed to the user's Boat account, as an SSH host for browsing and thread launches; only when the user asked for a new machine. Provisioning continues after the response. Each call can create another machine, so after a lost response check goat_cloud_machine_list and unconfirmedCreates before retrying.",
+      "Create a Boat cloud machine, billed to the user's Boat account, as an SSH host for browsing and thread launches; only when the user asked for a new machine. Provisioning continues after the response. Retry with the same clientRequestId; without one, check goat_cloud_machine_list and unconfirmedCreates after a lost response before retrying.",
     guide:
       "The user’s Boat account pays for the machine; create one only when requested. ttlSeconds is the auto-stop duration, from 60 to 2592000 seconds, restarted by explicit use rather than status checks. Its alias is added to the machine catalog before the response and is visible in goat_cloud_machine_list and goat_ssh_host_list even before SSH setup. The first browse, connection or launch waits for readiness and writes its SSH address and host key. Needs a live settings:write grant reauthorized for this call and the boat.start capability.",
     effect: "write",
@@ -43,6 +43,8 @@ export const cloudMachineEntries = {
       idempotentHint: false,
       openWorldHint: true,
     },
+    idempotency: "key",
+    reconcile: "cloud_machine.list",
   }),
   "cloud_machine.stop": entry({
     resource: "cloud_machine",
@@ -60,6 +62,7 @@ export const cloudMachineEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["approval"],
+    idempotencyReason: "Stopping a machine that is already stopping or stopped leaves it so.",
     annotations: {
       title: "Stop a cloud machine",
       idempotentHint: true,
@@ -82,6 +85,8 @@ export const cloudMachineEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["approval"],
+    idempotencyReason:
+      "Resuming a running machine only refreshes its address and restarts its auto-stop timer.",
     annotations: {
       title: "Resume a cloud machine",
       idempotentHint: true,
