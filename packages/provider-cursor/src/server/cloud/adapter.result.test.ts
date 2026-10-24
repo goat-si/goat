@@ -44,6 +44,9 @@ describe("Cursor Cloud failed run", () => {
     ["payment-service.git: ETIMEDOUT", UNEXPECTED],
     ["credit.git: ECONNRESET", UNEXPECTED],
     ["forbidden.git: ETIMEDOUT", UNEXPECTED],
+    ["Cloning forbidden..git: ETIMEDOUT", UNEXPECTED],
+    ["ENOENT: no such file or directory, open 'authentication/failed'", UNEXPECTED],
+    ["Cloning authentication-failed: ECONNRESET", UNEXPECTED],
     ["remote: 403 Forbidden while cloning payment-service.git", ACCESS],
     ["   ", UNEXPECTED],
   ])("says what to fix for %j", (message, expected) => {

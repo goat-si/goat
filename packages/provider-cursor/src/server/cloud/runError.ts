@@ -2,9 +2,10 @@
 // classified here (on a bounded prefix, with plain phrase tests) and never shown. Phrases must
 // stand alone, not inside a repository name or path, and a bare "upgrade" or "access" is not
 // enough; anything unclear keeps the general sentence.
-// A sentence may end in a period, but ".git" or "/path" continues a name.
+// A phrase sits between whitespace, the ends, or sentence punctuation; a period counts only when
+// it ends the sentence. Anything joined to a name or path (".git", "/", "-", quotes) does not.
 const ALONE = (phrases: string) =>
-  new RegExp("(?<![\\w./-])(?:" + phrases + ")(?![\\w/-]|\\.\\w)", "i");
+  new RegExp("(?<=^|[\\s,;:!?(])(?:" + phrases + ")(?=$|[\\s,;:!?)]|\\.(?:\\s|$))", "i");
 const ACCOUNT_LIMIT = ALONE(
   [
     "(?:no|insufficient|not enough|out of)(?: usage)? credits?",
@@ -23,7 +24,7 @@ const ACCESS_REFUSED = ALONE(
   [
     "unauthori[sz]ed",
     "unauthenticated",
-    "authenticat\\w{0,6}\\W{0,3}(?:required|failed)",
+    "authenticat\\w{0,6}:? +(?:required|failed)",
     "not (?:signed|logged) in",
     "(?:sign|log)[- ]?in (?:required|again)",
     "permission denied",
