@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  type GoatclawRole,
   OrchestratorMcpFailure,
   ProjectId,
   ProviderInstanceId,
@@ -56,7 +57,7 @@ export type LaunchOptions = {
   readonly notifyTarget?: { readonly name: string };
   /** The launch is interrupted while its watch is being saved, after the remote thread exists. */
   readonly registerInterrupted?: boolean;
-  readonly goatclawRole?: "issue-sweeper";
+  readonly goatclawRole?: GoatclawRole;
   readonly references?: boolean;
   readonly dispatchError?: SshRemoteDispatch.SshRemoteDispatchError;
   readonly coordinationError?: RemoteDispatchCoordinator.RemoteDispatchError;
