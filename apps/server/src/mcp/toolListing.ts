@@ -31,7 +31,7 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
  * supports, and hosts on older versions cannot learn that any other way. The header only picks
  * what tools/list shows; calls never read it.
  */
-export const callerListing = (
+const callerListing = (
   scope: McpInvocationContext.McpInvocationScope,
   setting: AgentToolListing,
   requested: string | undefined,
