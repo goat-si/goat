@@ -51,10 +51,22 @@ class HelperClientError extends Error {}
 
 const encoder = new TextEncoder();
 
+const acceptsWatch = (result: unknown, watchId: string) =>
+  typeof result === "object" &&
+  result !== null &&
+  "watchId" in result &&
+  result.watchId === watchId;
+
 export function makeHelperClient(options: HelperClientOptions) {
   let hello: HelperHello | undefined;
   let closed = false;
   let watchId: string | undefined;
+  /**
+   * The latest watch request, by request id and watch id. A late answer to it still decides
+   * which watch is in force: the helper may have taken it after the client stopped waiting, and
+   * its events would otherwise go unheard.
+   */
+  let latestWatch: { readonly requestId: string; readonly watchId: string } | undefined;
   const helloWaiter = Promise.withResolvers<HelperHello>();
   // A client closed before anyone awaits its hello must not raise an unhandled rejection.
   helloWaiter.promise.catch(() => undefined);
@@ -110,6 +122,18 @@ export function makeHelperClient(options: HelperClientOptions) {
     const frameBytes = encoder.encode(raw).byteLength;
     const reply = decodeReply(raw);
     if (reply._tag === "Some") {
+      const late = latestWatch;
+      if (
+        late !== undefined &&
+        reply.value.id === late.requestId &&
+        !pending.has(late.requestId) &&
+        reply.value.generation === hello.binding.generation &&
+        frameBytes <= hello.maxFrameBytes
+      ) {
+        latestWatch = undefined;
+        if (acceptsWatch(reply.value.result, late.watchId)) watchId = late.watchId;
+        return;
+      }
       const verdict = admitComputerUseReply({
         reply: reply.value,
         frameBytes,
@@ -138,10 +162,12 @@ export function makeHelperClient(options: HelperClientOptions) {
     params: unknown,
     deadlineMs: number,
     admitted?: (result: unknown) => void,
+    onId?: (id: string) => void,
   ) =>
     new Promise<unknown>((resolve) => {
       if (closed || hello === undefined) return resolve(undefined);
       const id = options.newId();
+      onId?.(id);
       const cancel = options.after(deadlineMs, () => settle(id, undefined));
       pending.set(id, { resolve, cancel, ...(admitted ? { admitted } : {}) });
       options.write(
@@ -170,15 +196,19 @@ export function makeHelperClient(options: HelperClientOptions) {
      */
     watch: async (targets: ReadonlyArray<ComputerUseWindowTarget>, deadlineMs: number) => {
       const next = options.newId();
-      const accepts = (result: unknown) =>
-        typeof result === "object" &&
-        result !== null &&
-        "watchId" in result &&
-        result.watchId === next;
-      const result = await request("watch", { watchId: next, targets }, deadlineMs, (answer) => {
-        if (accepts(answer)) watchId = next;
-      });
-      return accepts(result);
+      const result = await request(
+        "watch",
+        { watchId: next, targets },
+        deadlineMs,
+        (answer) => {
+          latestWatch = undefined;
+          if (acceptsWatch(answer, next)) watchId = next;
+        },
+        (requestId) => {
+          latestWatch = { requestId, watchId: next };
+        },
+      );
+      return acceptsWatch(result, next);
     },
     unwatch: async (deadlineMs: number) => {
       // A refused unwatch leaves the helper watching: its events, clearing ones among them,

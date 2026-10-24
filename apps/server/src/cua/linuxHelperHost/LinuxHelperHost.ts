@@ -289,7 +289,9 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       entry.watched = "";
       return;
     }
-    if (yield* Effect.promise(() => entry.client.watch(targets, WATCH_MS))) entry.watched = key;
+    // A watch that was refused or not answered in time leaves the helper's watch unknown, so
+    // the next tick asks again rather than trusting the windows it last watched.
+    entry.watched = (yield* Effect.promise(() => entry.client.watch(targets, WATCH_MS))) ? key : "";
   });
 
   /**
@@ -367,6 +369,8 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
 
 /** Longest helper line kept; the host asks for no screenshots, so its answers are small. */
 const MAX_LINE = 4 * 1024 * 1024;
+/** How long a helper asked to stop may take before its process group is killed. */
+const KILL_AFTER_MS = 5_000;
 
 /**
  * Where the helper is: a packaged bundle that GOAT_COMPUTER_USE_HELPER names, or its source
@@ -410,7 +414,11 @@ const spawnHelper =
       onLine: (listener) => void lines.push(listener),
       // close follows exit and a failed spawn alike.
       onExit: (listener) => void child.once("close", listener),
-      stop: () => killDriverGroup(platform, child, "SIGTERM"),
+      // Its targets stay private until it has exited, so a helper that ignores SIGTERM is killed.
+      stop: () => {
+        killDriverGroup(platform, child, "SIGTERM");
+        setTimeout(() => killDriverGroup(platform, child, "SIGKILL"), KILL_AFTER_MS).unref();
+      },
     };
   };
 

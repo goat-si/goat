@@ -35,13 +35,15 @@ const hostWith = (
       readonly helper: ReturnType<typeof fakeHelper>;
     }> = [];
     let next = 0;
+    /** Request deadlines; a test fires them to stand for a helper that did not answer in time. */
+    const deadlines: Array<() => void> = [];
     const host = yield* makeLinuxHelperHost({
       session: Ref.get(session),
       spawn: (env) => {
         const helper = fakeHelper({
           ...options,
           generation: "gen-" + (spawned.length + 1),
-          windows: () => windows,
+          windows: options.windows ?? (() => windows),
           onRequest: (request) => {
             options.onRequest?.(request);
             Queue.offerUnsafe(requests, request);
@@ -58,7 +60,10 @@ const hostWith = (
       },
       report,
       newId: () => "id-" + ++next,
-      after: () => () => undefined,
+      after: (_ms, task) => {
+        deadlines.push(task);
+        return () => undefined;
+      },
     });
     const safety = yield* Queue.unbounded<DesktopCuaSafetyReport>();
     yield* host.safety.pipe(
@@ -73,7 +78,10 @@ const hostWith = (
           request.method === method ? Effect.succeed(request) : nextRequest(method),
         ),
       );
-    return { host, session, report, spawned, safety, nextRequest };
+    const expire = () => {
+      for (const task of deadlines.splice(0)) task();
+    };
+    return { host, session, report, spawned, safety, nextRequest, expire };
   });
 
 describe("LinuxHelperHost (#1223)", () => {
@@ -277,6 +285,35 @@ describe("LinuxHelperHost (#1223)", () => {
         yield* TestClock.adjust(TICK_MS);
         assert.isTrue(t.spawned[0]?.helper.stopped());
         assert.deepEqual(yield* t.host.readiness, Option.none());
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a watch not answered in time is asked again, even for the same windows (#1494 r3)",
+    () =>
+      Effect.gen(function* () {
+        let windows = [{ pid: 7, windowId: 70 }];
+        let watches = 0;
+        const t = yield* hostWith([], {
+          windows: () => windows,
+          // The second watch goes unanswered.
+          answers: (request) => request.method !== "watch" || ++watches !== 2,
+        });
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        yield* t.host.setWatch(true);
+        yield* t.nextRequest("watch");
+        windows = [
+          { pid: 7, windowId: 70 },
+          { pid: 8, windowId: 80 },
+        ];
+        yield* TestClock.adjust(TICK_MS);
+        yield* t.nextRequest("watch");
+        t.expire();
+        windows = [{ pid: 7, windowId: 70 }];
+        yield* TestClock.adjust(TICK_MS);
+        // The windows match the first watch, but whether the helper took the second is unknown.
+        yield* t.nextRequest("watch");
       }).pipe(Effect.scoped),
   );
 });
