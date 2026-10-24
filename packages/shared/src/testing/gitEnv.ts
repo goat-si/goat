@@ -18,7 +18,10 @@ export const removeInheritedGitEnv = (env: NodeJS.ProcessEnv): void => {
 };
 
 /** The environment for a git child that must act only on the repository at its cwd. */
-export const isolatedGitEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv =>
-  Object.fromEntries(
-    Object.entries(env).filter(([name]) => !isGitEnvName(name) || TEST_GIT_CONFIG_NAME.test(name)),
-  );
+export const isolatedGitEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {
+  const isolated = { ...env };
+  for (const name of Object.keys(isolated)) {
+    if (isGitEnvName(name) && !TEST_GIT_CONFIG_NAME.test(name)) delete isolated[name];
+  }
+  return isolated;
+};

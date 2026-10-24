@@ -109,6 +109,8 @@ const GOAT_MEMORY_TOOLS = [
 ];
 const encodeReplayTranscriptJson = Schema.encodeEffect(replayTranscriptJson);
 const decodeReplayTranscriptJson = Schema.decodeUnknownEffect(replayTranscriptJson);
+const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
+  ChildProcess.make("git", args, { cwd, env: isolatedGitEnv() });
 const decodeThreadConfig = Schema.decodeUnknownEffect(
   Schema.Struct({ config: Schema.Record(Schema.String, Schema.Unknown) }),
 );
@@ -4231,32 +4233,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
         const replayDriver = yield* CodexReplay.makeReplayDriver(localTranscript);
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        assert.equal(Number(yield* spawner.exitCode(gitCommand(cwd, ["init", "--quiet"]))), 0);
         assert.equal(
           Number(
             yield* spawner.exitCode(
-              ChildProcess.make("git", ["init", "--quiet"], { cwd, env: isolatedGitEnv() }),
-            ),
-          ),
-          0,
-        );
-        assert.equal(
-          Number(
-            yield* spawner.exitCode(
-              ChildProcess.make(
-                "git",
-                [
-                  "-c",
-                  "user.name=Test",
-                  "-c",
-                  "user.email=test@example.com",
-                  "commit",
-                  "--allow-empty",
-                  "--quiet",
-                  "-m",
-                  "Initial commit",
-                ],
-                { cwd, env: isolatedGitEnv() },
-              ),
+              gitCommand(cwd, [
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "Initial commit",
+              ]),
             ),
           ),
           0,
@@ -4382,14 +4373,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "Initial commit",
           ],
         ]) {
-          assert.equal(
-            Number(
-              yield* spawner.exitCode(
-                ChildProcess.make("git", args, { cwd, env: isolatedGitEnv() }),
-              ),
-            ),
-            0,
-          );
+          assert.equal(Number(yield* spawner.exitCode(gitCommand(cwd, args))), 0);
         }
         yield* Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
