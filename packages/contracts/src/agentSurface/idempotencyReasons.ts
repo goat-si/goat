@@ -10,3 +10,7 @@ export const ORCHESTRATION_RECEIPT =
 
 /** Host-routable orchestration writes forward the key, so the machine that runs them dedupes. */
 export const ROUTED_ORCHESTRATION_RECEIPT = `${ORCHESTRATION_RECEIPT} A call with host forwards the key, so that machine's receipts deduplicate it where it runs.`;
+
+/** goat_ssh_host_add and goat_connection_add_ssh run one handler that is meant to be called again. */
+export const SSH_HOST_ADD_CONVERGES =
+  "Converges on one saved host: a repeat preflights again and continues from where the last call stopped, which is how a caller finishes after a person pins the host key or preparation outlives the call.";

@@ -48,7 +48,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 import { McpAttachmentInput } from "../attachment/input.ts";
 import { NotifyTargetInput } from "../../completionWebhook.ts";
-import { KeyedClientRequestId } from "../keyedParameters.ts";
+import { KeyedClientRequestId, withClientRequestId } from "../keyedParameters.ts";
 
 const shared = {
   failure: OrchestratorMcpFailure,
@@ -368,7 +368,7 @@ const CloudMachineListTool = Tool.make(agentSurfaceRegistry["cloud_machine.list"
 const CloudMachineCreateTool = Tool.make(agentSurfaceRegistry["cloud_machine.create"].name, {
   ...cloudShared,
   description: agentSurfaceRegistry["cloud_machine.create"].description,
-  parameters: CloudMachinesCreateInput,
+  parameters: withClientRequestId(CloudMachinesCreateInput),
   success: CloudMachine,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["cloud_machine.create"]));
 

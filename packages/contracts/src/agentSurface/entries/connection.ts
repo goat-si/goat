@@ -1,4 +1,5 @@
 import { entry } from "../entry.ts";
+import { SSH_HOST_ADD_CONVERGES } from "../idempotencyReasons.ts";
 
 export const connectionEntries = {
   "connection.list": entry({
@@ -38,6 +39,7 @@ export const connectionEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["host_trust", "approval", "sign_in"],
+    idempotencyReason: SSH_HOST_ADD_CONVERGES,
     annotations: {
       title: "Add an SSH device",
       idempotentHint: true,
