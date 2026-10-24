@@ -10,8 +10,8 @@ import {
 } from "./build-computer-use-helper.ts";
 
 const FIND_IDENTITY = [
-  '  1) D92256BF "Apple Development: Someone (QQ4ZRC9P5J)"',
-  '  2) 94E152BF "Developer ID Application: Someone (U9ATA49N28)"',
+  '  1) D92256BFF6CC21ABD4275A89CA418AAF8B484B00 "Apple Development: Someone (QQ4ZRC9P5J)"',
+  '  2) 94E152BFF6CC21ABD4275A89CA418AAF8B484B99 "Developer ID Application: Someone (U9ATA49N28)"',
   "     2 valid identities found",
 ].join("\n");
 
@@ -44,6 +44,23 @@ describe("build-computer-use-helper", () => {
         chooseSigningIdentity({ channel, explicit: undefined, findIdentityOutput: none }),
         "error",
       );
+    // An explicit certificate must still be a Developer ID from this keychain.
+    assert.property(
+      chooseSigningIdentity({
+        channel: "stable",
+        explicit: "Apple Development: Someone (QQ4ZRC9P5J)",
+        findIdentityOutput: FIND_IDENTITY,
+      }),
+      "error",
+    );
+    assert.deepEqual(
+      chooseSigningIdentity({
+        channel: "nightly",
+        explicit: "94e152bff6cc21abd4275a89ca418aaf8b484b99",
+        findIdentityOutput: FIND_IDENTITY,
+      }),
+      { identity: "94e152bff6cc21abd4275a89ca418aaf8b484b99" },
+    );
   });
 
   it("lets only a dev helper serve any parent, under its own per-channel bundle id", () => {

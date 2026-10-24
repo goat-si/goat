@@ -73,14 +73,27 @@ export interface HelperProcess {
 }
 
 export const spawnHelperProcess = (executable: string): HelperProcess => {
-  const child = NodeChildProcess.spawn(executable, [], { stdio: ["pipe", "pipe", "inherit"] });
+  // Its own process group: the launcher, the service it re-execs and the driver all join it, so
+  // a forced stop reaches the whole tree even when the service is stuck.
+  const child = NodeChildProcess.spawn(executable, [], {
+    stdio: ["pipe", "pipe", "inherit"],
+    detached: true,
+  });
   const exited = new Promise<void>((resolve) => {
     child.once("exit", () => resolve());
     child.once("error", () => resolve());
   });
   // A helper that died leaves a closed pipe; the exit promise reports it instead.
   child.stdin.on("error", () => undefined);
-  return { stdin: child.stdin, stdout: child.stdout, kill: (signal) => child.kill(signal), exited };
+  const kill = (signal: NodeJS.Signals) => {
+    if (child.pid === undefined) return;
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      // The group is already gone.
+    }
+  };
+  return { stdin: child.stdin, stdout: child.stdout, kill, exited };
 };
 
 export interface HelperSession {

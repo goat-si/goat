@@ -83,7 +83,7 @@ const fixture = Effect.fn(function* (
     blankCapture?: boolean;
     refuseStart?: boolean;
     /** Ship the GOAT Computer Use helper; its grants are separate from Electron's. */
-    helper?: { readonly granted: boolean };
+    helper?: { readonly granted: boolean } | "unusable";
   } = {},
 ) {
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
@@ -138,10 +138,15 @@ const fixture = Effect.fn(function* (
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
     helperGrants: async (bundle, prompt) => {
       helperProbes.push({ bundleId: bundle.bundleId, prompt });
-      const granted = options.helper?.granted ?? false;
+      const granted = typeof options.helper === "object" && options.helper.granted;
       return { accessibility: granted, screenRecording: granted };
     },
-    helperBundlePath: async () => (options.helper ? HELPER_BUNDLE : undefined),
+    helperBundlePath: async () =>
+      options.helper === "unusable"
+        ? { kind: "unusable", message: "GOAT Computer Use at /Helpers cannot be used (EACCES)." }
+        : options.helper
+          ? { kind: "found", path: HELPER_BUNDLE }
+          : { kind: "absent" },
     helperHost: (helper) => {
       helperLaunches.push({
         bundleId: helper.bundle.bundleId,
@@ -901,6 +906,31 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
             id: "grants",
             ok: false,
             detail: "Accessibility and Screen Recording are off for GOAT Computer Use.",
+          },
+        ]);
+      }),
+    ),
+  );
+});
+
+describe("DesktopCuaDriver when the helper cannot be used", () => {
+  it.effect("keeps computer use off instead of running it under GOAT's own grants", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // GOAT itself holds the grants here; falling back would silently use them.
+        const test = yield* fixture({ platform: "darwin", helper: "unusable" });
+        yield* test.request("agent");
+        const report = yield* test.next;
+        assert.equal(report.status, "unavailable");
+        assert.match(report.status === "unavailable" ? (report.message ?? "") : "", /EACCES/);
+        assert.isEmpty(test.constructors);
+        assert.isEmpty(test.helperLaunches);
+        const result = yield* test.verify;
+        assert.deepEqual(result.steps, [
+          {
+            id: "grants",
+            ok: false,
+            detail: "GOAT Computer Use at /Helpers cannot be used (EACCES).",
           },
         ]);
       }),

@@ -55,14 +55,23 @@ export function chooseSigningIdentity(input: {
   readonly explicit: string | undefined;
   readonly findIdentityOutput: string;
 }): { readonly identity: string } | { readonly error: string } {
-  const found = /"(Developer ID Application: [^"]+)"/u.exec(input.findIdentityOutput)?.[1];
-  const identity = input.explicit?.trim() || found || "-";
-  if (identity === "-" && input.channel !== "dev")
-    return {
-      error:
-        "A " + input.channel + " helper needs a Developer ID Application identity; none was found.",
-    };
-  return { identity };
+  // Each valid identity line: index, SHA-1, quoted name.
+  const developerIds = [
+    ...input.findIdentityOutput.matchAll(
+      /^\s*\d+\)\s+([0-9A-F]{40})\s+"(Developer ID Application: [^"]+)"/gmu,
+    ),
+  ].map(([, hash, name]) => ({ hash: hash ?? "", name: name ?? "" }));
+  const identity = input.explicit?.trim() || developerIds[0]?.name || "-";
+  if (input.channel === "dev") return { identity };
+  // A release helper checks its parent's Developer ID team, so it must carry one itself.
+  return developerIds.some(({ hash, name }) => identity === name || identity.toUpperCase() === hash)
+    ? { identity }
+    : {
+        error:
+          "A " +
+          input.channel +
+          " helper must be signed with a Developer ID Application identity from this keychain.",
+      };
 }
 
 export function renderHelperInfoPlist(

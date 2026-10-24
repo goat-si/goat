@@ -91,11 +91,19 @@ export interface DesktopCuaDriverDependencies {
   readonly checkGrants: () => Promise<Grants>;
   /** The helper's own grants, from a fresh helper process; prompts as the helper when asked. */
   readonly helperGrants: (bundle: HelperBundle, prompt: boolean) => Promise<Grants>;
-  /** The helper bundle this build ships, or undefined when it has none. */
+  /**
+   * The helper bundle this build ships. absent: the build has none, and GOAT itself runs the
+   * driver as releases did before the helper. unusable: it should be there and cannot be used,
+   * so computer use stays off rather than run under another principal.
+   */
   readonly helperBundlePath: (input: {
     readonly isPackaged: boolean;
     readonly resourcesPath: string;
-  }) => Promise<string | undefined>;
+  }) => Promise<
+    | { readonly kind: "found"; readonly path: string }
+    | { readonly kind: "absent" }
+    | { readonly kind: "unusable"; readonly message: string }
+  >;
   readonly helperHost: (options: Omit<HelperHostOptions, "spawn" | "readMetadata">) => NativeHost;
   readonly imageHasContent: (image: DriverImage) => Promise<boolean>;
   /** Writes the capability manifest for one daemon start and returns its path. */
@@ -149,13 +157,20 @@ const dependencies: DesktopCuaDriverDependencies = {
   helperBundlePath: async ({ isPackaged, resourcesPath }) => {
     const { access } = await import("node:fs/promises");
     const { join } = await import("node:path");
-    const candidate = isPackaged
-      ? join(resourcesPath, "..", "Helpers", `${COMPUTER_USE_HELPER_NAME}.app`)
-      : process.env.GOAT_CUA_HELPER_PATH?.trim();
-    if (!candidate) return undefined;
+    const configured = isPackaged ? undefined : process.env.GOAT_CUA_HELPER_PATH?.trim();
+    if (!isPackaged && !configured) return { kind: "absent" };
+    const candidate =
+      configured || join(resourcesPath, "..", "Helpers", `${COMPUTER_USE_HELPER_NAME}.app`);
     return access(candidate).then(
-      () => candidate,
-      () => undefined,
+      () => ({ kind: "found", path: candidate }) as const,
+      (error: NodeJS.ErrnoException) =>
+        // Only a packaged build without the helper falls back; a set dev path must exist.
+        error.code === "ENOENT" && !configured
+          ? ({ kind: "absent" } as const)
+          : ({
+              kind: "unusable",
+              message: `${COMPUTER_USE_HELPER_NAME} at ${candidate} cannot be used (${error.code ?? "unknown error"}).`,
+            } as const),
     );
   },
   helperHost: (options) =>
@@ -366,19 +381,32 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           )
       : process.env.GOAT_CUA_DRIVER_PATH?.trim();
 
-  /** A Mac build that ships the helper always uses it; the in-process host is the fallback. */
+  /**
+   * A Mac build that ships the helper always uses it. Only a build without one runs the driver
+   * in-process under GOAT's own grants; a helper that is there and unusable is a reason string,
+   * and computer use stays off.
+   */
   const engine = Effect.fn("desktop.cua.engine")(function* () {
     if (environment.platform === "darwin") {
-      const bundlePath = yield* Effect.tryPromise(() =>
+      const found = yield* Effect.tryPromise(() =>
         native.helperBundlePath({
           isPackaged: environment.isPackaged,
           resourcesPath: environment.resourcesPath,
         }),
-      ).pipe(Effect.orElseSucceed(() => undefined));
-      if (bundlePath)
+      ).pipe(
+        Effect.orElseSucceed(
+          () =>
+            ({
+              kind: "unusable",
+              message: `${COMPUTER_USE_HELPER_NAME} could not be found.`,
+            }) as const,
+        ),
+      );
+      if (found.kind === "unusable") return found.message;
+      if (found.kind === "found")
         return {
           kind: "helper",
-          bundle: helperBundle(bundlePath, computerUseHelperBundleId(environment.appUserModelId)),
+          bundle: helperBundle(found.path, computerUseHelperBundleId(environment.appUserModelId)),
         } satisfies Engine;
     }
     const path = driverPath();
@@ -410,6 +438,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   ];
 
   const spawn = Effect.fn("desktop.cua.spawn")(function* (engine: Engine, scope: CuaManifestScope) {
+    // Which app macOS charges the grants to, so a log shows who held them.
+    yield* Effect.logInfo("Starting Cua Driver", {
+      scope,
+      principal: engine.kind === "helper" ? engine.bundle.bundleId : environment.appUserModelId,
+    });
     const manifestPath = yield* Effect.tryPromise(() =>
       native.prepareManifest({
         binaryPath: enginePath(engine),
@@ -485,7 +518,12 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       record("grants", "Permission checks run on macOS only.");
       return done();
     }
-    const selected = yield* engine();
+    const chosen = yield* engine();
+    if (typeof chosen === "string") {
+      record("grants", chosen);
+      return done();
+    }
+    const selected = chosen;
     const principal = selected?.kind === "helper" ? COMPUTER_USE_HELPER_NAME : "GOAT";
     const grants = yield* Effect.tryPromise(() =>
       selected ? engineGrants(selected, false) : native.checkGrants(),
@@ -636,6 +674,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return;
     }
     const selected = yield* engine();
+    if (typeof selected === "string") {
+      yield* report(request.requestId, "unavailable", selected);
+      return;
+    }
     if (!selected) {
       yield* report(
         request.requestId,

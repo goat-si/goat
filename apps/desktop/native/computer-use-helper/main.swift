@@ -73,8 +73,13 @@ func satisfies(_ code: SecCode, _ requirementText: String) -> Bool {
   return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
 }
 
-/// Release builds only serve a parent signed by the same Developer ID team. A dev helper
-/// (built with GOATComputerUseAllowAnyParent) serves an unpackaged Electron or a terminal.
+/// Release builds only serve the GOAT app of their own channel: the same Developer ID team and
+/// the bundle identifier this helper's id extends (si.goat.desktop for
+/// si.goat.desktop.computer-use). A dev helper (built with GOATComputerUseAllowAnyParent)
+/// serves an unpackaged Electron or a terminal.
+///
+/// This is not enough on its own while GOAT's signed executable can run arbitrary JavaScript
+/// with ELECTRON_RUN_AS_NODE; release builds ship the helper only once that is closed (#1210).
 func parentRefusal() -> String? {
   if Bundle.main.object(forInfoDictionaryKey: "GOATComputerUseAllowAnyParent") as? Bool == true {
     return nil
@@ -82,10 +87,18 @@ func parentRefusal() -> String? {
   guard let own = selfStaticCode(), let team = signingTeam(own) else {
     return "This helper has no Developer ID team, so it cannot verify who launched it."
   }
+  let suffix = ".computer-use"
+  guard let ownId = Bundle.main.bundleIdentifier, ownId.hasSuffix(suffix) else {
+    return "This helper's bundle identifier does not name its GOAT app."
+  }
+  let appId = String(ownId.dropLast(suffix.count))
   guard let parent = guestCode(pid: getppid()),
-    satisfies(parent, "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\"")
+    satisfies(
+      parent,
+      "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and identifier \"\(appId)\""
+    )
   else {
-    return "The process that launched the helper is not signed by team \(team)."
+    return "The process that launched the helper is not \(appId) signed by team \(team)."
   }
   return nil
 }
@@ -195,6 +208,32 @@ final class DriverService {
     Bundle.main.resourceURL?.appendingPathComponent("cua-driver/cua-driver").path
   }
 
+  /// Checks the helper's sealed bundle, which covers the driver's bytes, right before running
+  /// it, and refuses a driver path that is a link or resolves outside the bundle. A same-user
+  /// writer could still swap the file between this check and exec; the bundle's location
+  /// (inside GOAT.app) is what keeps that writer out.
+  func driverRefusal(_ path: String) -> String? {
+    var info = stat()
+    guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+      return "The bundled Cua Driver is missing or is not a regular file."
+    }
+    // realpath on both sides: Foundation's symlink resolution drops /private from /private/tmp.
+    guard let resolved = realpath(path, nil), let bundleRoot = realpath(Bundle.main.bundlePath, nil)
+    else { return "The bundled Cua Driver cannot be resolved." }
+    let inside = String(cString: resolved).hasPrefix(String(cString: bundleRoot) + "/")
+    free(resolved)
+    free(bundleRoot)
+    guard inside else {
+      return "The bundled Cua Driver resolves outside the helper bundle."
+    }
+    guard let own = selfStaticCode() else { return "The helper cannot read its own signature." }
+    let flags = SecCSFlags(rawValue: kSecCSCheckNestedCode | kSecCSStrictValidate | kSecCSCheckAllArchitectures)
+    guard SecStaticCodeCheckValidity(own, flags, nil) == errSecSuccess else {
+      return "The helper bundle's signature no longer matches its contents."
+    }
+    return nil
+  }
+
   func handle(line: Data) {
     guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
       let id = object["id"] as? String, let method = object["method"] as? String
@@ -236,6 +275,9 @@ final class DriverService {
     }
     guard let driverPath, FileManager.default.isExecutableFile(atPath: driverPath) else {
       throw HelperError(code: "driver_missing", message: "The helper bundle has no Cua Driver.")
+    }
+    if let refusal = driverRefusal(driverPath) {
+      throw HelperError(code: "driver_untrusted", message: refusal)
     }
     guard let socketPath = params["socketPath"] as? String, socketPath.hasPrefix("/"),
       socketPath.utf8.count < 104
