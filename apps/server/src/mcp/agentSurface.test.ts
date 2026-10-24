@@ -390,6 +390,9 @@ const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
 // Inputs the schema sampler cannot satisfy, and reads that reach other machines with this
 // machine's SSH keys unless asked for the local answer.
 const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
+  "decision.list": {},
+  "decision.read": { id: "decision:fixture" },
+  "decision.answer": { id: "decision:fixture", optionId: "wait", reason: "Wait for capacity" },
   "note.read": { path: "inbox/note.md" },
   "note.write": { path: "inbox/note.md", body: "- [ ] item", status: null, baseRevision: null },
   "note.update": { path: "inbox/note.md", pinned: true },

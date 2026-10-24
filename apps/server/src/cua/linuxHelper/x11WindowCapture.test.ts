@@ -138,6 +138,11 @@ async function scriptedServer(
     readonly compositorToggles?: boolean;
     /** Structure events the server sends right after the redraw: [code, watched, window]. */
     readonly afterRedraw?: ReadonlyArray<readonly [number, number, number]>;
+    /**
+     * A child the app creates in this window just as its children are first listed: too late
+     * for the listing, so only a client already watching the window hears of it.
+     */
+    readonly createdWhileListed?: { readonly parent: number; readonly child: number };
   },
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
@@ -162,6 +167,9 @@ async function scriptedServer(
     let damage: { readonly id: number; readonly drawable: number } | undefined;
     let pinned = false;
     let replaced = false;
+    /** Windows this client asked for SubstructureNotify on. */
+    const watching = new Set<number>();
+    let listedOnce = false;
     const reply = (extra: Buffer, data = 0) => {
       const head = Buffer.alloc(32);
       head[0] = 1;
@@ -281,6 +289,24 @@ async function scriptedServer(
         } else if (op === 15) {
           const found = window(4);
           if (!found) return error();
+          const created = options.createdWhileListed;
+          // The first listing of it once the client has started watching windows, as it walks the tree.
+          if (
+            created &&
+            !listedOnce &&
+            watching.size > 0 &&
+            body.readUInt32LE(4) === created.parent
+          ) {
+            listedOnce = true;
+            if (watching.has(created.parent)) {
+              const event = Buffer.alloc(32);
+              event[0] = 16;
+              event.writeUInt16LE(requests.length & 0xffff, 2);
+              event.writeUInt32LE(created.parent, 4);
+              event.writeUInt32LE(created.child, 8);
+              socket.write(event);
+            }
+          }
           const extra = payload(24 + found.children.length * 4);
           extra.writeUInt32LE(ROOT, 0);
           extra.writeUInt32LE(found.parent, 4);
@@ -306,6 +332,9 @@ async function scriptedServer(
           extra.writeUInt32LE(list.length, 8);
           list.forEach((window, index) => extra.writeUInt32LE(window, 24 + index * 4));
           reply(extra, 32);
+        } else if (op === 2) {
+          if ((body.readUInt32LE(8) & (1 << 11)) !== 0 && (body.readUInt32LE(12) & (1 << 19)) !== 0)
+            watching.add(body.readUInt32LE(4));
         } else if (op === 3) {
           const found = window(4);
           if (!found) return error();
@@ -538,6 +567,18 @@ describe("X11 window capture against a scripted server", () => {
     expect(
       await captureX11Window(environment, 0x200001, shot, { socketPath: moved.path }),
     ).toMatchObject({ width: 100 });
+  });
+
+  it("hears of a child added while the tree is first listed, because each window is watched before it is listed (#1400 review r7)", async () => {
+    // Listing first and watching after would miss a child created in between, and anything
+    // later mapped inside it would go unseen.
+    await using server = await scriptedServer(FRAMED, {
+      redirected: [0x400001],
+      createdWhileListed: { parent: 0x200001, child: 0x200009 },
+    });
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toEqual({ refused: STILL_DRAWING, transient: true });
   });
 
   it("a compositor toggling redirection cannot swap the pixmap read: the frame stays redirected while it is read", async () => {
