@@ -58,6 +58,20 @@ settings, restart its OpenCodex once nothing runs there, and reconnect the link.
 **Leave** disconnects the device and returns it to its own sign-ins, then revokes
 its link or Hub key on the hub; GOAT asks before it does that.
 
+## Sync OpenCodex models
+
+**Sync OpenCodex** loads OpenCodex's current models into Codex, on the hub first
+and then on each linked Child. Find it in **Settings → Hub → OpenCodex models**,
+next to **Hub** on the Fleet page, and under **Update → Runtimes**. The dialog
+shows what each machine will do, then its progress and result.
+
+A Child always takes the hub's models and settings, never its own providers, so
+GOAT syncs it only while it is linked to this hub; a Child that is not linked is
+skipped with a pointer to **Repair**. Codex restarts to pick up the models only
+on a machine with nothing running. On a busy hub the models are written now and
+Codex restarts later; a busy Child is skipped until you sync again. GOAT also
+syncs each machine right after a managed OpenCodex update moves it.
+
 Each action lists its steps and their results. Some changes wait for a person: a
 host key GOAT has not pinned or that changed, re-linking a device, or removing
 one that could not be cleaned up. They appear in **Settings → Decision Inbox**;

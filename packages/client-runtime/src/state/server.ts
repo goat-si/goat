@@ -50,6 +50,7 @@ import {
 } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
+import { createOpenCodexSyncAtoms } from "./opencodexSync.ts";
 import {
   applyServerConfigProjection,
   type ServerConfigProjection,
@@ -1081,6 +1082,7 @@ export function createServerEnvironmentAtoms<R, E>(
 
   return {
     cloudMachines,
+    ...createOpenCodexSyncAtoms(runtime),
     cloudAgentRuns,
     configureCloudMachines: cloudMachineCommand(WS_METHODS.cloudMachinesConfigure),
     disconnectCloudMachines: cloudMachineCommand(WS_METHODS.cloudMachinesDisconnect),

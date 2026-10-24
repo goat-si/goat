@@ -68,7 +68,7 @@ const membershipTool = <
 
 const OpenCodexSyncTool = Tool.make(agentSurfaceRegistry["hub.opencodex_sync"].name, {
   description: agentSurfaceRegistry["hub.opencodex_sync"].description,
-  parameters: withClientRequestId(GoatHubOpenCodexSyncInput),
+  parameters: GoatHubOpenCodexSyncInput,
   success: OpenCodexSyncReport,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,

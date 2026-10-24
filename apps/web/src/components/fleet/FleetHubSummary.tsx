@@ -5,10 +5,12 @@ import {
   type HubDevice,
   type HubSnapshot,
 } from "@goat/client-runtime/state/hub-fleet";
+import type { EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 
 import { cn } from "~/lib/utils";
 
+import { OpenCodexSyncButton } from "../opencodex/OpenCodexSyncDialog";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
@@ -39,9 +41,16 @@ function deviceDot(device: HubDevice) {
 
 /**
  * One entry for the goatclaw hub: the Home and how its devices verify. Each device's transport,
- * parity, tunnel, version, fallback and pressure sit behind +N.
+ * parity, tunnel, version, fallback and pressure sit behind +N. Sync OpenCodex targets the Home's
+ * own environment, so it shows only when this client reads the Home directly.
  */
-export function FleetHubSummary({ hub }: { readonly hub: HubSnapshot }) {
+export function FleetHubSummary({
+  hub,
+  homeEnvironmentId,
+}: {
+  readonly hub: HubSnapshot;
+  readonly homeEnvironmentId: EnvironmentId | null;
+}) {
   const counts = new Map<string, number>();
   for (const device of hub.devices) {
     const verdict = verdictOf(device);
@@ -56,60 +65,70 @@ export function FleetHubSummary({ hub }: { readonly hub: HubSnapshot }) {
         <span className="font-mono text-3xs uppercase tracking-widest text-muted-foreground">
           Hub
         </span>
-        {hub.devices.length === 0 ? null : (
-          <Popover>
-            <PopoverTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label={`Show ${hub.devices.length} hub ${hub.devices.length === 1 ? "device" : "devices"}`}
-                  className="rounded-sm font-mono text-2xs text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                />
-              }
-            >
-              +{hub.devices.length}
-            </PopoverTrigger>
-            <PopoverPopup side="top" align="end" width="md">
-              <p className="mb-2 text-xs text-muted-foreground">
-                {[
-                  hub.homeVersion === null ? "OpenCodex Home" : `OpenCodex ${hub.homeVersion} Home`,
-                  hub.homeName,
-                ]
-                  .filter((part) => part !== null)
-                  .join(" · ")}
-              </p>
-              <ul aria-label="Hub devices" className="flex flex-col gap-1.5">
-                {hub.devices.map((device) => (
-                  <li key={device.alias} className="flex items-start gap-1.5 text-xs leading-4">
-                    <span
-                      aria-hidden
-                      className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", deviceDot(device))}
-                    />
-                    <span className="flex min-w-0 flex-col">
-                      <span className="font-medium">
-                        {device.alias}{" "}
-                        <span className="font-normal text-muted-foreground">
-                          {HUB_TRANSPORT_LABEL[device.transport]}
+        <span className="flex items-baseline gap-2">
+          {homeEnvironmentId === null ? null : (
+            <OpenCodexSyncButton
+              environmentId={homeEnvironmentId}
+              homeLabel={hub.homeName ?? "OpenCodex Home"}
+            />
+          )}
+          {hub.devices.length === 0 ? null : (
+            <Popover>
+              <PopoverTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={`Show ${hub.devices.length} hub ${hub.devices.length === 1 ? "device" : "devices"}`}
+                    className="rounded-sm font-mono text-2xs text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                  />
+                }
+              >
+                +{hub.devices.length}
+              </PopoverTrigger>
+              <PopoverPopup side="top" align="end" width="md">
+                <p className="mb-2 text-xs text-muted-foreground">
+                  {[
+                    hub.homeVersion === null
+                      ? "OpenCodex Home"
+                      : `OpenCodex ${hub.homeVersion} Home`,
+                    hub.homeName,
+                  ]
+                    .filter((part) => part !== null)
+                    .join(" · ")}
+                </p>
+                <ul aria-label="Hub devices" className="flex flex-col gap-1.5">
+                  {hub.devices.map((device) => (
+                    <li key={device.alias} className="flex items-start gap-1.5 text-xs leading-4">
+                      <span
+                        aria-hidden
+                        className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", deviceDot(device))}
+                      />
+                      <span className="flex min-w-0 flex-col">
+                        <span className="font-medium">
+                          {device.alias}{" "}
+                          <span className="font-normal text-muted-foreground">
+                            {HUB_TRANSPORT_LABEL[device.transport]}
+                          </span>
+                        </span>
+                        <span className="font-mono text-2xs text-muted-foreground wrap-anywhere">
+                          {hubDeviceFacts(device).join(" · ")}
                         </span>
                       </span>
-                      <span className="font-mono text-2xs text-muted-foreground wrap-anywhere">
-                        {hubDeviceFacts(device).join(" · ")}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <Button
-                size="xs"
-                variant="ghost"
-                className="mt-2"
-                render={<Link to="/settings/hub" />}
-              >
-                Hub settings
-              </Button>
-            </PopoverPopup>
-          </Popover>
-        )}
+                    </li>
+                  ))}
+                </ul>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  className="mt-2"
+                  render={<Link to="/settings/hub" />}
+                >
+                  Hub settings
+                </Button>
+              </PopoverPopup>
+            </Popover>
+          )}
+        </span>
       </span>
       <span className="flex items-baseline gap-2 text-xs">
         <span className="min-w-0 truncate">
