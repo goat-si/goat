@@ -6,6 +6,7 @@ import {
   ComputerUseCallAdmission,
   ComputerUseLeaseUpdate,
   CuaHostStatus,
+  DesktopCuaWatch,
 } from "./cua.ts";
 import { HostStatusEntry } from "./hostStatus.ts";
 import { ProviderHostRow } from "./providerHostSync.ts";
@@ -61,6 +62,15 @@ describe("computer use on the wire", () => {
       Schema.decodeUnknownSync(ComputerUseLeaseUpdate)({ state: "idle", controlId: "control:one" }),
     ).toEqual({ state: "idle", controlId: "control:one" });
   });
+  it("accepts watch messages from older servers and preserves optional approved app ids", () => {
+    const decode = Schema.decodeUnknownSync(DesktopCuaWatch);
+    const watch = { version: 1, type: "cuaWatch", seq: 1, active: true };
+    expect(decode(watch)).toEqual(watch);
+    const apps = ["com.example.notes", "C:\\work\\fixture.exe"];
+    expect(decode({ ...watch, apps })).toEqual({ ...watch, apps });
+    expect(() => decode({ ...watch, apps: [7] })).toThrow();
+  });
+
   it("preserves reported readiness and signals, and drops future optional shapes independently", () => {
     const decode = Schema.decodeUnknownSync(CuaHostStatus);
     const readiness = {

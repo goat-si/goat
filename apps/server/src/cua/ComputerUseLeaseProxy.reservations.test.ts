@@ -44,6 +44,7 @@ describe("proxy execution ownership", () => {
           Effect.andThen(Deferred.await(gate)),
         );
         const h = yield* harness({
+          manifestStamp: () => "v1",
           kill: wait === "kill" ? held : Effect.void,
           reservation: (request) =>
             request.action === "reserve"

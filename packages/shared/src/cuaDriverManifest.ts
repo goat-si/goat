@@ -118,8 +118,8 @@ export interface CuaDriverListedApp {
  * list_apps result is what it attests a window's app identity against), minus the host GOAT runs
  * in and the exclusions above. On Windows a running program with no Start menu entry has no
  * bundle id; its executable path stands in, which the driver matches against the executable it
- * attests for the window (#1368). Apps with neither stay out, so an app installed or started
- * after the driver started needs a restart of computer use.
+ * attests for the window (#1368). Apps with neither stay out. Desktop hosts refresh this list
+ * when an approval names a missing app; standalone servers still list only at host start.
  */
 export function admittedCuaApplications(
   apps: ReadonlyArray<CuaDriverListedApp>,
@@ -157,6 +157,28 @@ function identityKey(id: string): string {
   const unc = path.startsWith("\\\\");
   const parts = path.split("\\").filter((part) => part.length > 0);
   return ((unc ? "\\\\" : "") + parts.join("\\")).toLowerCase();
+}
+
+/** Reads only the JSON-quoted app lines written by cuaDriverCapabilityManifest. */
+export function cuaDriverManifestApplications(text: string): ReadonlyArray<string> {
+  const prefix = "    - bundle_id: ";
+  return text
+    .split("\n")
+    .filter((line) => line.startsWith(prefix))
+    .map((line) => {
+      const id: unknown = JSON.parse(line.slice(prefix.length));
+      if (typeof id !== "string") throw new Error("Invalid capability manifest app id.");
+      return id;
+    });
+}
+
+/** Approved identities not yet admitted by the manifest, with driver path normalization. */
+export function missingCuaDriverApplications(
+  approved: ReadonlyArray<string>,
+  admitted: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const present = new Set(admitted.map(identityKey));
+  return approved.filter((id) => !present.has(identityKey(id)));
 }
 
 /** v3 manifest text. JSON strings are valid YAML scalars, so every value is JSON-quoted. */
@@ -271,15 +293,23 @@ function listCuaDriverApplications(input: {
   });
 }
 
-/** Writes the manifest owner-only and returns its path for the driver to load at startup. */
+/** Replaces the manifest owner-only; direct agent connections can read it during refresh. */
 export async function writeCuaDriverCapabilityManifest(
   path: string,
   text: string,
 ): Promise<string> {
-  const { mkdir, writeFile } = await import("node:fs/promises");
-  const { dirname } = await import("node:path");
+  const { mkdir, mkdtemp, rename, rm, writeFile } = await import("node:fs/promises");
+  const { dirname, join } = await import("node:path");
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, text, { mode: 0o600 });
+  const temporary = await mkdtemp(join(dirname(path), ".manifest-"));
+  try {
+    const contents = join(temporary, "contents.yaml");
+    await writeFile(contents, text, { mode: 0o600 });
+    // The desktop mutex cannot fence a direct helper connection in another process.
+    await rename(contents, path);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
   return path;
 }
 

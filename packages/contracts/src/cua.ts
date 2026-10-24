@@ -38,6 +38,12 @@ export const DesktopCuaWatch = Schema.Struct({
   type: Schema.Literal("cuaWatch"),
   seq: Schema.Int,
   active: Schema.Boolean,
+  /**
+   * Union of approved app ids across live controls that name apps (bundle ids or Windows
+   * executable paths). Whole-screen controls contribute none. Optional for older desktops;
+   * new desktops refresh their driver manifest when an approved app was started later.
+   */
+  apps: Schema.optional(Schema.Array(Schema.String)),
 });
 export type DesktopCuaWatch = typeof DesktopCuaWatch.Type;
 

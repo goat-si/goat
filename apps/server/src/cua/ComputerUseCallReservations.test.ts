@@ -58,6 +58,37 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
 
 describe("server computer-use call reservations", () => {
   it.effect(
+    "refuses competing window mutations and desktop mutations in both admission orders",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const window = { pid: 42, window_id: 7, text: "hello" };
+        const admitted = yield* f.reserve(f.a, window);
+        assert.equal(admitted.status, "admitted");
+        assert.deepEqual(yield* f.reserve(f.b, window), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        assert.deepEqual(yield* f.reserve(f.b, { text: "desktop" }), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        if (admitted.status !== "admitted" || admitted.reservationId === null)
+          return assert.fail("mutation needs an execution reservation");
+        yield* f.release(f.a, admitted.reservationId);
+        assert.equal((yield* f.reserve(f.b, { text: "desktop" })).status, "admitted");
+        assert.deepEqual(yield* f.reserve(f.a, window), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.b,
+        });
+        yield* f.close(f.b);
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
     "rejects old-turn input when admission arrives after idle and reuse before the stream update",
     () =>
       Effect.gen(function* () {

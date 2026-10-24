@@ -111,70 +111,6 @@ layer("ComputerUseLeases controls", (it) => {
   );
 
   it.effect(
-    "refuses competing window mutations and desktop mutations in both admission orders",
-    () =>
-      Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        const first = ThreadId.make("reservation-first");
-        const second = ThreadId.make("reservation-second");
-        yield* grant(first, "reservation-first-grant");
-        yield* grant(second, "reservation-second-grant");
-        const a = yield* leases.control(first, Option.none());
-        const b = yield* leases.control(second, Option.none());
-        yield* Effect.addFinalizer(() =>
-          leases.stop(first).pipe(Effect.andThen(leases.stop(second))),
-        );
-        const reserve = (owner: ThreadId, controlId: string, callId: string, args: object) =>
-          leases.callReservation(owner, {
-            action: "reserve",
-            controlId,
-            connectionId: "driver:1",
-            callId,
-            interruptions: 0,
-            idleEpoch: 0,
-            name: "type_text",
-            args,
-          });
-        const window = { pid: 42, window_id: 7, text: "hello" };
-        const admitted = yield* reserve(first, a.controlId, "a", window);
-        assert.equal(admitted.status, "admitted");
-        assert.deepEqual(yield* reserve(second, b.controlId, "b", window), {
-          status: "refused",
-          detail: "target_busy",
-          holderThreadId: first,
-        });
-        assert.deepEqual(yield* reserve(second, b.controlId, "c", { text: "desktop" }), {
-          status: "refused",
-          detail: "target_busy",
-          holderThreadId: first,
-        });
-        if (admitted.status !== "admitted" || admitted.reservationId === null)
-          return assert.fail("mutation needs an execution reservation");
-        yield* leases.callReservation(first, {
-          action: "release",
-          controlId: a.controlId,
-          connectionId: "driver:1",
-          reservationId: admitted.reservationId,
-        });
-        assert.equal(
-          (yield* reserve(second, b.controlId, "d", { text: "desktop" })).status,
-          "admitted",
-        );
-        assert.deepEqual(yield* reserve(first, a.controlId, "e", window), {
-          status: "refused",
-          detail: "target_busy",
-          holderThreadId: second,
-        });
-        yield* leases.callReservation(second, {
-          action: "close",
-          controlId: b.controlId,
-          connectionId: "driver:1",
-        });
-      }).pipe(Effect.scoped),
-  );
-
-  it.effect(
     "marks a thread's control idle when its last open run ends, and its next turn reuses it",
     () =>
       Effect.gen(function* () {
@@ -494,6 +430,94 @@ it.effect(
                 NodeServices.layer,
                 DesktopTelemetryReceiver.layerTest({
                   setCuaWatch: (active) => Queue.offer(sent, active).pipe(Effect.asVoid),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
+);
+
+it.effect("sends the union of named approvals, updating apps while controls stay active", () =>
+  Effect.gen(function* () {
+    const sent = yield* Queue.unbounded<{
+      active: boolean;
+      apps: ReadonlyArray<string> | undefined;
+    }>();
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      // A whole-screen approval contributes nothing to the named union.
+      yield* grant(other, "handoff:screen");
+      yield* leases.control(other, yield* leases.active(other));
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+      yield* leases.control(thread, Option.none());
+      yield* grant(thread, "handoff:first", ["com.example.notes"]);
+      yield* leases.changed;
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
+      yield* grant(thread, "handoff:second", ["com.example.new", "com.example.notes"]);
+      yield* leases.changed;
+      assert.deepEqual(yield* Queue.take(sent), {
+        active: true,
+        apps: ["com.example.new", "com.example.notes"],
+      });
+      yield* leases.stop(thread);
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+      yield* leases.stop(other);
+      assert.deepEqual(yield* Queue.take(sent), { active: false, apps: [] });
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                setCuaWatch: (active, apps) =>
+                  Queue.offer(sent, { active, apps }).pipe(Effect.asVoid),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect(
+  "removes expired approved apps while the interactive control keeps watching through a pause",
+  () =>
+    Effect.gen(function* () {
+      const sent = yield* Queue.unbounded<{
+        active: boolean;
+        apps: ReadonlyArray<string> | undefined;
+      }>();
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* grant(thread, "handoff:earlier", ["com.example.notes"]);
+        yield* TestClock.adjust("30 minutes");
+        const control = yield* leases.control(thread, Option.none());
+        assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
+        yield* leases.pause("human_input");
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "paused");
+        yield* TestClock.adjust("31 minutes");
+        assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+        yield* leases.resume;
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+        yield* leases.stop(thread);
+        assert.deepEqual(yield* Queue.take(sent), { active: false, apps: [] });
+      }).pipe(
+        Effect.provide(
+          ComputerUseLeases.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                database,
+                NodeServices.layer,
+                DesktopTelemetryReceiver.layerTest({
+                  setCuaWatch: (active, apps) =>
+                    Queue.offer(sent, { active, apps }).pipe(Effect.asVoid),
                 }),
               ),
             ),
