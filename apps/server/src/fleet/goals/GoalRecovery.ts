@@ -187,8 +187,12 @@ const make = Effect.gen(function* () {
     const key = goal.id + "\n" + slot + "\n" + attempt;
     if (captured.get(key) === runId) return;
     const before = yield* readAttempt(threadId);
-    if (before._tag !== "Stopped" || before.runId !== runId || before.worktreePath === null) return;
-    captured.set(key, runId);
+    if (before._tag !== "Stopped" || before.runId !== runId) return;
+    // Nothing to read: a worker without a worktree, or one whose worktree was removed.
+    if (before.worktreePath === null || !(yield* fs.exists(before.worktreePath))) {
+      captured.set(key, runId);
+      return;
+    }
     const parsed = parseReplicaOutput(
       yield* sh(
         captureReplicaScript({
@@ -200,13 +204,15 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    if (parsed.type !== "ok")
+    if (parsed.type !== "ok") {
+      captured.set(key, runId);
       return yield* Effect.logInfo("fleet.goal.replica_skipped", {
         goalId: goal.id,
         slot,
         attempt,
         reason: parsed.type,
       });
+    }
     // A turn that ran while the tree was read would leave a snapshot of no finished turn.
     const after = yield* readAttempt(threadId);
     if (after._tag !== "Stopped" || after.runId !== runId) return;
@@ -235,6 +241,8 @@ const make = Effect.gen(function* () {
     `;
     const stale = previous[0]?.file;
     if (stale !== undefined && stale !== file) yield* fs.remove(stale).pipe(Effect.ignore);
+    // Only a published replica counts; a failure above leaves the run to be captured again.
+    captured.set(key, runId);
     if (parsed.excluded.length > 0)
       yield* Effect.logInfo("fleet.goal.replica_excluded_files", {
         goalId: goal.id,
@@ -358,18 +366,18 @@ const make = Effect.gen(function* () {
     const before = yield* readAttempt(previous);
     if (before._tag === "Wait") return before satisfies Resume;
     if (before._tag === "Stopped" && before.runId !== null) {
-      yield* captureRun(goal, slot, attempt - 1, previous, before.runId).pipe(
-        Effect.catch(logCaptureFailure(goal, slot)),
+      const capture = yield* captureRun(goal, slot, attempt - 1, previous, before.runId).pipe(
+        Effect.result,
       );
-      const after = yield* readAttempt(previous);
-      if (after._tag !== "Stopped" || after.runId !== before.runId)
+      if (capture._tag === "Failure") {
+        yield* logCaptureFailure(goal, slot)(capture.failure);
         return {
           _tag: "Wait",
-          message:
-            "The previous attempt ran again while it was being recovered; it is asked again.",
+          message: "The previous attempt's last turn could not be captured; it is tried again.",
         } satisfies Resume;
+      }
     }
-    return yield* pickStart(goal, slot, attempt).pipe(
+    const start = yield* pickStart(goal, slot, attempt).pipe(
       Effect.catch((error) =>
         Effect.succeed<Resume>({
           _tag: "Wait",
@@ -377,6 +385,15 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+    // Its work was read and imported as it was then; it must not have run again since.
+    if (start._tag !== "Start" || before._tag !== "Stopped") return start;
+    const after = yield* readAttempt(previous);
+    if (after._tag !== "Stopped" || after.runId !== before.runId)
+      return {
+        _tag: "Wait",
+        message: "The previous attempt ran again while it was being recovered; it is asked again.",
+      } satisfies Resume;
+    return start;
   });
 
   return GoalRecovery.of({

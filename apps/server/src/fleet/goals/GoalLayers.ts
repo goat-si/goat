@@ -26,8 +26,8 @@ const layerRuntime = GoalWorkerRuntime.layer.pipe(
 );
 
 const layerCore = GoalController.layer.pipe(
-  Layer.provideMerge(GoalRecovery.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provideMerge(GoalService.layer),
+  Layer.provideMerge(GoalRecovery.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provideMerge(layerRuntime),
   Layer.provideMerge(GoalStore.layer),
 );

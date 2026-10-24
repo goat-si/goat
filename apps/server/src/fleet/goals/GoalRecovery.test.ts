@@ -386,41 +386,73 @@ describe("GoalRecovery", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.live("waits when the previous attempt ran again during the capture", () =>
+  /** GoalRecovery alone, over one stopped attempt-1 worktree whose shell the test controls. */
+  const recoveryAlone = (world: World, shellOf: () => OrchestrationV2ThreadShell) =>
+    recoveryLayer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: () => Effect.sync(shellOf),
+          }),
+          project(world),
+          ProcessRunner.layer,
+          ServerConfig.layerTest(world.repo, NodePath.join(world.root, "state")),
+          SqlitePersistence.layerMemory,
+        ),
+      ),
+      Layer.provide(NodeServices.layer),
+    );
+
+  const stoppedShell = (worktree: string, runId: string): OrchestrationV2ThreadShell => ({
+    ...liveThreadShell(firstThread, { activeRunId: null }),
+    worktreePath: worktree,
+    latestRunId: RunId.make(runId),
+    status: "failed",
+  });
+
+  // The attempt reads as having run again once the step under test wrote its ref.
+  it.live.each([
+    { during: "the capture", writes: "refs/goat/replicas" },
+    { during: "the import", writes: "refs/heads/goat/replica" },
+  ])("waits when the previous attempt ran again during $during", ({ writes }) =>
     Effect.gen(function* () {
       const world = yield* acquireWorld;
       const worktree = NodePath.join(world.root, "a1");
       world.git(world.repo, "worktree", "add", "--quiet", "-b", "goal/test/s0-a1", worktree);
-      const shell = (runId: string): OrchestrationV2ThreadShell => ({
-        ...liveThreadShell(firstThread, { activeRunId: null }),
-        worktreePath: worktree,
-        latestRunId: RunId.make(runId),
-        status: "failed",
-      });
-      // The first read sees run:1 stopped; every later read sees run:2, which started and ended since.
-      let reads = 0;
+      NodeFS.writeFileSync(NodePath.join(worktree, "notes.txt"), "not committed\n");
+      const ranAgain = () => world.git(world.repo, "for-each-ref", writes).trim() !== "";
       const resume = yield* Effect.gen(function* () {
         return yield* (yield* GoalRecovery).resume(GOAL, 0, 2);
       }).pipe(
         Effect.provide(
-          recoveryLayer.pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                Layer.mock(ThreadManagement.ThreadManagementService)({
-                  getThreadShell: () =>
-                    Effect.sync(() => shell((reads += 1) === 1 ? "run:1" : "run:2")),
-                }),
-                project(world),
-                ProcessRunner.layer,
-                ServerConfig.layerTest(world.repo, NodePath.join(world.root, "state")),
-                SqlitePersistence.layerMemory,
-              ),
-            ),
-            Layer.provide(NodeServices.layer),
-          ),
+          recoveryAlone(world, () => stoppedShell(worktree, ranAgain() ? "run:2" : "run:1")),
         ),
       );
       expect(resume).toMatchObject({ _tag: "Wait", message: expect.stringContaining("ran again") });
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("waits when the last turn cannot be captured, and captures it on the next try", () =>
+    Effect.gen(function* () {
+      const world = yield* acquireWorld;
+      const worktree = NodePath.join(world.root, "a1");
+      world.git(world.repo, "worktree", "add", "--quiet", "-b", "goal/test/s0-a1", worktree);
+      NodeFS.writeFileSync(NodePath.join(worktree, "notes.txt"), "not committed\n");
+      // First the shell names a folder that is not a checkout, so the capture fails.
+      let worktreePath = NodePath.join(world.root, "not-a-checkout");
+      NodeFS.mkdirSync(worktreePath);
+      yield* Effect.gen(function* () {
+        const recovery = yield* GoalRecovery;
+        expect(yield* recovery.resume(GOAL, 0, 2)).toMatchObject({
+          _tag: "Wait",
+          message: expect.stringContaining("could not be captured"),
+        });
+        worktreePath = worktree;
+        expect(yield* recovery.resume(GOAL, 0, 2)).toMatchObject({
+          _tag: "Start",
+          workspace: { baseRef: expect.stringMatching(/^goat\/replica\//), startFromOrigin: false },
+        });
+      }).pipe(Effect.provide(recoveryAlone(world, () => stoppedShell(worktreePath, "run:1"))));
     }).pipe(Effect.scoped),
   );
 });
