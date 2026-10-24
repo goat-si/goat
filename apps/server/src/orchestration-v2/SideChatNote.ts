@@ -28,7 +28,7 @@ Do not modify files, git state, configuration, or other workspace state unless t
 </side_chat>`;
 
 /** Side chats get the note, except ahead of a slash command. */
-export function needsSideChatNote(
+function needsSideChatNote(
   thread: Pick<OrchestrationV2AppThread, "sideChatOf">,
   userText: string,
 ): boolean {
