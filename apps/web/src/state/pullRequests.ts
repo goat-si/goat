@@ -9,6 +9,7 @@ import type {
   EnvironmentId,
   ProjectId,
   PullRequestListInput,
+  PullRequestFilterOptionsInput,
   PullRequestListStatsInput,
   PullRequestListEntry,
   PullRequestRef,
@@ -305,6 +306,11 @@ const usePullRequestStatsQuery = createMergedEnvironmentQuery(
   pullRequestEnvironment.listStats,
 );
 
+const usePullRequestFilterOptionsQuery = createMergedEnvironmentQuery(
+  "web-pull-requests:filter-options",
+  pullRequestEnvironment.filterOptions,
+);
+
 const usePullRequestTurnRefreshQuery = createMergedEnvironmentQuery(
   "web-pull-requests:turn-refreshes",
   ({ environmentId }: EnvironmentQueryTarget<Readonly<Record<string, never>>>) =>
@@ -372,4 +378,16 @@ export function usePullRequestListStats(
           result.stats.map((stat) => ({ ...stat, environmentId })),
         );
   return { stats, isPending: query.isPending, refresh: query.refresh };
+}
+
+export function usePullRequestFilterOptions(
+  targets: ReadonlyArray<EnvironmentQueryTarget<PullRequestFilterOptionsInput>>,
+) {
+  const query = usePullRequestFilterOptionsQuery(targets);
+  return {
+    labels: query.values.flatMap(([, options]) => options.labels),
+    authors: query.values.flatMap(([, options]) => options.authors),
+    error: query.error,
+    isPending: query.isPending,
+  };
 }
