@@ -5,7 +5,6 @@ import {
   type CuaVerificationStepId,
   type DesktopCuaDriverRequest,
   type DesktopCuaGrants,
-  type DesktopCuaPrivateModeReport,
   type DesktopCuaVerification,
 } from "@goat/contracts";
 import {
@@ -60,7 +59,7 @@ import {
   type HelperHostOptions,
   type HelperSession,
 } from "./ComputerUseHelper.ts";
-import { makePrivateModeFollower } from "./privateModeWatch.ts";
+import { makeHelperFollowers } from "./helperFollowers.ts";
 import {
   describeDegraded,
   failedCall,
@@ -90,9 +89,12 @@ interface NativeHost {
   readonly uniffiDestroy: () => void;
   /** The helper's service pid, the driver's parent; absent for the in-process host. */
   readonly servicePid?: () => number | undefined;
-  /** The helper session of the running generation, for its private-mode watch (#1235). */
+  /** The running generation's helper session: its private-mode watch (#1235) and captures (#1370). */
   readonly session?: () =>
-    | Pick<HelperSession, "watch" | "unwatch" | "onEvent" | "canWatch">
+    | Pick<
+        HelperSession,
+        "watch" | "unwatch" | "onEvent" | "canWatch" | "canFrame" | "frames" | "onFrame"
+      >
     | undefined;
 }
 type DriverClient = Pick<CuaDriverLike, "callTool"> & { readonly uniffiDestroy?: () => void };
@@ -322,14 +324,12 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   let helperSeen = false;
   let lastReadiness: string | undefined;
   let watches = 0;
-  // Whether the running helper said it can watch; a build without the method raises nothing.
+  // What the running helper said it can do; a build without a method raises nothing for it.
   let helperCanWatch = false;
-  const safety = yield* Queue.unbounded<DesktopCuaPrivateModeReport>();
-  const watchRetries = yield* Queue.unbounded<() => void>();
-  const privateMode = makePrivateModeFollower({
-    publish: (report) => Queue.offerUnsafe(safety, report),
+  let helperCanFrame = false;
+  const followers = yield* makeHelperFollowers({
+    publisher,
     newWatchId: () => "watch-" + helperGeneration + "-" + ++watches,
-    retryLater: (retry) => Queue.offerUnsafe(watchRetries, retry),
   });
   /** Whether the running check reads through the helper; only then do its reads prove anything. */
   let checkingHelper = false;
@@ -343,6 +343,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         generation: helperGeneration,
         readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
         signals: helperSignals(helperCanWatch),
+        frames: helperCanFrame,
       } as const;
       const key = encodeJson(report);
       if (key === lastReadiness) return Effect.void;
@@ -402,7 +403,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       : Effect.succeed(true);
   }).pipe(
     Effect.tap(() => noteHelper((state) => withRunning(state, false))),
-    Effect.tap(() => Effect.sync(() => privateMode.detach())),
+    Effect.tap(() => followers.detach),
   );
   const report = (requestId: string, status: "stopped" | "unavailable", message?: string) =>
     closed
@@ -888,9 +889,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       const session = entry.host.session?.();
       if (entry.helper) {
         helperCanWatch = session?.canWatch === true;
+        helperCanFrame = session?.canFrame === true;
         yield* noteHelper((state) => withRunning(state, true));
       }
-      if (session) yield* Effect.sync(() => void privateMode.attach(session));
+      if (session) yield* followers.attach(session);
       if (!closed)
         yield* publisher.publishCuaReport({
           version: 1,
@@ -959,15 +961,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     grants,
     listen: Effect.gen(function* () {
       yield* Stream.runForEach(publisher.cuaRequests, handleRequest).pipe(Effect.forkScoped);
-      yield* Stream.runForEach(publisher.cuaWatch, (active) =>
-        Effect.sync(() => void privateMode.setWatching(active)),
-      ).pipe(Effect.forkScoped);
-      yield* Stream.runForEach(Stream.fromQueue(safety), publisher.publishCuaSafety).pipe(
-        Effect.forkScoped,
-      );
-      yield* Stream.runForEach(Stream.fromQueue(watchRetries), (retry) =>
-        Effect.sleep("1 second").pipe(Effect.andThen(Effect.sync(retry))),
-      ).pipe(Effect.forkScoped);
+      yield* followers.listen;
       yield* Effect.forever(
         Queue.take(crashes).pipe(
           Effect.flatMap((entry) =>
