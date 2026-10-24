@@ -12,6 +12,7 @@ import {
   turnItemOutputImages,
   turnItemOutputText,
 } from "@goat/client-runtime/work-log/item-detail";
+import { computerUseDisplayInput } from "@goat/client-runtime/work-log/computer-use";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
 import { isJavaScriptReplTool } from "@goat/shared/toolActivity";
 import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "~/components/solar";
@@ -422,7 +423,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
       {item.type === "dynamic_tool" ? (
         <ToolCallBody
           toolName={item.toolName}
-          args={item.input}
+          args={computerUseDisplayInput(item.toolName, item.input)}
           {...outputState}
           onImageExpand={props.onImageExpand}
         />

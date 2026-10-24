@@ -2651,6 +2651,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           });
           const now = yield* DateTime.now;
           const status = projectedStatus ?? toolStatus(merged.status);
+          const rawOutput = merged.data.rawOutput ?? merged.data.content;
           const startedAt = context.toolStartedAt.get(key) ?? now;
           context.toolStartedAt.set(key, startedAt);
           const ordinal = resolveSubagentChildOrdinal(subagent, key);
@@ -2690,7 +2691,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   ? (merged.title ?? merged.kind ?? "Tool")
                   : `${mcpIdentity.server}.${mcpIdentity.tool}`,
               input: merged.data.rawInput ?? null,
-              output: merged.data.rawOutput ?? merged.data.content ?? null,
+              // Child MCP results get the same normalization as root ones, so screenshots render.
+              output:
+                (mcpIdentity === undefined || rawOutput === undefined
+                  ? rawOutput
+                  : acpMcpToolCallOutput(rawOutput)) ?? null,
             },
           });
         });
@@ -7184,9 +7189,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           sessionId: string,
         ) {
           const prompt: Array<EffectAcpSchema.ContentBlock> = [];
+          const mcpContext = yield* readMcpContext(turnInput.threadId);
           const instructionState = {
             interactionMode: turnInput.runtimePolicy.interactionMode,
-            hasGoatMcp: (yield* readMcpContext(turnInput.threadId)).servers.length > 0,
+            hasGoatMcp: mcpContext.servers.length > 0,
           } satisfies GoatAcpInstructionState;
           const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
           const compactionMarker = (yield* Ref.get(compactionMarkers)).get(sessionId);
@@ -7254,7 +7260,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 model: turnInput.modelSelection.model,
                 // The server list is fixed when a session is activated, so a
                 // driver enabled later reaches the agent on its next activation.
-                computerUse: computerUseKeyBySessionId.has(sessionId),
+                computerUse:
+                  computerUseKeyBySessionId.has(sessionId) && mcpContext.computerUseSkill !== false,
               }),
             });
           }

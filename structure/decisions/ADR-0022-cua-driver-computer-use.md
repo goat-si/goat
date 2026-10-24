@@ -5,6 +5,9 @@
   pingdotgg/t3code#21694 at `b8569ac92` and #21695 at `dc307c8a7`. The commit messages do not
   record the alternatives below; they come from the lane plan and research for this program.
 - Related: [ADR-0003](ADR-0003-effect-services.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
+- Amended by: [ADR-0023](ADR-0023-goat-computer-use-app.md). The Electron-owned host and the
+  `si.goat.desktop` identity under "Identity" are superseded by a separate signed helper app; the
+  rest of this record stands.
 
 ## Decision record
 
@@ -65,7 +68,8 @@
     server function (`computerUseAttachment`) decides it for every session; see "Per-adapter
     decision" below.
   - **Safety.** Standard permission mode under a GOAT capability manifest, and admission of
-    unattended threads through an approved lease enforced by a GOAT proxy; see "Safety" below.
+    unattended threads through an approved lease, with every attached driver behind a GOAT
+    proxy that enforces Stop, the host kill switch, pauses and app approvals; see "Safety" below.
   - **Remote hosts.** Each server checks its own screen (`CuaDisplayCapability.ts`) and reports
     `available`, `partial` or `unavailable` with a reason and display. Turning computer use on
     is refused only on `unavailable`; `partial` (an X display without a session bus or AT-SPI
@@ -99,11 +103,15 @@
 
 ## Per-adapter decision
 
-`computerUseAttachment` returns `none` (with a reason) or `direct`. It attaches only when
+`computerUseAttachment` returns `none` (with a reason) or `proxied`. It attaches only when
 `enableCua` is on, the driver is running, the provider runs on this host, and the turn is neither
 Plan nor a read-only sandbox. An unattended turn gets `none` with `cuaDriverBlocked` unless its
-thread holds a lease, and then `leased`: the same session field carries GOAT's proxy instead of
-`cua-driver mcp`, with `cuaDriverOverridesUserConfig` (see "Safety").
+thread holds a lease and the host's helper reports both a person's input and secret fields as
+supported signals in its readiness (`cuaReadiness`, also shown as `CuaHostStatus.readiness`;
+otherwise `detection-unsupported`, #1235). Every attachment carries GOAT's proxy
+instead of `cua-driver mcp` under the thread's control (see "Safety") with
+`cuaDriverOverridesUserConfig`: a `cua-driver` the person configured would skip Stop, pauses and app
+approvals. Without the proxy subcommand nothing could stop the driver, so there is no attachment.
 
 | Provider (driver kind)                                | Decision                                    | How                                                                                                                                                                       | A change reaches a live session                                                                                                                                                      |
 | ----------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -193,15 +201,40 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   and turning computer use off ends it. At most one live lease per host: a second request is
   refused naming the holder, and a second approval is refused while one is live. Interactive
   threads still overlap a leased one; there is no focus or input isolation.
-- **Proxy.** A leased turn's provider runs `goat cua-lease-proxy` in place of `cua-driver mcp`.
-  It holds the thread's own MCP credential and reads `/api/computer-use/lease`, which streams the
-  lease's state and pushes its end. Every `tools/call` waits for the server's confirmation and
-  checks the deadline; the proxy holds its own timer on the expiry. On expiry, revocation, a lost
-  stream or computer use turned off, it refuses new calls, sends MCP cancellation for every
-  outstanding request, kills its `cua-driver mcp` child, answers the provider, and only then
-  revokes the driver sessions the agent named, in the background: a slow or stuck revoke never
-  delays the kill. The deadline timer kills the child at the expiry whichever path ended the
-  lease first.
+- **App approvals.** A grant may name apps (`Handoff.apps`, bundle ids as `list_apps` reports
+  them); it then admits only those apps' windows. Interactive threads ask the same way: without a
+  grant they may list apps and windows but act on none. The proxy ties a call to an app by the
+  pid it targets and learns which app a pid is from the driver's own answers, asking
+  `list_apps` when it has not seen one. Calls with no target act on the whole desktop, and
+  `run_script` and `run_steps` cannot be read ahead, so under a list they are refused
+  (`targetRefused`, detail `desktop_not_approved`) unless a grant covers the whole screen.
+- **Controls.** Every attached driver runs under a control the server mints per thread: an
+  unattended one lives on its grant, an interactive one for 60 minutes. Stop on a turn
+  (`ProviderTurnControlService` interrupt and restart) and the host kill switch
+  (`computerUse.stopAll`, which also cancels every live grant) end it; the next turn mints a new
+  id, which changes the attachment key, so adapters respawn the proxy. A person's input reported
+  by the desktop host (`cuaHumanInput`) or a takeover pauses every control on the host until
+  `computerUse.resume`; a pause with no agent on the screen does nothing. A secret field the host
+  reports (`cuaPrivateMode`, window only, never its content) pauses every control as `private`
+  until it loses focus. The control counts these pauses, so a proxy that only sees the state after a
+  pause has already ended still ends the call it overlapped. Narrowing a thread's approved apps ends
+  the call in flight. Interactive
+  turns run where the helper cannot report these yet, with the gap shown as unsupported; unattended
+  ones do not. Controls and pauses are
+  in memory, ended by a restart like the provider processes they serve.
+- **Proxy.** Every attached provider runs `goat cua-lease-proxy --control` in place of
+  `cua-driver mcp`. It holds the thread's own MCP credential and reads
+  `/api/computer-use/lease`, which streams the control's state (with its apps) and pushes its
+  pause or end. Every `tools/call` waits for the server's confirmation and checks the deadline and
+  the apps; the proxy holds its own timer on the expiry. On an end, a lost stream or computer use
+  turned off, it refuses new calls, sends MCP cancellation for every outstanding request, kills its
+  `cua-driver mcp` child, answers the provider, and only then revokes the driver sessions the
+  agent named, in the background: a slow or stuck revoke never delays the kill. A pause does the
+  same without ending; when the server hands control back the proxy starts a fresh child and
+  replays the provider's MCP handshake to it. Refusals carry a typed `refused` reason from the
+  shared list in `packages/contracts/src/cua.ts` (`ComputerUseRefusalReason`, which the native
+  helpers use too; a policy refusal is never a person's stop) and the proxy's finer `detail` in
+  `structuredContent`, and are never replayed for the agent.
 - **Stopping boundary (0.37.0, measured on macOS).** A `run_script` launching six apps 1.5 s
   apart was stopped three ways. MCP `notifications/cancelled` and `cua-driver revoke --session`
   ("Revoked 1 authorization scope") both let all six launch: 0.37.0 defers session cleanup while

@@ -5,6 +5,21 @@ description: Test GOAT's native iOS and Android app through its Device panel and
 
 # Test GOAT Mobile
 
+## Prerequisite: Agent device access
+
+Device tools work only while **Agent device access** is on in **Settings →
+Integrations → Devices** for this environment (a project can override it).
+It is a person's grant, and no agent tool can change it. Check it first:
+`goat_describe {path:"device.list"}` reports `available.now: false` with a
+reason that names the setting while it is off, and a `device.list` call is
+refused with the same reason.
+
+When it is off, ask the user to turn it on for the verification run, then wait
+for their reply. The grant reaches the thread on its next turn; if the device
+command is still missing from the shell, ask the user to restart the agent
+session. When verification ends, tell the user they can turn it back off if it
+was off before you asked.
+
 ## Open the device
 
 GOAT's device tools run through `goat_call`. Call `goat_call {path:"device.list"}`, then

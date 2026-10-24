@@ -11,6 +11,10 @@
       "types": "./src/cloudMachines.ts",
       "default": "./src/cloudMachines.ts"
     },
+    "./computer-use-linux-setup": {
+      "types": "./src/computerUseLinuxSetup.ts",
+      "default": "./src/computerUseLinuxSetup.ts"
+    },
     "./memory-browsing": {
       "types": "./src/memoryBrowsing.ts",
       "default": "./src/memoryBrowsing.ts"
@@ -71,6 +75,10 @@
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
     },
+    "./computerUse/readinessSteps": {
+      "types": "./src/computerUse/readinessSteps.ts",
+      "default": "./src/computerUse/readinessSteps.ts"
+    },
     "./computerUseGrant": {
       "types": "./src/computerUseGrant.ts",
       "default": "./src/computerUseGrant.ts"
@@ -82,6 +90,10 @@
     "./device/hub-access": {
       "types": "./src/device/hubAccess.ts",
       "default": "./src/device/hubAccess.ts"
+    },
+    "./state/preview-sessions": {
+      "types": "./src/state/previewSessions.ts",
+      "default": "./src/state/previewSessions.ts"
     },
     "./preview/server-browser-stream": {
       "types": "./src/preview/serverBrowserStream.ts",

@@ -287,6 +287,23 @@ Session 0, where the helper reports that there is no desktop and the driver refu
 Stable and nightly helpers must be signed (`--sign-thumbprint`) and serve only the GOAT
 executable installed two folders above them and signed by the same publisher.
 
+### Linux computer use helper
+
+On Linux, computer use runs Cua Driver under `goat-computer-use`, a Node helper
+(`apps/server/src/cua/linuxHelper`) that speaks the computer use protocol on stdio and owns the
+driver as its child. Build it, then run the live check, which starts its own Xvfb display,
+D-Bus session, AT-SPI bus and fixture window and stops each by the pid it started:
+
+```sh
+node scripts/build-computer-use-helper-linux.ts
+node scripts/computer-use-linux-smoke.ts --helper apps/server/.computer-use-helper-linux/goat-computer-use --evidence /tmp/gcu-linux
+```
+
+The check needs `Xvfb` (`--xvfb <path>` when it is not on `PATH`), `dbus-daemon`, at-spi2-core,
+python3 with GTK 3 introspection and `xdotool`. Without a writable `/dev/uinput` and an X server
+that accepts new input devices, which Xvfb is not, background keys and pixel clicks are refused
+with `backgroundUnavailable`; AT-SPI clicks and value writes still run in the background.
+
 ### Windows installer prerequisites
 
 Install Rust, Python 3, and Visual Studio Build Tools with **Desktop development with C++**.

@@ -55,7 +55,7 @@ export function requestedTurnCapabilities(input: {
 export function withTurnCapabilities(
   message: { readonly text: string; readonly context?: OrchestrationMessageContext | undefined },
   capabilities: ReadonlyArray<TurnCapability>,
-): { text: string; context: OrchestrationMessageContext | undefined } {
+): { text: string; context?: OrchestrationMessageContext } {
   const present = new Set(
     requestedTurnCapabilities({
       text: message.text,
@@ -63,7 +63,10 @@ export function withTurnCapabilities(
     }),
   );
   const missing = [...new Set(capabilities)].filter((capability) => !present.has(capability));
-  if (missing.length === 0) return { text: message.text, context: message.context };
+  if (missing.length === 0)
+    return message.context === undefined
+      ? { text: message.text }
+      : { text: message.text, context: message.context };
   const added = missing.map(turnCapabilityContextRecord);
   const addedIds = new Set(added.map((record) => record.contextId));
   const kept = (message.context?.records ?? []).filter((record) => !addedIds.has(record.contextId));

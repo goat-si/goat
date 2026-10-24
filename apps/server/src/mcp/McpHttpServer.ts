@@ -673,10 +673,10 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                 readonly screenshot: PreviewAutomationSnapshot["screenshot"];
               };
               const { screenshot, ...page } = snapshot;
-              const { data: _data, ...screenshotMetadata } = screenshot;
-              const png = new Uint8Array(Buffer.from(screenshot.data, "base64"));
-              const screenshotPath =
-                payload?.save === true ? yield* saveScreenshot(snapshot.url, png) : undefined;
+              const { data = "", ...screenshotMetadata } = screenshot ?? {};
+              const png = new Uint8Array(Buffer.from(data, "base64"));
+              const saving = payload?.save === true && screenshot !== undefined;
+              const screenshotPath = saving ? yield* saveScreenshot(snapshot.url, png) : undefined;
               // Images stay out of tool history unless asked for: providers replay them on every
               // later request, and some reject inline images outright.
               const includeImage = payload?.includeImage === true;
@@ -684,7 +684,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                 const saved = {
                   url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
                   screenshotPath,
-                  ...(screenshot.fullPage ? { screenshot: screenshotMetadata } : {}),
+                  ...(screenshot?.fullPage ? { screenshot: screenshotMetadata } : {}),
                 };
                 return new McpSchema.CallToolResult({
                   isError: false,
@@ -694,7 +694,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
               }
               const metadata = {
                 ...page,
-                screenshot: screenshotMetadata,
+                ...(screenshot ? { screenshot: screenshotMetadata } : {}),
                 ...(screenshotPath === undefined ? {} : { screenshotPath }),
               };
               const bounded = boundSnapshotMetadata(metadata);
@@ -725,7 +725,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                           text: `Snapshot text was bounded. Omitted: ${bounded.omitted.join("; ")}.`,
                         },
                       ]),
-                  ...(includeImage
+                  ...(includeImage && screenshot
                     ? [{ type: "image" as const, data: png, mimeType: screenshot.mimeType }]
                     : []),
                 ],

@@ -102,6 +102,8 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
+import * as ComputerUseTestkit from "../cua/ComputerUseLeases.testkit.ts";
+import { askComputer, carriesSkill } from "./ComputerUseSkill.testkit.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
@@ -547,7 +549,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
-  readonly cuaDriverLayer?: Layer.Layer<CuaDriver.CuaDriver>;
+  readonly cuaDriverLayer?: Layer.Layer<CuaDriver.CuaDriver | ComputerUseTestkit.Leases>;
   readonly projectionReads?: { getThread: number; getThreadShell: number };
   readonly beforeGetThread?: Ref.Ref<Effect.Effect<void>>;
   readonly fileSystem?: FileSystem.FileSystem;
@@ -5972,9 +5974,12 @@ it.effect(
 
         // Opened while computer use is off.
         assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
-        // Enabled later: the same session's next turn carries the driver.
+        // Enabled later: the same session's next turn carries the driver, behind GOAT's proxy.
         yield* Ref.set(enabled, true);
-        assert.deepEqual((yield* turn(runtimePolicy))?.cuaDriver, cuaDriver);
+        assert.include(
+          (yield* turn(runtimePolicy))?.cuaDriver?.environment.at(-1)?.value,
+          "/resources",
+        );
         assert.equal(yield* Ref.get(acquires), 1);
         // Plan and read-only turns never get it, and never start the driver.
         assert.isUndefined((yield* turn({ ...runtimePolicy, interactionMode: "plan" }))?.cuaDriver);
@@ -5982,6 +5987,9 @@ it.effect(
           (yield* turn({ ...runtimePolicy, sandboxPolicy: "read-only" }))?.cuaDriver,
         );
         assert.equal(yield* Ref.get(acquires), 1);
+        // Settings switched the skill off, and a turn that asks for @computer still loads it.
+        yield* askComputer(manager, { threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.isTrue(carriesSkill(yield* mcpSessions.read(threadId)));
         // Disabled again: the next turn drops it.
         yield* Ref.set(enabled, false);
         assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
@@ -5994,19 +6002,10 @@ it.effect(
           layerTest({
             state,
             idleTimeoutMs: 1_000,
-            cuaDriverLayer: Layer.succeed(
-              CuaDriver.CuaDriver,
-              CuaDriver.CuaDriver.of({
-                enabled: Ref.get(enabled),
-                acquire: Ref.updateAndGet(acquires, (count) => count + 1).pipe(
-                  Effect.as(Option.some(cuaDriver)),
-                ),
-                lastFailure: Effect.succeed(Option.none()),
-                status: Effect.succeed({ platform: "darwin", running: true }),
-                computerUse: Effect.die("unused"),
-                admitEnable: Effect.die("unused"),
-              }),
-            ),
+            cuaDriverLayer: ComputerUseTestkit.layerInteractive({
+              enabled: Ref.get(enabled),
+              acquire: Ref.updateAndGet(acquires, (count) => count + 1).pipe(Effect.as(cuaDriver)),
+            }),
           }),
         ),
       );

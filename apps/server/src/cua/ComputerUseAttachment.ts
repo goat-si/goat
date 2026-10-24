@@ -1,18 +1,23 @@
 import {
+  BuiltInSkillName,
   COMPUTER_USE_PROVIDER_DRIVERS,
   type CuaDriverMcpConfiguration,
   type ProviderDriverKind,
   type ProviderInteractionMode,
   type ThreadId,
+  type TurnCapability,
 } from "@goat/contracts";
+import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/registry";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
+import * as ServerSettings from "../serverSettings.ts";
 import type * as CuaDriver from "./CuaDriver.ts";
-import type { ComputerUseLease } from "./ComputerUseLeases.ts";
+import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import type { ComputerUseOrigin } from "./ComputerUseOrigin.ts";
 
 export type ComputerUseRefusal =
@@ -21,11 +26,15 @@ export type ComputerUseRefusal =
   | "plan"
   | "read-only"
   | "unavailable"
-  | "needs-approval";
+  | "needs-approval"
+  /** Unattended work needs a helper that reports a person's input and secret fields (#1235). */
+  | "detection-unsupported";
 
 /**
  * Every provider session's computer use comes from this one decision, so the
  * unattended gate lives here and adapters only carry out what it says.
+ * Interactive and unattended turns alike reach the driver only through GOAT's proxy,
+ * so Stop, the kill switch, a person's takeover and app approvals hold for both.
  */
 export type ComputerUseAttachment =
   | {
@@ -35,17 +44,13 @@ export type ComputerUseAttachment =
       readonly blockUserConfig: boolean;
     }
   | {
-      readonly _tag: "direct";
+      readonly _tag: "proxied";
       readonly mcp: CuaDriverMcpConfiguration;
+      readonly control: ComputerUseLeases.ComputerUseControl;
+      readonly proxy: SelfInvocation;
       /** The managed server replaces a `cua-driver` the user configured for the provider. */
       readonly overrideUserConfig: boolean;
-    }
-  | {
-      /** An unattended turn with an approved lease reaches the driver only through GOAT's proxy. */
-      readonly _tag: "leased";
-      readonly mcp: CuaDriverMcpConfiguration;
-      readonly lease: ComputerUseLease;
-      readonly proxy: SelfInvocation;
+      readonly skills: ReadonlyArray<BuiltInSkillName>;
     };
 
 export interface ComputerUseAttachmentInput {
@@ -54,9 +59,10 @@ export interface ComputerUseAttachmentInput {
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly readOnly: boolean;
   readonly origin: ComputerUseOrigin;
-  readonly lease: Option.Option<ComputerUseLease>;
-  /** How this server runs its own lease proxy subcommand; absent where it cannot. */
-  readonly proxy: SelfInvocation | undefined;
+  /** Absent only in test assemblies, where no turn gets computer use. */
+  readonly leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>;
+  /** Capabilities this turn asked for with a chip; they load their skill even when it is off (D13). */
+  readonly requested?: ReadonlyArray<TurnCapability> | undefined;
 }
 
 const none = (reason: ComputerUseRefusal, blockUserConfig = false): ComputerUseAttachment => ({
@@ -79,15 +85,45 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   if (Option.isNone(cua) || !(yield* cua.value.enabled)) return none("disabled", unattended);
   if (input.interactionMode === "plan") return none("plan", unattended);
   if (input.readOnly) return none("read-only", unattended);
-  if (unattended && Option.isNone(input.lease)) return none("needs-approval", true);
+  const leases = input.leases;
+  const lease =
+    unattended && Option.isSome(leases)
+      ? yield* leases.value.active(input.threadId).pipe(Effect.orElseSucceed(() => Option.none()))
+      : Option.none<ComputerUseLeases.ComputerUseLease>();
+  if (unattended && Option.isNone(lease)) return none("needs-approval", true);
+  if (unattended && Option.isSome(leases)) {
+    const detection = yield* leases.value.detection;
+    if (!detection.humanInput || !detection.privateMode) return none("detection-unsupported", true);
+  }
+  // Without its proxy nothing could stop the driver, so there is no computer use at all.
+  if (Option.isNone(leases) || leases.value.proxy === undefined)
+    return none("unavailable", unattended);
   const mcp = yield* cua.value.acquire;
   if (Option.isNone(mcp)) return none("unavailable", unattended);
-  if (!unattended) return { _tag: "direct", mcp: mcp.value, overrideUserConfig: false } as const;
-  if (Option.isNone(input.lease) || input.proxy === undefined) return none("unavailable", true);
-  return { _tag: "leased", mcp: mcp.value, lease: input.lease.value, proxy: input.proxy } as const;
+  // Names this build does not know are ignored; unreadable settings keep the default on.
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const disabled = Option.isNone(settings)
+    ? []
+    : yield* settings.value.getSettings.pipe(
+        Effect.map((value) => value.disabledBuiltInSkills.filter(Schema.is(BuiltInSkillName))),
+        Effect.orElseSucceed(() => []),
+      );
+  return {
+    _tag: "proxied",
+    mcp: mcp.value,
+    control: yield* leases.value.control(input.threadId, lease),
+    proxy: leases.value.proxy,
+    // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
+    overrideUserConfig: true,
+    skills: resolveBuiltInSkills({
+      attached: ["computer-use"],
+      ...(input.requested === undefined ? {} : { requested: input.requested }),
+      disabled,
+    }).active,
+  } as const;
 });
 
-/** Subcommand of this server that stands between a leased thread and the driver. */
+/** Subcommand of this server that stands between a thread and the driver. */
 const LEASE_PROXY_COMMAND = "cua-lease-proxy";
 export const LEASE_PROXY_ENV = {
   url: "GOAT_CUA_LEASE_URL",
@@ -96,13 +132,13 @@ export const LEASE_PROXY_ENV = {
 } as const;
 
 /**
- * The stdio server a leased thread's provider spawns. It carries the thread's own GOAT MCP
- * credential to read its lease, and the driver descriptor it forwards to. The lease id is in the
- * arguments, so a new lease changes the attachment key and adapters respawn it.
+ * The stdio server a thread's provider spawns. It carries the thread's own GOAT MCP credential
+ * to read its control, and the driver descriptor it forwards to. The control id is in the
+ * arguments, so a new control changes the attachment key and adapters respawn it.
  */
 function leaseProxyDescriptor(
   config: Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader">,
-  attachment: Extract<ComputerUseAttachment, { readonly _tag: "leased" }>,
+  attachment: Extract<ComputerUseAttachment, { readonly _tag: "proxied" }>,
   leaseRoute: string,
 ): CuaDriverMcpConfiguration {
   return {
@@ -110,10 +146,10 @@ function leaseProxyDescriptor(
     args: [
       ...selfInvocationArgs(attachment.proxy, [
         LEASE_PROXY_COMMAND,
-        "--handoff",
-        attachment.lease.handoffId,
+        "--control",
+        attachment.control.controlId,
         "--expires",
-        DateTime.formatIso(attachment.lease.expiresAt),
+        DateTime.formatIso(attachment.control.expiresAt),
       ]),
     ],
     environment: [
@@ -137,22 +173,18 @@ export function withComputerUse(
     cuaDriver: _previous,
     cuaDriverOverridesUserConfig: _previousOverride,
     cuaDriverBlocked: _previousBlock,
+    builtInSkills: _previousSkills,
     ...rest
   } = config;
   switch (attachment._tag) {
     case "none":
       return attachment.blockUserConfig ? { ...rest, cuaDriverBlocked: true } : rest;
-    case "direct":
-      return {
-        ...rest,
-        cuaDriver: attachment.mcp,
-        ...(attachment.overrideUserConfig ? { cuaDriverOverridesUserConfig: true } : {}),
-      };
-    case "leased":
+    case "proxied":
       return {
         ...rest,
         cuaDriver: leaseProxyDescriptor(config, attachment, leaseRoute),
-        cuaDriverOverridesUserConfig: true,
+        ...(attachment.overrideUserConfig ? { cuaDriverOverridesUserConfig: true } : {}),
+        builtInSkills: attachment.skills,
       };
   }
 }

@@ -34,14 +34,19 @@ import {
   type GoatToolSummaryCall,
 } from "@goat/client-runtime/goatToolSummary";
 
+import { computerUseDisplayInput } from "./computerUse.ts";
+
 export type WorkLogToolLifecycleStatus = RuntimeItemStatus | "stopped" | "idle";
 
 export function toolItemForDisplay(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
   switch (item.type) {
-    case "command_execution":
-    case "dynamic_tool": {
+    case "command_execution": {
       const { output: _output, ...displayItem } = item;
       return displayItem;
+    }
+    case "dynamic_tool": {
+      const { output: _output, ...displayItem } = item;
+      return { ...displayItem, input: computerUseDisplayInput(item.toolName, item.input) };
     }
     case "file_change": {
       const { diffStr, oldStr: _oldStr, newStr: _newStr, ...displayItem } = item;

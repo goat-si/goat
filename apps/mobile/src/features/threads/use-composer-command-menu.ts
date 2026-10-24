@@ -4,6 +4,7 @@ import type {
   ProjectId,
   ProviderInteractionMode,
   ServerProvider,
+  ServerSettings,
   ThreadId,
   ThreadPullRequestLink,
 } from "@goat/contracts";
@@ -46,6 +47,7 @@ import {
   hasCurrentProviderWorkspaceSnapshot,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
+  withBuiltInProviderSkills,
 } from "@goat/client-runtime/providerSkills";
 import { useEffect, useRef, useState } from "react";
 
@@ -181,6 +183,7 @@ export function useComposerCommandMenu({
   pullRequestRepository = null,
   threadPullRequests,
   selectedProviderStatus,
+  serverSettings = null,
   hasThread,
   hasCompactableConversation,
   offersUsageLimits = false,
@@ -199,6 +202,8 @@ export function useComposerCommandMenu({
   readonly pullRequestRepository?: string | null;
   readonly threadPullRequests?: ReadonlyArray<ThreadPullRequestLink>;
   readonly selectedProviderStatus: ServerProvider | null;
+  /** Decides which of GOAT's built-in skills the menu lists for this provider. */
+  readonly serverSettings?: Pick<ServerSettings, "enableCua" | "disabledBuiltInSkills"> | null;
   readonly hasThread: boolean;
   readonly hasCompactableConversation: boolean;
   readonly offersUsageLimits?: boolean;
@@ -236,9 +241,11 @@ export function useComposerCommandMenu({
     setSelection(composerSelectionAtEnd(draftMessage));
   }, [draftMessage, ownerKey]);
 
-  const skills = selectedProviderStatus
-    ? resolveProviderSkillsForCwd(selectedProviderStatus, projectCwd)
-    : [];
+  const skills = withBuiltInProviderSkills(
+    selectedProviderStatus ? resolveProviderSkillsForCwd(selectedProviderStatus, projectCwd) : [],
+    selectedProviderStatus,
+    serverSettings,
+  );
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });

@@ -5,7 +5,17 @@ import {
   Handoff,
   HandoffError,
 } from "./handoff.ts";
-import { CuaHostStatus } from "./cua.ts";
+import {
+  ComputerUseStopAllResult,
+  ComputerUseStopInput,
+  ComputerUseStopResult,
+  CuaHostStatus,
+} from "./cua.ts";
+import {
+  PreviewSessionControlInput,
+  PreviewSessionControlResult,
+  PreviewSessionsSnapshot,
+} from "./previewSession.ts";
 import {
   SshHostAddInput,
   SshPreflightInput,
@@ -590,6 +600,11 @@ export const WS_METHODS = {
 
   serverProbe: "server.probe",
   serverCheckComputerUse: "server.checkComputerUse",
+  computerUseStop: "computerUse.stop",
+  computerUseStopAll: "computerUse.stopAll",
+  computerUseResume: "computerUse.resume",
+  previewSessionsSubscribe: "previewSessions.subscribe",
+  previewSessionsControl: "previewSessions.control",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -764,6 +779,42 @@ const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
 const WsServerCheckComputerUseRpc = Rpc.make(WS_METHODS.serverCheckComputerUse, {
   payload: Schema.Struct({}),
   success: CuaHostStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+/** Ends one thread's control of this host's screen, killing its driver transport. */
+const WsComputerUseStopRpc = Rpc.make(WS_METHODS.computerUseStop, {
+  payload: ComputerUseStopInput,
+  success: ComputerUseStopResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/** The kill switch: every thread's control on this host ends, unattended admissions included. */
+const WsComputerUseStopAllRpc = Rpc.make(WS_METHODS.computerUseStopAll, {
+  payload: Schema.Struct({}),
+  success: ComputerUseStopAllResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/** Hands the screen back to agents after a person's input or takeover paused them. */
+const WsComputerUseResumeRpc = Rpc.make(WS_METHODS.computerUseResume, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
+});
+
+/** Every browser and desktop preview session on this host, again whenever one changes. */
+const WsPreviewSessionsSubscribeRpc = Rpc.make(WS_METHODS.previewSessionsSubscribe, {
+  payload: Schema.Struct({}),
+  success: PreviewSessionsSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+/** A person's takeover, hand back, stop or kill switch on a preview session. */
+const WsPreviewSessionsControlRpc = Rpc.make(WS_METHODS.previewSessionsControl, {
+  payload: PreviewSessionControlInput,
+  success: PreviewSessionControlResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -2319,6 +2370,11 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerCheckComputerUseRpc,
+  WsComputerUseStopRpc,
+  WsComputerUseStopAllRpc,
+  WsComputerUseResumeRpc,
+  WsPreviewSessionsSubscribeRpc,
+  WsPreviewSessionsControlRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

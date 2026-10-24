@@ -1,21 +1,24 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@goat/contracts";
+import { BUILTIN_SKILLS, type EnvironmentId } from "@goat/contracts";
 import { useContext, useEffect, useEffectEvent, useState } from "react";
 
 import { isElectron } from "../../env";
-import { readLocalApi } from "../../localApi";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { usePermissionStatus } from "../permissions/usePermissionStatus";
+import { ComputerUseReadiness } from "../computerUse/ComputerUseReadiness";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
+import { useCuaGrants } from "./CuaGrantSteps";
 import { CuaSetupDialog } from "./CuaSetupDialog";
 import {
   CUA_PERMISSIONS,
   computerUseStatusText,
   computerUseUnavailable,
+  cuaGranted,
+  readCuaGrants,
+  withLiveGrants,
   type CuaPermission,
 } from "./CuaSetupDialog.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -26,6 +29,10 @@ import { useSettingsScope } from "./SettingsScopeContext";
 export function useComputerUseHost(environmentId: EnvironmentId, local: boolean) {
   const registry = useContext(RegistryContext);
   const enabled = useEnvironmentSettings(environmentId, (settings) => settings.enableCua);
+  const disabledSkills = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.disabledBuiltInSkills,
+  );
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const query = useEnvironmentQuery(serverEnvironment.computerUse({ environmentId, input: {} }));
@@ -51,15 +58,19 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     typeof bridge.checkSystemPermission === "function" &&
     typeof bridge.verifyCuaDriver === "function";
 
-  const save = async (enableCua: boolean): Promise<string | null> => {
+  const save = async (patch: {
+    readonly enableCua?: boolean;
+    readonly disabledBuiltInSkills?: ReadonlyArray<string>;
+  }): Promise<string | null> => {
     if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId)))
       return "This connection cannot change settings on this host.";
-    const result = await update({ environmentId, input: { patch: { enableCua } } });
+    const result = await update({ environmentId, input: { patch } });
     query.refresh();
     return result._tag === "Success" ? null : "Could not save the setting. Try again.";
   };
   return {
     enabled,
+    disabledSkills,
     canConfigure,
     status: query.data,
     error: query.error,
@@ -71,8 +82,12 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
 
 export type ComputerUseHost = ReturnType<typeof useComputerUseHost>;
 
-const checkPermission = (permission: CuaPermission) =>
-  window.desktopBridge?.checkSystemPermission?.(permission) ?? Promise.resolve(false);
+const checkGrants = () => readCuaGrants(window.desktopBridge);
+
+const openGuide = async (permission: CuaPermission) => {
+  const guide = window.desktopBridge?.openCuaPermissionGuide;
+  if (!guide || !(await guide(permission))) throw new Error("Unable to open System Settings.");
+};
 
 export function ComputerUseSetup({
   host,
@@ -90,13 +105,11 @@ export function ComputerUseSetup({
       hostLabel={hostLabel}
       status={host.status}
       localMac={host.localMac}
-      onCheck={checkPermission}
-      onAllow={async (permission) => {
-        const api = readLocalApi();
-        if (!api) throw new Error("Unable to open System Settings.");
-        await api.shell.openSystemSettings(permission);
-      }}
-      onEnable={() => host.save(true)}
+      onCheck={checkGrants}
+      onAllow={openGuide}
+      onReveal={window.desktopBridge?.revealCuaGrantTarget}
+      onRelaunch={window.desktopBridge?.relaunchForCuaGrants}
+      onEnable={() => host.save({ enableCua: true })}
       onVerify={async () => {
         const verifyDriver = window.desktopBridge?.verifyCuaDriver;
         if (!verifyDriver) throw new Error("This desktop app cannot check computer use.");
@@ -147,19 +160,17 @@ function ComputerUseControls({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   // A grant revoked in System Settings shows here while the setting stays on.
-  const grants = usePermissionStatus(
-    async () => ({
-      accessibility: await checkPermission("accessibility"),
-      "screen-recording": await checkPermission("screen-recording"),
-    }),
-    { accessibility: true, "screen-recording": true },
-    host.localMac && host.enabled && !setupOpen,
-  );
+  // Each check starts a helper process, so the row rechecks slowly and whenever GOAT regains focus.
+  const grants = useCuaGrants(checkGrants, host.localMac && host.enabled && !setupOpen, 15_000);
+  const current = host.localMac && host.enabled ? grants.grants : null;
   const missingGrants =
-    host.localMac && host.enabled ? CUA_PERMISSIONS.filter((id) => !grants.status[id]) : [];
+    current && current.principal !== "unusable"
+      ? CUA_PERMISSIONS.filter((id) => !cuaGranted(current, id))
+      : [];
   const supported = host.status !== null && !computerUseUnavailable(host.status);
   const statusText =
     saveError ??
+    (current?.principal === "unusable" ? current.message : null) ??
     computerUseStatusText({
       enabled: host.enabled,
       status: host.status,
@@ -198,7 +209,7 @@ function ComputerUseControls({
                   return;
                 }
                 setSaving(true);
-                void host.save(false).then((failure) => {
+                void host.save({ enableCua: false }).then((failure) => {
                   setSaving(false);
                   setSaveError(failure);
                 });
@@ -207,9 +218,55 @@ function ComputerUseControls({
           </div>
         }
       />
+      <ComputerUseReadiness
+        platform={host.status?.platform}
+        readiness={withLiveGrants(
+          host.status?.readiness,
+          current && current.principal !== "unusable" ? current : null,
+        )}
+        tools={host.status?.tools}
+        signals={host.status?.signals}
+      />
+      {host.enabled ? <BuiltInSkillRows host={host} /> : null}
       {setupOpen && host.canConfigure ? (
         <ComputerUseSetup host={host} hostLabel={hostLabel} onClose={() => setSetupOpen(false)} />
       ) : null}
     </>
   );
+}
+
+function BuiltInSkillRows({ host }: { host: ComputerUseHost }) {
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  return BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => {
+    const on = !host.disabledSkills.includes(skill.name);
+    return (
+      <SettingsRow
+        key={skill.name}
+        {...searchableSetting("computer-use-skill")}
+        serverScoped
+        settingKeys={["disabledBuiltInSkills"]}
+        description="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+        status={saveError ? <span role="status">{saveError}</span> : undefined}
+        control={
+          <Switch
+            aria-label={`${skill.displayName} skill`}
+            checked={on}
+            disabled={saving || !host.canConfigure}
+            onCheckedChange={(checked) => {
+              setSaveError(null);
+              setSaving(true);
+              const others = host.disabledSkills.filter((name) => name !== skill.name);
+              void host
+                .save({ disabledBuiltInSkills: checked ? others : [...others, skill.name] })
+                .then((failure) => {
+                  setSaving(false);
+                  setSaveError(failure);
+                });
+            }}
+          />
+        }
+      />
+    );
+  });
 }

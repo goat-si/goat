@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Fallback from "../fleet/resources/Fallback.ts";
+import { failureClassesOf } from "../fleet/resources/fallbackPolicy.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -95,14 +96,12 @@ const makeSweep = Effect.gen(function* () {
       now,
       autoResume: preferences.autoResumeLimitedThreads,
       snooze: preferences.snoozeLimitedThreads,
-      fallbackTriggers: coversThreads
-        ? [
-            ...new Set(
-              Object.values(preferences.fleet.fallbackChains ?? {})
-                .filter((chain) => chain.scope === "goals_and_threads")
-                .flatMap((chain) => chain.on ?? DEFAULT_FALLBACK_ON),
-            ),
-          ]
+      fallbackClasses: coversThreads
+        ? failureClassesOf(
+            Object.values(preferences.fleet.fallbackChains ?? {})
+              .filter((chain) => chain.scope === "goals_and_threads")
+              .flatMap((chain) => chain.on ?? DEFAULT_FALLBACK_ON),
+          )
         : [],
     });
     const nowMs = DateTime.toEpochMillis(now);

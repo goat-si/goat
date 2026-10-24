@@ -189,57 +189,53 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(descriptor.capabilities.goatBotStatus).toBe(true);
     }),
   );
-  // The fixture is a POSIX npm prefix on the real filesystem, which a Windows host cannot
-  // produce, and win32 never claims npm-global ownership. Windows coverage: #1125.
-  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-    "publishes proven install ownership only for manually updated servers",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const baseDir = yield* fs.makeTempDirectoryScoped();
-        const prefix = `${baseDir}/node`;
-        const entry = `${prefix}/lib/node_modules/t3/dist/bin.mjs`;
-        yield* fs.makeDirectory(`${prefix}/lib/node_modules/t3/dist`, { recursive: true });
-        yield* fs.makeDirectory(`${prefix}/bin`, { recursive: true });
-        yield* fs.writeFileString(entry, "");
-        yield* fs.writeFileString(
-          `${prefix}/lib/node_modules/t3/package.json`,
-          '{"name":"t3","version":"0.0.45","bin":{"t3":"./dist/bin.mjs"}}',
-        );
-        yield* fs.symlink(entry, `${prefix}/bin/t3`);
-        const config = yield* makeServerConfig(baseDir);
-        yield* fs.makeDirectory(config.stateDir, { recursive: true });
-        for (const mode of ["web", "desktop"] as const) {
-          const descriptor = yield* Effect.gen(function* () {
-            const environment = yield* ServerEnvironment.ServerEnvironment;
-            return yield* environment.getDescriptor;
-          }).pipe(
-            Effect.provide(
-              ServerEnvironment.layer.pipe(
-                Layer.provide(layerEmptySecretStore),
-                Layer.provide(ServerConfig.layer({ ...config, mode })),
-              ),
+  it.effect("publishes proven install ownership only for manually updated servers", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped();
+      const prefix = `${baseDir}/node`;
+      const entry = `${prefix}/lib/node_modules/t3/dist/bin.mjs`;
+      yield* fs.makeDirectory(`${prefix}/lib/node_modules/t3/dist`, { recursive: true });
+      yield* fs.makeDirectory(`${prefix}/bin`, { recursive: true });
+      yield* fs.writeFileString(entry, "");
+      yield* fs.writeFileString(
+        `${prefix}/lib/node_modules/t3/package.json`,
+        '{"name":"t3","version":"0.0.45","bin":{"t3":"./dist/bin.mjs"}}',
+      );
+      yield* fs.symlink(entry, `${prefix}/bin/t3`);
+      const config = yield* makeServerConfig(baseDir);
+      yield* fs.makeDirectory(config.stateDir, { recursive: true });
+      for (const mode of ["web", "desktop"] as const) {
+        const descriptor = yield* Effect.gen(function* () {
+          const environment = yield* ServerEnvironment.ServerEnvironment;
+          return yield* environment.getDescriptor;
+        }).pipe(
+          Effect.provide(
+            ServerEnvironment.layer.pipe(
+              Layer.provide(layerEmptySecretStore),
+              Layer.provide(ServerConfig.layer({ ...config, mode })),
             ),
-            Effect.provideService(HostProcess.Arguments, ["node", entry]),
-            Effect.provideService(HostProcess.IsExecutable, false),
-            Effect.provideService(HostProcess.Platform, "linux"),
-            Effect.provideService(HostProcess.Environment, {}),
-          );
-          expect(descriptor.capabilities.serverInstallation).toEqual(
-            mode === "web" ? { kind: "npm-global", prefix: yield* fs.realPath(prefix) } : undefined,
-          );
-          expect(descriptor.capabilities.serverSelfUpdate).toBe(
-            mode === "web" ? undefined : "desktop-managed",
-          );
-          expect(descriptor.capabilities).toMatchObject({
-            settledWorktreeCleanup: true,
-            storageCleanupRun: true,
-            projectWorktreeCleanup: true,
-            worktreesDirectory: true,
-            threadAutoSettlementScope: true,
-          });
-        }
-      }),
+          ),
+          Effect.provideService(HostProcess.Arguments, ["node", entry]),
+          Effect.provideService(HostProcess.IsExecutable, false),
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, {}),
+        );
+        expect(descriptor.capabilities.serverInstallation).toEqual(
+          mode === "web" ? { kind: "npm-global", prefix: yield* fs.realPath(prefix) } : undefined,
+        );
+        expect(descriptor.capabilities.serverSelfUpdate).toBe(
+          mode === "web" ? undefined : "desktop-managed",
+        );
+        expect(descriptor.capabilities).toMatchObject({
+          settledWorktreeCleanup: true,
+          storageCleanupRun: true,
+          projectWorktreeCleanup: true,
+          worktreesDirectory: true,
+          threadAutoSettlementScope: true,
+        });
+      }
+    }),
   );
   it.effect.each([
     { name: "missing", content: undefined },
@@ -346,6 +342,40 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.projectProviderInstanceOverrides).toBe(true);
       expect(second.capabilities.automaticServerUpdates).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
+    }),
+  );
+
+  it.effect("servers on one machine name the same machine under their own environment ids", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const describe = Effect.fn(function* (home?: string) {
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-server-environment-test-",
+        });
+        const described = Effect.gen(function* () {
+          const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+          return yield* serverEnvironment.getDescriptor;
+        }).pipe(Effect.provide(layerServerEnvironment(baseDir)));
+        return yield* home === undefined
+          ? described
+          : described.pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+      });
+      // The desktop app's server and the headless server SSH launches keep in ~/.goat.
+      const desktop = yield* describe();
+      const headless = yield* describe();
+      const otherAccount = yield* describe("/Users/someone-else");
+
+      expect(desktop.environmentId).not.toBe(headless.environmentId);
+      expect(desktop.machineId).toBe(headless.machineId);
+      // One account's servers share an SSH config; another account on the machine has its own.
+      expect(desktop.machineUserId).toBe(headless.machineUserId);
+      expect(otherAccount.machineId).toBe(desktop.machineId);
+      // Every host GOAT CI and its developers run on exposes an OS machine identifier.
+      const platform = yield* HostProcess.Platform;
+      if (platform === "darwin" || platform === "linux") {
+        expect(desktop.machineId).toMatch(/^[0-9a-f]{32}$/);
+        expect(otherAccount.machineUserId).not.toBe(desktop.machineUserId);
+      }
     }),
   );
 

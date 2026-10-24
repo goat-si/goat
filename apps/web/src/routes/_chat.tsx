@@ -5,6 +5,7 @@ import { useEffect } from "react";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { ThreadRouteView } from "../components/ThreadRouteView";
+import { PreviewSessionStack } from "../components/preview/sessions/PreviewSessionStack";
 import { ThreadLinkPrompt } from "../components/promptLinks/ThreadLinkPrompt";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -208,9 +209,16 @@ function ChatRouteLayout() {
   // Both thread routes render here, not in their own leaf components, so the
   // draft-to-thread promotion keeps one ChatView mounted across the swap.
   const threadTarget = useThreadRouteTarget();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const sessionsEnvironmentId =
+    threadTarget?.kind === "server" ? threadTarget.threadRef.environmentId : primaryEnvironmentId;
   return (
     <>
       <ChatRouteGlobalShortcuts />
+      <PreviewSessionStack
+        environmentId={sessionsEnvironmentId}
+        threadRef={threadTarget?.kind === "server" ? threadTarget.threadRef : null}
+      />
       {threadTarget?.kind === "server" ? (
         <ThreadLinkPrompt threadRef={threadTarget.threadRef} />
       ) : null}

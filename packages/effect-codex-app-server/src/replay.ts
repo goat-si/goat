@@ -246,11 +246,19 @@ function normalizeReplayFrame(value: unknown): unknown {
   return normalized;
 }
 
-/** Set on every thread/start since #1004, empty without a session (provider-core mcpSession.ts). */
+/**
+ * Set on every thread/start since #1004, empty without a session (provider-core mcpSession.ts).
+ * The thread's temporary directory (TMPDIR, TEMP, TMP) and the system one are machine-local (#1206).
+ */
 const THREAD_CREDENTIAL_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set(
   [
     "GOAT_ACP_MCP_ENDPOINT",
     "GOAT_ACP_MCP_AUTHORIZATION",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "GOAT_SYSTEM_TMPDIR",
+    "T3CODE_SYSTEM_TMPDIR", // goat-rename: legacy: legacy env alias set beside the GOAT name.
     "T3_ACP_MCP_ENDPOINT", // goat-rename: legacy: legacy env alias set beside the GOAT name.
     "T3_ACP_MCP_AUTHORIZATION", // goat-rename: legacy: legacy env alias set beside the GOAT name.
   ].map((name) => `shell_environment_policy.set.${name}`),

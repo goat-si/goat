@@ -58,6 +58,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
 import { withTurnAgentAccess } from "./TurnCapabilities.ts";
+import { type PrepareReuse, selectPrepareInput } from "./McpPrepareInput.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
@@ -71,6 +72,7 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { makeScopeCloser } from "./ProviderSessionScopeClose.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -637,7 +639,7 @@ export const layerWithOptions = (
        */
       const prepareMcpSession = (
         input: ProviderMemoryPrepareInput,
-        reusePreparedInput: boolean | ProviderMemoryPrepareInput = false,
+        reusePreparedInput: PrepareReuse = false,
       ): Effect.Effect<PreparedMcpCredential> =>
         options.configureMcp === false
           ? mcpSessions
@@ -647,30 +649,9 @@ export const layerWithOptions = (
               input.threadId,
               Effect.gen(function* () {
                 const previousInput = memoryPrepareInputs.get(input.threadId);
-                const admitted =
-                  typeof reusePreparedInput === "object" ? reusePreparedInput : previousInput;
-                const {
-                  runId: _previousRun,
-                  delegatedTaskId: _previousTask,
-                  ...admittedAuthority
-                } = admitted ?? input;
-                const preparedInput =
-                  reusePreparedInput && admitted?.providerInstanceId === input.providerInstanceId
-                    ? {
-                        // Internal reprepare retains this execution's provenance. An
-                        // explicit admission replaces IDs, including absent IDs.
-                        ...(reusePreparedInput === true ? admitted : admittedAuthority),
-                        ...(input.runId === undefined ? {} : { runId: input.runId }),
-                        ...(input.delegatedTaskId === undefined
-                          ? {}
-                          : { delegatedTaskId: input.delegatedTaskId }),
-                        ...(input.interactionMode === undefined
-                          ? {}
-                          : { interactionMode: input.interactionMode }),
-                        ...(input.turnCapabilities && { turnCapabilities: input.turnCapabilities }),
-                        readOnly: admitted.readOnly === true || input.readOnly === true,
-                      }
-                    : { ...input, readOnly: input.readOnly === true };
+                const preparedInput = selectPrepareInput(input, reusePreparedInput, previousInput);
+                if (preparedInput === undefined)
+                  return { mcpCredentialId: undefined, issued: false };
                 const { threadId, providerInstanceId } = preparedInput;
                 const thread = yield* projectionStore.getThread(threadId).pipe(Effect.option);
                 const usableThread =
@@ -771,15 +752,8 @@ export const layerWithOptions = (
                   interactionMode: preparedInput.interactionMode,
                   readOnly,
                   origin: computerUseOrigin,
-                  lease:
-                    computerUseOrigin._tag === "unattended" && Option.isSome(computerUseLeases)
-                      ? yield* computerUseLeases.value
-                          .active(threadId)
-                          .pipe(Effect.orElseSucceed(() => Option.none()))
-                      : Option.none(),
-                  proxy: Option.isSome(computerUseLeases)
-                    ? computerUseLeases.value.proxy
-                    : undefined,
+                  leases: computerUseLeases,
+                  requested: preparedInput.turnCapabilities,
                 });
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
@@ -1392,43 +1366,13 @@ export const layerWithOptions = (
         },
       );
 
-      // Scope close can wedge on a misbehaving adapter finalizer (e.g. a
-      // provider process that never yields its message stream).
-      const closeScopeWithin = Effect.fn("ProviderSessionManager.closeScopeWithin")(function* (
-        scope: Scope.Closeable,
-        annotations: { readonly providerSessionId?: ProviderSessionId; readonly reason: string },
-      ) {
-        const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
-          Effect.exit,
-          Effect.forkDetach({ startImmediately: true }),
-        );
-        const closeExit = yield* Fiber.join(closeFiber).pipe(
-          Effect.timeoutOption(RELEASE_SCOPE_CLOSE_TIMEOUT_MS),
-        );
-        if (Option.isNone(closeExit)) {
-          yield* Effect.logWarning("orchestration-v2.provider-session-scope-close-timeout", {
-            ...annotations,
-            timeoutMs: RELEASE_SCOPE_CLOSE_TIMEOUT_MS,
-          });
-          yield* Fiber.join(closeFiber).pipe(
-            Effect.flatMap((exit) =>
-              Exit.isFailure(exit)
-                ? Effect.logWarning("orchestration-v2.provider-session-scope-close-failed", {
-                    ...annotations,
-                    cause: exit.cause,
-                  })
-                : Effect.logInfo(
-                    "orchestration-v2.provider-session-scope-close-completed-late",
-                    annotations,
-                  ),
-            ),
-            Effect.forkDetach,
-          );
-        }
-        return closeExit;
-      });
+      const {
+        closeWithin: closeScopeWithin,
+        trackRelease,
+        awaitPendingReleases,
+      } = makeScopeCloser(RELEASE_SCOPE_CLOSE_TIMEOUT_MS);
 
-      const releaseEntry = (input: {
+      const releaseEntryNow = (input: {
         readonly providerSessionId: ProviderSessionId;
         readonly reason: ProviderSessionReleaseReason;
         readonly detail?: string;
@@ -1548,6 +1492,8 @@ export const layerWithOptions = (
             ),
           ),
         );
+      const releaseEntry = (input: Parameters<typeof releaseEntryNow>[0]) =>
+        trackRelease(releaseEntryNow(input));
 
       const releaseIfStillIdle = Effect.fn("ProviderSessionManager.releaseIfStillIdle")(
         function* (input: {
@@ -2566,6 +2512,7 @@ export const layerWithOptions = (
             ),
           { concurrency: "unbounded", discard: true },
         );
+        yield* awaitPendingReleases;
       });
       yield* Effect.addFinalizer(() =>
         shutdown.pipe(
@@ -2582,7 +2529,7 @@ export const layerWithOptions = (
                 Effect.gen(function* () {
                   const input = memoryPrepareInputs.get(threadId);
                   if (!input || (yield* mcpSessions.read(threadId)) === undefined) return;
-                  const prepared = yield* prepareMcpSession(input, true);
+                  const prepared = yield* prepareMcpSession(input, "stored");
                   if (prepared.mcpCredentialId)
                     dropMcpCredentialReservation(threadId, prepared.mcpCredentialId);
                 }),

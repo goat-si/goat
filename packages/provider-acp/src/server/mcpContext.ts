@@ -12,6 +12,8 @@ export interface AcpMcpContext {
   readonly computerUse?: boolean;
   /** Identity of that driver (`cuaDriverKey`), empty when the session has none. */
   readonly computerUseKey?: string;
+  /** The thread's turns carry the computer use skill (`carriesComputerUseSkill`). */
+  readonly computerUseSkill?: boolean;
 }
 
 export function acpMcpContext(
@@ -51,6 +53,7 @@ export function acpMcpContext(
     authorization: session.authorizationHeader,
     computerUse: cua.length > 0,
     computerUseKey: McpProviderSession.cuaDriverKey(session.cuaDriver),
+    computerUseSkill: McpProviderSession.carriesComputerUseSkill(session),
     // Agent instructions and terminal fallbacks written for older builds read the legacy names.
     processEnvironment: McpProviderSession.withThreadMcpEnvironment(
       {

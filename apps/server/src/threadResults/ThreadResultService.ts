@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { redactGoatCredentialsDeep } from "../mcp/goatCredentialRedaction.ts";
 import { readObservedCheck, readObservedCheckState } from "./ObservedCheckService.ts";
 
 export class ThreadResultError extends Schema.TaggedError<ThreadResultError>()(
@@ -194,8 +195,10 @@ const make = Effect.gen(function* () {
 
   const report = Effect.fn("ThreadResultService.report")(function* (
     threadId: ThreadId,
-    input: ThreadResultReport,
+    agentReport: ThreadResultReport,
   ) {
+    // An agent's report is stored and relayed like its tool output.
+    const input = redactGoatCredentialsDeep(agentReport);
     const records = yield* load(threadId);
     const run =
       ThreadManagementService.latestActiveRun(records) ??
