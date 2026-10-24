@@ -97,8 +97,10 @@ export function useHubNodes(environmentId: EnvironmentId) {
       ),
     dismiss: (id: HubNodeNotice["id"]) =>
       run("dismiss", () => dismiss({ environmentId, input: { id } })),
-    add: (input: HubNodesAddInput, key = input.kind === "linked" ? "add-linked" : "add-ssh") =>
-      run(key, () => add({ environmentId, input })),
+    add: (input: HubNodesAddInput, key?: string) =>
+      run(key ?? (input.kind === "linked" ? "add-linked" : "add-ssh"), () =>
+        add({ environmentId, input }),
+      ),
   };
 }
 
