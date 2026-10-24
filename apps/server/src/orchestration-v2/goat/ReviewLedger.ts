@@ -30,7 +30,7 @@ export class OrchestratorReviewLedgerError extends Schema.TaggedError<Orchestrat
       case "task_not_owned":
         return "Review ledger requires an app-owned task of the parent thread.";
       case "not_review":
-        return "Review ledger requires a task with role review.";
+        return "Review ledger requires a task created with role review. Pass role='review' to goat_task_create when starting each review round.";
       case "evidence_required":
         return "Rebutting a critical or high severity finding requires evidence.";
       case "decision_required":
