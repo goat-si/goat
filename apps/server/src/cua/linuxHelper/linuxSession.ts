@@ -132,6 +132,7 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
       capture: "unavailable",
       tree: "unavailable",
       input: "unavailable",
+      blockers: [],
       reasons: [blocked ?? "Cua Driver did not start."],
       ...platform,
     };
@@ -176,6 +177,8 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
     capture,
     tree,
     input,
+    // Screen lock and session-switch signals (logind, the screensaver) are not read yet.
+    blockers: [],
     reasons,
     ...platform,
   };

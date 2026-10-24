@@ -2,6 +2,7 @@ import {
   ComputerUseActionRequest,
   ComputerUseObserveRequest,
   computerUseDeadlineResult,
+  computerUseImageInfo,
   type ComputerUseElement,
   type ComputerUseObservation,
   type ComputerUseRefusal,
@@ -239,7 +240,25 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         ),
       };
     }
-    const state = decoded.value;
+    // The screenshot is declared from its own bytes, so the size the agent points in is the
+    // size of the image it sees; an image those bytes do not describe is not declared at all.
+    const offered = input.screenshot ? answer.images[0] : undefined;
+    const info = offered ? computerUseImageInfo(offered.data) : undefined;
+    const {
+      screenshot_width: _width,
+      screenshot_height: _height,
+      screenshot_mime_type: _mime,
+      ...unshot
+    } = decoded.value;
+    const state =
+      offered && info && info.mimeType === offered.mimeType
+        ? {
+            ...unshot,
+            screenshot_width: info.width,
+            screenshot_height: info.height,
+            screenshot_mime_type: info.mimeType,
+          }
+        : unshot;
     const privateMode = await privateFor(input.pid);
     // A password field's value never leaves, even when it does not have focus.
     const elements = (state.elements ?? []).map((element) => {
@@ -274,7 +293,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       maxElements: input.maxElements,
       elements: known,
     });
-    const image = observation.screenshot ? answer.images[0] : undefined;
+    const image = observation.screenshot ? offered : undefined;
     return image ? { result: observation, image } : { result: observation };
   };
 
