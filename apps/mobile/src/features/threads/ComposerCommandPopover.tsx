@@ -1,4 +1,7 @@
-import type { ComposerCapabilityItem } from "@goat/client-runtime/composerCapabilityItems";
+import {
+  composerCapabilityDetail,
+  type ComposerCapabilityItem,
+} from "@goat/client-runtime/composerCapabilityItems";
 import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
@@ -157,13 +160,18 @@ const CommandRow = memo(function CommandRow(props: {
   readonly isSlashSkill: boolean;
 }) {
   const iconName = itemIcon(props.item);
-  const unavailableReason = props.item.type === "capability" ? props.item.unavailableReason : null;
-  const description = unavailableReason ?? props.item.description;
+  const inactive =
+    props.item.type === "capability" && props.item.availability.state !== "available";
+  const description =
+    props.item.type === "capability"
+      ? composerCapabilityDetail(props.item)
+      : props.item.description;
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityHint={unavailableReason ?? undefined}
+      accessibilityHint={inactive ? description : undefined}
+      accessibilityState={inactive ? { disabled: true } : undefined}
       onPress={props.onPress}
       className="flex-row items-center gap-2.5 border-border px-3.5 py-2.5 active:opacity-60"
       style={{ borderBottomWidth: props.isLast ? 0 : StyleSheet.hairlineWidth }}
@@ -184,7 +192,7 @@ const CommandRow = memo(function CommandRow(props: {
       ) : null}
       <Text
         className={
-          unavailableReason === null
+          !inactive
             ? "shrink-0 text-base font-goat-medium text-foreground"
             : "shrink-0 text-base font-goat-medium text-foreground-muted"
         }

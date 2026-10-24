@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { ComposerCapabilityContext } from "@goat/client-runtime/composerCapabilityItems";
-import type { EnvironmentId, ProviderInteractionMode } from "@goat/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -13,23 +13,23 @@ const NO_ENVIRONMENT = "" as EnvironmentId;
  */
 export function useComposerCapabilityContext(input: {
   readonly environmentId: EnvironmentId | null;
-  readonly interactionMode: ProviderInteractionMode;
   readonly active: boolean;
+  readonly turn: Omit<ComposerCapabilityContext, "computerUse">;
 }): ComposerCapabilityContext {
   const settings = useAtomValue(
     serverEnvironment.settingsValueAtom(input.environmentId ?? NO_ENVIRONMENT),
   );
-  const status = useEnvironmentQuery(
+  const query = useEnvironmentQuery(
     input.active && input.environmentId !== null
       ? serverEnvironment.computerUse({ environmentId: input.environmentId, input: {} })
       : null,
   );
-  const enabled = settings?.enableCua === true;
+  // A failed check is its own state: it must never read as "nothing is wrong".
   const computerUse =
-    status.data !== null
-      ? { enabled, status: status.data }
-      : status.error !== null
-        ? { enabled, status: null }
+    query.error !== null
+      ? { error: query.error }
+      : query.data !== null
+        ? { enabled: settings?.enableCua === true, status: query.data }
         : null;
-  return { computerUse, interactionMode: input.interactionMode };
+  return { ...input.turn, computerUse };
 }

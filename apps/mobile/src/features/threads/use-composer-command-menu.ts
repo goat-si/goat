@@ -8,7 +8,10 @@ import type {
   ThreadPullRequestLink,
 } from "@goat/contracts";
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
-import { matchComposerCapabilityItems } from "@goat/client-runtime/composerCapabilityItems";
+import {
+  composerThreadMayRunUnattended,
+  matchComposerCapabilityItems,
+} from "@goat/client-runtime/composerCapabilityItems";
 import { turnCapabilityContextRecord } from "@goat/shared/turnCapabilities";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 
@@ -338,12 +341,16 @@ export function useComposerCommandMenu({
     }
     return detectComposerTrigger(draftMessage, selection.end);
   })();
+  const currentShell = threadShells.find((shell) => shell.id === currentThreadId);
   const capabilityContext = useComposerCapabilityContext({
     environmentId,
-    // A draft has no shell yet; the server applies plan mode again when the turn starts.
-    interactionMode:
-      threadShells.find((shell) => shell.id === currentThreadId)?.interactionMode ?? "default",
     active: trigger?.kind === "path",
+    turn: {
+      // A draft has no shell yet; the server applies plan mode again when the turn starts.
+      interactionMode: currentShell?.interactionMode ?? "default",
+      providerDrivers: selectedProviderStatus === null ? [] : [selectedProviderStatus.driver],
+      mayRunUnattended: composerThreadMayRunUnattended(currentThreadId, currentShell?.source),
+    },
   });
   const pathSearch = useComposerPathSearch({
     environmentId,
@@ -533,10 +540,15 @@ export function useComposerCommandMenu({
     if (!trigger) return;
     if (item.type === "capability") {
       if (!ownerKey || trigger.kind !== "path") return;
-      if (item.unavailableReason !== null) {
+      const { availability } = item;
+      // Still checking: the typed text stays until the host answers.
+      if (availability.state === "checking") return;
+      if (availability.state === "unavailable") {
         Dialog.alert(
           "Computer use isn't ready",
-          `${item.unavailableReason} Set it up in GOAT on that computer under Settings > Integrations > Computer.`,
+          availability.setup
+            ? `${availability.reason} Set it up in GOAT on that computer under Settings > Integrations > Computer.`
+            : availability.reason,
         );
         return;
       }
