@@ -256,6 +256,9 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
 
   it("uploads through a label in one call after the gate, and refuses a framed input", async () => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-upload-"));
+    using _removeDirectory = {
+      [Symbol.dispose]: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
+    };
     const file = NodePath.join(directory, "note.txt");
     NodeFS.writeFileSync(file, "hello");
     await page.setContent(
