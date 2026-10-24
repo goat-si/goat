@@ -611,7 +611,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
   );
 
   it.effect(
-    "is ready only after the check proved capture and the tree and while the helper runs the driver",
+    "is ready once the check proved the helper, capture and the tree, also while the helper is idle",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -634,7 +634,13 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
           assert.equal(checked?.readiness.tree, "ready");
           // The check retired the agent's driver to see fresh grants.
           assert.equal((yield* test.next).status, "stopped");
-          assert.equal(checked?.readiness.helper, "unauthenticated");
+          // Idle is not a failure: the helper proved itself and starts when an agent needs it.
+          assert.equal(checked?.readiness.helper, "authenticated");
+          assert.equal(checked?.readiness.input, "background");
+          assert.isTrue(checked ? computerUseReady(checked.readiness) : false);
+          assert.isFalse(
+            (checked?.readiness.reasons ?? []).some((reason) => /not running/.test(reason)),
+          );
 
           yield* test.request("agent-again");
           assert.equal((yield* test.next).status, "ready");

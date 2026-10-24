@@ -11,6 +11,11 @@ type Blocker = Readiness["blockers"][number];
 export interface HelperReadinessState {
   readonly grants: Readiness["grants"];
   readonly running: boolean;
+  /**
+   * A readiness check got past the helper's identity and read through it. The helper stays
+   * confirmed while idle, because it starts when an agent needs it, until a proof is dropped.
+   */
+  readonly confirmed: boolean;
   readonly capture: Readiness["capture"];
   readonly tree: Readiness["tree"];
   /** What the last check found blocking capture, such as a locked screen. */
@@ -34,6 +39,7 @@ export const helperSignals = (canWatch: boolean): ComputerUseCapabilities["signa
 export const initialHelperReadiness: HelperReadinessState = {
   grants: { accessibility: "unknown", screenCapture: "unknown" },
   running: false,
+  confirmed: false,
   capture: "pending",
   tree: "unavailable",
   blockers: [],
@@ -46,6 +52,7 @@ export const withoutProof = (
   detail?: string,
 ): HelperReadinessState => ({
   ...state,
+  confirmed: false,
   capture: "pending",
   tree: "unavailable",
   blockers: [],
@@ -109,6 +116,8 @@ export const withProof = (
   proof: HelperProof,
 ): HelperReadinessState => ({
   ...state,
+  // Only a check that passed the identity step reads a window through the helper.
+  confirmed: true,
   capture: proof.capture,
   tree: proof.elements === undefined ? "unavailable" : proof.elements > 0 ? "ready" : "empty",
   blockers: proof.screenLocked ? ["screenLocked"] : [],
@@ -127,14 +136,15 @@ export const toReadiness = (state: HelperReadinessState, principal: string): Rea
       ...(state.desktop?.blocker === undefined ? [] : [state.desktop.blocker]),
     ]),
   ];
+  const usable = state.running || state.confirmed;
   return {
     grants: state.grants,
-    helper: state.running ? "authenticated" : "unauthenticated",
+    helper: usable ? "authenticated" : "unauthenticated",
     capture: state.capture,
     tree: state.tree,
-    // The driver delivers input to a window without raising it on macOS and Windows, but only
-    // while it runs.
-    input: state.running ? "background" : "unavailable",
+    // The driver delivers input to a window without raising it on macOS and Windows; a confirmed
+    // helper that is idle does so once it starts.
+    input: usable ? "background" : "unavailable",
     blockers,
     reasons: [
       // The helper's own refusal names the real cause; the grant pair it zeroed would mislead.
@@ -143,7 +153,7 @@ export const toReadiness = (state: HelperReadinessState, principal: string): Rea
         : off.length === 0
           ? []
           : [`${off.join(" and ")} ${off.length > 1 ? "are" : "is"} not on for ${principal}.`]),
-      ...(state.running ? [] : [`${principal} is not running computer use.`]),
+      ...(usable ? [] : [`${principal} has not been confirmed by a readiness check yet.`]),
       ...state.details,
       ...(unproven
         ? ["Run the readiness check so a real screenshot and accessibility read prove the rest."]
