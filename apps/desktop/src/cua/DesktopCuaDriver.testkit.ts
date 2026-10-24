@@ -4,6 +4,7 @@ import type {
   ComputerUseReadiness,
   DesktopCuaDriverReport,
   DesktopCuaDriverRequest,
+  DesktopCuaPrivateModeReport,
   DesktopCuaReadinessReport,
 } from "@goat/contracts";
 import type { ToolResult } from "@trycua/cua-driver";
@@ -17,6 +18,7 @@ import * as Stream from "effect/Stream";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { DesktopTelemetryPublisher } from "../telemetry/DesktopTelemetryPublisher.ts";
+import type { HelperEvent } from "./ComputerUseHelper.ts";
 import { make, type DesktopCuaDriverDependencies } from "./DesktopCuaDriver.ts";
 
 // The embedded allowlist forwards only these opt-outs; DO_NOT_TRACK would fail construction.
@@ -101,6 +103,12 @@ export const fixture = Effect.fn(function* (
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
   const reports = yield* Queue.unbounded<DesktopCuaDriverReport>();
   const readiness: DesktopCuaReadinessReport[] = [];
+  const watching = yield* Queue.unbounded<boolean>();
+  const safety: DesktopCuaPrivateModeReport[] = [];
+  const safetyHeard = yield* Queue.unbounded<void>();
+  /** The helper's watch calls, in order, and a way to raise its private-mode event. */
+  const helperWatches = yield* Queue.unbounded<"watch" | "unwatch">();
+  let raise: ((active: boolean, windowId: number) => void) | undefined;
   const starting = yield* Deferred.make<void>();
   const stopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
@@ -188,8 +196,27 @@ export const fixture = Effect.fn(function* (
       });
       const exit = Promise.withResolvers<void>();
       let running = false;
+      let listener: ((event: HelperEvent["event"]) => void) | undefined;
+      const session = {
+        watch: async (_watchId: string) => {
+          Queue.offerUnsafe(helperWatches, "watch");
+          // A watch's first state follows its answer.
+          raise = (active, windowId) =>
+            listener?.({ type: "privateMode", active, target: { pid: 7, windowId } });
+        },
+        unwatch: async () => {
+          Queue.offerUnsafe(helperWatches, "unwatch");
+        },
+        onEvent: (next: (event: HelperEvent["event"]) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+      };
       return {
         servicePid: () => (running ? HELPER_PID : undefined),
+        session: () => (running ? session : undefined),
         start: async () => {
           starts++;
           running = true;
@@ -332,12 +359,16 @@ export const fixture = Effect.fn(function* (
     updateCancellations: Stream.empty,
     publishUpdateReport: () => Effect.void,
     cuaRequests: Stream.fromQueue(requests),
-    cuaWatch: Stream.empty,
+    cuaWatch: Stream.fromQueue(watching),
     publishCuaReport: (report) => Queue.offer(reports, report).pipe(Effect.asVoid),
     publishCuaReadiness: (report) =>
       Effect.sync(() => {
         readiness.push(report);
       }),
+    publishCuaSafety: (report) =>
+      Effect.sync(() => {
+        if (report.type === "cuaPrivateMode") safety.push(report);
+      }).pipe(Effect.andThen(Queue.offer(safetyHeard, undefined)), Effect.asVoid),
   });
   const environment = DesktopEnvironment.layer({
     dirname: "/app",
@@ -403,6 +434,13 @@ export const fixture = Effect.fn(function* (
     helperAppListings,
     helperLaunches,
     readiness,
+    /** The server says whether agents control the host. */
+    setWatching: (active: boolean) => Queue.offer(watching, active).pipe(Effect.asVoid),
+    nextHelperWatch: Queue.take(helperWatches),
+    raisePrivateMode: (active: boolean, windowId: number) =>
+      Effect.sync(() => raise?.(active, windowId)),
+    safety,
+    nextSafety: Queue.take(safetyHeard),
     counts: () => ({ starts, stops, destroys }),
   };
 });

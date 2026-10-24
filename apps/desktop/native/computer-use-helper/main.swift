@@ -202,6 +202,7 @@ let privacyEnvironment = [
 
 final class DriverService {
   let queue = DispatchQueue(label: "si.goat.computer-use.service")
+  let privateMode = PrivateModeWatch()
   let bundleId = Bundle.main.bundleIdentifier ?? ""
   var driver: Process?
   var liveness: Pipe?
@@ -275,12 +276,16 @@ final class DriverService {
       case "permissions": result = permissions(prompt: params["prompt"] as? Bool == true)
       case "start": result = try start(params)
       case "listApps": result = try listApps()
+      case "watch": result = try privateMode.watch(params)
+      case "unwatch": result = try privateMode.unwatch(params)
       case "stop":
         stop()
         result = [:]
       default: throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
       }
       emit(["id": id, "result": result])
+      // A new watch's first state follows its answer (computerUseProtocol.ts watch ordering).
+      if method == "watch" { privateMode.announce() }
     } catch let error as HelperError {
       emit(["id": id, "error": ["code": error.code, "message": error.message]])
     } catch {
@@ -591,9 +596,133 @@ final class DriverService {
   }
 
   func shutDown() -> Never {
-    queue.sync { stop() }
+    queue.sync {
+      privateMode.end()
+      stop()
+    }
     exit(0)
   }
+}
+
+// MARK: - Private mode (#1235)
+
+/**
+ * Watches, only while the host asks, whether a secure text field (a password or passkey prompt)
+ * has focus anywhere on this Mac, and reports changes. Never reads what the field holds. An
+ * empty target list watches every window; the host narrows it to the lease's apps later.
+ */
+final class PrivateModeWatch {
+  let queue = DispatchQueue(label: "si.goat.computer-use.private-mode")
+  var watchId: String?
+  var timer: DispatchSourceTimer?
+  /// The secure field's window last reported active under watchId.
+  var active: (pid: Int, windowId: Int)?
+
+  func watch(_ params: [String: Any]) throws -> [String: Any] {
+    guard let watchId = params["watchId"] as? String, !watchId.isEmpty else {
+      throw HelperError(code: "bad_request", message: "watch needs a watchId.")
+    }
+    queue.sync {
+      // The old watch clears what it reported before its replacement answers.
+      clear()
+      self.watchId = watchId
+      if timer == nil {
+        let source = DispatchSource.makeTimerSource(queue: queue)
+        source.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
+        source.setEventHandler { [weak self] in self?.tick() }
+        source.resume()
+        timer = source
+      }
+    }
+    return ["watchId": watchId]
+  }
+
+  func unwatch(_ params: [String: Any]) throws -> [String: Any] {
+    let watchId = params["watchId"] as? String
+    queue.sync {
+      guard watchId == nil || watchId == self.watchId else { return }
+      stopOnQueue()
+    }
+    return [:]
+  }
+
+  /// Stops watching after clearing what was reported; safe to call when not watching.
+  func end() { queue.sync { stopOnQueue() } }
+
+  /// Sends the current state once, active or not, under the watch in force.
+  func announce() {
+    queue.async { [weak self] in
+      guard let self, self.watchId != nil else { return }
+      let now = focusedSecureField()
+      self.active = now
+      self.send(active: now != nil, target: now ?? (pid: 0, windowId: 0))
+    }
+  }
+
+  private func clear() {
+    if let previous = active { send(active: false, target: previous) }
+    active = nil
+  }
+
+  private func stopOnQueue() {
+    clear()
+    timer?.cancel()
+    timer = nil
+    watchId = nil
+  }
+
+  private func tick() {
+    guard watchId != nil else { return }
+    let now = focusedSecureField()
+    if now?.pid == active?.pid && now?.windowId == active?.windowId { return }
+    clear()
+    if let now {
+      active = now
+      send(active: true, target: now)
+    }
+  }
+
+  private func send(active: Bool, target: (pid: Int, windowId: Int)) {
+    guard let watchId else { return }
+    emit([
+      "type": "event", "watchId": watchId,
+      "event": [
+        "type": "privateMode", "active": active,
+        "target": ["pid": target.pid, "windowId": target.windowId],
+      ],
+    ])
+  }
+}
+
+/// The window of the focused secure text field, or nil when none has focus.
+func focusedSecureField() -> (pid: Int, windowId: Int)? {
+  let system = AXUIElementCreateSystemWide()
+  var focused: CFTypeRef?
+  guard
+    AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
+      == .success,
+    let focused, CFGetTypeID(focused) == AXUIElementGetTypeID()
+  else { return nil }
+  let element = focused as! AXUIElement
+  var subrole: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subrole) == .success,
+    (subrole as? String) == (kAXSecureTextFieldSubrole as String)
+  else { return nil }
+  var pid: pid_t = 0
+  guard AXUIElementGetPid(element, &pid) == .success else { return nil }
+  return (pid: Int(pid), windowId: frontWindow(of: pid) ?? 0)
+}
+
+/// The app's frontmost ordinary window: the one its focused field almost always sits in.
+func frontWindow(of pid: pid_t) -> Int? {
+  guard
+    let windows = CGWindowListCopyWindowInfo(
+      [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+  else { return nil }
+  return windows.first { window in
+    (window[kCGWindowOwnerPID as String] as? Int) == Int(pid)
+      && (window[kCGWindowLayer as String] as? Int) == 0
+  }?[kCGWindowNumber as String] as? Int
 }
 
 func runService() -> Never {

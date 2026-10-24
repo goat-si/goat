@@ -21,11 +21,14 @@ export interface HelperReadinessState {
   readonly desktop?: { readonly detail: string; readonly blocker?: Blocker };
 }
 
-/** Neither the macOS nor the Windows helper raises the safety signals yet (#1235). */
-export const HELPER_SIGNALS: ComputerUseCapabilities["signals"] = {
-  privateMode: "unsupported",
+/**
+ * The safety signals a desktop host's helper raises (#1235). The macOS helper reports a focused
+ * secure field; neither reports a person's input yet, so unattended turns stay refused.
+ */
+export const helperSignals = (platform: NodeJS.Platform): ComputerUseCapabilities["signals"] => ({
+  privateMode: platform === "darwin" ? "supported" : "unsupported",
   humanInput: "unsupported",
-};
+});
 
 export const initialHelperReadiness: HelperReadinessState = {
   grants: { accessibility: "unknown", screenCapture: "unknown" },
