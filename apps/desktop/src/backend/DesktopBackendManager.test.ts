@@ -166,6 +166,7 @@ function makeTestInstance(input: MakeInstanceInput) {
       cuaRequests: Stream.empty,
       cuaWatch: Stream.empty,
       publishCuaReport: () => Effect.void,
+      publishCuaReadiness: () => Effect.void,
       handleControlForSource: () => Effect.void,
       removeControlSource: () => Effect.void,
       publishUpdateReport: () => Effect.void,

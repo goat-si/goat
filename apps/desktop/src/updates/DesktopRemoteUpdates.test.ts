@@ -61,6 +61,7 @@ function runRemoteUpdatesTest(
         cuaRequests: Stream.empty,
         cuaWatch: Stream.empty,
         publishCuaReport: () => Effect.void,
+        publishCuaReadiness: () => Effect.void,
         handleControlForSource: () => Effect.void,
         removeControlSource: () => Effect.void,
         publishUpdateReport: (report) =>

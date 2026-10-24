@@ -1,6 +1,11 @@
 // Shared fixture for the DesktopCuaDriver suites; one fake per native dependency.
 import * as NodePath from "@effect/platform-node/NodePath";
-import type { DesktopCuaDriverReport, DesktopCuaDriverRequest } from "@goat/contracts";
+import type {
+  ComputerUseReadiness,
+  DesktopCuaDriverReport,
+  DesktopCuaDriverRequest,
+  DesktopCuaReadinessReport,
+} from "@goat/contracts";
 import type { ToolResult } from "@trycua/cua-driver";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -32,6 +37,13 @@ export const HOST_PID = 4242;
 export const HELPER_PID = 5151;
 export const HELPER_ID = "codes.t3.host-test.computer-use";
 export const HELPER_BUNDLE = "/Helpers/GOAT Computer Use.app";
+
+/** The helper's answer to a grant check; detail and blocker are its Windows refusal. */
+export interface HelperAnswer {
+  readonly granted: boolean;
+  readonly detail?: string;
+  readonly blocker?: ComputerUseReadiness["blockers"][number];
+}
 
 export const toolResult = (structured: unknown, images: ToolResult["images"] = []): ToolResult => ({
   text: "",
@@ -79,13 +91,14 @@ export const fixture = Effect.fn(function* (
     blankCapture?: boolean;
     refuseStart?: boolean;
     /** Ship the GOAT Computer Use helper; its grants are separate from Electron's. */
-    helper?: { readonly granted: boolean; readonly detail?: string } | "unusable";
+    helper?: HelperAnswer | "unusable";
     /** The helper refuses to list apps, as it does for a driver that fails its seal check. */
     helperAppsFail?: boolean;
   } = {},
 ) {
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
   const reports = yield* Queue.unbounded<DesktopCuaDriverReport>();
+  const readiness: DesktopCuaReadinessReport[] = [];
   const starting = yield* Deferred.make<void>();
   const stopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
@@ -106,6 +119,8 @@ export const fixture = Effect.fn(function* (
   const prepared = new Map<string, { scope: string; hostBundleIds: ReadonlyArray<string> }>();
   const holdMonitor = options.hold === "monitor";
   let allowed = !options.denyPermissions;
+  let helperAnswer = typeof options.helper === "object" ? options.helper : undefined;
+  let helperLost: "unusable" | "absent" | undefined;
   let starts = 0;
   let stops = 0;
   let destroys = 0;
@@ -139,16 +154,18 @@ export const fixture = Effect.fn(function* (
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
     helperGrants: async (bundle, prompt) => {
       helperProbes.push({ bundleId: bundle.bundleId, prompt });
-      const helper = typeof options.helper === "object" ? options.helper : undefined;
-      const granted = helper?.granted ?? false;
-      return helper?.detail === undefined
-        ? { accessibility: granted, screenRecording: granted }
-        : { accessibility: granted, screenRecording: granted, detail: helper.detail };
+      const granted = helperAnswer?.granted ?? false;
+      return {
+        accessibility: granted,
+        screenRecording: granted,
+        ...(helperAnswer?.detail === undefined ? {} : { detail: helperAnswer.detail }),
+        ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
+      };
     },
     helperBundlePath: async () =>
-      options.helper === "unusable"
+      options.helper === "unusable" || helperLost === "unusable"
         ? { kind: "unusable", message: "GOAT Computer Use at /Helpers cannot be used (EACCES)." }
-        : options.helper
+        : options.helper && helperLost === undefined
           ? { kind: "found", path: HELPER_BUNDLE }
           : { kind: "absent" },
     helperHost: (helper) => {
@@ -314,6 +331,10 @@ export const fixture = Effect.fn(function* (
     cuaRequests: Stream.fromQueue(requests),
     cuaWatch: Stream.empty,
     publishCuaReport: (report) => Queue.offer(reports, report).pipe(Effect.asVoid),
+    publishCuaReadiness: (report) =>
+      Effect.sync(() => {
+        readiness.push(report);
+      }),
   });
   const environment = DesktopEnvironment.layer({
     dirname: "/app",
@@ -357,6 +378,19 @@ export const fixture = Effect.fn(function* (
     denyPermissions: Effect.sync(() => {
       allowed = false;
     }),
+    /** What the helper answers to its next grant check. */
+    answerAsHelper: (answer: HelperAnswer) =>
+      Effect.sync(() => {
+        helperAnswer = answer;
+      }),
+    /** The shipped helper can no longer be used (its bundle lost its permissions) or is gone. */
+    loseHelper: (how: "unusable" | "absent") =>
+      Effect.sync(() => {
+        helperLost = how;
+      }),
+    restoreHelper: Effect.sync(() => {
+      helperLost = undefined;
+    }),
     crash: Effect.sync(() => exits.at(-1)?.()),
     constructors,
     launches,
@@ -364,6 +398,7 @@ export const fixture = Effect.fn(function* (
     manifestListings,
     helperAppListings,
     helperLaunches,
+    readiness,
     counts: () => ({ starts, stops, destroys }),
   };
 });
