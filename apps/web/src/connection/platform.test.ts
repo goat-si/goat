@@ -5,7 +5,7 @@ import {
   type DesktopBridge,
   type DesktopSshEnvironmentTarget,
 } from "@goat/contracts";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
