@@ -187,8 +187,6 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const settings = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
   const lifecycleLock = yield* Semaphore.make(1);
-  // Closes run one at a time so a close that is still shutting a device down
-  // keeps a concurrent identical close from shutting it down a second time.
   const closeLock = yield* Semaphore.make(1);
   const readDeviceSettings = settings.getSettings.pipe(
     Effect.map((value) => ({
@@ -694,11 +692,11 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     },
   );
 
-  const shutdownDevice = Effect.fn("DeviceService.shutdownDevice")(function* (
-    hostId: DeviceHostId,
-    deviceId: DeviceId,
-    platform: DevicePlatform,
-  ) {
+  const shutdownDevice = Effect.fn("DeviceService.shutdownDevice")(function* ({
+    hostId,
+    deviceId,
+    platform,
+  }: Pick<DeviceSession, "hostId" | "deviceId" | "platform">) {
     const ready = yield* readiness(hostId);
     yield* ready.devices.shutdown({ id: deviceId, platform });
     yield* publish((state) => ({
@@ -732,26 +730,20 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         (input.deviceId === undefined || session.deviceId === input.deviceId),
     );
     if (closing.length === 0) return;
-    if (!input.shutdown) {
-      yield* publish((current) => ({
-        ...current,
-        sessions: current.sessions.filter((session) => !closing.includes(session)),
-      }));
-      return;
-    }
-    // A successful shutdown removes that device's sessions; a failed one
-    // leaves its session in place so the same close can retry it.
-    yield* Effect.forEach(
-      closing,
-      (session) => shutdownDevice(session.hostId, session.deviceId, session.platform),
-      { discard: true },
-    );
+    // Each shutdown removes its device's sessions only once it succeeds, so a
+    // failed close stays retryable; the lock keeps a concurrent identical
+    // close from shutting the same device down twice.
+    if (input.shutdown) return yield* Effect.forEach(closing, shutdownDevice, { discard: true });
+    yield* publish((current) => ({
+      ...current,
+      sessions: current.sessions.filter((session) => !closing.includes(session)),
+    }));
   }, closeLock.withPermit);
 
   const shutdown: DeviceService["Service"]["shutdown"] = Effect.fn("DeviceService.shutdown")(
     function* (input) {
       const host = yield* resolveHost(input.hostId);
-      yield* shutdownDevice(host.id, input.deviceId, input.platform);
+      yield* shutdownDevice({ ...input, hostId: host.id });
       yield* publish((current) => ({
         ...current,
         sessions: current.sessions.filter(
