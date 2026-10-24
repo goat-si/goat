@@ -56,6 +56,7 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as FileSystem from "effect/FileSystem";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@goat/shared/mcpApp";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 import { resolveAttachmentPathById } from "../../attachmentStore.ts";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -4231,7 +4232,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const replayDriver = yield* CodexReplay.makeReplayDriver(localTranscript);
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         assert.equal(
-          Number(yield* spawner.exitCode(ChildProcess.make("git", ["init", "--quiet"], { cwd }))),
+          Number(
+            yield* spawner.exitCode(
+              ChildProcess.make("git", ["init", "--quiet"], { cwd, env: isolatedGitEnv() }),
+            ),
+          ),
           0,
         );
         assert.equal(
@@ -4250,7 +4255,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   "-m",
                   "Initial commit",
                 ],
-                { cwd },
+                { cwd, env: isolatedGitEnv() },
               ),
             ),
           ),
@@ -4377,7 +4382,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "Initial commit",
           ],
         ]) {
-          assert.equal(Number(yield* spawner.exitCode(ChildProcess.make("git", args, { cwd }))), 0);
+          assert.equal(
+            Number(
+              yield* spawner.exitCode(
+                ChildProcess.make("git", args, { cwd, env: isolatedGitEnv() }),
+              ),
+            ),
+            0,
+          );
         }
         yield* Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
