@@ -190,7 +190,11 @@ const canaryJwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnktand0In0.Y2FuYXJ5LWp3
 // A valid JWT whose header has spaces, so it does not start with "eyJ".
 const spacedJwt =
   "eyAiYWxnIjogIkhTMjU2IiwgInR5cCI6ICJKV1QiIH0.eyJzdWIiOiJjYW5hcnktd3Mtand0In0.Y2FuYXJ5LXdzLXNpZw";
+// A header that starts with a space, so it encodes as "IHsi…".
+const leadingSpaceJwt = `${Buffer.from(' {"alg":"HS256"}').toString("base64url")}.eyJzdWIiOiJjYW5hcnktbGVhZCJ9.c2ln`;
 const canaries = [
+  leadingSpaceJwt,
+  "canary-nested-cookie",
   "canaryGoatEnvToken0123456789",
   canaryJwt,
   spacedJwt,
@@ -207,9 +211,9 @@ const canaries = [
 /** An error whose message, own field and nested cause each carry a credential. */
 const leakyError = (label: string) =>
   Object.assign(
-    new Error(`${label} failed with ${canaryJwt} and ${spacedJwt}`, {
+    new Error(`${label} failed with ${canaryJwt}, ${spacedJwt} and ${leadingSpaceJwt}`, {
       cause: new Error(
-        'upstream echoed {"access_token":"canary-json-token","setCookie":["sid=canary-array-cookie"]}',
+        'upstream echoed {"access_token":"canary-json-token","setCookie":["sid=canary-array-cookie"],"cookie":[["a"],"canary-nested-cookie"]}',
       ),
     }),
     {

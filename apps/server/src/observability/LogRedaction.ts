@@ -21,23 +21,103 @@ const MASK = "***";
 const CREDENTIAL_KEY = String.raw`(?:(?:access|refresh|id|session|auth|bearer|csrf|xsrf|api|client)[_-]?)?token|(?:x[_-])?api[_-]?key|client[_-]?secret|secret|password|passwd|authorization|(?:set[_-]?)?cookie`;
 const isCredentialKey = new RegExp(`^(?:${CREDENTIAL_KEY})$`, "i");
 
-// The body of a quoted string, up to its own unescaped closing quote: in JSON, in a single-quoted
-// repr, and in JSON escaped inside another JSON string, where \\ and \" are themselves escaped.
-const DOUBLE_BODY = String.raw`(?:\\.|[^"\\])*`;
-const SINGLE_BODY = String.raw`(?:\\.|[^'\\])*`;
-const ESCAPED_BODY = String.raw`(?:\\\\(?:\\\\|\\"|[^\\"])|[^\\"])*`;
-const QUOTINGS = [
-  [String.raw`\\"`, ESCAPED_BODY],
-  ['"', DOUBLE_BODY],
-  ["'", SINGLE_BODY],
-] as const;
 // A value after = or :, whole when it is quoted.
-const VALUE = String.raw`(?:"${DOUBLE_BODY}"?|'${SINGLE_BODY}'?|\S+)`;
+const VALUE = String.raw`(?:"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|\S+)`;
+
+/**
+ * A credential-named field in JSON, a dict repr or JSON escaped inside another JSON string. Its
+ * whole value is masked, however it is quoted or nested; see {@link valueEnd}.
+ */
+const CREDENTIAL_FIELDS = [
+  { key: String.raw`\\"`, escaped: true },
+  { key: '"', escaped: false },
+  { key: "'", escaped: false },
+].map(({ key, escaped }) => ({
+  field: new RegExp(String.raw`${key}(?:${CREDENTIAL_KEY})${key}\s*:\s*`, "gi"),
+  escaped,
+}));
+
+const ESCAPED_QUOTE = '\\"';
+const ESCAPED_BACKSLASH = "\\\\";
+
+/**
+ * Where the JSON value starting at start ends: a string up to its own closing quote, an array or
+ * object up to its matching bracket, a bare value up to a separator. In escaped JSON, quotes and
+ * backslashes are themselves escaped. A value that never closes runs to the end of the text, so a
+ * cut or malformed value is hidden whole.
+ */
+function valueEnd(text: string, start: number, escaped: boolean): number {
+  let depth = 0;
+  let quote: string | undefined;
+  let index = start;
+  while (index < text.length) {
+    if (quote !== undefined) {
+      if (escaped) {
+        if (text.startsWith(ESCAPED_BACKSLASH, index)) {
+          const next = text.slice(index + 2, index + 4);
+          index += next === ESCAPED_BACKSLASH || next === ESCAPED_QUOTE ? 4 : 3;
+          continue;
+        }
+        if (text.startsWith(ESCAPED_QUOTE, index)) {
+          quote = undefined;
+          index += 2;
+          if (depth === 0) return index;
+          continue;
+        }
+      } else if (text[index] === "\\") {
+        index += 2;
+        continue;
+      } else if (text[index] === quote) {
+        quote = undefined;
+        index += 1;
+        if (depth === 0) return index;
+        continue;
+      }
+      index += 1;
+      continue;
+    }
+    const char = text.charAt(index);
+    if (escaped ? text.startsWith(ESCAPED_QUOTE, index) : char === '"' || char === "'") {
+      quote = escaped ? ESCAPED_QUOTE : char;
+      index += quote.length;
+      continue;
+    }
+    if (char === "[" || char === "{") depth += 1;
+    else if (char === "]" || char === "}") {
+      if (depth === 0) return index;
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    } else if (depth === 0 && (char === "," || char === "\\" || /\s/.test(char))) return index;
+    index += 1;
+  }
+  return text.length;
+}
+
+function maskCredentialFields(text: string): string {
+  let masked = text;
+  for (const { field, escaped } of CREDENTIAL_FIELDS) {
+    let out = "";
+    let shown = 0;
+    field.lastIndex = 0;
+    for (let match = field.exec(masked); match !== null; match = field.exec(masked)) {
+      if (match.index < shown) continue;
+      const start = match.index + match[0].length;
+      const end = valueEnd(masked, start, escaped);
+      out += masked.slice(shown, start) + MASK;
+      shown = end;
+      field.lastIndex = Math.max(end, start);
+    }
+    masked = out + masked.slice(shown);
+  }
+  return masked;
+}
 
 /** Whether a base64url part decodes to a JWT or JWE header: a JSON object naming its alg. */
 function isJoseHeader(part: string): boolean {
+  const decoded = Buffer.from(part, "base64url").toString("utf8");
+  if (!/^\s*\{/.test(decoded)) return false;
   try {
-    const header: unknown = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    const header: unknown = JSON.parse(decoded);
     return typeof header === "object" && header !== null && "alg" in header;
   } catch {
     return false;
@@ -45,53 +125,12 @@ function isJoseHeader(part: string): boolean {
 }
 
 const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => string)]> = [
-  // "setCookie": ["a=1", "b=2"]: every element of a credential array, whatever it holds
-  ...QUOTINGS.map(
-    ([quote, body]) =>
-      [
-        new RegExp(
-          String.raw`(${quote}(?:${CREDENTIAL_KEY})${quote}\s*:\s*)\[(?:\s*(?:${quote}${body}(?:${quote})?|[^\]\\"',\s]+)\s*,?)*\s*\]?`,
-          "gi",
-        ),
-        `$1[${MASK}]`,
-      ] as const,
-  ),
-  // "cookie": {"sid": "..."}: a credential object, up to its first closing brace
-  ...QUOTINGS.map(
-    ([quote, body]) =>
-      [
-        new RegExp(
-          String.raw`(${quote}(?:${CREDENTIAL_KEY})${quote}\s*:\s*)\{(?:${quote}${body}(?:${quote})?|[^{}"'\\])*\}?`,
-          "gi",
-        ),
-        `$1{${MASK}}`,
-      ] as const,
-  ),
-  // "access_token": "value"
-  ...QUOTINGS.map(
-    ([quote, body]) =>
-      [
-        new RegExp(String.raw`(${quote}(?:${CREDENTIAL_KEY})${quote}\s*:\s*${quote})${body}`, "gi"),
-        `$1${MASK}`,
-      ] as const,
-  ),
-  // "pin": 1234: a credential field's bare number, boolean or null
-  ...QUOTINGS.map(
-    ([quote]) =>
-      [
-        new RegExp(
-          String.raw`(${quote}(?:${CREDENTIAL_KEY})${quote}\s*:\s*)(?![\s"'[{\\])[^,}\]\s]+`,
-          "gi",
-        ),
-        `$1${MASK}`,
-      ] as const,
-  ),
   // Cookie and Set-Cookie headers hold every cookie up to the end of the line.
   [/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/gi, `$1${MASK}`],
-  // A JWT or JWE: base64url parts led by a JSON header. "{" followed by a quote or whitespace
-  // encodes as "ey" or "ew"; checking the header keeps dotted names such as eyes.width.px.
+  // A JWT or JWE: dotted base64url parts whose first decodes to a JSON header, whatever
+  // whitespace the header holds. Dotted names such as serverLogger.test.ts are left alone.
   [
-    /\be[wy][A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]*){2,4}/g,
+    /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*){2,4}/g,
     (match) => (isJoseHeader(match.slice(0, match.indexOf("."))) ? MASK : match),
   ],
   // https://user:token@host/repo.git
@@ -125,7 +164,7 @@ export function redactLogText(text: string): string {
       typeof replacement === "string"
         ? current.replace(pattern, replacement)
         : current.replace(pattern, replacement),
-    redactGoatCredentials(scanned),
+    maskCredentialFields(redactGoatCredentials(scanned)),
   );
   return redacted.length <= MAX_STRING && scanned === text
     ? redacted
@@ -303,7 +342,7 @@ function sanitize(value: unknown, depth: number, budget: Budget): unknown {
     case "symbol":
       return text(`Symbol(${value.description ?? ""})`, budget);
     case "function":
-      return text(`[Function ${value.name || "anonymous"}]`, budget);
+      return text(`[Function ${functionName(value)}]`, budget);
   }
   if (typeof value !== "object" || value === null) return null;
   if (budget.path.has(value)) return "[Circular]";
@@ -395,6 +434,12 @@ function property(
   if (!("value" in descriptor)) return "[Getter]";
   if (credential && descriptor.value !== undefined && descriptor.value !== null) return MASK;
   return sanitize(descriptor.value, depth + 1, budget);
+}
+
+/** A function's own name, read without running a getter. */
+function functionName(fn: Function): string {
+  const name: unknown = Object.getOwnPropertyDescriptor(fn, "name")?.value;
+  return typeof name === "string" && name.length > 0 ? name : "anonymous";
 }
 
 function dateText(date: Date): string {

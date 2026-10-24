@@ -12,6 +12,8 @@ import { defectSummary, redactCause, redactLogMessage, redactLogText } from "./L
 // Synthetic canaries throughout; none of them is a real credential.
 const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnkifQ.Y2FuYXJ5LXNpZ25hdHVyZQ";
 // The header { "alg": "HS256", "typ": "JWT" }, with spaces, encodes as "eyAi…".
+// A header that starts with a space, so it encodes as "IHsi…".
+const leadingSpaceJwt = `${Buffer.from(' {"alg":"HS256"}').toString("base64url")}.eyJzdWIiOiJjYW5hcnkifQ.c2ln`;
 const spacedJwt =
   "eyAiYWxnIjogIkhTMjU2IiwgInR5cCI6ICJKV1QiIH0.eyJzdWIiOiJjYW5hcnktd3Mtand0In0.Y2FuYXJ5LXdzLXNpZw";
 
@@ -31,24 +33,28 @@ describe("redactLogText", () => {
     [`session ${jwt} expired`, "session *** expired"],
     ["Cookie: sid=abc; theme=dark", "Cookie: ***"],
     ["Set-Cookie: sid=abc; Path=/; HttpOnly\nnext line", "Set-Cookie: ***\nnext line"],
-    ['{"access_token":"abc123","expires_in":3600}', '{"access_token":"***","expires_in":3600}'],
-    ['{\\"refreshToken\\":\\"abc123\\"}', '{\\"refreshToken\\":\\"***\\"}'],
-    ["{'password': 'hunter2'}", "{'password': '***'}"],
-    ['{"set-cookie":["a=1","b=2"],"status":200}', '{"set-cookie":[***],"status":200}'],
+    ['{"access_token":"abc123","expires_in":3600}', '{"access_token":***,"expires_in":3600}'],
+    ['{\\"refreshToken\\":\\"abc123\\"}', '{\\"refreshToken\\":***}'],
+    ["{'password': 'hunter2'}", "{'password': ***}"],
+    ['{"set-cookie":["a=1","b=2"],"status":200}', '{"set-cookie":***,"status":200}'],
     // A value holding the other quote, a bracket or an escaped quote is hidden whole.
-    [`{"cookie":"sid=prefix'CANARY"}`, '{"cookie":"***"}'],
-    ['{"set-cookie":["sid=before]CANARY; Path=/"]}', '{"set-cookie":[***]}'],
-    ['{"token":"abc\\"CANARY"}', '{"token":"***"}'],
-    ['{\\"token\\":\\"abc\\\\\\"CANARY\\"}', '{\\"token\\":\\"***\\"}'],
-    ["{'password': 'it\\'s CANARY'}", "{'password': '***'}"],
+    [`{"cookie":"sid=prefix'CANARY"}`, '{"cookie":***}'],
+    ['{"set-cookie":["sid=before]CANARY; Path=/"]}', '{"set-cookie":***}'],
+    ['{"token":"abc\\"CANARY"}', '{"token":***}'],
+    ['{\\"token\\":\\"abc\\\\\\"CANARY\\"}', '{\\"token\\":***}'],
+    ["{'password': 'it\\'s CANARY'}", "{'password': ***}"],
     ['password="two CANARY words" user=me', "password=*** user=me"],
     // Credential fields holding arrays, objects or bare values, and a JWT whose header has spaces.
     [
       '{"setCookie":["sid=CANARY; Path=/"],"cookie":["sid=CANARY", 7]}',
-      '{"setCookie":[***],"cookie":[***]}',
+      '{"setCookie":***,"cookie":***}',
     ],
-    ['{"cookie":{"sid":"CANARY"},"status":200}', '{"cookie":{***},"status":200}'],
+    ['{"cookie":{"sid":"CANARY"},"status":200}', '{"cookie":***,"status":200}'],
     ['{"password":123456,"ok":true}', '{"password":***,"ok":true}'],
+    ['{"cookie":[["first"],"CANARY"],"status":200}', '{"cookie":***,"status":200}'],
+    ['{"token":{"value":{"inner":"CANARY"},"next":"CANARY"},"ok":1}', '{"token":***,"ok":1}'],
+    ['{"token":"never closed CANARY', '{"token":***'],
+    [`whitespace ${leadingSpaceJwt} header`, "whitespace *** header"],
     [`id ${spacedJwt} expired`, "id *** expired"],
   ])("redacts %j", (text, expected) => {
     expect(redactLogText(text)).toBe(expected);
@@ -62,6 +68,7 @@ describe("redactLogText", () => {
     "https://github.com/goat-si/goat/pull/1388",
     '{"tokenCount":3,"secretName":"memory-hub-internal"}',
     "eyes.width.px and ewma.window.size=3",
+    "apps/server/src/serverLogger.test.ts and collector.example.com.local",
   ])("leaves %j as it is", (text) => {
     expect(redactLogText(text)).toBe(text);
   });
@@ -104,7 +111,7 @@ describe("redactCause", () => {
 
     const printed = Cause.pretty(redacted);
     expect(printed).toContain("TypeError: bad header Cookie: ***");
-    expect(printed).toContain('upstream said {"token":"***"}');
+    expect(printed).toContain('upstream said {"token":***}');
     expect(printed).not.toContain("canary");
     expect(Cause.squash(redacted)).not.toHaveProperty("headers");
     const exported = Cause.prettyErrors(redacted, { includeCauseInStack: true });
@@ -278,6 +285,15 @@ describe("redactLogMessage", () => {
     expect(typeof huge).toBe("string");
     expect(String(huge).length).toBeLessThanOrEqual(64_001);
     expect(redactLogMessage(42n)).toBe(42n);
+  });
+
+  it("names a function without running a name getter", () => {
+    const fn = Object.defineProperty(function () {}, "name", {
+      get() {
+        throw new Error("getter must not run");
+      },
+    });
+    expect(redactLogMessage({ fn })).toEqual({ fn: "[Function anonymous]" });
   });
 
   it("bounds a deep or wide message", () => {
