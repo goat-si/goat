@@ -62,9 +62,9 @@ export const runtimePolicy = {
   interactionMode: "default" as const,
   cwd: "/fixture",
 };
-export const selection = Schema.decodeSync(ModelSelection)({ provider: instanceId, model: "auto" });
+const selection = Schema.decodeSync(ModelSelection)({ provider: instanceId, model: "auto" });
 
-export const decodeAppThread = Schema.decodeEffect(OrchestrationV2AppThread);
+const decodeAppThread = Schema.decodeEffect(OrchestrationV2AppThread);
 export const decodeAttachment = Schema.decodeEffect(ChatAttachment);
 
 export const harness = Effect.gen(function* () {
