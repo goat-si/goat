@@ -54,6 +54,7 @@ const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
     send: (line: string) => Queue.offer(input, line),
     push: (update: ComputerUseLeaseUpdate) =>
       Queue.offer(updates, update).pipe(Effect.andThen(Queue.take(pulls))),
+    raw: Queue.take(output),
     answer: Queue.take(output).pipe(
       Effect.map(
         (line) =>
@@ -123,5 +124,25 @@ it.effect(
       // The cursor drew it as acting; the refusal settles that, as a reply would.
       assert.deepInclude(h.overlay.at(0), { op: "show", phase: "acting" });
       assert.deepInclude(h.overlay.at(-1), { op: "show", phase: "resting" });
+    }),
+);
+
+it.effect(
+  "refuses a provider request under the proxy's own ids, so its answer cannot pass for a listing",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active);
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "goat-proxy:apps:0",
+          method: "tools/call",
+          params: { name: "list_windows", arguments: {} },
+        }),
+      );
+      const answer = JSON.parse(yield* h.raw) as { readonly error?: { readonly code: number } };
+      assert.equal(answer.error?.code, -32600);
+      assert.equal(yield* h.driverQueued, 0);
     }),
 );

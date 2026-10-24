@@ -120,6 +120,8 @@ export function scopeVerdict(input: {
  * bundle id; a display name taken as an id would let a grant naming it reach an app another
  * grant names by bundle id. They can only drop a pid whose app they name differently, which
  * also catches a pid reused by another app, so it is listed again before it is judged.
+ * In a listing, an object with a pid is one app's entry; what it nests, such as its windows,
+ * is not read, since a window names its app without the bundle id.
  */
 export function learnApps(
   value: unknown,
@@ -138,8 +140,11 @@ export function learnApps(
   const name = text(object.app_name) ?? text(object.name);
   const id = text(object.bundle_id) ?? name;
   if (typeof pid === "number" && Number.isInteger(pid) && id !== undefined) {
-    if (listing) into.set(pid, { id, name });
-    else if (into.get(pid)?.id !== id) into.delete(pid);
+    if (listing) {
+      into.set(pid, { id, name });
+      return;
+    }
+    if (into.get(pid)?.id !== id) into.delete(pid);
   }
   for (const nested of Object.values(object))
     if (typeof nested === "object" && nested !== null) learnApps(nested, into, listing, depth + 1);

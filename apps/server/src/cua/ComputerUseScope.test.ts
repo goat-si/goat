@@ -84,4 +84,17 @@ describe("scopeVerdict", () => {
       { _tag: "allow" },
     );
   });
+
+  it("takes a listed app's bundle id over the windows its entry nests", () => {
+    const listed = new Map<number, ListedApp>();
+    learnApps(
+      {
+        apps: [{ ...KAKAO, windows: [{ pid: KAKAO.pid, app_name: KAKAO.name, window_id: 57000 }] }],
+      },
+      listed,
+      true,
+    );
+    assert.deepEqual(listed.get(KAKAO.pid), { id: KAKAO.bundle_id, name: KAKAO.name });
+    assert.deepEqual(verdict(listed), { _tag: "allow" });
+  });
 });

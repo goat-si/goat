@@ -385,10 +385,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           const message = parse(line);
           if (message?.id !== undefined && message.id !== null && message.method === undefined) {
             const own = typeof message.id === "string" && message.id.startsWith(OWN_ID);
-            const asked = own
-              ? String(message.id).startsWith(`${OWN_ID}apps:`)
+            // Only the answer to a list_apps request still waiting for it says which app a pid is.
+            const listing = own
+              ? String(message.id).startsWith(`${OWN_ID}apps:`) &&
+                ownAnswers.has(String(message.id))
               : outstanding.get(JSON.stringify(message.id))?.tool === "list_apps";
-            learnApps(message.result, listed, asked);
+            learnApps(message.result, listed, listing);
             if (own) {
               const waiter = ownAnswers.get(message.id);
               ownAnswers.delete(message.id);
@@ -658,6 +660,16 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const message = parse(line);
     const id = message?.id;
     const isRequest = id !== undefined && id !== null && message?.method !== undefined;
+    // The proxy's own ids are reserved: an answer under one would pass for the proxy's own
+    // list_apps lookup and could teach it which app a pid is.
+    if (isRequest && typeof id === "string" && id.startsWith(OWN_ID))
+      return yield* options.output(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          error: { code: -32600, message: `Request ids starting with ${OWN_ID} are reserved.` },
+        }),
+      );
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);
     if (finished !== undefined) {
