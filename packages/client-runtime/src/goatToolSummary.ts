@@ -402,6 +402,9 @@ export function summarizeGoatToolCalls(
         quantity(countEntities(entityIds("attachmentId")), "attachment upload"),
       );
       break;
+    case "attachment-list":
+      label = phrase("Listed", "list", `pending attachment uploads ${times}`);
+      break;
     case "attachment-discard":
       label = phrase(
         "Discarded",
