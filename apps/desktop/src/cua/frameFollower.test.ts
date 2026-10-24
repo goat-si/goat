@@ -168,8 +168,9 @@ describe("frameFollower", () => {
     const calls: Array<string> = [];
     const { follower, published, retries } = follow();
     const helper = fakeSession(calls, "h1", { hold: true });
-    await follower.attach(helper);
-    const first = follower.setRequest(request(4));
+    // Asked for before the generation attached, so its first request is the capture itself.
+    await follower.setRequest(request(4));
+    const first = follower.attach(helper);
     helper.held.shift()?.reject();
     await first;
     await follower.setRequest(request(5, []));
@@ -177,5 +178,26 @@ describe("frameFollower", () => {
     for (const retry of retries.splice(0)) retry();
     helper.sendLast();
     expect(published.filter((frame) => frame.type === "cuaFrame")).toEqual([]);
+  });
+
+  it("never reports a failure of an attempt a newer one already replaced", async () => {
+    const calls: Array<string> = [];
+    const { follower, published, retries } = follow();
+    const helper = fakeSession(calls, "h1", { hold: true });
+    await follower.attach(helper);
+    const a = follower.setRequest(request(4));
+    helper.held.shift()?.reject();
+    await a;
+    // B starts, then A's retry sends B again; the second attempt is answered first.
+    void follower.setRequest(request(5));
+    for (const retry of retries.splice(0)) retry();
+    helper.held.pop()?.release();
+    await Promise.resolve();
+    published.length = 0;
+    helper.held.shift()?.reject();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(published).toEqual([]);
+    expect(retries).toEqual([]);
   });
 });

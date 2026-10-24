@@ -96,8 +96,9 @@ export function makeFrameFollower(deps: {
       if (wanted.targets.length === 0 && capturing === current && request === wanted)
         capturing = undefined;
     } catch {
-      // Only the request still wanted matters; a newer one was already written after it.
-      if (session !== current || request !== wanted) return;
+      // Only the newest write matters: a later one, even a retry of this same request, was
+      // written after it and the helper reads them in order.
+      if (session !== current || framesId !== lastFramesId) return;
       refuse("captureFailed");
       retry();
     }
