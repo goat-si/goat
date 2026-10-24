@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- runs a real child to read its effective temp dir.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import {
   memoryToolAvailability,
@@ -86,5 +90,24 @@ describe("thread CLI environment", () => {
       PROVIDER_KEY: "fixture-provider",
     });
     expect(inherited.GOAT_ACP_MCP_AUTHORIZATION).toBe("Bearer parent");
+  });
+
+  it("gives a thread's processes its own temp dir on every platform and keeps the system one (#1206)", () => {
+    const thread = NodePath.join(NodeOS.tmpdir(), "goat-threads-fixture", "thread");
+    const system = NodeOS.tmpdir();
+    const env = withThreadMcpEnvironment(process.env, {
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer fixture",
+      temporaryDirectory: thread,
+      systemTemporaryDirectory: system,
+    });
+    const child = NodeChildProcess.spawnSync(
+      process.execPath,
+      ["-e", "process.stdout.write(require('node:os').tmpdir())"],
+      { env, encoding: "utf8" },
+    );
+
+    expect(child.stdout).toBe(thread);
+    expect(env.GOAT_SYSTEM_TMPDIR).toBe(system);
   });
 });
