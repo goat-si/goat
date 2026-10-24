@@ -38,6 +38,9 @@ export function PreviewSessionThumbnail(props: {
   const { session } = props;
   if (session.owner === "private")
     return <Placeholder icon="lock" text="Private (paused) while a person enters a secret" />;
+  // A person who took over is working in their own view; other clients do not watch them.
+  if (session.owner === "human")
+    return <Placeholder icon="lock" text="A person is controlling this tab" />;
   if (session.target.kind === "browser" && session.capabilities.frames)
     return (
       // The built-in browser's own surface, so a tile and the full preview are one view.
