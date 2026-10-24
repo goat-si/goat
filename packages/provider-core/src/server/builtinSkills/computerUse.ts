@@ -13,12 +13,12 @@ The \`cua-driver\` tools act on the computer the person is using right now. Use 
 ## Observe
 - Pick the window yourself: \`list_windows\`, then pass that window's \`pid\` and \`window_id\` to every call. Never act on whatever happens to be frontmost.
 - Read narrow first. \`get_window_state\` with \`query\` returns the rows whose text contains it, with their ancestors; \`max_elements\` and \`max_depth\` bound the walk. A filtered or truncated tree cannot show that something is absent.
-- After acting, read with \`since: "latest"\` to get only what changed. Every read issues a new snapshot id and retires the old tokens, so act only with \`element_token\` values from the newest read. Changing \`query\` or a limit gives a full read.
+- After acting, read with \`since: "latest"\` to get only what changed. Every tree read of a window issues a new snapshot id and retires that window's earlier tokens, so act only with \`element_token\` values from the newest tree read; a screenshot-only read (\`include_accessibility_tree: false\`) keeps them. Changing \`query\` or a limit gives a full read.
 - Take only what you need: \`include_screenshot: false\` when the tree answers the question, a screenshot when the tree is empty, mislabeled or drawn (canvas, many Electron apps). Points are pixels of that window's latest screenshot.
 
 ## Act
 - One action, then check it. Prefer element tokens; use points only for controls the tree lacks.
-- \`set_value\` replaces a field's value. If nothing applied, click the field, select all with \`hotkey\`, \`type_text\`, and read the value back. Some fields commit only on Tab or Return.
+- \`set_value\` replaces a field's whole value; \`type_text\` inserts at the caret. When a fresh read shows \`set_value\` did not apply and you meant to replace, click the field, select all with \`hotkey\`, \`type_text\`, and read the value back. Some apps keep a field's value only after Tab or Return; check the committed value, not just the field.
 - \`type_text\` inserts text and presses no keys; send Return, Escape, Tab and arrows with \`press_key\`. When it refuses long text and names a chunk size, send the text in chunks of that size.
 - Keep the default background delivery. Keys go to the target app, so system-wide shortcuts do nothing. Foreground delivery and \`bring_to_front\` take the person's screen: ask them first, and only after background input did not land.
 - Wait with \`verify_state\`, never a sleep: name the outcome you expect (an element by role or label that exists, has a value, is enabled or selected; a window that exists or has given bounds) and at most 10 s. It cannot wait for something to disappear; read the window again instead. An unknown result proves nothing.

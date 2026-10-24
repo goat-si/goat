@@ -146,7 +146,8 @@ describe("computer use skill against what agents receive today", () => {
       "element_token",
     ])
       expect(codeSpans, argument).toContain(argument);
-    expect(guidance).toMatch(/new snapshot id and retires the old tokens/);
+    expect(guidance).toMatch(/tree read of a window issues a new snapshot id and retires/);
+    expect(guidance).toMatch(/screenshot-only read .* keeps them/);
   });
 
   it("waits on an expected outcome with verify_state and never promises a wait for absence", () => {
