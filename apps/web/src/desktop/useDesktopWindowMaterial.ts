@@ -1,9 +1,15 @@
 import type { DesktopWindowMaterialState } from "@goat/contracts";
 import { useEffect, useState } from "react";
 
+// Older desktop builds lack the material bridge; their clients keep the CSS-only settings.
+export function hasDesktopWindowMaterialApi(): boolean {
+  const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
+  return Boolean(bridge?.getWindowMaterialState && bridge.onWindowMaterialStateChanged);
+}
+
 export function useDesktopWindowMaterial() {
   const bridge = window.desktopBridge;
-  const available = Boolean(bridge?.getWindowMaterialState && bridge.onWindowMaterialStateChanged);
+  const available = hasDesktopWindowMaterialApi();
   const [state, setState] = useState<DesktopWindowMaterialState | null>(null);
 
   useEffect(() => {

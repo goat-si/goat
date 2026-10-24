@@ -14,5 +14,6 @@ export const GLASS_SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
     searchTerms: ["native transparency mica windows accessibility"],
     desktopOnly: true,
+    requiresDesktopWindowMaterial: true,
   },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;

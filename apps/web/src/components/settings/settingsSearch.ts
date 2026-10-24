@@ -10,6 +10,7 @@ import { DEFAULT_KEYBINDINGS } from "@goat/shared/keybindings";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import { BROWSER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBrowserItems";
 import { GLASS_SETTINGS_SEARCH_ITEMS } from "./settingsSearchGlassItems";
+import { hasDesktopWindowMaterialApi } from "../../desktop/useDesktopWindowMaterial";
 import {
   validateSettingsScopeSearch,
   type ResolvedSettingsScope,
@@ -65,6 +66,7 @@ export interface SettingsSearchItem {
   readonly secondary?: boolean;
   readonly requiresMemory?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
+  readonly requiresDesktopWindowMaterial?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -1339,6 +1341,7 @@ export function searchSettings(
   return items
     .flatMap((item, index) => {
       if (!isElectron && item.desktopOnly === true) return [];
+      if (item.requiresDesktopWindowMaterial && !hasDesktopWindowMaterialApi()) return [];
       if (item.releaseChannelOnly && !isElectron && HOSTED_APP_CHANNEL === null) return [];
       if (item.macOnly && !isMacPlatform(platform)) return [];
       if (item.windowsOnly && !isWindowsPlatform(platform)) return [];
