@@ -28,12 +28,15 @@ export interface HelperReadinessState {
 
 /**
  * The safety signals a desktop host's helper raises (#1235): a focused secure field when the
- * running helper said it can watch for one. None reports a person's input yet, so unattended
- * turns stay refused.
+ * running helper said it can watch for one, and a person's input when its agent connections
+ * report it (macOS, through the lease proxy). Without both, unattended turns stay refused.
  */
-export const helperSignals = (canWatch: boolean): ComputerUseCapabilities["signals"] => ({
+export const helperSignals = (
+  canWatch: boolean,
+  reportsInput: boolean,
+): ComputerUseCapabilities["signals"] => ({
   privateMode: canWatch ? "supported" : "unsupported",
-  humanInput: "unsupported",
+  humanInput: reportsInput ? "supported" : "unsupported",
 });
 
 export const initialHelperReadiness: HelperReadinessState = {

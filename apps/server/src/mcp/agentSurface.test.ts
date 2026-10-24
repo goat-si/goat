@@ -55,7 +55,7 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(203); // Includes saved HTML page reconciliation alongside the existing agent tools.
+  expect(entries).toHaveLength(205); // Includes the pending upload and origin report receipt reconcile reads.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -390,6 +390,9 @@ const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
 // Inputs the schema sampler cannot satisfy, and reads that reach other machines with this
 // machine's SSH keys unless asked for the local answer.
 const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
+  "decision.list": {},
+  "decision.read": { id: "decision:fixture" },
+  "decision.answer": { id: "decision:fixture", optionId: "wait", reason: "Wait for capacity" },
   "note.read": { path: "inbox/note.md" },
   "note.write": { path: "inbox/note.md", body: "- [ ] item", status: null, baseRevision: null },
   "note.update": { path: "inbox/note.md", pinned: true },

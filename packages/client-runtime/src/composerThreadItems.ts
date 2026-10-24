@@ -18,23 +18,22 @@ export interface ComposerThreadItem {
   readonly description: string;
 }
 
-/**
- * The agent can only read threads on its own server, so candidates stay within the
- * composer's environment.
- */
+/** Foreign candidates require an SSH route settled by the caller for this agent. */
 export function matchComposerThreadItems(input: {
   shells: ReadonlyArray<ComposerThreadCandidate>;
   environmentId: EnvironmentId;
   excludeThreadId: ThreadId | null;
   query: string;
+  sshHostsByEnvironment?: ReadonlyMap<EnvironmentId, string>;
 }): ComposerThreadItem[] {
   const query = input.query.trim().toLowerCase();
   if (query.length === 0) return [];
   return input.shells
     .filter(
       (shell) =>
-        shell.environmentId === input.environmentId &&
-        shell.id !== input.excludeThreadId &&
+        (shell.environmentId === input.environmentId ||
+          input.sshHostsByEnvironment?.has(shell.environmentId)) &&
+        !(shell.environmentId === input.environmentId && shell.id === input.excludeThreadId) &&
         shell.archivedAt === null &&
         shell.title.toLowerCase().includes(query),
     )
@@ -45,6 +44,9 @@ export function matchComposerThreadItems(input: {
       type: "thread",
       thread: { environmentId: shell.environmentId, threadId: shell.id },
       label: shell.title,
-      description: "Thread",
+      description:
+        shell.environmentId === input.environmentId
+          ? "Thread"
+          : `Thread · ${input.sshHostsByEnvironment?.get(shell.environmentId)}`,
     }));
 }
