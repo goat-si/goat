@@ -1,4 +1,3 @@
-import * as NodeOS from "node:os";
 import {
   DEFAULT_CLIENT_SETTINGS,
   type DesktopWindowMaterialState,
@@ -22,7 +21,8 @@ import {
   syncWindowAppearance,
 } from "../DesktopWindowAppearance.ts";
 import * as Adapters from "./adapters.ts";
-import { probeCapability, resolveWindowMaterial } from "./materialPolicy.ts";
+import { resolveWindowMaterial } from "./materialPolicy.ts";
+import * as MaterialPlatform from "./materialPlatform.ts";
 
 export class WindowMaterialSenderError extends Schema.TaggedError<WindowMaterialSenderError>()(
   "WindowMaterialSenderError",
@@ -57,18 +57,11 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const theme = yield* ElectronTheme.ElectronTheme;
   const settingsStore = yield* DesktopClientSettings.DesktopClientSettings;
-  const adapter = yield* Adapters.WindowMaterialAdapter;
+  const { capability, adapter } = yield* MaterialPlatform.DesktopMaterialPlatform;
   const scope = yield* Scope.Scope;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
   const windows = new Map<number, WindowRecord>();
-  const capability = probeCapability({
-    platform: environment.platform,
-    macOSMajor: null,
-    windowsBuild: Number(NodeOS.release().split(".")[2]) || null,
-    hasBackgroundMaterialApi:
-      typeof Electron.BrowserWindow?.prototype?.setBackgroundMaterial === "function",
-  });
   let settings = DEFAULT_CLIENT_SETTINGS;
   let settingsRevision = 0;
   let dark = yield* theme.shouldUseDarkColors;
@@ -85,7 +78,7 @@ export const make = Effect.gen(function* () {
     });
 
   const publish = (entry: WindowRecord, reason: DesktopWindowMaterialReason) => {
-    const applied = reason === "active" ? adapter.kind : ("none" as const);
+    const applied = reason === "active" && adapter !== null ? adapter.kind : ("none" as const);
     const next = {
       capability,
       enabled: settings.desktopSystemMaterialEnabled,
@@ -124,8 +117,9 @@ export const make = Effect.gen(function* () {
       publish(entry, reason);
     } finally {
       // Release while Electron's native handle is still valid, including on close.
-      entry.attachment?.releaseSync();
+      const attachment = entry.attachment;
       entry.attachment = undefined;
+      attachment?.releaseSync();
     }
   };
 
@@ -139,6 +133,8 @@ export const make = Effect.gen(function* () {
       disableSync(entry, desired.reason);
       return;
     }
+    if (adapter === null) return;
+    const appearance = () => ({ dark, glassOpacity: settings.glassOpacity });
     if (entry.attachment === undefined) {
       const prepared = yield* adapter.prepare().pipe(Effect.result);
       if (
@@ -153,7 +149,7 @@ export const make = Effect.gen(function* () {
         return;
       }
       try {
-        entry.attachment = adapter.attachSync(entry.window);
+        entry.attachment = adapter.attachSync(entry.window, appearance());
         entry.window.setBackgroundColor("#00000000");
         updateOverlay(entry, true);
         publish(entry, "active");
@@ -162,9 +158,15 @@ export const make = Effect.gen(function* () {
         yield* Effect.logWarning("Could not attach desktop window material.", cause);
       }
     } else {
-      entry.window.setBackgroundColor("#00000000");
-      updateOverlay(entry, true);
-      publish(entry, "active");
+      try {
+        entry.attachment.updateSync(appearance());
+        entry.window.setBackgroundColor("#00000000");
+        updateOverlay(entry, true);
+        publish(entry, "active");
+      } catch (cause) {
+        disableSync(entry, "native-failed");
+        yield* Effect.logWarning("Could not update desktop window material.", cause);
+      }
     }
   });
 
@@ -299,6 +301,10 @@ export const make = Effect.gen(function* () {
         if (window.isDestroyed()) return;
         dark = shouldUseDarkColors;
         const entry = windows.get(window.webContents.id);
+        if (entry !== undefined && !entry.closed) {
+          yield* request(entry);
+          return;
+        }
         yield* syncWindowAppearance(
           window,
           dark,

@@ -145,3 +145,17 @@ it.each([
   await expect.element(screen.getByText(copy)).toBeVisible();
   await expect.element(screen.getByRole("switch", { name: "System glass" })).toBeEnabled();
 });
+it("labels active macOS glass as a development candidate", async () => {
+  using _fixture = materialBridge(
+    materialState({
+      capability: { supported: true, material: "macos-glass" },
+      applied: "macos-glass",
+      reason: "active",
+    }),
+    "darwin",
+  );
+  await using screen = await render(<Setting />);
+  await expect
+    .element(screen.getByText("Using system glass (development candidate)."))
+    .toBeVisible();
+});

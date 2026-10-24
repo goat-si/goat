@@ -84,6 +84,8 @@ import * as PreviewPasskeys from "./preview/Passkeys.ts";
 import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWindowMaterial from "./window/material/DesktopWindowMaterial.ts";
 import * as WindowMaterialAdapters from "./window/material/adapters.ts";
+import * as MaterialPlatform from "./window/material/materialPlatform.ts";
+import * as MacosObjcRuntime from "./electron/MacosObjcRuntime.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
@@ -218,7 +220,17 @@ const layerDesktopPreview = PreviewManager.layer.pipe(
 );
 
 const layerDesktopMaterial = DesktopWindowMaterial.layer.pipe(
-  Layer.provide(WindowMaterialAdapters.layer),
+  Layer.provide(
+    MaterialPlatform.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          WindowMaterialAdapters.layer,
+          MaterialPlatform.layerMacosVersion,
+          MacosObjcRuntime.layer,
+        ),
+      ),
+    ),
+  ),
   Layer.provideMerge(layerDesktopFoundation),
 );
 
