@@ -58,6 +58,18 @@ describe("learnApps", () => {
     assert.deepEqual(readCalculator(listed), { _tag: "allow" });
   });
 
+  it("keeps an approved Linux app's desktop id when list_apps also lists it as a process", () => {
+    // The pinned Linux driver answers list_apps with the apps and, beside them, every process.
+    for (const answer of [
+      { apps: [CALCULATOR], processes: [{ name: "Calculator", pid: CALCULATOR.pid }] },
+      { processes: [{ name: "Calculator", pid: CALCULATOR.pid }], apps: [CALCULATOR] },
+    ]) {
+      const listed = new Map<number, ListedApp>();
+      learnApps({ structuredContent: answer }, listed);
+      assert.deepEqual(readCalculator(listed), { _tag: "allow" });
+    }
+  });
+
   it("lists the apps again before refusing a pid known only by its window's app name", () => {
     const listed = new Map<number, ListedApp>();
     learnApps({ windows: CALCULATOR.windows }, listed);
@@ -66,7 +78,7 @@ describe("learnApps", () => {
     assert.deepEqual(readCalculator(listed), { _tag: "allow" });
   });
 
-  it("still judges a process without a desktop id by its window's app name", () => {
+  it("judges a process without a desktop id by its window's app name, not its command", () => {
     const listed = new Map<number, ListedApp>();
     const fixture = {
       pid: 3731239,
@@ -74,7 +86,7 @@ describe("learnApps", () => {
       name: "python3",
       windows: [{ app_name: "goat-cu-fixture.py", pid: 3731239, window_id: 4194307 }],
     };
-    learnApps({ apps: [fixture] }, listed);
+    learnApps({ apps: [fixture], processes: [{ name: "python3", pid: fixture.pid }] }, listed);
     assert.deepEqual(
       scopeVerdict({
         name: "get_window_state",
