@@ -38,7 +38,14 @@ namespace Goat.ComputerUse
         readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
         readonly Dictionary<string, Pending> pending = new Dictionary<string, Pending>();
         /// <summary>Each window's last screenshot size as the agent saw it; zoom coordinates are in it.</summary>
-        readonly Dictionary<IntPtr, Size> shots = new Dictionary<IntPtr, Size>();
+        readonly Dictionary<IntPtr, Shot> shots = new Dictionary<IntPtr, Shot>();
+
+        /// <summary>A screenshot as delivered, and the native width it was drawn from: the driver's zoom scale.</summary>
+        struct Shot
+        {
+            public Size Delivered;
+            public int NativeWidth;
+        }
         readonly object gate = new object();
         readonly Func<IntPtr, Bitmap> capture;
 
@@ -120,14 +127,19 @@ namespace Goat.ComputerUse
                     changed = true;
                 }
             }
-            object scrubbed = Scrub(message, own, ref changed);
-            return changed ? json.Serialize(scrubbed) : line;
+            // The id is the agent's own, echoed; it stays exactly as the agent sent it.
+            object echoed;
+            bool hasId = message.TryGetValue("id", out echoed);
+            message.Remove("id");
+            Scrub(message, own, ref changed);
+            if (hasId) message["id"] = echoed;
+            return changed ? json.Serialize(message) : line;
         }
 
         /// <summary>
         /// Replaces everything that is or could be an image with a note: image and resource-link
         /// blocks, anything with a blob, anything whose MIME type is an image or is not text, an
-        /// embedded resource holding one, and strings that start like an encoded image.
+        /// embedded resource holding one, and strings that carry an encoded image anywhere in them.
         /// </summary>
         object Scrub(object value, HashSet<object> own, ref bool changed)
         {
@@ -171,14 +183,46 @@ namespace Goat.ComputerUse
             return map.TryGetValue("resource", out resource) && resource is Dictionary<string, object> && ImageLike((Dictionary<string, object>)resource);
         }
 
+        /// <summary>
+        /// A data: image URL anywhere, any base64 or base64url run long enough to hold a picture
+        /// (1024 characters, whatever it decodes to), or a shorter run that decodes to the start
+        /// of a PNG, JPEG, GIF, WebP, BMP, TIFF or ICO file at any of its first offsets.
+        /// </summary>
         static bool EncodedImage(string text)
         {
-            string start = text.TrimStart();
-            foreach (string prefix in new[] { "iVBORw0KGgo", "/9j/", "R0lGOD", "UklGR", "Qk", "data:image/" })
-                if (start.StartsWith(prefix, prefix == "data:image/" ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) &&
-                    (prefix != "Qk" || start.Length > 64))
-                    return true;
+            if (text.IndexOf("data:image", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            for (int i = 0; i < text.Length;)
+            {
+                if (!Base64Char(text[i])) { i++; continue; }
+                int start = i;
+                while (i < text.Length && Base64Char(text[i])) i++;
+                int length = i - start;
+                if (length >= 1024) return true;
+                for (int offset = 0; offset + 16 <= length && offset < 64; offset++)
+                    if (ImageMagic(text.Substring(start + offset, 16))) return true;
+            }
             return false;
+        }
+
+        static bool Base64Char(char c)
+        {
+            return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '/' || c == '-' || c == '_' || c == '=';
+        }
+
+        static bool ImageMagic(string chunk)
+        {
+            byte[] b;
+            try { b = Convert.FromBase64String(chunk.Replace('-', '+').Replace('_', '/')); }
+            catch (FormatException) { return false; }
+            if (b.Length < 12) return false;
+            return (b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) ||
+                (b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) ||
+                (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38) ||
+                (b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46 && b[8] == 0x57 && b[9] == 0x45 && b[10] == 0x42 && b[11] == 0x50) ||
+                (b[0] == 0x42 && b[1] == 0x4D && b[6] == 0 && b[7] == 0 && b[8] == 0 && b[9] == 0) ||
+                (b[0] == 0x49 && b[1] == 0x49 && b[2] == 0x2A && b[3] == 0x00) ||
+                (b[0] == 0x4D && b[1] == 0x4D && b[2] == 0x00 && b[3] == 0x2A) ||
+                (b[0] == 0x00 && b[1] == 0x00 && b[2] == 0x01 && b[3] == 0x00 && b[5] == 0x00);
         }
 
         static string Field(Dictionary<string, object> map, string name)
@@ -196,13 +240,13 @@ namespace Goat.ComputerUse
                 using (Bitmap native = capture(call.Window))
                 {
                     if (native == null) return null;
-                    lock (gate) shots[call.Window] = size.Value;
+                    lock (gate) shots[call.Window] = new Shot { Delivered = size.Value, NativeWidth = native.Width };
                     return CaptureGuard.Png(native, new RectangleF(0, 0, native.Width, native.Height), size.Value.Width, size.Value.Height);
                 }
             }
             if (call.Tool == "zoom")
             {
-                Size shot;
+                Shot shot;
                 double x1, y1, x2, y2;
                 lock (gate)
                     if (!shots.TryGetValue(call.Window, out shot)) return null;
@@ -211,11 +255,12 @@ namespace Goat.ComputerUse
                     return null;
                 using (Bitmap native = capture(call.Window))
                 {
-                    if (native == null || shot.Width <= 0) return null;
+                    if (native == null || shot.Delivered.Width <= 0) return null;
                     // The driver's own crop, so its from_zoom mapping lands where the agent points:
-                    // screenshot to native by native width over screenshot width, then 20% padding,
-                    // whole pixels, clamped (cursor-overlay capture_utils.rs crop_png_to_jpeg).
-                    double scale = (double)native.Width / shot.Width;
+                    // screenshot to native by the scale kept with that screenshot (as the driver keeps
+                    // it), then 20% padding, whole pixels, clamped (cursor-overlay capture_utils.rs
+                    // crop_png_to_jpeg), cut from a fresh capture as the driver cuts from a fresh one.
+                    double scale = (double)shot.NativeWidth / shot.Delivered.Width;
                     double nx1 = x1 * scale, ny1 = y1 * scale, nx2 = x2 * scale, ny2 = y2 * scale;
                     double padX = Math.Max(nx2 - nx1, 1) * 0.20, padY = Math.Max(ny2 - ny1, 1) * 0.20;
                     int cx1 = Math.Min((int)Math.Max(nx1 - padX, 0), native.Width);
@@ -296,9 +341,32 @@ namespace Goat.ComputerUse
 
         Dictionary<string, object> Parse(string line)
         {
-            try { return json.DeserializeObject(line) as Dictionary<string, object>; }
+            try { return json.DeserializeObject(PlainSlashes(line)) as Dictionary<string, object>; }
             catch (ArgumentException) { return null; }
             catch (InvalidOperationException) { return null; }
+        }
+
+        /// <summary>
+        /// The same JSON with every escaped slash written as \u002F. .NET's reader turns a string
+        /// spelled "\/Date(...)\/" into a date, which would change ids and values it writes back.
+        /// </summary>
+        static string PlainSlashes(string line)
+        {
+            if (line.IndexOf("\\/", StringComparison.Ordinal) < 0) return line;
+            var plain = new System.Text.StringBuilder(line.Length + 16);
+            for (int i = 0; i < line.Length; i++)
+            {
+                char c = line[i];
+                if (c == '\\' && i + 1 < line.Length)
+                {
+                    if (line[i + 1] == '/') plain.Append("\\u002F");
+                    else plain.Append(c).Append(line[i + 1]);
+                    i++;
+                    continue;
+                }
+                plain.Append(c);
+            }
+            return plain.ToString();
         }
     }
 }

@@ -257,8 +257,8 @@ async function main() {
       "screenshot_out_file was not dropped",
     );
 
-    // 5. A reply the relay cannot pair with its request keeps no image: this id comes back from
-    // .NET's JSON reader as a date, so the driver's echo does not match it.
+    // 5. Ids pass through exactly: one .NET's JSON reader would turn into a date still pairs its
+    // reply, and the screenshot is still the helper's own.
     const dated = await agent.askRaw(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -269,14 +269,15 @@ async function main() {
       "/Date(0)/",
     );
     const datedResult = dated.result as ToolResult;
-    record("unpaired", {
+    const datedPng = save(datedResult, "5-dated-id-agent.png");
+    record("dated id", {
       images: images(datedResult).length,
       notes: texts(datedResult).filter((text) => text.startsWith("GOAT ")),
+      magenta: magentaPixels(datedPng),
     });
     expectThat(
-      images(datedResult).length === 0 &&
-        texts(datedResult).some((text) => text.startsWith(WITHHELD)),
-      "An unpaired reply kept its image",
+      images(datedResult).length === 1 && magentaPixels(datedPng) === 0,
+      "A date-like id lost its pairing or its screenshot shows the covering window",
     );
 
     // 6. A line the relay cannot read is refused, not forwarded.
