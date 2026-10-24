@@ -466,12 +466,10 @@ async function exchange(
     chain.push(parent);
   }
   const topLevel = chain.at(-1) ?? windowId;
-  // The named pixmap holds the top-level window with its border, and its pixels are in that
-  // window's visual: a pixmap read answers with no visual of its own.
-  const frameGeometry = await getGeometry(x, topLevel);
+  // The named pixmap's pixels are in the top-level window's visual: a pixmap read answers with no
+  // visual of its own.
   const attributes = await getAttributes(x, topLevel);
-  if (!frameGeometry || !attributes) return undefined;
-  const border = u16(frameGeometry, 20);
+  if (!attributes) return undefined;
   const visual = setup.visuals.get(u32(attributes, 8));
   // Held: nothing else may map, move or draw a window between the check and the read. The hold
   // covers only that, and is cut off at GRAB_LIMIT_MS by ending the connection.
@@ -484,7 +482,11 @@ async function exchange(
       return { refused: RESIZED_CAPTURE };
     const inFrame = await translate(x, windowId, topLevel);
     const onScreen = await translate(x, windowId, setup.root);
-    if (!inFrame || !onScreen) return undefined;
+    // The pixmap holds the top-level window with its border, so the crop starts past it; read
+    // while held, since a border that changed would shift the crop onto other windows.
+    const frameGeometry = await getGeometry(x, topLevel);
+    if (!inFrame || !onScreen || !frameGeometry) return undefined;
+    const border = u16(frameGeometry, 20);
     const target = { x: i16(onScreen, 12), y: i16(onScreen, 14), width, height };
     const shared = await drawnOver(x, setup, chain, target);
     if (shared === undefined) return undefined;

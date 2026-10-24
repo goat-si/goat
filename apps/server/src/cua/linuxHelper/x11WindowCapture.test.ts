@@ -317,10 +317,14 @@ describe("X11 window capture against a scripted server", () => {
     const grab = server.requests.indexOf(36);
     const release = server.requests.indexOf(37);
     const held = server.requests.slice(grab + 1, release);
-    // The size is checked again, the window placed, and the pixels read, all while held.
+    // The size is checked again, the window and its frame's border placed, and the pixels read,
+    // all while held; the release follows the read.
     expect(grab).toBeGreaterThan(0);
+    expect(release).toBeGreaterThan(server.requests.indexOf(73));
     expect(held[0]).toBe(14);
     expect(held).toContain(40);
+    // The window's own size and its frame's border are both read while held.
+    expect(held.filter((op) => op === 14)).toHaveLength(2);
     expect(held).toContain(73);
     // The tree walk up to the top-level window happens before the hold.
     expect(server.requests.slice(0, grab)).toContain(15);
