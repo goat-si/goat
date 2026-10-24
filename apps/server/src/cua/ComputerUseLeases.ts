@@ -679,18 +679,19 @@ const make = Effect.gen(function* () {
           if (state._tag === "ended") return { status: "refused", detail: state.reason } as const;
           if (state._tag === "paused" || paused !== undefined || privateHost)
             return { status: "refused", detail: "waiting_for_human" } as const;
+          if (current?.idle === true && callResource(call) !== "read")
+            return { status: "refused", detail: "control_idle" } as const;
           if (
             current === undefined ||
             current.controlId !== call.controlId ||
             current.ended !== undefined ||
             current.uses !== before?.uses ||
-            interruptions.count !== call.interruptions
+            interruptions.count !== call.interruptions ||
+            (current.idleEpoch ?? 0) !== call.idleEpoch
           )
             return { status: "refused", detail: "replaced" } as const;
           if (DateTime.toEpochMillis(current.expiresAt) <= now || state.wakeAt <= now)
             return { status: "refused", detail: "expired" } as const;
-          if (current.idle === true && callResource(call) !== "read")
-            return { status: "refused", detail: "control_idle" } as const;
           return reservations.reserve(threadId, call);
         }),
       );

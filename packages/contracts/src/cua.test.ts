@@ -40,14 +40,18 @@ describe("computer use on the wire", () => {
       connectionId: "driver:one",
       callId: "one",
       interruptions: 0,
+      idleEpoch: 0,
       name: "type_text",
       args: { pid: 42, window_id: 7 },
     };
     expect(decode(request)).toEqual(request);
+    const { idleEpoch: _idleEpoch, ...missingIdleEpoch } = request;
     for (const invalid of [
+      missingIdleEpoch,
       { ...request, action: "steal" },
       { ...request, connectionId: "" },
       { ...request, interruptions: -1 },
+      { ...request, idleEpoch: -1 },
       { ...request, name: "" },
     ])
       expect(() => decode(invalid)).toThrow();

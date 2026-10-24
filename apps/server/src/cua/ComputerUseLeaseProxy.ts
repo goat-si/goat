@@ -827,6 +827,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         connectionId: current.connectionId,
         callId: String(ownRequests++),
         interruptions: interruptionsSeen ?? 0,
+        idleEpoch: idleEpochSeen ?? 0,
         name: typeof message.params?.name === "string" ? message.params.name : "unknown",
         args: message.params?.arguments ?? {},
       });

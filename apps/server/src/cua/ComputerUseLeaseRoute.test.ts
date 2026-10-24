@@ -172,6 +172,7 @@ describe("computer use lease route", () => {
           name: "type_text",
           args: { pid: 42, window_id: 7 },
           interruptions: 0,
+          idleEpoch: 0,
         } as const;
         const response = yield* request({ ...call, threadId: "thread:forged" }, "Bearer fixture");
         assert.equal(response.status, 200);

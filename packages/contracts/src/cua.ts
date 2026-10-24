@@ -251,6 +251,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     expiresAt: Schema.String,
     apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+    /** Calls echo this value so a missed idle/reuse update cannot admit old-turn input. */
     idleEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     /**
      * How many times the host has paused agents, and why last. A pause and its end can both
@@ -326,6 +327,7 @@ export const ComputerUseCallReservation = Schema.Union([
     action: Schema.Literal("reserve"),
     callId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
     interruptions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    idleEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
     args: Schema.Unknown,
   }),

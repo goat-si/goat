@@ -111,6 +111,7 @@ layer("ComputerUseLeases controls", (it) => {
             connectionId: "driver:1",
             callId,
             interruptions: 0,
+            idleEpoch: 0,
             name: "type_text",
             args,
           });

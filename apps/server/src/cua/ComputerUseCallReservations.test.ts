@@ -3,11 +3,13 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId, type ComputerUseCallReservation } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const serviceLayer = ComputerUseLeases.layer.pipe(
@@ -34,6 +36,7 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
       connectionId,
       callId: String(sequence++),
       interruptions,
+      idleEpoch: 0,
       name,
       args,
     });
@@ -54,6 +57,41 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
 });
 
 describe("server computer-use call reservations", () => {
+  it.effect(
+    "rejects old-turn input when admission arrives after idle and reuse before the stream update",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const entered = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({
+          reservation: (request) =>
+            request.action !== "reserve"
+              ? Effect.succeed({ status: "released" } as const)
+              : Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(gate)),
+                  Effect.andThen(
+                    f.leases.callReservation(f.a, { ...request, controlId: f.first.controlId }),
+                  ),
+                  Effect.orDie,
+                ),
+        });
+        yield* h.push(active());
+        yield* h.send(call(1, "type_text", { pid: 42, window_id: 7, text: "old turn" }));
+        yield* Deferred.await(entered);
+        yield* f.leases.turnEnded(f.a);
+        const reused = yield* f.leases.control(f.a, Option.none());
+        assert.equal(reused.controlId, f.first.controlId);
+        yield* Deferred.succeed(gate, undefined);
+        // The proxy has not heard the idle epoch. Discovery proves the old input was never sent.
+        yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
+        assert.equal((yield* h.nextToDriver).id, 2);
+        const refused = (yield* h.nextToProvider).result as {
+          structuredContent: { detail: string };
+        };
+        assert.equal(refused.structuredContent.detail, "replaced");
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
   it.effect("atomically admits only one of two threads racing for the same window", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
@@ -176,6 +214,7 @@ describe("server computer-use call reservations", () => {
           connectionId: "driver:3",
           callId: "expired",
           interruptions: 1,
+          idleEpoch: 1,
           name: "type_text",
           args: { pid: 42, window_id: 7 },
         };
