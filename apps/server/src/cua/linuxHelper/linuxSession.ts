@@ -87,7 +87,6 @@ export function linuxCapabilities(session: LinuxSession): ComputerUseCapabilitie
   return {
     protocol: COMPUTER_USE_PROTOCOL_VERSION,
     platform: "linux",
-    signals: { humanInput: "unsupported", privateMode: "supported" },
     methods: Object.fromEntries(
       COMPUTER_USE_METHODS.map((method) => [
         method,
@@ -97,6 +96,8 @@ export function linuxCapabilities(session: LinuxSession): ComputerUseCapabilitie
       ]),
     ) as ComputerUseCapabilities["methods"],
     backgroundDelivery: session.unavailable === undefined && session.unsupported === undefined,
+    // No watch yet, so neither signal; the server refuses unattended use until both are here.
+    signals: { privateMode: "unsupported", humanInput: "unsupported" },
   };
 }
 
