@@ -105,13 +105,16 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
     ),
     Effect.map((result) => withHost(result, host)),
     Effect.flatMap(forwardContent),
-    // A dying target still gets an answer, with the same fixed text a direct call shows.
-    Effect.catchDefect(() =>
-      Effect.succeed(
-        envelopeError(
-          "internal",
-          "tool_error",
-          "Tool execution failed due to an internal server error.",
+    // A dying target still gets an answer, with the same fixed text a direct call shows; the
+    // cause goes to the log, since the answer carries none.
+    Effect.catchDefect((defect) =>
+      Effect.logError("goat_call target died", { tool: name, defect }).pipe(
+        Effect.as(
+          envelopeError(
+            "internal",
+            "tool_error",
+            "Tool execution failed due to an internal server error.",
+          ),
         ),
       ),
     ),
