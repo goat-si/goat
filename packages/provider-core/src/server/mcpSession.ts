@@ -1,4 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off -- adapters build spawn environments synchronously.
 import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import type {
   AuthEnvironmentScope,
   CuaDriverMcpConfiguration,
@@ -168,13 +173,31 @@ export function memoryToolAvailability(
   };
 }
 
+/**
+ * A thread's own temporary directory. Parallel agents on one machine otherwise share /tmp and
+ * can pick up each other's scratch files (#1206). It sits under the server's temp directory so
+ * provider sandboxes that allow the system temp directory allow it too.
+ */
+export function threadTemporaryDirectory(threadId: string): string {
+  const key = NodeCrypto.createHash("sha256").update(threadId).digest("hex").slice(0, 16);
+  const directory = NodePath.join(NodeOS.tmpdir(), `goat-thread-${key}`);
+  NodeFS.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  return directory;
+}
+
 /** Empty markers prevent a thread shell from falling back to a broader stored login. */
 export function withThreadMcpEnvironment(
   base: NodeJS.ProcessEnv,
-  config: Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader"> | undefined,
+  config:
+    | (Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader"> &
+        Partial<Pick<McpProviderSessionConfig, "threadId">>)
+    | undefined,
 ): NodeJS.ProcessEnv {
   return withLegacyEnvNames({
     ...base,
+    ...(config?.threadId === undefined
+      ? {}
+      : { TMPDIR: threadTemporaryDirectory(config.threadId) }),
     GOAT_ACP_MCP_ENDPOINT: config?.endpoint ?? "",
     GOAT_ACP_MCP_AUTHORIZATION: config?.authorizationHeader ?? "",
   });
