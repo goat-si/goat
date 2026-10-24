@@ -131,7 +131,7 @@ function partialStart(text: string): number {
   while (
     wordStart > 0 &&
     text.length - wordStart < LONGEST_NAME &&
-    /[A-Za-z0-9_]/.test(text[wordStart - 1]!)
+    /[A-Za-z0-9_]/.test(text.charAt(wordStart - 1))
   ) {
     wordStart -= 1;
   }
