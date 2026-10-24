@@ -146,7 +146,8 @@ has no `clientRequestId`.
 where the declaration admits the write, after every caller check, so direct calls
 and `goat_call` share it and a replay passes the checks again. A handler that
 authorizes inside its body (SSH launch's profile and role checks, the worktree
-credential) declares `admission: "handler"` and admits after them. Services also
+credential, a schedule update's task checks) declares `admission: "handler"`
+and admits after them. Services also
 authorize inside (provider settings, lane claims), so the reservation records the
 caller's grant as the launch resolves it: its runtime and interaction modes, its
 goatclaw capabilities, ceiling and host allowlist (narrowed by a forwarded ceiling
@@ -163,8 +164,7 @@ it, on the same host for a routed write. Only completed keys expire, after
 
 Every other write records an `idempotencyReason` in the registry instead, and
 [idempotency.test.ts](../../packages/contracts/src/agentSurface/idempotency.test.ts)
-fails a write that has neither, apart from an allowlist of writes not yet
-converted (#1029) that only shrinks. A keyed write's reconcile read must be a
+fails a write that has neither. A keyed write's reconcile read must be a
 registered read, host-routable when the write is. Writes that deduplicate in
 their own domain keep that store on purpose. Thread send, interrupt, retry and
 update, thread create-many, task create and cancel, review findings and
@@ -174,7 +174,10 @@ reservation statement cannot, and lives longer than 24 hours. Routed thread
 writes forward the key, so the host that runs them deduplicates it there. Goal
 apply stores the key with the goal it creates, channel ingest uses it as the
 message key in the channel ledger, and a secret request's key is how a later
-call collects the answer. Moving these onto the reservation would add a second,
+call collects the answer. An origin report stores the key as a receipt with
+its report row or the launcher's inbox entry, and derives a launcher wake's
+command id from it, so the receipt outlives the origin acknowledging the
+report. Moving these onto the reservation would add a second,
 weaker record of the same request.
 
 **Proposed.** A write that takes `clientRequestId` follows the rules payment APIs
