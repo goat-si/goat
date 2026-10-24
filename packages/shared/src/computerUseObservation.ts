@@ -113,13 +113,18 @@ export interface ObservationTracker {
     readonly screenshot: boolean;
     readonly privateMode: boolean;
   }) => ComputerUseObservation;
-  /** The driver token for an element ref the agent read in observationId, or why there is none. */
+  /**
+   * The driver token for an element ref the agent read in observationId, with the element's
+   * frame in screenshot pixels when it has one, or why there is none.
+   */
   readonly resolve: (input: {
     readonly pid: number;
     readonly windowId: number;
     readonly observationId: string;
     readonly element: string;
-  }) => { readonly token: string } | ComputerUseRefusal;
+  }) =>
+    | { readonly token: string; readonly frame?: ComputerUseElement["frame"] }
+    | ComputerUseRefusal;
   /** Whether pixel coordinates from observationId still describe the window's screenshot. */
   readonly pointsCurrent: (input: {
     readonly pid: number;
@@ -292,7 +297,8 @@ export function makeObservationTracker(newId: () => string): ObservationTracker 
         return stale("That observation is no longer current for this window. Observe it again.");
       const tracked = lineage.elements.get(element);
       if (!tracked?.token) return stale("That element is gone from the window. Observe it again.");
-      return { token: tracked.token };
+      const frame = tracked.element.frame;
+      return frame ? { token: tracked.token, frame } : { token: tracked.token };
     },
 
     pointsCurrent: ({ pid, windowId, observationId }) => {
