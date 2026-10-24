@@ -359,13 +359,12 @@ differences a maintainer would otherwise trip on:
 the tags below; `goat_host_status` returns each host's conditions as the additive `conditions`
 field, and `goat_host_cordon`, `goat_host_uncordon`, `goat_host_drain` and `goat_thread_reschedule`
 live in `apps/server/src/mcp/toolkits/fleet/`. Cordons persist in `fleet_host_states`. The goal
-controller moves no goal attempt yet: goal workers run on this machine only (#576), the Rescheduler
-moves work only to SSH hosts, and the controller's reschedules pass no project folder, so drain only
-cordons and marks the host Draining and stalled or failed reschedules are refused (#1452). Moving
-goal attempts waits on goal workers on other machines (#1451). `goat_thread_reschedule` takes the
-branch and folder from its caller. Channel
-tasks still heal through `ChannelRemoteWorkers.ts`. Moving the replica helpers out of channels waits
-for replica capture of goal attempts (#525); `fleet_replicas` already exists for it.
+controller moves no goal attempt to another machine: goal workers run on this machine only (#576),
+so drain only cordons and marks the host Draining. A stalled or failed goal attempt restarts on this
+machine instead, from its replica (below, and `fleet/goals/GoalRecovery.ts`). Moving goal attempts
+between machines waits on goal workers on other machines (#1451). `goat_thread_reschedule` takes the
+branch and folder from its caller. Channel tasks still heal through `ChannelRemoteWorkers.ts`; goal
+recovery reuses the replica helpers in `channels/channelReplica.ts` where they are.
 
 Where the code departs from the text below, and why:
 
@@ -378,8 +377,17 @@ Where the code departs from the text below, and why:
   `degraded` or `incompatible` host, with that verdict as its `reason`, and an `incompatible` host
   takes no work. Different builds that are compatible raise no condition.
 - Placement uses `choosePlacement` over Ready, uncordoned hosts until the T3 `Placement` tag lands.
-- A request that resumes from a replica is refused with `no_resume_point` until replica capture for
-  goal attempts lands; branch and base resumes work.
+- Goal workers run on this machine only (#576), so a failed or stalled attempt restarts here and the
+  goal controller never asks `Rescheduler` to move it. After each finished turn, the controller
+  captures the attempt's worktree, uncommitted changes included, into `fleet_replicas`, keyed by
+  `goal:<id>:s<slot>` and the attempt number. Each bundle file is named by its commit. Recovery only
+  moves the slot to its next attempt, so the old attempt becomes an orphan the plan stops. The next
+  attempt's ordinary launch then waits until the old attempt has stopped on the same run, and starts
+  from the newest replica that imports with its recorded commit. Failing that, it starts from the
+  newest attempt branch or from `baseRef`, choosing between replica and branch by containment. A
+  replica that does not verify blocks the launch with `ResumeRefused` and is checked again on each
+  pass. `Rescheduler` still refuses a replica resume with `no_resume_point`, since importing one on
+  another host waits for remote goal workers.
 - A retry after a lost answer finds the launched thread by its title (`Resume <branch>`) on the
   candidate hosts instead of launching again; the attempt branch keeps two launches apart as well.
 - `fenceStaleAttempt` interrupts a returning stale attempt with a reason that names the successor.

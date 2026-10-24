@@ -85,6 +85,8 @@ export function captureReplicaScript(input: {
   /** Ordinary watches export the immutable completed checkpoint, never the later live tree. */
   readonly checkpointRef?: string;
   readonly expectedCheckpointOid?: string;
+  /** The snapshot commit's message; channel tasks keep the default. */
+  readonly message?: string;
 }): string {
   return String.raw`set -eu
 umask 077
@@ -178,7 +180,7 @@ export GIT_AUTHOR_NAME='GOAT Replica' GIT_COMMITTER_NAME='GOAT Replica'
 export GIT_AUTHOR_EMAIL='replica@goat.invalid' GIT_COMMITTER_EMAIL='replica@goat.invalid'
 # Stable metadata makes retries of an unchanged tree produce the same commit.
 export GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' GIT_COMMITTER_DATE='2000-01-01T00:00:00Z'
-commit=$(printf 'GOAT channel replica\n' | git -c commit.gpgSign=false commit-tree "$tree" -p "$head")
+commit=$(printf '%s\n' ${shellInput(input.message ?? "GOAT channel replica")} | git -c commit.gpgSign=false commit-tree "$tree" -p "$head")
 fi
 git -c core.hooksPath=/dev/null update-ref --no-deref "$replica_ref" "$commit"
 if ! git bundle create "$tmp/bundle" "$replica_ref" --not --remotes 2> "$tmp/bundle-error"; then

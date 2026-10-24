@@ -85,9 +85,14 @@ to change this hub's settings.
 without its own profile gets the widest built-in profile, **owner**, until you
 pick a narrower **Default profile**. With it on, GOAT refuses an agent's
 request to launch or steer threads, work on other machines, manage the fleet or
-change settings when its profile does not allow it. Pull requests are opened and merged from the
-agent's own terminal, which profiles do not control; GOAT only refuses to start a
-merge manager for an agent whose profile cannot merge. Turn it on in
+change settings when its profile does not allow it. Agents allowed to create
+worktrees, such as those under **worker** and **manager**, can also add and clone
+projects; changing or deleting a project still needs permission to change settings.
+Pull requests are opened and merged from the agent's own terminal, which profiles
+do not control; GOAT only refuses to start a merge manager for an agent whose
+profile cannot merge. A supervisor whose own profile allows merging can still
+start one for a thread that cannot merge, unless the limits that thread was started
+with, such as ones forwarded from another machine, leave merging out. Turn it on in
 **Settings → Hub**.
 
 The switch covers your whole fleet. Turning it on or off on one machine does the
