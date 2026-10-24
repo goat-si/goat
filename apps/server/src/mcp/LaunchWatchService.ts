@@ -47,11 +47,13 @@ import * as CompletionWebhook from "./completionWebhook.ts";
 import {
   addPendingRun,
   clearAttempts,
+  dormantExpired,
   EXCERPT_MAX_CHARS,
   failureFromRemoteStatus,
   finishedWake,
   goneWake,
   isTerminalStatus,
+  launcherlessExpired,
   type LaunchWatch,
   LaunchWatchDocument,
   launchWatchId,
@@ -67,12 +69,14 @@ import {
   recordFailure,
   recordQuestion,
   recordFailedAttempt,
+  rearmRetriedRun,
   RemoteRunFailureStatus,
   settleRun,
   wakeAttempt,
+  watchExpired as expired,
 } from "./launchWatch.ts";
 import { runFailure } from "./threadStatus.ts";
-import { wakeThread } from "./threadWake.ts";
+import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
 
 /**
  * Wakes a thread when a thread it launched finishes, so orchestrators do not
@@ -106,14 +110,6 @@ const REMOTE_ANSWER_MARGIN_MS = 60_000;
 /** Bound on one whole remote step, including SSH setup. */
 const REMOTE_STEP_LIMIT_MS = REMOTE_TICK_MS + 3 * 60_000;
 const REMOTE_READ_TIMEOUT_MS = 60_000;
-/** A watch with nothing left to report is dropped this long after its last change. */
-const DORMANT_RETENTION_MS = 7 * 24 * 60 * 60_000;
-/**
- * A launcherless watch has no thread that could unwatch it, so it is dropped
- * this long after it was last armed even while its run is still owed, for
- * example when the host never comes back or a question is never answered.
- */
-const LAUNCHERLESS_RETENTION_MS = DORMANT_RETENTION_MS;
 /** How often dormant watches past their retention are dropped while the server runs. */
 const SWEEP_MS = 60 * 60_000;
 /** Pause before retrying after a changed caller, an unqueued wake or an unsaved state. */
@@ -182,6 +178,16 @@ export interface LaunchWatchServiceShape {
   readonly rearm: (
     input: LaunchWatchKey & { readonly runId: RunId },
   ) => Effect.Effect<void, LaunchWatchStoreError>;
+  /**
+   * Follows a run again on every watch of its thread once a retry moved it back to
+   * preparing under the same id. retryId names the retry, so a replay adds nothing.
+   */
+  readonly rearmRetried: (input: {
+    readonly host: string | null | undefined;
+    readonly threadId: ThreadId;
+    readonly runId: RunId;
+    readonly retryId: string;
+  }) => Effect.Effect<void, LaunchWatchStoreError>;
   /** The watch under this key, if any. */
   readonly find: (
     input: LaunchWatchKey,
@@ -274,27 +280,6 @@ const noDetails: Details = {
 };
 
 class LauncherGone extends Data.TaggedError("LauncherGone")<{}> {}
-
-/**
- * Orchestrator refusals a retry cannot change. A previously rejected command
- * is not one of them: the orchestrator also records a command that failed for
- * a passing reason as rejected, so the wake is retried under a fresh id.
- */
-const PERMANENT_DISPATCH_ERRORS = new Set([
-  "OrchestratorCommandRejectedError",
-  "OrchestratorSubagentThreadReadOnlyError",
-  "OrchestratorThreadAboveModeLimitError",
-]);
-
-const isPermanentDispatchFailure = (cause: Cause.Cause<unknown>) =>
-  Option.match(Cause.findErrorOption(cause), {
-    onNone: () => false,
-    onSome: (error) =>
-      typeof error === "object" &&
-      error !== null &&
-      "_tag" in error &&
-      PERMANENT_DISPATCH_ERRORS.has(String(error._tag)),
-  });
 
 const decodeDocument = Schema.decodeUnknownEffect(Schema.fromJsonString(LaunchWatchDocument));
 const encodeDocument = Schema.encodeEffect(Schema.fromJsonString(LaunchWatchDocument));
@@ -896,22 +881,6 @@ export const make = Effect.gen(function* () {
     return watch?.incarnation === incarnation ? watch : undefined;
   };
 
-  const launcherlessExpired = (watch: LaunchWatch, now: number) =>
-    watch.launcherThreadId === null &&
-    now - (watch.armedAt ?? watch.createdAt) >= LAUNCHERLESS_RETENTION_MS;
-
-  /** A watch past its retention, which every operation treats as gone. */
-  const expired = (watch: LaunchWatch, now: number) =>
-    watch.recovery === undefined &&
-    (launcherlessExpired(watch, now) ||
-      (watch.pendingRuns.length === 0 &&
-        watch.outage === null &&
-        now - watch.updatedAt >= DORMANT_RETENTION_MS));
-
-  /** An expired watch with nothing owed. One still owed is left to its follower to drop. */
-  const dormantExpired = (watch: LaunchWatch, now: number) =>
-    watch.pendingRuns.length === 0 && watch.outage === null && expired(watch, now);
-
   /**
    * Whether a launcherless watch can no longer report: the completion webhook,
    * its only destination, stopped taking it, or it outlived its retention.
@@ -934,16 +903,19 @@ export const make = Effect.gen(function* () {
     runId: RunId,
     result: StepResult,
     details: Details,
+    retry: string | undefined,
   ) =>
     locked(
       Effect.uninterruptible(
         Effect.gen(function* () {
           const watch = current(watchId, incarnation);
+          // A retry while the step was out makes what it read stale; the run is followed afresh.
           if (
             watch === undefined ||
             watch.recovery !== undefined ||
             watch.detached ||
-            !watch.pendingRuns.includes(runId)
+            !watch.pendingRuns.includes(runId) ||
+            watch.retriedRuns[runId] !== retry
           )
             return 0;
           const now = yield* Clock.currentTimeMillis;
@@ -1727,7 +1699,8 @@ export const make = Effect.gen(function* () {
           result._tag === "Terminal"
             ? yield* detailsFor(watch, result.runId, result.status)
             : noDetails;
-        const pause = yield* apply(watchId, incarnation, runId, result, details).pipe(
+        const retry = watch.retriedRuns[runId];
+        const pause = yield* apply(watchId, incarnation, runId, result, details, retry).pipe(
           Effect.catch((error) =>
             Effect.logWarning("launch watch: state not saved, will retry", {
               watchId,
@@ -1912,6 +1885,24 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const rearmRetried: LaunchWatchServiceShape["rearmRetried"] = (input) =>
+    locked(
+      Effect.gen(function* () {
+        yield* ensureLoaded;
+        const host = normalizeHost(input.host);
+        const now = yield* Clock.currentTimeMillis;
+        const rearmed = [...watches.values()].flatMap((watch) => {
+          if (watch.host !== host || watch.threadId !== input.threadId) return [];
+          if (watch.recovery !== undefined || watch.detached || expired(watch, now)) return [];
+          const next = rearmRetriedRun(watch, input.runId, input.retryId, now);
+          return next === watch ? [] : [next];
+        });
+        if (rearmed.length === 0) return;
+        yield* save((map) => rearmed.forEach((watch) => map.set(watch.id, watch)));
+        yield* Effect.forEach(rearmed, ensureFollower, { discard: true });
+      }),
+    );
+
   const withReplicationChoice = Effect.fn("LaunchWatchService.withReplicationChoice")(function* (
     watch: LaunchWatch,
   ) {
@@ -2086,6 +2077,7 @@ export const make = Effect.gen(function* () {
     register,
     recover,
     rearm,
+    rearmRetried,
     find,
     unwatch,
     list,

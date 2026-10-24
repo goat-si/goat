@@ -104,6 +104,13 @@ export const LaunchWatch = Schema.Struct({
   pendingRuns: Schema.Array(RunId),
   /** The most recently reported runs, so a run is never reported twice. */
   reportedRuns: Schema.Array(RunId),
+  /**
+   * The latest retry of each run retried in place, by run id. A retry reuses its run id,
+   * so the report of its end needs ids of its own, and a replayed retry adds nothing.
+   */
+  retriedRuns: Schema.Record(Schema.String, Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   /** The most recently reported pending requests, keyed by questionKey. */
   reportedQuestions: Schema.Array(Schema.String),
   /** Number of the last outage episode that ended; the next one counts from it. */
@@ -236,6 +243,7 @@ export function newLaunchWatch(input: {
     title: input.title,
     pendingRuns: [],
     reportedRuns: [],
+    retriedRuns: {},
     reportedQuestions: [],
     lastEpisode: 0,
     outage: null,
@@ -295,6 +303,65 @@ export function settleRun(watch: LaunchWatch, runId: RunId, now: number): Launch
     updatedAt: now,
   };
 }
+
+/**
+ * Follows a run again after a retry moved it back to preparing under the same id. Only a
+ * run this watch follows or reported is affected, and a retry already recorded is a replay.
+ */
+export function rearmRetriedRun(
+  watch: LaunchWatch,
+  runId: RunId,
+  retryId: string,
+  now: number,
+): LaunchWatch {
+  const followed = watch.pendingRuns.includes(runId) || watch.reportedRuns.includes(runId);
+  if (!followed || watch.retriedRuns[runId] === retryId) return watch;
+  const pendingRuns = watch.pendingRuns.includes(runId)
+    ? watch.pendingRuns
+    : [...watch.pendingRuns, runId];
+  const reportedRuns = watch.reportedRuns.filter((reported) => reported !== runId);
+  const known: ReadonlySet<string> = new Set([...pendingRuns, ...reportedRuns]);
+  const retriedRuns = Object.fromEntries(
+    Object.entries({ ...watch.retriedRuns, [runId]: retryId }).filter(([id]) => known.has(id)),
+  );
+  // An unqueued wake for the superseded end is never sent, so its attempts go with it.
+  const { [runWakeIds(watch, runId).commandId]: _superseded, ...deliveryAttempts } =
+    watch.deliveryAttempts;
+  return {
+    ...watch,
+    pendingRuns,
+    reportedRuns,
+    retriedRuns,
+    deliveryAttempts,
+    armedAt: now,
+    updatedAt: now,
+  };
+}
+
+/** A dormant watch is dropped this long after its last change. */
+const DORMANT_RETENTION_MS = 7 * 24 * 60 * 60_000;
+/**
+ * A launcherless watch has no thread that could unwatch it, so it is dropped
+ * this long after it was last armed even while its run is still owed, for
+ * example when the host never comes back or a question is never answered.
+ */
+const LAUNCHERLESS_RETENTION_MS = DORMANT_RETENTION_MS;
+
+export const launcherlessExpired = (watch: LaunchWatch, now: number) =>
+  watch.launcherThreadId === null &&
+  now - (watch.armedAt ?? watch.createdAt) >= LAUNCHERLESS_RETENTION_MS;
+
+/** A watch past its retention, which every operation treats as gone. */
+export const watchExpired = (watch: LaunchWatch, now: number) =>
+  watch.recovery === undefined &&
+  (launcherlessExpired(watch, now) ||
+    (watch.pendingRuns.length === 0 &&
+      watch.outage === null &&
+      now - watch.updatedAt >= DORMANT_RETENTION_MS));
+
+/** An expired watch with nothing owed. One still owed is left to its follower to drop. */
+export const dormantExpired = (watch: LaunchWatch, now: number) =>
+  watch.pendingRuns.length === 0 && watch.outage === null && watchExpired(watch, now);
 
 export const questionKey = (runId: RunId, requestId: string) => `${runId}/${requestId}`;
 
@@ -418,6 +485,12 @@ const wakeIds = (watch: LaunchWatch, event: string) => ({
   messageId: MessageId.make(`${LAUNCH_WATCH_MESSAGE_PREFIX}${watch.id}:${event}`),
 });
 
+/** A run's end. Each retry of a run retried in place ends under ids of its own. */
+const runWakeIds = (watch: LaunchWatch, runId: RunId) => {
+  const retry = watch.retriedRuns[runId];
+  return wakeIds(watch, retry === undefined ? `run:${runId}` : `run:${runId}:retry:${retry}`);
+};
+
 export function finishedWake(input: {
   readonly watch: LaunchWatch;
   readonly runId: RunId;
@@ -448,7 +521,7 @@ export function finishedWake(input: {
     `${brief?.cut === true ? `The message continues; read it with ${read}.` : `Read the thread with ${read}.`} ${stopHint(watch)}`,
   ];
   return {
-    ...wakeIds(watch, `run:${input.runId}`),
+    ...runWakeIds(watch, input.runId),
     text: lines.join("\n"),
     notification: {
       source: { kind: "background_task" },
@@ -565,7 +638,7 @@ function launchFailedWake(input: {
     EXCERPT_MAX_CHARS,
   );
   return {
-    ...wakeIds(watch, `run:${input.runId}`),
+    ...runWakeIds(watch, input.runId),
     text: lines.join("\n"),
     notification: {
       source: { kind: "background_task" },

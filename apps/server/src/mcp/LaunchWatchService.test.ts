@@ -85,6 +85,8 @@ interface World {
    * store, a dispatch that fails is recorded, and its id is refused again.
    */
   readonly rejected: Set<string>;
+  /** Command ids the orchestrator accepted; like its receipts, a repeat queues nothing new. */
+  readonly accepted: Set<string>;
   readonly attempts: Array<Dispatch>;
   readonly delivered: Queue.Queue<Dispatch>;
   readonly deliveredLog: Array<Dispatch>;
@@ -155,6 +157,7 @@ const makeWorld = Effect.gen(function* () {
     subagents: [],
     dispatchFailures: [],
     rejected: new Set(),
+    accepted: new Set(),
     attempts: [],
     delivered: yield* Queue.unbounded<Dispatch>(),
     deliveredLog: [],
@@ -196,6 +199,8 @@ const dispatchIn = (world: World, command: OrchestrationV2ServerCommand) =>
             }),
       );
     }
+    if (world.accepted.has(commandId)) return Effect.succeed({} as never);
+    world.accepted.add(commandId);
     world.deliveredLog.push(dispatch);
     return Queue.offer(world.delivered, dispatch).pipe(Effect.as({} as never));
   });
@@ -1197,6 +1202,97 @@ describe("LaunchWatchService", () => {
           expect(wake.notification?.detail).toContain("Receiving objects:  45%");
         }),
       );
+    }),
+  );
+
+  const failedPreparation = (world: World) => {
+    world.runs.push({
+      id: run1,
+      status: "failed",
+      workspacePreparation: { type: "worktree", baseRef: "dev" },
+    });
+    world.turnItems.push({
+      type: "error",
+      status: "failed",
+      runId: run1,
+      ordinal: 2,
+      failure: {
+        class: "unknown",
+        code: ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+        retryable: true,
+        message: "Workspace preparation failed during provision worktree: timed out.",
+      },
+    });
+  };
+
+  it.effect(
+    "reports a run retried in place after its failure was reported, once per retry (#978)",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const baseDir = yield* tempDir;
+        failedPreparation(world);
+        yield* withService(world, baseDir, (service) =>
+          Effect.gen(function* () {
+            yield* watchLocal(service, run1);
+            yield* Queue.offer(world.waits, finished(run1, "failed"));
+            const failure = yield* Queue.take(world.delivered);
+            expect(failure.text).toContain(
+              "failed while GOAT prepared its workspace, in run run-1",
+            );
+            expect(yield* pendingRuns(service)).toEqual([]);
+
+            // The retry moves the same run back to preparing; the watch owes its end again.
+            const retry = { host: null, threadId: target, runId: run1, retryId: "retry-a" };
+            yield* service.rearmRetried(retry);
+            yield* service.rearmRetried(retry);
+            expect(yield* pendingRuns(service)).toEqual([run1]);
+            world.runs.length = 0;
+            world.turnItems.length = 0;
+            world.assistantMessages.push({ runId: run1, text: "Prepared on the second try." });
+            yield* Queue.offer(world.waits, finished(run1));
+            const retried = yield* Queue.take(world.delivered);
+            expect(retried.text).toContain("finished run run-1 with status completed");
+            expect(retried.text).toContain("Prepared on the second try.");
+            expect(retried.commandId).not.toBe(failure.commandId);
+            expect(retried.messageId).not.toBe(failure.messageId);
+
+            // Replaying the same retry request after its end was reported adds nothing.
+            yield* service.rearmRetried(retry);
+            expect(yield* pendingRuns(service)).toEqual([]);
+          }),
+        );
+        expect(world.deliveredLog.map((wake) => wake.commandId)).toHaveLength(2);
+        expect(world.waitCalls.map((call) => call.runId)).toEqual([run1, run1]);
+      }),
+  );
+
+  it.effect("drops a failure the follower read before a retry, and reports the retried end", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      failedPreparation(world);
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchLocal(service, run1);
+          expect(yield* Queue.take(world.waitStarted)).toBe(run1);
+          // The retry lands while the follower holds the failure it is about to report.
+          yield* service.rearmRetried({
+            host: null,
+            threadId: target,
+            runId: run1,
+            retryId: "retry-a",
+          });
+          yield* Queue.offer(world.waits, finished(run1, "failed"));
+          expect(yield* Queue.take(world.waitStarted)).toBe(run1);
+          world.runs.length = 0;
+          world.turnItems.length = 0;
+          yield* Queue.offer(world.waits, finished(run1));
+          const wake = yield* Queue.take(world.delivered);
+          expect(wake.text).toContain("finished run run-1 with status completed");
+        }),
+      );
+      expect(world.deliveredLog).toHaveLength(1);
     }),
   );
 
