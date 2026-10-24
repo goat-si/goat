@@ -367,59 +367,6 @@ layer("ComputerUseLeases controls", (it) => {
       }),
   );
 
-  it.effect("a person's key while another agent clicks pauses every agent", () =>
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      yield* leases.stopAll;
-      const mine = yield* leases.control(thread, Option.none());
-      const bots = yield* leases.control(other, Option.none());
-      // The bot's click posts pointer events only; a keyboard event during it is a person's.
-      assert.isTrue(
-        yield* leases.agentInput(other, bots.controlId, {
-          call: "7",
-          state: "start",
-          at: 30_000,
-          kinds: ["pointer"],
-        }),
-      );
-      assert.equal(yield* leases.humanInput(thread, mine.controlId, 30_100, "pointer"), "agents");
-      assert.equal(yield* leases.humanInput(thread, mine.controlId, 30_150, "keyboard"), "paused");
-      assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
-        _tag: "paused",
-        reason: "human_input",
-      });
-    }),
-  );
-
-  it.effect("back-to-back agent calls hide a person's input for ten seconds at most", () =>
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      yield* leases.stopAll;
-      const mine = yield* leases.control(thread, Option.none());
-      const bots = yield* leases.control(other, Option.none());
-      // A click every 400 ms, each answered after 100 ms: its cover never lapses. The server's
-      // own clock moves with it, so old calls are forgotten as it goes.
-      yield* TestClock.adjust(30_000);
-      for (let call = 0; call < 60; call++) {
-        const at = 30_000 + call * 400;
-        const report = { call: String(call), kinds: ["pointer"] as const };
-        yield* leases.agentInput(other, bots.controlId, { ...report, state: "start", at });
-        yield* leases.agentInput(other, bots.controlId, { ...report, state: "end", at: at + 100 });
-        // The helper reports an event a little after it happened.
-        if (call === 10)
-          assert.equal(
-            yield* leases.humanInput(thread, mine.controlId, at - 300, "pointer"),
-            "agents",
-          );
-        yield* TestClock.adjust(400);
-      }
-      // Past ten seconds of unbroken cover, pointer input pauses the agents, erring toward a person.
-      assert.equal(yield* leases.humanInput(thread, mine.controlId, 53_300, "pointer"), "paused");
-    }),
-  );
-
   it.effect(
     "a proxy's report of a person's input pauses every agent, from its live control only",
     () =>
@@ -907,4 +854,63 @@ it.effect(
       assert.isTrue(Option.isNone(yield* Fiber.join(claiming)));
       yield* leases.stopAll;
     }).pipe(Effect.provide(everyAppLayer)),
+);
+
+/** A service of its own, so agent input recorded by other tests cannot cover these. */
+const freshLeases = ComputerUseLeases.layer.pipe(
+  Layer.provideMerge(Layer.mergeAll(database, NodeServices.layer)),
+);
+
+it.effect("a person's key while another agent clicks pauses every agent", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    yield* leases.stopAll;
+    const mine = yield* leases.control(thread, Option.none());
+    const bots = yield* leases.control(other, Option.none());
+    // The bot's click posts pointer events only; a keyboard event during it is a person's.
+    yield* TestClock.adjust(30_000);
+    assert.isTrue(
+      yield* leases.agentInput(other, bots.controlId, {
+        call: "7",
+        state: "start",
+        at: 30_000,
+        kinds: ["pointer"],
+      }),
+    );
+    assert.equal(yield* leases.humanInput(thread, mine.controlId, 30_100, "pointer"), "agents");
+    assert.equal(yield* leases.humanInput(thread, mine.controlId, 30_150, "keyboard"), "paused");
+    assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
+      _tag: "paused",
+      reason: "human_input",
+    });
+  }).pipe(Effect.provide(freshLeases)),
+);
+
+it.effect("back-to-back agent calls hide a person's input for ten seconds at most", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    yield* leases.stopAll;
+    const mine = yield* leases.control(thread, Option.none());
+    const bots = yield* leases.control(other, Option.none());
+    // A click every 400 ms, each answered after 100 ms: its cover never lapses. The server's
+    // own clock moves with it, so old calls are forgotten as it goes.
+    yield* TestClock.adjust(30_000);
+    for (let call = 0; call < 60; call++) {
+      const at = 30_000 + call * 400;
+      const report = { call: String(call), kinds: ["pointer"] as const };
+      yield* leases.agentInput(other, bots.controlId, { ...report, state: "start", at });
+      yield* leases.agentInput(other, bots.controlId, { ...report, state: "end", at: at + 100 });
+      // The helper reports an event a little after it happened.
+      if (call === 10)
+        assert.equal(
+          yield* leases.humanInput(thread, mine.controlId, at - 300, "pointer"),
+          "agents",
+        );
+      yield* TestClock.adjust(400);
+    }
+    // Past ten seconds of unbroken cover, pointer input pauses the agents, erring toward a person.
+    assert.equal(yield* leases.humanInput(thread, mine.controlId, 53_300, "pointer"), "paused");
+  }).pipe(Effect.provide(freshLeases)),
 );

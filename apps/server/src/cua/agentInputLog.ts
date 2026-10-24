@@ -49,7 +49,6 @@ const POINTER_TOOLS: ReadonlySet<string> = new Set([
   "double_click",
   "right_click",
   "drag",
-  "scroll",
   "move_cursor",
 ]);
 
@@ -72,8 +71,12 @@ export function inputKinds(tool: string, args?: unknown): ReadonlyArray<InputKin
   const given = record(args);
   // A point makes a keyboard tool click there first; modifiers make a pointer tool press keys.
   const point = typeof given?.x === "number" || typeof given?.y === "number";
-  const modifiers = Array.isArray(given?.modifiers) && given.modifiers.length > 0;
+  // click, right_click and drag name their held keys `modifier`.
+  const held = given?.modifier ?? given?.modifiers;
+  const modifiers = Array.isArray(held) && held.length > 0;
   if (KEYBOARD_TOOLS.has(tool)) return point ? ["keyboard", "pointer"] : ["keyboard"];
+  // With a point, scroll turns the wheel there; without one it presses Page Down or arrows.
+  if (tool === "scroll") return point ? ["pointer"] : ["keyboard"];
   if (POINTER_TOOLS.has(tool)) return modifiers ? ["pointer", "keyboard"] : ["pointer"];
   return ["keyboard", "pointer"];
 }
@@ -99,9 +102,12 @@ const KEEP_MS = 10_000;
  */
 const OPEN_MS = 10_000;
 
-interface Covered {
+/** Cover of one kind that never lapsed: from its first call until the last one's tail. */
+interface Run {
   readonly from: number;
-  readonly to: number;
+  /** Undefined while a call of the run is still open. */
+  to: number | undefined;
+  open: number;
 }
 
 export function makeAgentInputLog() {
@@ -115,38 +121,75 @@ export function makeAgentInputLog() {
     readonly kinds: ReadonlyArray<InputKind>;
   }> = [];
   /**
+   * Each kind's unbroken runs, kept apart from the calls themselves: forgetting an old call must
+   * not make a long run look as if it began later.
+   */
+  const runs: Record<InputKind, Array<Run>> = { keyboard: [], pointer: [] };
+  const opened = (kinds: ReadonlyArray<InputKind>, at: number) => {
+    for (const kind of kinds) {
+      const last = runs[kind].at(-1);
+      if (last !== undefined && (last.to === undefined || at - BEFORE_MS <= last.to)) {
+        last.to = undefined;
+        last.open += 1;
+      } else runs[kind].push({ from: at - BEFORE_MS, to: undefined, open: 1 });
+    }
+  };
+  const closed = (kinds: ReadonlyArray<InputKind>, until: number) => {
+    for (const kind of kinds) {
+      const last = runs[kind].at(-1);
+      if (last === undefined || last.open === 0) continue;
+      last.open -= 1;
+      if (last.open === 0) last.to = until;
+    }
+  };
+  const finish = (
+    call: { readonly start: number; readonly kinds: ReadonlyArray<InputKind> },
+    end: number,
+  ) => {
+    done = [...done, { ...call, end }];
+    closed(call.kinds, end + AFTER_MS);
+  };
+  /**
    * Forgets what can no longer cover an event near now: finished calls after KEEP_MS, open ones
-   * after OPEN_MS. A start whose end never arrives, or arrives first, is gone by then too. now
-   * must come from the owner's own clock, never from a report, so a report dated in the future
-   * cannot erase another agent's calls.
+   * after OPEN_MS, and runs that ended that long ago. A start whose end never arrives, or arrives
+   * first, is gone by then too. now must come from the owner's own clock, never from a report, so
+   * a report dated in the future cannot erase another agent's calls.
    */
   const prune = (now: number) => {
     done = done.filter((call) => now - call.end < KEEP_MS);
-    for (const [key, call] of open) if (now - call.start > OPEN_MS) open.delete(key);
+    for (const [key, call] of open)
+      if (now - call.start > OPEN_MS) {
+        open.delete(key);
+        closed(call.kinds, call.start + OPEN_MS);
+      }
+    for (const kind of ["keyboard", "pointer"] as const)
+      runs[kind] = runs[kind].filter((run) => run.to === undefined || now - run.to < KEEP_MS);
   };
   return {
     prune,
-    started: (key: string, at: number, kinds: ReadonlyArray<InputKind> = BOTH) =>
-      void open.set(key, { start: at, kinds }),
+    started: (key: string, at: number, kinds: ReadonlyArray<InputKind> = BOTH) => {
+      open.set(key, { start: at, kinds });
+      opened(kinds, at);
+    },
     /** A call answered, cancelled or cut off; true when it was open. */
     ended: (key: string, now: number) => {
       const call = open.get(key);
       if (call === undefined) return false;
       open.delete(key);
-      done = [...done, { ...call, end: now }];
+      finish(call, now);
       return true;
     },
     /** Every open call ends, as when the driver child is stopped; returns their keys. */
     endAll: (now: number) => {
       const keys = [...open.keys()];
-      for (const call of open.values()) done = [...done, { ...call, end: now }];
+      for (const call of open.values()) finish(call, now);
       open.clear();
       return keys;
     },
     /**
      * Whether an event of `kind` at `at` falls inside the agents' own input of that kind, for
-     * no longer than OPEN_MS of unbroken cover. `live` says which open calls still count, so a
-     * call of a control that has ended covers nothing. An event of unknown kind is a person's.
+     * no longer than OPEN_MS into an unbroken run. `live` says which open calls still count, so
+     * a call of a control that has ended covers nothing. An event of unknown kind is a person's.
      */
     isAgents: (
       at: number,
@@ -154,27 +197,22 @@ export function makeAgentInputLog() {
       live: (key: string) => boolean = () => true,
     ) => {
       if (kind === "unknown") return false;
-      const spans: Array<Covered> = [
-        ...[...open]
-          .filter(([key, call]) => live(key) && call.kinds.includes(kind))
-          .map(([, call]) => ({ from: call.start - BEFORE_MS, to: call.start + OPEN_MS })),
-        ...done
-          .filter((call) => call.kinds.includes(kind))
-          .map((call) => ({ from: call.start - BEFORE_MS, to: call.end + AFTER_MS })),
-      ];
-      const covering = spans.filter((span) => at >= span.from && at <= span.to);
-      if (covering.length === 0) return false;
-      // Walk back through overlapping spans to where this run of cover began.
-      let from = Math.min(...covering.map((span) => span.from));
-      for (let grew = true; grew;) {
-        grew = false;
-        for (const span of spans)
-          if (span.from < from && span.to >= from) {
-            from = span.from;
-            grew = true;
-          }
-      }
-      return at - from <= OPEN_MS;
+      const covered =
+        [...open].some(
+          ([key, call]) =>
+            live(key) &&
+            call.kinds.includes(kind) &&
+            at >= call.start - BEFORE_MS &&
+            at <= call.start + OPEN_MS,
+        ) ||
+        done.some(
+          (call) =>
+            call.kinds.includes(kind) && at >= call.start - BEFORE_MS && at <= call.end + AFTER_MS,
+        );
+      if (!covered) return false;
+      const run = runs[kind].find((entry) => entry.from <= at && (entry.to ?? Infinity) >= at);
+      // No run on record for covered input: err toward the person.
+      return run !== undefined && at - run.from <= OPEN_MS;
     },
     /** How many calls the log still holds, open or finished. */
     size: () => open.size + done.length,
