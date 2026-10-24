@@ -5,6 +5,11 @@
  * base64, whose first bytes match its type, and which decodes to at most
  * COMPUTER_USE_SCREENSHOT_MAX_BYTES. Any other image block is replaced by a short note.
  *
+ * A result that still carries an image never carries structuredContent (#1154): Codex sends the
+ * model a non-null structuredContent in place of every content block, so the screenshot would
+ * never reach it (openai/codex `codex-rs/protocol/src/models.rs`, the structured-content branch
+ * of the CallToolResult conversion). The structured fields move into a JSON text block instead.
+ *
  * @module ComputerUseDriverReply
  */
 // Driver lines are forwarded as written; only the image blocks of a result are read.
@@ -48,7 +53,10 @@ const parseRecord = (line: string): Record<string, unknown> | undefined => {
   }
 };
 
-/** A driver line with every image block that fails the checks replaced by a note. */
+/**
+ * A driver line with every image block that fails the checks replaced by a note, and with
+ * structuredContent folded into the text when an image remains.
+ */
 export function admitDriverReplyScreenshots(line: string): string {
   if (!line.includes('"image"')) return line;
   const message = parseRecord(line);
@@ -62,7 +70,21 @@ export function admitDriverReplyScreenshots(line: string): string {
     changed = true;
     return { type: "text", text: `GOAT withheld a screenshot from this result: ${reason}.` };
   });
-  return changed ? JSON.stringify({ ...message, result: { ...result, content } }) : line;
+  const { structuredContent, ...rest } = result;
+  const hasImage = content.some((block: unknown) => isRecord(block) && block.type === "image");
+  if (!hasImage || structuredContent === undefined || structuredContent === null)
+    return changed ? JSON.stringify({ ...message, result: { ...result, content } }) : line;
+  const structuredText = JSON.stringify(structuredContent);
+  const carried = content.some(
+    (block: unknown) => isRecord(block) && block.type === "text" && block.text === structuredText,
+  );
+  return JSON.stringify({
+    ...message,
+    result: {
+      ...rest,
+      content: carried ? content : [{ type: "text", text: structuredText }, ...content],
+    },
+  });
 }
 
 /** The outstanding-request key a provider's `notifications/cancelled` names, if the line is one. */
