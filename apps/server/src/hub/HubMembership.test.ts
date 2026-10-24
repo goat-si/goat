@@ -252,7 +252,7 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
             homeTunnels: (alias, port) =>
               Effect.sync(() => {
                 calls.push(`tunnels ${alias} ${port}`);
-                return links.has(alias) || fixture.strayTunnel ? 1 : 0;
+                return (alias !== undefined && links.has(alias)) || fixture.strayTunnel ? 1 : 0;
               }),
           }),
         ),

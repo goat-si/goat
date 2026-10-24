@@ -324,6 +324,8 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     expiresAt: Schema.String,
     apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+    /** Calls echo this value so a missed idle/reuse update cannot admit old-turn input. */
+    idleEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     /**
      * How many times the host has paused agents, and why last. A pause and its end can both
      * land before the proxy reads the control, so a higher count still ends the call in flight.
@@ -337,6 +339,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     reason: ComputerUsePauseReason,
   }),
+  Schema.Struct({ state: Schema.Literal("idle"), controlId: TrimmedNonEmptyString }),
   Schema.Struct({ state: Schema.Literal("ended"), reason: ComputerUseControlEnd }),
 ]);
 export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
@@ -346,6 +349,9 @@ export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
  * computerUseProtocol.ts). A policy refusal is targetRefused, never a person's stop (#1146).
  */
 export const ComputerUseRefusalDetail = Schema.Literals([
+  "target_busy",
+  "invalid_target",
+  "control_idle",
   "app_not_approved",
   "desktop_not_approved",
   /** Whole-display screenshots are off; an agent looks at one window at a time (#1321). */
@@ -381,6 +387,45 @@ export const computerUseRefusalReason = (
 
 /** Path the proxy reads control updates from, on the server that issued its MCP credential. */
 export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
+
+const ComputerUseCallOwner = {
+  controlId: TrimmedNonEmptyString,
+  connectionId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+};
+
+/** A proxy reserves execution before dispatch, and closes a driver generation after cutoff. */
+export const ComputerUseCallReservation = Schema.Union([
+  Schema.Struct({
+    ...ComputerUseCallOwner,
+    action: Schema.Literal("reserve"),
+    callId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+    interruptions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    idleEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+    args: Schema.Unknown,
+  }),
+  Schema.Struct({
+    ...ComputerUseCallOwner,
+    action: Schema.Literal("release"),
+    reservationId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({ ...ComputerUseCallOwner, action: Schema.Literal("close") }),
+]);
+export type ComputerUseCallReservation = typeof ComputerUseCallReservation.Type;
+
+export const ComputerUseCallAdmission = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("admitted"),
+    reservationId: Schema.NullOr(Schema.String),
+  }),
+  Schema.Struct({ status: Schema.Literal("released") }),
+  Schema.Struct({
+    status: Schema.Literal("refused"),
+    detail: ComputerUseRefusalDetail,
+    holderThreadId: Schema.optionalKey(ThreadId),
+  }),
+]);
+export type ComputerUseCallAdmission = typeof ComputerUseCallAdmission.Type;
 
 /**
  * Sent by the desktop host's computer use helper when a person's own keyboard or pointer input

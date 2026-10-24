@@ -2,6 +2,8 @@
 /** The lease proxy over in-memory stdio, lease stream and drivers, for its tests. */
 import {
   type ComputerUseHumanInputSource,
+  type ComputerUseCallReservation,
+  type ComputerUseCallAdmission,
   type ComputerUseLeaseUpdate,
   type ComputerUseOverlayCommand,
   computerUseRefusalReason,
@@ -28,7 +30,7 @@ export const call = (id: number | string, name: string, args: object = {}) =>
 export const active = (
   expiresAt = "1970-01-01T00:30:00.000Z",
   apps?: ReadonlyArray<string>,
-): ComputerUseLeaseUpdate => ({
+): Extract<ComputerUseLeaseUpdate, { state: "active" }> => ({
   state: "active",
   controlId: CONTROL,
   expiresAt,
@@ -58,6 +60,10 @@ export const harness = Effect.fn(function* (
     readonly placementGate?: Deferred.Deferred<void>;
     /** Answers each window report; reports land in `targets`. */
     readonly onTarget?: (target: { pid: number; windowId: number }) => boolean;
+    readonly reservation?: (
+      call: ComputerUseCallReservation,
+    ) => Effect.Effect<ComputerUseCallAdmission>;
+    readonly kill?: Effect.Effect<void>;
     /** Holds every window report until it is done, as a slow server would. */
     readonly targetGate?: Deferred.Deferred<void>;
     /**
@@ -87,7 +93,22 @@ export const harness = Effect.fn(function* (
   const applied = yield* Queue.unbounded<string>();
   const agentCalls = yield* Queue.unbounded<string>();
   const hidFeeds: Array<Queue.Queue<{ source: ComputerUseHumanInputSource; at: number }>> = [];
+  const reservations: Array<ComputerUseCallReservation> = [];
+  const reservationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
   const proxy = yield* runLeaseProxy({
+    connectionId: "proxy:test",
+    reservation: (call) =>
+      Effect.sync(() => void reservations.push(call)).pipe(
+        Effect.andThen(Queue.offer(reservationEvents, call)),
+        Effect.andThen(
+          options.reservation?.(call) ??
+            Effect.succeed<ComputerUseCallAdmission>(
+              call.action === "reserve"
+                ? { status: "admitted", reservationId: `ticket:${call.callId}` }
+                : { status: "released" },
+            ),
+        ),
+      ),
     controlId: CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     input: Stream.fromQueue(input),
@@ -135,6 +156,7 @@ export const harness = Effect.fn(function* (
           }).pipe(Effect.andThen(Queue.offer(driver.toDriver, line)), Effect.asVoid),
         lines: Stream.fromQueue(driver.fromDriver),
         kill: Deferred.succeed(driver.killed, undefined).pipe(
+          Effect.andThen(options.kill ?? Effect.void),
           Effect.andThen(
             driver === drivers[0] && options.firstKillGate !== undefined
               ? Deferred.await(options.firstKillGate)
@@ -232,6 +254,8 @@ export const harness = Effect.fn(function* (
     /** The next input call start or end the proxy told the server about, as "start 1". */
     agentCall: Queue.take(agentCalls),
     agentCallsQueued: Queue.size(agentCalls),
+    reservations,
+    nextReservation: Queue.take(reservationEvents),
     revoked,
     log,
     proxy,
