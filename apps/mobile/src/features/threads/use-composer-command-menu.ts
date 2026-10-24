@@ -5,8 +5,6 @@ import type {
   ProviderInteractionMode,
   ServerProvider,
   ServerSettings,
-  ThreadId,
-  ThreadPullRequestLink,
 } from "@goat/contracts";
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
 import {
@@ -556,7 +554,7 @@ export function useComposerCommandMenu({
         if (availability.setup && environmentId !== null) {
           navigation.navigate("SettingsSheet", {
             screen: "SettingsContent",
-            params: { screen: "SettingsEnvironmentDetail", params: { environmentId } },
+            params: { screen: "SettingsEnvironmentAgentBehavior", params: { environmentId } },
           });
           return;
         }

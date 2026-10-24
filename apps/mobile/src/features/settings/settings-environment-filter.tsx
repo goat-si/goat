@@ -28,6 +28,8 @@ const SettingsEnvironmentFilterContext = createContext<{
   readonly selectProject: (projectKey: string | null) => void;
   readonly selectAll: () => void;
   readonly toggleEnvironment: (environmentId: EnvironmentId) => void;
+  /** Narrows the settings to one environment, as a link from that environment's composer does. */
+  readonly focusEnvironment: (environmentId: EnvironmentId) => void;
 } | null>(null);
 
 export function SettingsEnvironmentFilterProvider(props: { readonly children: ReactNode }) {
@@ -76,6 +78,10 @@ export function SettingsEnvironmentFilterProvider(props: { readonly children: Re
         setSelectedIds((current) =>
           toggleSettingsEnvironment(current, availableTargets, environmentId),
         ),
+      focusEnvironment: (environmentId: EnvironmentId) => {
+        setSelectedProjectKey(null);
+        setSelectedIds(new Set([environmentId]));
+      },
     }),
     [
       availableTargets,
