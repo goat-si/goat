@@ -1,7 +1,7 @@
 import { scopedThreadKey } from "@goat/client-runtime/environment";
 import type { EnvironmentId, PreviewSessionControl, ScopedThreadRef } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 import { SquareIcon } from "~/components/solar";
 import { Button } from "~/components/ui/button";
@@ -82,7 +82,7 @@ export function PreviewSessionStack(props: {
   const focusRequest = usePreviewSessionStack((state) => state.focusRequest);
   const probe = useRef<HTMLDivElement>(null);
   // Browser tabs whose large view should take control once its stream connects.
-  const takeOver = useRef(new Set<string>());
+  const [takeOver, setTakeOver] = useState<ReadonlySet<string>>(() => new Set());
   const layout = useAgentCardsPlacement(
     probe,
     [
@@ -155,8 +155,14 @@ export function PreviewSessionStack(props: {
                     focusRequest={focusRequest}
                     session={session}
                     live={live}
-                    takeOverOnOpen={enlarged && takeOver.current.has(session.id)}
-                    onTakeOverStarted={() => takeOver.current.delete(session.id)}
+                    takeOverOnOpen={enlarged && takeOver.has(session.id)}
+                    onTakeOverStarted={() =>
+                      setTakeOver((current) => {
+                        const next = new Set(current);
+                        next.delete(session.id);
+                        return next;
+                      })
+                    }
                     headerAction={
                       index === 0 && (toggle !== null || floating) ? (
                         <>
@@ -168,7 +174,8 @@ export function PreviewSessionStack(props: {
                       ) : null
                     }
                     onExpand={(options) => {
-                      if (options?.takeOver) takeOver.current.add(session.id);
+                      if (options?.takeOver)
+                        setTakeOver((current) => new Set(current).add(session.id));
                       expand(session);
                     }}
                     onCollapse={collapse}

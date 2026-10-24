@@ -184,8 +184,8 @@ export function ServerBrowserSurface(props: {
     tabId,
   );
   const followSize = followSizeProp && !agentDriven;
-  const followSizeRef = useRef(followSize);
-  followSizeRef.current = followSize;
+  // Read when control arrives; an effect event keeps the stream from reconnecting on a change.
+  const followsSize = useEffectEvent(() => followSize);
   // A secret field stays hidden from this viewer across a reconnect until the stream says otherwise.
   const privateRef = useRef(false);
   const thumbnailFrameMs = thumbnail?.frameIntervalMs;
@@ -466,7 +466,7 @@ export function ServerBrowserSurface(props: {
             clearInput();
           } else if (previous?.controller !== "you") {
             const size = sizeRef.current;
-            if (followSizeRef.current && size) client.send({ type: "resize", ...size });
+            if (followsSize() && size) client.send({ type: "resize", ...size });
           }
         },
         onConnectedChange: (connected) => {
