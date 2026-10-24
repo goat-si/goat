@@ -502,12 +502,18 @@ const assertSetsUpProjects = Effect.fn("McpToolAccess.assertSetsUpProjects")(fun
   if (!result.effective.enabled) return yield* capabilityRefused(setsUpProjectsRequired);
 });
 
-/** Creates or clones a project: `writesEnvironment`, except as `assertSetsUpProjects` allows. */
+const projectSetupCaller = orchestratingCaller.pipe(Effect.tap(assertSetsUpProjects));
+
+/**
+ * Creates or clones a project: `writesEnvironment`, except as `assertSetsUpProjects` allows.
+ * Admission can wait on a concurrent duplicate, so the caller is checked again after it.
+ */
 export const setsUpProjects = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("write", (params: P) =>
-    orchestratingCaller.pipe(
-      Effect.tap(assertSetsUpProjects),
-      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
+    projectSetupCaller.pipe(
+      Effect.flatMap((caller) =>
+        admitted(params, caller.limits, Effect.andThen(projectSetupCaller, handle(params))),
+      ),
     ),
   );
 

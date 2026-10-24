@@ -385,6 +385,21 @@ export const layer = Layer.effect(
       // roleProfile keeps the role profile's id, so the child is bound under the role's profile.
       return { named, profile: roleProfile(role, named, caller) };
     });
+    /**
+     * What a caller grants a thread bound under `profileId` when it reaches that thread without
+     * launching it, as a send does: a role thread that keeps capabilities gets the role's grant,
+     * so a kept capability is neither read as exceeding the caller nor stripped on rebinding.
+     */
+    const reachGrant = Effect.fn("PermissionProfiles.reachGrant")(function* (
+      profileId: string | undefined,
+      caller: EffectiveProfile,
+    ) {
+      const role = GoatclawRole.literals.find(
+        (role) =>
+          GOATCLAW_ROLE_PROFILES[role] === profileId && goatclawRoleTemplate(role).keeps.length > 0,
+      );
+      return role === undefined ? caller.profile : (yield* roleGrant(role, caller)).profile;
+    });
     const assertTarget = Effect.fn("PermissionProfiles.assertTarget")(function* (
       scope: McpInvocationScope,
       threadId: ThreadId,
@@ -398,16 +413,7 @@ export const layer = Layer.effect(
       const within = (ceiling: PermissionProfile) =>
         encodeProfile(intersectProfiles(target.profile, ceiling)) === encodeProfile(target.profile);
       if (within(caller.profile)) return;
-      // A role thread holds what its role keeps beyond the caller's profile; the caller can still
-      // reach it while that role's grant from the caller now covers it, as a launch would.
-      for (const role of GoatclawRole.literals) {
-        if (
-          GOATCLAW_ROLE_PROFILES[role] === target.narrowing?.named.id &&
-          goatclawRoleTemplate(role).keeps.length > 0 &&
-          within((yield* roleGrant(role, caller)).profile)
-        )
-          return;
-      }
+      if (within(yield* reachGrant(target.narrowing?.named.id, caller))) return;
       return yield* refusal("The target thread's permission profile exceeds the caller's ceiling.");
     });
     const recheck = Effect.fn("PermissionProfiles.recheck")(function* (
@@ -633,6 +639,8 @@ export const layer = Layer.effect(
               const narrower = sources.findLast(
                 (source) => source.id !== granted.profile.id && withinAll(source),
               );
+              // A send rebinds an existing role thread under the grant assertTarget admitted it
+              // with, so the capabilities its role keeps survive the narrowing.
               const inherited =
                 previous === undefined
                   ? { ...granted.profile, ...(narrower === undefined ? {} : { id: narrower.id }) }
@@ -640,7 +648,9 @@ export const layer = Layer.effect(
                       yield* decodeProfile(previous.ceiling_json).pipe(
                         Effect.mapError(storageFailure),
                       ),
-                      granted.profile,
+                      input.role === undefined
+                        ? yield* reachGrant(previous.profile_id, granted)
+                        : granted.profile,
                     );
               yield* sql`INSERT INTO goatclaw_thread_profiles (thread_id, profile_id, ceiling_json, owner_key)
           VALUES (${input.childThreadId}, ${previous?.profile_id ?? granted.profile.id}, ${encodeProfile(inherited)}, ${owner})

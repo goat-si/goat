@@ -94,7 +94,7 @@ it.effect(
 );
 
 it.effect(
-  "the thread that launched a supervisor can send to it; a ceiling without merge cannot",
+  "the thread that launched a supervisor can resume it and it can still merge; a ceiling without merge cannot send",
   () =>
     Effect.gen(function* () {
       const profiles = yield* PermissionProfiles;
@@ -107,6 +107,20 @@ it.effect(
         role: "supervisor",
       });
       yield* seed("supervisor", "auto");
+      // What sendToThread does to resume an idle thread: check the target, then claim its lane.
+      yield* profiles.assertTarget(threadScope("person"), supervisor, "auto", "auto");
+      yield* profiles.claim(threadScope("person"), {
+        id: "resume",
+        childThreadId: supervisor,
+        runtimeMode: "auto",
+      });
+      expect(
+        (yield* profiles.claim(threadScope("supervisor"), {
+          id: "merger",
+          runtimeMode: "auto",
+          role: "merge-manager",
+        })).profile.capabilities,
+      ).toContain("pr.merge");
       yield* profiles.assertTarget(threadScope("person"), supervisor, "auto", "auto");
       expect(
         (yield* profiles

@@ -24,6 +24,7 @@ import * as Repositories from "../../../sourceControl/SourceControlRepositorySer
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as ThreadLaunchMcpService from "../../ThreadLaunchMcpService.ts";
@@ -41,19 +42,50 @@ const project = {
   deletedAt: null,
 };
 
+/** What a call did; `revoke` is applied while the call is admitted, after its first check. */
+interface CallState {
+  mode: RuntimeMode;
+  admissions: number;
+  writes: number;
+  readonly revoke?: "mode" | "profile";
+}
+
+/** Stands in for ToolAdmission: admitting the call revokes the caller's mode or profile. */
+const revokingAdmission = (state: CallState) =>
+  Layer.effect(
+    McpToolAccess.KeyedAdmission,
+    Effect.map(ServerSettings.ServerSettingsService, (settings) => ({
+      admit: () =>
+        Effect.gen(function* () {
+          state.admissions += 1;
+          if (state.revoke === "mode") state.mode = "approval-required";
+          if (state.revoke === "profile")
+            yield* settings.updateSettings({ goatclaw: { defaultProfile: "observer" } });
+        }).pipe(Effect.orDie),
+    })),
+  );
+
 /** The real project toolkit, served the way /mcp serves it, with goatclaw on or off. */
-const served = (options: { readonly profile?: string; readonly mode: RuntimeMode }) =>
+const served = (
+  options: { readonly profile?: string; readonly mode: RuntimeMode },
+  state: CallState = { mode: options.mode, admissions: 0, writes: 0 },
+) =>
   McpHttpServer.toolkitRegistration(ProjectToolkit, ProjectHandlers.layer).pipe(
     Layer.provideMerge(Profiles.layer),
     Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(state.revoke === undefined ? Layer.empty : revokingAdmission(state)),
     Layer.provideMerge(
       Layer.mergeAll(
         Layer.mock(ThreadManagement.ThreadManagementService)({
           getThreadShell: (threadId) =>
-            Effect.succeed(liveThreadShell(threadId, { runtimeMode: options.mode })),
+            Effect.sync(() => liveThreadShell(threadId, { runtimeMode: state.mode })),
         }),
         Layer.mock(Project.ProjectService)({
-          create: () => Effect.succeed(project),
+          create: () =>
+            Effect.sync(() => {
+              state.writes += 1;
+              return project;
+            }),
           update: () => Effect.succeed(project),
           delete: () => Effect.succeed(project),
         }),
@@ -175,4 +207,17 @@ it.effect.each([
           new RegExp(`^capability_denied: .*${changes}`),
         );
     }).pipe(Effect.provide(served({ ...(profile === undefined ? {} : { profile }), mode }))),
+);
+
+// A caller's mode or profile can change while its call waits in admission.
+it.effect.each(["mode", "profile"] as const)(
+  "a worker whose %s is revoked while its create is admitted is refused before it writes",
+  (revoke) => {
+    const state: CallState = { mode: "auto", admissions: 0, writes: 0, revoke };
+    return Effect.gen(function* () {
+      yield* seed("auto");
+      expect(yield* refusalOf("project.create", threadCaller)).toMatch(/^capability_denied: /);
+      expect(state).toMatchObject({ admissions: 1, writes: 0 });
+    }).pipe(Effect.provide(served({ profile: "worker", mode: "auto" }, state)));
+  },
 );

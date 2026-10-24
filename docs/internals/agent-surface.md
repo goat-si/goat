@@ -389,9 +389,9 @@ launch snapshot or forwarded ceiling without it still removes it. That is safe o
 while `pr.merge` gates nothing but role launches, so gating a tool on it would hand
 that tool to every supervisor.
 Every check that compares a role thread's grant with its caller's, such as the
-recheck before an SSH launch and a send's target check, derives it with the same
-`roleProfile`; comparing against the caller's plain profile reads the kept
-capability as a narrowing and refuses every such launch or send.
+recheck before an SSH launch and a send's target check and rebinding, derives it
+with the same `roleProfile`; comparing against the caller's plain profile reads the
+kept capability as a narrowing, refusing the launch or send or stripping it.
 Creating and cloning a project are the one environment write a calling thread at
 `auto` may run, because worker agents run at `auto` at most; that needs goatclaw on
 and a profile allowing `worktree.create`, and every other environment write still
