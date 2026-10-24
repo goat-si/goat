@@ -18,6 +18,14 @@ export const ALWAYS_LOAD_META_KEY = "anthropic/alwaysLoad";
 
 /**
  * The _meta key on a tools/list result that names the listing agents GOAT runs get. Clients keep
- * the full listing (D22), so this is how one, such as the D8 runner, learns what agents see.
+ * the full listing unless they ask for core (D22), so this is how one, such as the D8 runner,
+ * learns what agents see.
  */
 export const AGENT_TOOL_LISTING_META_KEY = "goat/agentToolListing";
+
+/**
+ * The request header an MCP client outside GOAT sends to /mcp, with the value "core", to be listed
+ * only the core tools. Without it a client keeps the full listing, which other GOAT hosts read to
+ * learn a remote's launch arguments and memory tools (D22).
+ */
+export const AGENT_TOOL_LISTING_HEADER = "x-goat-tool-listing";

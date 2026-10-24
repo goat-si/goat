@@ -81,6 +81,7 @@ import {
 } from "../telemetry/ProviderDimensions.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryInventory from "../project/RepositoryInventory.ts";
 import * as RepositoryReferences from "../project/RepositoryReferences.ts";
 import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.ts";
@@ -794,6 +795,8 @@ const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function*
 const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreenshot")(function* () {
   const devices = yield* DeviceService.DeviceService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
+  const projects = yield* ProjectService.ProjectService;
+  const settings = yield* Settings.ServerSettingsService;
   const built = yield* decodeAsAdvertised(DeviceScreenshotToolkit);
   yield* registerImageTool(
     DeviceScreenshotTool,
@@ -805,6 +808,8 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
       effect.pipe(
         Effect.provideService(DeviceService.DeviceService, devices),
         Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+        Effect.provideService(ProjectService.ProjectService, projects),
+        Effect.provideService(Settings.ServerSettingsService, settings),
       ),
     "screenshot",
     "Device screenshot failed.",

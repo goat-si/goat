@@ -22,9 +22,9 @@ Choose **Float device over chat** in the toolbar to keep watching and tapping th
 device in a small window while the right panel shows something else; drag the
 window by its handle, resize it from any edge, and use **Open in right panel**
 to bring it back.
-Turn off the device hub in **Settings → Integrations → Devices** to stop the
-helper processes; simulators and emulators keep running until you power them
-off.
+Turn off **Simulators and emulators** in **Settings → Integrations → Devices**
+to stop the device hub and its helper processes; simulators and emulators keep
+running until you power them off.
 
 Simulators run on the machine that hosts the environment server. iOS needs
 macOS with Xcode. Android needs the SDK Platform-Tools, Android Emulator,
@@ -84,8 +84,15 @@ once per server. Restart an existing agent session after granting access so it
 receives the device CLI environment.
 
 To keep agents away from simulators, turn off **Agent device access** in
-**Settings → Integrations → Devices**. This hides the device tools from agents
-started from then on; your own Device panel is unaffected.
+**Settings → Integrations → Devices**. That is the default for every project, and
+a project's own settings can override it either way. Agents that lose access no
+longer see the device tools when they start, and running ones are refused when
+they next list, open, or capture a device; they can still close one. Turning the
+environment setting off also stops GOAT's `agent-device` service until a project
+that still grants access opens a device. A project-only revocation leaves that
+service running, so an agent there can keep using the `agent-device` flags it
+already received. To stop device use for every project, turn off device support.
+Your own Device panel is unaffected.
 
 ## Remote connections
 
