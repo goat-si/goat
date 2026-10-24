@@ -174,6 +174,14 @@ const missingLibrariesReason = (missing: ReturnType<typeof missingLibraries>) =>
   `Computer use needs ${missing.map((library) => library.soname).join(", ")} on this computer (Debian/Ubuntu: apt install ${missing.map((library) => library.package).join(" ")}).`;
 
 export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
+  // The driver is handed DISPLAY=:N, which is screen 0 of that display.
+  const screen = /\.(\d+)$/u.exec(facts.requestedDisplay?.trim() ?? "")?.[1];
+  if (screen !== undefined && Number(screen) !== 0)
+    return {
+      capability: "unavailable",
+      reason: `This server was started with DISPLAY=${facts.requestedDisplay}, screen ${Number(screen)} of that X display. Computer use works on screen 0 only; start GOAT with DISPLAY set to screen 0.`,
+      environment: [],
+    };
   const reachable = facts.displays.find((entry) => entry.outcome === "ok");
   const session: CuaDisplayVariable[] = [
     ...(facts.sessionBus ? [{ name: "DBUS_SESSION_BUS_ADDRESS", value: facts.sessionBus }] : []),

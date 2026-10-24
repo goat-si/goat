@@ -289,11 +289,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const listed = new Map<number, ListedApp>();
   const sessions = new Set<string>();
 
+  /** Why the last child was cut off, for a call that was waiting when it happened. */
+  let lastInterruption: { readonly reason: ComputerUseRefusalDetail; readonly message: string } = {
+    reason: "helper_restarted",
+    message: LEASE_END_MESSAGES.helper_restarted,
+  };
+
   /** Cancels and answers every outstanding call, then kills the child. */
   const interrupt = Effect.fn("ComputerUseLeaseProxy.interrupt")(function* (
     reason: ComputerUseRefusalDetail,
     message: string,
   ) {
+    lastInterruption = { reason, message };
     const current = running;
     running = undefined;
     const pending = [...outstanding.values()];
@@ -580,6 +587,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     if (isRequest && message?.method === "tools/call") {
       yield* Effect.raceFirst(Deferred.await(confirmed), Deferred.await(ended).pipe(Effect.asVoid));
+      // The child this call was admitted under. A pause, takeover or narrowed approval while it
+      // waits replaces the child, and the call belongs to what was cut off, never to the next one.
+      const admitted = running;
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       const needsProof =
         options.placement !== undefined && (tool === undefined || !PROOF_FREE.has(tool));
@@ -597,6 +607,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       // The last wait before the driver hears the call: it judges the control as it is now.
       const refused = yield* refuseCall(id, message);
       if (refused !== undefined) return yield* options.output(refused);
+      if (admitted !== undefined && running !== admitted)
+        return yield* options.output(
+          refusal(id, message.method, lastInterruption.reason, lastInterruption.message),
+        );
       if (needsProof && (running === undefined || proven !== running))
         return yield* options.output(
           refusal(

@@ -55,6 +55,7 @@ const harness = Effect.fn(function* (
   const started = yield* Queue.unbounded<FakeDriver>();
   const revokeCalled = yield* Deferred.make<void>();
   const revoked: Array<ReadonlyArray<string>> = [];
+  const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const proxy = yield* runLeaseProxy({
     controlId: CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
@@ -81,10 +82,12 @@ const harness = Effect.fn(function* (
       ? {}
       : {
           placement: (windows: ReadonlyArray<NamedWindow>) =>
-            (options.placementGate === undefined
-              ? Effect.void
-              : Deferred.await(options.placementGate)
-            ).pipe(
+            Queue.offer(checking, windows).pipe(
+              Effect.andThen(
+                options.placementGate === undefined
+                  ? Effect.void
+                  : Deferred.await(options.placementGate),
+              ),
               Effect.as(
                 windows.some((window) => options.elsewhere?.has(window.pid))
                   ? ("other" as const)
@@ -117,6 +120,8 @@ const harness = Effect.fn(function* (
     isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
     restarted: Queue.take(started),
     revokeCalled: Deferred.await(revokeCalled),
+    /** The windows of the next placement check, once it has started. */
+    checking: Queue.take(checking),
     revoked,
     proxy,
   };
@@ -635,6 +640,36 @@ describe("ComputerUseLeaseProxy", () => {
       // The action still waits for the proxy's own, unfiltered listing.
       yield* h.send(call(2, "type_text", { pid: 900, text: "hi" }));
       assert.deepEqual((yield* h.nextToDriver).params, { name: "list_windows", arguments: {} });
+    }),
+  );
+
+  it.effect("a call waiting on its window check when the person takes over never runs", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({ elsewhere: new Set([900]), placementGate: gate });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 10, window_id: 20, x: 1, y: 1 }));
+      yield* h.checking;
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+      yield* h.push(active());
+      yield* h.restarted;
+      yield* Deferred.succeed(gate, undefined);
+      // The replacement child proves its screen, yet the click from before the takeover is refused.
+      const asked = yield* h.nextToDriver;
+      assert.deepEqual(asked.params, { name: "list_windows", arguments: {} });
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: asked.id,
+          result: { content: [], structuredContent: { windows: [{ pid: 10, window_id: 20 }] } },
+        }),
+      );
+      const refused = yield* h.nextToProvider;
+      assert.equal(refused.id, 1);
+      assert.deepInclude((refused.result as { structuredContent: object }).structuredContent, {
+        detail: "waiting_for_human",
+      });
+      assert.equal(yield* h.driverQueued, 0);
     }),
   );
 

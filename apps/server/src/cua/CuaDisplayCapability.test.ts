@@ -121,6 +121,12 @@ describe("Linux display parsing", () => {
     expect(classifyLinux(facts({ displays: [], wayland: liveWayland })).capability).toBe("partial");
   });
 
+  it("a named screen other than 0 is unavailable, since the driver would use screen 0", () => {
+    const result = classifyLinux(facts({ requestedDisplay: ":0.1" }));
+    expect(result).toMatchObject({ capability: "unavailable", environment: [] });
+    expect(classifyLinux(facts({ requestedDisplay: ":1.0" })).capability).toBe("available");
+  });
+
   it("reads local DISPLAY values and ignores forwarded ones", () => {
     expect(localDisplayNumber(":1")).toBe(1);
     expect(localDisplayNumber(":3.0")).toBe(3);
