@@ -270,6 +270,23 @@ ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the same team
 Signing needs the login keychain of the signed-in user, so it fails over SSH or from an agent
 session that cannot unlock it (`errSecInternalComponent`).
 
+### Linux computer use helper
+
+On Linux, computer use runs Cua Driver under `goat-computer-use`, a Node helper
+(`apps/server/src/cua/linuxHelper`) that speaks the computer use protocol on stdio and owns the
+driver as its child. Build it, then run the live check, which starts its own Xvfb display,
+D-Bus session, AT-SPI bus and fixture window and stops each by the pid it started:
+
+```sh
+node scripts/build-computer-use-helper-linux.ts
+node scripts/computer-use-linux-smoke.ts --helper apps/server/.computer-use-helper-linux/goat-computer-use --evidence /tmp/gcu-linux
+```
+
+The check needs `Xvfb` (`--xvfb <path>` when it is not on `PATH`), `dbus-daemon`, at-spi2-core,
+python3 with GTK 3 introspection and `xdotool`. Without a writable `/dev/uinput` and an X server
+that accepts new input devices, which Xvfb is not, background keys and pixel clicks are refused
+with `backgroundUnavailable`; AT-SPI clicks and value writes still run in the background.
+
 ### Windows installer prerequisites
 
 Install Rust, Python 3, and Visual Studio Build Tools with **Desktop development with C++**.

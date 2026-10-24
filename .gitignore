@@ -59,3 +59,5 @@ node_modules/
 
 # Locally built macOS computer use helper (scripts/build-computer-use-helper.ts)
 apps/desktop/.computer-use-helper/
+# Locally built Linux computer use helper (scripts/build-computer-use-helper-linux.ts)
+apps/server/.computer-use-helper-linux/
