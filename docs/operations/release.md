@@ -459,6 +459,26 @@ The disabled upstream release workflow publishes an npm launcher using trusted
 publishing. Do not configure its `t3` package publisher for GOAT. GOAT's active
 workflow publishes verified archives to its release repository.
 
+GOAT's supported npm route uses the private `@goat-si/goat` launcher tarball,
+`goat-npm.tgz`, from `goat-si/goat-releases`. The name identifies the installed
+tarball only; ownership of that npm scope has not been established. The active
+`goat-nightly.yml` assemble job builds it for the exact release version, validates
+the packed name/private flag/bins/dependency-free manifest, and includes it in
+`SHA256SUMS`. Both stable and nightly releases carry the same asset name.
+
+Install stable with
+`npm install --global https://github.com/goat-si/goat-releases/releases/latest/download/goat-npm.tgz`.
+For a nightly or an exact stable version, use
+`https://github.com/goat-si/goat-releases/releases/download/v<VERSION>/goat-npm.tgz`.
+Updates reinstall that URL with the original npm prefix; see
+[npm installation](../user/install.md#install-with-npm).
+
+Do not publish to the unrelated unscoped `goat` registry package or upstream's
+`t3` package. The legacy publisher command refuses registry publication, including
+dry runs and stale tarballs. A future registry route requires a maintainer to
+confirm an owned identity and explicitly configure its publisher; this workflow
+does not acquire a name, configure credentials, or enable npm publication.
+
 ## 1) Release validation and unsigned builds
 
 GOAT validation follows `goat-nightly.yml` and its explicit publication gates.

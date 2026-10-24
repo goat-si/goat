@@ -6,6 +6,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import packageJson from "../../package.json" with { type: "json" };
 import {
+  resolveCliCommand,
+  resolveEntryPath,
+  resolveNpmUpdateCommand,
   resolveHostCliCommand,
   resolveRootCliCommand,
   resolveServerInstallation,
@@ -40,12 +43,14 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
       const npx = "/home/theo/.npm/_npx/abc/node_modules/goat/dist/bin.mjs";
       // sudo's secure_path already has a system Node.
       expect(yield* rootCommand({ node: "/usr/bin/node", entry: npx })).toBe(
-        "sudo npx goat browser setup",
+        `sudo npm exec --yes --package=https://github.com/goat-si/goat-releases/releases/download/v${packageJson.version}/goat-npm.tgz -- goat browser setup`,
       );
       // nvm, fnm, and tarball installs are dropped by sudo's PATH reset.
       expect(
         yield* rootCommand({ node: "/home/theo/.nvm/versions/node/v24/bin/node", entry: npx }),
-      ).toBe('sudo env "PATH=$PATH" npx goat browser setup');
+      ).toBe(
+        `sudo env "PATH=$PATH" npm exec --yes --package=https://github.com/goat-si/goat-releases/releases/download/v${packageJson.version}/goat-npm.tgz -- goat browser setup`,
+      );
       expect(
         yield* rootCommand({
           node: "/home/theo/.local/node/bin/node",
@@ -92,6 +97,81 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
 });
 
 it.layer(NodeServices.layer)("host CLI commands", (it) => {
+  it.effect("Windows npm pin guidance retains the verified global prefix", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const prefix = path.join(root, "Windows npm prefix");
+      const launcher = path.join(prefix, "node_modules/@goat-si/goat/bin/goat.mjs");
+      yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(path.dirname(launcher), "../package.json"),
+        JSON.stringify({
+          name: "@goat-si/goat",
+          version: packageJson.version,
+          bin: { goat: "./bin/goat.mjs" },
+        }),
+      );
+      yield* fs.writeFileString(
+        path.join(prefix, "goat.cmd"),
+        '@"%dp0%\\node_modules\\@goat-si\\goat\\bin\\goat.mjs" %*',
+      );
+      const command = resolveNpmUpdateCommand("2.0.0").pipe(
+        Effect.provideService(HostProcess.Environment, { GOAT_NPM_LAUNCHER_PATH: launcher }),
+        Effect.provideService(HostProcess.IsExecutable, true),
+        Effect.provideService(HostProcess.ExecutablePath, "C:\\goat.exe"),
+        Effect.provideService(HostProcess.Platform, "win32"),
+      );
+      expect(yield* command).toBe(
+        `npm --prefix "${prefix}" install --global https://github.com/goat-si/goat-releases/releases/download/v2.0.0/goat-npm.tgz`,
+      );
+      yield* fs.writeFileString(path.join(prefix, "goat.cmd"), "unrelated command");
+      expect(yield* command).toBe(
+        "npm exec --yes --package=https://github.com/goat-si/goat-releases/releases/download/v2.0.0/goat-npm.tgz -- goat",
+      );
+    }),
+  );
+  it.effect("every package runner selects an exact GOAT release instead of npm goat", () =>
+    Effect.gen(function* () {
+      for (const entry of [
+        "/tmp/npm/_npx/hash/node_modules/@goat-si/goat/bin/goat.mjs",
+        "/tmp/pnpm/dlx/hash/node_modules/t3/bin/t3.mjs",
+        "/tmp/.bun/install/cache/goat/dist/bin.mjs",
+      ]) {
+        const command = yield* resolveCliCommand("serve").pipe(
+          Effect.provideService(HostProcess.Arguments, ["node", entry]),
+          Effect.provideService(HostProcess.Environment, {}),
+          Effect.provideService(HostProcess.IsExecutable, false),
+        );
+        expect(command).toBe(
+          `npm exec --yes --package=https://github.com/goat-si/goat-releases/releases/download/v${packageJson.version}/goat-npm.tgz -- goat serve`,
+        );
+      }
+    }),
+  );
+
+  it.effect("ignores inherited metadata from the unrelated goat package", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const launcher = path.join(root, "bin/goat.mjs");
+      yield* fs.makeDirectory(path.dirname(launcher));
+      yield* fs.writeFileString(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "goat", version: packageJson.version }),
+      );
+      expect(
+        yield* resolveEntryPath.pipe(
+          Effect.provideService(HostProcess.Environment, { GOAT_NPM_LAUNCHER_PATH: launcher }),
+          Effect.provideService(HostProcess.IsExecutable, true),
+          Effect.provideService(HostProcess.ExecutablePath, "/opt/goat/goat"),
+        ),
+      ).toBe("/opt/goat/goat");
+    }),
+  );
+
   it.effect("renders a PowerShell command line on Windows", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -215,8 +295,8 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       const root = yield* fs
         .makeTempDirectoryScoped()
         .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
-      const prefix = path.join(root, "bunx-tools");
-      const packageRoot = path.join(prefix, "lib/node_modules/goat");
+      const prefix = path.join(root, "custom npm prefix");
+      const packageRoot = path.join(prefix, "lib/node_modules/@goat-si/goat");
       const launcher = path.join(packageRoot, "bin/goat.mjs");
       const executable = path.join(root, ".goat/runtime/goat/versions/1.0.0/goat");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
@@ -240,10 +320,21 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       ] as const) {
         yield* fs.writeFileString(
           path.join(packageRoot, "package.json"),
-          `{"name":"goat","version":"${version}","bin":{"goat":"./bin/goat.mjs"}}`,
+          `{"name":"@goat-si/goat","version":"${version}","bin":{"goat":"./bin/goat.mjs"}}`,
         );
         expect(yield* resolve).toEqual(expected);
       }
+      expect(
+        yield* resolveNpmUpdateCommand("2.0.0").pipe(
+          Effect.provideService(HostProcess.ExecutablePath, executable),
+          Effect.provideService(HostProcess.Arguments, [executable, executable]),
+          Effect.provideService(HostProcess.IsExecutable, true),
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, { GOAT_NPM_LAUNCHER_PATH: launcher }),
+        ),
+      ).toBe(
+        `npm --prefix '${prefix}' install --global https://github.com/goat-si/goat-releases/releases/download/v2.0.0/goat-npm.tgz`,
+      );
     }),
   );
 

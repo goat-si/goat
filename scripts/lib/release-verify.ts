@@ -7,6 +7,11 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@goat/shared/HostProcess";
+import {
+  CLI_NPM_PACKAGE_NAME,
+  CLI_NPM_LAUNCHER_ASSET,
+  cliArchiveTarCommand,
+} from "@goat/shared/cliRelease";
 import type { PlatformError } from "effect/PlatformError";
 import { runtimeManifestAssetName } from "@goat/shared/runtimeManifest";
 import { checkReleaseRuntimeManifest } from "./runtime-manifest.ts";
@@ -455,6 +460,7 @@ export function requiredReleaseAssets(version: string): string[] {
     "install-goat-server.sh",
     "THIRD_PARTY_NOTICES.md",
     "LICENSE-T3CODE.txt",
+    CLI_NPM_LAUNCHER_ASSET,
   ];
   for (const arch of ["arm64", "x64"]) {
     for (const ext of ["dmg", "zip", "exe"]) names.push(`GOAT-${version}-${arch}.${ext}`);
@@ -662,6 +668,9 @@ export const assembleRelease = Effect.fn("assembleRelease")(function* (
   const path = yield* Path.Path;
   const names = (yield* fs.readDirectory(dir)).toSorted();
   const problems = checkReleaseAssetSet(names, version, allowMissing);
+  if (names.includes(CLI_NPM_LAUNCHER_ASSET)) {
+    yield* verifyNpmLauncherTarball(path.join(dir, CLI_NPM_LAUNCHER_ASSET), version);
+  }
   const assets: ReleaseAsset[] = [];
   for (const name of names.filter((name) => name !== "SHA256SUMS")) {
     if ((yield* fs.stat(path.join(dir, name))).type !== "File") {
@@ -738,4 +747,75 @@ export const assembleRelease = Effect.fn("assembleRelease")(function* (
     checks: ["asset-set", "manifests", "reports", "SHA256SUMS"],
     problems: [],
   };
+});
+
+const NpmLauncherManifest = Schema.Struct({
+  name: Schema.Literal(CLI_NPM_PACKAGE_NAME),
+  private: Schema.Literal(true),
+  version: Schema.String,
+  bin: Schema.Struct({
+    goat: Schema.Literal("./bin/goat.mjs"),
+    t3: Schema.Literal("./bin/goat.mjs"),
+  }),
+  dependencies: Schema.optionalKey(Schema.Unknown),
+  optionalDependencies: Schema.optionalKey(Schema.Unknown),
+  peerDependencies: Schema.optionalKey(Schema.Unknown),
+  bundledDependencies: Schema.optionalKey(Schema.Unknown),
+  bundleDependencies: Schema.optionalKey(Schema.Unknown),
+  scripts: Schema.optionalKey(Schema.Unknown),
+});
+const decodeNpmLauncherManifest = Schema.decodeEffect(Schema.fromJsonString(NpmLauncherManifest));
+
+/** Inspect the packed bytes before checksumming, without executing or extracting their code. */
+export const verifyNpmLauncherTarball = Effect.fn("verifyNpmLauncherTarball")(function* (
+  archive: string,
+  version: string,
+) {
+  const tar = cliArchiveTarCommand(yield* HostProcess.Platform, yield* HostProcess.Environment);
+  const listing = yield* requireReleaseCommand(runReleaseCommand, tar, ["-tzf", archive]);
+  const members = listing.stdout.split(/\r?\n/).filter(Boolean);
+  const allowed = new Set([
+    "package/",
+    "package/bin/",
+    "package/dist/",
+    "package/package.json",
+    "package/README.md",
+    "package/bin/goat.mjs",
+    "package/dist/bin.mjs",
+  ]);
+  if (
+    members.some((name) => !allowed.has(name)) ||
+    new Set(members).size !== members.length ||
+    !["package/package.json", "package/bin/goat.mjs", "package/dist/bin.mjs"].every((name) =>
+      members.includes(name),
+    )
+  ) {
+    return yield* new ReleaseVerificationError({
+      problems: ["Invalid npm launcher tarball members"],
+    });
+  }
+  const packed = yield* requireReleaseCommand(runReleaseCommand, tar, [
+    "-xOzf",
+    archive,
+    "package/package.json",
+  ]);
+  const manifest = yield* decodeNpmLauncherManifest(packed.stdout).pipe(
+    Effect.mapError(
+      () =>
+        new ReleaseVerificationError({ problems: ["Invalid private GOAT npm launcher manifest"] }),
+    ),
+  );
+  if (
+    manifest.version !== version ||
+    "dependencies" in manifest ||
+    "optionalDependencies" in manifest ||
+    "peerDependencies" in manifest ||
+    "bundledDependencies" in manifest ||
+    "bundleDependencies" in manifest ||
+    "scripts" in manifest
+  ) {
+    return yield* new ReleaseVerificationError({
+      problems: ["npm launcher version or dependency-free manifest does not match the release"],
+    });
+  }
 });
