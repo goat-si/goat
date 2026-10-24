@@ -121,7 +121,8 @@ export class HubOcx extends Context.Service<
     readonly deviceHealth: (alias: string) => Effect.Effect<string | undefined>;
     /** Live `ssh -R` link tunnels on this Home for the alias or port; undefined when unreadable. */
     readonly homeTunnels: (
-      alias: string,
+      /** Undefined counts by port alone, so a newer link under the alias is not counted. */
+      alias: string | undefined,
       tunnelPort: number | undefined,
     ) => Effect.Effect<number | undefined>;
   }
@@ -211,7 +212,7 @@ export const healthScript = [
 /** OpenCodex runs each link tunnel as `ssh … -R 127.0.0.1:<port>:127.0.0.1:<home> -- <alias>`. */
 export const countLinkTunnels = (
   processes: string,
-  alias: string,
+  alias: string | undefined,
   tunnelPort: number | undefined,
 ) =>
   processes.split(/\r?\n/u).filter((line) => {
@@ -221,7 +222,7 @@ export const countLinkTunnels = (
     if (!argv.includes("-R") || forward === undefined) return false;
     return (
       (tunnelPort !== undefined && forward.startsWith(`127.0.0.1:${tunnelPort}:`)) ||
-      (argv.at(-2) === "--" && argv.at(-1) === alias)
+      (alias !== undefined && argv.at(-2) === "--" && argv.at(-1) === alias)
     );
   }).length;
 
