@@ -412,7 +412,8 @@ export const buildComputerUseHelperCommand = Command.make(
       Flag.withDescription(
         "Sign a dev helper ad-hoc. Every rebuild then loses its macOS permissions.",
       ),
-      Flag.withDefault(false),
+      Flag.withDescription("defaults to false; Developer ID signing remains the default"),
+      Flag.optional,
     ),
     notaryProfile: Flag.String("notary-profile").pipe(
       Flag.withDescription("notarytool keychain profile; notarizes and staples when set."),
