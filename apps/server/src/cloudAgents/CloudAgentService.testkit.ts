@@ -23,6 +23,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
@@ -420,7 +421,11 @@ export const layerFor = (world: World, profile?: string) => {
 
 export const run = <A, E>(
   world: World,
-  body: Effect.Effect<A, E, CloudAgents.CloudAgentService | ProjectionStore.ProjectionStoreV2>,
+  body: Effect.Effect<
+    A,
+    E,
+    CloudAgents.CloudAgentService | ProjectionStore.ProjectionStoreV2 | SqlClient.SqlClient
+  >,
 ) => body.pipe(Effect.provide(layerFor(world)));
 
 export const full = Effect.succeed({
