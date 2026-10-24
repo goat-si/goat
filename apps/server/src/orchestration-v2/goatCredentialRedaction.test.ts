@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import {
   REDACTED_CREDENTIAL,
@@ -8,7 +8,7 @@ import {
 } from "./goatCredentialRedaction.ts";
 
 // Synthetic, shaped like McpSessionRegistry's run tag plus secret.
-const TOKEN = "testtag0" + "SyntheticMcpTokenNotARealCredential00000000";
+const TOKEN = "testtag0SyntheticMcpTokenNotARealCredential00000000";
 
 describe("redactGoatCredentials", () => {
   it("an environment dump in any common format never shows the MCP token", () => {
