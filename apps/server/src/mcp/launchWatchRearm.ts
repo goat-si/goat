@@ -74,24 +74,23 @@ export const rearmAfterSend = (
  * An unkeyed one is named by when it was made: a second in the same millisecond finds the
  * run preparing already and retries nothing. Bookkeeping must never fail the retry itself.
  */
-export const rearmAfterRetry = (
+export const rearmAfterRetry = Effect.fn("LaunchWatch.rearmAfterRetry")(function* (
   launchWatches: LaunchWatches,
   scope: McpInvocationScope,
   input: OrchestratorMcpThreadRetryInput,
   result: OrchestratorMcpThreadRetryResult,
-) =>
-  Effect.gen(function* () {
-    const retryId =
-      input.clientRequestId === undefined
-        ? `at:${yield* Clock.currentTimeMillis}`
-        : stableCommandId({ scope, requestKey: input.clientRequestId, operation: "thread-retry" });
-    yield* followRetriedRun(launchWatches, {
-      host: input.host,
-      threadId: input.threadId,
-      runId: result.runId,
-      retryId,
-    });
+) {
+  const retryId =
+    input.clientRequestId === undefined
+      ? `at:${yield* Clock.currentTimeMillis}`
+      : stableCommandId({ scope, requestKey: input.clientRequestId, operation: "thread-retry" });
+  yield* followRetriedRun(launchWatches, {
+    host: input.host,
+    threadId: input.threadId,
+    runId: result.runId,
+    retryId,
   });
+});
 
 export type PreparedRunRetryServices =
   | ThreadLaunchService.ThreadLaunchService
