@@ -106,8 +106,9 @@
 `computerUseAttachment` returns `none` (with a reason) or `proxied`. It attaches only when
 `enableCua` is on, the driver is running, the provider runs on this host, and the turn is neither
 Plan nor a read-only sandbox. An unattended turn gets `none` with `cuaDriverBlocked` unless its
-thread holds a lease and the host's helper reports both a person's input and secret fields
-(`cuaDetection`; otherwise `detection-unsupported`, #1235). Every attachment carries GOAT's proxy
+thread holds a lease and the host's helper reports both a person's input and secret fields as
+supported signals in its readiness (`cuaReadiness`, also shown as `CuaHostStatus.readiness`;
+otherwise `detection-unsupported`, #1235). Every attachment carries GOAT's proxy
 instead of `cua-driver mcp` under the thread's control (see "Safety") with
 `cuaDriverOverridesUserConfig`: a `cua-driver` the person configured would skip Stop, pauses and app
 approvals. Without the proxy subcommand nothing could stop the driver, so there is no attachment.
