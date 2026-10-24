@@ -34,6 +34,8 @@ export const previewEntries = {
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Answers the currently pending live-page dialog and invalidates element refs; read preview.status and a fresh preview.snapshot before deciding whether another answer is needed.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -72,12 +74,14 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Open browser preview",
     description:
-      "Open or reuse a collaborative browser tab and request its preview. Parallel subagents sharing a session must each create a separate tab and pass its returned tabId on every call. A profile choice applies only when creating a tab.",
+      "Open or reuse a collaborative browser tab. Parallel subagents must each create a separate tab and pass its tabId on every call. A profile choice applies only to a new tab. Retry with the same clientRequestId to avoid opening another tab.",
     guide:
       "Requires the thread's preview MCP capability. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. An explicit tabId reuses that tab; reuseExistingTab=false creates a new tab; otherwise the broker supplies this session's current tab. Omission never implicitly takes over another session's tab. Unless open=false, the server requests a preview reveal; an explicit open=true forces the reveal request, while omission leaves it unforced. profileId accepts an id or case-insensitive name from goat_preview_status. A reused tab keeps its original profile and ignores profileId. With a reported default profile, omission uses it; without one, a new headless agent tab uses an isolated context rather than inheriting saved logins. An initial open may return despite a load wait timing out; use goat_preview_navigate when a successful readiness wait matters.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotency: "key",
+    reconcile: "preview.status",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -101,6 +105,8 @@ export const previewEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Navigates the live shared tab and returns observed page status; read preview.status or preview.snapshot after an uncertain outcome before deciding to navigate again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -124,6 +130,8 @@ export const previewEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Replaces the tab viewport setting with an absolute fill, freeform, or preset size; repeating the same setting converges to the same viewport configuration.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -147,6 +155,8 @@ export const previewEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Sets an absolute color-scheme override, or removes it for system appearance; repeating the same value leaves the same override.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -170,6 +180,8 @@ export const previewEntries = {
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Clicks the live shared page and can submit or open a dialog; inspect preview.snapshot and preview.status after an uncertain outcome before deciding to click again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -192,6 +204,8 @@ export const previewEntries = {
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Inserts text at the live page caret, or replaces a field when clear is set; inspect preview.snapshot after an uncertain outcome before deciding to type again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -215,6 +229,8 @@ export const previewEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Moves the pointer over the live shared page, whose handlers decide the effect; inspect preview.snapshot before deciding to hover again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -238,6 +254,8 @@ export const previewEntries = {
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Selects options on the live shared page and dispatches browser change events; inspect preview.snapshot before deciding to select again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -260,6 +278,8 @@ export const previewEntries = {
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Drags between live page locators, potentially changing their positions or meaning; inspect a fresh preview.snapshot before deciding to drag again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -283,6 +303,8 @@ export const previewEntries = {
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Answers the current file chooser or sets a live file input, which can trigger page handlers; inspect preview.status and preview.snapshot before deciding to upload again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -305,6 +327,8 @@ export const previewEntries = {
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Sends a key to the live focused page and can submit or navigate; inspect preview.snapshot and preview.status before deciding to press again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -327,6 +351,8 @@ export const previewEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Applies relative scroll deltas to the live page or element; inspect preview.snapshot before deciding whether another scroll is needed.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -350,6 +376,8 @@ export const previewEntries = {
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Executes arbitrary JavaScript in the live shared page; read back its effect with preview.snapshot or a read-only expression before deciding to execute it again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -394,6 +422,8 @@ export const previewEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Server capture serializes starts and reuses the active recording; the desktop recorder returns its existing start time or refuses while starting or stopping.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -417,6 +447,8 @@ export const previewEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Consumes the active recording: server capture clears it during finalization, desktop stop shares its in-flight promise, and the attachment claim reuses the retained file. A later stop without an active recording cannot transfer it again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -461,6 +493,8 @@ export const previewEntries = {
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Removes the specified thread tab; repeating after removal finds no manager session and closes nothing further.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -483,6 +517,8 @@ export const previewEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Moves one entry backward in live tab history; inspect preview.status or preview.snapshot after an uncertain outcome before deciding to move again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -506,6 +542,8 @@ export const previewEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Moves one entry forward in live tab history; inspect preview.status or preview.snapshot after an uncertain outcome before deciding to move again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -529,6 +567,8 @@ export const previewEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Reloads the live shared page and may repeat its requests; inspect preview.status or preview.snapshot after an uncertain outcome before deciding to reload again.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
