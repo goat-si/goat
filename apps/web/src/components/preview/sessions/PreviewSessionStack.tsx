@@ -10,6 +10,7 @@ import {
   previewSessionChip,
   ThreadId,
 } from "@goat/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
@@ -31,7 +32,8 @@ import { useThreadShell } from "~/state/entities";
 import { previewSessionsEnvironment, usePreviewSessions } from "~/state/previewSessions";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { PreviewSessionThumbnail, useDocumentVisible } from "./PreviewSessionThumbnail";
+import { PreviewSessionStackSurface } from "./PreviewSessionStackSurface";
+import { PreviewSessionThumbnail } from "./PreviewSessionThumbnail";
 import { openPreviewSessionStack, usePreviewSessionStack } from "./previewSessionStackStore";
 
 const CHIP_VARIANT = {
@@ -80,6 +82,10 @@ function PreviewSessionTile(props: {
       ? expand?.()
       : props.onControl(control);
   const actions = session.capabilities.controls.filter((control) => control in CONTROL_LABEL);
+  // Read-only connections see the tile but not controls the server would refuse.
+  const canControl = useAtomValue(
+    previewSessionsEnvironment.control.permissionAtom(session.environmentId),
+  );
   const tile = useRef<HTMLElement>(null);
   // Each request scrolls again, even to the tile already focused.
   const focusRequest = props.focused ? props.focusRequest : 0;
@@ -89,9 +95,10 @@ function PreviewSessionTile(props: {
   return (
     <article
       ref={tile}
+      data-stack-interactive
       className={cn(
         // Clipped content would otherwise let the scrolling list squeeze a tile instead of scrolling.
-        "shrink-0 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-sm",
+        "pointer-events-auto shrink-0 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-sm",
         props.focused && "ring-2 ring-ring",
       )}
       aria-label={`${session.target.title || previewSessionDetail(session)}: ${chip}`}
@@ -127,7 +134,13 @@ function PreviewSessionTile(props: {
       </button>
       <div className="flex items-center gap-1.5 p-2">
         {actions.map((control) => (
-          <Button key={control} variant="outline" size="compact" onClick={() => act(control)}>
+          <Button
+            key={control}
+            variant="outline"
+            size="compact"
+            disabled={!canControl}
+            onClick={() => act(control)}
+          >
             {CONTROL_LABEL[control]}
           </Button>
         ))}
@@ -136,6 +149,7 @@ function PreviewSessionTile(props: {
             className="ml-auto"
             variant="destructive-outline"
             size="compact"
+            disabled={!canControl}
             onClick={() => props.onControl("stop")}
           >
             <SquareIcon />
@@ -178,6 +192,25 @@ function useMiniPlayerTop(frame: unknown) {
   return frame === null ? null : top;
 }
 
+function StopAllButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly onStop: () => void;
+}) {
+  const canControl = useAtomValue(
+    previewSessionsEnvironment.control.permissionAtom(props.environmentId),
+  );
+  return (
+    <Button
+      variant="destructive-outline"
+      size="compact"
+      disabled={!canControl}
+      onClick={props.onStop}
+    >
+      Stop all
+    </Button>
+  );
+}
+
 /**
  * The right-side stack of what agents drive on this environment's host: one tile per browser
  * tab or desktop session, waiting ones first. Thumbnails stream only while the stack is open and
@@ -210,7 +243,6 @@ export function PreviewSessionStack(props: {
   const setCollapsed = usePreviewSessionStack((state) => state.setCollapsed);
   const focus = usePreviewSessionStack((state) => state.focus);
   const focusRequest = usePreviewSessionStack((state) => state.focusRequest);
-  const visible = useDocumentVisible();
   const miniPlayerTop = useMiniPlayerTop(miniPlayer);
   const focusedId =
     focus === null
@@ -220,56 +252,80 @@ export function PreviewSessionStack(props: {
             ? session.kind === focus.kind
             : session.id === focus.sessionId,
         )?.id ?? null);
-  if (props.environmentId === null || sessions.length === 0 || panelOpen) return null;
+
   const environmentId = props.environmentId;
   const send = (input: { readonly sessionId?: string; readonly control: PreviewSessionControl }) =>
-    void control({ environmentId, input });
+    environmentId === null ? undefined : void control({ environmentId, input });
   return (
-    <aside
-      className="pointer-events-none fixed top-14 right-3 z-40 flex max-h-[calc(100vh-5rem)] w-72 flex-col gap-2"
-      // The mini player keeps its corner; the stack ends above it and scrolls.
-      style={
-        miniPlayerTop === null
-          ? undefined
-          : { maxHeight: Math.max(0, miniPlayerTop - STACK_TOP_PX - STACK_GAP_PX) }
-      }
-      aria-label="Agents on screen"
+    <PreviewSessionStackSurface
+      hasContent={environmentId !== null && sessions.length > 0}
+      dockedHidden={panelOpen}
     >
-      <div className="pointer-events-auto flex items-center gap-1.5 rounded-lg border bg-popover px-2 py-1.5 shadow-sm">
-        <span className="flex-1 font-medium text-xs">
-          Agents on screen <span className="text-muted-foreground">{sessions.length}</span>
-        </span>
-        <Button
-          variant="destructive-outline"
-          size="compact"
-          onClick={() => send({ control: "stopAll" })}
+      {({ floating, live, maxHeight, toggle, captureNotice }) => (
+        <aside
+          className={
+            floating
+              ? "pointer-events-none flex w-72 flex-col gap-2"
+              : "pointer-events-none fixed top-14 right-3 z-40 flex max-h-[calc(100vh-5rem)] w-72 flex-col gap-2"
+          }
+          // The mini player keeps its corner; the stack ends above it and scrolls.
+          style={
+            floating
+              ? { maxHeight }
+              : miniPlayerTop === null
+                ? undefined
+                : { maxHeight: Math.max(0, miniPlayerTop - STACK_TOP_PX - STACK_GAP_PX) }
+          }
+          aria-label="Agents on screen"
         >
-          Stop all
-        </Button>
-        <Button
-          variant="ghost-muted"
-          size="icon-xs"
-          aria-label={collapsed ? "Show agent sessions" : "Hide agent sessions"}
-          aria-expanded={!collapsed}
-          onClick={() => (collapsed ? openPreviewSessionStack() : setCollapsed(true))}
-        >
-          {collapsed ? <ChevronDownIcon /> : <ChevronUpIcon />}
-        </Button>
-      </div>
-      {collapsed ? null : (
-        <div className="pointer-events-auto flex min-h-0 flex-col gap-2 overflow-y-auto">
-          {sessions.map((session) => (
-            <PreviewSessionTile
-              key={session.id}
-              focused={session.id === focusedId}
-              focusRequest={focusRequest}
-              session={session}
-              live={visible}
-              onControl={(next) => send({ sessionId: session.id, control: next })}
-            />
-          ))}
-        </div>
+          <div
+            data-stack-interactive
+            className="pointer-events-auto flex flex-wrap items-center gap-1.5 rounded-lg border bg-popover px-2 py-1.5 shadow-sm"
+          >
+            <span className="flex-1 font-medium text-xs">
+              Agents on screen <span className="text-muted-foreground">{sessions.length}</span>
+            </span>
+            {toggle}
+            {environmentId === null ? null : (
+              <StopAllButton
+                environmentId={environmentId}
+                onStop={() => send({ control: "stopAll" })}
+              />
+            )}
+            <Button
+              variant="ghost-muted"
+              size="icon-xs"
+              aria-label={collapsed ? "Show agent sessions" : "Hide agent sessions"}
+              aria-expanded={!collapsed}
+              onClick={() => (collapsed ? openPreviewSessionStack() : setCollapsed(true))}
+            >
+              {collapsed ? <ChevronDownIcon /> : <ChevronUpIcon />}
+            </Button>
+          </div>
+          {captureNotice ? (
+            <p
+              data-stack-interactive
+              className="pointer-events-auto rounded-lg border bg-popover p-2 text-xs text-muted-foreground"
+            >
+              {captureNotice}
+            </p>
+          ) : null}
+          {collapsed ? null : (
+            <div className="pointer-events-none flex min-h-0 flex-col gap-2 overflow-y-auto">
+              {sessions.map((session) => (
+                <PreviewSessionTile
+                  key={session.id}
+                  focused={session.id === focusedId}
+                  focusRequest={focusRequest}
+                  session={session}
+                  live={live}
+                  onControl={(next) => send({ sessionId: session.id, control: next })}
+                />
+              ))}
+            </div>
+          )}
+        </aside>
       )}
-    </aside>
+    </PreviewSessionStackSurface>
   );
 }

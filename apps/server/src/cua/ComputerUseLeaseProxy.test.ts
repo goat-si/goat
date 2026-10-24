@@ -87,6 +87,8 @@ const harness = Effect.fn(function* (
     push: (update: ComputerUseLeaseUpdate) => Queue.offer(updates, update),
     failLeaseStream: Queue.fail(updates, "connection reset"),
     reply: (line: string) => Queue.offer(current().fromDriver, line),
+    /** The driver's output ends without the proxy killing it, as when the helper restarts. */
+    driverExits: Effect.suspend(() => Queue.end(current().fromDriver)),
     nextToDriver: Effect.suspend(() => Queue.take(current().toDriver)).pipe(Effect.map(json)),
     nextToProvider: Queue.take(output).pipe(Effect.map(json)),
     providerQueued: Queue.size(output),
@@ -208,6 +210,22 @@ describe("ComputerUseLeaseProxy", () => {
       assert.deepEqual((yield* h.nextToProvider).id, 1);
       assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "expired"));
     }),
+  );
+
+  it.effect(
+    "tells the agent the helper stopped or restarted when the driver exits on its own (#1233)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        yield* h.send(call(1, "click"));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.driverExits;
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "helper_restarted"));
+        yield* h.send(call(2, "get_window_state"));
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "helper_restarted"));
+        assert.equal(computerUseRefusalReason("helper_restarted"), "helperUnavailable");
+      }),
   );
 
   it.effect("fails closed when the lease stream drops, and before any confirmation", () =>
@@ -345,7 +363,6 @@ describe("ComputerUseLeaseProxy", () => {
           },
         );
         for (const [id, name, args] of [
-          [3, "get_desktop_state", {}],
           [4, "press_key", { key: "return" }],
           [5, "run_script", { script: "click()" }],
         ] as const) {
@@ -364,6 +381,34 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.send(call(6, "list_windows"));
         assert.equal((yield* h.nextToDriver).id, 6);
         assert.equal(yield* h.driverQueued, 0);
+      }),
+  );
+
+  it.effect(
+    "never screenshots the whole display, even for a thread approved for the whole screen",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        // No app list: this thread may act on anything the screen shows.
+        yield* h.push(active());
+        yield* h.send(call(1, "get_desktop_state", { max_image_dimension: 800 }));
+        const refused = yield* h.nextToProvider;
+        assert.equal(refused.id, 1);
+        const result = refused.result as {
+          content: ReadonlyArray<{ type: string; text?: string }>;
+          structuredContent: object;
+        };
+        assert.deepInclude(result.structuredContent, {
+          refused: "targetRefused",
+          detail: "desktop_capture_off",
+        });
+        assert.isFalse(result.content.some((part) => part.type === "image"));
+        assert.include(result.content[0]?.text ?? "", "get_window_state");
+        assert.equal(yield* h.driverQueued, 0);
+
+        // One window's screenshot still goes to the driver.
+        yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
+        assert.equal((yield* h.nextToDriver).id, 2);
       }),
   );
 

@@ -172,6 +172,7 @@ namespace Goat.ComputerUse
                     case "listApps": reply["result"] = service.ListApps(); break;
                     case "stop": service.Stop(); reply["result"] = new Dictionary<string, object>(); break;
                     case "window": reply["result"] = Window(parameters); break;
+                    case "elementStates": reply["result"] = ElementStatesOf(parameters); break;
                     default: throw new HelperException("unknown_method", "Unknown method " + method + ".");
                 }
             }
@@ -184,6 +185,15 @@ namespace Goat.ComputerUse
                 reply["error"] = Failure("internal", error.GetType().Name + ": " + error.Message);
             }
             Emit(reply);
+        }
+
+        static Dictionary<string, object> ElementStatesOf(Dictionary<string, object> parameters)
+        {
+            object pid, windowId;
+            if (!parameters.TryGetValue("pid", out pid) || !(pid is int) ||
+                !parameters.TryGetValue("windowId", out windowId) || !(windowId is int || windowId is long))
+                throw new HelperException("bad_request", "elementStates needs an integer pid and windowId.");
+            return ElementStates.Read((int)pid, Convert.ToInt64(windowId));
         }
 
         static Dictionary<string, object> Window(Dictionary<string, object> parameters)
