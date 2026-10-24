@@ -87,7 +87,7 @@ import {
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import { OPENCODE_PROVIDER, openCodePermissionRequestKind } from "../adapter.ts";
-import { openCodeToolTurnItem } from "../toolItems.ts";
+import { openCodeFileUris, openCodeToolTurnItem, type OpenCodeToolResult } from "../toolItems.ts";
 import { goatRemoteMcpConfig } from "../goatMcpConfig.ts";
 
 const OpenCode2ProviderCapabilities = {
@@ -1043,7 +1043,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       turn: ActiveTurn,
       id: string,
       status: "running" | "completed" | "failed" | "interrupted",
-      result?: { readonly output: string | undefined; readonly metadata: unknown },
+      result?: OpenCodeToolResult,
     ) {
       const tool = turn.tools.get(id);
       if (tool === undefined) return;
@@ -1061,6 +1061,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             name: tool.name,
             input: tool.input,
             output: result?.output,
+            fileUrls: result?.fileUrls,
             completedMetadata: status === "completed" ? result?.metadata : undefined,
           },
         ),
@@ -2177,6 +2178,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           const output = textOf(event.data.content);
           yield* emitTool(state, turn, event.data.id, "completed", {
             output,
+            fileUrls: openCodeFileUris(event.data.content),
             metadata: event.data.metadata,
           });
           turn.tools.delete(event.data.id);
@@ -2631,6 +2633,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (part.state.status === "completed") {
             yield* emitTool(state, turn, part.id, "completed", {
               output: textOf(part.state.content),
+              fileUrls: openCodeFileUris(part.state.content),
               metadata: part.state.metadata,
             });
             turn.tools.delete(part.id);

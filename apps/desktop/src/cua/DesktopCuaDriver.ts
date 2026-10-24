@@ -1,4 +1,5 @@
 import {
+  type ComputerUseReadiness,
   CuaDriverMcpConfiguration,
   type CuaVerificationStep,
   type CuaVerificationStepId,
@@ -12,6 +13,7 @@ import {
   prepareCuaDriverCapabilityManifest,
   writeCuaDriverCapabilityManifest,
 } from "@goat/shared/cuaDriverManifest";
+import type { CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
 import {
   COMPUTER_USE_HELPER_NAME,
   computerUseHelperBundleId,
@@ -33,9 +35,21 @@ import * as Stream from "effect/Stream";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import {
+  HELPER_SIGNALS,
+  initialHelperReadiness,
+  toReadiness,
+  withGrants,
+  withProof,
+  withRunning,
+  withoutProof,
+  type HelperProof,
+  type HelperReadinessState,
+} from "./helperReadiness.ts";
+import {
   classifyHelperBundle,
   helperBundle,
   makeHelperHost,
+  listHelperApplications,
   probeHelperGrants,
   spawnHelperProcess,
   type DaemonMetadata,
@@ -64,7 +78,12 @@ interface NativeHost {
 type DriverClient = Pick<CuaDriverLike, "callTool"> & { readonly uniffiDestroy?: () => void };
 type DriverImage = ToolResult["images"][number];
 /** detail: why a Windows desktop is not ready, in onboarding's words; Windows has no grant to give. */
-type Grants = { accessibility: boolean; screenRecording: boolean; readonly detail?: string };
+type Grants = {
+  accessibility: boolean;
+  screenRecording: boolean;
+  readonly detail?: string;
+  readonly blocker?: ComputerUseReadiness["blockers"][number];
+};
 
 /**
  * Who runs the driver. "helper": GOAT Computer Use.app owns the TCC identity and spawns the
@@ -130,7 +149,14 @@ export interface DesktopCuaDriverDependencies {
     readonly hostBundleIds: ReadonlyArray<string>;
     readonly directory: string;
     readonly platform: NodeJS.Platform;
+    /** Lists apps through the helper, so the driver never runs outside its seal check. */
+    readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   }) => Promise<string>;
+  /** The apps the helper's driver lists, after the helper verifies it (#1241, macOS and Windows). */
+  readonly helperApps: (
+    bundle: HelperBundle,
+    platform: NodeJS.Platform,
+  ) => Promise<ReadonlyArray<CuaDriverListedApp>>;
   readonly processId: number;
   /** Windows manifests name apps by executable path, so GOAT's own is how they name GOAT. */
   readonly executablePath: string;
@@ -149,6 +175,33 @@ export function bitmapHasContent(bitmap: Uint8Array): boolean {
     if (Math.max(bitmap[offset]!, bitmap[offset + 1]!, bitmap[offset + 2]!) > 16) lit++;
   }
   return lit / sampled >= 0.01;
+}
+
+/**
+ * The manifest for one daemon start. The grant check's admits only GOAT and needs no listing;
+ * the agents' lists apps through listApplications when the engine gives it one, so a helper
+ * that verifies its driver is the only thing that runs it.
+ */
+export async function prepareDesktopManifest(
+  input: Parameters<DesktopCuaDriverDependencies["prepareManifest"]>[0],
+): Promise<string> {
+  const { join } = await import("node:path");
+  return input.scope === "verify"
+    ? writeCuaDriverCapabilityManifest(
+        join(input.directory, "verify-manifest.yaml"),
+        cuaDriverCapabilityManifest({
+          applications: input.hostBundleIds,
+          tools: CUA_DRIVER_VERIFY_TOOLS,
+        }),
+      )
+    : prepareCuaDriverCapabilityManifest({
+        binaryPath: input.binaryPath,
+        platform: input.platform,
+        environment: cuaDriverListingEnvironment(process.env),
+        hostBundleIds: input.hostBundleIds,
+        path: join(input.directory, "capability-manifest.yaml"),
+        ...(input.listApplications ? { listApplications: input.listApplications } : {}),
+      });
 }
 
 const dependencies: DesktopCuaDriverDependencies = {
@@ -212,24 +265,9 @@ const dependencies: DesktopCuaDriverDependencies = {
     const decoded = nativeImage.createFromBuffer(Buffer.from(image.dataBase64, "base64"));
     return !decoded.isEmpty() && bitmapHasContent(decoded.toBitmap());
   },
-  prepareManifest: async (input) => {
-    const { join } = await import("node:path");
-    return input.scope === "verify"
-      ? writeCuaDriverCapabilityManifest(
-          join(input.directory, "verify-manifest.yaml"),
-          cuaDriverCapabilityManifest({
-            applications: input.hostBundleIds,
-            tools: CUA_DRIVER_VERIFY_TOOLS,
-          }),
-        )
-      : prepareCuaDriverCapabilityManifest({
-          binaryPath: input.binaryPath,
-          platform: input.platform,
-          environment: cuaDriverListingEnvironment(process.env),
-          hostBundleIds: input.hostBundleIds,
-          path: join(input.directory, "capability-manifest.yaml"),
-        });
-  },
+  prepareManifest: prepareDesktopManifest,
+  helperApps: (bundle, platform) =>
+    listHelperApplications(spawnHelperProcess(bundle.executable, platform), bundle.bundleId),
   processId: process.pid,
   executablePath: process.execPath,
 };
@@ -238,6 +276,8 @@ interface OwnedHost {
   readonly host: NativeHost;
   readonly abort: AbortController;
   readonly started: Promise<EmbeddedDriverConnection>;
+  /** Run by GOAT Computer Use; only such a host makes the helper's readiness "running". */
+  readonly helper: boolean;
   monitor?: Promise<void>;
   cleanup?: Promise<void>;
 }
@@ -338,6 +378,42 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   let owned: OwnedHost | undefined;
   let currentRequest: DesktopCuaDriverRequest | undefined;
   let closed = false;
+  // The server learns the helper's readiness from these reports; only a helper build sends them.
+  let helperState = initialHelperReadiness;
+  let helperGeneration = 0;
+  let helperSeen = false;
+  let lastReadiness: string | undefined;
+  /** Whether the running check reads through the helper; only then do its reads prove anything. */
+  let checkingHelper = false;
+  const noteHelper = (update: (state: HelperReadinessState) => HelperReadinessState) =>
+    Effect.suspend(() => {
+      if (!helperSeen || closed) return Effect.void;
+      helperState = update(helperState);
+      const report = {
+        version: 1,
+        type: "cuaReadiness",
+        generation: helperGeneration,
+        readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
+        signals: HELPER_SIGNALS,
+      } as const;
+      const key = encodeJson(report);
+      if (key === lastReadiness) return Effect.void;
+      lastReadiness = key;
+      return publisher.publishCuaReadiness(report);
+    });
+  const noteChecked = (update: (state: HelperReadinessState) => HelperReadinessState) =>
+    Effect.suspend(() => (checkingHelper ? noteHelper(update) : Effect.void));
+  /**
+   * The helper seen before is gone, unusable, or not chosen: what it proved then says nothing
+   * now, and nothing runs as it.
+   */
+  const forgetHelper = (chosen: Engine | string | undefined) =>
+    noteHelper((state) =>
+      withoutProof(
+        withRunning(state, false),
+        typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
+      ),
+    );
 
   // UniFFI calls can outlive cancellation. Retain the host until every native
   // promise settles, even after the public shutdown deadline has elapsed.
@@ -362,7 +438,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           Effect.orElseSucceed(() => false),
         )
       : Effect.succeed(true),
-  );
+  ).pipe(Effect.tap(() => noteHelper((state) => withRunning(state, false))));
   const report = (requestId: string, status: "stopped" | "unavailable", message?: string) =>
     closed
       ? Effect.void
@@ -477,11 +553,19 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         hostBundleIds: hostBundleIds(engine),
         directory: environment.path.join(environment.stateDir, "cua-driver"),
         platform: environment.platform,
+        // The helper verifies its driver before running it, so it lists the apps too; running
+        // the driver here would execute it unchecked, under GOAT's identity (#1241).
+        ...(engine.kind === "helper" &&
+        (environment.platform === "darwin" || environment.platform === "win32")
+          ? { listApplications: () => native.helperApps(engine.bundle, environment.platform) }
+          : {}),
       }),
     );
     if (closed) return undefined;
     let host: NativeHost;
     if (engine.kind === "helper") {
+      helperSeen = true;
+      helperGeneration += 1;
       const { environment: driverEnvironment } = cuaDriverHostOptions(
         engine.bundle.driverPath,
         engine.bundle.bundleId,
@@ -508,6 +592,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       host,
       abort: new AbortController(),
       started: Promise.resolve().then(() => host.start()),
+      helper: engine.kind === "helper",
     };
     owned = entry;
     void entry.started.then(
@@ -547,6 +632,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return done();
     }
     const chosen = yield* engine();
+    checkingHelper = typeof chosen === "object" && chosen.kind === "helper";
+    if (!checkingHelper) yield* forgetHelper(chosen);
     if (typeof chosen === "string") {
       record("grants", chosen);
       return done();
@@ -564,6 +651,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const grants = yield* Effect.tryPromise(() =>
       selected ? engineGrants(selected, false) : native.checkGrants(),
     ).pipe(Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })));
+    if (selected?.kind === "helper") {
+      helperSeen = true;
+      // A check stands on its own reads: until it proves capture and the tree again, they are not.
+      yield* noteHelper((state) => withoutProof(withGrants(state, grants, false)));
+    }
     const missing = [
       ...(grants.accessibility ? [] : ["Accessibility"]),
       ...(grants.screenRecording ? [] : ["Screen Recording"]),
@@ -669,7 +761,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       Option.fromNullishOr(readNumber(readArray(structured, "windows")[0], "window_id")),
     );
     if (Option.isNone(windowId)) {
-      record("capture", "Keep a GOAT window open on screen, then try again.");
+      const detail = "Keep a GOAT window open on screen, then try again.";
+      record("capture", detail);
+      yield* noteChecked((state) =>
+        withProof(state, { capture: "noWindow", screenLocked: false, details: [detail] }),
+      );
       return done();
     }
     const state = yield* call("get_window_state", {
@@ -678,39 +774,60 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     });
     const degraded = Option.flatMap(state, ({ structured }) =>
       Option.fromNullishOr(readString(structured, "degraded_reason")),
-    ).pipe(Option.map(describeDegraded), Option.getOrUndefined);
+    );
+    const screenLocked = Option.exists(degraded, (reason) => reason.startsWith("screen_locked"));
+    const degradedDetail = degraded.pipe(Option.map(describeDegraded), Option.getOrUndefined);
     const image = Option.flatMap(state, ({ result }) => Option.fromNullishOr(result.images[0]));
     const captured = Option.isSome(image)
       ? yield* Effect.tryPromise(() => native.imageHasContent(image.value)).pipe(
           Effect.orElseSucceed(() => false),
         )
       : false;
-    if (
-      !record(
-        "capture",
-        captured
-          ? undefined
-          : (degraded ??
-              (Option.isSome(image)
-                ? "The screenshot was blank. Check Screen Recording, then try again."
-                : "The driver returned no screenshot. Check Screen Recording, then try again.")),
-      )
-    )
+    const captureFailure = captured
+      ? undefined
+      : (degradedDetail ??
+        (Option.isSome(image)
+          ? "The screenshot was blank. Check Screen Recording, then try again."
+          : "The driver returned no screenshot. Check Screen Recording, then try again."));
+    if (!record("capture", captureFailure)) {
+      const proof: HelperProof = {
+        capture: Option.isSome(image) && degradedDetail === undefined ? "blank" : "unavailable",
+        screenLocked,
+        details: captureFailure === undefined ? [] : [captureFailure],
+      };
+      yield* noteChecked((current) => withProof(current, proof));
       return done();
+    }
     const elements = Option.match(state, {
       onNone: () => 0,
       onSome: ({ structured }) =>
         readNumber(structured, "element_count") ?? readArray(structured, "elements").length,
     });
-    record(
-      "accessibility",
+    const treeFailure =
       elements > 0
         ? undefined
-        : (degraded ?? "The driver could not read GOAT's window. Check Accessibility."),
+        : (degradedDetail ?? "The driver could not read GOAT's window. Check Accessibility.");
+    record("accessibility", treeFailure);
+    yield* noteChecked((current) =>
+      withProof(current, {
+        capture: "ready",
+        elements,
+        screenLocked,
+        details: treeFailure === undefined ? [] : [treeFailure],
+      }),
     );
     return done();
   }).pipe(
     Effect.scoped,
+    // A check that stopped before reading a window says why nothing is proven.
+    Effect.tap((result) => {
+      const early = result.steps.find(
+        (step) =>
+          !step.ok &&
+          (step.id === "restart" || step.id === "permissions" || step.id === "identity"),
+      );
+      return early ? noteChecked((state) => withoutProof(state, early.detail)) : Effect.void;
+    }),
     // Only the check's own generation is stopped here: nothing else holds it. A driver that was
     // already serving an agent is retired only by the restart step, which reports "stopped".
     Effect.ensuring(
@@ -735,6 +852,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return;
     }
     const selected = yield* engine();
+    if (typeof selected !== "object" || selected.kind !== "helper") yield* forgetHelper(selected);
     if (typeof selected === "string") {
       yield* report(request.requestId, "unavailable", selected);
       return;
@@ -753,6 +871,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         if (environment.platform === "darwin") {
           // Prompts as whoever owns the grants: the helper when it ships, else GOAT itself.
           const grants = yield* Effect.tryPromise(() => engineGrants(selected, true));
+          if (selected.kind === "helper") {
+            helperSeen = true;
+            yield* noteHelper((state) => withGrants(state, grants, true));
+          }
           if (!grants.accessibility || !grants.screenRecording) {
             yield* report(
               request.requestId,
@@ -766,6 +888,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         } else if (selected.kind === "helper") {
           // Windows has no grant to prompt for; a desktop the helper cannot use says why.
           const ready = yield* Effect.tryPromise(() => engineGrants(selected, false));
+          helperSeen = true;
+          yield* noteHelper((state) => withGrants(state, ready, false));
           if (ready.detail !== undefined || !ready.accessibility || !ready.screenRecording) {
             yield* report(
               request.requestId,
@@ -782,6 +906,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         Effect.timeout("20 seconds"),
       );
       const mcp = yield* decodeMcp({ ...connection.mcp, socketPath: connection.socketPath });
+      if (entry.helper) yield* noteHelper((state) => withRunning(state, true));
       if (!closed)
         yield* publisher.publishCuaReport({
           version: 1,

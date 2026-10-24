@@ -17,10 +17,11 @@
 
 export const COMPUTER_USE_SCREENSHOT_MAX_BYTES = 25 * 1024 * 1024;
 
-const SIGNATURES: Readonly<Record<string, ReadonlyArray<number>>> = {
-  "image/png": [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
-  "image/jpeg": [0xff, 0xd8, 0xff],
-};
+// A Map, so a mimeType such as "constructor" never finds an inherited property.
+const SIGNATURES: ReadonlyMap<string, ReadonlyArray<number>> = new Map([
+  ["image/png", [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
+  ["image/jpeg", [0xff, 0xd8, 0xff]],
+]);
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
 const decodedLength = (data: string) =>
@@ -29,7 +30,7 @@ const decodedLength = (data: string) =>
 /** Why an image block may not pass, or undefined when it may. */
 function withheldReason(block: Record<string, unknown>): string | undefined {
   const mimeType = typeof block.mimeType === "string" ? block.mimeType.toLowerCase() : undefined;
-  const signature = mimeType === undefined ? undefined : SIGNATURES[mimeType];
+  const signature = mimeType === undefined ? undefined : SIGNATURES.get(mimeType);
   if (signature === undefined) return "it is not a PNG or JPEG image";
   const data = block.data;
   if (typeof data !== "string" || data.length % 4 !== 0 || !BASE64.test(data))
@@ -55,10 +56,10 @@ const parseRecord = (line: string): Record<string, unknown> | undefined => {
 
 /**
  * A driver line with every image block that fails the checks replaced by a note, and with
- * structuredContent folded into the text when an image remains.
+ * structuredContent folded into the text when an image remains. Every line is parsed: JSON can
+ * spell "image" with escapes, so no raw-text shortcut is safe.
  */
 export function admitDriverReplyScreenshots(line: string): string {
-  if (!line.includes('"image"')) return line;
   const message = parseRecord(line);
   const result = message?.result;
   if (message === undefined || !isRecord(result) || !Array.isArray(result.content)) return line;
@@ -89,7 +90,6 @@ export function admitDriverReplyScreenshots(line: string): string {
 
 /** The outstanding-request key a provider's `notifications/cancelled` names, if the line is one. */
 export function cancelledRequestKey(line: string): string | undefined {
-  if (!line.includes("notifications/cancelled")) return undefined;
   const message = parseRecord(line);
   if (message?.method !== "notifications/cancelled" || !isRecord(message.params)) return undefined;
   const requestId = message.params.requestId;

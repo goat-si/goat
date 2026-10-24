@@ -205,11 +205,10 @@ Anything missing from the list becomes an unavailable snapshot.
 | `acpRegistry` | `packages/provider-acp-registry/src/server/driver.ts`   |
 | `devinCloud`  | `packages/provider-devin-cloud/src/server/driver.ts`    |
 
-`BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2` in
-`apps/server/src/orchestration-v2/builtInProviderAdapterDrivers.ts` lists the v2 turn adapters for
-codex, claude, cursor, opencode, grok, pi, and `acpRegistry`. Antigravity and Muse attach their v2
-adapters on the driver: `makeAntigravityAdapterV2` inside `AntigravityDriver.ts`, and
-`makeMuseAdapterV2` inside `packages/provider-muse/src/server/driver.ts`.
+Every driver in this table attaches its own v2 turn adapter to the provider instance it creates,
+for example `createCodexAdapterV2` inside `CodexDriver.ts`, `makeAntigravityAdapterV2` inside
+`AntigravityDriver.ts`, and `makeMuseAdapterV2` inside `packages/provider-muse/src/server/driver.ts`.
+`ProviderAdapterRegistryV2` reads that adapter from the instance.
 
 `packages/provider-core` holds the driver and adapter-driver interfaces those packages implement.
 `packages/provider-acp` is the ACP client stack the ACP drivers sit on. Shared provider behavior
@@ -276,7 +275,7 @@ sandboxes and providers that do not run on this host get nothing, and those thre
 driver. Adapters attach `cuaDriver` as a stdio MCP server named `cua-driver` and add the
 `<computer_use>` instructions (`packages/provider-core/src/server/runtimeInstructions.ts`) only
 when the provider actually has it. Which adapters attach, and when a change reaches a live session,
-is in ADR-0020.
+is in [ADR-0022](decisions/ADR-0022-cua-driver-computer-use.md#per-adapter-decision).
 
 `server.checkComputerUse` reports the host's platform, whether a driver is running, why the last
 start failed, whether a Linux host runs Wayland, and whether the host has a screen the driver can
@@ -291,11 +290,22 @@ Both hosts start the driver in standard mode under the capability manifest from
 scheduled and webhook runs, and what they launch; `ComputerUseOrigin.ts`) get the driver only
 while their thread holds a lease: an approved `computer_use.grant` handoff before its expiry
 (`ComputerUseLeases.ts`), requested with `goat_computer_use_request` (`ComputerUseRequests.ts`).
-Such a turn's provider runs the `cua-lease-proxy` subcommand (`ComputerUseLeaseProxy.ts`) instead
-of `cua-driver mcp`; it follows the lease over `/api/computer-use/lease`
-(`ComputerUseLeaseRoute.ts`) and kills its driver child when the lease ends.
+A grant may name apps, and interactive turns act only on apps a grant names. Every attached
+provider runs the `cua-lease-proxy` subcommand (`ComputerUseLeaseProxy.ts`) instead of
+`cua-driver mcp`, under a per-thread control from `ComputerUseLeases`; it follows the control over
+`/api/computer-use/lease` (`ComputerUseLeaseRoute.ts`), checks each call's app
+(`ComputerUseScope.ts`), and kills its driver child on Stop, the `computerUse.stopAll` kill switch,
+expiry, or a pause for a person's input until `computerUse.resume` (`ComputerUseRpcHandlers.ts`).
 
 > Decision record: [ADR-0022](decisions/ADR-0022-cua-driver-computer-use.md)
+
+`apps/server/src/preview/PreviewSessions.ts` lists what agents drive on this host as one
+`PreviewSession` shape (`packages/contracts/src/previewSession.ts`), whether a server browser tab
+or a computer use control, over `previewSessions.subscribe`, and applies a person's controls
+(`previewSessions.control`: takeover, hand back, stop, stop all). A browser tab goes private while
+a password, one-time code or passkey prompt has focus (`PreviewPrivateMode.ts`): its
+`SessionControl` refuses agent actions and observation, and only its controlling viewer and no
+recording get frames.
 
 ## Services
 

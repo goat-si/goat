@@ -102,6 +102,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
+import * as ComputerUseTestkit from "../cua/ComputerUseLeases.testkit.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
@@ -547,7 +548,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
-  readonly cuaDriverLayer?: Layer.Layer<CuaDriver.CuaDriver>;
+  readonly cuaDriverLayer?: Layer.Layer<CuaDriver.CuaDriver | ComputerUseTestkit.Leases>;
   readonly projectionReads?: { getThread: number; getThreadShell: number };
   readonly beforeGetThread?: Ref.Ref<Effect.Effect<void>>;
   readonly fileSystem?: FileSystem.FileSystem;
@@ -746,6 +747,7 @@ function runBrowserAccessScenario(input: {
   readonly deviceOverride?: boolean;
   readonly createThread?: boolean;
   readonly projectExists?: boolean;
+  readonly turnCapabilities?: ReadonlyArray<MemoryContracts.TurnCapability>;
 }) {
   return Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -777,8 +779,9 @@ function runBrowserAccessScenario(input: {
           events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now, projectId })],
         });
       }
+      const { turnCapabilities = [] } = input;
       yield* manager
-        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy, turnCapabilities })
         .pipe(Effect.ignore);
     }).pipe(
       Effect.provide(
@@ -1788,26 +1791,22 @@ it.effect(
     }),
 );
 
-it.effect("ProviderSessionManagerV2 honors a project browser-access opt-out", () =>
+it.effect.each([
+  { name: "honors a project browser-access opt-out", expected: false },
+  { name: "withholds browser tools without the project", projectExists: false, expected: false },
+  {
+    name: "opens preview tools for an @browser turn",
+    turnCapabilities: ["browser"],
+    expected: true,
+  },
+] as const)("ProviderSessionManagerV2 $name", ({ name: _, expected, ...scenario }) =>
   Effect.gen(function* () {
     const captured = yield* runBrowserAccessScenario({
       enableAgentBrowserAccess: true,
       projectOverride: false,
+      ...scenario,
     });
-    assert.isDefined(captured);
-    assert.equal(captured?.browserToolsAvailable, false);
-  }),
-);
-
-it.effect("ProviderSessionManagerV2 fails browser access closed for a missing project", () =>
-  Effect.gen(function* () {
-    const captured = yield* runBrowserAccessScenario({
-      enableAgentBrowserAccess: true,
-      projectOverride: true,
-      projectExists: false,
-    });
-    assert.isDefined(captured);
-    assert.equal(captured?.browserToolsAvailable, false);
+    assert.equal(captured?.browserToolsAvailable, expected);
   }),
 );
 
@@ -5974,9 +5973,12 @@ it.effect(
 
         // Opened while computer use is off.
         assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
-        // Enabled later: the same session's next turn carries the driver.
+        // Enabled later: the same session's next turn carries the driver, behind GOAT's proxy.
         yield* Ref.set(enabled, true);
-        assert.deepEqual((yield* turn(runtimePolicy))?.cuaDriver, cuaDriver);
+        assert.include(
+          (yield* turn(runtimePolicy))?.cuaDriver?.environment.at(-1)?.value,
+          "/resources",
+        );
         assert.equal(yield* Ref.get(acquires), 1);
         // Plan and read-only turns never get it, and never start the driver.
         assert.isUndefined((yield* turn({ ...runtimePolicy, interactionMode: "plan" }))?.cuaDriver);
@@ -5996,19 +5998,10 @@ it.effect(
           layerTest({
             state,
             idleTimeoutMs: 1_000,
-            cuaDriverLayer: Layer.succeed(
-              CuaDriver.CuaDriver,
-              CuaDriver.CuaDriver.of({
-                enabled: Ref.get(enabled),
-                acquire: Ref.updateAndGet(acquires, (count) => count + 1).pipe(
-                  Effect.as(Option.some(cuaDriver)),
-                ),
-                lastFailure: Effect.succeed(Option.none()),
-                status: Effect.succeed({ platform: "darwin", running: true }),
-                computerUse: Effect.die("unused"),
-                admitEnable: Effect.die("unused"),
-              }),
-            ),
+            cuaDriverLayer: ComputerUseTestkit.layerInteractive({
+              enabled: Ref.get(enabled),
+              acquire: Ref.updateAndGet(acquires, (count) => count + 1).pipe(Effect.as(cuaDriver)),
+            }),
           }),
         ),
       );
