@@ -67,6 +67,8 @@ function setup(options: { granted?: boolean; enabled?: boolean; status?: CuaHost
     // The settings stream echoes each saved value right away unless a test holds it back.
     echo: true,
     stream: new EventTarget(),
+    // Each test is its own host, so no save queue carries over between tests.
+    host: crypto.randomUUID(),
     localMac: true,
     status: options.status ?? idleMac,
     disabledSkills: [] as string[],
@@ -107,6 +109,7 @@ function Harness({ f }: { f: Fixture }) {
   }, [f]);
   return (
     <ComputerUsePanel
+      environmentId={f.host}
       hostLabel="this Mac"
       enabled={f.enabled}
       canConfigure
@@ -471,4 +474,27 @@ it("an Off chosen while On is still saving is saved even after the panel closes"
   await act(() => firstSave.resolve(null));
   await vi.waitFor(() => expect(f.save).toHaveBeenLastCalledWith({ enableCua: false }));
   expect(f.verify).not.toHaveBeenCalled();
+});
+
+it("an Off chosen after the panel reopened is saved after the earlier queued On", async () => {
+  const f = setup({ enabled: true });
+  f.echo = false;
+  const firstSave = deferred<string | null>();
+  f.save.mockImplementationOnce(() => firstSave.promise);
+  {
+    await using first = await render(panel(f));
+    await clickSwitch("Computer use");
+    await clickSwitch("Computer use");
+    await first.unmount();
+  }
+  await using _second = await render(panel(f));
+  // The stream has not moved, so the reopened switch still reads on.
+  await clickSwitch("Computer use");
+  await act(() => firstSave.resolve(null));
+  await vi.waitFor(() => expect(f.save).toHaveBeenCalledTimes(3));
+  expect(f.save.mock.calls.map(([patch]) => patch)).toEqual([
+    { enableCua: false },
+    { enableCua: true },
+    { enableCua: false },
+  ]);
 });

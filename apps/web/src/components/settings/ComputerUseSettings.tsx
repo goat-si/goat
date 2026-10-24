@@ -150,6 +150,7 @@ function ComputerUseControls({
   const bridge = window.desktopBridge;
   return (
     <ComputerUsePanel
+      environmentId={environmentId}
       hostLabel={hostLabel}
       enabled={host.enabled}
       canConfigure={host.canConfigure}

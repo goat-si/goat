@@ -60,14 +60,22 @@ type EnableChoiceResult =
   | { readonly kind: "failed"; readonly message: string; readonly latest: boolean }
   | { readonly kind: "superseded" };
 
+// One host's On/Off saves, in click order across every mount of the panel.
+const saveQueues = new Map<string, Promise<unknown>>();
+
 /**
  * The person's latest On/Off choice. Saves go out in click order, each after the previous one
- * answered, on a queue that outlives the panel, so the host always ends on the last choice. The
+ * answered, on a queue per host that outlives the panel, so the host always ends on the last
+ * choice even when the panel closed and opened again in between. The
  * switch shows that choice until its save answers; after that the settings stream wins as soon
  * as it shows the choice or moves at all. Settings carry no generation, so an older echo can
  * still arrive afterwards; it can flicker the switch but never cancels setup.
  */
-function useEnableChoice(enabled: boolean, save: (value: boolean) => Promise<string | null>) {
+function useEnableChoice(
+  queueKey: string,
+  enabled: boolean,
+  save: (value: boolean) => Promise<string | null>,
+) {
   const [desired, setDesired] = useState<{
     readonly id: number;
     readonly value: boolean;
@@ -75,7 +83,6 @@ function useEnableChoice(enabled: boolean, save: (value: boolean) => Promise<str
     readonly streamedAtSave: boolean | null;
   } | null>(null);
   const latest = useRef(0);
-  const queue = useRef<Promise<unknown>>(Promise.resolve());
   const streamed = useRef(enabled);
   useEffect(() => {
     streamed.current = enabled;
@@ -91,8 +98,13 @@ function useEnableChoice(enabled: boolean, save: (value: boolean) => Promise<str
     latest.current += 1;
     const id = latest.current;
     setDesired({ id, value, streamedAtSave: null });
-    const saved = queue.current.then(() => save(value)).catch(() => SAVE_FAILED);
-    queue.current = saved;
+    const saved = (saveQueues.get(queueKey) ?? Promise.resolve())
+      .then(() => save(value))
+      .catch(() => SAVE_FAILED);
+    saveQueues.set(queueKey, saved);
+    void saved.then(() => {
+      if (saveQueues.get(queueKey) === saved) saveQueues.delete(queueKey);
+    });
     const failure = await saved;
     if (id !== latest.current) return { kind: "superseded" };
     if (failure !== null) {
@@ -114,11 +126,14 @@ function useEnableChoice(enabled: boolean, save: (value: boolean) => Promise<str
  * Only the Mac that runs the host can read and prove its grants; elsewhere saving is the setup.
  */
 export function useComputerUseAutoSetup({
+  queueKey,
   enabled,
   localMac,
   hostRejects,
   actions,
 }: {
+  /** The host whose setting this is; its saves share one queue. */
+  readonly queueKey: string;
   readonly enabled: boolean;
   readonly localMac: boolean;
   /**
@@ -129,7 +144,7 @@ export function useComputerUseAutoSetup({
   readonly actions: ComputerUseSetupActions;
 }) {
   const [phase, setPhase] = useState<ComputerUseSetupPhase>({ step: "idle" });
-  const choice = useEnableChoice(enabled, (value) => actions.save({ enableCua: value }));
+  const choice = useEnableChoice(queueKey, enabled, (value) => actions.save({ enableCua: value }));
   const [opened, setOpened] = useState<CuaPermission | null>(null);
   const [opening, setOpening] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);

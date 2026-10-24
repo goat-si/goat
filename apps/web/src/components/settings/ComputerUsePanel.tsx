@@ -167,6 +167,7 @@ function useAdvancedOpen() {
 }
 
 export function ComputerUsePanel({
+  environmentId,
   hostLabel,
   enabled,
   canConfigure,
@@ -178,6 +179,7 @@ export function ComputerUsePanel({
   save,
   bridge,
 }: {
+  environmentId: string;
   hostLabel: string;
   enabled: boolean;
   canConfigure: boolean;
@@ -193,6 +195,7 @@ export function ComputerUsePanel({
   };
 }) {
   const setup = useComputerUseAutoSetup({
+    queueKey: environmentId,
     enabled,
     localMac,
     hostRejects: hostRejects(status),
