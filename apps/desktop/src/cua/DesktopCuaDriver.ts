@@ -198,11 +198,12 @@ export async function prepareDesktopManifest(
   input: Parameters<DesktopCuaDriverDependencies["prepareManifest"]>[0],
 ): Promise<string> {
   const { join } = await import("node:path");
+  const hostBundleIds = await withResolvedWindowsPaths(input.hostBundleIds, input.platform);
   return input.scope === "verify"
     ? writeCuaDriverCapabilityManifest(
         join(input.directory, "verify-manifest.yaml"),
         cuaDriverCapabilityManifest({
-          applications: input.hostBundleIds,
+          applications: hostBundleIds,
           tools: CUA_DRIVER_VERIFY_TOOLS,
         }),
       )
@@ -210,10 +211,31 @@ export async function prepareDesktopManifest(
         binaryPath: input.binaryPath,
         platform: input.platform,
         environment: cuaDriverListingEnvironment(process.env),
-        hostBundleIds: input.hostBundleIds,
+        hostBundleIds,
         path: join(input.directory, "capability-manifest.yaml"),
         ...(input.listApplications ? { listApplications: input.listApplications } : {}),
       });
+}
+
+/**
+ * The driver attests a Windows executable by its final path, with links, junctions and short
+ * names resolved, and the helper lists apps that way (#1379). GOAT's own path joins the host ids
+ * in that form too, so a GOAT reached through a link is still never admitted.
+ */
+async function withResolvedWindowsPaths(
+  ids: ReadonlyArray<string>,
+  platform: NodeJS.Platform,
+): Promise<ReadonlyArray<string>> {
+  if (platform !== "win32") return ids;
+  const { realpath } = await import("node:fs/promises");
+  const resolved = await Promise.all(
+    ids.map((id) =>
+      /^[A-Za-z]:[\\/]/u.test(id)
+        ? realpath(id).catch(() => undefined)
+        : Promise.resolve(undefined),
+    ),
+  );
+  return [...new Set([...ids, ...resolved.filter((path): path is string => path !== undefined)])];
 }
 
 const dependencies: DesktopCuaDriverDependencies = {
