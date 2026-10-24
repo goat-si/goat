@@ -42,6 +42,7 @@ import { FleetUncountedHosts } from "./FleetUncountedHosts";
 import { fleetQuota } from "./fleetQuota";
 import {
   fleetAlerts,
+  fleetChildSetups,
   fleetThroughput,
   fleetHostRows,
   hottestHost,
@@ -485,6 +486,7 @@ function FleetConsoleExpanded(props: {
     environmentOf,
     pendingSince: status.pendingSince,
     stalls,
+    childSetups: fleetChildSetups(rows, snapshot.machines, status.reports),
   });
   // A host that is not answering takes its alert's color on the row, so both say the same.
   const answeringLate = new Map(

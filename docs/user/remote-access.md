@@ -477,7 +477,7 @@ only accepts approval-required threads in folders that are already projects
 there.
 
 An agent can also list, add, and remove the devices on this hub (see
-[Devices on this hub](#devices-on-this-hub)), including on a headless
+[Hub devices](#hub-devices)), including on a headless
 `goat serve` with no desktop app. Adding uses only SSH keys or ssh-agent, never a
 password, and needs a host where GOAT has run before; prepare a new host first.
 Adding a device that is already listed returns it. Adding and removing need a
@@ -539,7 +539,9 @@ forgets it here. To end it on the other machine at once, revoke **GOAT on …** 
 that machine's **Settings → Connections**. To watch its threads yourself, add
 the machine under **Settings → Connections** with a pairing URL from `goat pair`.
 
-### Devices on this hub
+<a id="devices-on-this-hub"></a>
+
+### Hub devices
 
 The GOAT server your phone or browser pairs with keeps one list of the machines it
 reaches: SSH hosts you add, GOAT servers you link, and its cloud machines. Every
@@ -547,15 +549,17 @@ client paired with that server sees the same list, and a device added on the
 desktop appears on the phone right away. It works the same on a headless
 `goat serve`.
 
-Find it under **Settings → Connections → Devices on this hub** on desktop and
-web, and under **Settings → Devices on this hub** in the mobile app. Add an SSH
+Find it under **Settings → Hub → Hub devices** on desktop and web, for the
+environment selected at the top of Settings, and under **Settings → Hub devices**
+in the mobile app. Each device also shows whether it is linked to the hub's
+[OpenCodex](./hub.md#add-repair-or-remove-a-device). Add an SSH
 host by its alias from this machine's `~/.ssh/config`, or add another GOAT server
 with a pairing URL from `goat pair`. A machine reached two ways, for example
 over SSH and as a linked server, is one device with two routes.
 
 **Check** asks each route whether it answers. It never starts or extends a cloud
 machine: a stopped one shows as offline. Cloud machines are removed from
-**Cloud machines** below, not from this list. Removing a saved connection in the
+**Settings → Connections → [Cloud machines](#cloud-machines)**, not from this list. Removing a saved connection in the
 desktop sidebar does not remove the device from the hub.
 
 The first time the desktop app runs as a hub, it copies the SSH connections saved
@@ -573,7 +577,7 @@ needs SSH, Tailscale access to the node, or a pairing of its own with that machi
 
 1. On the hub, pair the phone with hub access: `goat pair --tailscale --hub-proxy`. A pairing
    made without `--hub-proxy` reaches only the hub itself; pair again to add it.
-2. Add the machines to the hub's [device list](#devices-on-this-hub). An SSH host needs nothing
+2. Add the machines to the hub's [device list](#hub-devices). An SSH host needs nothing
    more. If GOAT never ran on it, choose **Set up** once, so the hub installs GOAT there and
    learns which machine it is.
 3. For a machine linked over HTTPS, choose **Allow phone access** and paste a pairing link
