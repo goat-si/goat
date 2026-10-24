@@ -32,7 +32,10 @@ export const layer = Layer.effectDiscard(
           event.type === "subagent.updated") &&
         !OPEN.has(event.payload.status)
           ? leases.value.settle
-          : Effect.void,
+          : // A control on every app lasts only while its thread stays in full access.
+            event.type === "thread.runtime-mode-updated"
+            ? leases.value.changed
+            : Effect.void,
       ),
     );
     yield* (yield* settings.subscribeChanges).pipe(
