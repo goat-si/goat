@@ -268,6 +268,52 @@ describe("ComputerUseLeaseProxy", () => {
   );
 
   it.effect(
+    "drops a reply drawn while a pause is still hiding the overlay; the pause refuses the call",
+    () =>
+      Effect.gen(function* () {
+        const reply = {
+          gate: yield* Deferred.make<void>(),
+          entered: yield* Deferred.make<void>(),
+          resumed: yield* Deferred.make<void>(),
+        };
+        const hide = { gate: yield* Deferred.make<void>(), entered: yield* Deferred.make<void>() };
+        const h = yield* harness({
+          overlay: (command) =>
+            command.op === "show" && command.phase === "resting"
+              ? Deferred.succeed(reply.entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(reply.gate)),
+                  Effect.andThen(Deferred.succeed(reply.resumed, undefined)),
+                )
+              : command.op === "hide" && command.reason === "takeover"
+                ? Deferred.succeed(hide.entered, undefined).pipe(
+                    Effect.andThen(Deferred.await(hide.gate)),
+                  )
+                : Effect.void,
+        });
+        yield* h.push(active());
+        yield* h.send(call(7, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* h.nextToDriver;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 7,
+            result: { content: [{ type: "text", text: "clicked" }] },
+          }),
+        );
+        yield* Deferred.await(reply.entered);
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+        yield* Deferred.await(hide.entered);
+        // The reply's draw finishes first, while the pause is still hiding the overlay.
+        yield* Deferred.succeed(reply.gate, undefined);
+        yield* Deferred.await(reply.resumed);
+        yield* Deferred.succeed(hide.gate, undefined);
+        const answer = yield* h.nextToProvider;
+        assert.notInclude(JSON.stringify(answer), "clicked");
+        assert.include(JSON.stringify(answer), PAUSE_MESSAGES.takeover);
+      }),
+  );
+
+  it.effect(
     "refuses a call drawn while a pause is still hiding the overlay, before the driver stops",
     () =>
       Effect.gen(function* () {
