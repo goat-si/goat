@@ -1,4 +1,4 @@
-import { DesktopHostTelemetryMessage } from "@goat/contracts";
+import { type DesktopCuaFrames, DesktopHostTelemetryMessage } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -242,12 +242,12 @@ describe("DesktopTelemetryPublisher", () => {
     () =>
       Effect.gen(function* () {
         const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
-        const heard = yield* Queue.unbounded<number>();
+        const heard = yield* Queue.unbounded<DesktopCuaFrames>();
         yield* publisher.cuaFrames.pipe(
-          Stream.runForEach((request) => Queue.offer(heard, request.targets.length)),
+          Stream.runForEach((request) => Queue.offer(heard, request)),
           Effect.forkScoped,
         );
-        assert.equal(yield* Queue.take(heard), 0);
+        assert.equal((yield* Queue.take(heard)).seq, 0);
         const frames = (seq: number) =>
           ({
             version: 1,
@@ -259,10 +259,14 @@ describe("DesktopTelemetryPublisher", () => {
           }) as const;
         const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
         yield* publisher.handleControlForSource("ssh:remote", frames(9));
+        // Another environment's server never asks this host to capture anything.
+        assert.equal(yield* Queue.size(heard), 0);
+        const none: DesktopCuaFrames = { version: 1, type: "cuaFrames", seq: 0, targets: [] };
+        assert.deepEqual(yield* publisher.cuaFrames.pipe(Stream.runHead), Option.some(none));
         yield* publisher.handleControlForSource("primary", frames(7));
-        assert.equal(yield* Queue.take(heard), 1);
+        assert.deepEqual(yield* Queue.take(heard), frames(7));
         yield* Fiber.interrupt(primary.fiber);
-        assert.equal(yield* Queue.take(heard), 0);
+        assert.deepEqual((yield* Queue.take(heard)).targets, []);
         assert.equal(yield* Queue.size(heard), 0);
       }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
   );
