@@ -23,7 +23,6 @@ import {
   trustPrompt,
   trustRefusal,
   cleanOutput,
-  redact,
   SESSION_ID,
   validateLogin,
 } from "./protocol.ts";
@@ -550,14 +549,8 @@ const make = Effect.gen(function* () {
       // With a trust policy, a prompt still rendering its options is answered on a later chunk.
       if (!failure && trustPrompt(pending) && (!trust || receipt))
         failure = trustFailure(cwd, receipt ? "uncertain" : "rejected");
-      const diagnostic = readDiagnostic(bounded);
-      if (diagnostic && !failure)
-        failure = new ClaudeCloudError({
-          detail:
-            redact(diagnostic, login.environment).replace(/\s+/g, " ") ||
-            "Claude could not confirm cloud submission.",
-          outcome: "uncertain",
-        });
+      const diagnostic = failure ? undefined : readDiagnostic(bounded, login.environment);
+      if (diagnostic) failure = new ClaudeCloudError({ detail: diagnostic, outcome: "uncertain" });
       notify();
     };
     // The exit listener belongs to the process resource. Keep it until release sees real exit,

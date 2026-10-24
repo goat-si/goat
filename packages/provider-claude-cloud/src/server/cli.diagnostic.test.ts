@@ -84,3 +84,36 @@ it.effect("masks a wrapped link together with its continuation line", () =>
     }),
   ),
 );
+
+it.effect.each([
+  [
+    "",
+    "Error: visit https:\u001b[1C//example.invalid/?token=private-url-token\n",
+    "visit [link redacted]",
+  ],
+  ["", "Error: invalid Bearer private-\u001b[1Ctoken\n", "invalid [redacted]"],
+  [
+    "",
+    "Error: visit https://example.invalid/?token=\r\r\n\u001b[1Cprivate-url-token\r\r\n",
+    "visit [link redacted]",
+  ],
+  ["ab  cd", "Error: invalid ab \u001b[1C cd\n", "invalid [redacted]"],
+  ["/fixture/tool/bin:".repeat(1024), "Error: a simple error\n", "a simple error"],
+] as const)(
+  "masks what plain redaction masks however the screen spaced it (%#)",
+  ([value, output, shown]) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeCliHarness();
+        const login = { ...LOGIN, environment: { ...LOGIN.environment, FIXTURE_VALUE: value } };
+        const fiber = yield* h.service
+          .start(login, "/fixture/project", "task")
+          .pipe(Effect.forkChild);
+        yield* h.fake.ready;
+        h.fake.emit(output);
+        h.fake.finish(1);
+        const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+        expect(error.detail).toBe(shown);
+      }),
+    ),
+);

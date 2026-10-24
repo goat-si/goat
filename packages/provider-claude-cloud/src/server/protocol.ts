@@ -67,18 +67,78 @@ export function cleanOutput(raw: string) {
   return NodeUtil.stripVTControlCharacters(raw).replace(/\r\n?/g, "\n");
 }
 
+/** Where the native PTY jumped the cursor; it reads as a space but redaction never sees it. */
+const GAP = "\uE000";
+
 /**
- * Claude's "Error:" text as it appears on screen, as lines. The native PTY spaces words with
- * cursor-column jumps and wraps long text with CR CR LF, so the jumps become spaces and the wrapped
- * lines that already arrived are kept. Callers redact before collapsing whitespace, so a masked
- * value still matches its original spacing.
+ * Claude's "Error:" text as it appears on screen, redacted. The native PTY spaces words with
+ * cursor-column jumps and wraps long text with CR CR LF. Redaction runs on the text without the
+ * jumps, exactly what redact() sees, and only the unmasked jumps then become spaces; the wrapped
+ * lines that already arrived rejoin into one sentence.
  */
-export function readDiagnostic(raw: string) {
+export function readDiagnostic(raw: string, environment: NodeJS.ProcessEnv) {
   const screen = NodeUtil.stripVTControlCharacters(
     // eslint-disable-next-line no-control-regex -- Match the native PTY's cursor-column and cursor-forward sequences.
-    raw.replace(/\u001b\[\d*[GC]/g, " "),
+    raw.replace(/\u001b\[\d*[GC]/g, GAP),
   ).replace(/\r+\n|\r/g, "\n");
-  return /^\s*Error:\s*(\S.*(?:\n[ \t]*\S.*)*)\n/m.exec(screen)?.[1];
+  const block =
+    /^[\s\uE000]*Error:[\s\uE000]*([^\s\uE000].*(?:\n[ \t\uE000]*[^\s\uE000].*)*)\n/m.exec(
+      screen,
+    )?.[1];
+  if (block === undefined) return undefined;
+  return maskScreen(block, environment)
+    .replaceAll(GAP, " ")
+    .replace(/\s+/g, " ")
+    .slice(0, 1024)
+    .trim();
+}
+
+function maskScreen(block: string, environment: NodeJS.ProcessEnv) {
+  const positions: number[] = [];
+  let text = "";
+  for (let index = 0; index < block.length; index++) {
+    if (block[index] === GAP) continue;
+    positions.push(index);
+    text += block[index];
+  }
+  const ranges: Array<{ start: number; end: number; label: string }> = [];
+  for (const value of Object.values(environment)) {
+    if (!value || value.length < 6) continue;
+    for (let at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + value.length))
+      ranges.push({ start: at, end: at + value.length, label: "[redacted]" });
+  }
+  // A URL wrapped onto following lines keeps its continuation inside the mask.
+  for (const match of text.matchAll(/https?:\/\/[^\s<>]+(?:\n[^\s<>]+)*/g))
+    ranges.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      label: "[link redacted]",
+    });
+  for (const match of text.matchAll(/(?:sk-ant-|Bearer\s+)[A-Za-z0-9_-]+/gi))
+    ranges.push({ start: match.index, end: match.index + match[0].length, label: "[redacted]" });
+  ranges.sort((left, right) => left.start - right.start);
+  let masked = "";
+  let cursor = 0;
+  let open: (typeof ranges)[number] | undefined;
+  const close = (range: (typeof ranges)[number]) => {
+    const start = positions[range.start] ?? block.length;
+    masked += block.slice(cursor, start) + range.label;
+    cursor = (positions[range.end - 1] ?? block.length - 1) + 1;
+  };
+  for (const range of ranges) {
+    if (open && range.start < open.end) {
+      open = {
+        start: open.start,
+        end: Math.max(open.end, range.end),
+        label: range.label === "[link redacted]" ? range.label : open.label,
+      };
+      continue;
+    }
+    if (open) close(open);
+    open = range;
+  }
+  if (open) close(open);
+  return masked + block.slice(cursor);
 }
 
 export function readStartReceipt(raw: string) {
@@ -166,23 +226,9 @@ export function redact(detail: string, environment: NodeJS.ProcessEnv) {
   for (const value of Object.values(environment)) {
     if (value && value.length >= 6) text = text.split(value).join("[redacted]");
   }
-  // Screen text turns cursor jumps into spaces and keeps wrapped lines, so a value can come back
-  // with whitespace inside it. Mask it with any whitespace between its characters as well.
-  for (const value of Object.values(environment)) {
-    const compact = value?.replace(/\s+/g, "");
-    if (compact && compact.length >= 6) text = text.replace(spacedPattern(compact), "[redacted]");
-  }
-  // A URL wrapped onto following lines keeps its continuation inside the mask.
-  text = text.replace(/https?:\/\/[^\s<>]+(?:\n[^\s<>]+)*/g, "[link redacted]");
+  text = text.replace(/https?:\/\/[^\s<>]+/g, "[link redacted]");
   text = text.replace(/(?:sk-ant-|Bearer\s+)[A-Za-z0-9_-]+/gi, "[redacted]");
   return text.slice(0, 1024).trim();
-}
-
-function spacedPattern(compact: string) {
-  const characters = Array.from(compact, (character) =>
-    character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  );
-  return new RegExp(characters.join("\\s*"), "g");
 }
 
 export function readSendReceipt(raw: string, expectedId: string, environment: NodeJS.ProcessEnv) {
