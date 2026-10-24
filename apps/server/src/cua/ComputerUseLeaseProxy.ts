@@ -15,7 +15,7 @@
  *
  * Killing the child is what stops nested work. Against the pinned 0.37.0 driver, MCP
  * cancellation and `cua-driver revoke --session` both leave a running run_script going, while
- * closing its transport stops it after the action already dispatched (ADR-0020). The rest is
+ * closing its transport stops it after the action already dispatched (ADR-0022). The rest is
  * protocol hygiene and covers drivers that honour them. A refused call is never replayed: the
  * agent observes again.
  *

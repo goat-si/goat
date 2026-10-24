@@ -64,6 +64,7 @@ const machine = (id: string, overrides: object) => ({
   machineKind: null,
   environmentId: null,
   sshHost: null,
+  reportedAliases: [],
   boat: null,
   answering: false,
   running: 0,
