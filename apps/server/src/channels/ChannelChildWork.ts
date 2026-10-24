@@ -17,7 +17,6 @@
 import {
   type ChannelChildWork as ChannelChildWorkRecord,
   type ChannelChildWorkDestination,
-  type ChannelChildWorkId,
   type ChannelChildWorkState,
   type ChannelChildWorkSurface,
   type ChannelTask,
@@ -38,6 +37,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
+import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import {
   childWorkIdFor,
   childWorkKeylessRequestKeyFor,
@@ -311,12 +311,36 @@ const make = Effect.gen(function* () {
   const markUnknown = (record: ChannelChildWorkRecord) =>
     transition(record, ["launched", "bound"], "unknown");
 
+  // Same liveness the dispatcher's stop applies: a run that has not ended, a finished run
+  // whose provider still works in the background, or a cloud task in flight. Settling a
+  // refused stop against any of those would abandon live provider work.
   const childThreadLive = (threadId: ThreadId) =>
-    threads.getThreadRecords(threadId, ["runs"]).pipe(
-      Effect.map((records) => records.runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status))),
-      // An unreadable thread may still be alive; keep the stop retrying instead of settling.
-      Effect.orElseSucceed(() => true),
-    );
+    threads
+      .getThreadRecords(threadId, ["runs", "providerThreads", "turnItems"], {
+        turnItemStatuses: ["pending", "running", "waiting"],
+      })
+      .pipe(
+        Effect.map((records) => {
+          const runs = records.runs;
+          const latestRun = runs.findLast((run) => run.status !== "queued");
+          const background =
+            latestRun !== undefined &&
+            derivePendingBackgroundWork({
+              latestRun,
+              providerThreads: records.providerThreads,
+              turnItems: records.turnItems,
+              activeProviderThreadId: records.thread.activeProviderThreadId,
+              runs,
+            }).length > 0;
+          const cloud = records.providerThreads.some(
+            (thread) =>
+              thread.cloudTask?.status === "running" || thread.cloudTask?.status === "submitting",
+          );
+          return runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status)) || background || cloud;
+        }),
+        // An unreadable thread may still be alive; keep the stop retrying instead of settling.
+        Effect.orElseSucceed(() => true),
+      );
 
   const cancelForTask = Effect.fn("ChannelChildWork.cancelForTask")(function* (input: {
     readonly taskId: ChannelTaskId;

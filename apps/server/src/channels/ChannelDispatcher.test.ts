@@ -1,4 +1,6 @@
 import { assert, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
+import * as TestClock from "effect/testing/TestClock";
 import { MessageId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -270,6 +272,49 @@ it.effect("stopping a workstream stops its launched thread child and settles its
     assert.include(harness.world.interrupts, task.worker!.threadId);
     assert.include(harness.world.interrupts, childThreadId);
     assert.strictEqual(harness.world.latestRun(childThreadId)?.status, "cancelled");
+    const record = yield* store.get(task.taskId, admission.record.childWorkId);
+    assert.strictEqual(record?.state, "cancelled");
+    assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("a stop whose worker thread vanished still stops its recorded thread children", () => {
+  const harness = makeHarness();
+  harness.script.current = (input) =>
+    input.mode === "input" && input.inputText === "stop"
+      ? Effect.succeed({ replyText: "Stopping.", action: { type: "stop_work" as const } })
+      : defaultScript(input);
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const childWork = yield* ChannelChildWork.ChannelChildWork;
+    const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+    yield* gateway.ingest(goatInput("do: fix the build", "stop-missing-worker"), rpcContext);
+    yield* runtime.drain;
+    const task = yield* onlyTask;
+    const admission = yield* childWork.admit({
+      callerThreadId: task.worker!.threadId,
+      surface: "thread_launch",
+      prompt: "watch the deploy",
+      destinationKey: "codex/gpt-6.1-sol",
+    });
+    if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+    const childThreadId = ThreadId.make("thread:child-of-missing-worker");
+    harness.world.addRun(childThreadId, MessageId.make("child-msg"));
+    yield* childWork.markLaunched(admission.record, { threadId: childThreadId });
+    // The worker thread is deleted before the stop lands: its reads fail as missing.
+    harness.world.runs.delete(task.worker!.threadId);
+    yield* gateway.ingest(goatInput("stop", "stop-missing-worker-2"), rpcContext);
+    yield* runtime.drain;
+    yield* runtime.drain;
+    // Inside the launch grace the stop stays pending without touching the children.
+    assert.notInclude(harness.world.interrupts, childThreadId);
+    yield* TestClock.adjust(Duration.minutes(3));
+    yield* runtime.drain;
+    yield* runtime.drain;
+    assert.include(harness.world.interrupts, childThreadId);
     const record = yield* store.get(task.taskId, admission.record.childWorkId);
     assert.strictEqual(record?.state, "cancelled");
     assert.lengthOf(yield* ledger.listPendingForwards(10), 0);

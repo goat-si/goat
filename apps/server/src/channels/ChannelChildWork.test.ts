@@ -94,6 +94,7 @@ const threadsLayer = (
   runs: ReadonlyMap<string, ReadonlyArray<unknown>>,
   failures: ReadonlyMap<string, unknown> = new Map(),
   dispatched: Array<DispatchedStop> = [],
+  providerThreads: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map(),
 ) =>
   Layer.succeed(
     ThreadManagementService.ThreadManagementService,
@@ -138,11 +139,12 @@ const threadsLayer = (
             deletedAt: null,
             pullRequests: [],
             updatedAt: NOW,
+            activeProviderThreadId: null,
           },
           runs: runs.get(threadId) ?? [],
           runtimeRequests: [],
           turnItems: [],
-          providerThreads: [],
+          providerThreads: providerThreads.get(threadId) ?? [],
           subagents: [],
           messages: [],
         } as never)) as never,
@@ -178,11 +180,12 @@ const makeLayer = (
   runs: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map(),
   failures: ReadonlyMap<string, unknown> = new Map(),
   dispatched: Array<DispatchedStop> = [],
+  providerThreads: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map(),
 ) =>
   ChannelChildWork.layer.pipe(
     Layer.provideMerge(ChannelChildWorkStore.layer),
     Layer.provideMerge(ChannelLedger.layer),
-    Layer.provideMerge(threadsLayer(runs, failures, dispatched)),
+    Layer.provideMerge(threadsLayer(runs, failures, dispatched, providerThreads)),
     Layer.provideMerge(SqlitePersistence.layerMemory),
   );
 
@@ -740,6 +743,54 @@ describe("ChannelChildWork cancelForTask", () => {
           new Map([[childThread, [fakeRun("cancelled")]]]),
           new Map([[childThread, { _tag: "OrchestratorCommandRejectedError" }]]),
           dispatched,
+        ),
+      ),
+    );
+  });
+
+  it.effect("keeps retrying a refused child stop while a cloud task keeps the thread live", () => {
+    const dispatched: Array<DispatchedStop> = [];
+    return Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const admission = yield* admit("thread child", { surface: "thread_launch" });
+      if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      const stopEventId = taskEventIdFor(taskId, 99);
+      const outcome = yield* childWork.cancelForTask({
+        taskId,
+        generation: 1,
+        stopEventId,
+        attempt: 0,
+        reason: "Stopped.",
+      });
+      assert.strictEqual(outcome, "retry");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.strictEqual(yield* ledger.stopAttempt(stopEventId), 1);
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      assert.strictEqual(
+        (yield* store.get(taskId, admission.record.childWorkId))?.state,
+        "launched",
+      );
+    }).pipe(
+      Effect.provide(
+        makeLayer(
+          new Map([[childThread, [fakeRun("cancelled")]]]),
+          new Map([[childThread, { _tag: "OrchestratorCommandRejectedError" }]]),
+          dispatched,
+          new Map([
+            [
+              childThread,
+              [
+                {
+                  id: "pt-1",
+                  providerInstanceId: "pi-1",
+                  cloudTask: { status: "running" },
+                  pendingBackgroundTasks: [],
+                },
+              ],
+            ],
+          ]),
         ),
       ),
     );

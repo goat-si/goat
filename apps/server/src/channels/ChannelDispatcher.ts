@@ -1186,6 +1186,7 @@ const make = Effect.gen(function* () {
       const threadId =
         task.worker?.threadId ?? workerLaunchIdsFor(task.taskId, task.generation).threadId;
       const ids = stopIdsFor(pending.event.eventId);
+      const attempt = yield* ledger.stopAttempt(pending.event.eventId);
       const read = yield* threads
         .getThreadRecords(threadId, ["runs", "providerThreads", "turnItems"], {
           turnItemStatuses: ["pending", "running", "waiting"],
@@ -1197,87 +1198,88 @@ const make = Effect.gen(function* () {
         if (!isThreadMissing(read.failure)) return;
         const age =
           DateTime.toEpochMillis(yield* DateTime.now) - Date.parse(pending.event.occurredAt);
-        if (age > STOP_LAUNCH_GRACE_MS) yield* done;
-        return;
-      }
-      const records = { value: read.success };
-      // Anything not yet ended is alive: queued, preparing, starting, running, waiting, or a
-      // finished run whose provider still works in the background or in the cloud.
-      const runs = records.value.runs;
-      const latestRun = runs.findLast((run) => run.status !== "queued");
-      const background =
-        latestRun !== undefined &&
-        derivePendingBackgroundWork({
-          latestRun,
-          providerThreads: records.value.providerThreads,
-          turnItems: records.value.turnItems,
-          activeProviderThreadId: records.value.thread.activeProviderThreadId,
-          runs,
-        }).length > 0;
-      // A cloud task still running or being submitted keeps working whatever the runs say, as
-      // the orchestrator's own stop treats it.
-      const cloud = records.value.providerThreads.some(
-        (thread) =>
-          thread.cloudTask?.status === "running" || thread.cloudTask?.status === "submitting",
-      );
-      const live =
-        runs.findLast((run) => !ENDED_RUN_STATUSES.has(run.status)) ??
-        (background || cloud ? latestRun : undefined);
-      const stopThread = (commandId: CommandId) =>
-        threads
-          .dispatch({
-            type: "thread.stop",
-            commandId,
+        if (age <= STOP_LAUNCH_GRACE_MS) return;
+        // The worker thread is gone, but its recorded thread children live independently of
+        // it, so the stop below still has to reach them before the forward may complete.
+      } else {
+        const records = { value: read.success };
+        // Anything not yet ended is alive: queued, preparing, starting, running, waiting, or a
+        // finished run whose provider still works in the background or in the cloud.
+        const runs = records.value.runs;
+        const latestRun = runs.findLast((run) => run.status !== "queued");
+        const background =
+          latestRun !== undefined &&
+          derivePendingBackgroundWork({
+            latestRun,
+            providerThreads: records.value.providerThreads,
+            turnItems: records.value.turnItems,
+            activeProviderThreadId: records.value.thread.activeProviderThreadId,
+            runs,
+          }).length > 0;
+        // A cloud task still running or being submitted keeps working whatever the runs say, as
+        // the orchestrator's own stop treats it.
+        const cloud = records.value.providerThreads.some(
+          (thread) =>
+            thread.cloudTask?.status === "running" || thread.cloudTask?.status === "submitting",
+        );
+        const live =
+          runs.findLast((run) => !ENDED_RUN_STATUSES.has(run.status)) ??
+          (background || cloud ? latestRun : undefined);
+        const stopThread = (commandId: CommandId) =>
+          threads
+            .dispatch({
+              type: "thread.stop",
+              commandId,
+              threadId,
+              stopDelegatedTasks: false,
+              reason: "Stopped from GOAT Bot.",
+            })
+            .pipe(Effect.result);
+        const refusedFor = (failure: unknown) => {
+          const tag = (failure as { readonly _tag?: string })._tag;
+          return (
+            tag === "OrchestratorCommandRejectedError" ||
+            tag === "OrchestratorCommandPreviouslyRejectedError"
+          );
+        };
+        // A refused command id is refused for good, so each refusal while something still runs
+        // moves the stop to a new attempt id; the next pass tries that one.
+        const stopped = yield* stopThread(
+          attempt === 0
+            ? ids.interrupt
+            : stopIdsFor(pending.event.eventId, "attempt-" + attempt).interrupt,
+        );
+        if (stopped._tag === "Failure" && refusedFor(stopped.failure) && live !== undefined) {
+          yield* ledger.advanceStopAttempt({
+            eventId: pending.event.eventId,
+            from: attempt,
+            now: DateTime.formatIso(yield* DateTime.now),
+          });
+        }
+        if (stopped._tag === "Failure") {
+          // A refused stop is done only if nothing is left running there.
+          if (!refusedFor(stopped.failure) || live !== undefined) {
+            yield* Effect.logWarning("channel worker stop failed; retrying", {
+              taskId: task.taskId,
+              cause: stopped.failure,
+            });
+            return;
+          }
+        }
+        const subagents = yield* threads
+          .stopDelegatedTasks({
             threadId,
-            stopDelegatedTasks: false,
+            commandId: ids.subagents,
             reason: "Stopped from GOAT Bot.",
           })
           .pipe(Effect.result);
-      const refusedFor = (failure: unknown) => {
-        const tag = (failure as { readonly _tag?: string })._tag;
-        return (
-          tag === "OrchestratorCommandRejectedError" ||
-          tag === "OrchestratorCommandPreviouslyRejectedError"
-        );
-      };
-      // A refused command id is refused for good, so each refusal while something still runs
-      // moves the stop to a new attempt id; the next pass tries that one.
-      const attempt = yield* ledger.stopAttempt(pending.event.eventId);
-      const stopped = yield* stopThread(
-        attempt === 0
-          ? ids.interrupt
-          : stopIdsFor(pending.event.eventId, "attempt-" + attempt).interrupt,
-      );
-      if (stopped._tag === "Failure" && refusedFor(stopped.failure) && live !== undefined) {
-        yield* ledger.advanceStopAttempt({
-          eventId: pending.event.eventId,
-          from: attempt,
-          now: DateTime.formatIso(yield* DateTime.now),
-        });
-      }
-      if (stopped._tag === "Failure") {
-        // A refused stop is done only if nothing is left running there.
-        if (!refusedFor(stopped.failure) || live !== undefined) {
-          yield* Effect.logWarning("channel worker stop failed; retrying", {
+        if (subagents._tag === "Failure") {
+          yield* Effect.logWarning("channel subagent stop failed; retrying", {
             taskId: task.taskId,
-            cause: stopped.failure,
+            cause: subagents.failure,
           });
           return;
         }
-      }
-      const subagents = yield* threads
-        .stopDelegatedTasks({
-          threadId,
-          commandId: ids.subagents,
-          reason: "Stopped from GOAT Bot.",
-        })
-        .pipe(Effect.result);
-      if (subagents._tag === "Failure") {
-        yield* Effect.logWarning("channel subagent stop failed; retrying", {
-          taskId: task.taskId,
-          cause: subagents.failure,
-        });
-        return;
       }
       // Launched thread children sit outside the delegated-task cascade; the ownership records
       // drive their stop. Anything incomplete keeps the stop pending for the next pass.
