@@ -242,6 +242,8 @@ export class ServerBrowser extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
     /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
     readonly sessionChanges: Stream.Stream<void>;
+    /** The kill switch for browser tabs: stops agents on every tab now, reading nothing first. */
+    readonly stopAllAgents: Effect.Effect<void>;
     /** A person's stop or hand back of agent control on one tab; false when it is gone. */
     readonly controlSession: (input: {
       readonly threadId: string;
@@ -1553,7 +1555,8 @@ const make = Effect.gen(function* () {
     async ({ x, y }, phase) => {
       const encoder = tab.recording?.encoder;
 
-      if (tab.viewers.size === 0 && !encoder && !tab.desktop) return;
+      if (tab.viewers.size === 0 && !encoder && !tab.desktop)
+        return tab.control.assertAgentMayDispatch();
       const show = (next: "move" | "click") => {
         const sequence = ++pointerSequence;
         for (const viewer of tab.viewers)
@@ -1575,9 +1578,12 @@ const make = Effect.gen(function* () {
       };
       show("move");
       await sleepUntil(Date.now() + AGENT_CURSOR_MOVE_MS);
-      if (phase !== "click") return;
-      show("click");
-      await sleepUntil(Date.now() + AGENT_CURSOR_CLICK_LEAD_MS);
+      if (phase === "click") {
+        show("click");
+        await sleepUntil(Date.now() + AGENT_CURSOR_CLICK_LEAD_MS);
+      }
+      // The cursor took time; a Stop, takeover or secret since then keeps the input from landing.
+      tab.control.assertAgentMayDispatch();
     };
 
   const recordAction = <A>(tab: ServerTab, action: string, run: () => Promise<A>): Promise<A> => {
@@ -2526,6 +2532,9 @@ const make = Effect.gen(function* () {
     answerFileChooser,
     sessions: Effect.promise(() => Promise.all([...tabs.values()].map(browserSessionView))),
     sessionChanges: Stream.fromPubSub(sessionChanges),
+    stopAllAgents: Effect.sync(() => {
+      for (const tab of tabs.values()) tab.control.stopAgents();
+    }),
     controlSession: (input) =>
       Effect.sync(() => {
         const tab = tabs.get(tabKey(input.threadId, input.tabId));

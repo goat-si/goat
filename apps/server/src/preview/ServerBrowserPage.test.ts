@@ -584,6 +584,7 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
   /** Each change the watcher reports, resolved in order. */
   let changes: Array<PromiseWithResolvers<boolean>>;
   let reported: number;
+  let delivered: number;
   const nextChange = () => changes[reported++]!.promise;
 
   beforeAll(async () => {
@@ -597,8 +598,10 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
     page = await context.newPage();
     changes = Array.from({ length: 8 }, () => Promise.withResolvers<boolean>());
     reported = 0;
-    let delivered = 0;
+    delivered = 0;
     await watchPrivateMode(page, (on) => changes[delivered++]!.resolve(on));
+    // Bindings are answered in order, so awaiting this one means every earlier report arrived.
+    await page.exposeFunction("__fence", () => undefined);
   });
   afterEach(async () => {
     await context.close();
@@ -622,6 +625,17 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
     expect(await nextChange()).toBe(false);
     await page.focus("#otp");
     expect(await nextChange()).toBe(true);
+  });
+
+  it("stays private through history and hash moves, and clears only for a new document", async () => {
+    await load('<input id="pass" type="password">');
+    await page.focus("#pass");
+    expect(await nextChange()).toBe(true);
+    await page.evaluate("history.pushState({}, '', '/step-2'); location.hash = 'otp'");
+    await page.evaluate("window.__fence()");
+    expect(delivered).toBe(1);
+    await page.goto("https://login.example/done");
+    expect(await nextChange()).toBe(false);
   });
 
   it("goes private for a passkey prompt until it settles, inside a frame too", async () => {

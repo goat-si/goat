@@ -92,6 +92,7 @@ it.effect.each([
       sessions: Effect.succeed([]),
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
+      stopAllAgents: Effect.void,
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
@@ -171,6 +172,7 @@ it.effect("sends replies ahead of stale frames and only the newest frame after a
       sessions: Effect.succeed([]),
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
+      stopAllAgents: Effect.void,
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
@@ -246,6 +248,7 @@ it.effect.each([
       sessions: Effect.succeed([]),
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
+      stopAllAgents: Effect.void,
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
@@ -290,6 +293,7 @@ it.effect("serves a tab's download only to an authorized session", () =>
       sessions: Effect.succeed([]),
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
+      stopAllAgents: Effect.void,
       reportProfiles: () => Effect.void,
       openDownload: (input) =>
         Effect.sync(() => {
@@ -341,6 +345,7 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
       sessions: Effect.succeed([]),
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
+      stopAllAgents: Effect.void,
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: (input) =>
@@ -413,6 +418,7 @@ it.effect.each([
       sessions: Effect.succeed([]),
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
+      stopAllAgents: Effect.void,
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),

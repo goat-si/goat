@@ -345,10 +345,16 @@ const make = Effect.gen(function* () {
     resume: Effect.sync(() => {
       paused = undefined;
     }).pipe(Effect.andThen(changed)),
-    sessions: Effect.forEach([...controls.values()], (record) =>
-      controlState(record.threadId, record.controlId).pipe(
-        Effect.orElseSucceed((): ComputerUseControlState => ({ _tag: "ended", reason: "revoked" })),
-        Effect.map((state) => ({ control: record as ComputerUseControl, state })),
+    // Suspended: the controls are read each time it runs, never once when the service is built.
+    sessions: Effect.suspend(() =>
+      Effect.forEach([...controls.values()], (record) =>
+        controlState(record.threadId, record.controlId).pipe(
+          Effect.orElseSucceed((): ComputerUseControlState => ({
+            _tag: "ended",
+            reason: "revoked",
+          })),
+          Effect.map((state) => ({ control: record as ComputerUseControl, state })),
+        ),
       ),
     ),
     subscribe: PubSub.subscribe(signals),

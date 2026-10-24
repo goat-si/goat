@@ -28,7 +28,9 @@ const PRIVATE_MODE_SCRIPT = `(() => {
     element instanceof HTMLInputElement &&
     (element.type === "password" || secretAutocomplete.test(element.autocomplete || ""));
   let ceremonies = 0;
-  let last = false;
+  // Unset, so every new document reports where it starts: a same-document move reports nothing,
+  // and a new page replaces whatever the frame's last document said.
+  let last;
   const update = () => {
     const on = ceremonies > 0 || secret(focused());
     if (on === last) return;
@@ -59,7 +61,8 @@ const PRIVATE_MODE_SCRIPT = `(() => {
 
 /**
  * Follows the page's frames and calls `onChange` with whether any of them holds a secret now.
- * Frames that go away stop counting.
+ * Each document reports when it starts, so only a new document clears its frame's secret, never a
+ * history or hash move within one; frames that go away stop counting.
  */
 export async function watchPrivateMode(page: Page, onChange: (on: boolean) => void) {
   const privateFrames = new Set<Frame>();
@@ -76,9 +79,6 @@ export async function watchPrivateMode(page: Page, onChange: (on: boolean) => vo
     publish();
   });
   page.on("framedetached", (frame) => {
-    if (privateFrames.delete(frame)) publish();
-  });
-  page.on("framenavigated", (frame) => {
     if (privateFrames.delete(frame)) publish();
   });
   await page.addInitScript(PRIVATE_MODE_SCRIPT);

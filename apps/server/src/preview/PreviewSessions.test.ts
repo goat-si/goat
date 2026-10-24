@@ -1,7 +1,16 @@
-import { EnvironmentId, previewSessionChip, ThreadId } from "@goat/contracts";
+import { AuthSessionId, EnvironmentId, previewSessionChip, ThreadId } from "@goat/contracts";
+import { it as effectIt } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as ServerBrowser from "./ServerBrowser.ts";
 import { describe, expect, it } from "vite-plus/test";
 
+import * as PreviewSessions from "./PreviewSessions.ts";
 import { browserSession, desktopSession } from "./PreviewSessions.ts";
 
 const base = { environmentId: EnvironmentId.make("env"), host: "mac", platform: "mac" } as const;
@@ -72,5 +81,33 @@ describe("preview sessions", () => {
     expect(browserSession(base, { ...tab, agentId: null })).toBeUndefined();
     for (const reason of ["expired", "revoked", "replaced", "disabled"] as const)
       expect(desktopSession(base, control, { _tag: "ended", reason })).toBeUndefined();
+  });
+
+  effectIt.effect("stops every agent without waiting on a page that never answers", () => {
+    const stopped: Array<string> = [];
+    const layer = PreviewSessions.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ServerBrowser.ServerBrowser)({
+            // A hung renderer: reading a tab's title never finishes.
+            sessions: Effect.never,
+            stopAllAgents: Effect.sync(() => void stopped.push("browser")),
+          }),
+          Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            stopAll: Effect.sync(() => (stopped.push("desktop"), [])),
+            grants: Effect.succeed([]),
+            proxy: undefined,
+          }),
+          Layer.mock(Handoffs.Handoffs)({}),
+          Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const sessions = yield* PreviewSessions.PreviewSessions;
+      const result = yield* sessions.control({ control: "stopAll" }, AuthSessionId.make("session"));
+      expect(result).toEqual({ applied: true });
+      expect(stopped).toEqual(["browser", "desktop"]);
+    }).pipe(Effect.provide(layer));
   });
 });

@@ -7,7 +7,7 @@
 import * as Schema from "effect/Schema";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ComputerUseRefusalReason } from "./cua.ts";
+import { ComputerUseRefusalReason } from "./computerUseProtocol.ts";
 
 export const PreviewSessionKind = Schema.Literals(["browser", "desktop"]);
 export type PreviewSessionKind = typeof PreviewSessionKind.Type;

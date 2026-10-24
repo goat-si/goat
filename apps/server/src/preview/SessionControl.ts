@@ -35,6 +35,8 @@ export class SessionControl {
   private privateMode = false;
   private agentStopped = false;
   private activeAgentAction: AbortController | undefined;
+  /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
+  private activeAgentCut: AbortController | undefined;
 
   constructor(agentId: string | null, onGenerationChange: () => void = () => {}) {
     this.agentId = agentId;
@@ -75,8 +77,7 @@ export class SessionControl {
     this.privateMode = on;
     this.epoch++;
     this.onGenerationChange();
-    if (on)
-      this.activeAgentAction?.abort(new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode"));
+    if (on) this.cut(new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode"));
     this.changed();
   }
 
@@ -85,14 +86,31 @@ export class SessionControl {
     this.agentStopped = true;
     this.epoch++;
     this.onGenerationChange();
-    this.activeAgentAction?.abort(new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped"));
+    this.cut(new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped"));
     this.changed();
+  }
+
+  private cut(reason: BrowserControlInterrupted) {
+    this.activeAgentAction?.abort(reason);
+    this.activeAgentCut?.abort(reason);
   }
 
   resumeAgents() {
     if (!this.agentStopped) return;
     this.agentStopped = false;
     this.changed();
+  }
+
+  /**
+   * Called just before input leaves for the page, after any wait such as the agent cursor: an
+   * action that started before Stop, a takeover or a secret field must not land after it.
+   */
+  assertAgentMayDispatch() {
+    this.assertOpen();
+    const blocked = this.agentBlocked();
+    if (blocked) throw blocked;
+    if (this.owner !== null)
+      throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
   }
 
   private agentBlocked() {
@@ -180,11 +198,22 @@ export class SessionControl {
       () => this.agentMayAct(agentId) && this.owner === null && !this.agentBlocked(),
       async () => {
         const action = new AbortController();
+        const cut = new AbortController();
         this.activeAgentAction = action;
+        this.activeAgentCut = cut;
+        const work = run(action.signal);
+        // Later actions still wait for it, even after its caller has been answered.
+        this.track(work);
+        const aborted = new Promise<never>((_, reject) =>
+          cut.signal.addEventListener("abort", () => reject(cut.signal.reason), { once: true }),
+        );
         try {
-          return await run(action.signal);
+          // Work that ignores the signal still never hands its result to the agent.
+          return await Promise.race([work, aborted]);
         } finally {
           this.activeAgentAction = undefined;
+          this.activeAgentCut = undefined;
+          void aborted.catch(() => undefined);
         }
       },
       deadlineMs,
@@ -204,7 +233,11 @@ export class SessionControl {
     this.assertOpen();
     if (this.privateMode)
       return Promise.reject(new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode"));
-    return run();
+    // A secret that appeared while it read keeps what it saw from the agent.
+    return run().then((result) => {
+      if (this.privateMode) throw new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode");
+      return result;
+    });
   }
 
   system<A>(run: () => Promise<A>) {

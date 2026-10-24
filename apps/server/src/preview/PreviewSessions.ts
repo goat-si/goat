@@ -200,9 +200,8 @@ const make = Effect.gen(function* () {
     sessionId: AuthSessionId,
   ) {
     if (input.control === "stopAll") {
-      if (Option.isSome(browser))
-        for (const tab of yield* browser.value.sessions)
-          yield* browser.value.controlSession({ ...tab, control: "stop" });
+      // Control first, and nothing a stuck page could hold up: no titles or URLs are read.
+      if (Option.isSome(browser)) yield* browser.value.stopAllAgents;
       yield* stopAllComputerUse(leases, handoffs, sessionId);
       return { applied: true };
     }
