@@ -8,9 +8,11 @@ export const attachmentEntries = {
     toolkit: "attachment",
     summary: "Create the app's signed upload URL.",
     description:
-      "Create a signed attachment upload URL and record its caller ownership. Uploading bytes and sending the attachment to a thread are separate steps; provider support depends on its adapter.",
+      "Create a signed attachment upload URL and record its caller ownership. Uploading bytes and sending the attachment to a thread are separate steps; provider support depends on its adapter. Retry with the same clientRequestId to get the first upload back.",
     guide:
-      "POST the exact file bytes to relativeUrl on this MCP server's HTTP origin. Then pass the attachment metadata and returned attachmentId to goat_thread_send_attachments. Preparing the URL does not send a thread message. The provider adapter decides attachment support.",
+      "POST the exact file bytes to relativeUrl on this MCP server's HTTP origin. Then pass the attachment metadata and returned attachmentId to goat_thread_send_attachments. Preparing the URL does not send a thread message. The provider adapter decides attachment support.\n\nA retry with the same clientRequestId returns the same attachmentId and URL; once expiresAt passes, prepare again with a new key. If the result was lost, goat_attachment_pending_list shows the uploads this caller prepared; discard one you cannot use, then prepare again with a new key.",
+    idempotency: "key",
+    reconcile: "attachment.pending_list",
     effect: "destructive",
     capability: "none",
     capabilityReason:
@@ -46,6 +48,26 @@ export const attachmentEntries = {
     annotations: {
       idempotentHint: false,
       openWorldHint: true,
+    },
+  }),
+  "attachment.pending_list": entry({
+    resource: "attachment",
+    verb: "pending_list",
+    name: "goat_attachment_pending_list",
+    toolkit: "attachment",
+    summary: "List this caller's prepared uploads.",
+    description:
+      "List the uploads this caller prepared that are not yet sent or discarded, and whether their bytes arrived. Returns no upload URLs.",
+    guide:
+      "Each entry has the attachmentId, metadata, expiresAt of its upload URL and uploaded. Send an uploaded entry with goat_thread_send_attachments or remove it with goat_attachment_discard. Entries leave the list once sent or discarded, or after a day.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: false,
     },
   }),
 } as const;

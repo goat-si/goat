@@ -31,6 +31,8 @@ export interface ThreadContextDragSubject {
   readonly key: string;
   readonly title: string;
   readonly list: Element | null;
+  readonly refs?: ReadonlyArray<ScopedThreadRef> | undefined;
+  readonly unrestricted?: boolean | undefined;
 }
 
 /** Threads a drag hands over: the whole selection when the picked-up row belongs to it. */
@@ -69,7 +71,8 @@ export function useThreadContextDrag(
   };
   const move = (point: { x: number; y: number }) => {
     const subject = subjectRef.current;
-    const contextDrag = subject !== null && isOutsideList(subject.list, point);
+    const contextDrag =
+      subject !== null && (subject.unrestricted || isOutsideList(subject.list, point));
     if (contextDragRef.current !== contextDrag) {
       contextDragRef.current = contextDrag;
       onContextDragChangeRef.current?.(contextDrag);
@@ -80,14 +83,15 @@ export function useThreadContextDrag(
     }
     moveThreadContextDrag(point, {
       title: subject.title.trim() || "Thread",
-      count: threadContextDragRefs(subject.key).length,
+      count: (subject.refs ?? threadContextDragRefs(subject.key)).length,
     });
     return true;
   };
   const drop = (point: { x: number; y: number }) => {
     const subject = subjectRef.current;
-    if (subject === null || !isOutsideList(subject.list, point)) return false;
-    dropThreadContext(point, threadContextDragRefs(subject.key));
+    if (subject === null || (!subject.unrestricted && !isOutsideList(subject.list, point)))
+      return false;
+    dropThreadContext(point, subject.refs ?? threadContextDragRefs(subject.key));
     // Releasing outside the list never sorts, whether or not a composer took the drop.
     return true;
   };
@@ -131,12 +135,14 @@ export function useThreadContextDragHandle(input: {
   readonly threadKey: string;
   readonly title: string;
   readonly disabled: boolean;
+  readonly refs?: ReadonlyArray<ScopedThreadRef>;
+  readonly unrestricted?: boolean;
 }) {
   const drag = useThreadContextDrag();
-  const rowRef = useRef({ threadKey: input.threadKey, title: input.title });
+  const rowRef = useRef(input);
   useLayoutEffect(() => {
-    rowRef.current = { threadKey: input.threadKey, title: input.title };
-  }, [input.threadKey, input.title]);
+    rowRef.current = input;
+  });
   const sensorRef = useRef<SidebarPointerSensor | null>(null);
   useEffect(() => () => sensorRef.current?.cancel(), []);
   // A row that stops allowing context drag mid-press (rename, or it became sortable) drops
@@ -147,7 +153,7 @@ export function useThreadContextDragHandle(input: {
   const onPointerDown = (event: ReactPointerEvent<Element>) => {
     if (!shouldStartThreadContextDrag(event, navigator.platform)) return;
     sensorRef.current?.cancel();
-    const { threadKey, title } = rowRef.current;
+    const { threadKey, title, refs, unrestricted } = rowRef.current;
     const list = event.currentTarget.closest(`[${LIST_ATTRIBUTE}]`);
     // The sensor owns its document listeners from here until release or cancellation.
     void new SidebarPointerSensor({
@@ -169,7 +175,7 @@ export function useThreadContextDragHandle(input: {
         onDrop: drag.drop,
       },
       onPending: noop,
-      onStart: () => drag.begin({ key: threadKey, title, list }),
+      onStart: () => drag.begin({ key: threadKey, title, list, refs, unrestricted }),
       onMove: noop,
       onEnd: noop,
       onCancel: noop,

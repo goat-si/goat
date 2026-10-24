@@ -378,6 +378,10 @@
         "apps/server/src/fleet/pressure/PressureNudger.ts",
         "packages/contracts/src/hostPressure.ts",
         "apps/server/src/goatclaw/DecisionInbox.ts",
+        "apps/server/src/goatclaw/DecisionService.ts",
+        "apps/server/src/goatclaw/DecisionAuthority.ts",
+        "apps/server/src/goatclaw/DecisionLayers.ts",
+        "apps/server/src/goatclaw/DecisionClient.ts",
         "apps/server/src/persistence/Migrations/099_DecisionInbox.ts",
         "packages/contracts/src/decisions.ts",
         "apps/server/src/goatclaw/RoleTemplates.ts"

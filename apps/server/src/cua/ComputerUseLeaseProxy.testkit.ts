@@ -1,19 +1,24 @@
-// @effect-diagnostics preferSchemaOverJson:off -- raw JSON-RPC lines are the fixture's public boundary.
+// @effect-diagnostics preferSchemaOverJson:off -- The fake driver speaks raw JSON-RPC lines.
+/** The lease proxy over in-memory stdio, lease stream and drivers, for its tests. */
 import {
-  type ComputerUseLeaseUpdate,
-  type ComputerUseOverlayCommand,
+  type ComputerUseHumanInputSource,
   type ComputerUseCallReservation,
   type ComputerUseCallAdmission,
   TurnItemId,
+  type ComputerUseLeaseUpdate,
+  type ComputerUseOverlayCommand,
+  computerUseRefusalReason,
 } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+
 import type { NamedWindow } from "./x11WindowPlacement.ts";
-import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { LEASE_END_MESSAGES, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 
 export const CONTROL = "control:one";
 export const call = (id: number | string, name: string, args: object = {}) =>
@@ -40,7 +45,7 @@ export const foregroundActive = (expiresAt = "1970-01-01T00:30:00.000Z") => ({
   ],
 });
 
-interface FakeDriver {
+export interface FakeDriver {
   readonly toDriver: Queue.Queue<string>;
   readonly fromDriver: Queue.Queue<string, Cause.Done>;
   readonly killed: Deferred.Deferred<void>;
@@ -70,6 +75,12 @@ export const harness = Effect.fn(function* (
     ) => Effect.Effect<ComputerUseCallAdmission>;
     readonly kill?: Effect.Effect<void>;
     readonly restartFailure?: string;
+    /**
+     * Gives each driver a helper input feed (`hid`); reports to the server land in `people`,
+     * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
+     */
+    readonly humanInput?: boolean;
+    readonly acceptHuman?: () => boolean;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -82,6 +93,9 @@ export const harness = Effect.fn(function* (
   const log: Array<string> = [];
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
+  const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
+  const agentCalls = yield* Queue.unbounded<string>();
+  const hidFeeds: Array<Queue.Queue<{ source: ComputerUseHumanInputSource; at: number }>> = [];
   const reservations: Array<ComputerUseCallReservation> = [];
   const reservationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
   const proxy = yield* runLeaseProxy({
@@ -109,6 +123,14 @@ export const harness = Effect.fn(function* (
             Queue.offer(targets, target).pipe(Effect.as(options.onTarget?.(target) ?? true)),
         }),
     leaseUpdates: options.leaseUpdates ?? Stream.fromQueue(updates),
+    ...(options.humanInput
+      ? {
+          onHumanInput: (input: { source: ComputerUseHumanInputSource; at: number }) =>
+            Queue.offer(people, input.source).pipe(Effect.as(options.acceptHuman?.() ?? true)),
+          onAgentInput: (report: { call: string; state: "start" | "end"; at: number }) =>
+            Queue.offer(agentCalls, report.state + " " + report.call),
+        }
+      : {}),
     startDriver: Effect.gen(function* () {
       if (drivers.length > 0 && options.restartFailure !== undefined)
         return yield* Effect.fail(options.restartFailure);
@@ -119,7 +141,10 @@ export const harness = Effect.fn(function* (
       };
       drivers.push(driver);
       yield* Queue.offer(started, driver);
+      const hid = yield* Queue.unbounded<{ source: ComputerUseHumanInputSource; at: number }>();
+      hidFeeds.push(hid);
       return {
+        ...(options.humanInput ? { humanInput: Stream.fromQueue(hid) } : {}),
         send: (line: string) =>
           Effect.sync(() => {
             const params = (JSON.parse(line) as { params?: { name?: unknown } }).params;
@@ -192,10 +217,34 @@ export const harness = Effect.fn(function* (
     /** The next window the proxy reported to the server. */
     reported: Queue.take(targets),
     reportedQueued: Queue.size(targets),
-    revoked,
-    log,
+    /** The helper saw a keyboard or pointer event `ageMs` ago. */
+    hid: (source: ComputerUseHumanInputSource, ageMs = 0) =>
+      Effect.suspend(() => {
+        const feed = hidFeeds.at(-1);
+        if (feed === undefined) return Effect.void;
+        return Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) => Queue.offer(feed, { source, at: now - ageMs })),
+        );
+      }),
+    /** The next person's input the proxy reported to the server. */
+    person: Queue.take(people),
+    /** The next input call start or end the proxy told the server about, as "start 1". */
+    agentCall: Queue.take(agentCalls),
+    agentCallsQueued: Queue.size(agentCalls),
     reservations,
     nextReservation: Queue.take(reservationEvents),
+    revoked,
+    log,
     proxy,
   };
+});
+
+export const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES) => ({
+  jsonrpc: "2.0",
+  id,
+  result: {
+    content: [{ type: "text", text: LEASE_END_MESSAGES[reason] }],
+    structuredContent: { refused: computerUseRefusalReason(reason), detail: reason },
+    isError: true,
+  },
 });

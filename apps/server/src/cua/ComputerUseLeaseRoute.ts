@@ -2,14 +2,15 @@
  * The control stream a computer use proxy holds open: the current state of the control it was
  * started with, then a new line whenever that may have changed, ending with the line that ends
  * it. It authenticates with the thread's own GOAT MCP credential, so a proxy only ever learns
- * about its own thread. A POST to the same route reports the window the proxy's latest admitted
- * call named, for that thread's live control only.
+ * about its own thread. A POST to the same route reports, for that thread's live control only,
+ * the window the proxy's latest admitted call named, its own input calls, or a person's input
+ * its helper saw.
  *
  * @module ComputerUseLeaseRoute
  */
 import {
   COMPUTER_USE_LEASE_ROUTE,
-  ComputerUseLeaseTarget,
+  ComputerUseLeaseReport,
   ComputerUseLeaseUpdate,
   ComputerUseCallReservation,
   ComputerUseCallAdmission,
@@ -124,23 +125,36 @@ const threadOf = Effect.gen(function* () {
   return invocation?.thread?.threadId;
 });
 
-const decodeTarget = Schema.decodeUnknownEffect(Schema.fromJsonString(ComputerUseLeaseTarget));
+const decodeReport = Schema.decodeUnknownEffect(Schema.fromJsonString(ComputerUseLeaseReport));
 
 /**
- * The window a proxy's latest admitted call named (#1370). A report for a control that is not the
- * thread's live one, such as an old proxy's after its control was replaced, changes nothing.
+ * The window a proxy's latest admitted call named (#1370), or a person's own input (#1235). A
+ * report for a control that is not the thread's live one, such as an old proxy's after its
+ * control was replaced, changes nothing.
  */
-const targetLayer = HttpRouter.add(
+export const reportLayer = HttpRouter.add(
   "POST",
   COMPUTER_USE_LEASE_ROUTE,
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const threadId = yield* threadOf;
     if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
-    const target = yield* request.text.pipe(Effect.flatMap(decodeTarget), Effect.option);
-    if (Option.isNone(target)) return HttpServerResponse.empty({ status: 400 });
+    const report = yield* request.text.pipe(Effect.flatMap(decodeReport), Effect.option);
+    if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
-    const recorded = yield* leases.setTarget(threadId, target.value.controlId, target.value);
+    const value = report.value;
+    if ("humanInput" in value) {
+      const outcome = yield* leases.humanInput(threadId, value.controlId, value.humanInput.at);
+      // 204 only when it paused the agents: the proxy stops reporting for that helper then, and
+      // keeps reporting after a 202 (another agent's input) or a 409.
+      return HttpServerResponse.empty({
+        status: outcome === "paused" ? 204 : outcome === "agents" ? 202 : 409,
+      });
+    }
+    const recorded =
+      "agentInput" in value
+        ? yield* leases.agentInput(threadId, value.controlId, value.agentInput)
+        : yield* leases.setTarget(threadId, value.controlId, value);
     return HttpServerResponse.empty({ status: recorded ? 204 : 409 });
   }),
 );
@@ -194,4 +208,4 @@ const callLayer = HttpRouter.add(
   }),
 );
 
-export const layer = Layer.mergeAll(streamLayer, targetLayer, callLayer);
+export const layer = Layer.mergeAll(streamLayer, reportLayer, callLayer);

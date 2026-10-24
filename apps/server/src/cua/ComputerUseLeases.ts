@@ -27,6 +27,7 @@ import {
 } from "@goat/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- control ids are minted inside a sync map update.
 import * as NodeCrypto from "node:crypto";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -49,6 +50,7 @@ import {
   requiresForeground,
 } from "./ComputerUseCallReservations.ts";
 import { makeForegroundApprovals } from "./ComputerUseForeground.ts";
+import { makeAgentInputLog } from "./agentInputLog.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -128,6 +130,10 @@ export interface Interruptions {
 /** How long an interactive control lasts before the thread's next turn mints another. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
 const WATCH_RETRY_MS = 1_000;
+/** Separates a control id from a call id in an input log key; a control id never contains it. */
+const CALL_KEY = "\u0000";
+/** How far a proxy's input report time may be from this server's clock. */
+const REPORT_SKEW_MS = 60_000;
 
 /** Why a thread runs without a person directing it; see ComputerUseOrigin. */
 export type ChannelOrigin = "goat_bot" | "channel_task";
@@ -203,6 +209,27 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       controlId: string,
       target: { readonly pid: number; readonly windowId: number },
+    ) => Effect.Effect<boolean>;
+    /**
+     * A keyboard or pointer event at "at" that a control's proxy saw through its helper, outside
+     * its own input calls (#1235). Unless another agent's input covers that moment, every agent on
+     * the host pauses, as for the desktop's report. False when the control is not the thread's
+     * live one, so an old proxy cannot pause anyone.
+     */
+    readonly humanInput: (
+      threadId: ThreadId,
+      controlId: string,
+      at: number,
+    ) => Effect.Effect<"paused" | "agents" | "refused">;
+    /**
+     * One of a control's calls that can post input started or ended (#1235). A person's input
+     * reported while any agent's input was on its way is that agent's, not a person's. False when
+     * the control is not the thread's live one.
+     */
+    readonly agentInput: (
+      threadId: ThreadId,
+      controlId: string,
+      report: { readonly call: string; readonly state: "start" | "end"; readonly at: number },
     ) => Effect.Effect<boolean>;
     /** Ends every control on this host, returning the threads that held one. */
     readonly stopAll: Effect.Effect<ReadonlyArray<ThreadId>>;
@@ -533,6 +560,32 @@ const make = Effect.gen(function* () {
     return true;
   };
 
+  /** Every agent's input calls on this host, keyed by control id and call (#1235). */
+  const agentInputs = makeAgentInputLog();
+  /**
+   * Whether a proxy's report time is close to this server's clock, which the proxy shares on
+   * the same host. A report far off is refused, and the log is pruned by this clock alone.
+   */
+  const nearNow = (at: number) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.map((now) => {
+        agentInputs.prune(now);
+        return Math.abs(now - at) <= REPORT_SKEW_MS;
+      }),
+    );
+  /** The thread's control when it is the live one this report names, expiry included. */
+  const liveControl = Effect.fn("ComputerUseLeases.liveControl")(function* (
+    threadId: ThreadId,
+    controlId: string,
+  ) {
+    const record = controls.get(threadId);
+    if (record?.controlId !== controlId || record.ended !== undefined) return undefined;
+    // An expired control is ended to every reader even before anything marks it so.
+    const now = yield* DateTime.now;
+    if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) return undefined;
+    return record;
+  });
+
   const pause = (reason: ComputerUsePauseReason) =>
     Effect.sync(() => {
       foreground.clear();
@@ -794,11 +847,8 @@ const make = Effect.gen(function* () {
       controlId: string,
       target: { readonly pid: number; readonly windowId: number },
     ) {
-      const record = controls.get(threadId);
-      if (record?.controlId !== controlId || record.ended !== undefined) return false;
-      // An expired control is ended to every reader even before anything marks it so.
-      const now = yield* DateTime.now;
-      if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) return false;
+      const record = yield* liveControl(threadId, controlId);
+      if (record === undefined) return false;
       if (record.target?.pid === target.pid && record.target.windowId === target.windowId)
         return true;
       controls.set(threadId, {
@@ -806,6 +856,37 @@ const make = Effect.gen(function* () {
         target: { pid: target.pid, windowId: target.windowId },
       });
       yield* changed;
+      return true;
+    }),
+    humanInput: Effect.fn("ComputerUseLeases.humanInput")(function* (
+      threadId: ThreadId,
+      controlId: string,
+      at: number,
+    ) {
+      if ((yield* liveControl(threadId, controlId)) === undefined) return "refused" as const;
+      if (!(yield* nearNow(at))) return "refused" as const;
+      // Another agent's input on this host shows up in every helper; only a live control's
+      // calls count.
+      const live = new Set(
+        [...controls.values()]
+          .filter((record) => record.ended === undefined)
+          .map((record) => record.controlId),
+      );
+      if (agentInputs.isAgents(at, (key) => live.has(key.slice(0, key.indexOf(CALL_KEY)))))
+        return "agents" as const;
+      yield* pause("human_input");
+      return "paused" as const;
+    }),
+    agentInput: Effect.fn("ComputerUseLeases.agentInput")(function* (
+      threadId: ThreadId,
+      controlId: string,
+      report: { readonly call: string; readonly state: "start" | "end"; readonly at: number },
+    ) {
+      if ((yield* liveControl(threadId, controlId)) === undefined) return false;
+      if (!(yield* nearNow(report.at))) return false;
+      const key = controlId + CALL_KEY + report.call;
+      if (report.state === "start") agentInputs.started(key, report.at);
+      else agentInputs.ended(key, report.at);
       return true;
     }),
     stopAll: Effect.sync(() => {

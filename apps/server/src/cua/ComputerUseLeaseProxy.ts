@@ -24,6 +24,7 @@
 // JSON-RPC lines pass through unchanged; only the fields the proxy acts on are read.
 // @effect-diagnostics preferSchemaOverJson:off
 import {
+  type ComputerUseHumanInputSource,
   type ComputerUseOverlayCommand,
   type ComputerUseControlEnd,
   ComputerUseLeaseUpdate,
@@ -51,6 +52,8 @@ import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
+import { postsInput } from "./agentInputLog.ts";
+import { makeLeaseProxyInput, type LeaseProxyInputOptions } from "./ComputerUseLeaseProxyInput.ts";
 import {
   initialOverlayState,
   type OverlayEvent,
@@ -112,9 +115,17 @@ export interface LeaseProxyDriver {
    * change is on screen, so a capture forwarded after a hide cannot contain the overlay.
    */
   readonly overlay?: (command: ComputerUseOverlayCommand) => Effect.Effect<void>;
+  /**
+   * Keyboard and pointer events the macOS helper saw, each with when it happened on this
+   * process's clock, every agent's own included (#1235). Absent where the child reports none.
+   */
+  readonly humanInput?: Stream.Stream<{
+    readonly source: ComputerUseHumanInputSource;
+    readonly at: number;
+  }>;
 }
 
-export interface LeaseProxyOptions<EU, ED> {
+export interface LeaseProxyOptions<EU, ED> extends LeaseProxyInputOptions {
   readonly connectionId: string;
   readonly reservation: (
     call: ComputerUseCallReservation,
@@ -333,6 +344,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   // The control's window survives pauses: the server keeps it until the control ends.
   let reported: ComputerUseCallTarget | undefined;
   let overlay = initialOverlayState;
+  const agentInput = yield* makeLeaseProxyInput(options);
 
   /** Updates what the overlay shows and waits until the helper has drawn it. */
   const drawOverlay = Effect.fn("ComputerUseLeaseProxy.overlay")(function* (event: OverlayEvent) {
@@ -359,6 +371,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     running = undefined;
     const pending = [...outstanding.values()];
     outstanding.clear();
+    yield* agentInput.cutoff;
     if (current !== undefined) {
       for (const request of pending)
         yield* current.driver.send(
@@ -426,6 +439,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const request = outstanding.get(key);
             // A reply to a request the provider cancelled, or never made, is stale.
             if (request === undefined) return;
+            yield* agentInput.ended(key);
             if (request.cancelled) {
               yield* release(request);
               if (
@@ -526,6 +540,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       connectionId: `${options.connectionId}:${driverGeneration++}`,
     };
     running = current;
+    yield* agentInput.watch(
+      driver.humanInput,
+      child,
+      () => finished === undefined && paused === undefined && running === current,
+    );
     // A new helper draws nothing yet.
     overlay = initialOverlayState;
     // A fresh child after a pause hears the provider's handshake again; its answers are dropped.
@@ -757,7 +776,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         id,
         message.method,
         "app_not_approved",
-        scopeMessage("app_not_approved", `the app with pid ${verdict.pid}`),
+        scopeMessage(
+          "app_not_approved",
+          listed.get(verdict.pid)?.id ?? `the app with pid ${verdict.pid}`,
+        ),
       );
     if (verdict._tag === "refuse")
       return refusal(
@@ -935,6 +957,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       // The driver may ignore cancellation; ownership lasts until its reply or actual cutoff.
       if (request !== undefined) outstanding.set(cancelled, { ...request, cancelled: true });
     }
+    if (running !== current || paused !== undefined || idle || finished !== undefined) return;
+    if (
+      isRequest &&
+      message?.method === "tools/call" &&
+      postsInput(typeof message.params?.name === "string" ? message.params.name : "")
+    )
+      yield* agentInput.started(JSON.stringify(id));
     if (running !== current || paused !== undefined || idle || finished !== undefined) return;
     yield* current.driver.send(line);
     if (isRequest && message?.method === "tools/call" && options.onTarget !== undefined) {

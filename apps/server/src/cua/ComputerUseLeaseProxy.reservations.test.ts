@@ -154,26 +154,31 @@ describe("proxy execution ownership", () => {
     }),
   );
 
-  it.effect("keeps a cancelled execution reserved until the driver's terminal reply", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      yield* h.push(foregroundActive());
-      yield* h.send(call(1, "run_script", { code: "opaque" }));
-      yield* h.nextToDriver;
-      const acquired = yield* h.nextReservation;
-      yield* h.send(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          method: "notifications/cancelled",
-          params: { requestId: 1 },
-        }),
-      );
-      yield* h.nextToDriver;
-      assert.deepEqual(h.reservations, [acquired]);
-      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
-      assert.equal((yield* h.nextReservation).action, "release");
-      assert.equal(yield* h.providerQueued, 0);
-    }),
+  it.effect(
+    "keeps cancelled execution ownership and input attribution until the terminal reply",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ humanInput: true });
+        yield* h.push(foregroundActive());
+        yield* h.send(call(1, "run_script", { code: "opaque" }));
+        yield* h.nextToDriver;
+        const acquired = yield* h.nextReservation;
+        assert.equal(yield* h.agentCall, "start 1");
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: 1 },
+          }),
+        );
+        yield* h.nextToDriver;
+        assert.deepEqual(h.reservations, [acquired]);
+        assert.equal(yield* h.agentCallsQueued, 0);
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        assert.equal((yield* h.nextReservation).action, "release");
+        assert.equal(yield* h.agentCall, "end 1");
+        assert.equal(yield* h.providerQueued, 0);
+      }),
   );
 
   it.effect("waits for acknowledged driver cutoff before releasing outstanding executions", () =>
