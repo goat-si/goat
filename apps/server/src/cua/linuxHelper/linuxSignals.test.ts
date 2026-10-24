@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { ComputerUseEvent } from "@goat/contracts";
 
@@ -297,6 +297,31 @@ describe("makeSignalMonitor", () => {
     expect(m.events.filter((entry) => entry.watchId === "b")).toEqual([
       { watchId: "b", event: { type: "privateMode", active: true, target } },
     ]);
+  });
+
+  it("a probe past its time limit holds its window until its scan ends, so slow scans never pile up", async () => {
+    const probes: Array<PromiseWithResolvers<SecureFocus>> = [];
+    const m = monitor({
+      secureFocus: () => {
+        const probe = Promise.withResolvers<SecureFocus>();
+        probes.push(probe);
+        return probe.promise;
+      },
+    });
+    await m.signals.watch("w", [target]);
+    const first = m.runDeferred();
+    m.expireProbes();
+    await first;
+    expect(m.events).toEqual([
+      { watchId: "w", event: { type: "privateMode", active: true, target } },
+    ]);
+    await m.tick();
+    expect(probes).toHaveLength(1);
+    probes[0]?.resolve(secure);
+    await probes[0]?.promise;
+    // The next tick probes again once the slow scan has ended; it never answers here.
+    void m.tick();
+    await vi.waitFor(() => expect(probes).toHaveLength(2));
   });
 
   it("one window's slow focus probe holds back no other signal", async () => {

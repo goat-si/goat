@@ -88,9 +88,12 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
     mine: number,
     target: ComputerUseWindowTarget,
     report: boolean,
+    scan: (probe: Promise<unknown>) => void,
   ) => {
+    const probe = deps.secureFocus(target.pid);
+    scan(probe);
     const focus = await Promise.race([
-      deps.secureFocus(target.pid),
+      probe,
       deps.delay(FOCUS_PROBE_LIMIT_MS).then(() => UNREADABLE),
     ]);
     // The watch may have changed while AT-SPI answered.
@@ -116,6 +119,9 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
     if (checking.has(key)) return;
     const owner = {};
     checking.set(key, owner);
+    // A probe past its time limit has already reported the window private, but its AT-SPI scan
+    // keeps running; the window stays held until that scan ends so slow scans never pile up.
+    let running: Promise<unknown> | undefined;
     try {
       if (!initial) {
         const open = await deps.windowOpen(target);
@@ -127,9 +133,15 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
           return;
         }
       }
-      await readFocus(id, mine, target, initial);
+      await readFocus(id, mine, target, initial, (probe) => {
+        running = probe;
+      });
     } finally {
-      if (checking.get(key) === owner) checking.delete(key);
+      const free = () => {
+        if (checking.get(key) === owner) checking.delete(key);
+      };
+      if (running) void running.then(free, free);
+      else free();
     }
   };
 
