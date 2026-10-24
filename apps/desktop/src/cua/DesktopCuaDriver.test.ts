@@ -606,3 +606,39 @@ describe("DesktopCuaDriver when the helper cannot be used", () => {
     ),
   );
 });
+
+describe("DesktopCuaDriver app listing for the agents' manifest", () => {
+  it.effect(
+    "lists apps through the macOS helper, so its driver never runs outside the helper's seal check",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          assert.deepEqual(test.manifestListings, [
+            { scope: "agents", through: "helper", apps: 1 },
+          ]);
+          assert.deepEqual(test.helperAppListings, [HELPER_ID]);
+        }),
+      ),
+  );
+
+  it.effect.each([
+    { name: "a build without the helper", platform: "darwin" as const, helper: undefined },
+  ])("keeps listing by running the driver for $name", ({ platform, helper }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({ platform, ...(helper ? { helper } : {}) });
+        yield* test.request("agent");
+        yield* test.next;
+        assert.deepEqual(
+          test.manifestListings.map(({ through }) => through),
+          test.manifestListings.length === 0 ? [] : ["driver"],
+        );
+        assert.isEmpty(test.helperAppListings);
+      }),
+    ),
+  );
+});

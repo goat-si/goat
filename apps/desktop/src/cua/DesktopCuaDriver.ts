@@ -12,6 +12,7 @@ import {
   prepareCuaDriverCapabilityManifest,
   writeCuaDriverCapabilityManifest,
 } from "@goat/shared/cuaDriverManifest";
+import type { CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
 import {
   COMPUTER_USE_HELPER_NAME,
   computerUseHelperBundleId,
@@ -36,6 +37,7 @@ import {
   classifyHelperBundle,
   helperBundle,
   makeHelperHost,
+  listHelperApplications,
   probeHelperGrants,
   spawnHelperProcess,
   type DaemonMetadata,
@@ -43,7 +45,6 @@ import {
   type HelperHostOptions,
 } from "./ComputerUseHelper.ts";
 import {
-  listWindowsApps,
   probeWindowsReadiness,
   windowsDriverPipe,
   windowsHelperBundle,
@@ -131,9 +132,14 @@ export interface DesktopCuaDriverDependencies {
     readonly hostBundleIds: ReadonlyArray<string>;
     readonly directory: string;
     readonly platform: NodeJS.Platform;
-    /** The Windows helper that lists apps from its verified driver; absent elsewhere. */
-    readonly listThrough?: HelperBundle;
+    /** Lists apps through the helper, so the driver never runs outside its seal check. */
+    readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   }) => Promise<string>;
+  /** The apps the macOS helper's driver lists, after the helper verifies it (#1241). */
+  readonly helperApps: (
+    bundle: HelperBundle,
+    platform: NodeJS.Platform,
+  ) => Promise<ReadonlyArray<CuaDriverListedApp>>;
   readonly processId: number;
   /** Windows manifests name apps by executable path, so GOAT's own is how they name GOAT. */
   readonly executablePath: string;
@@ -215,7 +221,7 @@ const dependencies: DesktopCuaDriverDependencies = {
     const decoded = nativeImage.createFromBuffer(Buffer.from(image.dataBase64, "base64"));
     return !decoded.isEmpty() && bitmapHasContent(decoded.toBitmap());
   },
-  prepareManifest: async ({ listThrough, ...input }) => {
+  prepareManifest: async (input) => {
     const { join } = await import("node:path");
     return input.scope === "verify"
       ? writeCuaDriverCapabilityManifest(
@@ -231,17 +237,11 @@ const dependencies: DesktopCuaDriverDependencies = {
           environment: cuaDriverListingEnvironment(process.env),
           hostBundleIds: input.hostBundleIds,
           path: join(input.directory, "capability-manifest.yaml"),
-          ...(listThrough
-            ? {
-                listApplications: () =>
-                  listWindowsApps(
-                    spawnHelperProcess(listThrough.executable, input.platform),
-                    listThrough.bundleId,
-                  ),
-              }
-            : {}),
+          ...(input.listApplications ? { listApplications: input.listApplications } : {}),
         });
   },
+  helperApps: (bundle, platform) =>
+    listHelperApplications(spawnHelperProcess(bundle.executable, platform), bundle.bundleId),
   processId: process.pid,
   executablePath: process.execPath,
 };
@@ -489,10 +489,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         hostBundleIds: hostBundleIds(engine),
         directory: environment.path.join(environment.stateDir, "cua-driver"),
         platform: environment.platform,
-        // The Windows helper runs the driver only after checking its pinned hashes, so the
-        // listing goes through it too.
-        ...(engine.kind === "helper" && environment.platform === "win32"
-          ? { listThrough: engine.bundle }
+        // The helper verifies its driver before running it, so it lists the apps too; running
+        // the driver here would execute it unchecked, under GOAT's identity (#1241).
+        ...(engine.kind === "helper" &&
+        (environment.platform === "darwin" || environment.platform === "win32")
+          ? { listApplications: () => native.helperApps(engine.bundle, environment.platform) }
           : {}),
       }),
     );

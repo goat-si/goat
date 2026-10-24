@@ -305,7 +305,12 @@ namespace Goat.ComputerUse
                     ((Dictionary<string, object>)result).TryGetValue("structuredContent", out structured) &&
                     structured is Dictionary<string, object> &&
                     ((Dictionary<string, object>)structured).TryGetValue("apps", out apps) && apps is object[])
-                    return apps;
+                {
+                    // The same answer as the macOS helper's listApps.
+                    var listed = new Dictionary<string, object>();
+                    listed["apps"] = apps;
+                    return listed;
+                }
                 throw new HelperException("list_failed", "Cua Driver could not list apps.");
             }
         }

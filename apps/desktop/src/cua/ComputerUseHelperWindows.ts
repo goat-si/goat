@@ -59,26 +59,6 @@ export function windowsReadinessFailure(readiness: WindowsReadiness): string | u
   return undefined;
 }
 
-/** One app from the driver's list_apps, as GOAT's capability manifest reads it. */
-const ListedApp = Schema.Struct({
-  bundle_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  name: Schema.optionalKey(Schema.NullOr(Schema.String)),
-});
-const decodeApps = Schema.decodeUnknownSync(Schema.Array(ListedApp));
-
-/**
- * The driver's app list, read by a fresh helper from the files it pinned and verified. The
- * desktop never runs the helper's driver itself, so a replaced driver never runs at all.
- */
-export async function listWindowsApps(process: HelperProcess, expectedBundleId: string) {
-  const session = await openHelperSession(process, expectedBundleId);
-  try {
-    return decodeApps(await session.request("listApps"));
-  } finally {
-    await session.close();
-  }
-}
-
 /** Readiness from a fresh helper, in the grant shape the desktop host checks. */
 export async function probeWindowsReadiness(
   process: HelperProcess,
