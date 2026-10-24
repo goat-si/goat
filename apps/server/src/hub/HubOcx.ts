@@ -15,7 +15,8 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
-import { prepareScript, resolveOcx } from "../opencodex/childPrepare.ts";
+import { type OcxLayout, prepareScript, resolveOcx } from "../opencodex/childPrepare.ts";
+import { SAFE_LINK_ID } from "./opencodexSyncPlan.ts";
 
 const MAX_BYTES = 256 * 1024;
 const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
@@ -34,6 +35,9 @@ const Invite = Schema.Struct({
   managementUrl: Schema.String,
 });
 const decodeInvite = Schema.decodeUnknownOption(Schema.fromJsonString(Invite));
+
+/** `guardedSyncScript` exit codes besides ocx's own. */
+export const SYNC_EXIT = { notConnected: 90, connectionChanged: 91 } as const;
 
 export interface OcxOutput {
   readonly code: number;
@@ -97,6 +101,15 @@ export class HubOcx extends Context.Service<
       version: string,
       timeoutMs: number,
     ) => Effect.Effect<OcxOutput, HubOcxError>;
+    /**
+     * `ocx sync` on a Remote Link Child, only while it is connected over `linkId`. Stdout is
+     * what ocx printed; the code is ocx's own or one of `SYNC_EXIT`.
+     */
+    readonly syncDevice: (
+      alias: string,
+      options: { readonly linkId: string; readonly restartCodex: boolean },
+      timeoutMs: number,
+    ) => Effect.Effect<OcxOutput, HubOcxError>;
     /** False when `ssh -G` shows a jump chain or proxy command, or cannot resolve the alias. */
     readonly directAlias: (alias: string) => Effect.Effect<boolean>;
     /** Running turns on the device, subagents included; undefined when it cannot be read. */
@@ -146,6 +159,33 @@ export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) 
 };
 
 const platformScript = "uname -s 2>/dev/null\nprintf '\\n__goat_ocx_exit=%s\\n' \"$?\"\n";
+
+/**
+ * `ocx sync` falls back to the machine's own providers once it is no longer connected, and it
+ * cannot be told which link to expect (lidge-jun/opencodex#7694). So the script reads
+ * `ocx connect status --json` right before the sync and refuses unless it is connected over this
+ * link, then reads it again so a connection that moved during the run is never reported synced.
+ * OpenCodex prints that status as two-space JSON, which the anchored patterns rely on.
+ */
+export const guardedSyncScript = (linkId: string, restartCodex: boolean, layout?: OcxLayout) => {
+  if (!SAFE_LINK_ID.test(linkId)) throw new TypeError("Unsafe link id.");
+  return [
+    ...resolveOcx(layout),
+    "if [ -z \"$goat_ocx\" ]; then printf '\\n__goat_ocx_exit=127\\n'; exit 0; fi",
+    "goat_linked() {",
+    '  goat_status=$("$goat_ocx" connect status --json </dev/null 2>/dev/null) || return 1',
+    '  printf \'%s\\n\' "$goat_status" | grep -q \'^  "state": "connected",\\{0,1\\}$\' || return 1',
+    '  printf \'%s\\n\' "$goat_status" | grep -q \'^  "transport": "link",\\{0,1\\}$\' || return 1',
+    `  printf '%s\\n' "$goat_status" | grep -q '^    "linkId": "${linkId}",\\{0,1\\}$'`,
+    "}",
+    `if ! goat_linked; then printf '\\n__goat_ocx_exit=${SYNC_EXIT.notConnected}\\n'; exit 0; fi`,
+    `goat_out=$("$goat_ocx" sync${restartCodex ? " --restart-codex" : ""} </dev/null 2>/dev/null)`,
+    "goat_code=$?",
+    `if ! goat_linked; then printf '\\n__goat_ocx_exit=${SYNC_EXIT.connectionChanged}\\n'; exit 0; fi`,
+    'printf \'%s\\n__goat_ocx_exit=%s\\n\' "$goat_out" "$goat_code"',
+    "",
+  ].join("\n");
+};
 
 export const parseDeviceOutput = (stdout: string): OcxOutput | undefined => {
   const match = EXIT.exec(stdout);
@@ -261,6 +301,8 @@ const make = Effect.gen(function* () {
     device: (alias, args, timeoutMs) => runDevice(alias, deviceScript(args), timeoutMs),
     prepareDevice: (alias, version, timeoutMs) =>
       runDevice(alias, prepareScript(version), timeoutMs),
+    syncDevice: (alias, options, timeoutMs) =>
+      runDevice(alias, guardedSyncScript(options.linkId, options.restartCodex), timeoutMs),
     devicePlatform: Effect.fn("HubOcx.devicePlatform")(
       function* (alias) {
         const result = yield* dispatch.runHostScript({

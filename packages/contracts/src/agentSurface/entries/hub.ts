@@ -78,4 +78,24 @@ export const hubEntries = {
     reconcile: "hub.device_verify",
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
+  "hub.opencodex_sync": entry({
+    resource: "hub",
+    verb: "opencodex_sync",
+    name: "goat_hub_opencodex_sync",
+    toolkit: "hostStatus",
+    summary: "Sync OpenCodex models into Codex on this machine and its Children.",
+    description:
+      "Run ocx sync on this machine, then on each Remote Link Child of its OpenCodex Home, so Codex lists the current models. dryRun returns the per-machine plan without running anything. goat_host_status shows the sync that followed the last managed update.",
+    guide:
+      "Uses the managed OpenCodex update's busy rule: running top-level and subagent turns, plus admitted work on this machine; activity that cannot be read counts as busy. This machine adds --restart-codex only when idle, judged again after it stops new turns; when busy it writes the catalog without restarting Codex, which keeps its old list until it restarts or a later sync runs idle. A busy Child is skipped, because a Child's sync can restart its OpenCodex runtime. A Child runs only as a connected Remote Link Child of this Home with a matching link id; on the device GOAT checks ocx connect status --json just before ocx sync and again after it, and reports connection-changed if the connection moved during the run. When the Home's link record for a Child is down, the Home runs ocx link reconnect once and syncs that Child only if the record comes back connected. A Child that is not linked to this Home is skipped; repair it with goat_hub_device_repair. While a managed update window is open, every machine is skipped with reason updating. Needs hub.manage; in a GOAT thread with goatclaw enabled, each Child also needs hub.manage and threads.remote for its host, and a Child outside the profile's hosts is skipped as not-permitted. dryRun still passes the write gate. Each machine reports synced, failed or skipped with a reason code; the report streams to GOAT clients while it runs.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "supported",
+    humanSteps: [],
+    idempotencyReason:
+      "A repeated sync converges on the same catalog and Codex settings from the current providers; a retry costs another fetch and, on idle machines, another Codex restart. Syncs never overlap: a second call waits for the first.",
+    annotations: { idempotentHint: true, openWorldHint: true },
+  }),
 } as const;

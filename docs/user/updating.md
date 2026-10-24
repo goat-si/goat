@@ -50,8 +50,10 @@ it to see every machine. A server still restarting finishes on its own, and the
 button keeps showing it after the desktop app restarts.
 
 Managed OpenCodex updates run on their own on a Hub, Home first and then each
-Child, while their machines are idle. **Update** on the Runtimes tab asks for that
-check now; a release that is still rolling out waits its turn.
+Child, while their machines are idle, and sync each machine's models into Codex
+right after it moves. **Update** on the Runtimes tab asks for that check now; a
+release that is still rolling out waits its turn. **Sync OpenCodex** below it
+syncs models without updating.
 
 If a desktop app restarts on its old version, GOAT tells you the update did
 not apply. It does not install that version again on its own, even when another
