@@ -10,6 +10,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { grant } from "./ComputerUseLeases.projection.testkit.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const serviceLayer = ComputerUseLeases.layer.pipe(
@@ -57,6 +58,24 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
 });
 
 describe("server computer-use call reservations", () => {
+  it.effect(
+    "refuses a call that takes the screen once another thread holds a grant, whatever the proxy has heard",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        // Disjoint grants: both admitted, so the screen is shared.
+        yield* grant(f.a, "grant:a", ["app.a"]);
+        yield* grant(f.b, "grant:b", ["app.b"]);
+        const window = { pid: 42, window_id: 7, x: 1, y: 1 };
+        assert.deepEqual(
+          yield* f.reserve(f.a, { ...window, delivery_mode: "foreground" }, "click"),
+          { status: "refused", detail: "screen_shared" },
+        );
+        assert.equal((yield* f.reserve(f.a, window, "click")).status, "admitted");
+        yield* f.close(f.a);
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
   it.effect(
     "refuses competing window mutations and desktop mutations in both admission orders",
     () =>

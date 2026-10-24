@@ -21,11 +21,16 @@ export const DESKTOP_CAPTURE_OFF =
 export const SCREEN_SHARED =
   "Another thread is using other apps on this screen, so a script, a batch or a call that brings a window forward, moves the pointer or sends foreground input did not run: it would take the screen from that thread. Make single calls that act on this window in the background or through an element, or end your turn and ask the person.";
 
-/** Why a call another thread's window reservation, or none at all, kept from running (#1462). */
-export const reservationRefusal = (holder: string | undefined) =>
-  holder === undefined
-    ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
-    : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
+/**
+ * Why the server would not reserve a call (#1462): another thread's window reservation, a screen
+ * another thread shares, or no reservation at all.
+ */
+export const reservationRefusal = (detail: string, holder: string | undefined) =>
+  detail === "screen_shared"
+    ? SCREEN_SHARED
+    : holder === undefined
+      ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
+      : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,

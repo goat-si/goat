@@ -47,7 +47,7 @@ import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetry
 import * as ServerSettings from "../serverSettings.ts";
 import { callResource, makeCallReservations } from "./ComputerUseCallReservations.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
-import { approvedApps } from "./ComputerUseScope.ts";
+import { approvedApps, takesScreen } from "./ComputerUseScope.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
@@ -846,6 +846,10 @@ const make = Effect.gen(function* () {
             return { status: "refused", detail: "replaced" } as const;
           if (DateTime.toEpochMillis(current.expiresAt) <= now || state.wakeAt <= now)
             return { status: "refused", detail: "expired" } as const;
+          // Judged here, under the admission lock, with the grants as they are now: the proxy
+          // hears of another thread's grant through its lease stream, which can lag.
+          if (state.shared === true && takesScreen(call.name, call.args))
+            return { status: "refused", detail: "screen_shared" } as const;
           return reservations.reserve(threadId, call);
         }),
       );

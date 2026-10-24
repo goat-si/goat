@@ -919,9 +919,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (decision.status !== "admitted") {
         const detail = decision.status === "refused" ? decision.detail : "unauthorized";
         const holder = decision.status === "refused" ? decision.holderThreadId : undefined;
-        return yield* options.output(
-          refusal(id, message.method, detail, reservationRefusal(holder), undefined, holder),
-        );
+        const why = reservationRefusal(detail, holder);
+        return yield* options.output(refusal(id, message.method, detail, why, undefined, holder));
       }
       reservationId = decision.reservationId ?? undefined;
       if (!stillCurrent()) {
