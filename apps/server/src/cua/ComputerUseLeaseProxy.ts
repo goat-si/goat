@@ -463,8 +463,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                 !outstanding.has(key)
               )
                 return;
-              outstanding.delete(key);
               yield* release(request);
+              const latest = outstanding.get(key);
+              if (
+                finished !== undefined ||
+                paused !== undefined ||
+                idle ||
+                running !== current ||
+                latest === undefined
+              )
+                return;
+              outstanding.delete(key);
+              if (latest.cancelled) return;
               if (verdict === "other") {
                 yield* options.output(
                   refusal(

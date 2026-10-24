@@ -6,6 +6,46 @@ import * as TestClock from "effect/testing/TestClock";
 import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("proxy execution ownership", () => {
+  it.effect(
+    "suppresses a reply cancelled during asynchronous reply processing while releasing its ticket",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({
+          overlay: (command) =>
+            command.op === "show" && command.phase === "resting"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+              : Effect.void,
+        });
+        yield* h.push(active());
+        yield* h.send(call(7, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* h.nextToDriver;
+        yield* h.nextReservation;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 7,
+            result: { content: [{ type: "text", text: "clicked" }] },
+          }),
+        );
+        yield* Deferred.await(entered);
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: 7 },
+          }),
+        );
+        yield* h.nextToDriver;
+        yield* Deferred.succeed(gate, undefined);
+        assert.equal((yield* h.nextReservation).action, "release");
+        yield* h.send(call(8, "get_guide"));
+        yield* h.nextToDriver;
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 8, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 8);
+      }),
+  );
   it.effect("returns the holding thread without dispatching a denied mutation", () =>
     Effect.gen(function* () {
       const h = yield* harness({
