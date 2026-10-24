@@ -38,6 +38,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -905,22 +906,23 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       message?.method === "tools/call" &&
       postsInput(typeof message.params?.name === "string" ? message.params.name : "");
     if (posts) yield* inputStarted(JSON.stringify(id));
-    // Checked last, with no wait before the send: another thread's grant that arrived during any
-    // step above still refuses a call that would take the screen from it.
-    if (
+    // Checked last, in one step with the send: the scheduler must not run the update that makes
+    // the screen shared between the check and the write, or a foreground call would go out anyway.
+    const takes =
       isRequest &&
       message?.method === "tools/call" &&
-      shared &&
-      takesScreen(message.params?.name, message.params?.arguments)
-    ) {
+      takesScreen(message.params?.name, message.params?.arguments);
+    const refused = yield* Effect.suspend(() =>
+      takes && shared ? Effect.succeed(true) : current.driver.send(line).pipe(Effect.as(false)),
+    ).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));
+    if (refused) {
       const key = JSON.stringify(id);
       outstanding.delete(key);
       if (posts) yield* inputEnded(key);
       // Drawn as acting above; it never reaches the driver, so no reply will settle it.
       yield* drawOverlay({ type: "reply", id: key, failed: true });
-      return yield* options.output(refusal(id, message.method, "screen_shared", SCREEN_SHARED));
+      return yield* options.output(refusal(id, message?.method, "screen_shared", SCREEN_SHARED));
     }
-    yield* current.driver.send(line);
   });
 
   yield* options.input.pipe(Stream.runForEach(handle));
