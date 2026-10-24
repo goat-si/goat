@@ -610,12 +610,42 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 return yield* protocol(
                   "A Cursor Cloud run is already active or awaiting reconciliation.",
                 );
-              if (input.message.attachments.length > 0)
-                return yield* protocol("Cursor Cloud currently accepts text-only messages.");
-              if (!input.cloudSource || !input.commitCloudTask)
+              const commitCloudTask = input.commitCloudTask;
+              if (!input.cloudSource || !commitCloudTask)
                 return yield* protocol(
                   "Cloud source or persistence was not resolved by the shared base.",
                 );
+              // These refusals come before any Cursor request. Record the base's submitting intent
+              // as failed, or shared finalization reports an unknown task that may still be running.
+              const refuse = (detail: string, guidance = "") =>
+                Effect.gen(function* () {
+                  const intent = input.providerThread.cloudTask;
+                  if (intent?.status === "submitting") {
+                    const now = yield* DateTime.now;
+                    yield* commitCloudTask(
+                      {
+                        ...intent,
+                        status: "failed",
+                        error: detail,
+                        summary: `${detail}${guidance} Nothing was sent to Cursor Cloud.`,
+                        updatedAt: DateTime.formatIso(now),
+                      },
+                      {
+                        nativeThreadRef: input.providerThread.nativeThreadRef,
+                        nativeConversationHeadRef: input.providerThread.nativeConversationHeadRef,
+                      },
+                    ).pipe(
+                      Effect.catch(() =>
+                        Effect.logWarning("Cursor Cloud refusal could not be persisted", {
+                          runId: input.runId,
+                        }),
+                      ),
+                    );
+                  }
+                  return yield* protocol(detail);
+                });
+              if (input.message.attachments.length > 0)
+                return yield* refuse("Cursor Cloud currently accepts text-only messages.");
               const sandbox = input.runtimePolicy.sandboxPolicy;
               if (
                 input.runtimePolicy.runtimeMode !== "full-access" ||
@@ -627,7 +657,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                     !("type" in sandbox) ||
                     sandbox.type !== "dangerFullAccess"))
               ) {
-                return yield* protocol(
+                return yield* refuse(
                   "Cursor Cloud supports full access only; GOAT sandbox and approval overrides cannot be applied in the cloud.",
                 );
               }
@@ -642,12 +672,16 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 !/^[a-f0-9]{40,64}$/i.test(source.sha) ||
                 repository(source.repository) === undefined
               ) {
-                return yield* protocol(
+                return yield* refuse(
                   "Cursor Cloud requires a published repository and remote tip SHA.",
                 );
               }
               const sha = source.sha;
-              const apiKey = yield* key;
+              const apiKey = yield* key.pipe(
+                Effect.catch((failure) =>
+                  refuse(failure.detail, " Sign in to Cursor, then send the message again."),
+                ),
+              );
               const agentId = input.providerThread.nativeThreadRef?.nativeId;
               const agent = yield* Effect.acquireRelease(
                 call(agentId ? "resume" : "create", () =>
@@ -778,6 +812,44 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 yield* input.commitCloudTask(task);
               }
               const runId = task.taskId;
+              // startTurn recorded this run's refusal before any Cursor request (the base wrote
+              // this run's submitting intent first), and the run ended before it was finalized.
+              // Settle it as recorded; nothing reached Cursor, so there is nothing to reconcile.
+              if (task.status === "failed" && task.acceptedAppRunId !== input.runId) {
+                const timestamp = yield* DateTime.now;
+                const refused: OrchestrationV2ProviderTurn = {
+                  id: ids.derive.providerTurn({
+                    driver: DRIVER,
+                    nativeTurnId: `${instanceId}:refused:${input.runId}`,
+                  }),
+                  providerThreadId: input.providerThread.id,
+                  nodeId: input.rootNodeId,
+                  runAttemptId: input.attemptId,
+                  nativeTurnRef: null,
+                  ordinal: PositiveInt.make(input.providerTurnOrdinal),
+                  status: "failed",
+                  startedAt: timestamp,
+                  completedAt: timestamp,
+                };
+                yield* emit({
+                  type: "provider_turn.updated",
+                  driver: DRIVER,
+                  threadId: input.threadId,
+                  providerTurn: refused,
+                });
+                yield* emit({
+                  type: "turn.terminal",
+                  driver: DRIVER,
+                  providerThreadId: input.providerThread.id,
+                  providerTurnId: refused.id,
+                  runOrdinal: PositiveInt.make(input.runOrdinal),
+                  failureItemOrdinal: PositiveInt.make(input.providerTurnOrdinal * 100 + 2),
+                  status: "failed",
+                  failure: makeProviderFailure({ class: "provider_error" }),
+                  threadDisposition: "reusable",
+                });
+                return;
+              }
               if (
                 !agentId ||
                 task.status === "submitting" ||
