@@ -13,6 +13,10 @@ type Frameable = Pick<HelperSession, "canFrame" | "frames" | "onFrame">;
  * Requests apply in the order the publisher hands them over. Their seq is the server's and starts
  * again when another server attaches, so it is never compared; the helper gets this follower's
  * own increasing framesId, and its frames go back under the seq of the request in force.
+ *
+ * A new request goes to the helper at once, never behind an earlier one's answer: the helper
+ * reads requests in order, so a Stop written after a capture overrides it whenever either is
+ * answered, and frames of the replaced request are dropped from the moment it is replaced.
  */
 export function makeFrameFollower(deps: {
   readonly publish: (frame: DesktopCuaFrame) => void;
@@ -21,14 +25,18 @@ export function makeFrameFollower(deps: {
 }) {
   let request: DesktopCuaFrames = { version: 1, type: "cuaFrames", seq: 0, targets: [] };
   let session: Frameable | undefined;
-  /** The session and request the helper last accepted. */
-  let sent: { readonly session: Frameable; readonly request: DesktopCuaFrames } | undefined;
-  /** The framesId of the request the helper is asked for now, and that request's server seq. */
+  /** The session and request last written to the helper, answered or not. */
+  let written: { readonly session: Frameable; readonly request: DesktopCuaFrames } | undefined;
+  /**
+   * The session that may be capturing: it was asked for a window, and no Stop it accepted
+   * since. A request with no answer may still have started capturing.
+   */
+  let capturing: Frameable | undefined;
+  /** The framesId of the request whose frames pass, and that request's server seq. */
   let inForce: { readonly framesId: number; readonly seq: number } | undefined;
   let lastFramesId = 0;
   let unsubscribe: (() => void) | undefined;
   let retryPending = false;
-  let chain = Promise.resolve();
 
   const refuse = (reason: PreviewSessionNoPicture) => {
     for (const target of request.targets)
@@ -55,73 +63,68 @@ export function makeFrameFollower(deps: {
             mime: "image/jpeg",
             data: frame.data,
           }
-        : {
-            version: 1,
-            type: "cuaFrameUnavailable",
-            seq,
-            key: frame.key,
-            reason: frame.reason,
-          },
+        : { version: 1, type: "cuaFrameUnavailable", seq, key: frame.key, reason: frame.reason },
     );
   };
-  const reconcile = async () => {
+  const retry = () => {
+    if (retryPending) return;
+    retryPending = true;
+    deps.retryLater(() => {
+      retryPending = false;
+      written = undefined;
+      void reconcile();
+    });
+  };
+  const reconcile = async (): Promise<void> => {
     const current = session;
     if (current === undefined) return;
     const wanted = request;
-    if (sent?.session === current && sent.request === wanted) return;
-    // A helper starts capturing nothing; there is nothing to stop before the first request.
-    if (sent?.session !== current && wanted.targets.length === 0) {
-      sent = { session: current, request: wanted };
-      return;
-    }
+    if (written?.session === current && written.request === wanted) return;
+    written = { session: current, request: wanted };
+    // Nothing to stop on a helper that was never asked to capture.
+    if (wanted.targets.length === 0 && capturing !== current) return;
     if (!current.canFrame) {
       // An older helper generation: it would answer an unknown method (#1338's lesson).
-      sent = { session: current, request: wanted };
       refuse("unsupported");
       return;
     }
     const framesId = ++lastFramesId;
-    // In force as it is sent, like the session's own filter: earlier frames drop from here on.
-    inForce = { framesId, seq: wanted.seq };
+    inForce = wanted.targets.length === 0 ? undefined : { framesId, seq: wanted.seq };
+    if (wanted.targets.length > 0) capturing = current;
     try {
       await current.frames(framesId, wanted.targets);
-      sent = { session: current, request: wanted };
+      if (wanted.targets.length === 0 && capturing === current && request === wanted)
+        capturing = undefined;
     } catch {
+      // Only the request still wanted matters; a newer one was already written after it.
+      if (session !== current || request !== wanted) return;
       refuse("captureFailed");
-      if (!retryPending) {
-        retryPending = true;
-        deps.retryLater(() => {
-          retryPending = false;
-          void settle();
-        });
-      }
+      retry();
     }
-  };
-  // One change at a time, in order.
-  const settle = () => {
-    chain = chain.then(reconcile);
-    return chain;
   };
 
   return {
     setRequest: (next: DesktopCuaFrames) => {
       request = next;
-      return settle();
+      // The replaced request's frames stop here, whatever the helper has answered.
+      inForce = undefined;
+      return reconcile();
     },
     /** The helper session of a generation that just started. */
     attach: (next: Frameable) => {
-      if (session === next) return chain;
+      if (session === next) return Promise.resolve();
       session = next;
       unsubscribe?.();
       unsubscribe = next.onFrame(onFrame);
-      return settle();
+      return reconcile();
     },
     /** The generation ended, and its captures with it. */
     detach: () => {
       unsubscribe?.();
       unsubscribe = undefined;
       session = undefined;
-      sent = undefined;
+      written = undefined;
+      capturing = undefined;
       inForce = undefined;
     },
   };
