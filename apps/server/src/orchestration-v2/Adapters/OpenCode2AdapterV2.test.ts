@@ -56,6 +56,7 @@ import {
   OPENCODE_2_STILL_STOPPING,
   OPENCODE_PROVIDER,
   goatMcpServerName,
+  openCode2DurableVersion,
 } from "@goat/provider-opencode/testing";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { noMcpInstructions, openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
@@ -79,15 +80,19 @@ const event = (
   type: string,
   data: Record<string, unknown>,
   label?: string,
-): ProviderReplayEntry => ({
-  type: "emit_inbound",
-  frame: {
-    type: "sdk.event",
-    event: { id: `evt_${type.replaceAll(".", "")}0000`, created: 1, type, data, ...durable },
-  },
-  ...(label === undefined ? {} : { label }),
-});
-const durable = { durable: { aggregateID: SESSION, seq: 1, version: 1 } };
+): ProviderReplayEntry => {
+  const version = openCode2DurableVersion(type);
+  const durable =
+    version === undefined ? {} : { durable: { aggregateID: SESSION, seq: 1, version } };
+  return {
+    type: "emit_inbound",
+    frame: {
+      type: "sdk.event",
+      event: { id: `evt_${type.replaceAll(".", "")}0000`, created: 1, type, data, ...durable },
+    },
+    ...(label === undefined ? {} : { label }),
+  };
+};
 
 const mcpRules = [
   { action: "t3-code-*", resource: "*", effect: "deny" },
@@ -1116,26 +1121,15 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  const returnedRunning = (id: string): ProviderReplayEntry => ({
-    type: "emit_inbound",
-    frame: {
-      type: "sdk.event",
-      event: {
-        id: `evt_toolsuccess_${id}`,
-        created: 1,
-        type: "session.tool.success",
-        data: {
-          sessionID: SESSION,
-          assistantMessageID: "msg_assistant",
-          id,
-          content: [{ type: "text", text: "The subagent is working in the background." }],
-          metadata: { sessionID: CHILD, status: "running" },
-          executed: true,
-        },
-        durable: { aggregateID: SESSION, seq: 1, version: 2 },
-      },
-    },
-  });
+  const returnedRunning = (id: string) =>
+    event("session.tool.success", {
+      sessionID: SESSION,
+      assistantMessageID: "msg_assistant",
+      id,
+      content: [{ type: "text", text: "The subagent is working in the background." }],
+      metadata: { sessionID: CHILD, status: "running" },
+      executed: true,
+    });
   const callAgain = (input: Record<string, unknown>): ReadonlyArray<ProviderReplayEntry> => {
     const tool = { sessionID: SESSION, assistantMessageID: "msg_assistant", id: "call-again" };
     return [
@@ -4845,6 +4839,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       const last = items.at(-1);
       assert.equal(last?.type === "dynamic_tool" ? last.toolName : null, name);
       assert.deepEqual(last?.type === "dynamic_tool" ? last.input : null, input);
+      assert.equal(last?.type === "dynamic_tool" ? last.output : null, "Reviewed");
     }).pipe(Effect.scoped),
   );
 

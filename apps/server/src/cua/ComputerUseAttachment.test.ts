@@ -38,13 +38,31 @@ const fakeLeases = (input: {
   readonly grant?: ComputerUseLeases.ComputerUseLease;
   readonly proxy?: typeof proxy | undefined;
   readonly detection?: ComputerUseLeases.ComputerUseDetection;
+  /** Another thread holding the screen for unattended work. */
+  readonly holder?: ComputerUseLeases.ComputerUseHolder;
+  /** The screen was claimed between the holder check and the claim. */
+  readonly claimLost?: boolean;
 }) => {
   const minted: Array<Option.Option<ComputerUseLeases.ComputerUseLease>> = [];
+  /** Every control on every app asked for, by whether it was for unattended work. */
+  const everyApp: Array<boolean> = [];
   const service = ComputerUseLeases.ComputerUseLeases.of({
     active: () => Effect.succeed(Option.fromNullishOr(input.grant)),
-    holder: () => Effect.die("unused"),
+    holder: () => Effect.succeed(Option.fromNullishOr(input.holder)),
     channelOrigin: () => Effect.die("unused"),
     state: () => Effect.die("unused"),
+    everyAppControl: (threadId, unattended) =>
+      Effect.sync(() => {
+        everyApp.push(unattended);
+        return input.claimLost === true
+          ? Option.none()
+          : Option.some({
+              controlId: "control:every-app",
+              threadId,
+              expiresAt: DateTime.makeUnsafe("2026-10-21T13:00:00.000Z"),
+            });
+      }),
+    serializeAdmission: (effect) => effect,
     control: (threadId, grant) =>
       Effect.sync(() => {
         minted.push(grant);
@@ -59,20 +77,23 @@ const fakeLeases = (input: {
       }),
     controlState: () => Effect.die("unused"),
     stop: () => Effect.die("unused"),
+    setTarget: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
     turnEnded: () => Effect.die("unused"),
     settle: Effect.die("unused"),
     disable: Effect.die("unused"),
     grants: Effect.die("unused"),
     pause: () => Effect.die("unused"),
-    detection: Effect.succeed(input.detection ?? { humanInput: true, privateMode: true }),
+    detection: Effect.succeed(
+      input.detection ?? { humanInput: true, privateMode: true, frames: false },
+    ),
     resume: Effect.die("unused"),
     sessions: Effect.die("unused"),
     subscribe: Effect.die("unused"),
     changed: Effect.die("unused"),
     proxy: "proxy" in input ? input.proxy : proxy,
   });
-  return { leases: Option.some(service), minted };
+  return { leases: Option.some(service), minted, everyApp };
 };
 const interactiveControl = {
   controlId: "control:interactive",
@@ -117,6 +138,9 @@ const input = (
   leases: fakeLeases({}).leases,
   ...overrides,
 });
+
+const allowFullAccess = (allow: boolean) =>
+  ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: allow });
 
 const decide = (
   driver: ReturnType<typeof fakeDriver>,
@@ -177,6 +201,79 @@ describe("computerUseAttachment", () => {
   );
 
   it.effect.each([
+    { label: "interactive", origin: interactive, unattendedWork: false },
+    { label: "unattended", origin: unattended, unattendedWork: true },
+  ])(
+    "gives a $label full access turn every app without a grant when the host allows it",
+    ({ origin, unattendedWork }) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const leases = fakeLeases({});
+        const attached = yield* decide(driver, {
+          origin,
+          runtimeMode: "full-access",
+          leases: leases.leases,
+        }).pipe(Effect.provide(allowFullAccess(true)));
+        assert.equal(
+          attached._tag === "proxied" ? attached.control.controlId : attached._tag,
+          "control:every-app",
+        );
+        assert.deepEqual(leases.everyApp, [unattendedWork]);
+        assert.deepEqual(leases.minted, []);
+      }),
+  );
+
+  it.effect(
+    "keeps asking an unattended turn for a grant unless it runs in full access on a host that allows it",
+    () =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const unattendedTurn = (runtimeMode: "full-access" | "auto", allow: boolean) =>
+          decide(driver, { origin: unattended, runtimeMode, leases: fakeLeases({}).leases }).pipe(
+            Effect.provide(allowFullAccess(allow)),
+          );
+        const needsApproval = {
+          _tag: "none",
+          reason: "needs-approval",
+          blockUserConfig: true,
+        } as const;
+        assert.deepEqual(yield* unattendedTurn("auto", true), needsApproval);
+        assert.deepEqual(yield* unattendedTurn("full-access", false), needsApproval);
+        // An interactive turn outside full access still attaches, limited to the apps it was granted.
+        const leases = fakeLeases({});
+        yield* decide(driver, { runtimeMode: "auto", leases: leases.leases }).pipe(
+          Effect.provide(allowFullAccess(true)),
+        );
+        assert.deepEqual(leases.everyApp, []);
+        assert.deepEqual(leases.minted, [Option.none()]);
+      }),
+  );
+
+  it.effect("refuses full access unattended work while another thread holds the screen", () =>
+    Effect.gen(function* () {
+      const driver = fakeDriver({ enabled: true, running: true });
+      const held = { _tag: "none", reason: "held", blockUserConfig: true } as const;
+      const turn = (
+        leases: ReturnType<typeof fakeLeases>,
+        origin: ComputerUse.ComputerUseAttachmentInput["origin"] = unattended,
+      ) =>
+        decide(driver, { origin, runtimeMode: "full-access", leases: leases.leases }).pipe(
+          Effect.provide(allowFullAccess(true)),
+        );
+      const holder = { threadId: ThreadId.make("thread-bot"), expiresAt: lease.expiresAt };
+      const busy = fakeLeases({ holder });
+      assert.deepEqual(yield* turn(busy), held);
+      // Checked before the driver starts, so a held screen never starts it.
+      assert.equal(driver.calls.acquire, 0);
+      assert.deepEqual(busy.everyApp, []);
+      // A thread that lost the claim to another between the check and the claim holds nothing.
+      assert.deepEqual(yield* turn(fakeLeases({ claimLost: true })), held);
+      // A person directing a thread can still use the screen beside unattended work.
+      assert.equal((yield* turn(fakeLeases({ holder }), interactive))._tag, "proxied");
+    }),
+  );
+
+  it.effect.each([
     { label: "interactive", origin: undefined, grant: undefined },
     { label: "leased unattended", origin: unattended, grant: lease },
   ])(
@@ -208,8 +305,8 @@ describe("computerUseAttachment", () => {
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
         for (const detection of [
-          { humanInput: false, privateMode: true },
-          { humanInput: true, privateMode: false },
+          { humanInput: false, privateMode: true, frames: false },
+          { humanInput: true, privateMode: false, frames: false },
         ])
           assert.deepEqual(
             yield* decide(driver, {
@@ -221,7 +318,9 @@ describe("computerUseAttachment", () => {
         // A person directing the thread can watch and stop it, so interactive turns still attach.
         assert.equal(
           (yield* decide(driver, {
-            leases: fakeLeases({ detection: { humanInput: false, privateMode: false } }).leases,
+            leases: fakeLeases({
+              detection: { humanInput: false, privateMode: false, frames: false },
+            }).leases,
           }))._tag,
           "proxied",
         );

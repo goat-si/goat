@@ -50,6 +50,14 @@ Windows, a window's screenshot can still include other windows that cover it.
 an action sequence. The agent gets the screen back on its next turn, within the
 apps you approved.
 
+To skip approvals on a computer you trust, turn on **Full access without
+approval** under **Computer use**. Threads in full access mode then use every
+app without asking, including GOAT Bot, scheduled tasks and other work that
+runs on its own. Threads in other modes still ask, and a thread that leaves full
+access stops at once. Work that runs on its own still uses the screen one thread
+at a time. Stop, **Stop all** and turning the setting or computer use off still
+end their computer use.
+
 ## Watching agents
 
 While agents use the built-in browser or this computer, GOAT shows them in a
@@ -130,9 +138,10 @@ A headless server with Xvfb also works. Without AT-SPI (the `at-spi2-core`
 package) and a D-Bus session, agents can take screenshots and use the mouse and
 keyboard but cannot read app controls.
 Window screenshots on Linux need a desktop that composites its windows (a bare
-Xvfb needs a compositor such as xcompmgr); in a Wayland session other than
-Hyprland, agents read app controls but get no window screenshots. A window that
-has just opened or is still redrawing can briefly show part of the app behind it.
+Xvfb needs a compositor such as xcompmgr). In a Wayland session without
+XWayland, other than Hyprland, agents read app controls but get no window
+screenshots. Before each screenshot the app is asked to redraw its window, and
+an app that does not redraw all of it promptly gets no screenshot that time.
 
 ## Other computers
 

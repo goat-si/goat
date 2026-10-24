@@ -348,7 +348,7 @@ it.effect(
 );
 
 it.effect.each(["general", "implementation", "research", "test", "design"] as const)(
-  "refuses a %s task",
+  "refuses a %s task and names the role='review' argument for goat_task_create",
   (role) =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture(false, role);
@@ -362,7 +362,8 @@ it.effect.each(["general", "implementation", "research", "test", "design"] as co
         })
         .pipe(Effect.flip);
       assert.equal(refusal._tag, "OrchestratorReviewLedgerError");
-      assert.include(refusal.message, "role review");
+      assert.include(refusal.message, "goat_task_create");
+      assert.include(refusal.message, "role='review'");
     }).pipe(Effect.provide(layerTest)),
 );
 

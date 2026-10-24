@@ -11,6 +11,8 @@ import {
   makeDevelopmentEnvironmentScript,
   makeDevelopmentLauncherScript,
   resolveElectronBinaryPath,
+  resolveMacBundleInfoPlistStrings,
+  resolveMacLauncherIdentity,
   resolveMacLauncherPaths,
   writeDevelopmentLauncherScript,
 } from "./electron-launcher.mjs";
@@ -76,18 +78,18 @@ describe("electron development launcher", () => {
 
   it("keeps the native Electron executable name inside the branded macOS bundle", () => {
     const paths = resolveMacLauncherPaths(
-      "/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app",
-      "T3 Code (Dev)",
+      "/repo/apps/desktop/.electron-runtime/GOAT (Dev).app",
+      "GOAT (Dev)",
     );
 
-    assert.equal(paths.launcherExecutableName, "T3 Code (Dev) Launcher");
+    assert.equal(paths.launcherExecutableName, "GOAT (Dev) Launcher");
     assert.equal(
       paths.launcherBinaryPath,
-      "/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/T3 Code (Dev) Launcher",
+      "/repo/apps/desktop/.electron-runtime/GOAT (Dev).app/Contents/MacOS/GOAT (Dev) Launcher",
     );
     assert.equal(
       paths.runtimeElectronBinaryPath,
-      "/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/Electron",
+      "/repo/apps/desktop/.electron-runtime/GOAT (Dev).app/Contents/MacOS/Electron",
     );
 
     const script = makeDevelopmentLauncherScript({
@@ -98,9 +100,26 @@ describe("electron development launcher", () => {
     });
     assert.include(
       script,
-      "exec '/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/Electron'",
+      "exec '/repo/apps/desktop/.electron-runtime/GOAT (Dev).app/Contents/MacOS/Electron'",
     );
     assert.notInclude(script, "node_modules/electron");
+  });
+
+  // #1284: macOS names the requesting app after CFBundleName in keychain and privacy prompts.
+  it("names the macOS bundle GOAT while keeping its bundle identity", () => {
+    const development = resolveMacLauncherIdentity(true);
+    assert.equal(development.displayName, "GOAT (Dev)");
+    assert.match(development.bundleId, /^com\.t3tools\.t3code\.dev\.[a-z0-9]+$/);
+    assert.deepEqual(development.protocolSchemes, ["goat-dev", "t3code-dev"]);
+    const developmentPlist = resolveMacBundleInfoPlistStrings("GOAT (Dev) Launcher", development);
+    assert.equal(developmentPlist.CFBundleName, "GOAT (Dev)");
+    assert.equal(developmentPlist.CFBundleDisplayName, "GOAT (Dev)");
+    assert.equal(developmentPlist.CFBundleIdentifier, development.bundleId);
+
+    const production = resolveMacLauncherIdentity(false);
+    assert.equal(production.displayName, "GOAT");
+    assert.equal(production.bundleId, "com.t3tools.t3code");
+    assert.equal(resolveMacBundleInfoPlistStrings("Electron", production).CFBundleName, "GOAT");
   });
 
   it("restores execute permissions on an unchanged launcher", () => {

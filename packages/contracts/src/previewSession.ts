@@ -105,6 +105,61 @@ export const PreviewSessionsSnapshot = Schema.Struct({
 });
 export type PreviewSessionsSnapshot = typeof PreviewSessionsSnapshot.Type;
 
+/**
+ * Limits on a desktop session's live picture (#1370): a tile's thumbnail at most 2 frames a
+ * second and 480 px wide (D11, #1327), so nobody receives full-resolution pixels of a window.
+ */
+export const PREVIEW_SESSION_FRAME_LIMITS = {
+  maxWidth: 480,
+  minIntervalMs: 500,
+  /** One JPEG; a larger frame is dropped as captureFailed. */
+  maxBytes: 256 * 1024,
+} as const;
+
+/**
+ * Why a desktop session shows no live picture. windowUnknown: no agent call has named a window
+ * yet. unsupported: this host's helper cannot capture one window by itself. appNotApproved: the
+ * window belongs to an app outside the control's approved apps.
+ */
+export const PreviewSessionNoPicture = Schema.Literals([
+  "screenRecordingNotGranted",
+  "windowUnknown",
+  "windowGone",
+  "appNotApproved",
+  "private",
+  "paused",
+  "stopped",
+  "unsupported",
+  "captureFailed",
+]);
+export type PreviewSessionNoPicture = typeof PreviewSessionNoPicture.Type;
+
+/** A viewer's request for a desktop session's frames: the same knobs a browser thumbnail uses. */
+export const PreviewSessionFramesInput = Schema.Struct({
+  sessionId: TrimmedNonEmptyString,
+  maxWidth: Schema.Int.check(
+    Schema.isBetween({ minimum: 16, maximum: PREVIEW_SESSION_FRAME_LIMITS.maxWidth }),
+  ),
+  frameIntervalMs: Schema.Int.check(
+    Schema.isGreaterThanOrEqualTo(PREVIEW_SESSION_FRAME_LIMITS.minIntervalMs),
+  ),
+});
+export type PreviewSessionFramesInput = typeof PreviewSessionFramesInput.Type;
+
+export const PreviewSessionFrameEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("frame"),
+    seq: Schema.Int,
+    width: Schema.Int,
+    height: Schema.Int,
+    mime: Schema.Literal("image/jpeg"),
+    /** Base64. */
+    data: Schema.String,
+  }),
+  Schema.Struct({ type: Schema.Literal("unavailable"), reason: PreviewSessionNoPicture }),
+]);
+export type PreviewSessionFrameEvent = typeof PreviewSessionFrameEvent.Type;
+
 export const PreviewSessionControlInput = Schema.Struct({
   /** Ignored for stopAll, which acts on every session on the host. */
   sessionId: Schema.optionalKey(TrimmedNonEmptyString),
