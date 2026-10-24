@@ -15,12 +15,8 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import type { NamedWindow } from "./x11WindowPlacement.ts";
-import {
-  LEASE_END_MESSAGES,
-  MAY_HAVE_ACTED,
-  READ_CUT_OFF,
-  runLeaseProxy,
-} from "./ComputerUseLeaseProxy.ts";
+import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { LEASE_END_MESSAGES, MAY_HAVE_ACTED, READ_CUT_OFF } from "./ComputerUseLeaseMessages.ts";
 
 export const CONTROL = "control:one";
 export const call = (id: number | string, name: string, args: object = {}) =>
