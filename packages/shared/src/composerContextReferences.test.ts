@@ -290,6 +290,44 @@ describe("provider projection", () => {
 });
 
 describe("threadContextsOutsideEnvironment", () => {
+  it("allows a referenced SSH thread only for the environment its host was settled for", () => {
+    const environmentId = EnvironmentId.make("desktop");
+    const record = {
+      version: 1 as const,
+      kind: "thread" as const,
+      contextId: ctx("remote"),
+      environmentId: EnvironmentId.make("remote"),
+      threadId: ThreadId.make("remote"),
+      title: "Remote work",
+      label: "Remote work",
+      host: "build-box",
+    };
+    const input = {
+      text: "[Remote](goat-context://v1/thread/remote)",
+      records: [record],
+      environmentId,
+    };
+    // #1406: a saved host alone cannot vouch for a different agent's SSH routing.
+    expect(
+      threadContextsOutsideEnvironment({ ...input, hostRoutingEnvironmentId: environmentId }),
+    ).toEqual([]);
+    for (const hostRoutingEnvironmentId of [undefined, record.environmentId]) {
+      expect(threadContextsOutsideEnvironment({ ...input, hostRoutingEnvironmentId })).toEqual([
+        record,
+      ]);
+    }
+    const { host: _host, ...withoutHost } = record;
+    for (const unrouted of [withoutHost, { ...record, host: "" }, { ...record, host: "  " }]) {
+      expect(
+        threadContextsOutsideEnvironment({
+          ...input,
+          records: [unrouted],
+          hostRoutingEnvironmentId: environmentId,
+        }),
+      ).toEqual([unrouted]);
+    }
+  });
+
   it("returns only referenced foreign threads, ignoring local and removed references", () => {
     const local = {
       version: 1 as const,

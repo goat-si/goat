@@ -40,21 +40,23 @@ import * as ThreadSearchMcpService from "../../ThreadSearchMcpService.ts";
 
 const ThreadOrganizeTool = Tool.make(agentSurfaceRegistry["thread.organize"].name, {
   description: agentSurfaceRegistry["thread.organize"].description,
-  parameters: Schema.Struct({
-    threadId: Schema.optional(ThreadId),
-    action: Schema.Literals([
-      "pin",
-      "unpin",
-      "snooze",
-      "unsnooze",
-      "settle",
-      "unsettle",
-      "archive",
-      "unarchive",
-      "mark_unread",
-    ]),
-    snoozedUntil: Schema.optional(IsoDateTime),
-  }),
+  parameters: withClientRequestId(
+    Schema.Struct({
+      threadId: Schema.optional(ThreadId),
+      action: Schema.Literals([
+        "pin",
+        "unpin",
+        "snooze",
+        "unsnooze",
+        "settle",
+        "unsettle",
+        "archive",
+        "unarchive",
+        "mark_unread",
+      ]),
+      snoozedUntil: Schema.optional(IsoDateTime),
+    }),
+  ),
   success: Schema.Union([
     OrchestrationV2DispatchCommandResult,
     Schema.Struct({ settlesWhenTurnEnds: Schema.Literal(true) }),

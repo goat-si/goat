@@ -449,12 +449,13 @@ function mentionsSecrets(value, key = "") {
   return false;
 }
 
-// prepare's resolve step is what picks and checks the commit on dev: a green commit for a
-// nightly, a published nightly's commit for stable (release-train.cjs from the workflow's own
-// commit decides which); every checkout trusts its sha output. Changing that step means
+// prepare's resolve step is what picks and checks the commit on dev: a green commit newer than
+// the newest published nightly's for a nightly, a published nightly's commit for stable
+// (release-train.cjs from the workflow's own commit decides both); every checkout trusts its sha
+// output. Changing that step means
 // updating this pin on purpose.
 // The whole step is pinned (any added key such as if or continue-on-error changes it).
-const pinnedResolveSha256 = "e02d48d68328cdacbcce9c79f3f23a73d0e29fdfe03ec7dba36da9ac163889fa";
+const pinnedResolveSha256 = "8183fe738381a5de4ab34953951fb24bb6eee129b09b95126eac647a178b8db0";
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value !== null && typeof value === "object") {
