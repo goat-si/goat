@@ -120,6 +120,7 @@ export const fixture = Effect.fn(function* (
   const holdMonitor = options.hold === "monitor";
   let allowed = !options.denyPermissions;
   let helperAnswer = typeof options.helper === "object" ? options.helper : undefined;
+  let helperBroken = false;
   let starts = 0;
   let stops = 0;
   let destroys = 0;
@@ -162,7 +163,7 @@ export const fixture = Effect.fn(function* (
       };
     },
     helperBundlePath: async () =>
-      options.helper === "unusable"
+      options.helper === "unusable" || helperBroken
         ? { kind: "unusable", message: "GOAT Computer Use at /Helpers cannot be used (EACCES)." }
         : options.helper
           ? { kind: "found", path: HELPER_BUNDLE }
@@ -381,6 +382,10 @@ export const fixture = Effect.fn(function* (
       Effect.sync(() => {
         helperAnswer = answer;
       }),
+    /** The shipped helper can no longer be used, as when its bundle lost its permissions. */
+    breakHelper: Effect.sync(() => {
+      helperBroken = true;
+    }),
     crash: Effect.sync(() => exits.at(-1)?.()),
     constructors,
     launches,

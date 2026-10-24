@@ -690,6 +690,31 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
     ),
   );
 
+  it.effect("drops earlier proofs when the helper can no longer be used", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+        });
+        assert.isTrue((yield* test.verify).verified);
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        const proven = test.readiness.at(-1);
+        assert.isTrue(proven ? computerUseReady(proven.readiness) : false);
+
+        yield* test.breakHelper;
+        const failed = yield* test.verify;
+        assert.isFalse(failed.verified);
+        const after = test.readiness.at(-1)?.readiness;
+        assert.isFalse(after ? computerUseReady(after) : true);
+        assert.equal(after?.capture, "pending");
+        assert.include(after?.reasons ?? [], failed.steps[0]?.detail);
+      }),
+    ),
+  );
+
   it.effect("drops earlier proofs when a later check fails before reading a window", () =>
     Effect.scoped(
       Effect.gen(function* () {

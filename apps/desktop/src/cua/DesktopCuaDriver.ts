@@ -612,6 +612,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const chosen = yield* engine();
     if (typeof chosen === "string") {
       record("grants", chosen);
+      // A helper that was found before and cannot be used now proves nothing it proved then.
+      yield* noteHelper((state) => withoutProof(withRunning(state, false), chosen));
       return done();
     }
     // Electron's grant APIs are macOS only; on Windows the helper is what reads the desktop.
