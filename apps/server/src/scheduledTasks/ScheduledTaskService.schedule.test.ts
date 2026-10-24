@@ -167,3 +167,60 @@ it.effect("keeps the task list order when a toggle or edit rewrites updated_at",
     }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
+
+it.effect(
+  "a saved signing secret names the secretRef it came from until another secret replaces it",
+  () =>
+    Effect.gen(function* () {
+      const ref = "secret-ref:00000000000000000000000000000003";
+      const consumed: Array<string> = [];
+      const layerDependencies = Layer.mergeAll(
+        NodeCrypto.layer,
+        Scheduler.layer,
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({
+          consume: (input) =>
+            Effect.sync(() => {
+              consumed.push(input.ref);
+              return "rotated-secret";
+            }),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        const signature = { header: "x-hub-signature-256", encoding: "hex", prefix: "sha256=" };
+        const save = (overrides: Record<string, unknown>) =>
+          decodeUpsertInput({
+            id: "scheduled-task:hook",
+            title: "Review PRs",
+            prompt: "Review this PR.",
+            enabled: true,
+            schedule: { type: "webhook" },
+            projectId: "project-webhook",
+            workspaceStrategy: { type: "root" },
+            modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            ...overrides,
+          }).pipe(Effect.flatMap((input) => service.upsert(input)));
+        const rotated = yield* save({
+          schedule: { type: "webhook", signature: { ...signature, secretRef: ref } },
+        });
+        expect(rotated.task.webhook).toMatchObject({ hasSecret: true, secretRef: ref });
+        // A save that leaves the secret alone keeps the ref that set it.
+        const renamed = yield* save({ title: "Renamed", schedule: { type: "webhook", signature } });
+        expect(renamed.task.webhook?.secretRef).toBe(ref);
+        const inline = yield* save({
+          schedule: { type: "webhook", signature: { ...signature, secret: "inline" } },
+        });
+        expect(inline.task.webhook).toMatchObject({ hasSecret: true });
+        expect(inline.task.webhook?.secretRef).toBeUndefined();
+        expect(consumed).toEqual([ref]);
+      }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
