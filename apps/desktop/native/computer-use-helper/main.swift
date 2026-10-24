@@ -911,6 +911,8 @@ func runMcp() -> Never {
     while waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
     exit(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
   }
+  // The cursor overlay (Overlay.swift) runs AppKit's loop when the proxy opened its channel.
+  runOverlayIfConnected()
   dispatchMain()
 }
 
