@@ -355,7 +355,11 @@ async function main(
           await sent("click", cw.pid, cw.window_id, last.observationId, close.ref);
           // Closed means this exact window is gone, not that the click was sent.
           for (let attempt = 0; attempt < 20; attempt++) {
-            const listed = (await tool("list_windows", {})).structured?.windows ?? [];
+            // Only a successful listing can show the window is gone.
+            const listing = await tool("list_windows", {});
+            const listed: unknown = listing.structured?.windows;
+            if (listing.isError || !Array.isArray(listed))
+              fail("Could not list windows to confirm Calculator closed.");
             if (
               !(listed as Array<{ window_id: number }>).some(
                 (window) => window.window_id === cw.window_id,
