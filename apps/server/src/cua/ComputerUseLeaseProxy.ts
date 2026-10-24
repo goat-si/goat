@@ -282,7 +282,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       readonly tool?: string;
       readonly unfiltered?: boolean;
       readonly reservationId?: string;
-      readonly connectionId?: string;
+      readonly connectionId: string;
       readonly cancelled?: boolean;
     }
   >();
@@ -346,20 +346,22 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let lastInterruption: Interruption = { _tag: "end", reason: "helper_restarted" };
 
   /**
-   * Cancels every outstanding call, kills the child, then answers each one. Every outstanding
-   * call reached the driver, so a tool call is answered as cut off, never as refused.
+   * Cuts off the current generation. Its calls remain addressable until closure so a later
+   * cancellation can still suppress the final answer.
    */
   const interrupt = Effect.fn("ComputerUseLeaseProxy.interrupt")(function* (cause: Interruption) {
     lastInterruption = cause;
     const message = interruptionRefusal(cause);
     const current = running;
     running = undefined;
-    const pending = [...outstanding.values()];
-    outstanding.clear();
+    const pending =
+      current === undefined
+        ? []
+        : [...outstanding].filter(([, request]) => request.connectionId === current.connectionId);
     const cutAt = yield* Clock.currentTimeMillis;
     for (const key of agentInput.endAll(cutAt)) yield* tellAgentInput(key, "end", cutAt);
     if (current !== undefined) {
-      for (const request of pending)
+      for (const [, request] of pending)
         yield* current.driver.send(
           JSON.stringify({
             jsonrpc: "2.0",
@@ -379,13 +381,17 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     for (const waiter of ownAnswers.values()) yield* Deferred.succeed(waiter, undefined);
     proven = undefined;
     ownAnswers.clear();
-    for (const request of pending)
-      if (!request.cancelled)
+    for (const [key, request] of pending) {
+      const latest = outstanding.get(key);
+      if (latest?.connectionId !== request.connectionId) continue;
+      outstanding.delete(key);
+      if (!latest.cancelled)
         yield* options.output(
           request.method === "tools/call"
             ? cutOff(request.id, request.tool, cause)
             : refusal(request.id, request.method, interruptionDetail(cause), message),
         );
+    }
   });
 
   const end = Effect.fn("ComputerUseLeaseProxy.end")(function* (reason: LeaseEnd) {
@@ -763,6 +769,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const message = parse(line);
     const id = message?.id;
     const isRequest = id !== undefined && id !== null && message?.method !== undefined;
+    const cancelled = cancelledRequestKey(line);
+    if (cancelled !== undefined) {
+      const request = outstanding.get(cancelled);
+      // Cutoff may be waiting for native closure even when no driver is current.
+      if (request !== undefined) outstanding.set(cancelled, { ...request, cancelled: true });
+    }
     if (isRequest && outstanding.has(JSON.stringify(id)))
       return yield* options.output(
         refusal(
@@ -912,16 +924,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         method: message!.method!,
         ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
         unfiltered: Object.keys(message?.params?.arguments ?? {}).every((key) => key === "session"),
-        ...(reservationId === undefined
-          ? {}
-          : { reservationId, connectionId: current.connectionId }),
+        connectionId: current.connectionId,
+        ...(reservationId === undefined ? {} : { reservationId }),
       });
-    const cancelled = cancelledRequestKey(line);
-    if (cancelled !== undefined) {
-      const request = outstanding.get(cancelled);
-      // The driver may ignore cancellation; ownership lasts until its reply or actual cutoff.
-      if (request !== undefined) outstanding.set(cancelled, { ...request, cancelled: true });
-    }
     if (running !== current || paused !== undefined || idle || finished !== undefined) return;
     if (
       isRequest &&
