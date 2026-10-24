@@ -2,6 +2,8 @@
 import * as NodeFS from "node:fs";
 
 import { assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 
 import {
   AD_HOC_WARNING,
@@ -9,8 +11,10 @@ import {
   helperBundleIdForChannel,
   helperDesignatedRequirement,
   renderHelperInfoPlist,
-  signingFailure,
+  resolveSigningIdentity,
+  signComputerUseHelper,
 } from "./build-computer-use-helper.ts";
+import type { CommandResult, ReleaseCommandRunner } from "./lib/release-verify.ts";
 
 const FIND_IDENTITY = [
   '  1) D92256BFF6CC21ABD4275A89CA418AAF8B484B00 "Apple Development: Someone (QQ4ZRC9P5J)"',
@@ -18,6 +22,23 @@ const FIND_IDENTITY = [
   "     2 valid identities found",
 ].join("\n");
 const NONE = "     0 valid identities found";
+
+/** Answers each command from `answer` and records the calls, like the build's real runner. */
+function fakeRunner(answer: (program: string, args: readonly string[]) => Partial<CommandResult>) {
+  const calls: Array<readonly string[]> = [];
+  const runner: ReleaseCommandRunner = (program, args) => {
+    calls.push([program, ...args]);
+    return Effect.succeed({ exitCode: 0, stdout: "", stderr: "", ...answer(program, args) });
+  };
+  return { runner, calls };
+}
+
+const SIGN_INPUT = {
+  bundle: "/out/GOAT Computer Use.app",
+  bundleId: "si.goat.desktop.dev.computer-use",
+  driverPaths: ["/out/driver/cua-driver"],
+  entitlements: "/src/entitlements.plist",
+};
 
 describe("build-computer-use-helper", () => {
   it("signs every channel, dev included, with the keychain's Developer ID and its team", () => {
@@ -124,16 +145,69 @@ describe("build-computer-use-helper", () => {
     assert.notInclude(requirement, "cdhash");
   });
 
-  it("explains a keychain the session cannot use when codesign fails", () => {
-    const message = signingFailure(
-      "/tmp/GOAT Computer Use.app",
-      "/tmp/GOAT Computer Use.app: errSecInternalComponent\n",
-    );
-    assert.include(message, "errSecInternalComponent");
-    assert.include(message, "not usable from this session");
-    assert.include(message, "Always Allow");
-    assert.include(message, "does not fall back to ad-hoc");
-  });
+  it.effect("reports a failed keychain lookup with its own error instead of 'no identity'", () =>
+    Effect.gen(function* () {
+      const { runner, calls } = fakeRunner(() => ({
+        exitCode: 1,
+        stderr: "security: SecKeychainSearchCopyNext: User interaction is not allowed.",
+      }));
+      const exit = yield* Effect.exit(
+        resolveSigningIdentity(runner, { channel: "dev", identity: undefined, adHoc: false }),
+      );
+      assert.isTrue(Exit.isFailure(exit));
+      const message = String(Exit.isFailure(exit) ? exit.cause : "");
+      assert.include(message, "User interaction is not allowed");
+      assert.include(message, "Run the build from Terminal while signed in");
+      assert.lengthOf(calls, 1);
+    }),
+  );
+
+  it.effect("signs drivers, then the bundle under the team requirement, then verifies", () =>
+    Effect.gen(function* () {
+      const { runner, calls } = fakeRunner(() => ({}));
+      yield* signComputerUseHelper(runner, {
+        ...SIGN_INPUT,
+        choice: { identity: "Developer ID Application: Someone (U9ATA49N28)", team: "U9ATA49N28" },
+      });
+      assert.deepEqual(
+        calls.map((call) => call.at(-1)),
+        ["/out/driver/cua-driver", SIGN_INPUT.bundle, SIGN_INPUT.bundle],
+      );
+      const bundleSign = calls[1] ?? [];
+      assert.include(bundleSign, "--timestamp");
+      assert.include(bundleSign, "runtime");
+      assert.equal(
+        bundleSign[bundleSign.indexOf("--requirements") + 1],
+        helperDesignatedRequirement(SIGN_INPUT.bundleId, "U9ATA49N28"),
+      );
+      assert.include(calls[2] ?? [], "--verify");
+    }),
+  );
+
+  it.effect("stops on a codesign failure with the keychain remedy and never retries ad-hoc", () =>
+    Effect.gen(function* () {
+      const { runner, calls } = fakeRunner((_, args) =>
+        args.at(-1) === SIGN_INPUT.bundle
+          ? { exitCode: 1, stderr: SIGN_INPUT.bundle + ": errSecInternalComponent" }
+          : {},
+      );
+      const exit = yield* Effect.exit(
+        signComputerUseHelper(runner, {
+          ...SIGN_INPUT,
+          choice: {
+            identity: "Developer ID Application: Someone (U9ATA49N28)",
+            team: "U9ATA49N28",
+          },
+        }),
+      );
+      assert.isTrue(Exit.isFailure(exit));
+      const message = String(Exit.isFailure(exit) ? exit.cause : "");
+      assert.include(message, "errSecInternalComponent");
+      assert.include(message, "not usable from this session");
+      assert.lengthOf(calls, 2);
+      assert.isFalse(calls.some((call) => call.includes("-")));
+    }),
+  );
 
   it("lets only a dev helper serve any parent, under its own per-channel bundle id", () => {
     const template = NodeFS.readFileSync(

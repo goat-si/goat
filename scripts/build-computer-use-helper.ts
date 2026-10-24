@@ -126,7 +126,7 @@ export const helperDesignatedRequirement = (bundleId: string, team: string) =>
   '"';
 
 /** Why codesign failed and what fixes it; a keychain the session cannot use is the usual cause. */
-export function signingFailure(target: string, stderr: string): string {
+function signingFailure(target: string, stderr: string): string {
   const keychain =
     /errSecInternalComponent|User interaction is not allowed|unable to build chain/iu.test(stderr);
   return [
@@ -150,6 +150,84 @@ export function renderHelperInfoPlist(
 
 const fail = (problem: string) => new ReleaseVerificationError({ problems: [problem] });
 
+type SignedChoice = Exclude<SigningChoice, { readonly error: string }>;
+
+/** Reads the keychain's identities and picks one, failing with the cause when it cannot. */
+export const resolveSigningIdentity = Effect.fn("resolveSigningIdentity")(function* (
+  runner: ReleaseCommandRunner,
+  input: {
+    readonly channel: HelperChannel;
+    readonly identity: string | undefined;
+    readonly adHoc: boolean;
+  },
+) {
+  const identities = yield* runner("security", ["find-identity", "-v", "-p", "codesigning"]);
+  // An ad-hoc build needs no keychain, so only a Developer ID build stops on a failed lookup.
+  if (identities.exitCode !== 0 && !input.adHoc)
+    return yield* fail(
+      "security find-identity -v -p codesigning failed (" +
+        identities.exitCode +
+        "): " +
+        identities.stderr.trim() +
+        "\n" +
+        KEYCHAIN_REMEDY,
+    );
+  const choice = chooseSigningIdentity({
+    channel: input.channel,
+    explicit: input.identity,
+    adHoc: input.adHoc,
+    findIdentityOutput: identities.stdout,
+  });
+  if ("error" in choice) return yield* fail(choice.error);
+  if ("warning" in choice) yield* Effect.logWarning(choice.warning);
+  else yield* Effect.log("Signing with " + choice.identity + ".");
+  return choice;
+});
+
+/**
+ * Signs inside out: the driver binaries, then the helper bundle under its designated
+ * requirement. A codesign failure stops the build; it never retries ad-hoc.
+ */
+export const signComputerUseHelper = Effect.fn("signComputerUseHelper")(function* (
+  runner: ReleaseCommandRunner,
+  input: {
+    readonly choice: SignedChoice;
+    readonly bundle: string;
+    readonly bundleId: string;
+    readonly driverPaths: readonly string[];
+    readonly entitlements: string;
+  },
+) {
+  const { choice } = input;
+  const signing = [
+    "--force",
+    "--options",
+    "runtime",
+    ...("team" in choice ? ["--timestamp"] : []),
+    "--sign",
+    choice.identity,
+  ];
+  const sign = Effect.fn("signHelperPart")(function* (target: string, extra: readonly string[]) {
+    const result = yield* runner("codesign", [...signing, ...extra, target]);
+    if (result.exitCode !== 0) return yield* fail(signingFailure(target, result.stderr));
+  });
+  for (const driver of input.driverPaths) yield* sign(driver, []);
+  yield* sign(input.bundle, [
+    "--entitlements",
+    input.entitlements,
+    ...("team" in choice
+      ? ["--requirements", helperDesignatedRequirement(input.bundleId, choice.team)]
+      : []),
+  ]);
+  yield* requireReleaseCommand(runner, "codesign", [
+    "--verify",
+    "--strict",
+    "--deep",
+    "--verbose=2",
+    input.bundle,
+  ]);
+});
+
 export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(function* (input: {
   readonly repoRoot: string;
   readonly output: string;
@@ -168,16 +246,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
     return yield* fail("The helper builds on macOS only.");
 
   // Choose the identity before the slow build, so a missing key fails in seconds.
-  const identities = yield* runner("security", ["find-identity", "-v", "-p", "codesigning"]);
-  const choice = chooseSigningIdentity({
-    channel: input.channel,
-    explicit: input.identity,
-    adHoc: input.adHoc,
-    findIdentityOutput: identities.stdout,
-  });
-  if ("error" in choice) return yield* fail(choice.error);
-  if ("warning" in choice) yield* Effect.logWarning(choice.warning);
-  else yield* Effect.log("Signing with " + choice.identity + ".");
+  const choice = yield* resolveSigningIdentity(runner, input);
 
   const release = cuaDriverRelease("darwin", "arm64");
   if (!release) return yield* fail("No pinned Cua Driver release for macOS.");
@@ -298,27 +367,13 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
     yield* fs.copyFile(path.join(notices, name), path.join(noticesDir, name));
 
   const adHoc = !("team" in choice);
-  const signing = [
-    "--force",
-    "--options",
-    "runtime",
-    ...(adHoc ? [] : ["--timestamp"]),
-    "--sign",
-    choice.identity,
-  ];
-  const sign = Effect.fn("signHelperPart")(function* (target: string, extra: readonly string[]) {
-    const result = yield* runner("codesign", [...signing, ...extra, target]);
-    if (result.exitCode !== 0) return yield* fail(signingFailure(target, result.stderr));
+  yield* signComputerUseHelper(runner, {
+    choice,
+    bundle,
+    bundleId,
+    driverPaths: driverBinaries.map((name) => path.join(driverDir, name)),
+    entitlements: path.join(sourceDir, "entitlements.plist"),
   });
-  for (const name of driverBinaries) yield* sign(path.join(driverDir, name), []);
-  yield* sign(bundle, [
-    "--entitlements",
-    path.join(sourceDir, "entitlements.plist"),
-    ...("team" in choice
-      ? ["--requirements", helperDesignatedRequirement(bundleId, choice.team)]
-      : []),
-  ]);
-  yield* run("codesign", ["--verify", "--strict", "--deep", "--verbose=2", bundle]);
 
   if (input.notaryProfile) {
     if (adHoc) return yield* fail("Notarization needs a Developer ID signature.");
