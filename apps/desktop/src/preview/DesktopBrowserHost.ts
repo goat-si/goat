@@ -43,6 +43,8 @@ interface AttachedTab {
   readonly key: DesktopBrowserTabKey;
   readonly debuggee: DesktopBrowserTabDebugger;
   relay: CdpRelayConnection | null;
+  screenshotTurn: object | null;
+  readonly waitingScreenshots: Array<() => void>;
   downloadDirectory: string | null;
   pendingDownloadGuid: string | null;
   agentInputAt: number;
@@ -52,6 +54,7 @@ interface AttachedTab {
     params: unknown,
     sessionId: string,
   ) => void;
+  readonly onNewDocument: () => void;
 }
 
 export class DesktopBrowserHost extends Context.Service<
@@ -93,31 +96,70 @@ export const make = Effect.gen(function* () {
   const tabs = new Map<string, AttachedTab>();
   const emit = (event: DesktopBrowserEventType) => runFork(PubSub.publish(outbox, event));
 
+  const nextScreenshot = (tab: AttachedTab) => {
+    tab.screenshotTurn = null;
+    tab.waitingScreenshots.shift()?.();
+  };
+
+  /**
+   * Chromium below 157 crashes the whole app when a guest's renderer exits with a
+   * screenshot copy in flight (crbug.com/567321049). Overlapping screenshots make that
+   * far likelier, and one the server gave up on stays pending in Chromium, so each guest
+   * gets one at a time. One queued by a relay released since then is dropped unsent.
+   */
+  const takeScreenshot = (
+    tab: AttachedTab,
+    relay: CdpRelayConnection,
+    capture: () => Promise<unknown>,
+  ) =>
+    new Promise<unknown>((resolve, reject) => {
+      const start = () => {
+        if (tab.relay !== relay) {
+          reject(new Error("The preview connection that asked for this screenshot closed."));
+          nextScreenshot(tab);
+          return;
+        }
+        const turn = {};
+        tab.screenshotTurn = turn;
+        capture()
+          .finally(() => {
+            if (tab.screenshotTurn === turn) nextScreenshot(tab);
+          })
+          .then(resolve, reject);
+      };
+      if (tab.screenshotTurn === null) start();
+      else tab.waitingScreenshots.push(start);
+    });
+
   const relayFor = (tab: AttachedTab) => {
     if (tab.relay) return tab.relay;
     const { webContents, debugger: debuggee } = tab.debuggee;
+    const send = async (method: string, params: Record<string, unknown>, sessionId?: string) => {
+      if (method === "Page.reload" && sessionId === undefined) {
+        // Embedded guests can acknowledge CDP reload without navigating.
+        // Keep Playwright's CDP lifecycle waiter, but drive the exact guest.
+        if (params.ignoreCache === true) webContents.reloadIgnoringCache();
+        else webContents.reload();
+        return {};
+      }
+      if (sessionId !== undefined) return debuggee.sendCommand(method, params, sessionId);
+      if (method !== "Page.captureScreenshot")
+        return sendPageCommand(webContents, debuggee, method, params);
+      // Chromium answers with the guest's next frame, and a guest parked outside the window
+      // composites none, so the app window keeps it painting until this settles.
+      runFork(PubSub.publish(captures, { key: tab.key, capturing: true }));
+      try {
+        return await sendPageCommand(webContents, debuggee, method, params);
+      } finally {
+        runFork(PubSub.publish(captures, { key: tab.key, capturing: false }));
+      }
+    };
     const relay: CdpRelayConnection = createCdpRelayConnection(
       {
-        send: async (method, params, sessionId) => {
-          if (method === "Page.reload" && sessionId === undefined) {
-            // Embedded guests can acknowledge CDP reload without navigating.
-            // Keep Playwright's CDP lifecycle waiter, but drive the exact guest.
-            if (params.ignoreCache === true) webContents.reloadIgnoringCache();
-            else webContents.reload();
-            return {};
-          }
-          if (sessionId !== undefined) return debuggee.sendCommand(method, params, sessionId);
-          if (method !== "Page.captureScreenshot")
-            return sendPageCommand(webContents, debuggee, method, params);
-          // Chromium answers with the guest's next frame, and a guest parked outside the window
-          // composites none, so the app window keeps it painting until this settles.
-          runFork(PubSub.publish(captures, { key: tab.key, capturing: true }));
-          try {
-            return await sendPageCommand(webContents, debuggee, method, params);
-          } finally {
-            runFork(PubSub.publish(captures, { key: tab.key, capturing: false }));
-          }
-        },
+        send: (method, params, sessionId) =>
+          method === "Page.captureScreenshot"
+            ? takeScreenshot(tab, relay, () => send(method, params, sessionId))
+            : send(method, params, sessionId),
         targetId: () =>
           debuggee
             .sendCommand("Target.getTargetInfo")
@@ -158,7 +200,9 @@ export const make = Effect.gen(function* () {
     const tab = tabs.get(id);
     if (!tab) return;
     tabs.delete(id);
+    tab.relay = null;
     tab.debuggee.debugger.off("message", tab.onMessage);
+    tab.debuggee.webContents.off("did-navigate", tab.onNewDocument);
     emit({ type: "detached", ...key });
   };
 
@@ -170,6 +214,8 @@ export const make = Effect.gen(function* () {
       key,
       debuggee,
       relay: null,
+      screenshotTurn: null,
+      waitingScreenshots: [],
       downloadDirectory: null,
       pendingDownloadGuid: null,
       agentInputAt: Number.NEGATIVE_INFINITY,
@@ -180,9 +226,15 @@ export const make = Effect.gen(function* () {
         }
         tab.relay?.event(method, params, sessionId);
       },
+      // A screenshot pending when the page loads a new document, a reload included, can
+      // stay unanswered. A crashed page lands here once it reloads, well after its renderer died.
+      onNewDocument: () => {
+        if (tab.screenshotTurn !== null) nextScreenshot(tab);
+      },
     };
     tabs.set(id, tab);
     debuggee.debugger.on("message", tab.onMessage);
+    debuggee.webContents.on("did-navigate", tab.onNewDocument);
     emit({ type: "attached", ...key });
   };
 
