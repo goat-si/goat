@@ -616,6 +616,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   yield* Queue.take(applying).pipe(
     Effect.flatMap(({ update, fence }) => apply(update, fence)),
     Effect.forever,
+    // A failed update ends the control as lost here: this fiber is the queue's only reader.
+    Effect.catchCause(() => end("lost")),
     Effect.forkScoped,
   );
   const take = (update: ComputerUseLeaseUpdate | undefined) =>
