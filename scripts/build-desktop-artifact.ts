@@ -24,7 +24,6 @@ import { fromYaml } from "@goat/shared/schemaYaml";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@goat/shared/relayAuth";
 import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
-import { cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" with { type: "json" };
@@ -48,6 +47,12 @@ import {
   type WebAssetBrand,
 } from "./lib/brand-assets.ts";
 import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
+import {
+  stageComputerUseHelper,
+  stageCuaDriverExecutable,
+  verifyEmbeddedComputerUseHelper,
+  withComputerUseHelper,
+} from "./lib/desktop-computer-use.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 import {
@@ -203,6 +208,7 @@ interface BuildCliInput {
   readonly skipBuild: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
+  readonly computerUseHelper?: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
@@ -1004,6 +1010,7 @@ interface ResolvedBuildOptions {
   readonly skipBuild: boolean;
   readonly keepStage: boolean;
   readonly signed: boolean;
+  readonly computerUseHelper: boolean;
   readonly macPasskeys: boolean;
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
@@ -1768,6 +1775,9 @@ const BuildEnvConfig = Config.all({
   skipBuild: Config.Boolean("GOAT_DESKTOP_SKIP_BUILD").pipe(Config.withDefault(false)),
   keepStage: Config.Boolean("GOAT_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
   signed: Config.Boolean("GOAT_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
+  computerUseHelper: Config.Boolean("GOAT_DESKTOP_COMPUTER_USE_HELPER").pipe(
+    Config.withDefault(false),
+  ),
   macPasskeys: Config.Boolean("GOAT_DESKTOP_MAC_PASSKEYS").pipe(Config.withDefault(false)),
   verbose: Config.Boolean("GOAT_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
   mockUpdates: Config.Boolean("GOAT_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
@@ -1910,6 +1920,10 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     skipBuild,
     keepStage,
     signed,
+    computerUseHelper: resolveBooleanFlag(
+      input.computerUseHelper ?? Option.none(),
+      env.computerUseHelper,
+    ),
     macPasskeys: env.macPasskeys,
     verbose,
     mockUpdates,
@@ -2748,134 +2762,6 @@ export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (inp
       { cwd: input.repoRoot },
     ),
     { label: "build Linux browser secret helper", verbose: input.verbose },
-  );
-});
-
-class CuaDriverArtifactError extends Schema.TaggedError<CuaDriverArtifactError>()(
-  "CuaDriverArtifactError",
-  { message: Schema.String },
-) {}
-
-export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(function* (input: {
-  readonly repoRoot: string;
-  readonly stageRoot: string;
-  readonly stageResourcesDir: string;
-  readonly platform: typeof BuildPlatform.Type;
-  readonly arch: typeof BuildArch.Type;
-  readonly verbose: boolean;
-}) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const release = cuaDriverRelease(
-    input.platform === "mac" ? "darwin" : input.platform === "win" ? "win32" : "linux",
-    input.arch === "universal" ? "arm64" : input.arch,
-  );
-  if (!release) {
-    return yield* new CuaDriverArtifactError({ message: "Unsupported Cua Driver build target." });
-  }
-  const cacheDir = path.join(input.repoRoot, "node_modules/.cache/goat/cua-driver");
-  const archivePath = path.join(cacheDir, release.archiveName);
-  const verified = Effect.fn("verifyCuaDriverArchive")(function* (file: string) {
-    if (!(yield* fs.exists(file))) return false;
-    if (Number((yield* fs.stat(file)).size) !== release.bytes) return false;
-    const hash = NodeCrypto.createHash("sha256");
-    yield* fs
-      .stream(file)
-      .pipe(Stream.runForEach((chunk) => Effect.sync(() => hash.update(chunk))));
-    return hash.digest("hex") === release.sha256;
-  });
-  yield* fs.makeDirectory(cacheDir, { recursive: true });
-  if (!(yield* verified(archivePath))) {
-    yield* fs.remove(archivePath, { force: true });
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const temporary = yield* fs.makeTempDirectoryScoped({ directory: cacheDir });
-        const downloadPath = path.join(temporary, release.archiveName);
-        yield* runCommand(
-          ChildProcess.make("curl", [
-            "--fail",
-            "--location",
-            "--silent",
-            "--show-error",
-            "--connect-timeout",
-            "30",
-            "--max-time",
-            "600",
-            "--retry",
-            "3",
-            "--output",
-            downloadPath,
-            release.url,
-          ]),
-          { label: "download Cua Driver", verbose: input.verbose },
-        );
-        if (!(yield* verified(downloadPath))) {
-          return yield* new CuaDriverArtifactError({
-            message: `Cua Driver archive failed size/SHA-256 verification: ${release.archiveName}`,
-          });
-        }
-        yield* fs.rename(downloadPath, archivePath);
-      }),
-    );
-  }
-  yield* fs.makeDirectory(input.stageRoot, { recursive: true });
-  yield* Effect.scoped(
-    Effect.gen(function* () {
-      const extracted = yield* fs.makeTempDirectoryScoped({ directory: input.stageRoot });
-      const hostPlatform = yield* HostProcess.Platform;
-      const command =
-        release.format === "zip" && hostPlatform !== "win32"
-          ? ChildProcess.make("unzip", ["-q", archivePath, "-d", extracted])
-          : ChildProcess.make(hostPlatform === "win32" ? windowsSystemTar() : "tar", [
-              "-xf",
-              archivePath,
-              "-C",
-              extracted,
-            ]);
-      yield* runCommand(command, { label: "extract Cua Driver", verbose: input.verbose });
-      const requiredFiles = [
-        release.executable,
-        ...(input.platform === "win"
-          ? ["cua-driver-uia.exe", "cua-cursor-theme.exe"]
-          : input.platform === "linux"
-            ? [
-                "cua-cursor-theme",
-                "wayland-helper/install.sh",
-                "wayland-helper/winrects@cua/metadata.json",
-                "wayland-helper/winrects@cua/extension.js",
-              ]
-            : []),
-      ];
-      for (const file of requiredFiles) {
-        if ((yield* fs.stat(path.join(extracted, file))).type !== "File") {
-          return yield* new CuaDriverArtifactError({
-            message: `Cua Driver release is missing ${file}.`,
-          });
-        }
-      }
-      yield* fs.makeDirectory(input.stageResourcesDir, { recursive: true });
-      const destination = path.join(input.stageResourcesDir, "cua-driver");
-      yield* fs.remove(destination, { recursive: true, force: true });
-      if (input.platform === "mac") {
-        yield* fs.copyFile(path.join(extracted, release.executable), destination);
-        yield* fs.chmod(destination, 0o755);
-      } else {
-        yield* fs.makeDirectory(destination, { recursive: true });
-        // SDK libraries come from the app's npm dependencies, not this release.
-        const entries =
-          input.platform === "linux"
-            ? [release.executable, "cua-cursor-theme", "wayland-helper"]
-            : requiredFiles;
-        for (const entry of entries) {
-          yield* fs.copy(path.join(extracted, entry), path.join(destination, entry));
-        }
-        if (input.platform === "linux") {
-          for (const executable of [release.executable, "cua-cursor-theme"]) {
-            yield* fs.chmod(path.join(destination, executable), 0o755);
-          }
-        }
-      }
-    }),
   );
 });
 
@@ -4496,8 +4382,16 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     stageResourcesDir,
     platform: options.platform,
     arch: options.arch,
-    verbose: options.verbose,
   });
+  const computerUseHelper = options.computerUseHelper
+    ? yield* stageComputerUseHelper({
+        repoRoot,
+        stageRoot,
+        platform: options.platform,
+        appId: resolveDesktopAppId(appVersion),
+        signed: options.signed,
+      })
+    : undefined;
 
   yield* assertPlatformBuildResources(
     options.platform,
@@ -4592,22 +4486,25 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     homepage: `https://github.com/${DESKTOP_UPDATE_REPOSITORY}`,
     author: "T3 Tools",
     main: "apps/desktop/dist-electron/boot.cjs",
-    build: yield* createBuildConfig(
-      options.platform,
-      options.target,
-      appVersion,
-      options.signed,
-      options.mockUpdates,
-      options.mockUpdateServerPort,
-      macPasskeySigning && macEntitlementsPath
-        ? {
-            entitlementsPath: macEntitlementsPath,
-            provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
-          }
-        : undefined,
-      bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
-      options.arch,
-      options.sshRuntimeArchiveDir !== undefined,
+    build: withComputerUseHelper(
+      yield* createBuildConfig(
+        options.platform,
+        options.target,
+        appVersion,
+        options.signed,
+        options.mockUpdates,
+        options.mockUpdateServerPort,
+        macPasskeySigning && macEntitlementsPath
+          ? {
+              entitlementsPath: macEntitlementsPath,
+              provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+            }
+          : undefined,
+        bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
+        options.arch,
+        options.sshRuntimeArchiveDir !== undefined,
+      ),
+      computerUseHelper,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -4792,6 +4689,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     });
   }
 
+  if (computerUseHelper) yield* verifyEmbeddedComputerUseHelper(stageDistDir, computerUseHelper);
+
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
       stageDistDir,
@@ -4897,6 +4796,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   signed: Flag.Boolean("signed").pipe(
     Flag.withDescription(
       "Enable signing/notarization discovery; Windows uses Azure Trusted Signing (env: GOAT_DESKTOP_SIGNED).",
+    ),
+    Flag.optional,
+  ),
+  computerUseHelper: Flag.Boolean("computer-use-helper").pipe(
+    Flag.withDescription(
+      "Embed GOAT Computer Use.app in GOAT.app/Contents/Helpers on macOS; signed builds wait for #1210 (env: GOAT_DESKTOP_COMPUTER_USE_HELPER).",
     ),
     Flag.optional,
   ),

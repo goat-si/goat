@@ -23,7 +23,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   buildDesktopBundles,
   DesktopBuildManifestRestoreError,
-  stageCuaDriverExecutable,
   BundleNotSelfContainedError,
   BuildCommandFailedError,
   parseWslRuntimeArchiveMembers,
@@ -88,6 +87,7 @@ import {
   sandboxedPreloadSyntaxError,
   stampReleaseVersionForBuild,
 } from "./build-desktop-artifact.ts";
+import { stageCuaDriverExecutable } from "./lib/desktop-computer-use.ts";
 import {
   ReleasePackageManifestError,
   releasePackageFiles,
@@ -241,7 +241,6 @@ const makeCuaStageFixture = Effect.fn("test.makeCuaStageFixture")(function* (
       repoRoot: root,
       stageRoot,
       stageResourcesDir,
-      verbose: false,
     }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, downloadSpawner),
       Effect.as(stageResourcesDir),

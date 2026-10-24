@@ -31,7 +31,7 @@ describe("build-computer-use-helper", () => {
     );
   });
 
-  it("refuses an ad-hoc release helper, which could not verify its parent's team", () => {
+  it("signs a release helper ad-hoc only when asked to, for an unsigned local GOAT.app", () => {
     const none = "     0 valid identities found";
     assert.deepEqual(
       chooseSigningIdentity({ channel: "dev", explicit: undefined, findIdentityOutput: none }),
@@ -43,6 +43,13 @@ describe("build-computer-use-helper", () => {
       assert.property(
         chooseSigningIdentity({ channel, explicit: undefined, findIdentityOutput: none }),
         "error",
+      );
+    for (const channel of ["stable", "nightly"] as const)
+      assert.deepEqual(
+        chooseSigningIdentity({ channel, explicit: "-", findIdentityOutput: none }),
+        {
+          identity: "-",
+        },
       );
     // An explicit certificate must still be a Developer ID from this keychain.
     assert.property(
@@ -63,16 +70,16 @@ describe("build-computer-use-helper", () => {
     );
   });
 
-  it("lets only a dev helper serve any parent, under its own per-channel bundle id", () => {
+  it("renders the per-channel bundle id and whether the helper serves any parent", () => {
     const template = NodeFS.readFileSync(
       new URL("../apps/desktop/native/computer-use-helper/Info.plist", import.meta.url),
       "utf8",
     );
-    const render = (channel: "stable" | "nightly" | "dev") =>
+    const render = (channel: "stable" | "nightly" | "dev", allowAnyParent = channel === "dev") =>
       renderHelperInfoPlist(template, {
         bundleId: helperBundleIdForChannel(channel),
         version: "1.2.3",
-        channel,
+        allowAnyParent,
       });
     for (const channel of ["stable", "nightly", "dev"] as const)
       assert.notMatch(render(channel), /@[A-Z_]+@/);
@@ -80,5 +87,6 @@ describe("build-computer-use-helper", () => {
     assert.match(render("nightly"), /<string>si\.goat\.desktop\.nightly\.computer-use<\/string>/);
     assert.match(render("stable"), /GOATComputerUseAllowAnyParent<\/key>\s*<false\/>/);
     assert.match(render("dev"), /GOATComputerUseAllowAnyParent<\/key>\s*<true\/>/);
+    assert.match(render("stable", true), /GOATComputerUseAllowAnyParent<\/key>\s*<true\/>/);
   });
 });

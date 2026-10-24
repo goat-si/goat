@@ -47,8 +47,9 @@ export const helperBundleIdForChannel = (channel: HelperChannel) =>
 
 /**
  * The identity to sign with: an explicit one, else the first Developer ID Application in
- * `security find-identity` output. Ad-hoc ("-") is for dev builds only, because a release
- * helper verifies its parent by Developer ID team and an ad-hoc one has none.
+ * `security find-identity` output. A release helper verifies its parent by Developer ID team, so
+ * it signs ad-hoc ("-") only when asked to explicitly, for an unsigned local GOAT.app; such a
+ * helper serves any parent (renderHelperInfoPlist).
  */
 export function chooseSigningIdentity(input: {
   readonly channel: HelperChannel;
@@ -62,7 +63,7 @@ export function chooseSigningIdentity(input: {
     ),
   ].map(([, hash, name]) => ({ hash: hash ?? "", name: name ?? "" }));
   const identity = input.explicit?.trim() || developerIds[0]?.name || "-";
-  if (input.channel === "dev") return { identity };
+  if (input.channel === "dev" || input.explicit?.trim() === "-") return { identity };
   // A release helper checks its parent's Developer ID team, so it must carry one itself.
   return developerIds.some(({ hash, name }) => identity === name || identity.toUpperCase() === hash)
     ? { identity }
@@ -76,12 +77,12 @@ export function chooseSigningIdentity(input: {
 
 export function renderHelperInfoPlist(
   template: string,
-  input: { readonly bundleId: string; readonly version: string; readonly channel: HelperChannel },
+  input: { readonly bundleId: string; readonly version: string; readonly allowAnyParent: boolean },
 ): string {
   return template
     .replaceAll("@BUNDLE_ID@", input.bundleId)
     .replaceAll("@VERSION@", input.version)
-    .replaceAll("@ALLOW_ANY_PARENT@", input.channel === "dev" ? "<true/>" : "<false/>");
+    .replaceAll("@ALLOW_ANY_PARENT@", input.allowAnyParent ? "<true/>" : "<false/>");
 }
 
 const fail = (problem: string) => new ReleaseVerificationError({ problems: [problem] });
@@ -176,6 +177,20 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
   }
   yield* run("lipo", ["-create", "-output", executable, ...slices]);
 
+  const identities = yield* (input.runner ?? runReleaseCommand)("security", [
+    "find-identity",
+    "-v",
+    "-p",
+    "codesigning",
+  ]);
+  const choice = chooseSigningIdentity({
+    channel: input.channel,
+    explicit: input.identity,
+    findIdentityOutput: identities.stdout,
+  });
+  if ("error" in choice) return yield* fail(choice.error);
+  const adHoc = choice.identity === "-";
+
   const bundleId = helperBundleIdForChannel(input.channel);
   const template = yield* fs.readFileString(path.join(sourceDir, "Info.plist"));
   yield* fs.writeFileString(
@@ -183,7 +198,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
     renderHelperInfoPlist(template, {
       bundleId,
       version: desktopPackageJson.version,
-      channel: input.channel,
+      // An ad-hoc helper has no team to compare its parent's with.
+      allowAnyParent: input.channel === "dev" || adHoc,
     }),
   );
   // macOS shows this icon in System Settings' privacy lists and the permission drag panel,
@@ -219,19 +235,6 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
   for (const name of yield* fs.readDirectory(notices))
     yield* fs.copyFile(path.join(notices, name), path.join(noticesDir, name));
 
-  const identities = yield* (input.runner ?? runReleaseCommand)("security", [
-    "find-identity",
-    "-v",
-    "-p",
-    "codesigning",
-  ]);
-  const choice = chooseSigningIdentity({
-    channel: input.channel,
-    explicit: input.identity,
-    findIdentityOutput: identities.stdout,
-  });
-  if ("error" in choice) return yield* fail(choice.error);
-  const adHoc = choice.identity === "-";
   const signing = [
     "--force",
     "--options",
