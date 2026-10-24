@@ -88,9 +88,10 @@ export interface EnsureReadyOptions {
 
 /**
  * Why an alias's SSH caches were dropped: `endpoint` when a running machine got a new address or
- * host key, `lifecycle` when it was stopped, deleted, forgotten or its key was disconnected.
+ * host key, `lifecycle` when it was stopped or its key was disconnected, and `removed` when it was
+ * deleted or forgotten, which ends this server's ownership for good.
  */
-export type CloudAliasInvalidation = "endpoint" | "lifecycle";
+export type CloudAliasInvalidation = "endpoint" | "lifecycle" | "removed";
 
 export class CloudMachineService extends Context.Service<
   CloudMachineService,
@@ -130,6 +131,20 @@ export class CloudMachineService extends Context.Service<
     /** Whether this server manages the alias; reads only the local catalog. */
     readonly owns: (alias: string) => Effect.Effect<boolean>;
     /**
+     * Whether the machine was deleted or forgotten: the catalog no longer lists it, Boat accepted
+     * its delete, or Boat answers that it no longer exists. Fails when the catalog cannot be read,
+     * and an unanswered Boat check is "not removed", so an unknown answer never counts as gone.
+     */
+    readonly isRemoved: (alias: string) => Effect.Effect<boolean, CloudMachineError>;
+    /**
+     * Runs `listener` once a delete Boat accepted or a forget is certain, before the catalog changes.
+     * A failure stops the removal with that error, so what the listener records exists before this
+     * server lets go of the machine.
+     */
+    readonly onRemoving: (
+      listener: (alias: string) => Effect.Effect<void, CloudMachineError>,
+    ) => Effect.Effect<void>;
+    /**
      * Runs `listener` after a machine's address or host key changed, or it was stopped, deleted
      * or disconnected, so SSH caches for that alias are dropped before the next connection.
      */
@@ -167,6 +182,9 @@ const make = Effect.gen(function* () {
   const listeners: Array<(alias: string, cause: CloudAliasInvalidation) => Effect.Effect<void>> =
     [];
   const readyListeners: Array<(alias: string) => Effect.Effect<void>> = [];
+  const removingListeners: Array<(alias: string) => Effect.Effect<void, CloudMachineError>> = [];
+  const removing = (alias: string) =>
+    Effect.forEach(removingListeners, (listener) => listener(alias), { discard: true });
 
   const readCatalog = fs.exists(catalogPath).pipe(
     Effect.flatMap((exists) =>
@@ -518,6 +536,9 @@ const make = Effect.gen(function* () {
       const machine = yield* owned(alias);
       const key = yield* apiKey;
       yield* boat.remove(key, machine.sandboxId);
+      // After Boat accepted, so a refused delete leaves nothing behind. Should GOAT stop between the
+      // two, Boat no longer shows the machine and forgetting it runs this again.
+      yield* removing(alias);
       const pending = { ...machine, deletePending: true };
       yield* updateCatalog((catalog) => [
         {
@@ -527,7 +548,7 @@ const make = Effect.gen(function* () {
         undefined,
       ]);
       yield* ssh.removeHost(alias);
-      yield* invalidate(alias, "lifecycle");
+      yield* invalidate(alias, "removed");
       return view(pending, yield* remoteOf(key, pending));
     });
 
@@ -540,12 +561,13 @@ const make = Effect.gen(function* () {
         remote.presence === "not_found" ||
         (remote.presence === "present" && remote.state === "archived");
       if (!removable) return yield* fail("forget_refused");
+      yield* removing(alias);
       yield* updateCatalog((catalog) => [
         { ...catalog, machines: catalog.machines.filter((entry) => entry.alias !== alias) },
         undefined,
       ]);
       yield* ssh.removeHost(alias);
-      yield* invalidate(alias, "lifecycle");
+      yield* invalidate(alias, "removed");
       lastErrors.delete(alias);
       return { forgotten: true as const };
     });
@@ -589,6 +611,16 @@ const make = Effect.gen(function* () {
         Effect.map((catalog) => catalog.machines.some((entry) => entry.alias === alias)),
         Effect.orElseSucceed(() => false),
       ),
+    isRemoved: (alias) =>
+      Effect.gen(function* () {
+        const machine = (yield* readCatalog).machines.find((entry) => entry.alias === alias);
+        if (machine === undefined || machine.deletePending) return true;
+        // A delete Boat accepted just before GOAT stopped leaves the entry unmarked; only Boat's
+        // own 404 proves it gone. The read never wakes the machine.
+        if (!(yield* isConfigured)) return false;
+        return (yield* remoteOf(yield* apiKey, machine)).presence === "not_found";
+      }),
+    onRemoving: (listener) => Effect.sync(() => void removingListeners.push(listener)),
     onAliasInvalidated: (listener) => Effect.sync(() => void listeners.push(listener)),
     onReady: (listener) => Effect.sync(() => void readyListeners.push(listener)),
   });

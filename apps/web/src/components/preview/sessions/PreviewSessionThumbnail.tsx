@@ -178,6 +178,14 @@ export function PreviewSessionThumbnail(props: {
   // A person who took over is working in their own view; a card does not watch them.
   if (!interactive && session.owner === "human")
     return <Placeholder icon="person" text="A person is in control" />;
+  // A turn the desktop gave no driver: say what a person must allow (#1399).
+  if (session.status === "permission-needed")
+    return (
+      <Placeholder
+        icon="lock"
+        text={`No computer use yet. ${session.target.kind === "desktop" ? session.target.title : "Allow it"} (System Settings > Privacy & Security).`}
+      />
+    );
   if (
     session.target.kind === "browser" &&
     session.threadId !== undefined &&

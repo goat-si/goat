@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -6,24 +7,53 @@ import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.
 
 describe("ComputerUseLeaseProxy person and agent input", () => {
   it.effect(
-    "reports a person's input once, and never the agent's own input during or just after its call",
+    "reports every helper event to the server, even during the agent's own call, since only the server sees every agent's calls",
     () =>
       Effect.gen(function* () {
-        const h = yield* harness({ humanInput: true });
+        // The server takes each one for an agent's: another agent may have a run of cover that,
+        // with this one's, lasts past the cap, and only the server can tell.
+        const h = yield* harness({ humanInput: true, acceptHuman: () => false });
         yield* h.push(active());
         yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
         assert.equal((yield* h.nextToDriver).id, 1);
-        // The click's own events, while it runs and as they surface after its answer.
         yield* h.hid("pointer");
+        assert.equal(yield* h.person, "pointer");
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
         yield* h.nextToProvider;
         yield* h.hid("pointer");
-        yield* TestClock.adjust(1_000);
-        // Reported a second late, but from the click's moment.
-        yield* h.hid("pointer", 800);
-        // A person's key well after the click: the first thing that reaches the server.
+        assert.equal(yield* h.person, "pointer");
         yield* h.hid("keyboard");
         assert.equal(yield* h.person, "keyboard");
+      }),
+  );
+
+  it.effect(
+    "every event waiting behind a slow report reaches the server in order, a person's key included",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({ humanInput: true, acceptHuman: () => false, humanGate: gate });
+        yield* h.push(active());
+        yield* h.hid("pointer");
+        // The server holds this report while more events arrive than the helper's feed keeps.
+        assert.equal(yield* h.person, "pointer");
+        // Events a millisecond apart, as the helper sends them.
+        const event = (source: "pointer" | "keyboard" | "unknown") =>
+          TestClock.adjust(1).pipe(Effect.andThen(h.hid(source)));
+        const sent: Array<"pointer" | "keyboard"> = [
+          ...Array.from({ length: 20 }, () => "pointer" as const),
+          // A person's key, then the agent's own keys later: the later ones must not replace it.
+          "keyboard",
+          ...Array.from({ length: 20 }, () => "pointer" as const),
+          "keyboard",
+        ];
+        for (const source of sent) yield* event(source);
+        yield* event("unknown");
+        yield* Deferred.succeed(gate, undefined);
+        const reported: Array<string> = [];
+        while (reported.at(-1) !== "unknown" && reported.length <= sent.length)
+          reported.push(yield* h.person);
+        assert.deepEqual(reported, [...sent, "unknown"]);
       }),
   );
 
@@ -67,7 +97,7 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
   );
 
   it.effect.each(["reply", "cancel", "stop", "pause", "child exits"] as const)(
-    "ends a sent input call exactly once on %s, including after a late reply or replacement",
+    "ends a sent input call exactly once after %s finishes, including after a late reply or replacement",
     (ending) =>
       Effect.gen(function* () {
         const h = yield* harness({ humanInput: true });
@@ -88,6 +118,9 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
             }),
           );
           assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+          // Cancellation alone cannot prove that the driver stopped posting input.
+          assert.equal(yield* h.agentCallsQueued, 0);
+          yield* h.reply(reply);
         } else {
           if (ending === "pause")
             yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });

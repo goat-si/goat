@@ -1,6 +1,7 @@
 import * as NodeModule from "node:module";
 
 import {
+  CuaAgentBlock,
   CuaDriverMcpConfiguration,
   type ComputerUseReadiness,
   type CuaDisplayCapability,
@@ -71,6 +72,8 @@ export class CuaDriverHostError extends Schema.TaggedError<CuaDriverHostError>()
       "install",
     ]),
     cause: Schema.optional(Schema.Defect()),
+    /** The desktop's typed reason, beside its message, when agents cannot get past it alone. */
+    block: Schema.optional(CuaAgentBlock),
   },
 ) {
   override get message() {
@@ -93,6 +96,29 @@ export const CUA_DRIVER_REFUSED_MESSAGE =
 
 export type CuaDriverError = CuaDriverStartError | CuaDriverHostError;
 
+/** The typed reason behind a failed start, when agents cannot get past it alone (#1399). */
+export const agentBlock = (failure: Option.Option<CuaDriverError>) =>
+  Option.isSome(failure) && failure.value._tag === "CuaDriverHostError"
+    ? failure.value.block
+    : undefined;
+
+/**
+ * The block that still explains anything: once the helper's newer readiness reports every
+ * missing grant granted, the last failure is history and the next start tries again (#1399).
+ */
+const currentBlock = (
+  failure: Option.Option<CuaDriverError>,
+  readiness: ComputerUseReadiness | undefined,
+) => {
+  const block = agentBlock(failure);
+  if (block === undefined || readiness === undefined) return block;
+  const granted = block.missing.every(
+    (grant) =>
+      readiness.grants[grant === "accessibility" ? "accessibility" : "screenCapture"] === "granted",
+  );
+  return granted ? undefined : block;
+};
+
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const isStartError = Schema.is(CuaDriverStartError);
 const isHostError = Schema.is(CuaDriverHostError);
@@ -109,6 +135,11 @@ export class CuaDriver extends Context.Service<
     readonly acquire: Effect.Effect<Option.Option<CuaDriverMcpConfiguration>>;
     readonly enabled: Effect.Effect<boolean>;
     readonly lastFailure: Effect.Effect<Option.Option<CuaDriverError>>;
+    /**
+     * Why an agent cannot use the computer here until a person acts, from the last failure and
+     * the helper's newest report only, so admission never waits on a readiness probe.
+     */
+    readonly block: Effect.Effect<CuaAgentBlock | undefined>;
     readonly status: Effect.Effect<CuaHostStatus>;
     readonly computerUse: Effect.Effect<HostComputerUse>;
     /**
@@ -387,6 +418,11 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     ),
     enabled,
     lastFailure: Effect.sync(() => failure),
+    block: (options.helperReadiness ?? Effect.succeedNone).pipe(
+      Effect.map((helper) =>
+        currentBlock(failure, Option.isSome(helper) ? helper.value.readiness : undefined),
+      ),
+    ),
     status: Effect.gen(function* () {
       const display = yield* reported;
       // The helper's own report (desktop telemetry) wins; the server-run Linux helper is read
@@ -409,6 +445,10 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       // when that read failed or timed out.
       const helper = observe ? yield* reportedByHelper : first;
       const isEnabled = yield* enabled;
+      const block = currentBlock(
+        failure,
+        Option.isSome(helper) ? helper.value.readiness : observed?.readiness,
+      );
       return {
         platform:
           platform === "darwin" || platform === "linux" || platform === "win32"
@@ -420,6 +460,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
           ? observed
           : {}),
         ...(Option.isSome(failure) ? { failure: failure.value.message } : {}),
+        ...(block === undefined ? {} : { block }),
         ...(platform === "linux"
           ? { wayland: hostEnvironment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" }
           : {}),
@@ -676,9 +717,13 @@ export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactor
                 yield* retire(new CuaDriverHostError({ operation: "restart" }));
               else
                 yield* retire(
-                  report.message === undefined
+                  report.message === undefined && report.block === undefined
                     ? unavailable
-                    : new CuaDriverHostError({ operation: "desktop", cause: report.message }),
+                    : new CuaDriverHostError({
+                        operation: "desktop",
+                        ...(report.message === undefined ? {} : { cause: report.message }),
+                        ...(report.block === undefined ? {} : { block: report.block }),
+                      }),
                 );
             }),
           ),

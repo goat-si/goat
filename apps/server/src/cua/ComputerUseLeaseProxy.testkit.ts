@@ -2,6 +2,8 @@
 /** The lease proxy over in-memory stdio, lease stream and drivers, for its tests. */
 import {
   type ComputerUseHumanInputSource,
+  type ComputerUseCallReservation,
+  type ComputerUseCallAdmission,
   type ComputerUseLeaseUpdate,
   type ComputerUseOverlayCommand,
   computerUseRefusalReason,
@@ -28,7 +30,7 @@ export const call = (id: number | string, name: string, args: object = {}) =>
 export const active = (
   expiresAt = "1970-01-01T00:30:00.000Z",
   apps?: ReadonlyArray<string>,
-): ComputerUseLeaseUpdate => ({
+): Extract<ComputerUseLeaseUpdate, { state: "active" }> => ({
   state: "active",
   controlId: CONTROL,
   expiresAt,
@@ -58,6 +60,10 @@ export const harness = Effect.fn(function* (
     readonly placementGate?: Deferred.Deferred<void>;
     /** Answers each window report; reports land in `targets`. */
     readonly onTarget?: (target: { pid: number; windowId: number }) => boolean;
+    readonly reservation?: (
+      call: ComputerUseCallReservation,
+    ) => Effect.Effect<ComputerUseCallAdmission>;
+    readonly kill?: Effect.Effect<void>;
     /** Holds every window report until it is done, as a slow server would. */
     readonly targetGate?: Deferred.Deferred<void>;
     /**
@@ -70,6 +76,10 @@ export const harness = Effect.fn(function* (
     /** Holds the first driver's kill open until done, as a child slow to stop would. */
     readonly firstKillGate?: Deferred.Deferred<void>;
     readonly acceptHuman?: () => boolean;
+    /** Holds every report of a person's input until it is done, as a slow server would. */
+    readonly humanGate?: Deferred.Deferred<void>;
+    /** Holds every start report until it is done, as a slow server would. */
+    readonly agentInputGate?: Deferred.Deferred<void>;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -87,7 +97,22 @@ export const harness = Effect.fn(function* (
   const applied = yield* Queue.unbounded<string>();
   const agentCalls = yield* Queue.unbounded<string>();
   const hidFeeds: Array<Queue.Queue<{ source: ComputerUseHumanInputSource; at: number }>> = [];
+  const reservations: Array<ComputerUseCallReservation> = [];
+  const reservationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
   const proxy = yield* runLeaseProxy({
+    connectionId: "proxy:test",
+    reservation: (call) =>
+      Effect.sync(() => void reservations.push(call)).pipe(
+        Effect.andThen(Queue.offer(reservationEvents, call)),
+        Effect.andThen(
+          options.reservation?.(call) ??
+            Effect.succeed<ComputerUseCallAdmission>(
+              call.action === "reserve"
+                ? { status: "admitted", reservationId: `ticket:${call.callId}` }
+                : { status: "released" },
+            ),
+        ),
+      ),
     controlId: CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     input: Stream.fromQueue(input),
@@ -106,9 +131,20 @@ export const harness = Effect.fn(function* (
     ...(options.humanInput
       ? {
           onHumanInput: (input: { source: ComputerUseHumanInputSource; at: number }) =>
-            Queue.offer(people, input.source).pipe(Effect.as(options.acceptHuman?.() ?? true)),
+            Queue.offer(people, input.source).pipe(
+              Effect.andThen(
+                options.humanGate === undefined ? Effect.void : Deferred.await(options.humanGate),
+              ),
+              Effect.as(options.acceptHuman?.() ?? true),
+            ),
           onAgentInput: (report: { call: string; state: "start" | "end"; at: number }) =>
-            Queue.offer(agentCalls, report.state + " " + report.call),
+            Queue.offer(agentCalls, report.state + " " + report.call).pipe(
+              Effect.andThen(
+                report.state === "start" && options.agentInputGate !== undefined
+                  ? Deferred.await(options.agentInputGate)
+                  : Effect.void,
+              ),
+            ),
         }
       : {}),
     // Each update is marked taken as the proxy pulls it, and applied once the proxy has acted.
@@ -124,7 +160,9 @@ export const harness = Effect.fn(function* (
       };
       drivers.push(driver);
       yield* Queue.offer(started, driver);
-      const hid = yield* Queue.unbounded<{ source: ComputerUseHumanInputSource; at: number }>();
+      // Bounded and sliding like the CLI's (ComputerUseLeaseProxyCli.ts): events the proxy does
+      // not take in time are lost there.
+      const hid = yield* Queue.sliding<{ source: ComputerUseHumanInputSource; at: number }>(16);
       hidFeeds.push(hid);
       return {
         ...(options.humanInput ? { humanInput: Stream.fromQueue(hid) } : {}),
@@ -135,6 +173,7 @@ export const harness = Effect.fn(function* (
           }).pipe(Effect.andThen(Queue.offer(driver.toDriver, line)), Effect.asVoid),
         lines: Stream.fromQueue(driver.fromDriver),
         kill: Deferred.succeed(driver.killed, undefined).pipe(
+          Effect.andThen(options.kill ?? Effect.void),
           Effect.andThen(
             driver === drivers[0] && options.firstKillGate !== undefined
               ? Deferred.await(options.firstKillGate)
@@ -232,6 +271,8 @@ export const harness = Effect.fn(function* (
     /** The next input call start or end the proxy told the server about, as "start 1". */
     agentCall: Queue.take(agentCalls),
     agentCallsQueued: Queue.size(agentCalls),
+    reservations,
+    nextReservation: Queue.take(reservationEvents),
     revoked,
     log,
     proxy,
