@@ -10,6 +10,102 @@ const platform = process.platform;
 const source = NodeURL.fileURLToPath(new URL("../native/computer-use-helper/", import.meta.url));
 const ready = '{"jsonrpc":"2.0","method":"fixture/ready"}\n';
 
+function syntaxCorpus() {
+  const numbers = ["0", "-0", "1", "-1", "1.25", "1e400", "-1E-400", "1E+01", "9".repeat(80)];
+  const strings = [
+    '""',
+    '"한😀"',
+    String.raw`"a\"b\\c\/d"`,
+    String.raw`"\u0000"`,
+    String.raw`"\ud800"`,
+    String.raw`"\udc00"`,
+    String.raw`"\ud800\udc00"`,
+    '",} ,]"',
+  ];
+  const documents = [
+    "{}",
+    "[]",
+    "null",
+    "true",
+    "0",
+    '"text"',
+    "",
+    " \t\r\n",
+    "\ufeff{}",
+    "{}\ufeff",
+    '{"x":1,"x":2}',
+    '{"__proto__":null}',
+    '{"a":[{},[],true,false,null]}',
+    '{"a":1,}',
+    '{"a":[1,]}',
+    '{"a":{"b":1,}}',
+    "{}{}",
+    '{"a":}',
+    String.raw`{"x":"\u12G4"}`,
+    String.raw`{"x":"\x41"}`,
+    String.raw`{"x":"\v"}`,
+    ...[...numbers, ...strings].map((value) => `{"value":${value}}`),
+    ...["+1", "01", "-01", ".1", "1.", "1e", "1e+", "NaN", "Infinity"].map(
+      (value) => `{"value":${value}}`,
+    ),
+    '{"value":"' + String.fromCodePoint(0xfeff) + '"}',
+    '{"root":' + "[".repeat(4096) + "0" + "]".repeat(4096) + "}",
+    '{"a":'.repeat(2048) + "0" + "}".repeat(2048),
+    ...[1, 2, 16, 31, 128, 4096, 65536].map((count) => '{"a":' + "[".repeat(count)),
+  ];
+  let seed = 0x474f4154;
+  const next = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0);
+  const value = (depth) => {
+    const choice = next() % (depth > 0 ? 7 : 5);
+    if (choice < 3) return ["true", "false", "null"][choice];
+    if (choice === 3) return numbers[next() % numbers.length];
+    if (choice === 4) return strings[next() % strings.length];
+    const children = Array.from({ length: next() % 4 }, () => value(depth - 1));
+    return choice === 5
+      ? "[" + children.join(",") + "]"
+      : "{" + children.map((child, index) => `"key${index}":${child}`).join(",") + "}";
+  };
+  const frames = documents.map((document) => Buffer.from(document));
+  for (let i = 0; i < 256; i++) {
+    const frame = Buffer.from(`{"generated":${value(4)}}`);
+    frames.push(frame);
+    const step = Math.max(1, Math.floor(frame.length / 8));
+    for (let cut = 0; cut < frame.length; cut += step) frames.push(frame.subarray(0, cut));
+    for (const byte of [0, 0x20, 0x22, 0x2c, 0x3a, 0x5b, 0x5c, 0x5d, 0x7b, 0x7d, 0xff]) {
+      const mutated = Buffer.from(frame);
+      mutated[next() % mutated.length] = byte;
+      frames.push(mutated);
+    }
+  }
+  for (const hex of [
+    "c280",
+    "dfbf",
+    "e0a080",
+    "ed9fbf",
+    "ee8080",
+    "f0908080",
+    "f48fbfbf",
+    "80",
+    "c080",
+    "c1bf",
+    "e08080",
+    "eda080",
+    "f0808080",
+    "f4908080",
+    "f5808080",
+    "e282",
+    "f09080",
+    "ff",
+    "7b0000007d000000",
+    "0000007b0000007d",
+    "7b007d002000",
+  ]) {
+    const bytes = Buffer.from(hex, "hex");
+    frames.push(bytes, Buffer.concat([Buffer.from('{"text":"'), bytes, Buffer.from('"}')]));
+  }
+  return frames;
+}
+
 describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport", () => {
   let directory;
   let executable;
@@ -47,6 +143,7 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
       "-o",
       framing,
       NodePath.join(source, "McpFraming.swift"),
+      NodePath.join(source, "McpJsonSyntax.swift"),
       NodePath.join(source, "fixtures/McpFrameFixture.swift"),
     ]);
   });
@@ -142,6 +239,52 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
     expect(run(" \t\r\n{}\n\n").stdout.toString()).toBe("{}\n");
     expect(run("{}", ["--tail"]).stdout.toString()).toBe("{}\n");
     expect(run("{}").stdout.length).toBe(0);
+  });
+
+  it("preserves opaque scalar syntax without converting values in either direction", async () => {
+    for (const wire of ['{"text":"\\ud800"}\n', '{"text":"\\udc00"}\n', '{"value":1e400}\n']) {
+      const session = await start();
+      session.collect();
+      session.child.stdin.end(wire);
+      expect((await session.closed).code).toBe(0);
+      expect(session.output()).toBe(ready + wire);
+    }
+    const outgoing = await start();
+    outgoing.collect();
+    outgoing.child.stdin.end('{"jsonrpc":"2.0","method":"fixture/scalar-reply"}\n');
+    expect((await outgoing.closed).code).toBe(0);
+    expect(outgoing.output()).toBe(ready + '{"text":"\\ud800","low":"\\udc00","value":1e400}\n');
+  });
+
+  it("matches JSON.parse syntax without scalar conversion or recursive depth limits", () => {
+    const frames = syntaxCorpus();
+    const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+    const expected = frames.map((frame) => {
+      try {
+        const value = JSON.parse(decoder.decode(frame));
+        return value !== null && typeof value === "object" && !Array.isArray(value)
+          ? "valid"
+          : "invalid";
+      } catch {
+        return "invalid";
+      }
+    });
+    const result = NodeChildProcess.spawnSync(framing, ["--syntax-lines"], {
+      input: frames.map((frame) => frame.toString("base64")).join("\n") + "\n",
+    });
+    expect(result.status).toBe(0);
+    const actual = result.stdout.toString().trimEnd().split("\n");
+    expect(actual.length).toBe(frames.length);
+    const mismatches = expected.flatMap((verdict, index) =>
+      verdict === actual[index]
+        ? []
+        : [{ index, expected: verdict, actual: actual[index], hex: frames[index].toString("hex") }],
+    );
+    expect(mismatches).toEqual([]);
+    // The seed and corpus dimensions are part of this native contract's review evidence.
+    process.stdout.write(
+      `Native JSON syntax: seed=0x474f4154 cases=${frames.length} valid=${expected.filter((v) => v === "valid").length} mismatches=${mismatches.length}\n`,
+    );
   });
 
   it("preserves schemas, unknown fields, ID types and split Unicode with normal EOF drain", async () => {

@@ -31,6 +31,9 @@ int main(void) {
     } else if (strstr(line, "fixture/hold")) {
       fputs("holding\n", stderr);
       for (;;) pause();
+    } else if (strstr(line, "fixture/scalar-reply")) {
+      puts("{\"text\":\"\\ud800\",\"low\":\"\\udc00\",\"value\":1e400}");
+      fflush(stdout);
     } else if (strstr(line, "fixture/invalid-reply")) {
       if (strstr(line, "trailing")) puts("{\"value\":[1,]}");
       else if (strstr(line, "bom")) puts("\xef\xbb\xbf{}");
