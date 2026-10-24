@@ -12,7 +12,7 @@ import { resolveWorkspaceFilePath } from "@goat/shared/path";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Cause from "effect/Cause";
 import { ChevronsDownUp, ChevronsUpDown } from "~/components/solar/nodes";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupInput } from "~/components/ui/input-group";
@@ -33,11 +33,23 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 import { joinHostPath } from "./filePath";
 import {
   copyFilePathsForCommand,
-  filePathCopyCommandForEvent,
   fileTreeCopyPaths,
   hasRelativeCopyPaths,
   type FilePathCopyCommand,
 } from "./filePathCopyShortcut";
+import {
+  FILE_TREE_FOCUS_REQUEST,
+  focusTreeRow,
+  runFileTreeCommand,
+  toggleDirectoryRecursively,
+  typeToFindSeed,
+  type FileTreeShortcutContext,
+} from "./fileTreeShortcuts";
+import {
+  FILE_TREE_COMMANDS,
+  fileViewCommandForEvent,
+  fileViewShortcutLabel,
+} from "./fileViewCommands";
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
 import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "./fileTreeExpansion";
 import { buildFileTreePathUpdates } from "./fileTreePathReconciliation";
@@ -92,13 +104,16 @@ function RefreshFilesButton(props: { isPending: boolean; onRefresh: () => void }
 function FileSearchField(props: {
   ariaLabel: string;
   name: string;
+  inputRef: RefObject<HTMLInputElement | null>;
   onClose: () => void;
+  onFocusTree: () => void;
   onValueChange: (value: string) => void;
   value: string;
 }) {
   return (
     <InputGroup variant="ghost" className="h-7 min-w-0 flex-1">
       <InputGroupInput
+        ref={props.inputRef}
         type="search"
         name={props.name}
         size="sm"
@@ -108,6 +123,12 @@ function FileSearchField(props: {
         spellCheck={false}
         onChange={(event) => props.onValueChange(event.target.value)}
         onKeyDown={(event) => {
+          // VS Code and JetBrains step from the filter into its results with ArrowDown.
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            props.onFocusTree();
+            return;
+          }
           if (event.key !== "Escape") return;
           props.onClose();
           event.currentTarget.blur();
@@ -372,8 +393,7 @@ export default function FileBrowserPanel({
   const allDirectoriesExpanded = useFileTreeSelector(model, (currentModel) =>
     areAllDirectoriesExpanded(currentModel, expandableDirectoryPaths),
   );
-  const toggleAllDirectories = () => {
-    const expanded = !(expandAll || allDirectoriesExpanded);
+  const setAllExpanded = (expanded: boolean) => {
     setExpandAll(expanded);
     setAllDirectoriesExpanded(
       model,
@@ -381,6 +401,7 @@ export default function FileBrowserPanel({
       expanded,
     );
   };
+  const toggleAllDirectories = () => setAllExpanded(!(expandAll || allDirectoriesExpanded));
   const closeSearch = () => {
     setQuery("");
     search.close();
@@ -553,21 +574,93 @@ export default function FileBrowserPanel({
       panel.removeEventListener("dragend", handleDragEnd);
     };
   }, [dragMention, model]);
-  // Rows live in the tree's shadow root and key events retarget to its host,
-  // so the panel sees them; the tree leaves modified letter keys unhandled.
-  const handlePathCopyShortcut = useStableCallback((event: KeyboardEvent) => {
-    const command = filePathCopyCommandForEvent(event, keybindings);
-    if (command === null) return;
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const treeHost = () =>
+    panelRef.current?.querySelector<HTMLElement>("file-tree-container") ?? null;
+  const focusSearch = (seed?: string) => {
+    if (seed !== undefined) handleSearchValueChange(seed);
+    searchInputRef.current?.focus();
+  };
+  const focusTree = () => {
+    const path =
+      model.getFocusedPath() ??
+      model.getSelectedPaths().at(-1) ??
+      model.getVisibleRows(0, 0)[0]?.path;
+    if (path !== undefined) focusTreeRow(treeHost(), model, path);
+  };
+  const shortcutContext = (): FileTreeShortcutContext => ({
+    model,
+    host: treeHost(),
+    directoryPaths,
+    expandableDirectoryPaths,
+    canExpandAll: !hostFolder,
+    setAllExpanded,
+    // FilePreviewPanel's surface root takes focus (tabIndex -1).
+    focusViewer: () => panelRef.current?.closest<HTMLElement>("[data-file-view]")?.focus(),
+  });
+  // Capture runs before the rows' own handlers in the tree's shadow root, which
+  // treat Alt and Cmd/Ctrl arrows as plain arrows and stop them.
+  const handleShortcut = useStableCallback((event: KeyboardEvent) => {
+    const command = fileViewCommandForEvent(event, keybindings, [
+      ...FILE_TREE_COMMANDS,
+      "files.find",
+      "files.copyPath",
+      "files.copyRelativePath",
+    ]);
+    if (command === null) {
+      const seed = event.target === treeHost() ? typeToFindSeed(event) : null;
+      if (seed === null) return;
+      event.preventDefault();
+      focusSearch(seed);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
-    if (!event.repeat) void copyTreePaths(command, fileTreeCopyPaths(model));
+    if (command === "files.pageDown" || command === "files.pageUp") {
+      runFileTreeCommand(command, shortcutContext());
+    } else if (event.repeat) {
+      return;
+    } else if (command === "files.find") {
+      focusSearch();
+    } else if (command === "files.copyPath" || command === "files.copyRelativePath") {
+      void copyTreePaths(command, fileTreeCopyPaths(model));
+    } else {
+      runFileTreeCommand(command, shortcutContext());
+    }
   });
+  // Option-click opens or closes a folder with everything below it, as in Finder and VS Code.
+  const handleRecursiveClick = useStableCallback((event: MouseEvent) => {
+    if (!event.altKey || event.button !== 0) return;
+    const row = event
+      .composedPath()
+      .find(
+        (node): node is HTMLElement =>
+          node instanceof HTMLElement && node.dataset.itemPath?.endsWith("/") === true,
+      );
+    const path = row?.dataset.itemPath;
+    const item = path === undefined ? null : model.getItem(path);
+    if (path === undefined || !item?.isDirectory()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggleDirectoryRecursively(shortcutContext(), path, !item.isExpanded());
+    focusTreeRow(treeHost(), model, path);
+  });
+  const handleFocusRequest = useStableCallback(() => focusTree());
   useEffect(() => {
     const panel = panelRef.current;
     if (panel === null) return;
-    panel.addEventListener("keydown", handlePathCopyShortcut);
-    return () => panel.removeEventListener("keydown", handlePathCopyShortcut);
-  }, [handlePathCopyShortcut]);
+    panel.addEventListener("keydown", handleShortcut, true);
+    panel.addEventListener("click", handleRecursiveClick, true);
+    panel.addEventListener(FILE_TREE_FOCUS_REQUEST, handleFocusRequest);
+    return () => {
+      panel.removeEventListener("keydown", handleShortcut, true);
+      panel.removeEventListener("click", handleRecursiveClick, true);
+      panel.removeEventListener(FILE_TREE_FOCUS_REQUEST, handleFocusRequest);
+    };
+  }, [handleFocusRequest, handleRecursiveClick, handleShortcut]);
+  const expandToggleCommand =
+    expandAll || allDirectoriesExpanded ? "files.collapseAll" : "files.expandAll";
+  const expandToggleShortcut = fileViewShortcutLabel(keybindings, expandToggleCommand);
 
   return (
     <div
@@ -583,9 +676,11 @@ export default function FileBrowserPanel({
         <FileSearchField
           name="project-files-search"
           ariaLabel={`Search ${projectName} files`}
+          inputRef={searchInputRef}
           value={search.value}
           onValueChange={handleSearchValueChange}
           onClose={closeSearch}
+          onFocusTree={focusTree}
         />
         {directoryPaths.length > 0 && !hostFolder ? (
           <Tooltip>
@@ -611,6 +706,9 @@ export default function FileBrowserPanel({
             </TooltipTrigger>
             <TooltipPopup>
               {expandAll || allDirectoriesExpanded ? "Collapse all folders" : "Expand all folders"}
+              {expandToggleShortcut ? (
+                <span className="ms-2 text-muted-foreground">{expandToggleShortcut}</span>
+              ) : null}
             </TooltipPopup>
           </Tooltip>
         ) : null}

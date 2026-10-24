@@ -3,12 +3,12 @@ import type { FileTree } from "@pierre/trees";
 
 import { toastManager } from "~/components/ui/toast";
 import { copyFilePath, resolveFilePathCopyTargets } from "~/filePathCopy";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
-import { isEditableFocused } from "~/lib/editableFocus";
+
+import { fileViewCommandForEvent, fileViewShortcutLabel } from "./fileViewCommands";
 
 export type FilePathCopyCommand = "files.copyPath" | "files.copyRelativePath";
 
-const FILE_VIEW_CONTEXT = { fileViewFocus: true } as const;
+const FILE_PATH_COPY_COMMANDS = ["files.copyPath", "files.copyRelativePath"] as const;
 
 /**
  * The copy command a key press inside a file view asks for. Typing in a field
@@ -18,18 +18,14 @@ export function filePathCopyCommandForEvent(
   event: KeyboardEvent,
   keybindings: ResolvedKeybindingsConfig,
 ): FilePathCopyCommand | null {
-  if (event.defaultPrevented || event.isComposing || isEditableFocused(event.target)) return null;
-  const command = resolveShortcutCommand(event, keybindings, {
-    context: { ...FILE_VIEW_CONTEXT, editableFocus: false },
-  });
-  return command === "files.copyPath" || command === "files.copyRelativePath" ? command : null;
+  return fileViewCommandForEvent(event, keybindings, FILE_PATH_COPY_COMMANDS);
 }
 
 export function filePathCopyShortcutLabel(
   keybindings: ResolvedKeybindingsConfig,
   command: FilePathCopyCommand,
 ): string | null {
-  return shortcutLabelForCommand(keybindings, command, { context: FILE_VIEW_CONTEXT });
+  return fileViewShortcutLabel(keybindings, command);
 }
 
 /**

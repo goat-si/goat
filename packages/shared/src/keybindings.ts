@@ -177,6 +177,24 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
     command: "files.copyRelativePath",
     when: "fileViewFocus && !editableFocus",
   },
+  // Tree-only keys. The tree's own arrows, Home/End, Enter/Space and selection keys stay built in.
+  { key: "pagedown", command: "files.pageDown", when: "fileTreeFocus && !editableFocus" },
+  { key: "pageup", command: "files.pageUp", when: "fileTreeFocus && !editableFocus" },
+  { key: "mod+arrowdown", command: "files.open", when: "fileTreeFocus && !editableFocus" },
+  {
+    key: "alt+arrowright",
+    command: "files.expandRecursive",
+    when: "fileTreeFocus && !editableFocus",
+  },
+  {
+    key: "alt+arrowleft",
+    command: "files.collapseRecursive",
+    when: "fileTreeFocus && !editableFocus",
+  },
+  { key: "mod+arrowright", command: "files.expandAll", when: "fileTreeFocus && !editableFocus" },
+  { key: "mod+arrowleft", command: "files.collapseAll", when: "fileTreeFocus && !editableFocus" },
+  // chat.find shares mod+f; it yields to a file view that can find (fileFindShortcut.ts).
+  { key: "mod+f", command: "files.find", when: "fileViewFocus" },
   { key: "mod+shift+f", command: "projectSearch.toggle", when: "!terminalFocus" },
   { key: "mod+u", command: "usage.open", when: "!terminalFocus" },
   { key: "mod+alt+a", command: "theme.select", when: "!terminalFocus" },
