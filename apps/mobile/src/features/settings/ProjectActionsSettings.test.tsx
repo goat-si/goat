@@ -1,4 +1,4 @@
-import { DEFAULT_SERVER_SETTINGS, type ProjectScript } from "@goat/contracts";
+import { DEFAULT_SERVER_SETTINGS, ProjectReadFileError, type ProjectScript } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { act } from "react";
@@ -44,16 +44,17 @@ vi.mock("../../state/session", () => ({
 }));
 vi.mock("../../state/projects", () => ({
   projectEnvironment: {
-    readFile: (request: { input: { cwd: string; relativePath: string } }) => request.input,
+    readFile: (request: { environmentId: string; input: { cwd: string; relativePath: string } }) =>
+      `${request.environmentId}:${request.input.cwd}/${request.input.relativePath}`,
   },
 }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (input: { cwd: string; relativePath: string } | null) => {
-    const entry = input ? mocks.files[`${input.cwd}/${input.relativePath}`] : undefined;
+  useEnvironmentQuery: (key: string | null) => {
+    const entry = key ? mocks.files[key] : undefined;
     return {
       data: entry?.data ?? null,
       cause: entry?.cause ?? null,
-      isPending: input !== null && entry === undefined,
+      isPending: key !== null && entry === undefined,
     };
   },
 }));
@@ -96,6 +97,20 @@ function goatFile(path: string, scripts: readonly object[]) {
 }
 
 const setupFile = [{ name: "Install", command: "vp i", runOnWorktreeCreate: true }];
+
+/** Servers without allowMissing report an absent file only through the read error's cause. */
+function missingOnOlderServer(path: string) {
+  mocks.files[path] = {
+    data: null,
+    cause: new ProjectReadFileError({
+      cwd: "/repo",
+      relativePath: path.slice(path.lastIndexOf("/") + 1),
+      failure: "operation_failed",
+      operation: "realpath-target",
+      cause: Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" }),
+    }),
+  };
+}
 
 let root: Root;
 let container: HTMLDivElement;
@@ -216,7 +231,7 @@ describe("ProjectActionsSettings", () => {
   });
 
   it("shows repository setup from goat.json for an unconfigured project and turns it off", async () => {
-    goatFile("/repo/goat.json", setupFile);
+    goatFile("local:/repo/goat.json", setupFile);
     render([member("local")], [environment("local", {})]);
     expect(container.textContent).toContain("Install (setup)");
     expect(container.textContent).toContain("Repository setup from goat.json");
@@ -229,17 +244,48 @@ describe("ProjectActionsSettings", () => {
   });
 
   it("reads t3.json only when goat.json is absent", () => {
-    mocks.files["/repo/goat.json"] = {
+    mocks.files["local:/repo/goat.json"] = {
       data: { contents: "", truncated: false, exists: false },
     };
-    goatFile("/repo/t3.json", setupFile);
+    goatFile("local:/repo/t3.json", setupFile);
     render([member("local")], [environment("local", {})]);
     expect(container.textContent).toContain("Repository setup from t3.json");
   });
 
+  it("falls back to t3.json and reports a missing file on a server that only returns ENOENT", () => {
+    missingOnOlderServer("local:/repo/goat.json");
+    goatFile("local:/repo/t3.json", setupFile);
+    render([member("local")], [environment("local", {})]);
+    expect(container.textContent).toContain("Repository setup from t3.json");
+
+    missingOnOlderServer("local:/repo/t3.json");
+    render([member("local")], [environment("local", {})]);
+    expect(container.textContent).toContain("This checkout has no goat.json or t3.json.");
+    expect(buttons("Turn off actions for this project")).toHaveLength(0);
+  });
+
+  it("reads each checkout's repository file from its own environment", () => {
+    goatFile("local:/repo/goat.json", setupFile);
+    mocks.files["remote:/repo/goat.json"] = {
+      data: { contents: "", truncated: false, exists: false },
+    };
+    mocks.files["remote:/repo/t3.json"] = {
+      data: { contents: "", truncated: false, exists: false },
+    };
+    render(
+      [member("local"), member("remote")],
+      [environment("local", {}), environment("remote", {})],
+    );
+    expect(container.textContent).toContain("Repository setup from goat.json");
+    expect(container.textContent).toContain("This checkout has no goat.json or t3.json.");
+    expect(buttons("Turn off actions for this project")).toHaveLength(1);
+  });
+
   it("ignores repository actions when goat.json is invalid, even with a valid t3.json", () => {
-    mocks.files["/repo/goat.json"] = { data: { contents: "{", truncated: false, exists: true } };
-    goatFile("/repo/t3.json", setupFile);
+    mocks.files["local:/repo/goat.json"] = {
+      data: { contents: "{", truncated: false, exists: true },
+    };
+    goatFile("local:/repo/t3.json", setupFile);
     render([member("local")], [environment("local", {})]);
     expect(container.textContent).toContain("goat.json is invalid");
     expect(container.textContent).not.toContain("Install");
@@ -248,7 +294,7 @@ describe("ProjectActionsSettings", () => {
 
   it("does not read repository files without filesystem read access", () => {
     mocks.readScope = new Set();
-    goatFile("/repo/goat.json", setupFile);
+    goatFile("local:/repo/goat.json", setupFile);
     render([member("local")], [environment("local", {})]);
     expect(container.textContent).toContain("cannot read this checkout's repository actions");
     expect(container.textContent).not.toContain("Install");
