@@ -122,6 +122,9 @@ const CHILD_SETUP_TEXT: Record<ChildSetup["tone"], string> = {
   destructive: "text-sm text-danger-foreground",
 };
 
+/** Web's host-status period: each read samples CPU and asks every SSH host. */
+const SETUP_REFRESH_MS = 15_000;
+
 /** The hub's machines with their OpenCodex link, as Settings → Hub shows them on desktop and web. */
 function HubDevicesList({
   environmentId,
@@ -141,6 +144,14 @@ function HubDevicesList({
     ),
     hosts,
   });
+  // Host status is a one-shot read; reread it only while a setup is still moving.
+  const settingUp = rows.some((row) => row.childSetup?.state === "running");
+  const refreshStatus = status.refresh;
+  useEffect(() => {
+    if (!settingUp) return;
+    const timer = setInterval(refreshStatus, SETUP_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [settingUp, refreshStatus]);
   const canCheck = useAtomValue(serverEnvironment.checkHubNodes.permissionAtom(environmentId));
   const canRemove = useAtomValue(serverEnvironment.removeHubNode.permissionAtom(environmentId));
   const canDismiss = useAtomValue(

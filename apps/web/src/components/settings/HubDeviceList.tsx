@@ -162,14 +162,18 @@ export function HubDeviceListSection(props: {
         </p>
       )}
       {/* Search and old links to "Devices on this hub" land on the forms that add one. The
-          anchor waits for both reads, so rows arriving above it do not push it out of view. */}
-      {nodes.loading || props.hostsState === "reading" ? (
+          anchor id waits for both reads, so rows arriving above it do not push it out of view;
+          the wrapper stays mounted so a half-typed form keeps its text. */}
+      <SettingsSearchTarget
+        id={
+          nodes.loading || props.hostsState === "reading"
+            ? undefined
+            : searchableSetting("hub-nodes").id
+        }
+        className="outline-none"
+      >
         <HubNodeAddForms nodes={nodes} />
-      ) : (
-        <SettingsSearchTarget id={searchableSetting("hub-nodes").id} className="outline-none">
-          <HubNodeAddForms nodes={nodes} />
-        </SettingsSearchTarget>
-      )}
+      </SettingsSearchTarget>
     </SettingsSection>
   );
 }

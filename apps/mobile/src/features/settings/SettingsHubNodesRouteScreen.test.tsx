@@ -111,15 +111,19 @@ beforeEach(() => {
   state.hosts = [];
   state.hostsError = null;
   state.refreshHosts.mockReset();
-  state.query
-    .mockReset()
-    .mockImplementation((target: object) =>
-      "hostStatus" in target
-        ? state.hostsError === null
-          ? { data: { hosts: state.hosts }, error: null, cause: null, isSuccess: true }
-          : { data: null, error: state.hostsError, cause: null, refresh: state.refreshHosts }
-        : { data: { nodes: [device], notices: [] }, error: null, cause: null },
-    );
+  state.query.mockReset().mockImplementation((target: object) =>
+    "hostStatus" in target
+      ? state.hostsError === null
+        ? {
+            data: { hosts: state.hosts },
+            error: null,
+            cause: null,
+            isSuccess: true,
+            refresh: state.refreshHosts,
+          }
+        : { data: null, error: state.hostsError, cause: null, refresh: state.refreshHosts }
+      : { data: { nodes: [device], notices: [] }, error: null, cause: null },
+  );
   for (const command of [state.check, state.remove, state.dismiss])
     command.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
   container = document.createElement("div");
@@ -225,7 +229,13 @@ it("tells the user when the chosen hub is too old to keep a device list", async 
   ];
   state.query.mockImplementation((target: object) =>
     "hostStatus" in target
-      ? { data: { hosts: state.hosts }, error: null, cause: null, isSuccess: true }
+      ? {
+          data: { hosts: state.hosts },
+          error: null,
+          cause: null,
+          isSuccess: true,
+          refresh: state.refreshHosts,
+        }
       : { data: null, error: null, cause: new Error("Unknown request tag: hub.nodes.subscribe") },
   );
   await render();
@@ -271,4 +281,26 @@ it("says when OpenCodex link state could not be read, keeps the hub's devices, a
   expect(container.textContent).not.toContain("Not linked to OpenCodex");
   await act(async () => button("Try again").click());
   expect(state.refreshHosts).toHaveBeenCalledOnce();
+});
+
+it("rereads host status while a setup is running, and stops once none is", async () => {
+  state.environments = [first];
+  state.selectedTargets = [first];
+  state.hosts = [
+    { host: "lab", reachability: "ok", opencodexChild: { state: "running", checkedAt: 0 } },
+  ];
+  vi.useFakeTimers();
+  try {
+    await render();
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(state.refreshHosts).toHaveBeenCalledOnce();
+    state.hosts = [
+      { host: "lab", reachability: "ok", opencodexChild: { state: "child", checkedAt: 1 } },
+    ];
+    await render();
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(state.refreshHosts).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
 });
