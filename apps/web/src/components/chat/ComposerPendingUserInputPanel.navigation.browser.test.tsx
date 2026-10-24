@@ -302,7 +302,7 @@ it("refuses a question answer after its attached thread loses its SSH route and 
     "question-1",
   );
   let requests!: ReturnType<typeof usePendingThreadRequests>;
-  await using screen = await render(
+  await using _screen = await render(
     <PendingRequestsProbe
       environmentId={environmentId}
       projection={projection}
