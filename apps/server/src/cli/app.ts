@@ -179,6 +179,11 @@ const appEnvironment = Config.all({
   goatHome: Config.String("GOAT_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   sshConnection: Config.String("SSH_CONNECTION").pipe(Config.option),
   sshTty: Config.String("SSH_TTY").pipe(Config.option),
+  // A thread shell's TMPDIR is the thread's own; the desktop listens under the machine's (#1206).
+  systemTemporaryDirectory: Config.String("GOAT_SYSTEM_TMPDIR").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 const runAppCommand = Effect.fn("cli.app")(function* (flags: {
@@ -206,7 +211,7 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
     resolveDesktopAppControlAddresses({
       stateDir,
       platform: hostPlatform,
-      tempDir: NodeOS.tmpdir(),
+      tempDir: environment.systemTemporaryDirectory || NodeOS.tmpdir(),
       userId,
       joinPath: path.join,
     }).map(({ address }) => address);
