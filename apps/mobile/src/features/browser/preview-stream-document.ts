@@ -12,6 +12,7 @@ export interface PreviewStreamConfiguration {
   readonly tabId: string;
   readonly interactive: boolean;
   readonly background: string;
+  readonly thumbnail?: boolean;
 }
 
 export type PreviewStreamMessage =
