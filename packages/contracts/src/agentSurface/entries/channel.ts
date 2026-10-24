@@ -184,7 +184,7 @@ export const channelEntries = {
     description:
       "Record progress, a question, proposed completion, or failure for this thread's GOAT ledger task. Stop after reporting waiting_input. A completed report does not stop the run. A reused eventId or a stale task state returns success without changing the task.",
     guide:
-      "Only the task's worker thread can report. Pass its current generation and a new eventId for each report.\n\n- Use running for progress.\n- Use waiting_input with question to ask the person who requested the work, then stop.\n- Use completed to propose completion; GOAT records the proposal and settles completion after the run ends.\n- Use failed to report failure.",
+      "Only the task's worker thread can report. Pass its current generation and a new eventId for each report.\n\n- Use running for progress. Set milestone: true for a milestone the person should see now: work started on another machine, a material finding, or a blocker. Leave it unset for routine progress or chatter.\n- Use waiting_input with question to ask the person who requested the work, then stop.\n- Use completed to propose completion; GOAT records the proposal and settles completion after the run ends.\n- Use failed to report failure.",
     effect: "write",
     capability: "none",
     capabilityReason: "Only the task's own worker thread reports on it.",
