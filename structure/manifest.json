@@ -153,7 +153,6 @@
         "apps/server/src/orchestration-v2/ProviderAdapterRegistry.ts",
         "apps/server/src/orchestration-v2/CheckpointCaptureService.ts",
         "apps/server/src/orchestration-v2/CheckpointService.ts",
-        "apps/server/src/orchestration-v2/builtInProviderAdapterDrivers.ts",
         "apps/server/src/checkpointing/CheckpointStore.ts",
         "apps/server/src/checkpointing/Utils.ts",
         "apps/server/src/vcs/GitVcsDriver.ts",
@@ -430,7 +429,9 @@
         "apps/desktop/src/app/DesktopClerk.ts",
         "apps/desktop/src/cua/",
         "scripts/build-desktop-artifact.ts",
-        "patches/@ubjs__node@0.31.0-3.patch"
+        "patches/@ubjs__node@0.31.0-3.patch",
+        "apps/desktop/native/computer-use-helper/",
+        "scripts/build-computer-use-helper.ts"
       ]
     },
     {
@@ -502,6 +503,14 @@
           "anchor": "state-roots"
         },
         "dependents": ["overview.md", "server.md", "desktop.md", "ssh.md"]
+      },
+      {
+        "id": "computer-use",
+        "owner": {
+          "document": "server.md",
+          "anchor": "computer-use"
+        },
+        "dependents": ["desktop.md", "shared.md"]
       }
     ]
   },

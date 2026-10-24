@@ -171,6 +171,7 @@ import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -834,7 +835,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       ProjectStore.layer,
       ThreadSearch.layer,
       layerCuaDriver,
-      ComputerUseLeases.layer,
+      ComputerUseLeases.layer.pipe(Layer.provide(layerDesktopTelemetryReceiver)),
       CloudProviderAutoSetup.layer,
     ),
   ),
@@ -972,7 +973,7 @@ const layerMakeRoutes = Layer.mergeAll(
     HubProxyHttp.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
-    Ws.layer,
+    Ws.layer.pipe(Layer.provide(PreviewSessions.layer)),
   ),
   Layer.mergeAll(
     McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),

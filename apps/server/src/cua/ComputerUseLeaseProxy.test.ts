@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { ComputerUseLeaseUpdate } from "@goat/contracts";
+import { type ComputerUseLeaseUpdate, computerUseRefusalReason } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -9,18 +9,33 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import { LEASE_END_MESSAGES, leaseUpdateLines, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import {
+  LEASE_END_MESSAGES,
+  leaseUpdateLines,
+  PAUSE_MESSAGES,
+  runLeaseProxy,
+} from "./ComputerUseLeaseProxy.ts";
 
-const HANDOFF = "handoff:grant";
-const call = (id: number, name: string, args: object = {}) =>
+const CONTROL = "control:one";
+const call = (id: number | string, name: string, args: object = {}) =>
   JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
-const active = (expiresAt = "1970-01-01T00:30:00.000Z"): ComputerUseLeaseUpdate => ({
+const active = (
+  expiresAt = "1970-01-01T00:30:00.000Z",
+  apps?: ReadonlyArray<string>,
+): ComputerUseLeaseUpdate => ({
   state: "active",
-  handoffId: HANDOFF,
+  controlId: CONTROL,
   expiresAt,
+  ...(apps === undefined ? {} : { apps }),
 });
 
-/** A proxy over in-memory stdio, lease stream and driver, on the TestClock (epoch 0). */
+interface FakeDriver {
+  readonly toDriver: Queue.Queue<string>;
+  readonly fromDriver: Queue.Queue<string, Cause.Done>;
+  readonly killed: Deferred.Deferred<void>;
+}
+
+/** A proxy over in-memory stdio, lease stream and drivers, on the TestClock (epoch 0). */
 const harness = Effect.fn(function* (
   options: {
     readonly expiresAt?: string;
@@ -31,21 +46,31 @@ const harness = Effect.fn(function* (
   const input = yield* Queue.unbounded<string, Cause.Done>();
   const output = yield* Queue.unbounded<string>();
   const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done | string>();
-  const driverIn = yield* Queue.unbounded<string>();
-  const driverOut = yield* Queue.unbounded<string, Cause.Done>();
-  const killed = yield* Deferred.make<void>();
+  const drivers: Array<FakeDriver> = [];
+  const started = yield* Queue.unbounded<FakeDriver>();
   const revokeCalled = yield* Deferred.make<void>();
   const revoked: Array<ReadonlyArray<string>> = [];
   const proxy = yield* runLeaseProxy({
-    handoffId: HANDOFF,
+    controlId: CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     input: Stream.fromQueue(input),
     output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
     leaseUpdates: Stream.fromQueue(updates),
-    startDriver: Effect.succeed({
-      send: (line: string) => Queue.offer(driverIn, line).pipe(Effect.asVoid),
-      lines: Stream.fromQueue(driverOut),
-      kill: Deferred.succeed(killed, undefined).pipe(Effect.andThen(Queue.end(driverOut))),
+    startDriver: Effect.gen(function* () {
+      const driver: FakeDriver = {
+        toDriver: yield* Queue.unbounded<string>(),
+        fromDriver: yield* Queue.unbounded<string, Cause.Done>(),
+        killed: yield* Deferred.make<void>(),
+      };
+      drivers.push(driver);
+      yield* Queue.offer(started, driver);
+      return {
+        send: (line: string) => Queue.offer(driver.toDriver, line).pipe(Effect.asVoid),
+        lines: Stream.fromQueue(driver.fromDriver),
+        kill: Deferred.succeed(driver.killed, undefined).pipe(
+          Effect.andThen(Queue.end(driver.fromDriver)),
+        ),
+      };
     }),
     revokeSessions: (sessions) =>
       Effect.sync(() => void revoked.push(sessions)).pipe(
@@ -53,18 +78,22 @@ const harness = Effect.fn(function* (
         Effect.andThen(options.revoke?.(sessions) ?? Effect.void),
       ),
   }).pipe(Effect.scoped, Effect.forkChild);
+  const first = yield* Queue.take(started);
+  const current = () => drivers.at(-1) ?? first;
   const json = (line: string) => JSON.parse(line) as Record<string, unknown>;
   return {
     send: (line: string) => Queue.offer(input, line),
     close: Queue.end(input),
     push: (update: ComputerUseLeaseUpdate) => Queue.offer(updates, update),
     failLeaseStream: Queue.fail(updates, "connection reset"),
-    reply: (line: string) => Queue.offer(driverOut, line),
-    nextToDriver: Queue.take(driverIn).pipe(Effect.map(json)),
+    reply: (line: string) => Queue.offer(current().fromDriver, line),
+    nextToDriver: Effect.suspend(() => Queue.take(current().toDriver)).pipe(Effect.map(json)),
     nextToProvider: Queue.take(output).pipe(Effect.map(json)),
-    driverQueued: Queue.size(driverIn),
-    killed: Deferred.await(killed),
-    isKilled: Deferred.isDone(killed),
+    providerQueued: Queue.size(output),
+    driverQueued: Effect.suspend(() => Queue.size(current().toDriver)),
+    killed: Effect.suspend(() => Deferred.await(first.killed)),
+    isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
+    restarted: Queue.take(started),
     revokeCalled: Deferred.await(revokeCalled),
     revoked,
     proxy,
@@ -74,7 +103,11 @@ const harness = Effect.fn(function* (
 const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES) => ({
   jsonrpc: "2.0",
   id,
-  result: { content: [{ type: "text", text: LEASE_END_MESSAGES[reason] }], isError: true },
+  result: {
+    content: [{ type: "text", text: LEASE_END_MESSAGES[reason] }],
+    structuredContent: { refused: computerUseRefusalReason(reason), detail: reason },
+    isError: true,
+  },
 });
 
 describe("ComputerUseLeaseProxy", () => {
@@ -188,10 +221,10 @@ describe("ComputerUseLeaseProxy", () => {
     }),
   );
 
-  it.effect("treats a lease for another handoff, or computer use turned off, as ended", () =>
+  it.effect("treats an update for another control, or computer use turned off, as ended", () =>
     Effect.gen(function* () {
       const other = yield* harness();
-      yield* other.push({ ...active(), handoffId: "handoff:other" } as ComputerUseLeaseUpdate);
+      yield* other.push({ ...active(), controlId: "control:other" } as ComputerUseLeaseUpdate);
       yield* other.killed;
       yield* other.send(call(1, "click"));
       assert.deepEqual(yield* other.nextToProvider, refusedCall(1, "lost"));
@@ -205,11 +238,247 @@ describe("ComputerUseLeaseProxy", () => {
     }),
   );
 
+  it.effect("on Stop kills the driver mid-call and tells the agent not to go on", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.send(call(1, "run_script", { script: "/* long */" }));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.push({ state: "ended", reason: "stopped" });
+      yield* h.killed;
+      assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+      assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "stopped"));
+      yield* h.close;
+      assert.equal(yield* Fiber.join(h.proxy), "stopped");
+    }),
+  );
+
+  it.effect(
+    "pauses for a person's input: kills the call in flight, refuses until handed back, then restarts the driver",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        const initialize = JSON.stringify({
+          jsonrpc: "2.0",
+          id: 0,
+          method: "initialize",
+          params: { v: 1 },
+        });
+        const initialized = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" });
+        yield* h.send(initialize);
+        yield* h.send(initialized);
+        assert.equal((yield* h.nextToDriver).method, "initialize");
+        assert.equal((yield* h.nextToDriver).method, "notifications/initialized");
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 0, result: {} }));
+        assert.equal((yield* h.nextToProvider).id, 0);
+        yield* h.push(active());
+        yield* h.send(call(1, "drag", { pid: 4, window_id: 9 }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        yield* h.killed;
+        assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+        const waiting = {
+          jsonrpc: "2.0",
+          result: {
+            content: [{ type: "text", text: PAUSE_MESSAGES.human_input }],
+            structuredContent: { refused: "userIntervened", detail: "waiting_for_human" },
+            isError: true,
+          },
+        };
+        assert.deepEqual(yield* h.nextToProvider, { ...waiting, id: 1 });
+        yield* h.send(call(2, "click", { pid: 4, window_id: 9 }));
+        assert.deepEqual(yield* h.nextToProvider, { ...waiting, id: 2 });
+
+        yield* h.push(active());
+        yield* h.restarted;
+        // The fresh child hears the handshake under the proxy's own id, and its answer stays inside.
+        const replayed = yield* h.nextToDriver;
+        assert.deepInclude(replayed, { method: "initialize", params: { v: 1 } });
+        assert.match(String(replayed.id), /^goat-proxy:/);
+        assert.equal((yield* h.nextToDriver).method, "notifications/initialized");
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: replayed.id, result: {} }));
+        yield* h.send(call(3, "click", { pid: 4, window_id: 9 }));
+        assert.equal((yield* h.nextToDriver).id, 3);
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 3);
+      }),
+  );
+
+  it.effect(
+    "lets a thread act only on its approved apps, asking the driver which app a pid is",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active(undefined, ["com.apple.calculator"]));
+        yield* h.send(call(1, "click", { target: { kind: "window", pid: 42, window_id: 1 } }));
+        const lookup = yield* h.nextToDriver;
+        assert.deepEqual(lookup.params, { name: "list_apps", arguments: {} });
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: lookup.id,
+            result: {
+              structuredContent: {
+                apps: [
+                  { pid: 42, bundle_id: "com.apple.calculator", name: "Calculator" },
+                  { pid: 7, bundle_id: "com.apple.Terminal", name: "Terminal" },
+                ],
+              },
+            },
+          }),
+        );
+        assert.equal((yield* h.nextToDriver).id, 1);
+
+        yield* h.send(
+          call(2, "type_text", {
+            text: "rm -rf ~",
+            target: { kind: "window", pid: 7, window_id: 3 },
+          }),
+        );
+        const refused = yield* h.nextToProvider;
+        assert.deepInclude(
+          (refused.result as Record<string, unknown>).structuredContent as object,
+          {
+            refused: "appNotAllowed",
+            app: "com.apple.Terminal",
+          },
+        );
+        for (const [id, name, args] of [
+          [3, "get_desktop_state", {}],
+          [4, "press_key", { key: "return" }],
+          [5, "run_script", { script: "click()" }],
+        ] as const) {
+          yield* h.send(call(id, name, args));
+          const answer = yield* h.nextToProvider;
+          assert.equal(answer.id, id);
+          assert.deepInclude(
+            (answer.result as Record<string, unknown>).structuredContent as object,
+            {
+              refused: "targetRefused",
+              detail: "desktop_not_approved",
+            },
+          );
+        }
+        // Listing what is on screen touches no app.
+        yield* h.send(call(6, "list_windows"));
+        assert.equal((yield* h.nextToDriver).id, 6);
+        assert.equal(yield* h.driverQueued, 0);
+      }),
+  );
+
+  it.effect("stops a running call when its app loses approval, and drops its late answer", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active(undefined, ["com.apple.calculator", "com.apple.Notes"]));
+      yield* h.send(call(1, "list_apps"));
+      yield* h.nextToDriver;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { structuredContent: { apps: [{ pid: 9, bundle_id: "com.apple.Notes" }] } },
+        }),
+      );
+      assert.equal((yield* h.nextToProvider).id, 1);
+      yield* h.send(
+        call(2, "type_text", { text: "long note", target: { kind: "window", pid: 9 } }),
+      );
+      assert.equal((yield* h.nextToDriver).id, 2);
+      // A person ends the Notes grant while the call runs.
+      yield* h.push(active(undefined, ["com.apple.calculator"]));
+      yield* h.killed;
+      assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+      const refused = yield* h.nextToProvider;
+      assert.equal(refused.id, 2);
+      assert.deepInclude((refused.result as Record<string, unknown>).structuredContent as object, {
+        detail: "app_not_approved",
+      });
+      yield* h.restarted;
+      assert.equal(yield* h.providerQueued, 0);
+    }),
+  );
+
+  it.effect(
+    "refuses a call held for a proxy whose first word is paused, and never runs it on hand back",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        const refused = yield* h.nextToProvider;
+        assert.equal(refused.id, 1);
+        assert.deepInclude(
+          (refused.result as Record<string, unknown>).structuredContent as object,
+          {
+            refused: "userIntervened",
+          },
+        );
+        yield* h.push(active());
+        yield* h.restarted;
+        yield* h.send(call(2, "list_windows"));
+        // The fresh child sees only the new call; the held click is gone.
+        assert.equal((yield* h.nextToDriver).id, 2);
+      }),
+  );
+
+  it.effect("pauses for a secret field with a private refusal and resumes by itself", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "private" });
+      yield* h.killed;
+      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
+      const refused = yield* h.nextToProvider;
+      assert.deepInclude((refused.result as Record<string, unknown>).structuredContent as object, {
+        detail: "private_mode",
+      });
+      yield* h.push(active());
+      yield* h.restarted;
+      yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
+      assert.equal((yield* h.nextToDriver).id, 2);
+    }),
+  );
+
+  it.effect(
+    "ends the call a secret overlapped even when the pause and its end arrive as one update",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        yield* h.send(call(1, "type_text", { text: "hello", target: { kind: "window", pid: 4 } }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        // The route read the control only after the secret field had already lost focus.
+        yield* h.push({
+          ...active(),
+          interruptions: { count: 1, last: "private" },
+        } as ComputerUseLeaseUpdate);
+        yield* h.killed;
+        assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+        const refused = yield* h.nextToProvider;
+        assert.equal(refused.id, 1);
+        assert.deepInclude(
+          (refused.result as Record<string, unknown>).structuredContent as object,
+          {
+            detail: "private_mode",
+          },
+        );
+        yield* h.restarted;
+        // The same count again is no new pause.
+        yield* h.push({
+          ...active(),
+          interruptions: { count: 1, last: "private" },
+        } as ComputerUseLeaseUpdate);
+        yield* h.send(call(2, "list_windows"));
+        assert.equal((yield* h.nextToDriver).id, 2);
+      }),
+  );
+
   it.effect("drops a driver reply to a request the provider cancelled or never made", () =>
     Effect.gen(function* () {
       const h = yield* harness();
       yield* h.push(active());
-      yield* h.send(call(3, "screenshot"));
+      yield* h.send(call(3, "list_apps"));
       assert.equal((yield* h.nextToDriver).id, 3);
       const cancel = {
         jsonrpc: "2.0",

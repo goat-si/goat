@@ -1,4 +1,10 @@
-import { assert, describe, it } from "@effect/vitest";
+// @effect-diagnostics nodeBuiltinImport:off -- Manifest tests use a trap driver script on a real temporary directory.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import { assert, describe, expect, it } from "@effect/vitest";
+import { computerUseReady } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -6,7 +12,7 @@ import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { afterEach, vi } from "vite-plus/test";
 
-import { bitmapHasContent } from "./DesktopCuaDriver.ts";
+import { bitmapHasContent, prepareDesktopManifest } from "./DesktopCuaDriver.ts";
 
 import {
   privacyEnvironment,
@@ -580,6 +586,261 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
       }),
     ),
   );
+
+  it.effect("reports grants the helper asked for as waiting, with neither safety signal", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: false } });
+        yield* test.request("agent");
+        yield* test.next;
+        const report = test.readiness.at(-1);
+        assert.deepEqual(report?.readiness.grants, {
+          accessibility: "pending",
+          screenCapture: "pending",
+        });
+        assert.equal(report?.readiness.helper, "unauthenticated");
+        assert.deepEqual(report?.signals, {
+          privateMode: "unsupported",
+          humanInput: "unsupported",
+        });
+        assert.isFalse(report ? computerUseReady(report.readiness) : true);
+      }),
+    ),
+  );
+
+  it.effect(
+    "is ready only after the check proved capture and the tree and while the helper runs the driver",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+          });
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          const started = test.readiness.at(-1);
+          // Running, but nothing has read a window yet.
+          assert.equal(started?.readiness.helper, "authenticated");
+          assert.equal(started?.readiness.capture, "pending");
+          assert.isFalse(started ? computerUseReady(started.readiness) : true);
+
+          assert.isTrue((yield* test.verify).verified);
+          const checked = test.readiness.at(-1);
+          assert.equal(checked?.readiness.capture, "ready");
+          assert.equal(checked?.readiness.tree, "ready");
+          // The check retired the agent's driver to see fresh grants.
+          assert.equal((yield* test.next).status, "stopped");
+          assert.equal(checked?.readiness.helper, "unauthenticated");
+
+          yield* test.request("agent-again");
+          assert.equal((yield* test.next).status, "ready");
+          const running = test.readiness.at(-1);
+          assert.isTrue(running ? computerUseReady(running.readiness) : false);
+          assert.isAbove(running?.generation ?? 0, started?.generation ?? 0);
+          assert.deepEqual(running?.readiness.reasons, []);
+        }),
+      ),
+  );
+
+  it.effect("reports a blank capture from the check as blank, not ready", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          blankCapture: true,
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+        });
+        assert.isFalse((yield* test.verify).verified);
+        assert.equal(test.readiness.at(-1)?.readiness.capture, "blank");
+        assert.equal(test.readiness.at(-1)?.readiness.tree, "unavailable");
+      }),
+    ),
+  );
+
+  it.effect("needs a fresh check after the helper's grants were taken away and given back", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+        });
+        assert.isTrue((yield* test.verify).verified);
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        const proven = test.readiness.at(-1);
+        assert.isTrue(proven ? computerUseReady(proven.readiness) : false);
+
+        yield* test.restart;
+        assert.equal((yield* test.next).status, "stopped");
+        yield* test.answerAsHelper({ granted: false });
+        yield* test.request("revoked");
+        assert.equal((yield* test.next).status, "unavailable");
+        yield* test.answerAsHelper({ granted: true });
+        yield* test.request("given-back");
+        assert.equal((yield* test.next).status, "ready");
+        const running = test.readiness.at(-1);
+        assert.equal(running?.readiness.helper, "authenticated");
+        assert.equal(running?.readiness.capture, "pending");
+        assert.isFalse(running ? computerUseReady(running.readiness) : true);
+      }),
+    ),
+  );
+
+  it.effect.each([
+    { platform: "darwin", how: "unusable" },
+    { platform: "darwin", how: "absent" },
+    { platform: "win32", how: "unusable" },
+    { platform: "win32", how: "absent" },
+  ] as const)(
+    "drops earlier proofs when the helper becomes $how on $platform",
+    ({ platform, how }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform,
+            helper: { granted: true },
+            tools:
+              platform === "win32"
+                ? {
+                    ...healthyTools(),
+                    check_permissions: toolResult({ elevated: false, uia: true }),
+                  }
+                : helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+          });
+          assert.isTrue((yield* test.verify).verified);
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          const proven = test.readiness.at(-1);
+          assert.isTrue(proven ? computerUseReady(proven.readiness) : false);
+
+          yield* test.loseHelper(how);
+          yield* test.verify;
+          const after = test.readiness.at(-1)?.readiness;
+          assert.isFalse(after ? computerUseReady(after) : true);
+          assert.equal(after?.capture, "pending");
+          assert.equal(after?.helper, "unauthenticated");
+          assert.isTrue(
+            (after?.reasons ?? []).some((reason) =>
+              how === "absent" ? /could not be found/.test(reason) : /cannot be used/.test(reason),
+            ),
+          );
+        }),
+      ),
+  );
+
+  it.effect("a start request that cannot use the helper drops its earlier proofs", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+        });
+        assert.isTrue((yield* test.verify).verified);
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.restart;
+        assert.equal((yield* test.next).status, "stopped");
+
+        yield* test.loseHelper("unusable");
+        yield* test.request("unusable");
+        assert.equal((yield* test.next).status, "unavailable");
+        const after = test.readiness.at(-1)?.readiness;
+        assert.isFalse(after ? computerUseReady(after) : true);
+        assert.isTrue((after?.reasons ?? []).some((reason) => /cannot be used/.test(reason)));
+      }),
+    ),
+  );
+
+  it.effect("a driver GOAT runs itself never counts as the helper running", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+        });
+        assert.isTrue((yield* test.verify).verified);
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.restart;
+        assert.equal((yield* test.next).status, "stopped");
+
+        // Without the helper this build runs the driver under GOAT's own identity.
+        yield* test.loseHelper("absent");
+        yield* test.request("embedded");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.restoreHelper;
+        yield* test.request("helper-back");
+        assert.equal((yield* test.next).status, "ready");
+        const after = test.readiness.at(-1)?.readiness;
+        assert.equal(after?.helper, "unauthenticated");
+        assert.isFalse(after ? computerUseReady(after) : true);
+      }),
+    ),
+  );
+
+  it.effect("drops earlier proofs when a later check fails before reading a window", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tools: Record<string, ReturnType<typeof toolResult>> = helperTools({
+          bundle: HELPER_ID,
+          parent: HELPER_PID,
+        });
+        const test = yield* fixture({ platform: "darwin", helper: { granted: true }, tools });
+        assert.isTrue((yield* test.verify).verified);
+        // The driver now runs outside the helper's permissions.
+        tools.check_permissions = toolResult({
+          accessibility: true,
+          screen_recording: true,
+          source: { attribution: "process" },
+        });
+        const failed = yield* test.verify;
+        assert.equal(failed.steps.at(-1)?.id, "permissions");
+        const after = test.readiness.at(-1);
+        assert.equal(after?.readiness.capture, "pending");
+        assert.equal(after?.readiness.tree, "unavailable");
+        assert.include(after?.readiness.reasons ?? [], failed.steps.at(-1)?.detail);
+
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        const running = test.readiness.at(-1);
+        assert.isFalse(running ? computerUseReady(running.readiness) : true);
+      }),
+    ),
+  );
+});
+
+describe("DesktopCuaDriver readiness on Windows", () => {
+  it.effect(
+    "reports the helper's own refusal and its typed cause, and clears both on recovery",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const detail = "GOAT runs in Windows Session 0 (a service or SSH session).";
+          const test = yield* fixture({
+            platform: "win32",
+            helper: { granted: false, detail, blocker: "noInteractiveDesktop" },
+          });
+          yield* test.request("session-zero");
+          assert.equal((yield* test.next).status, "unavailable");
+          const refused = test.readiness.at(-1)?.readiness;
+          assert.deepEqual(refused?.blockers, ["noInteractiveDesktop"]);
+          assert.include(refused?.reasons ?? [], detail);
+
+          yield* test.answerAsHelper({ granted: true });
+          yield* test.request("desktop");
+          assert.equal((yield* test.next).status, "ready");
+          const recovered = test.readiness.at(-1)?.readiness;
+          assert.deepEqual(recovered?.blockers, []);
+          assert.notInclude(recovered?.reasons ?? [], detail);
+        }),
+      ),
+  );
 });
 
 describe("DesktopCuaDriver when the helper cannot be used", () => {
@@ -602,6 +863,103 @@ describe("DesktopCuaDriver when the helper cannot be used", () => {
             detail: "GOAT Computer Use at /Helpers cannot be used (EACCES).",
           },
         ]);
+      }),
+    ),
+  );
+});
+
+describe("DesktopCuaDriver app listing for the agents' manifest", () => {
+  it.effect(
+    "lists apps through the macOS helper, so its driver never runs outside the helper's seal check",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          assert.deepEqual(test.manifestListings, [
+            { scope: "agents", through: "helper", apps: 1 },
+          ]);
+          assert.deepEqual(test.helperAppListings, [HELPER_ID]);
+        }),
+      ),
+  );
+
+  it.effect.each([
+    { name: "a build without the helper", platform: "darwin" as const, helper: undefined },
+  ])("keeps listing by running the driver for $name", ({ platform, helper }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({ platform, ...(helper ? { helper } : {}) });
+        yield* test.request("agent");
+        yield* test.next;
+        assert.deepEqual(
+          test.manifestListings.map(({ through }) => through),
+          ["driver"],
+        );
+        assert.isEmpty(test.helperAppListings);
+      }),
+    ),
+  );
+});
+
+describe("DesktopCuaDriver manifest preparation", () => {
+  const trap = (onTestFinished: (cleanup: () => void) => void) => {
+    const directory = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "goat-cu-desktop-manifest-"),
+    );
+    onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+    const marker = NodePath.join(directory, "ran");
+    const binaryPath = NodePath.join(directory, "cua-driver");
+    NodeFS.writeFileSync(binaryPath, "#!/bin/sh\ntouch '" + marker + "'\nexit 3\n", {
+      mode: 0o755,
+    });
+    return { directory, binaryPath, ran: () => NodeFS.existsSync(marker) };
+  };
+
+  it("hands the helper's listing to the shared manifest, so the driver never runs here", async ({
+    onTestFinished,
+  }) => {
+    const driver = trap(onTestFinished);
+    const path = await prepareDesktopManifest({
+      binaryPath: driver.binaryPath,
+      scope: "agents",
+      hostBundleIds: ["si.goat.desktop"],
+      directory: driver.directory,
+      platform: "darwin",
+      listApplications: async () => [{ bundle_id: "com.apple.TextEdit", name: "TextEdit" }],
+    });
+    expect(driver.ran()).toBe(false);
+    expect(NodeFS.readFileSync(path, "utf8")).toContain("com.apple.TextEdit");
+  });
+
+  it("writes the grant check's manifest without listing anything", async ({ onTestFinished }) => {
+    const driver = trap(onTestFinished);
+    await prepareDesktopManifest({
+      binaryPath: driver.binaryPath,
+      scope: "verify",
+      hostBundleIds: ["si.goat.desktop"],
+      directory: driver.directory,
+      platform: "darwin",
+    });
+    expect(driver.ran()).toBe(false);
+  });
+});
+
+describe("DesktopCuaDriver when the helper cannot list apps", () => {
+  it.effect("stays off instead of starting a driver or listing another way", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          helperAppsFail: true,
+        });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "unavailable");
+        assert.isEmpty(test.helperLaunches);
+        assert.isEmpty(test.constructors);
       }),
     ),
   );
