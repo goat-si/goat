@@ -184,7 +184,7 @@ Claude Desktop.
 
 ### Clients that only start local stdio servers
 
-`mcp-remote` (Node.js 20.18 or newer) turns the HTTP endpoint into a stdio server. Most stdio
+`mcp-remote` (Node.js 20.18.1 or newer) turns the HTTP endpoint into a stdio server. Most stdio
 clients take this shape, for example Claude Desktop's `claude_desktop_config.json`:
 
 ```json
