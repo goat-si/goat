@@ -13,6 +13,8 @@ import {
   tasklistSession,
   x11SetupOutcome,
   x11SetupRequest,
+  linuxBusCandidates,
+  linuxDisplayCandidates,
   x11SocketDisplays,
   xauthorityCookie,
   xServerAuthFile,
@@ -79,6 +81,50 @@ describe("Linux display parsing", () => {
     expect(x11SocketDisplays(["X6", "X1", ".lock", "X10", "X3", "X7", "Xfoo"])).toEqual([
       1, 3, 6, 7, 10,
     ]);
+  });
+
+  it("a server given a display or session bus uses only that one, never another desktop (#1358)", () => {
+    // The server was started for its own Xvfb on :96 while a person is signed in on :1.
+    expect(linuxDisplayCandidates(":96", [1, 96])).toEqual([96]);
+    expect(linuxDisplayCandidates("localhost:10.0", [0, 1])).toEqual([]);
+    expect(linuxBusCandidates("unix:path=/tmp/private-bus", "/run/user/1000")).toEqual([
+      "unix:path=/tmp/private-bus",
+    ]);
+    // A server with neither, such as one started over SSH, looks for the local desktop.
+    expect(linuxDisplayCandidates(undefined, [1, 96])).toEqual([1, 96]);
+    expect(linuxBusCandidates(undefined, "/run/user/1000")).toEqual([
+      "unix:path=/run/user/1000/bus",
+    ]);
+  });
+
+  it("a named DISPLAY that does not answer is unavailable, even with a Wayland session beside it (#1358)", () => {
+    // Started for its own Xvfb on :96 from a terminal inside a Wayland desktop.
+    const failed = classifyLinux(
+      facts({
+        requestedDisplay: ":96",
+        displays: linuxDisplayCandidates(":96", [0, 96]).map((display) => ({
+          display,
+          outcome: "unreachable" as const,
+          xauthority: null,
+        })),
+        wayland: liveWayland,
+      }),
+    );
+    expect(failed).toMatchObject({ capability: "unavailable", environment: [] });
+    expect(failed.reason).toContain("DISPLAY=:96");
+    const forwarded = classifyLinux(
+      facts({ requestedDisplay: "localhost:10.0", displays: [], wayland: liveWayland }),
+    );
+    expect(forwarded).toMatchObject({ capability: "unavailable", environment: [] });
+    expect(forwarded.reason).toContain("forwarded");
+    // Without DISPLAY, the Wayland session is the one this server was started in.
+    expect(classifyLinux(facts({ displays: [], wayland: liveWayland })).capability).toBe("partial");
+  });
+
+  it("a named screen other than 0 is unavailable, since the driver would use screen 0", () => {
+    const result = classifyLinux(facts({ requestedDisplay: ":0.1" }));
+    expect(result).toMatchObject({ capability: "unavailable", environment: [] });
+    expect(classifyLinux(facts({ requestedDisplay: ":1.0" })).capability).toBe("available");
   });
 
   it("reads local DISPLAY values and ignores forwarded ones", () => {
