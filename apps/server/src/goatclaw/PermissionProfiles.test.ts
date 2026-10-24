@@ -605,6 +605,82 @@ it.effect("a role launch binds the child under the role's profile, narrowed by t
   }).pipe(Effect.provide(fixture("manager"))),
 );
 
+// #858: a person whose agents run under worker can still have a supervisor land pull requests.
+it.effect(
+  "a supervisor a worker thread launches can start a merge manager; ceilings still refuse it",
+  () =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const refusal =
+        "A merge-manager launch needs pr.merge, which this caller's profile does not allow.";
+      yield* seed("person", "auto");
+      yield* profiles.claim(threadScope("person"), {
+        id: "supervisor",
+        childThreadId: ThreadId.make("supervisor"),
+        runtimeMode: "auto",
+        role: "supervisor",
+      });
+      yield* seed("supervisor", "full-access");
+      // The merge manager holds what the worker caller held plus merge, under its runtime ceiling.
+      expect(
+        yield* profiles.claim(threadScope("supervisor"), {
+          id: "merger",
+          childThreadId: ThreadId.make("merger"),
+          runtimeMode: "full-access",
+          role: "merge-manager",
+        }),
+      ).toMatchObject({
+        runtimeMode: "auto",
+        profile: {
+          id: "merge-manager",
+          capabilities: [...BUILTIN_PERMISSION_PROFILES.worker!.capabilities, "pr.merge"],
+        },
+      });
+      // The person's own thread still cannot start one.
+      expect(
+        (yield* profiles
+          .claim(threadScope("person"), {
+            id: "direct",
+            runtimeMode: "auto",
+            role: "merge-manager",
+          })
+          .pipe(Effect.flip)).message,
+      ).toBe(refusal);
+      // A ceiling forwarded from a worker on another machine still removes merge.
+      yield* profiles.claim(outside, {
+        id: "forwarded-supervisor",
+        childThreadId: ThreadId.make("forwarded-supervisor"),
+        runtimeMode: "full-access",
+        role: "supervisor",
+        forwarded: BUILTIN_PERMISSION_PROFILES.worker!,
+      });
+      yield* seed("forwarded-supervisor", "full-access");
+      expect(
+        (yield* profiles
+          .claim(threadScope("forwarded-supervisor"), {
+            id: "forwarded-merger",
+            runtimeMode: "full-access",
+            role: "merge-manager",
+          })
+          .pipe(Effect.flip)).message,
+      ).toBe(refusal);
+      // An observer cannot launch the supervisor in the first place.
+      yield* settings.updateSettings({ goatclaw: { defaultProfile: "observer" } });
+      yield* seed("watcher", "auto");
+      expect(
+        (yield* profiles
+          .claim(threadScope("watcher"), {
+            id: "observer-supervisor",
+            childThreadId: ThreadId.make("observer-supervisor"),
+            runtimeMode: "auto",
+            role: "supervisor",
+          })
+          .pipe(Effect.flip)).message,
+      ).toContain("does not allow threads.launch");
+    }).pipe(Effect.provide(fixture("worker"))),
+);
+
 it.effect("role launches and bindings stop while goatclaw is off", () =>
   Effect.gen(function* () {
     const profiles = yield* PermissionProfiles;
