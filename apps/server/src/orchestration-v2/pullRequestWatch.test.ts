@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import {
   PULL_REQUEST_WATCH_WAKE_LIMIT,
   evaluatePullRequestWatch,
+  mergeHeldContext,
   pullRequestWatchOutcome,
 } from "./pullRequestWatch.ts";
 
@@ -298,7 +299,7 @@ describe("pull request watch policy", () => {
     assert.deepEqual(report.changes, [{ kind: "remarks", remarks: [comments[0]!] }]);
   });
 
-  it("holds what is kept as context, then tells it with the next wake", () => {
+  it("records what is kept as context for the digest instead of the pull request's next wake", () => {
     const policy: PullRequestWatchPolicy = { ...DEFAULT_POLICY, checksPassed: "keep_as_context" };
     const passing = detail({ checks: [check("test", "success")] });
     const quiet = evaluate(watch(), passing, noRemarks, context(policy));
@@ -312,7 +313,7 @@ describe("pull request watch policy", () => {
     });
     assert.isUndefined(held.wake);
     assert.equal(held.note?.summary, "#7: checks passed, kept as context");
-    assert.deepEqual(held.next?.heldContext, ["- All 1 check passed on aaaaaaa."]);
+    assert.deepEqual(held.next?.heldContext, ["all 1 check passed on aaaaaaa"]);
 
     const later = evaluate(
       held.next!,
@@ -325,10 +326,43 @@ describe("pull request watch policy", () => {
       url: "https://github.com/o/r/pull/7",
       baseBranch: "main",
       report: later,
+      heldContext: held.next?.heldContext ?? [],
     });
-    assert.include(woken.wake?.text ?? "", "Earlier updates GOAT kept as context");
-    assert.include(woken.wake?.text ?? "", "- All 1 check passed on aaaaaaa.");
+    // The next notice turn to start carries it, whichever pull request or lane it is about.
+    assert.notInclude(woken.wake?.text ?? "", "all 1 check passed");
     assert.isUndefined(woken.next?.heldContext);
+  });
+
+  it("keeps one fragment per kind at its latest state until it is told", () => {
+    const merged = mergeHeldContext(
+      ["checks failed on aaaaaaa: lint", '1 new comment, latest from bot: "first"'],
+      ["all 2 checks passed on bbbbbbb", '2 new comments, latest from bot: "third"'],
+    );
+    assert.deepEqual(mergeHeldContext(merged, ["conflicts with main"]), [
+      "all 2 checks passed on bbbbbbb",
+      '3 new comments, latest from bot: "third"',
+      "conflicts with main",
+    ]);
+  });
+
+  it("tells what was kept with the wake a watch ends on", () => {
+    const chatty = evaluate(
+      watch({ headSha: "aaaaaaaaaa", wakes: PULL_REQUEST_WATCH_WAKE_LIMIT - 1 }),
+      detail(),
+      [remark("reviewer", "2026-10-02T12:10:00Z")],
+    );
+    const ending = pullRequestWatchOutcome({
+      number: 7,
+      url: "https://github.com/o/r/pull/7",
+      baseBranch: "main",
+      report: chatty,
+      heldContext: ["conflicts with main"],
+    });
+    assert.isNull(ending.next);
+    assert.include(
+      ending.wake?.text ?? "",
+      "Also kept as context without waking you: conflicts with main",
+    );
   });
 
   it("names the head of a wake that reports only check results, so a push can drop it", () => {

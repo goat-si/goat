@@ -184,8 +184,8 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
     left.remarkIds.join("\n") === right.remarkIds.join("\n") &&
     left.conflicting === right.conflicting &&
     left.wakes === right.wakes &&
-    left.automatic === right.automatic &&
-    (left.heldContext ?? []).join("\n") === (right.heldContext ?? []).join("\n")
+    // Kept context is merged by the orchestrator; a pass sends only what it kept itself.
+    left.automatic === right.automatic
   );
 }
 
@@ -592,6 +592,9 @@ export const make = Effect.gen(function* () {
         url: target.link.url,
         baseBranch: detail.baseBranch,
         report,
+        ...(target.watch.heldContext === undefined
+          ? {}
+          : { heldContext: target.watch.heldContext }),
       });
       if (outcome.wake !== undefined) {
         return record(target, outcome.next, outcome.wake, undefined, outcome.endedWatch).pipe(

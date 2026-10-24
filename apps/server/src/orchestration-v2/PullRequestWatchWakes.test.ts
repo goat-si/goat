@@ -5,6 +5,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   CommandId,
   EventId,
+  MessageId,
   type ModelSelection,
   ProjectId,
   ProviderDriverKind,
@@ -12,6 +13,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 
 import * as Option from "effect/Option";
@@ -30,11 +32,13 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
+import { EventSinkV2 } from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 import * as ProjectStore from "./ProjectStore.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
 import { pullRequestWakeMessageId } from "./goat/PullRequestWatchWakes.ts";
+import { HOST_PRESSURE_MESSAGE_PREFIX } from "../fleet/pressure/pressureModel.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -387,6 +391,225 @@ describe("pull request watch wakes", () => {
       expect(texts.join("\n")).not.toContain("Checks failed on 1111111.");
       expect(texts.join("\n")).toContain("1 new comment.");
       expect(texts.join("\n")).toContain("The branch now conflicts with dev.");
+    }).pipe(Effect.provide(layerTest)),
+  );
+});
+
+const second = { ...key, number: 8 };
+const secondUrl = "https://github.com/pingdotgg/t3code/pull/8";
+
+/** An idle thread watching #7 and #8, each with one update kept as context. */
+const threadWithKeptContext = (name: string) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const threadId = ThreadId.make(`pr-kept-${name}`);
+    const projectId = ProjectId.make(`pr-kept-${name}-project`);
+    yield* seedProject({
+      projectId,
+      title: "Kept",
+      workspaceRoot: process.cwd(),
+      defaultModelSelection: modelSelection,
+      createdAt: "2026-10-23T00:00:00.000Z",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      createdBy: "user",
+      creationSource: "web",
+      commandId: CommandId.make(`pr-kept-${name}-create`),
+      threadId,
+      projectId,
+      title: "Kept",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+    });
+    const kept = [
+      [key, url, ["all 3 checks passed on aaaaaaa"]],
+      [second, secondUrl, ['1 new comment, latest from vercel[bot]: "Preview ready"']],
+    ] as const;
+    for (const [pr, prUrl] of kept)
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make(`pr-kept-${name}-watch-${pr.number}`),
+        threadId,
+        ...pr,
+        watching: true,
+        link: { url: prUrl, source: "agent" },
+      });
+    const shell = yield* orchestrator.getThreadShell(threadId);
+    const links = shell?.pullRequests ?? [];
+    for (const [pr, , heldContext] of kept) {
+      const watch = links.find((link) => link.number === pr.number)?.watch;
+      if (watch === undefined) return yield* Effect.die("no watch");
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make(`pr-kept-${name}-hold-${pr.number}`),
+        threadId,
+        ...pr,
+        startedAt: watch.startedAt,
+        watch: { ...watch, heldContext },
+        note: {
+          source: { kind: "monitor" },
+          outcome: "updated",
+          summary: `#${pr.number}: kept as context`,
+        },
+      });
+    }
+    const startedText = Effect.map(
+      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+      ({ runs, messages }) =>
+        runs
+          .filter((run) => run.status !== "queued")
+          .map((run) => messages.find((message) => message.id === run.userMessageId)?.text),
+    );
+    const heldLeft = Effect.map(orchestrator.getThreadShell(threadId), (thread) =>
+      (thread?.pullRequests ?? []).flatMap((link) => link.watch?.heldContext ?? []),
+    );
+    return { orchestrator, threadId, links, startedText, heldLeft };
+  });
+
+describe("pull request updates kept as context (#1055)", () => {
+  it.effect("a queued notice turn carries what was kept while it waited", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, link, watch, statusOf } = yield* watchWithQueuedWake("wait");
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-kept-wait-hold"),
+        threadId,
+        ...key,
+        startedAt: watch.startedAt,
+        watch: { ...watch, heldContext: ["all 3 checks passed on aaaaaaa"] },
+        note: { source: { kind: "monitor" }, outcome: "updated", summary: "#7: kept as context" },
+      });
+      const { runs } = yield* orchestrator.getThreadRecords(threadId, ["runs"]);
+      const first = runs.find(
+        (run) => run.userMessageId === pullRequestWakeMessageId(link, "wait-first"),
+      );
+      // The running wake ends, so the queue moves on to the next turn.
+      const now = yield* DateTime.now;
+      yield* (yield* EventSinkV2).write({
+        events: [
+          {
+            id: EventId.make("event:pr-kept-wait-first-ended"),
+            type: "run.updated",
+            threadId,
+            runId: first!.id,
+            occurredAt: now,
+            payload: { ...first!, status: "interrupted", startedAt: now, completedAt: now },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("pr-kept-wait-resume"),
+        threadId,
+      });
+      expect(yield* statusOf("second")).not.toBe("queued");
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      const text = messages.find(
+        (message) => message.id === pullRequestWakeMessageId(link, "wait-second"),
+      )?.text;
+      expect(text).toContain("The branch now conflicts with dev.");
+      expect(text?.match(/^Pull request #7 .*all 3 checks passed on aaaaaaa$/m)).not.toBeNull();
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      expect(shell?.pullRequests?.[0]?.watch?.heldContext).toBeUndefined();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a merged pull request leaves a shared digest and the other notices stay", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, link, watch, statusOf } = yield* watchWithQueuedWake("share");
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("pr-kept-share-pressure"),
+        threadId,
+        messageId: MessageId.make(`${HOST_PRESSURE_MESSAGE_PREFIX}box-a:wake:1`),
+        text: "Resource pressure: box-a is elevated.",
+        attachments: [],
+        notification: { source: { kind: "monitor" }, outcome: "updated", summary: "box-a" },
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+      });
+      const messageOf = Effect.map(
+        orchestrator.getThreadRecords(threadId, ["messages"]),
+        ({ messages }) =>
+          messages.find((message) => message.id === pullRequestWakeMessageId(link, "share-second"))
+            ?.text,
+      );
+      // The pressure notice waits in the pull request's queued turn.
+      expect(yield* messageOf).toContain("Resource pressure: box-a is elevated.");
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-kept-share-merged"),
+        threadId,
+        ...key,
+        startedAt: watch.startedAt,
+        watch: null,
+        dropQueuedWakes: true,
+      });
+      expect(yield* statusOf("second")).toBe("queued");
+      const text = yield* messageOf;
+      expect(text).toContain("Resource pressure: box-a is elevated.");
+      expect(text).not.toContain("The branch now conflicts with dev.");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("two pull requests kept as context reach the next turn as one digest", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, startedText, heldLeft } =
+        yield* threadWithKeptContext("digest");
+      // Keeping context never starts a turn by itself.
+      expect(yield* startedText).toEqual([]);
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("pr-kept-digest-pressure"),
+        threadId,
+        messageId: MessageId.make(`${HOST_PRESSURE_MESSAGE_PREFIX}box-a:wake:1`),
+        text: "Resource pressure: box-a is elevated.",
+        attachments: [],
+        notification: { source: { kind: "monitor" }, outcome: "updated", summary: "box-a" },
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+      });
+      const [text, ...others] = yield* startedText;
+      expect(others).toEqual([]);
+      expect(text).toContain('<notices count="3">');
+      expect(text).toContain("Resource pressure: box-a is elevated.");
+      expect(text?.match(/^Pull request #7 .*all 3 checks passed on aaaaaaa$/m)).not.toBeNull();
+      expect(text?.match(/^Pull request #8 .*Preview ready"$/m)).not.toBeNull();
+      // Told once: the next turn does not repeat them.
+      expect(yield* heldLeft).toEqual([]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a wake carries what other pull requests kept as context in the same turn", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, links, startedText, heldLeft } =
+        yield* threadWithKeptContext("react");
+      const link = links.find((candidate) => candidate.number === 7)!;
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-kept-react-wake"),
+        threadId,
+        ...key,
+        startedAt: link.watch!.startedAt,
+        watch: link.watch!,
+        wake: {
+          messageId: pullRequestWakeMessageId(link, "react"),
+          text: "Checks failed on bbbbbbb: lint.",
+          notification,
+        },
+      });
+      const [text, ...others] = yield* startedText;
+      expect(others).toEqual([]);
+      expect(text).toContain("Checks failed on bbbbbbb: lint.");
+      expect(text).toContain("all 3 checks passed on aaaaaaa");
+      expect(text).toContain("Preview ready");
+      expect(yield* heldLeft).toEqual([]);
     }).pipe(Effect.provide(layerTest)),
   );
 });

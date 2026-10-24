@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  overnightPullRequestStream,
   overnightNoticeStream,
   replayNoticeDigest,
   replayNoticeStream,
+  replayPullRequestDigest,
 } from "./noticeReplay.testkit.ts";
 
 /**
@@ -33,5 +35,14 @@ describe("notice replay", () => {
     const busy = replayNoticeDigest(events, 8);
     expect(busy.length).toBeLessThanOrEqual(20);
     expect(total(busy)).toBeLessThanOrEqual(94_000);
+  });
+
+  it("tells every pull request's kept context once, within the night's budget (#1055)", () => {
+    // Before #1055 this night told 12 of its 67 kept updates (108,705 B over 31 turns, busy for
+    // eight events) and ended with all 30 pull requests holding context nobody was told.
+    const { turns, untold } = replayPullRequestDigest(overnightPullRequestStream(), 8);
+    expect(untold).toBe(0);
+    expect(turns.length).toBeLessThanOrEqual(31);
+    expect(turns.reduce((sum, bytes) => sum + bytes, 0)).toBeLessThanOrEqual(122_000);
   });
 });

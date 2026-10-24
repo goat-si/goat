@@ -1,4 +1,4 @@
-import { RunId, ThreadId } from "@goat/contracts";
+import { type PullRequestComment, RunId, ThreadId } from "@goat/contracts";
 
 import { finishedWake, newLaunchWatch } from "../mcp/launchWatch.ts";
 import {
@@ -8,9 +8,20 @@ import {
 import {
   foldNotice,
   type Notice,
+  renderDigest,
   renderNotices,
   turnText,
 } from "../orchestration-v2/TurnDigest.ts";
+import {
+  heldContextLine,
+  mergeHeldContext,
+  type PullRequestWatchChange,
+  pullRequestWatchOutcome,
+} from "../orchestration-v2/pullRequestWatch.ts";
+import {
+  pullRequestHeldNoticeId,
+  pullRequestWakeMessageId,
+} from "../orchestration-v2/goat/PullRequestWatchWakes.ts";
 import { framePendingReports, frameRemoteReport } from "./reportFrame.ts";
 
 /**
@@ -221,4 +232,186 @@ export function replayNoticeDigest(
   // Reports left over ride on whatever turn comes next, so they are counted as turns too.
   while (inbox.length > 0) startTurn([{ id: "message:next-turn", text: "" }], events.length);
   return turns;
+}
+
+/**
+ * The same night with a pull request per lane, watched under a policy that wakes on failed checks
+ * and keeps passed checks and bot comments as context (#1055). Each lane's pull request gets a
+ * deploy-preview comment after its first milestone, passed checks after its last, a second bot
+ * comment on every fourth lane, and a failed check that wakes on every third.
+ */
+export type PullRequestStreamEvent =
+  | StreamEvent
+  | {
+      readonly kind: "pull-request";
+      readonly number: number;
+      readonly url: string;
+      readonly headSha: string;
+      readonly mode: "react" | "keep_as_context";
+      readonly change: PullRequestWatchChange;
+    };
+
+const botRemark = (lane: number, body: string, minute: number): PullRequestComment => ({
+  id: `remark-${lane}-${minute}`,
+  kind: "issue-comment",
+  author: { login: "vercel[bot]", name: null, avatarUrl: null, isBot: true },
+  body,
+  createdAt: `2026-10-23T02:${String(minute).padStart(2, "0")}:00Z`,
+  url: `https://github.com/acme/app/pull/${2000 + lane}#remark-${minute}`,
+  path: null,
+  reviewState: null,
+});
+
+export function overnightPullRequestStream(lanes = 30): ReadonlyArray<PullRequestStreamEvent> {
+  const progress = new Map<number, number>();
+  return overnightNoticeStream(lanes).flatMap((event): ReadonlyArray<PullRequestStreamEvent> => {
+    if (event.kind !== "report") return [event];
+    const lane = event.lane;
+    const pr = (mode: "react" | "keep_as_context", change: PullRequestWatchChange) => ({
+      kind: "pull-request" as const,
+      number: 2000 + lane,
+      url: `https://github.com/acme/app/pull/${2000 + lane}`,
+      headSha: `${String(lane).padStart(4, "0")}abcdef`,
+      mode,
+      change,
+    });
+    if (event.report === "completed") {
+      return [
+        ...(lane % 3 === 0
+          ? [
+              pr("react", {
+                kind: "checks-failed",
+                failed: [{ name: "lint", status: "failure", description: null, url: null }],
+              }),
+            ]
+          : []),
+        event,
+        pr("keep_as_context", { kind: "checks-passed", count: 6, required: true }),
+      ];
+    }
+    const step = (progress.get(lane) ?? 0) + 1;
+    progress.set(lane, step);
+    const remark = (body: string) =>
+      pr("keep_as_context", {
+        kind: "remarks",
+        remarks: [botRemark(lane, body, step * 10 + (lane % 10))],
+      });
+    if (step === 1) return [event, remark(`Preview for lane ${lane} is ready.`)];
+    if (step === 3 && lane % 4 === 0) return [event, remark(`Preview for lane ${lane} updated.`)];
+    return [event];
+  });
+}
+
+/**
+ * Delivery after #1055, on the same busy model as replayNoticeDigest but with the orchestrator's
+ * source-kind rule: run ends fold apart from monitor notices (pressure and pull request wakes).
+ * A pull request's kept fragments merge per kind and ride the next turn to start, one line per
+ * pull request. Returns each turn's bytes and the kept lines no turn carried.
+ */
+export function replayPullRequestDigest(
+  events: ReadonlyArray<PullRequestStreamEvent>,
+  busyFor = 4,
+): { readonly turns: ReadonlyArray<number>; readonly untold: number } {
+  const bytes = (text: string) => new TextEncoder().encode(text).length;
+  let inbox: Array<{
+    lane: string;
+    report: string;
+    host: string | null;
+    threadId: string;
+    runId: string;
+    kind: string;
+    text: string;
+  }> = [];
+  const queue: Array<{ kind: string; notices: ReadonlyArray<Notice> }> = [];
+  const held = new Map<number, { url: string; fragments: ReadonlyArray<string> }>();
+  let busyUntil = -1;
+  const turns: number[] = [];
+  const startTurn = (notices: ReadonlyArray<Notice>, at: number) => {
+    const [first] = notices;
+    if (first === undefined) return;
+    const withHeld = [...held].reduce(
+      (digest, [number, { url, fragments }]) =>
+        foldNotice(digest, {
+          id: pullRequestHeldNoticeId({ host: "github.com", repository: "acme/app", number, url }),
+          text: heldContextLine({ number, url }, fragments),
+        }),
+      notices,
+    );
+    held.clear();
+    const drained: typeof inbox = [];
+    let characters = 0;
+    for (const row of inbox) {
+      const size = row.text.length + (drained.length === 0 ? 0 : 2);
+      if (drained.length === 20 || characters + size > 16_000) break;
+      drained.push(row);
+      characters += size;
+    }
+    turns.push(
+      bytes(turnText({ messageId: first.id, text: renderDigest(first.id, withHeld) }, drained)),
+    );
+    inbox = inbox.slice(drained.length);
+    busyUntil = at + busyFor;
+  };
+  const enqueue = (kind: string, notice: Notice, index: number) => {
+    if (index >= busyUntil) return startTurn([notice], index);
+    const last = queue.at(-1);
+    if (last?.kind === kind) last.notices = foldNotice(last.notices, notice);
+    else queue.push({ kind, notices: [notice] });
+  };
+  events.forEach((event, index) => {
+    const next = index >= busyUntil ? queue.shift() : undefined;
+    if (next !== undefined) startTurn(next.notices, index);
+    if (event.kind === "report") {
+      const lane = `${event.host ?? ""}/${event.threadId}`;
+      if (event.report === "progress")
+        inbox = inbox.filter((row) => !(row.lane === lane && row.report === "progress"));
+      inbox.push({ ...event, lane, kind: event.report });
+      return;
+    }
+    if (event.kind === "wake") {
+      const kind = event.id.startsWith(HOST_PRESSURE_MESSAGE_PREFIX) ? "monitor" : "task";
+      return enqueue(kind, { id: event.id, text: event.text }, index);
+    }
+    const outcome = pullRequestWatchOutcome({
+      number: event.number,
+      url: event.url,
+      baseBranch: "main",
+      report: pullRequestReport(event),
+    });
+    if (outcome.wake !== undefined) {
+      const link = { host: "github.com", repository: "acme/app", number: event.number };
+      const id = pullRequestWakeMessageId(link, `wake-${index}`, outcome.wake.checksOn);
+      return enqueue("monitor", { id, text: outcome.wake.text }, index);
+    }
+    const previous = held.get(event.number)?.fragments;
+    held.set(event.number, {
+      url: event.url,
+      fragments: mergeHeldContext(previous, outcome.next?.heldContext),
+    });
+  });
+  for (const turn of queue.splice(0)) startTurn(turn.notices, events.length);
+  while (inbox.length > 0) startTurn([{ id: "message:next-turn", text: "" }], events.length);
+  return { turns, untold: held.size };
+}
+
+/** A watch report carrying one change, sorted the way the stream's policy sorts it. */
+function pullRequestReport(
+  event: Extract<PullRequestStreamEvent, { readonly kind: "pull-request" }>,
+) {
+  return {
+    changes: event.mode === "react" ? [event.change] : [],
+    held: event.mode === "react" ? [] : [event.change],
+    exhausted: false,
+    next: {
+      startedAt: "2026-10-23T00:00:00.000Z",
+      headSha: event.headSha,
+      failedChecks: [],
+      passed: false,
+      passedChecks: [],
+      remarksThrough: "2026-10-23T00:00:00.000Z",
+      remarkIds: [],
+      conflicting: false,
+      wakes: 0,
+    },
+  };
 }
