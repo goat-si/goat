@@ -156,8 +156,9 @@ export function linuxCapabilities(
 
 /**
  * Readiness as the contract's separate steps (D10). Linux has no OS grant for AT-SPI or for X11
- * capture, so those read as granted; whether they work is the tree and capture steps, proven by
- * a real read. Wayland screen capture needs the desktop's consent, pending until a capture
+ * capture. AT-SPI reads as granted only once a real read of a window's app answered (#1392);
+ * until then it is unknown, never granted on faith. X11 capture reads as granted, and whether it
+ * works is the capture step, proven by a real read. Wayland screen capture needs the desktop's consent, pending until a capture
  * proves it. The helper answers only after its hello, so it is always authenticated here.
  */
 export interface ReadinessFacts {
@@ -198,7 +199,9 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
   const tree = facts.driver.atspi ? facts.tree : "unavailable";
   if (tree === "unavailable")
     reasons.push(
-      "AT-SPI does not answer on the session bus, so app controls cannot be read. Turn on assistive technologies or install at-spi2-core.",
+      facts.driver.atspi && facts.capture === "noWindow"
+        ? "No window is open to read app controls from, so AT-SPI is not proven yet. Open any app window."
+        : "AT-SPI does not answer on the session bus, so app controls cannot be read. Turn on assistive technologies or install at-spi2-core.",
     );
   if (tree === "empty") reasons.push("The app that was checked shows no windows to AT-SPI.");
   const capture =
@@ -230,7 +233,7 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
     );
   return {
     grants: {
-      accessibility: "granted",
+      accessibility: tree === "unavailable" ? "unknown" : "granted",
       // No consent can make a cropped capture one window's own, so nothing is pending on it.
       screenCapture: !wayland
         ? "granted"
