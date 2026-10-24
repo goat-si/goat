@@ -77,6 +77,9 @@ export const CuaDisplayCapability = Schema.Struct({
 });
 export type CuaDisplayCapability = typeof CuaDisplayCapability.Type;
 
+export const CuaToolsAvailability = Schema.Literals(["available", "off", "unavailable"]);
+export type CuaToolsAvailability = typeof CuaToolsAvailability.Type;
+
 /** Driver readiness on one host, independent of the enableCua setting. */
 export const CuaHostStatus = Schema.Struct({
   platform: Schema.Literals(["darwin", "linux", "win32", "other"]),
@@ -94,6 +97,8 @@ export const CuaHostStatus = Schema.Struct({
   readiness: ForwardCompatibleOptional(ComputerUseReadiness),
   /** Which safety signals that helper raises; absent means neither (#1235). */
   signals: ForwardCompatibleOptional(ComputerUseCapabilities.fields.signals),
+  /** Decided by the server's setting and running driver, never by the helper. */
+  tools: ForwardCompatibleOptional(CuaToolsAvailability),
 });
 export type CuaHostStatus = typeof CuaHostStatus.Type;
 

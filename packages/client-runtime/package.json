@@ -67,6 +67,10 @@
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
     },
+    "./computerUse/readinessSteps": {
+      "types": "./src/computerUse/readinessSteps.ts",
+      "default": "./src/computerUse/readinessSteps.ts"
+    },
     "./computerUseGrant": {
       "types": "./src/computerUseGrant.ts",
       "default": "./src/computerUseGrant.ts"
