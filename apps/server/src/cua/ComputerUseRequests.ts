@@ -10,6 +10,7 @@ import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   type ComputerUseRequestInput,
   type ComputerUseRequestResult,
+  cuaAgentBlockMessage,
   type ProviderInstanceId,
   type ThreadId,
 } from "@goat/contracts";
@@ -38,6 +39,15 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       kind: "refused",
       reason: "disabled",
       message: "Computer use is off on this host. A person turns it on in Settings.",
+    } satisfies ComputerUseRequestResult;
+  // An approval would not help: the desktop will not start the driver until macOS allows it.
+  const block = CuaDriver.agentBlock(yield* cua.value.lastFailure);
+  if (block !== undefined)
+    return {
+      kind: "refused",
+      reason: "not_granted",
+      block,
+      message: cuaAgentBlockMessage(block),
     } satisfies ComputerUseRequestResult;
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const held = yield* leases.holder(input.threadId);

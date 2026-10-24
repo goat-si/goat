@@ -17,7 +17,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as ServerSettings from "../serverSettings.ts";
-import type * as CuaDriver from "./CuaDriver.ts";
+import * as CuaDriver from "./CuaDriver.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import type { ComputerUseOrigin } from "./ComputerUseOrigin.ts";
 
@@ -107,11 +107,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     return none("unavailable", unattended);
   const mcp = yield* cua.value.acquire;
   if (Option.isNone(mcp)) {
-    const failure = yield* cua.value.lastFailure;
-    const block =
-      Option.isSome(failure) && failure.value._tag === "CuaDriverHostError"
-        ? failure.value.block
-        : undefined;
+    const block = CuaDriver.agentBlock(yield* cua.value.lastFailure);
     // The trace says why a turn ran without computer use, not only that it did.
     yield* Effect.annotateCurrentSpan({
       "computerUse.refusal": block === undefined ? "unavailable" : "not-granted",

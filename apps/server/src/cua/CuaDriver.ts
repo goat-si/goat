@@ -96,6 +96,12 @@ export const CUA_DRIVER_REFUSED_MESSAGE =
 
 export type CuaDriverError = CuaDriverStartError | CuaDriverHostError;
 
+/** The typed reason behind a failed start, when agents cannot get past it alone (#1399). */
+export const agentBlock = (failure: Option.Option<CuaDriverError>) =>
+  Option.isSome(failure) && failure.value._tag === "CuaDriverHostError"
+    ? failure.value.block
+    : undefined;
+
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const isStartError = Schema.is(CuaDriverStartError);
 const isHostError = Schema.is(CuaDriverHostError);
