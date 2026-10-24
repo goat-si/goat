@@ -457,5 +457,7 @@ export async function connect(
       return ended;
     },
     close: async () => (input.end(), served),
+    /** The helper's own shutdown, as main.ts runs it on SIGTERM. */
+    shutdown: () => helper.close(),
   };
 }

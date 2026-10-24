@@ -514,7 +514,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     close: () =>
       (closing ??= (async () => {
         closed = true;
-        await deps.signals.unwatch();
+        await deps.signals.unwatch({ announce: false });
         const current = driver;
         driver = undefined;
         driverGeneration++;
