@@ -115,29 +115,43 @@ export const subagentThreadIdsOf = (
       .map((thread) => thread.id),
   );
 
+/**
+ * Which lineage events already shaped the subagent set. Replay and the live tail are filtered
+ * concurrently, so a lineage event older than the thread's last applied one, or than the snapshot
+ * that built the set, must not undo a newer classification such as a GOAT promotion.
+ */
+export interface SubagentLineageOrder {
+  readonly through: number;
+  readonly appliedByThread: Map<string, number>;
+}
+
+export const subagentLineageOrder = (through: number): SubagentLineageOrder => ({
+  through,
+  appliedByThread: new Map(),
+});
+
+/** The subagent set of a shell snapshot taken through a sequence, with its lineage order. */
+export const subagentShellState = (
+  threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
+  through: number,
+) => ({ ids: subagentThreadIdsOf(threads), ...subagentLineageOrder(through) });
+
 /** Focused subagents receive these updates through their thread subscription. */
 export function shouldPublishShellApplicationEvent(
   stored: ApplicationStoredEvent,
   subagentThreadIds: Set<string>,
-  // The snapshot that built the set. Replay and the live tail are filtered concurrently, so an
-  // event at or below it must not undo a newer classification, such as a GOAT promotion.
-  classifiedThroughSequence = 0,
+  order: SubagentLineageOrder = subagentLineageOrder(0),
 ): boolean {
   if ("aggregateKind" in stored) return true;
   const { event } = stored;
-  const reclassifies = !(stored.sequence <= classifiedThroughSequence);
-  if (event.type === "thread.created") {
-    if (reclassifies && event.payload.lineage.relationshipToParent === "subagent") {
-      subagentThreadIds.add(event.threadId);
-    }
-    return true;
-  }
-  if (event.type === "thread.metadata-updated") {
-    // GOAT promotion detaches a delegated task in place, so its lineage can stop being a subagent.
-    if (!reclassifies) return true;
+  if (event.type === "thread.created" || event.type === "thread.metadata-updated") {
+    const applied = order.appliedByThread.get(event.threadId) ?? order.through;
+    if (stored.sequence <= applied) return true;
+    order.appliedByThread.set(event.threadId, stored.sequence);
     if (event.payload.lineage.relationshipToParent === "subagent") {
       subagentThreadIds.add(event.threadId);
-    } else {
+    } else if (event.type === "thread.metadata-updated") {
+      // GOAT promotion detaches a delegated task in place, so it stops being a subagent.
       subagentThreadIds.delete(event.threadId);
     }
     return true;

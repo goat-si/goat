@@ -225,7 +225,7 @@ import {
   shellStreamItemsFromInitialSnapshot,
   shellStreamItemsFromResumeSnapshot,
   shouldPublishShellApplicationEvent,
-  subagentThreadIdsOf,
+  subagentShellState,
   skipUnchangedThreadShells,
   toShellApplicationEvent,
   type ShellApplicationEvent,
@@ -1101,10 +1101,9 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const projects = yield* ProjectStore.ProjectStoreV2;
     const projectService = yield* ProjectService.ProjectService;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
-    let subagentThreadIds = new Set<string>();
-    let subagentsClassifiedThrough = 0;
+    let subagents = subagentShellState([], 0);
     const filterSubagentTranscript = (stored: ApplicationStoredEvent) =>
-      shouldPublishShellApplicationEvent(stored, subagentThreadIds, subagentsClassifiedThrough);
+      shouldPublishShellApplicationEvent(stored, subagents.ids, subagents);
 
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
@@ -1131,8 +1130,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           latestSequence: applicationEvents.latestApplicationSequence,
         }),
       );
-      subagentsClassifiedThrough = base.snapshotSequence;
-      subagentThreadIds = subagentThreadIdsOf(base.threads);
+      subagents = subagentShellState(base.threads, base.snapshotSequence);
       const enriched = yield* enrichProjectShells(base.projects);
       return {
         snapshot: { ...base, projects: enriched.projects } as OrchestrationV2ShellSnapshot,
@@ -1287,8 +1285,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       }
 
       const currentShell = yield* threadManagement.getShellSnapshot({ location: "active" });
-      subagentsClassifiedThrough = highWater;
-      subagentThreadIds = subagentThreadIdsOf(currentShell.threads);
+      subagents = subagentShellState(currentShell.threads, highWater);
 
       const loaded = yield* loadProjectMetadataSnapshot(highWater);
       const replay = toShellStream(

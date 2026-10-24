@@ -24,6 +24,7 @@ import {
   shellStreamItemsFromInitialSnapshot,
   shouldPublishShellApplicationEvent,
   skipUnchangedThreadShells,
+  subagentLineageOrder,
 } from "./ShellStream.ts";
 
 const emptyShellSnapshot = {
@@ -92,37 +93,53 @@ describe("subagent shell events", () => {
   });
 
   it("keeps a live promotion when replay later reaches the delegated task's creation", () => {
-    // The live tail is filtered while replay is still draining the snapshot's range (through 5).
-    const subagents = new Set(["child"]);
+    const subagents = new Set<string>();
+    // Snapshot through 5; the stream's own catch-up replay covers 6-7 while the live tail is
+    // filtered concurrently, so the promotion (8) is seen before the creation (6).
+    const order = subagentLineageOrder(5);
     const lineageEvent = (sequence: number, type: string, relationshipToParent: string | null) =>
       ({
         sequence,
         event: { threadId: "child", type, payload: { lineage: { relationshipToParent } } },
       }) as ApplicationStoredEvent;
+    const message = { sequence: 9, event: { threadId: "child", type: "message.updated" } };
+    shouldPublishShellApplicationEvent(
+      lineageEvent(8, "thread.metadata-updated", null),
+      subagents,
+      order,
+    );
+    shouldPublishShellApplicationEvent(
+      lineageEvent(6, "thread.created", "subagent"),
+      subagents,
+      order,
+    );
     expect(
-      shouldPublishShellApplicationEvent(
-        lineageEvent(8, "thread.metadata-updated", null),
-        subagents,
-        5,
-      ),
+      shouldPublishShellApplicationEvent(message as ApplicationStoredEvent, subagents, order),
     ).toBe(true);
-    expect(
-      shouldPublishShellApplicationEvent(
-        lineageEvent(3, "thread.created", "subagent"),
-        subagents,
-        5,
-      ),
-    ).toBe(true);
+  });
+
+  it("classifies a subagent created after the snapshot even when replay delivers it", () => {
+    const subagents = new Set<string>();
+    const order = subagentLineageOrder(5);
+    const created = {
+      sequence: 6,
+      event: {
+        threadId: "late-child",
+        type: "thread.created",
+        payload: { lineage: { relationshipToParent: "subagent" } },
+      },
+    } as ApplicationStoredEvent;
+    shouldPublishShellApplicationEvent(created, subagents, order);
     expect(
       shouldPublishShellApplicationEvent(
         {
-          sequence: 9,
-          event: { threadId: "child", type: "message.updated" },
+          sequence: 7,
+          event: { threadId: "late-child", type: "node.updated" },
         } as ApplicationStoredEvent,
         subagents,
-        5,
+        order,
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
