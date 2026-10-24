@@ -42,6 +42,49 @@ If `goat` or `goat start` reports an already running server, connect to that ser
 instead. Stop it before starting a replacement, or use a different `--base-dir`
 for an independent server.
 
+### Install with npm
+
+GOAT is distributed as an npm-installable tarball in
+[GOAT Releases](https://github.com/goat-si/goat-releases/releases), rather than
+through an npm registry package. The unscoped `goat` registry package is an
+unrelated blockchain toolkit; `t3` is upstream T3 Code.
+
+With Node.js 20.11 or newer and npm installed, install the latest stable release:
+
+```bash
+npm install --global https://github.com/goat-si/goat-releases/releases/latest/download/goat-npm.tgz
+goat --version
+goat help
+```
+
+For an exact stable or nightly version, copy its tag from GOAT Releases and use
+that release's `goat-npm.tgz` URL. For example, in a POSIX shell:
+
+```bash
+# Enter the version from the release tag, without the leading v.
+read -r GOAT_VERSION
+npm install --global "https://github.com/goat-si/goat-releases/releases/download/v${GOAT_VERSION}/goat-npm.tgz"
+```
+
+This route becomes available with the first release containing `goat-npm.tgz`;
+older releases require the archive installer above. The tarball has the private
+identity `@goat-si/goat` and exposes `goat` plus the legacy `t3` command. This does
+not claim that npm scope is available or published. If you already have a separate
+`t3` command, use a dedicated npm prefix rather than forcing npm to overwrite it.
+
+The first invocation downloads the exact version's CLI archive and checks its
+SHA-256 against `SHA256SUMS`. Later invocations stay pinned to that npm package's
+version. To update, install the target release's tarball again with the same npm
+prefix. For a custom prefix, use `npm --prefix <prefix> install --global <URL>`
+and put that prefix's executable directory on `PATH`. Native `goat update` can
+update the server runtime but does not change an npm-owned launcher pin.
+
+For a clean Linux or cloud machine, set up its
+[OpenCodex Child](./providers-codex.md#use-opencodex-home) on that same machine,
+install GOAT above, then run `goat serve`. Add the environment's
+[MCP URL](./outside-agents.md#get-the-mcp-url) to your agent and authorize it
+through the normal sign-in flow. OpenCodex serves the provider; GOAT serves MCP.
+
 ### Intel Macs
 
 There is no `goat` executable for Intel Macs (the desktop app is available). To

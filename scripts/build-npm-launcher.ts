@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Builds the `goat` npm package behind `npx goat` / `npm i -g goat`: a launcher
+ * Builds GOAT's private npm-installable release tarball: a launcher
  * with no dependencies that downloads this exact version's CLI archive from
  * the GitHub Release on first run (scripts/npm-launcher/goat.mjs).
  * The executables are not published to npm. npm's publish-time scanning held
@@ -8,8 +8,7 @@
  * live, and every install in that window ran a launcher with nothing to
  * launch.
  *
- * Output: `<output-dir>/goat/` (the package tree) and `<output-dir>/goat.tgz`,
- * which is what gets published.
+ * Output: `<output-dir>/goat/` and `<output-dir>/goat-npm.tgz` for GitHub Releases.
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -23,12 +22,12 @@ import { Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as HostProcess from "@goat/shared/HostProcess";
+import { CLI_NPM_PACKAGE_NAME, CLI_NPM_LAUNCHER_ASSET } from "@goat/shared/cliRelease";
 import { fromJsonStringPretty } from "@goat/shared/schemaJson";
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 
-export const NPM_LAUNCHER_PACKAGE_NAME = "goat";
 // Kept here rather than in apps/server/package.json: the desktop bundle inlines that
 // file, and shipped artifacts must not carry the private repository's URL.
 const NPM_REPOSITORY = {
@@ -54,7 +53,8 @@ export class NpmLauncherCommandFailedError extends Schema.TaggedError<NpmLaunche
  */
 export function npmLauncherPackageManifest(version: string) {
   return {
-    name: NPM_LAUNCHER_PACKAGE_NAME,
+    name: CLI_NPM_PACKAGE_NAME,
+    private: true,
     version,
     description:
       "GOAT CLI. Downloads the self-contained executable for this platform from the GitHub Release.",
@@ -95,8 +95,8 @@ export const buildNpmLauncher = Effect.fn("buildNpmLauncher")(function* (input: 
     yield* fs.copyFile(readme, path.join(stageDir, "README.md"));
   }
 
-  const packageDir = path.join(input.outputDir, NPM_LAUNCHER_PACKAGE_NAME);
-  const tarball = path.join(input.outputDir, `${NPM_LAUNCHER_PACKAGE_NAME}.tgz`);
+  const packageDir = path.join(input.outputDir, "goat");
+  const tarball = path.join(input.outputDir, CLI_NPM_LAUNCHER_ASSET);
   yield* fs.remove(tarball, { force: true });
   const tar = (yield* HostProcess.Platform) === "win32" ? windowsSystemTar() : "tar";
   // npm tarballs root everything under `package/`.
@@ -125,7 +125,7 @@ const command = Command.make(
     outputDir: Flag.String("output-dir").pipe(Flag.withDefault("npm-packages")),
   },
   buildNpmLauncher,
-).pipe(Command.withDescription("Build the goat npm launcher package."));
+).pipe(Command.withDescription("Build GOAT's private npm-installable release tarball."));
 
 if (import.meta.main) {
   Command.run(command, { version: "0.0.0" }).pipe(

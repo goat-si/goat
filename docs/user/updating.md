@@ -23,7 +23,19 @@ Each row has a checkbox, and **Update** runs the checked rows of the tab you are
 on. Machines GOAT cannot update are listed under **Skipped** with the reason,
 such as a machine that is offline or needs a manual update. Use the notice or
 **Settings → Connections** for those. Server updates appear only after that
-version is published to npm; remote desktop apps do not wait for npm.
+version's CLI archives and checksums are available in GOAT Releases; desktop apps
+use their own release feed.
+
+For an [npm tarball installation](./install.md#install-with-npm), update the
+launcher by reinstalling the target release's `goat-npm.tgz` from
+https://github.com/goat-si/goat-releases/releases. Use the same npm prefix as the
+original install: `npm --prefix <prefix> install --global <release-tarball-URL>`.
+The npm launcher remains pinned until that reinstall; `goat update` does not
+rewrite npm-owned files. For the latest stable tarball with your default prefix:
+
+```bash
+npm install --global https://github.com/goat-si/goat-releases/releases/latest/download/goat-npm.tgz
+```
 
 Updates never interrupt running threads. A machine with running threads shows
 **waits for idle** and starts once they finish. Remote machines go first, and

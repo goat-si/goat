@@ -4,12 +4,22 @@ import {
   cliArchiveTarCommand,
   cliReleaseDownloadBaseUrl,
   cliReleaseIndexPageUrl,
+  cliNpmExecCommand,
+  cliNpmPackageUrl,
   isPublishableCliReleaseVersion,
   newestCliReleaseVersion,
   parseChecksums,
 } from "./cliRelease.ts";
 
 describe("cliRelease", () => {
+  it.each(["1.2.3", "1.2.4-nightly.20261024.1", "1.2.4-preview.20261024.1"])(
+    "npm commands select GOAT's exact release tarball for %s",
+    (version) => {
+      const url = `https://github.com/goat-si/goat-releases/releases/download/v${version}/goat-npm.tgz`;
+      expect(cliNpmPackageUrl(version)).toBe(url);
+      expect(cliNpmExecCommand(version)).toBe(`npm exec --yes --package=${url} -- goat`);
+    },
+  );
   it("treats only stable, nightly and preview versions as publishable", () => {
     expect(isPublishableCliReleaseVersion("0.1.0")).toBe(true);
     expect(isPublishableCliReleaseVersion("0.1.0-nightly.20261019.194")).toBe(true);
