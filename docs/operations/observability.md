@@ -631,6 +631,13 @@ process, and `goat-web` for web client spans the backend forwards, all in `servi
 `goat`. `OTEL_SERVICE_NAME` and a `service.name` or
 `service.namespace` in `OTEL_RESOURCE_ATTRIBUTES` are ignored. Tell installations apart with other
 resource attributes, such as `OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=development`.
+The UI reports `deployment.environment.name` from its build: `development` under the Vite dev server
+and `production` otherwise.
+
+Attributes specific to GOAT use the `goat.` prefix. The UI runs as `goat-web` in both a browser
+and the desktop window, since it is the same code, and `goat.client.surface` is `desktop` or
+`web`. The server's `goat.server.managed_by` is `desktop` when the desktop app launched it and
+`standalone` otherwise.
 
 Releases before the GOAT rename reported `t3code-server`, `t3code-desktop`, and `t3code-web` in
 namespace `t3code`, with `service.runtime` `t3-server` or `t3-web`, and tagged SSH runtime

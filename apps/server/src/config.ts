@@ -113,7 +113,7 @@ export const otlpResource = (
   attributes: {
     "service.namespace": "goat",
     "service.runtime": "goat-server",
-    "service.mode": config.mode,
+    "goat.server.managed_by": config.mode === "desktop" ? "desktop" : "standalone",
     "host.name": config.otelEnvironment.resourceAttributes["host.name"] || hostName,
   },
 });

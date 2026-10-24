@@ -451,7 +451,7 @@ export const TEXT_RULES: readonly TextRule[] = [
   {
     id: "otlp-service-identity",
     category: "identities",
-    find: /\bt3code(?=-(?:server|desktop|web)\b)|(?<="service\.namespace": "|"stringValue":")t3code(?=")|(?<="service\.runtime": ")t3(?=-(?:server|web)")/g,
+    find: /\bt3code(?=-(?:server|desktop|web)\b)|(?<="service\.namespace": "|"stringValue":")t3code(?=")|(?<="service\.runtime": ")t3(?=-(?:server|web)")|(?<=")t3code(?=\.(?:server\.managed_by|client\.surface)")/g,
     replace: "goat",
     scope: (path) =>
       /^(?:apps\/server\/src\/(?:config|persistence\/Sqlite|serverLogger\.test)|apps\/desktop\/src\/app\/DesktopObservability(?:\.test)?|apps\/web\/src\/observability\/clientTracing)\.ts$/.test(
@@ -850,7 +850,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   {
     id: "observability-services",
     pattern:
-      /t3code-(?:desktop|server|web|mobile)|t3-(?:server|web)|(?<="service.namespace": ")t3code/g,
+      /t3code-(?:desktop|server|web|mobile)|t3-(?:server|web)|(?<="service.namespace": ")t3code|t3code\.(?:component|client\.surface)/g,
     scope: (path) =>
       /(?:relayTracing|apps\/web\/src\/lib\/runtime|apps\/mobile\/src\/features\/observability\/tracing)\./.test(
         path,
