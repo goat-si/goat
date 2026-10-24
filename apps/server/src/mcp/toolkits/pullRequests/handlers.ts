@@ -418,57 +418,62 @@ const make = Effect.gen(function* () {
     ),
     watch_pull_request: writesThread((input) => setWatching(input, true)),
     unwatch_pull_request: writesThread((input) => setWatching(input, false)),
-    write_pull_request_guides: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const located = yield* locateAll(input.pullRequests);
-        const guides = yield* Effect.forEach(
-          located,
-          (entry) =>
-            Effect.gen(function* () {
-              if (entry.target === null) {
-                return {
-                  host: entry.input.host ?? "",
-                  repository: entry.input.repository ?? "",
-                  number: entry.input.number ?? 0,
-                  url: entry.input.url ?? "",
-                  outcome: "failed" as const,
-                  detail: entry.failure,
+    write_pull_request_guides: McpToolAccess.writesWithCapability(
+      (input) =>
+        Effect.gen(function* () {
+          const located = yield* locateAll(input.pullRequests);
+          yield* McpToolAccess.admit(input);
+          const guides = yield* Effect.forEach(
+            located,
+            (entry) =>
+              Effect.gen(function* () {
+                if (entry.target === null) {
+                  return {
+                    host: entry.input.host ?? "",
+                    repository: entry.input.repository ?? "",
+                    number: entry.input.number ?? 0,
+                    url: entry.input.url ?? "",
+                    outcome: "failed" as const,
+                    detail: entry.failure,
+                  };
+                }
+                const identity = {
+                  host: entry.target.host,
+                  repository: entry.target.repository,
+                  number: entry.target.number,
+                  url: entry.target.url,
                 };
-              }
-              const identity = {
-                host: entry.target.host,
-                repository: entry.target.repository,
-                number: entry.target.number,
-                url: entry.target.url,
-              };
-              if (entry.project === undefined) {
-                return {
-                  ...identity,
-                  outcome: "failed" as const,
-                  detail: new PullRequestProjectNotFoundError({
-                    repository: entry.target.repository,
-                  }).message,
-                };
-              }
-              return yield* reviewGuides.generate(guideReference(entry.project, entry.target)).pipe(
-                Effect.map((result) => ({
-                  ...identity,
-                  outcome: result.started ? ("started" as const) : ("running" as const),
-                  detail: null,
-                })),
-                Effect.catch((error) =>
-                  Effect.succeed({
+                if (entry.project === undefined) {
+                  return {
                     ...identity,
                     outcome: "failed" as const,
-                    detail: guideFailureDetail(error),
-                  }),
-                ),
-              );
-            }),
-          { concurrency: 4 },
-        );
-        return { guides };
-      }),
+                    detail: new PullRequestProjectNotFoundError({
+                      repository: entry.target.repository,
+                    }).message,
+                  };
+                }
+                return yield* reviewGuides
+                  .generate(guideReference(entry.project, entry.target))
+                  .pipe(
+                    Effect.map((result) => ({
+                      ...identity,
+                      outcome: result.started ? ("started" as const) : ("running" as const),
+                      detail: null,
+                    })),
+                    Effect.catch((error) =>
+                      Effect.succeed({
+                        ...identity,
+                        outcome: "failed" as const,
+                        detail: guideFailureDetail(error),
+                      }),
+                    ),
+                  );
+              }),
+            { concurrency: 4 },
+          );
+          return { guides };
+        }),
+      { admission: "handler" },
     ),
     read_pull_request_guide: McpToolAccess.reads((input) =>
       Effect.gen(function* () {

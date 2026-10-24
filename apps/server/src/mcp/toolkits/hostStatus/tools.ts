@@ -1,3 +1,4 @@
+import { withClientRequestId } from "../keyedParameters.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
@@ -50,7 +51,7 @@ const membershipTool = <
 ) =>
   Tool.make(agentSurfaceRegistry[path].name, {
     description: agentSurfaceRegistry[path].description,
-    parameters: HubDeviceOperationInput,
+    parameters: withClientRequestId(HubDeviceOperationInput),
     success: hubDeviceToolResult(agentSurfaceRegistry[path].name),
     failure: OrchestratorMcpFailure,
     failureMode: "return" as const,

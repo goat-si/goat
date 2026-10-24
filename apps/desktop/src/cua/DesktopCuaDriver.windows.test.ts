@@ -37,6 +37,9 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
         assert.deepEqual(test.helperProbes, [{ bundleId: HELPER_ID, prompt: false }]);
         assert.isEmpty(test.constructors);
         assert.include(test.launches[0]?.hostBundleIds ?? [], HELPER_ID);
+        // The agents' app list comes from the helper's verified driver, never a direct run.
+        assert.deepEqual(test.manifestListings, [{ scope: "agents", through: "helper", apps: 1 }]);
+        assert.deepEqual(test.helperAppListings, [HELPER_ID]);
       }),
     ),
   );

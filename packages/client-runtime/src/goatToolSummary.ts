@@ -496,6 +496,9 @@ export function summarizeGoatToolCalls(
     case "html-preview":
       label = phrase("Previewed", "preview", quantity(selected.length, "HTML page"));
       break;
+    case "html-list":
+      label = phrase("Listed", "list", `saved HTML pages ${times}`);
+      break;
     case "html-render":
       label = phrase("Rendered", "render", quantity(selected.length, "HTML page"));
       break;

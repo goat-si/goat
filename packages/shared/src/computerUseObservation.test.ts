@@ -296,3 +296,52 @@ describe("computer use observation bookkeeping", () => {
     });
   });
 });
+
+describe("computer use element state", () => {
+  it("shows a toggled check box and a disabled button in the diff", () => {
+    const { observe } = setup();
+    const withState = (
+      snapshot: number,
+      agreed: boolean,
+      saveEnabled: boolean,
+    ): DriverWindowState => ({
+      ...read(snapshot, [
+        { role: "AXGroup", label: "Form" },
+        { role: "AXCheckBox", label: "Agree", parent: 0 },
+        { role: "AXButton", label: "Save", parent: 0 },
+      ]),
+      elements: [
+        { element_index: 0, element_token: "s" + snapshot + ":0", role: "AXGroup", label: "Form" },
+        {
+          element_index: 1,
+          element_token: "s" + snapshot + ":1",
+          role: "AXCheckBox",
+          label: "Agree",
+          parent_index: 0,
+          selected: agreed,
+        },
+        {
+          element_index: 2,
+          element_token: "s" + snapshot + ":2",
+          role: "AXButton",
+          label: "Save",
+          parent_index: 0,
+          enabled: saveEnabled,
+        },
+      ],
+    });
+    const first = observe(withState(1, false, false));
+    if (first.kind !== "full") throw new Error("expected full");
+    expect(first.elements.map((element) => element.state)).toEqual([
+      undefined,
+      { selected: false },
+      { enabled: false },
+    ]);
+    const second = observe(withState(2, true, true), first.observationId);
+    if (second.kind !== "diff") throw new Error("expected diff");
+    expect(second.changed.map((element) => [element.label, element.state])).toEqual([
+      ["Agree", { selected: true }],
+      ["Save", { enabled: true }],
+    ]);
+  });
+});

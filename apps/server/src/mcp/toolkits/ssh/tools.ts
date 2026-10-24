@@ -114,22 +114,24 @@ const LinkedHost = Schema.Struct({
 const HostLinkCreateTool = Tool.make(agentSurfaceRegistry["host_link.create"].name, {
   ...shared,
   description: agentSurfaceRegistry["host_link.create"].description,
-  parameters: Schema.Struct({
-    name: TrimmedNonEmptyString.annotate({
-      description:
-        "What to call the host in the host parameter of other tools: lowercase letters, digits, '.', '_' and '-'. Must not be an SSH alias from goat_ssh_host_list.",
-    }),
-    url: TrimmedNonEmptyString.annotate({
-      description:
-        "The pairing URL from goat pair or goat auth pairing create on that host, or the host's https address (then pass code).",
-    }),
-    code: Schema.optional(
-      TrimmedNonEmptyString.annotate({
-        description: "A pairing code from that host, when url is only its address.",
+  parameters: withClientRequestId(
+    Schema.Struct({
+      name: TrimmedNonEmptyString.annotate({
+        description:
+          "What to call the host in the host parameter of other tools: lowercase letters, digits, '.', '_' and '-'. Must not be an SSH alias from goat_ssh_host_list.",
       }),
-    ),
-    access: Schema.optional(AuthMcpClientAccess),
-  }),
+      url: TrimmedNonEmptyString.annotate({
+        description:
+          "The pairing URL from goat pair or goat auth pairing create on that host, or the host's https address (then pass code).",
+      }),
+      code: Schema.optional(
+        TrimmedNonEmptyString.annotate({
+          description: "A pairing code from that host, when url is only its address.",
+        }),
+      ),
+      access: Schema.optional(AuthMcpClientAccess),
+    }),
+  ),
   success: Schema.Struct({ host: LinkedHost, replaced: Schema.Boolean }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["host_link.create"]));
 
@@ -181,7 +183,7 @@ const SshHostForgetTool = Tool.make(agentSurfaceRegistry["ssh.host_forget"].name
 const SshRuntimeUpdateTool = Tool.make(agentSurfaceRegistry["ssh.runtime_update"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.runtime_update"].description,
-  parameters: SshRuntimeUpdateInput,
+  parameters: withClientRequestId(SshRuntimeUpdateInput),
   success: SshHostResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.runtime_update"]));
 
