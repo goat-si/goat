@@ -22,8 +22,8 @@ name: goat-nightly
 # visible only with push access, so every job that reads or writes a hand-off asks
 # for contents: write and passes github.token to its staging steps alone. The
 # cleanup job deletes the drafts when the run ends, unless a job failed or was
-# cancelled: then it keeps them, so "Re-run failed jobs" rebuilds only what failed
-# from the hand-offs the other jobs already staged.
+# cancelled: then it keeps them, so "Re-run failed jobs" re-runs the failed jobs and
+# the jobs that depend on them, reusing the hand-offs the passing jobs staged.
 on:
   # 03:00 KST. A day without a newer green dev commit publishes nothing.
   schedule:
