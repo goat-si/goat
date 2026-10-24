@@ -139,7 +139,13 @@ export function ServerBrowserSurface(props: {
   readonly tabId: string;
   readonly visible: boolean;
   readonly followSize?: boolean;
-  readonly controlPosition?: "top" | "bottom";
+  /** none: no control bar, as in a thumbnail that only shows the page. */
+  readonly controlPosition?: "top" | "bottom" | "none";
+  /**
+   * A passive, low-rate view: no input or control grants, frames scaled down on the server to
+   * maxWidth and acked no faster than frameIntervalMs.
+   */
+  readonly thumbnail?: { readonly frameIntervalMs: number; readonly maxWidth: number };
   readonly onFirstFrame?: () => void;
   readonly onViewport?: (viewport: PreviewStreamViewport) => void;
   readonly onControl?: (control: PreviewStreamControl | null) => void;
@@ -155,6 +161,7 @@ export function ServerBrowserSurface(props: {
     visible,
     followSize = true,
     controlPosition = "top",
+    thumbnail,
     onFirstFrame,
     onViewport,
     onControl,
@@ -163,6 +170,8 @@ export function ServerBrowserSurface(props: {
     pdfUrl = null,
     ref,
   } = props;
+  const thumbnailFrameMs = thumbnail?.frameIntervalMs;
+  const thumbnailWidth = thumbnail?.maxWidth;
   const access = usePreviewStreamAccess(environmentId);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -368,7 +377,17 @@ export function ServerBrowserSurface(props: {
       firstFrame();
     });
     const client = createPreviewStreamClient(
-      { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height },
+      thumbnailFrameMs === undefined || thumbnailWidth === undefined
+        ? { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height }
+        : {
+            access,
+            threadId,
+            tabId,
+            maxWidth: Math.min(cap.width, thumbnailWidth),
+            maxHeight: Math.min(cap.height, thumbnailWidth),
+            interactive: false,
+            ackDelayMs: thumbnailFrameMs,
+          },
       {
         onFrame: (jpeg) => {
           unauthorizedRef.current = 0;
@@ -453,6 +472,8 @@ export function ServerBrowserSurface(props: {
     access,
     accessDenied,
     cap,
+    thumbnailFrameMs,
+    thumbnailWidth,
     clearInput,
     environmentId,
     followSize,
@@ -711,28 +732,30 @@ export function ServerBrowserSurface(props: {
       className={cn("relative flex flex-col overflow-hidden", className)}
       data-server-browser-surface={tabId}
     >
-      <div
-        className={cn(
-          "visible relative z-20 flex shrink-0 items-center justify-between gap-2 border-border bg-background px-2 py-1",
-          controlPosition === "bottom" ? "order-last border-t" : "border-b",
-        )}
-      >
-        <span role="status" className="text-xs text-muted-foreground">
-          {previewStreamControlLabel(control)}
-        </span>
-        {control?.canOperate ? (
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={control.controller === "another-viewer"}
-            onClick={() =>
-              send({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
-            }
-          >
-            {control.controller === "you" ? "Release control" : "Take control"}
-          </Button>
-        ) : null}
-      </div>
+      {controlPosition === "none" ? null : (
+        <div
+          className={cn(
+            "visible relative z-20 flex shrink-0 items-center justify-between gap-2 border-border bg-background px-2 py-1",
+            controlPosition === "bottom" ? "order-last border-t" : "border-b",
+          )}
+        >
+          <span role="status" className="text-xs text-muted-foreground">
+            {previewStreamControlLabel(control)}
+          </span>
+          {control?.canOperate ? (
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={control.controller === "another-viewer"}
+              onClick={() =>
+                send({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
+              }
+            >
+              {control.controller === "you" ? "Release control" : "Take control"}
+            </Button>
+          ) : null}
+        </div>
+      )}
       <div className="relative min-h-0 flex-1">
         {pdfUrl ? (
           <embed
