@@ -38,6 +38,7 @@ const fixture = Effect.fnUntraced(function* () {
         return {
           _tag: "active",
           expiresAt,
+          interruptions: { count: 0, last: "human_input" },
           apps: ["com.apple.calculator"],
           wakeAt: DateTime.toEpochMillis(expiresAt),
         } as const;
@@ -46,6 +47,7 @@ const fixture = Effect.fnUntraced(function* () {
     stopAll: Effect.die("unused"),
     grants: Effect.die("unused"),
     pause: () => Effect.die("unused"),
+    detection: Effect.succeed({ humanInput: true, privateMode: true }),
     resume: Effect.die("unused"),
     sessions: Effect.die("unused"),
     subscribe: PubSub.subscribe(signals),

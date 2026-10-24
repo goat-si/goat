@@ -72,7 +72,9 @@ request names the thread, this computer, what the agent wants to do, and until
 when. Someone allowed to change this environment's settings approves it in a
 GOAT app; a reply in a chat channel does not count.
 
-Approving admits that thread until the time shown. It does not approve each
+Such work only gets the screen on a computer whose GOAT can tell when you type a
+password or use the keyboard or mouse yourself; elsewhere the request is refused
+and says why. Approving admits that thread until the time shown. It does not approve each
 action. Only one such thread uses the screen at a time, and threads you run
 yourself can still use it meanwhile, so the two may get in each other's way.
 Choose **End computer use** on the request in the thread to stop it early;

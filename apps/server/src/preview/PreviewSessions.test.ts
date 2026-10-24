@@ -1,7 +1,16 @@
-import { EnvironmentId, previewSessionChip, ThreadId } from "@goat/contracts";
+import { AuthSessionId, EnvironmentId, previewSessionChip, ThreadId } from "@goat/contracts";
+import { it as effectIt } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as ServerBrowser from "./ServerBrowser.ts";
 import { describe, expect, it } from "vite-plus/test";
 
+import * as PreviewSessions from "./PreviewSessions.ts";
 import { browserSession, desktopSession } from "./PreviewSessions.ts";
 
 const base = { environmentId: EnvironmentId.make("env"), host: "mac", platform: "mac" } as const;
@@ -21,17 +30,19 @@ const control = {
   threadId,
   expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
 };
+const detected = { humanInput: true, privateMode: true } as const;
 const active = {
   _tag: "active",
   expiresAt: control.expiresAt,
   apps: ["com.apple.calculator"],
   wakeAt: 0,
+  interruptions: { count: 0, last: "human_input" },
 } as const;
 
 describe("preview sessions", () => {
   it("shows a browser tab and a desktop control with the same owner, status and controls", () => {
     const browser = browserSession(base, tab)!;
-    const desktop = desktopSession(base, control, active)!;
+    const desktop = desktopSession(base, control, active, detected)!;
     for (const session of [browser, desktop]) {
       expect(session.owner).toBe("agent");
       expect(session.status).toBe("acting");
@@ -56,21 +67,69 @@ describe("preview sessions", () => {
     ]);
     expect(stopped.capabilities.controls).toEqual(["handBack", "stopAll"]);
 
-    const collided = desktopSession(base, control, { _tag: "paused", reason: "human_input" })!;
+    const collided = desktopSession(
+      base,
+      control,
+      { _tag: "paused", reason: "human_input" },
+      detected,
+    )!;
     expect([previewSessionChip(collided), collided.reason]).toEqual([
       "Waiting for you",
       "userIntervened",
     ]);
-    const takenOver = desktopSession(base, control, { _tag: "paused", reason: "takeover" })!;
+    const takenOver = desktopSession(
+      base,
+      control,
+      { _tag: "paused", reason: "takeover" },
+      detected,
+    )!;
     expect(previewSessionChip(takenOver)).toBe("You're controlling");
     expect(takenOver.capabilities.controls).toEqual(["handBack", "stop", "stopAll"]);
-    const ended = desktopSession(base, control, { _tag: "ended", reason: "stopped_all" })!;
+    const ended = desktopSession(
+      base,
+      control,
+      { _tag: "ended", reason: "stopped_all" },
+      detected,
+    )!;
+    const secret = desktopSession(base, control, { _tag: "paused", reason: "private" }, detected)!;
+    expect([previewSessionChip(secret), secret.status]).toEqual(["Private (paused)", "paused"]);
+    // A host whose helper cannot detect these says so instead of implying protection.
+    const blind = desktopSession(base, control, active, { humanInput: false, privateMode: false })!;
+    expect(blind.capabilities).toMatchObject({ privateMode: false, humanInput: false });
     expect(previewSessionChip(ended)).toBe("Stopped");
   });
 
   it("leaves out a person's own tab and controls that ended without a person's stop", () => {
     expect(browserSession(base, { ...tab, agentId: null })).toBeUndefined();
     for (const reason of ["expired", "revoked", "replaced", "disabled"] as const)
-      expect(desktopSession(base, control, { _tag: "ended", reason })).toBeUndefined();
+      expect(desktopSession(base, control, { _tag: "ended", reason }, detected)).toBeUndefined();
+  });
+
+  effectIt.effect("stops every agent without waiting on a page that never answers", () => {
+    const stopped: Array<string> = [];
+    const layer = PreviewSessions.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ServerBrowser.ServerBrowser)({
+            // A hung renderer: reading a tab's title never finishes.
+            sessions: Effect.never,
+            stopAllAgents: Effect.sync(() => void stopped.push("browser")),
+          }),
+          Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            stopAll: Effect.sync(() => (stopped.push("desktop"), [])),
+            grants: Effect.succeed([]),
+            proxy: undefined,
+          }),
+          Layer.mock(Handoffs.Handoffs)({}),
+          Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const sessions = yield* PreviewSessions.PreviewSessions;
+      const result = yield* sessions.control({ control: "stopAll" }, AuthSessionId.make("session"));
+      expect(result).toEqual({ applied: true });
+      expect(stopped).toEqual(["browser", "desktop"]);
+    }).pipe(Effect.provide(layer));
   });
 });

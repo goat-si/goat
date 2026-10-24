@@ -119,7 +119,7 @@ export function cuaDriverHostOptions(
     binaryPath,
     hostBundleId,
     // EmbeddedPermissionMode.Standard. Bounded mode ties authority to manifest lifetimes that
-    // would end the shared daemon under interactive threads too (ADR-0020).
+    // would end the shared daemon under interactive threads too (ADR-0022).
     permissionMode: 0,
     capabilityManifestPath,
     approveCapabilityManifest: true,

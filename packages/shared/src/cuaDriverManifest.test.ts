@@ -57,7 +57,7 @@ describe("cuaDriverManifest", () => {
     });
     expect(text).toBe(
       [
-        "# Written by GOAT at each driver start. See ADR-0020.",
+        "# Written by GOAT at each driver start. See ADR-0022.",
         "version: 3",
         "resources:",
         "  desktop:",

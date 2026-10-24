@@ -12,7 +12,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   ChevronDownIcon,
@@ -24,6 +24,7 @@ import {
 } from "~/components/solar";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { selectActiveRightPanel, useRightPanelStore } from "~/rightPanelStore";
@@ -32,6 +33,7 @@ import { previewSessionsEnvironment, usePreviewSessions } from "~/state/previewS
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { PreviewSessionThumbnail, useDocumentVisible } from "./PreviewSessionThumbnail";
+import { openPreviewSessionStack, usePreviewSessionStack } from "./previewSessionStackStore";
 
 const CHIP_VARIANT = {
   "Agent controlling": "info",
@@ -49,6 +51,8 @@ const CONTROL_LABEL: Partial<Record<PreviewSessionControl, string>> = {
 
 function PreviewSessionTile(props: {
   readonly session: PreviewSession;
+  readonly focused: boolean;
+  readonly focusRequest: number;
   readonly live: boolean;
   readonly onControl: (control: PreviewSessionControl) => void;
 }) {
@@ -73,9 +77,20 @@ function PreviewSessionTile(props: {
   const act = (control: PreviewSessionControl) =>
     previewSessionControlUsesBrowser(session, control) ? expand?.() : props.onControl(control);
   const actions = session.capabilities.controls.filter((control) => control in CONTROL_LABEL);
+  const tile = useRef<HTMLElement>(null);
+  // Each request scrolls again, even to the tile already focused.
+  const focusRequest = props.focused ? props.focusRequest : 0;
+  useEffect(() => {
+    if (focusRequest > 0) tile.current?.scrollIntoView({ block: "nearest" });
+  }, [focusRequest]);
   return (
     <article
-      className="overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-sm"
+      ref={tile}
+      className={cn(
+        // Clipped content would otherwise let the scrolling list squeeze a tile instead of scrolling.
+        "shrink-0 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-sm",
+        props.focused && "ring-2 ring-ring",
+      )}
       aria-label={`${session.target.title || previewSessionDetail(session)}: ${chip}`}
     >
       <div className="flex items-center gap-2 px-2.5 pt-2">
@@ -129,6 +144,37 @@ function PreviewSessionTile(props: {
   );
 }
 
+/** The stack's top edge (`top-14`) plus the gap it keeps above the mini player, in px. */
+const STACK_TOP_PX = 56;
+const STACK_GAP_PX = 8;
+/** `w-72` and `right-3`: a mini player left of this edge does not sit under the stack. */
+const STACK_SPAN_PX = 300;
+
+/**
+ * Where the mini player starts when it sits under the stack, so the stack ends above it. Its
+ * frame depends on the page it shows and the composer, so it is measured, again whenever it is
+ * resized or moved.
+ */
+function useMiniPlayerTop(frame: unknown) {
+  const [top, setTop] = useState<number | null>(null);
+  useEffect(() => {
+    const player = frame === null ? null : document.querySelector("[data-preview-mini-player]");
+    if (player === null) return;
+    const measure = () => {
+      const rect = player.getBoundingClientRect();
+      setTop(rect.right > window.innerWidth - STACK_SPAN_PX ? rect.top : null);
+    };
+    // Observing delivers the current size first, which measures it once.
+    const stopObserving = observeResize(player, measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      stopObserving();
+      window.removeEventListener("resize", measure);
+    };
+  }, [frame]);
+  return frame === null ? null : top;
+}
+
 /**
  * The right-side stack of what agents drive on this environment's host: one tile per browser
  * tab or desktop session, waiting ones first. Thumbnails stream only while the stack is open and
@@ -157,19 +203,33 @@ export function PreviewSessionStack(props: {
       ),
   );
   const control = useAtomCommand(previewSessionsEnvironment.control);
-  const [collapsed, setCollapsed] = useState(false);
+  const collapsed = usePreviewSessionStack((state) => state.collapsed);
+  const setCollapsed = usePreviewSessionStack((state) => state.setCollapsed);
+  const focus = usePreviewSessionStack((state) => state.focus);
+  const focusRequest = usePreviewSessionStack((state) => state.focusRequest);
   const visible = useDocumentVisible();
+  const miniPlayerTop = useMiniPlayerTop(miniPlayer);
+  const focusedId =
+    focus === null
+      ? null
+      : (sessions.find((session) =>
+          focus.sessionId === undefined
+            ? session.kind === focus.kind
+            : session.id === focus.sessionId,
+        )?.id ?? null);
   if (props.environmentId === null || sessions.length === 0 || panelOpen) return null;
   const environmentId = props.environmentId;
   const send = (input: { readonly sessionId?: string; readonly control: PreviewSessionControl }) =>
     void control({ environmentId, input });
   return (
     <aside
-      className={cn(
-        "pointer-events-none fixed top-14 right-3 z-40 flex w-72 flex-col gap-2",
-        // The mini player keeps the lower right; the stack ends above where it opens.
-        miniPlayer ? "max-h-[calc(100vh-30rem)]" : "max-h-[calc(100vh-5rem)]",
-      )}
+      className="pointer-events-none fixed top-14 right-3 z-40 flex max-h-[calc(100vh-5rem)] w-72 flex-col gap-2"
+      // The mini player keeps its corner; the stack ends above it and scrolls.
+      style={
+        miniPlayerTop === null
+          ? undefined
+          : { maxHeight: Math.max(0, miniPlayerTop - STACK_TOP_PX - STACK_GAP_PX) }
+      }
       aria-label="Agents on screen"
     >
       <div className="pointer-events-auto flex items-center gap-1.5 rounded-lg border bg-popover px-2 py-1.5 shadow-sm">
@@ -188,7 +248,7 @@ export function PreviewSessionStack(props: {
           size="icon-xs"
           aria-label={collapsed ? "Show agent sessions" : "Hide agent sessions"}
           aria-expanded={!collapsed}
-          onClick={() => setCollapsed((value) => !value)}
+          onClick={() => (collapsed ? openPreviewSessionStack() : setCollapsed(true))}
         >
           {collapsed ? <ChevronDownIcon /> : <ChevronUpIcon />}
         </Button>
@@ -198,6 +258,8 @@ export function PreviewSessionStack(props: {
           {sessions.map((session) => (
             <PreviewSessionTile
               key={session.id}
+              focused={session.id === focusedId}
+              focusRequest={focusRequest}
               session={session}
               live={visible}
               onControl={(next) => send({ sessionId: session.id, control: next })}

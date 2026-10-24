@@ -80,6 +80,7 @@ export const leaseUpdates = (input: {
           controlId: input.controlId,
           expiresAt: DateTime.formatIso(state.expiresAt),
           ...(state.apps === undefined ? {} : { apps: state.apps }),
+          ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
         });
         const remaining = state.wakeAt - (yield* Clock.currentTimeMillis);
         yield* Effect.raceFirst(Queue.take(wake), Effect.sleep(Math.max(0, remaining)));

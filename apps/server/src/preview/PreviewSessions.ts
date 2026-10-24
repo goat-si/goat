@@ -88,7 +88,7 @@ export const browserSession = (
     owner: tab.private ? "private" : tab.humanControls ? "human" : "agent",
     status,
     ...(tab.agentStopped ? { reason: "userStoppedSession" as const } : {}),
-    capabilities: { controls, frames: true, privateMode: true },
+    capabilities: { controls, frames: true, privateMode: true, humanInput: true },
   };
 };
 
@@ -97,6 +97,7 @@ export const desktopSession = (
   base: Base,
   control: ComputerUseLeases.ComputerUseControl,
   state: ComputerUseLeases.ComputerUseControlState,
+  detection: ComputerUseLeases.ComputerUseDetection,
 ): PreviewSession | undefined => {
   if (state._tag === "ended" && state.reason !== "stopped" && state.reason !== "stopped_all")
     return undefined;
@@ -121,14 +122,21 @@ export const desktopSession = (
             ? "No apps approved"
             : apps.join(", "),
     },
-    owner: state._tag === "paused" && state.reason === "takeover" ? "human" : "agent",
+    owner:
+      state._tag !== "paused"
+        ? "agent"
+        : state.reason === "private"
+          ? "private"
+          : state.reason === "takeover"
+            ? "human"
+            : "agent",
     status:
       state._tag === "ended"
         ? "stopped"
         : state._tag === "paused"
-          ? state.reason === "takeover"
-            ? "paused"
-            : "waiting-for-human"
+          ? state.reason === "human_input"
+            ? "waiting-for-human"
+            : "paused"
           : "acting",
     ...(reason === undefined ? {} : { reason }),
     lease: {
@@ -144,7 +152,8 @@ export const desktopSession = (
             ? ["handBack", "stop", "stopAll"]
             : ["takeover", "stop", "stopAll"],
       frames: false,
-      privateMode: false,
+      privateMode: detection.privateMode,
+      humanInput: detection.humanInput,
     },
   };
 };
@@ -165,11 +174,13 @@ const make = Effect.gen(function* () {
         const session = browserSession(base, tab);
         if (session) sessions.push(session);
       }
-    if (Option.isSome(leases))
+    if (Option.isSome(leases)) {
+      const detection = yield* leases.value.detection;
       for (const { control, state } of yield* leases.value.sessions) {
-        const session = desktopSession(base, control, state);
+        const session = desktopSession(base, control, state, detection);
         if (session) sessions.push(session);
       }
+    }
     return { sessions };
   }).pipe(Effect.withSpan("PreviewSessions.snapshot"));
 
@@ -200,9 +211,8 @@ const make = Effect.gen(function* () {
     sessionId: AuthSessionId,
   ) {
     if (input.control === "stopAll") {
-      if (Option.isSome(browser))
-        for (const tab of yield* browser.value.sessions)
-          yield* browser.value.controlSession({ ...tab, control: "stop" });
+      // Control first, and nothing a stuck page could hold up: no titles or URLs are read.
+      if (Option.isSome(browser)) yield* browser.value.stopAllAgents;
       yield* stopAllComputerUse(leases, handoffs, sessionId);
       return { applied: true };
     }

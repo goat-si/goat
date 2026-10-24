@@ -211,4 +211,54 @@ describe("SessionControl", () => {
     await expect(control.agent("agent", async () => "click")).resolves.toBe("click");
     expect(changes).toEqual([true, false]);
   });
+
+  it("answers a stopped action at once even when its work ignores the signal, and keeps later actions behind that work", async () => {
+    const control = new SessionControl("agent");
+    const work = Promise.withResolvers<string>();
+    const started = Promise.withResolvers<void>();
+    const events: Array<string> = [];
+    const stuck = control.agent("agent", () => {
+      started.resolve();
+      return work.promise;
+    });
+    await started.promise;
+    control.stopAgents();
+    await expect(stuck).rejects.toMatchObject({ reason: "stopped" });
+    expect(() => control.assertAgentMayDispatch()).toThrow(BrowserControlInterrupted);
+    control.resumeAgents();
+    const next = control.agent("agent", async () => events.push("next"));
+    work.resolve("late click");
+    await next;
+    expect(events).toEqual(["next"]);
+  });
+
+  it("withholds what an observation read when a secret appeared before it returned", async () => {
+    const control = new SessionControl("agent");
+    const read = Promise.withResolvers<string>();
+    const observing = control.observe(() => read.promise);
+    control.setPrivate(true);
+    read.resolve("snapshot with the password field");
+    await expect(observing).rejects.toMatchObject({ reason: "privateMode" });
+  });
+
+  it("keeps an action's input cancelled after a brief secret ends", async () => {
+    const control = new SessionControl("agent");
+    const gate = control.dispatchGate();
+    control.setPrivate(true);
+    control.setPrivate(false);
+    expect(control.agentCanActNow("agent")).toBe(true);
+    expect(gate).toThrow(BrowserControlInterrupted);
+    expect(control.dispatchGate()).not.toThrow();
+  });
+
+  it("withholds a read that a brief secret overlapped, even after the secret is gone", async () => {
+    const control = new SessionControl("agent");
+    const read = Promise.withResolvers<string>();
+    const observing = control.observe(() => read.promise);
+    control.setPrivate(true);
+    control.setPrivate(false);
+    read.resolve("frame that showed the password field");
+    await expect(observing).rejects.toMatchObject({ reason: "privateMode" });
+    await expect(control.observe(async () => "next read")).resolves.toBe("next read");
+  });
 });

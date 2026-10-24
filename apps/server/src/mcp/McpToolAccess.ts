@@ -310,11 +310,18 @@ export const readsOrReachesHost = <P, A, E, R>(
 export const readsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("read", (params: P) => requireThreadCaller.pipe(Effect.flatMap(() => handle(params))));
 
-export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+export const actsAsCaller = <P, A, E, R>(
+  handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
+) =>
   declare("write", (params: P) =>
     requireThreadCaller.pipe(
       Effect.flatMap(() => writingCaller),
-      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params)),
+      ),
     ),
   );
 
@@ -358,7 +365,7 @@ export const writesWithCapability = <P, A, E, R>(
 export const writesThreads = <P, A, E, R>(
   threads: (params: P) => ReadonlyArray<ThreadId | undefined>,
   handle: (params: P) => Effect.Effect<A, E, R>,
-  options: { readonly refusalSuffix?: string } = {},
+  options: AdmissionOption & { readonly refusalSuffix?: string } = {},
 ) =>
   declare("write", (params: P) =>
     Effect.gen(function* () {
@@ -385,7 +392,11 @@ export const writesThreads = <P, A, E, R>(
       // orchestrator checks again under the thread's lock and records its
       // refusal here, since handlers wrap dispatch errors their own way.
       const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
-      return yield* admitted(params, caller.limits, handle(params)).pipe(
+      return yield* (
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params))
+      ).pipe(
         Effect.provideService(DispatchModeLimit, { ...caller.limits, refused }),
         Effect.catch((error) =>
           Effect.flatMap(Ref.get(refused), (refusal) =>

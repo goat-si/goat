@@ -44,6 +44,7 @@ import {
 } from "../ui/sidebar";
 import { SidebarUtilityMenu } from "../sidebar/SidebarChrome";
 import { scrollToSettingsTarget } from "./settingsLayout";
+import { SETTINGS_NAV_GROUPS } from "./settingsNav";
 import {
   searchSettings,
   isSettingsOverviewVisible,
@@ -87,18 +88,6 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/archived": ArchiveIcon,
 };
 
-const SETTINGS_NAV_ITEMS: ReadonlyArray<{
-  label: string;
-  to: SettingsPath;
-  icon: ComponentType<{ className?: string }>;
-}> = (Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[])
-  .filter((to) => to !== "/settings/diagnostics")
-  .map((to) => ({
-    to,
-    label: SETTINGS_SECTION_LABELS[to],
-    icon: SETTINGS_SECTION_ICONS[to],
-  }));
-
 function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   const Icon = SETTINGS_SECTION_ICONS[to];
   return <Icon className="size-3.5 h-5 shrink-0 text-sidebar-muted-foreground/60" />;
@@ -110,11 +99,13 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const currentSearch = useLocation({ select: (location) => location.search });
   const scopeSearch = validateSettingsScopeSearch(currentSearch);
   const searchableItems = useAvailableSettingsSearchItems(scopeSearch);
-  const navItems = SETTINGS_NAV_ITEMS.filter(
-    (item) =>
-      (item.to !== "/settings/projects" || isSettingsOverviewVisible(scopeSearch)) &&
-      (item.to !== "/settings/memory" || searchableItems.some((entry) => entry.to === item.to)),
-  );
+  const isNavItemVisible = (to: SettingsPath) =>
+    (to !== "/settings/projects" || isSettingsOverviewVisible(scopeSearch)) &&
+    (to !== "/settings/memory" || searchableItems.some((entry) => entry.to === to));
+  const navGroups = SETTINGS_NAV_GROUPS.map((group) => ({
+    ...group,
+    paths: group.paths.filter(isNavItemVisible),
+  })).filter((group) => group.paths.length > 0);
   const { isMobile, setOpenMobile, open, setOpen } = useSidebar();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
@@ -326,29 +317,43 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 ))}
               </SidebarMenu>
             ) : (
-              <SidebarMenu>
-                {navItems.map((item) => {
-                  const Icon = item.icon;
-                  const isGeneralDetailPage =
-                    item.to === "/settings/general" &&
-                    pathname === "/settings/open-source-licenses";
-                  const isActive =
-                    isGeneralDetailPage ||
-                    pathname === item.to ||
-                    pathname.startsWith(`${item.to}/`);
+              <nav aria-label="Settings sections" className="flex flex-col gap-3">
+                {navGroups.map((group, groupIndex) => {
+                  const headingId = `settings-nav-group-${groupIndex}`;
                   return (
-                    <SidebarMenuItem key={item.to}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        onClick={() => handleSectionClick(item.to)}
+                    <div key={group.label} className="flex flex-col gap-0.5">
+                      <h2
+                        id={headingId}
+                        className="px-2 py-1 text-xs font-medium text-sidebar-muted-foreground/70"
                       >
-                        <Icon />
-                        <span className="truncate">{item.label}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
+                        {group.label}
+                      </h2>
+                      <SidebarMenu aria-labelledby={headingId}>
+                        {group.paths.map((to) => {
+                          const Icon = SETTINGS_SECTION_ICONS[to];
+                          const isGeneralDetailPage =
+                            to === "/settings/general" &&
+                            pathname === "/settings/open-source-licenses";
+                          const isActive =
+                            isGeneralDetailPage || pathname === to || pathname.startsWith(`${to}/`);
+                          return (
+                            <SidebarMenuItem key={to}>
+                              <SidebarMenuButton
+                                isActive={isActive}
+                                aria-current={isActive ? "page" : undefined}
+                                onClick={() => handleSectionClick(to)}
+                              >
+                                <Icon />
+                                <span className="truncate">{SETTINGS_SECTION_LABELS[to]}</span>
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                          );
+                        })}
+                      </SidebarMenu>
+                    </div>
                   );
                 })}
-              </SidebarMenu>
+              </nav>
             )}
           </div>
         </SidebarGroup>

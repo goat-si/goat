@@ -15,6 +15,8 @@ export const computerUseEntries = {
     effect: "write",
     capability: "none",
     capabilityReason: "Asks a person, who decides whether to admit the thread.",
+    idempotencyReason:
+      "Pending requests with the same purpose and duration reuse this thread’s existing computer-use handoff; an admitted thread returns its existing admission.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",

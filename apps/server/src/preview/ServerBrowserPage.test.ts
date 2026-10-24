@@ -101,6 +101,90 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       timeoutMs: 15_000,
     });
 
+  it("never clicks after Stop, even when Playwright was still waiting for the target", async () => {
+    await page.setContent('<button id="b" disabled onclick="window.clicked = true">Send</button>');
+    let stopped = false;
+    const clicking = ServerBrowserPage.click(
+      page,
+      { locator: "#b", timeoutMs: 10_000 },
+      undefined,
+      () => {
+        if (stopped) throw new Error("stopped");
+      },
+    );
+    void clicking.catch(() => undefined);
+    // A person stops the agent while the click waits for the button, which then becomes usable.
+    stopped = true;
+    await page.evaluate("document.getElementById('b').disabled = false");
+    await expect(clicking).rejects.toThrow("stopped");
+    expect(await page.evaluate("window.clicked === true")).toBe(false);
+  });
+
+  it("clears and types only into the target, never into another focused field", async () => {
+    await page.setContent(
+      '<input id="target" disabled value="old"><input id="other" value="keep">',
+    );
+    await page.focus("#other");
+    await expect(
+      ServerBrowserPage.type(page, { locator: "#target", clear: true, text: "WRONG" }),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationTargetNotEditableError" });
+    expect(await page.evaluate("[target.value, other.value]")).toEqual(["old", "keep"]);
+  });
+
+  it("does not click an element that covered the target after Playwright's check", async () => {
+    await page.setContent(
+      '<button id="b" onclick="window.hits.push(\'target\')">Send</button><script>window.hits = []</script>',
+    );
+    const cover =
+      "const o = document.createElement('div'); o.style.cssText = 'position:fixed;inset:0'; o.onclick = () => window.hits.push('overlay'); document.body.append(o)";
+    const button = page.locator("#b");
+    // The page changes between Playwright's actionability check and the dispatch.
+    const coveredAfterCheck = new Proxy(page, {
+      get: (target, key) =>
+        key === "locator"
+          ? () =>
+              new Proxy(button, {
+                get: (locator, name) =>
+                  name === "click"
+                    ? async (options: Parameters<typeof button.click>[0]) => {
+                        await locator.click(options);
+                        await page.evaluate(cover);
+                      }
+                    : Reflect.get(locator, name, locator),
+              })
+          : Reflect.get(target, key, target),
+    });
+    await expect(
+      ServerBrowserPage.click(coveredAfterCheck, { locator: "#b" }),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationExecutionError" });
+    expect(await page.evaluate("window.hits")).toEqual([]);
+  });
+
+  it("never selects or uploads after Stop, even when the target appears later", async () => {
+    await page.setContent('<select id="s"><option value="a">A</option></select>');
+    const stopped = () => {
+      throw new Error("stopped");
+    };
+    await expect(
+      ServerBrowserPage.select(page, { locator: "#s", values: ["b"] }),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationExecutionError" });
+    await page.evaluate("s.add(new Option('B', 'b'))");
+    await expect(
+      ServerBrowserPage.select(page, { locator: "#s", values: ["b"] }, stopped),
+    ).rejects.toThrow("stopped");
+    expect(await page.evaluate("s.value")).toBe("a");
+
+    const uploading = ServerBrowserPage.setInputFiles(
+      page,
+      { locator: "#f", paths: [NodePath.join(NodeOS.tmpdir(), "missing-upload.txt")] },
+      stopped,
+    );
+    void uploading.catch(() => undefined);
+    await page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input id=f type=file>')");
+    await expect(uploading).rejects.toThrow("stopped");
+    expect(await page.evaluate("f.files.length")).toBe(0);
+  });
+
   it("skips the capture for a text-only snapshot and still returns the page", async () => {
     await page.setContent("<main><h1>Inbox</h1><button>Compose</button></main>");
     const result = await ServerBrowserPage.snapshot({
@@ -536,47 +620,6 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
   });
 });
 
-describe("server browser drag", () => {
-  it("fails the drag, not the server, when it times out while the cursor is still moving", async () => {
-    const timedOut = new Error("locator.dragTo: Timeout 30000ms exceeded.");
-    const box = { x: 0, y: 0, width: 20, height: 20 };
-    const targetBox = Promise.withResolvers<typeof box>();
-    const page = {
-      locator: (selector: string) =>
-        selector === "#card"
-          ? {
-              scrollIntoViewIfNeeded: async () => {},
-              boundingBox: async () => box,
-              dragTo: () => Promise.reject(timedOut),
-            }
-          : { boundingBox: () => targetBox.promise },
-    } as unknown as Page;
-    const unobserved: Array<unknown> = [];
-    const onUnhandled = (reason: unknown) => unobserved.push(reason);
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      let finished = false;
-      const settled = ServerBrowserPage.drag(page, { source: "#card", target: "#lane" }).then(
-        () => null,
-        (error: unknown) => error,
-      );
-      void settled.then(() => (finished = true));
-      // Two macrotask turns: Node reports a rejection nobody observed after the first.
-      for (let turn = 0; turn < 2; turn++) {
-        // oxlint-disable-next-line goat/no-real-time-wait-in-tests -- Node emits unhandledRejection only between macrotasks; no promise can mark that point.
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-      expect(finished).toBe(false);
-      targetBox.resolve(box);
-
-      expect(await settled).toBe(timedOut);
-      expect(unobserved).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-    }
-  });
-});
-
 describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
   let browser: Browser;
   let context: BrowserContext;
@@ -584,6 +627,7 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
   /** Each change the watcher reports, resolved in order. */
   let changes: Array<PromiseWithResolvers<boolean>>;
   let reported: number;
+  let delivered: number;
   const nextChange = () => changes[reported++]!.promise;
 
   beforeAll(async () => {
@@ -597,8 +641,10 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
     page = await context.newPage();
     changes = Array.from({ length: 8 }, () => Promise.withResolvers<boolean>());
     reported = 0;
-    let delivered = 0;
+    delivered = 0;
     await watchPrivateMode(page, (on) => changes[delivered++]!.resolve(on));
+    // Bindings are answered in order, so awaiting this one means every earlier report arrived.
+    await page.exposeFunction("__fence", () => undefined);
   });
   afterEach(async () => {
     await context.close();
@@ -622,6 +668,17 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
     expect(await nextChange()).toBe(false);
     await page.focus("#otp");
     expect(await nextChange()).toBe(true);
+  });
+
+  it("stays private through history and hash moves, and clears only for a new document", async () => {
+    await load('<input id="pass" type="password">');
+    await page.focus("#pass");
+    expect(await nextChange()).toBe(true);
+    await page.evaluate("history.pushState({}, '', '/step-2'); location.hash = 'otp'");
+    await page.evaluate("window.__fence()");
+    expect(delivered).toBe(1);
+    await page.goto("https://login.example/done");
+    expect(await nextChange()).toBe(false);
   });
 
   it("goes private for a passkey prompt until it settles, inside a frame too", async () => {
