@@ -1,10 +1,21 @@
 import {
+  COMPUTER_USE_PROVIDER_DRIVERS,
   TURN_CAPABILITIES,
   type CuaHostStatus,
   type ProviderInteractionMode,
   type TurnCapability,
 } from "@goat/contracts";
 import { TURN_CAPABILITY_LABEL } from "@goat/shared/turnCapabilities";
+
+/**
+ * Whether a capability can run on the next turn. `checking` is not an answer yet, so picking
+ * the entry does nothing; `unavailable` says why, and `setup` marks the ones the host's
+ * Computer settings can fix.
+ */
+export type ComposerCapabilityAvailability =
+  | { readonly state: "available"; readonly note: string | null }
+  | { readonly state: "checking" }
+  | { readonly state: "unavailable"; readonly reason: string; readonly setup: boolean };
 
 /** An `@computer` / `@browser` entry in the composer's @ list. */
 export interface ComposerCapabilityItem {
@@ -13,14 +24,18 @@ export interface ComposerCapabilityItem {
   readonly capability: TurnCapability;
   readonly label: string;
   readonly description: string;
-  /** Why the capability cannot run on this turn; picking the entry opens setup instead. */
-  readonly unavailableReason: string | null;
+  readonly availability: ComposerCapabilityAvailability;
 }
 
 export interface ComposerCapabilityContext {
-  /** The environment's computer use state; null while it loads or when it cannot be read. */
-  readonly computerUse: { readonly enabled: boolean; readonly status: CuaHostStatus | null } | null;
+  /** The host's computer use state; null while the first check runs. */
+  readonly computerUse:
+    | { readonly enabled: boolean; readonly status: CuaHostStatus }
+    | { readonly error: string }
+    | null;
   readonly interactionMode: ProviderInteractionMode;
+  /** The driver of the provider the next turn goes to. */
+  readonly providerDriver: string | null;
 }
 
 const DESCRIPTION: Record<TurnCapability, string> = {
@@ -33,23 +48,49 @@ const SEARCH_TERMS: Record<TurnCapability, ReadonlyArray<string>> = {
   browser: ["browser", "web", "preview"],
 };
 
+const AVAILABLE: ComposerCapabilityAvailability = { state: "available", note: null };
+
 /**
- * Why a capability cannot run, in the words a person needs to fix it. The server applies the
- * same gates again when the turn starts; this only keeps the entry honest before sending.
+ * The same gates the server applies when the turn starts, in the words a person needs to act
+ * on them. Turns sent from the composer are attended, so the unattended lease does not apply;
+ * a read-only sandbox is the provider's and is reported by the agent if it bites.
  */
-export function turnCapabilityUnavailableReason(
+export function turnCapabilityAvailability(
   capability: TurnCapability,
   context: ComposerCapabilityContext,
-): string | null {
-  if (capability === "browser") return null;
-  if (context.interactionMode === "plan") return "Computer use is off in plan mode.";
+): ComposerCapabilityAvailability {
+  if (capability === "browser") return AVAILABLE;
+  if (context.interactionMode === "plan")
+    return { state: "unavailable", reason: "Computer use is off in plan mode.", setup: false };
+  if (context.providerDriver !== null && !COMPUTER_USE_PROVIDER_DRIVERS.has(context.providerDriver))
+    return {
+      state: "unavailable",
+      reason: "This agent doesn't run on this computer, so it can't use computer use.",
+      setup: false,
+    };
   const computerUse = context.computerUse;
-  if (computerUse === null) return "Checking computer use on this host…";
-  if (computerUse.status?.platform === "other") return "Computer use isn't available on this host.";
-  if (computerUse.status?.display?.capability === "unavailable")
-    return computerUse.status.display.reason;
-  if (!computerUse.enabled) return "Computer use is off for this host. Set it up to use it.";
-  return null;
+  if (computerUse === null) return { state: "checking" };
+  if ("error" in computerUse)
+    return {
+      state: "unavailable",
+      reason: `Couldn't check computer use on this host: ${computerUse.error}`,
+      setup: true,
+    };
+  const { status, enabled } = computerUse;
+  if (status.platform === "other")
+    return {
+      state: "unavailable",
+      reason: "Computer use isn't available on this host.",
+      setup: false,
+    };
+  if (status.display?.capability === "unavailable")
+    return { state: "unavailable", reason: status.display.reason, setup: true };
+  if (!enabled)
+    return { state: "unavailable", reason: "Computer use is off for this host.", setup: true };
+  // Limited support (missing grants, Wayland) still runs; the person sees the limit.
+  return status.display?.capability === "partial"
+    ? { state: "available", note: status.display.reason }
+    : AVAILABLE;
 }
 
 /** Entries whose name or a search term starts with the typed query; all of them for a bare @. */
@@ -68,6 +109,18 @@ export function matchComposerCapabilityItems(
     capability,
     label: TURN_CAPABILITY_LABEL[capability],
     description: DESCRIPTION[capability],
-    unavailableReason: turnCapabilityUnavailableReason(capability, context),
+    availability: turnCapabilityAvailability(capability, context),
   }));
+}
+
+/** The line an entry shows under its name. */
+export function composerCapabilityDetail(item: ComposerCapabilityItem): string {
+  switch (item.availability.state) {
+    case "available":
+      return item.availability.note ?? item.description;
+    case "checking":
+      return "Checking this host…";
+    case "unavailable":
+      return item.availability.reason;
+  }
 }

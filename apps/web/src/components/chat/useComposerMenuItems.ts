@@ -98,6 +98,7 @@ export function useComposerMenuItems({
   const capabilityContext = useComposerCapabilityContext({
     environmentId,
     interactionMode,
+    providerDriver: selectedProvider,
     active: isPathTrigger,
   });
   const environmentThreadShells = useThreadShells(isPathTrigger);

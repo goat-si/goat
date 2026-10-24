@@ -1954,14 +1954,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
     if (item.type === "capability") {
       if (trigger.kind !== "path") return;
-      if (item.unavailableReason === null) {
+      const { availability } = item;
+      if (availability.state === "available") {
         const record = turnCapabilityContextRecord(item.capability);
         if (replaceTriggerWith(`${formatInlineContextReference(record)} `))
           setComposerHighlightedItemId(null);
-        return;
       }
+      // Still checking, or nothing in Settings fixes it: the typed text stays and the row says why.
+      if (availability.state !== "unavailable" || !availability.setup) return;
       if (replaceTriggerWith("")) setComposerHighlightedItemId(null);
-      void navigate({ to: "/settings/integrations", hash: "computer" });
+      void navigate({
+        to: "/settings/integrations",
+        // The host this composer sends to, which is the one whose computer use needs setting up.
+        search: { project: undefined, machine: environmentId, checkout: undefined },
+        hash: "computer",
+      });
       return;
     }
     if (item.type === "path") {

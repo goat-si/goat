@@ -12,19 +12,25 @@ import { serverEnvironment } from "../../state/server";
 export function useComposerCapabilityContext(input: {
   readonly environmentId: EnvironmentId;
   readonly interactionMode: ProviderInteractionMode;
+  readonly providerDriver: string | null;
   readonly active: boolean;
 }): ComposerCapabilityContext {
   const enabled = useEnvironmentSettings(input.environmentId, (settings) => settings.enableCua);
-  const status = useEnvironmentQuery(
+  const query = useEnvironmentQuery(
     input.active
       ? serverEnvironment.computerUse({ environmentId: input.environmentId, input: {} })
       : null,
   );
+  // A failed check is its own state: it must never read as "nothing is wrong".
   const computerUse =
-    status.data !== null && status.data !== undefined
-      ? { enabled, status: status.data }
-      : status.error !== null && status.error !== undefined
-        ? { enabled, status: null }
+    query.error !== null && query.error !== undefined
+      ? { error: query.error }
+      : query.data !== null && query.data !== undefined
+        ? { enabled, status: query.data }
         : null;
-  return { computerUse, interactionMode: input.interactionMode };
+  return {
+    computerUse,
+    interactionMode: input.interactionMode,
+    providerDriver: input.providerDriver,
+  };
 }
