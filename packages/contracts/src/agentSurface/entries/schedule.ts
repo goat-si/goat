@@ -32,7 +32,7 @@ export const scheduleEntries = {
     toolkit: "orchestrator",
     summary: "List scheduled tasks",
     description:
-      "Read recurring scheduled tasks, including their schedule, prompt, enabled state, bound thread, next run time and last run status. Omit projectId for this thread's project, or all projects when no thread calls.",
+      "Read recurring scheduled tasks, including their schedule, prompt, enabled state, bound thread, next run time, last run status, run count and last run time. Omit projectId for this thread's project, or all projects when no thread calls.",
     guide: "Use the returned scheduledTaskId with goat_schedule_update or goat_schedule_delete.",
     effect: "read",
     hostRoutable: false,
