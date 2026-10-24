@@ -67,6 +67,17 @@ describe("computerUseObservedTarget", () => {
     ).toBe("Downloads in Finder");
     expect(computerUseObservedTarget({ app_name: "Finder" })).toBe("Finder");
     expect(computerUseObservedTarget([{ type: "text", text: "x" }])).toBeNull();
+    // GOAT moves the structured fields into JSON text beside a screenshot (#1154).
+    const folded = JSON.stringify({ app_name: "Finder", window_title: "Downloads" });
+    expect(
+      computerUseObservedTarget([
+        { type: "text", text: folded },
+        { type: "image", mimeType: "image/png", data: "AAAA" },
+      ]),
+    ).toBe("Downloads in Finder");
+    expect(
+      computerUseObservedTarget({ content: [{ type: "text", text: "{not json" }] }),
+    ).toBeNull();
   });
 });
 
