@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { computerUseReady, type ComputerUseReadiness } from "@goat/contracts";
 
 import {
   CUA_DESKTOP_UPDATE_NEEDED,
@@ -6,6 +7,7 @@ import {
   computerUseUnavailable,
   hostComputerUseText,
   readCuaGrants,
+  withLiveGrants,
 } from "./CuaSetupDialog.logic";
 
 const mac = { platform: "darwin", running: true } as const;
@@ -140,5 +142,40 @@ describe("readCuaGrants", () => {
       principal: "unusable",
       message: CUA_DESKTOP_UPDATE_NEEDED,
     });
+  });
+});
+
+describe("withLiveGrants", () => {
+  const reported: ComputerUseReadiness = {
+    grants: { accessibility: "granted", screenCapture: "granted" },
+    helper: "authenticated",
+    capture: "ready",
+    tree: "ready",
+    input: "background",
+    blockers: [],
+    reasons: [],
+  };
+  const live = (accessibility: boolean, screenRecording: boolean) =>
+    ({
+      principal: "helper",
+      name: "GOAT Computer Use",
+      bundleId: "si.goat.desktop.computer-use",
+      accessibility,
+      screenRecording,
+    }) as const;
+
+  it("shows a grant revoked since the helper's last report as denied, so the host is not ready", () => {
+    const merged = withLiveGrants(reported, live(false, true));
+    expect(merged?.grants).toEqual({ accessibility: "denied", screenCapture: "granted" });
+    expect(computerUseReady(merged!)).toBe(false);
+    expect(computerUseReady(reported)).toBe(true);
+  });
+
+  it("never marks a grant granted that the report has not proven", () => {
+    const pending = {
+      ...reported,
+      grants: { accessibility: "pending", screenCapture: "unknown" },
+    } as const;
+    expect(withLiveGrants(pending, live(true, true))?.grants).toEqual(pending.grants);
   });
 });

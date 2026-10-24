@@ -1,4 +1,5 @@
 import type {
+  ComputerUseReadiness,
   CuaHostStatus,
   CuaVerificationStepId,
   DesktopBridge,
@@ -205,4 +206,25 @@ export function hostComputerUseText(computerUse: HostComputerUse | undefined): s
   return computerUse.display && computerUse.display !== "console"
     ? `${state} (${computerUse.display})`
     : state;
+}
+
+/**
+ * The host's last readiness report with this Mac's live grant reads laid over it. The report is
+ * as old as the helper's last check, so a grant revoked since then would still read granted; a
+ * live read only ever takes a grant away, since granting also stands for proofs it cannot make.
+ */
+export function withLiveGrants(
+  readiness: ComputerUseReadiness | undefined,
+  live: CuaGrantHolder | null,
+): ComputerUseReadiness | undefined {
+  if (!readiness || !live) return readiness;
+  const revoke = (reported: ComputerUseReadiness["grants"]["accessibility"], granted: boolean) =>
+    !granted && reported === "granted" ? "denied" : reported;
+  return {
+    ...readiness,
+    grants: {
+      accessibility: revoke(readiness.grants.accessibility, live.accessibility),
+      screenCapture: revoke(readiness.grants.screenCapture, live.screenRecording),
+    },
+  };
 }

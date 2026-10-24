@@ -18,6 +18,7 @@ import {
   computerUseUnavailable,
   cuaGranted,
   readCuaGrants,
+  withLiveGrants,
   type CuaPermission,
 } from "./CuaSetupDialog.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -211,7 +212,10 @@ function ComputerUseControls({
       />
       <ComputerUseReadiness
         platform={host.status?.platform}
-        readiness={host.status?.readiness}
+        readiness={withLiveGrants(
+          host.status?.readiness,
+          current && current.principal !== "unusable" ? current : null,
+        )}
         tools={host.status?.tools}
         signals={host.status?.signals}
       />
