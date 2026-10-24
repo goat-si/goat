@@ -79,6 +79,28 @@ describe("linuxComputerUseSetup", () => {
     expect(status(declined)).toMatchObject({ capture: "action" });
   });
 
+  it("Wayland capture that is not proven yet does not promise a dialog that may never come", () => {
+    // The helper reports pending both while consent is unanswered and when the compositor
+    // cannot capture one window at all.
+    const unproven: ComputerUseReadiness = {
+      ...READY,
+      grants: { accessibility: "granted", screenCapture: "pending" },
+      capture: "pending",
+      input: "foregroundOnly",
+      platform: { linux: { displayServer: "wayland" } },
+    };
+    const step = linuxComputerUseSetup(unproven, "lidge-ai").steps.find(
+      (entry) => entry.id === "capture",
+    );
+    const words = [
+      step?.title,
+      step?.detail,
+      ...(step?.guidance ?? []).map((line) => line.text),
+    ].join(" ");
+    expect(words).toContain("If no dialog appears");
+    expect(words).not.toContain("appears at that machine.");
+  });
+
   it("a proven machine that is blocked is not ready and says what blocks it", () => {
     const locked = { ...READY, blockers: ["screenLocked"] } as const;
     const setup = linuxComputerUseSetup(locked, "lidge-ai");
