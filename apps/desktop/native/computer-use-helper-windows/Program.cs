@@ -34,9 +34,19 @@ namespace Goat.ComputerUse
         /// <summary>Queues a line for the host (HelperOutput); never waits on stdout.</summary>
         static void Emit(Dictionary<string, object> message)
         {
-            byte[] line = new UTF8Encoding(false).GetBytes(Json.Serialize(message) + "\n");
             object type;
-            output.Add(line, message.TryGetValue("type", out type) && (type as string) == "frame");
+            output.Add(Encode(message), message.TryGetValue("type", out type) && (type as string) == "frame");
+        }
+
+        /// <summary>Signal lines: paced, so a stalled host leaves them coalescing in SignalOutbox.</summary>
+        static void EmitSignal(Dictionary<string, object> message)
+        {
+            output.AddPaced(Encode(message));
+        }
+
+        static byte[] Encode(Dictionary<string, object> message)
+        {
+            return new UTF8Encoding(false).GetBytes(Json.Serialize(message) + "\n");
         }
 
         static Dictionary<string, object> Message(string type)
@@ -65,7 +75,23 @@ namespace Goat.ComputerUse
                     return 78;
                 }
             }
-            output = new HelperOutput(Console.OpenStandardOutput());
+            DriverService service = null;
+            Signals signals = null;
+            FrameSource frames = null;
+            // A host that stopped reading altogether: stop the driver and leave, as on EOF.
+            output = new HelperOutput(Console.OpenStandardOutput(), delegate
+            {
+                try
+                {
+                    if (frames != null) frames.Shutdown();
+                    if (signals != null) signals.Shutdown();
+                }
+                finally
+                {
+                    if (service != null) service.Stop();
+                    Environment.Exit(75);
+                }
+            });
             if (refusal != null)
             {
                 var refused = Message("refused");
@@ -75,9 +101,9 @@ namespace Goat.ComputerUse
                 output.Drain(2000);
                 return 77;
             }
-            var service = new DriverService(executable, Emit);
-            var signals = new Signals(Emit);
-            var frames = new FrameSource(service, Emit);
+            service = new DriverService(executable, Emit);
+            signals = new Signals(EmitSignal);
+            frames = new FrameSource(service, Emit);
             var hello = Message("hello");
             hello["protocol"] = ProtocolVersion;
             hello["pid"] = System.Diagnostics.Process.GetCurrentProcess().Id;
