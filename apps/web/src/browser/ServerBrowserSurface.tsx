@@ -40,6 +40,8 @@ import { cn } from "~/lib/utils";
 import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/previewStream";
 import { observeResize } from "~/lib/observeResize";
 
+import { boxToViewport, viewportToBox } from "./letterbox";
+
 export interface ServerBrowserHandle {
   readonly navigate: (url: string) => void;
   readonly history: (delta: -1 | 1) => void;
@@ -277,13 +279,14 @@ export function ServerBrowserSurface(props: {
     if (!canvas || !viewport || !hasFrameRef.current || controlRef.current?.controller !== "you")
       return null;
     const rect = canvas.getBoundingClientRect();
-    const fit = Math.min(rect.width / canvas.width, rect.height / canvas.height);
-    const width = canvas.width * fit;
-    const height = canvas.height * fit;
-    if (!(width > 0 && height > 0)) return null;
-    const scale = viewport.width / width;
-    const x = (clientX - rect.left - (rect.width - width) / 2) * scale;
-    const y = (clientY - rect.top - (rect.height - height) / 2) * (viewport.height / height);
+    const point = boxToViewport(
+      { x: clientX - rect.left, y: clientY - rect.top },
+      rect,
+      canvas,
+      viewport,
+    );
+    if (!point) return null;
+    const { x, y, scale } = point;
     const inside = x >= 0 && y >= 0 && x <= viewport.width && y <= viewport.height;
     if (!inside && !clamp) return null;
     return {
@@ -941,13 +944,11 @@ function placeAgentCursor(
 ): AgentCursorPlacement | null {
   if (!canvas || !viewport || canvas.width < 1 || canvas.height < 1) return null;
   const box = { width: canvas.clientWidth, height: canvas.clientHeight };
-  const fit = Math.min(box.width / canvas.width, box.height / canvas.height);
-  const width = canvas.width * fit;
-  const height = canvas.height * fit;
+  const { x: left, y: top } = viewportToBox(pointer, box, canvas, viewport);
   return {
     phase: pointer.phase,
     sequence: pointer.sequence,
-    left: (box.width - width) / 2 + (pointer.x * width) / viewport.width,
-    top: (box.height - height) / 2 + (pointer.y * height) / viewport.height,
+    left,
+    top,
   };
 }

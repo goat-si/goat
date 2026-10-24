@@ -1,11 +1,22 @@
-import type { EnvironmentId } from "@goat/contracts";
+import type { EnvironmentId, PreviewSession } from "@goat/contracts";
 import { create } from "zustand";
 
-/** Which session a caller asked the stack to show; kind alone means the first of that kind. */
+/**
+ * Which session a caller asked the stack to show: by id, by a thread's browser tab, or by kind
+ * alone for the first of that kind.
+ */
 export interface PreviewSessionStackFocus {
   readonly kind: "browser" | "desktop";
   readonly sessionId?: string;
+  readonly tabId?: string;
 }
+
+export const matchesFocus = (session: PreviewSession, focus: PreviewSessionStackFocus) =>
+  focus.sessionId !== undefined
+    ? session.id === focus.sessionId
+    : focus.tabId !== undefined
+      ? session.target.kind === "browser" && session.target.tabId === focus.tabId
+      : session.kind === focus.kind;
 
 /** sessionStorage belongs to one tab or Electron window and survives its reloads. */
 const HIDDEN_KEY = "goat:agent-screen-cards:hidden";
@@ -36,12 +47,16 @@ interface PreviewSessionStackState {
   readonly revealedWhileNarrow: boolean;
   /** Stopped sessions whose card the person closed. */
   readonly dismissed: ReadonlySet<string>;
+  /** The session shown at the large size; its card returns when it is collapsed. */
+  readonly expanded: PreviewSessionStackFocus | null;
   readonly focus: PreviewSessionStackFocus | null;
   /** Bumps on each request, so asking for the same session again scrolls to it again. */
   readonly focusRequest: number;
   readonly setShown: (shown: boolean) => void;
   readonly setNarrow: (narrow: boolean) => void;
   readonly dismiss: (sessionId: string) => void;
+  readonly expand: (sessionId: string) => void;
+  readonly collapse: () => void;
 }
 
 export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, get) => ({
@@ -49,6 +64,7 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
   narrow: false,
   revealedWhileNarrow: false,
   dismissed: new Set(),
+  expanded: null,
   focus: null,
   focusRequest: 0,
   setShown: (shown) => {
@@ -62,6 +78,8 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
     if (get().narrow !== narrow) set({ narrow, revealedWhileNarrow: false });
   },
   dismiss: (sessionId) => set((state) => ({ dismissed: new Set(state.dismissed).add(sessionId) })),
+  expand: (sessionId) => set({ expanded: { kind: "browser", sessionId } }),
+  collapse: () => set({ expanded: null }),
 }));
 
 export const selectAgentCardsShown = (state: PreviewSessionStackState) =>
@@ -75,6 +93,8 @@ export const selectAgentCardsShown = (state: PreviewSessionStackState) =>
 export function openPreviewSessionStack(input?: {
   readonly environmentId?: EnvironmentId;
   readonly focus?: PreviewSessionStackFocus;
+  /** Show the focused session at the large size, as when an agent opens a browser tab. */
+  readonly expand?: boolean;
 }): void {
   writeHidden(false);
   usePreviewSessionStack.setState((state) => ({
@@ -82,5 +102,6 @@ export function openPreviewSessionStack(input?: {
     revealedWhileNarrow: state.narrow,
     focus: input?.focus ?? null,
     focusRequest: state.focusRequest + 1,
+    ...(input?.expand && input.focus ? { expanded: input.focus } : {}),
   }));
 }

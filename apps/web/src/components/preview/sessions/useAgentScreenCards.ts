@@ -14,8 +14,18 @@ export const AGENT_CARD_WIDTH_PX = 240;
 export const AGENT_CARD_GAP_PX = 12;
 /** Below the header when no chat header is on screen (`top-14`). */
 const FALLBACK_TOP_PX = 56;
-/** A mini player starting this close below the cards' top leaves no room for a card above it. */
+/** Something on the column this close below the cards' top leaves no room for a card above it. */
 const MIN_CARD_SPACE_PX = 160;
+/**
+ * Every card's picture is 16:10: the server browser opens pages at 1280x800, and Mac displays,
+ * where desktop apps run, are 16:10. Any page or window letterboxes inside it.
+ */
+export const AGENT_VIEW_ASPECT = 16 / 10;
+/** The card's padding and one-line header around its picture, in px. */
+const CARD_CHROME = { width: 12, height: 40 } as const;
+const LARGE_MAX_WIDTH_PX = 720;
+/** The large view takes up to this share of the pane, so the conversation stays in sight. */
+const LARGE_PANE_SHARE = 0.5;
 
 /**
  * Whether a card fits in the gutter right of the conversation column. Cards overlay the pane, so
@@ -24,6 +34,24 @@ const MIN_CARD_SPACE_PX = 160;
 export function agentCardFits(paneWidth: number, contentWidth: number) {
   const gutter = (paneWidth - Math.min(contentWidth, paneWidth)) / 2;
   return gutter >= AGENT_CARD_WIDTH_PX + 2 * AGENT_CARD_GAP_PX;
+}
+
+/** The card's height for a width; the picture keeps its aspect at every size. */
+export const agentCardHeight = (width: number) =>
+  CARD_CHROME.height + (width - CARD_CHROME.width) / AGENT_VIEW_ASPECT;
+
+/**
+ * The large view's width: it follows the pane's width, capped so the whole card fits the height
+ * it has. Only its frame changes size; the page inside keeps its own viewport.
+ */
+export function largeAgentViewWidth(paneWidth: number, maxHeight: number) {
+  const byHeight = (maxHeight - CARD_CHROME.height) * AGENT_VIEW_ASPECT + CARD_CHROME.width;
+  return Math.round(
+    Math.max(
+      AGENT_CARD_WIDTH_PX,
+      Math.min(LARGE_MAX_WIDTH_PX, paneWidth * LARGE_PANE_SHARE, byHeight),
+    ),
+  );
 }
 
 interface Box {
@@ -40,24 +68,26 @@ export interface AgentCardsPlacement {
 }
 
 /**
- * Cards start where the floating mini player does: under the thread header, at the pane's right
- * edge. A mini player in that column comes first and the cards follow it, or, when the person
- * moved it further down, the cards end above it.
+ * A column of `width` at the pane's right edge, starting under the thread header where the
+ * floating mini player does. Something already in that column (the pinned thread details card,
+ * the mini player) comes first and the column follows it, or, further down, the column ends above.
  */
-export function placeAgentCards(input: {
+export function placeAgentColumn(input: {
   readonly pane: Box;
   readonly viewport: { readonly width: number; readonly height: number };
-  readonly player: Box | null;
+  readonly width: number;
+  readonly obstacles: ReadonlyArray<Box>;
 }): AgentCardsPlacement {
-  const { pane, viewport, player } = input;
+  const { pane, viewport, width } = input;
   let top = pane.top + AGENT_CARD_GAP_PX;
   let bottom = viewport.height - AGENT_CARD_GAP_PX;
   const columnRight = pane.right - AGENT_CARD_GAP_PX;
-  const columnLeft = columnRight - AGENT_CARD_WIDTH_PX;
-  if (player && player.right > columnLeft && player.left < columnRight) {
-    if (player.top - top < MIN_CARD_SPACE_PX)
-      top = Math.max(top, player.bottom + AGENT_CARD_GAP_PX);
-    else bottom = Math.min(bottom, player.top - AGENT_CARD_GAP_PX);
+  const columnLeft = columnRight - width;
+  for (const obstacle of [...input.obstacles].toSorted((a, b) => a.top - b.top)) {
+    if (!(obstacle.right > columnLeft && obstacle.left < columnRight)) continue;
+    if (obstacle.top - top < MIN_CARD_SPACE_PX)
+      top = Math.max(top, obstacle.bottom + AGENT_CARD_GAP_PX);
+    else bottom = Math.min(bottom, obstacle.top - AGENT_CARD_GAP_PX);
   }
   return {
     top,
@@ -66,23 +96,53 @@ export function placeAgentCards(input: {
   };
 }
 
-const samePlacement = (a: AgentCardsPlacement | null, b: AgentCardsPlacement) =>
-  a !== null && a.top === b.top && a.right === b.right && a.maxHeight === b.maxHeight;
+export interface AgentScreenLayout {
+  readonly card: AgentCardsPlacement;
+  readonly large: AgentCardsPlacement & { readonly width: number };
+}
+
+const OBSTACLES = ["[data-thread-details-card]", "[data-preview-mini-player]"] as const;
+
+/** Lays out cards and the large view for a pane, a viewport, and what already floats there. */
+export function layoutAgentScreen(input: {
+  readonly pane: Box;
+  readonly viewport: { readonly width: number; readonly height: number };
+  readonly obstacles: ReadonlyArray<Box>;
+}): AgentScreenLayout {
+  const paneWidth = input.pane.right - input.pane.left;
+  const card = placeAgentColumn({ ...input, width: AGENT_CARD_WIDTH_PX });
+  const roomy = largeAgentViewWidth(paneWidth, input.viewport.height - input.pane.top);
+  const placed = placeAgentColumn({ ...input, width: roomy });
+  return { card, large: { ...placed, width: largeAgentViewWidth(paneWidth, placed.maxHeight) } };
+}
+
+const sameLayout = (a: AgentScreenLayout | null, b: AgentScreenLayout) =>
+  a !== null &&
+  a.card.top === b.card.top &&
+  a.card.right === b.card.right &&
+  a.card.maxHeight === b.card.maxHeight &&
+  a.large.top === b.large.top &&
+  a.large.width === b.large.width &&
+  a.large.maxHeight === b.large.maxHeight;
 
 /**
  * Measures the thread pane under `[data-chat-header]` and the conversation width that `probe`
  * resolves from `--chat-content-max-width`, and records whether the pane is too narrow for
- * cards. `layoutKey` names what replaces the header or the mini player, such as another thread.
+ * cards. `layoutKey` names what replaces the header or what floats beside it, such as another
+ * thread or a mini player opening.
  */
 export function useAgentCardsPlacement(
   probe: RefObject<HTMLElement | null>,
   layoutKey: string,
-): AgentCardsPlacement | null {
+): AgentScreenLayout | null {
   const setNarrow = usePreviewSessionStack((state) => state.setNarrow);
-  const [placement, setPlacement] = useState<AgentCardsPlacement | null>(null);
+  const [layout, setLayout] = useState<AgentScreenLayout | null>(null);
   useEffect(() => {
     const header = document.querySelector<HTMLElement>("[data-chat-header]");
-    let player = document.querySelector<HTMLElement>("[data-preview-mini-player]");
+    const watched = new Set<Element>();
+    const stops: Array<() => void> = [];
+    const find = () =>
+      OBSTACLES.flatMap((selector) => Array.from(document.querySelectorAll<HTMLElement>(selector)));
     const measure = () => {
       const viewport = { width: window.innerWidth, height: window.innerHeight };
       const rect = header?.getBoundingClientRect();
@@ -90,40 +150,42 @@ export function useAgentCardsPlacement(
         ? { left: rect.left, right: rect.right, top: rect.bottom, bottom: viewport.height }
         : { left: 0, right: viewport.width, top: FALLBACK_TOP_PX, bottom: viewport.height };
       setNarrow(!agentCardFits(pane.right - pane.left, probe.current?.offsetWidth ?? 0));
-      const next = placeAgentCards({
+      const next = layoutAgentScreen({
         pane,
         viewport,
-        player: player?.isConnected ? player.getBoundingClientRect() : null,
+        obstacles: find()
+          .filter((element) => element.isConnected)
+          .map((element) => element.getBoundingClientRect()),
       });
-      setPlacement((current) => (samePlacement(current, next) ? current : next));
+      setLayout((current) => (sameLayout(current, next) ? current : next));
     };
-    const stops: Array<() => void> = [];
-    // The player moves by its style (a drag, the composer growing) as well as by resizing.
-    const watchPlayer = (element: HTMLElement) => {
-      stops.push(observeResize(element, measure));
-      const moves = new MutationObserver(measure);
-      moves.observe(element, { attributes: true, attributeFilter: ["style"] });
-      stops.push(() => moves.disconnect());
+    // A floating view moves by its style (a drag, the composer growing) as well as by resizing.
+    const watch = () => {
+      for (const element of find()) {
+        if (watched.has(element)) continue;
+        watched.add(element);
+        stops.push(observeResize(element, measure));
+        const moves = new MutationObserver(measure);
+        moves.observe(element, { attributes: true, attributeFilter: ["style"] });
+        stops.push(() => moves.disconnect());
+      }
     };
-    if (player) watchPlayer(player);
-    // The player sizes itself after mounting, so it can appear a frame after this effect.
-    const retry = player
-      ? null
-      : requestAnimationFrame(() => {
-          player = document.querySelector<HTMLElement>("[data-preview-mini-player]");
-          if (player) watchPlayer(player);
-          measure();
-        });
+    watch();
+    // The mini player sizes itself after mounting, so it can appear a frame after this effect.
+    const retry = requestAnimationFrame(() => {
+      watch();
+      measure();
+    });
     if (header) stops.push(observeResize(header, measure));
     else measure();
     window.addEventListener("resize", measure);
     return () => {
-      if (retry !== null) cancelAnimationFrame(retry);
+      cancelAnimationFrame(retry);
       for (const stop of stops) stop();
       window.removeEventListener("resize", measure);
     };
   }, [layoutKey, probe, setNarrow]);
-  return placement;
+  return layout;
 }
 
 /**
