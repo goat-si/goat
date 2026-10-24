@@ -90,7 +90,7 @@ export const sshEntries = {
     toolkit: "ssh",
     summary: "Update an SSH runtime",
     description:
-      "Move an SSH host's GOAT runtime to this machine's version. The default when_idle drains it only when no work runs there and otherwise waits and retries; a GOAT thread may start it. now asks a person to approve and then continues on its own. Never replaces a newer or foreign runtime (one GOAT launched but lost track of counts as GOAT's). Follow it with goat_ssh_host_status.",
+      "Update an SSH host's GOAT runtime. when_idle waits for work to finish; now needs a person's approval before stopping work. Follow goat_ssh_host_status. Retry with the same clientRequestId.",
     guide:
       "when_idle returns at its first real phase or a waiting result. A GOAT runtime whose launch records were lost (for example after a manual restart) counts as GOAT's own and can be replaced through its own drain. now from outside a GOAT thread needs environment:maintain and then returns error unsupported with instructions to ask from a GOAT thread; a server client (not MCP) gets unsupported and is pointed to Update now in Settings → Connections. No desktop app is needed on the host.",
     effect: "write",
@@ -99,6 +99,8 @@ export const sshEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["approval"],
+    idempotency: "key",
+    reconcile: "ssh.host_status",
     annotations: {
       title: "Update an SSH runtime",
       idempotentHint: false,

@@ -1,3 +1,4 @@
+import { withClientRequestId } from "../keyedParameters.ts";
 import {
   DecisionAnswerInput,
   DecisionGetInput,
@@ -37,7 +38,7 @@ const get = Tool.make("goat_decision_get", {
 const request = Tool.make("goat_decision_request", {
   ...shared,
   description: agentSurfaceRegistry["decision.request"].description,
-  parameters: DecisionRequestInput,
+  parameters: withClientRequestId(DecisionRequestInput),
   success: DecisionItem,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["decision.request"]));
 const answer = Tool.make("goat_decision_answer", {
