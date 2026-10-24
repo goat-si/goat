@@ -16,6 +16,7 @@ import {
   type RunId,
   type ThreadId,
   type ThreadPullRequestKey,
+  type ThreadPullRequestWatch,
   TurnItemId,
 } from "@goat/contracts";
 import {
@@ -26,7 +27,12 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
-import { heldContextLine, mergeHeldContext, withHeldContext } from "../pullRequestWatch.ts";
+import {
+  heldContextLine,
+  mergeHeldContext,
+  settleHeldContext,
+  withHeldContext,
+} from "../pullRequestWatch.ts";
 import { foldNotice, isNoticeMessage, parseNotices, renderDigest } from "../TurnDigest.ts";
 import {
   pullRequestHeldNoticeId,
@@ -220,9 +226,24 @@ export const pullRequestWatchNote = (
 
 /**
  * The text of the wake a watch ends on, with what the watch still kept. It is read under the
- * thread lock: a notice turn that started while the host was read has already told the rest.
+ * thread lock: a notice turn that started while the host was read has already told the rest. A
+ * watch ending on its comment limit carries the pass's own kept fragments on `ended`; they merge
+ * with the stored ones after those settle against the pass's state, in the same write.
  */
 export const endingWakeText = (
   text: string,
-  watch: { readonly heldContext?: ReadonlyArray<string> },
-) => withHeldContext(text, mergeHeldContext(watch.heldContext));
+  watch: ThreadPullRequestWatch,
+  ended: ThreadPullRequestWatch | undefined,
+) =>
+  withHeldContext(
+    text,
+    ended === undefined
+      ? mergeHeldContext(watch.heldContext)
+      : mergeHeldContext(
+          settleHeldContext(watch.heldContext, {
+            ...ended,
+            headMoved: ended.headSha !== watch.headSha,
+          }),
+          ended.heldContext,
+        ),
+  );

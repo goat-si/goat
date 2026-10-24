@@ -473,6 +473,55 @@ const threadWithKeptContext = (name: string) =>
   });
 
 describe("pull request updates kept as context (#1055)", () => {
+  it.effect("a watch ending on its comment limit tells its kept context once, in one write", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, links } = yield* threadWithKeptContext("limit");
+      const link = links.find((candidate) => candidate.number === 8)!;
+      const current = Effect.map(orchestrator.getThreadShell(threadId), (shell) =>
+        shell!.pullRequests!.find((candidate) => candidate.number === 8)!,
+      );
+      const watch = (yield* current).watch!;
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-kept-limit-conflict"),
+        threadId,
+        ...second,
+        startedAt: watch.startedAt,
+        watch: { ...watch, conflicting: true, heldContext: ["conflicts with main"] },
+        note: { source: { kind: "monitor" }, outcome: "updated", summary: "#8: kept" },
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-kept-limit-end"),
+        threadId,
+        ...second,
+        startedAt: watch.startedAt,
+        watch: null,
+        // The ending pass merged cleanly and kept one more bot comment.
+        endedWatch: {
+          ...watch,
+          conflicting: false,
+          heldContext: ['1 new comment, latest from vercel[bot]: "Preview updated"'],
+        },
+        wake: {
+          messageId: pullRequestWakeMessageId(link, "limit"),
+          text: "GOAT stopped watching after 10 comment-only updates in a row.",
+          notification,
+        },
+      });
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      const text = messages.find(
+        (message) => message.id === pullRequestWakeMessageId(link, "limit"),
+      )?.text;
+      expect(text?.match(/Also kept as context/g)).toHaveLength(1);
+      expect(text).toContain('2 new comments, latest from vercel[bot]: "Preview updated"');
+      expect(text).not.toContain("conflicts with main");
+      const ended = yield* current;
+      expect(ended.watch).toBeUndefined();
+      expect(ended.endedWatch?.heldContext).toBeUndefined();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("a notice left alone under a dropped wake's id survives the next push", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, links } = yield* threadWithKeptContext("refold");

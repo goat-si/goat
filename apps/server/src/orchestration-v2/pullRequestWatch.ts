@@ -237,9 +237,7 @@ function heldFragment(
 ): string {
   switch (change.kind) {
     case "checks-failed": {
-      const names = change.failed.slice(0, HELD_CHECK_NAMES).map((check) => check.name);
-      const more = change.failed.length - names.length;
-      return `checks failed${context.commit}: ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+      return `checks failed${context.commit}: ${checkNames(change.failed.map((check) => check.name))}`;
     }
     case "checks-passed":
       return `all ${change.count} ${change.required ? "required " : ""}${change.count === 1 ? "check" : "checks"} passed${context.commit}`;
@@ -256,6 +254,11 @@ function heldFragment(
 }
 
 const commentCount = (count: number) => `${count} new ${count === 1 ? "comment" : "comments"}`;
+
+const checkNames = (names: ReadonlyArray<string>) => {
+  const more = names.length - HELD_CHECK_NAMES;
+  return `${names.slice(0, HELD_CHECK_NAMES).join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+};
 
 const HELD_KINDS = [
   ["checks", /^(checks failed|all \d+ (required )?checks? passed)/],
@@ -314,18 +317,29 @@ export function settleHeldContext(
     readonly headMoved: boolean;
   },
 ): ReadonlyArray<string> {
-  return mergeHeldContext(heldContext).filter((fragment) => {
+  return mergeHeldContext(heldContext).flatMap((fragment) => {
     switch (heldKind(fragment)) {
       case "conflict":
-        return state.conflicting;
-      case "checks":
-        // Failures that cleared, or a pass a rerun or a new failure undid, no longer hold.
-        return (
-          !state.headMoved &&
-          (fragment.startsWith("checks failed") ? state.failedChecks.length > 0 : state.passed)
-        );
+        return state.conflicting ? [fragment] : [];
+      case "checks": {
+        // A pass a rerun or a new failure undid no longer holds, nor do failures that cleared.
+        if (state.headMoved) return [];
+        if (!fragment.startsWith("checks failed")) return state.passed ? [fragment] : [];
+        if (state.failedChecks.length === 0) return [];
+        const split = fragment.indexOf(": ");
+        if (split === -1) return [fragment];
+        const named = fragment
+          .slice(split + 2)
+          .replace(/ and \d+ more$/, "")
+          .split(", ")
+          .map((entry) => entry.split(" ")[0] ?? entry);
+        // A check that passed since must not stay listed as failing.
+        return named.every((name) => state.failedChecks.includes(name))
+          ? [fragment]
+          : [fragment.slice(0, split + 2) + checkNames(state.failedChecks)];
+      }
       default:
-        return true;
+        return [fragment];
     }
   });
 }
@@ -403,8 +417,8 @@ export interface PullRequestWatchWake {
  * timeline note for updates kept as context. The watch carries only this pass's kept fragments;
  * the orchestrator merges them into the ones not told yet and folds those into the next notice
  * turn that starts (#1055). A watch that spent its comment limit ends with its wake, which tells
- * what the watch kept: `settle` records this pass first, so its fragments merge and settle with
- * the stored ones under the thread lock, and the ending wake reads the result there.
+ * what the watch kept: the pass's own fragments ride on `endedWatch`, and the orchestrator merges
+ * them with the stored ones under the thread lock, in the write that ends the watch.
  */
 export function pullRequestWatchOutcome(input: {
   readonly number: number;
@@ -415,8 +429,6 @@ export function pullRequestWatchOutcome(input: {
   readonly next: ThreadPullRequestWatch | null;
   /** An ending watch keeps what this pass saw, so watching again starts from it. */
   readonly endedWatch?: ThreadPullRequestWatch;
-  /** Progress to record before the watch ends on its wake. */
-  readonly settle?: ThreadPullRequestWatch;
   readonly wake?: PullRequestWatchWake;
   readonly note?: OrchestrationV2Notification;
 } {
@@ -430,7 +442,7 @@ export function pullRequestWatchOutcome(input: {
   const kept = held.length === 0 ? next : { ...next, heldContext: held };
   if (report.changes.length > 0) {
     return {
-      ...(report.exhausted ? { next: null, endedWatch: next, settle: kept } : { next: kept }),
+      ...(report.exhausted ? { next: null, endedWatch: kept } : { next: kept }),
       wake: pullRequestWatchMessage({
         number: input.number,
         url: input.url,

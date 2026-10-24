@@ -675,7 +675,10 @@ function withPullRequestWatch(
   const { watch: previous, endedWatch, ...rest } = link;
   if (watch !== undefined) return { ...rest, watch };
   const ended = previous ?? endedWatch;
-  return ended === undefined ? rest : { ...rest, endedWatch: ended };
+  if (ended === undefined) return rest;
+  // Kept context is told when the watch ends (or dropped with it); an ended watch never holds it.
+  const { heldContext: _told, ...told } = ended;
+  return { ...rest, endedWatch: told };
 }
 
 function legacyPullRequestLink(
@@ -2772,7 +2775,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           // An ending watch tells what it kept, as stored now rather than when the host was read.
           text:
             command.watch === null
-              ? endingWakeText(command.wake.text, link.watch)
+              ? endingWakeText(command.wake.text, link.watch, command.endedWatch)
               : command.wake.text,
           notification: command.wake.notification,
           attachments: [],

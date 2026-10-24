@@ -361,9 +361,15 @@ describe("pull request watch policy", () => {
       "conflicts with main",
       comment,
     ]);
+    // A failure fixed while another still fails leaves only the one still failing.
+    const both = ["checks failed on aaaaaaa: lint, test"];
+    assert.deepEqual(settleHeldContext(both, { ...state, failedChecks: ["test"] }), [
+      "checks failed on aaaaaaa: test",
+    ]);
+    assert.deepEqual(settleHeldContext(both, { ...state, failedChecks: ["test", "lint"] }), both);
   });
 
-  it("records what a watch kept before it ends on its comment limit", () => {
+  it("hands what a pass kept to the write that ends the watch on its comment limit", () => {
     const policy: PullRequestWatchPolicy = { ...REACT_ALL, botRemarks: "keep_as_context" };
     const report = evaluate(
       watch({ headSha: "aaaaaaaaaa", wakes: PULL_REQUEST_WATCH_WAKE_LIMIT - 1 }),
@@ -374,7 +380,7 @@ describe("pull request watch policy", () => {
     const ending = pullRequestWatchOutcome({ number: 7, url: "u", baseBranch: "main", report });
     assert.isNull(ending.next);
     assert.match(
-      ending.settle?.heldContext?.[0] ?? "",
+      ending.endedWatch?.heldContext?.[0] ?? "",
       /^1 new comment, latest from vercel\[bot\]/,
     );
     // The ending wake tells it as the orchestrator stores it, merged and settled once.
