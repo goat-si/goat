@@ -122,6 +122,11 @@ const toolsCopy = {
   },
 } as const satisfies Record<CuaToolsAvailability, { state: ReadinessStepState; detail: string }>;
 
+// The Linux helper reports pending both before a Wayland desktop's consent and when its
+// compositor cannot capture one window, so it is not described as a prompt to answer.
+const LINUX_CAPTURE_UNPROVEN =
+  "Screen capture is not proven yet. A Wayland desktop may be waiting for consent, or may not capture one window at all.";
+
 const blockerRemedies = {
   screenLocked: { step: "capture", remedy: "Unlock the screen on this computer." },
   userIntervened: { step: "capture", remedy: "Computer use resumes when the person's input ends." },
@@ -191,6 +196,7 @@ export function computerUseReadinessSteps({
             ? "Screen capture / desktop portal"
             : "Screen capture",
   };
+  const linuxUnproven = platform === "linux";
   const grantIds = ["accessibility", "screenCapture"] as const;
   const current = grantIds.find((id) => readiness?.grants[id] !== "granted");
   const grants: ReadinessGrantRow[] = grantIds.map((grant) => {
@@ -200,7 +206,13 @@ export function computerUseReadinessSteps({
       state,
       status: readiness ? grantCopy[state].state : unavailable.state,
       title: titles[grant],
-      detail: [readiness ? grantCopy[state].detail : unavailable.detail],
+      detail: [
+        !readiness
+          ? unavailable.detail
+          : linuxUnproven && grant === "screenCapture" && state === "pending"
+            ? LINUX_CAPTURE_UNPROVEN
+            : grantCopy[state].detail,
+      ],
       isCurrent: grant === current,
     };
   });
@@ -211,7 +223,13 @@ export function computerUseReadinessSteps({
   }));
   const helper = readiness ? helperCopy[readiness.helper] : unavailable;
   const capture = readiness
-    ? [captureCopy[readiness.capture], treeCopy[readiness.tree], inputCopy[readiness.input]]
+    ? [
+        linuxUnproven && readiness.capture === "pending"
+          ? ({ state: "pending", detail: LINUX_CAPTURE_UNPROVEN } as const)
+          : captureCopy[readiness.capture],
+        treeCopy[readiness.tree],
+        inputCopy[readiness.input],
+      ]
     : [unavailable];
   const toolsStatus = tools
     ? toolsCopy[tools]

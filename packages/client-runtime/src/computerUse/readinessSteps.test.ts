@@ -289,3 +289,38 @@ describe.each(platforms)("%s platform parity", (platform) => {
     expect([...states].sort()).toEqual(["blocked", "ok", "pending", "unknown", "unsupported"]);
   });
 });
+
+it("on Linux, unproven Wayland capture does not claim a consent prompt is waiting", () => {
+  // The Linux helper reports pending both before consent and when the compositor cannot
+  // capture one window, so neither the steps nor the guide promise a prompt.
+  const unproven = computerUseReadinessSteps({
+    readiness: {
+      ...ready,
+      grants: { accessibility: "granted", screenCapture: "pending" },
+      capture: "pending",
+      input: "foregroundOnly",
+      platform: { linux: { displayServer: "wayland" } },
+    },
+    platform: "linux",
+    tools: "available",
+  });
+  const words = [
+    ...unproven.steps.flatMap((step) => [
+      ...step.detail,
+      ...step.grants.flatMap((row) => row.detail),
+    ]),
+    ...(unproven.linuxSetup?.steps ?? []).flatMap((step) => [
+      step.detail,
+      ...step.guidance.map((line) => line.text),
+    ]),
+  ].join(" ");
+  expect(words).not.toContain("Waiting for your answer");
+  expect(words).not.toContain("Waiting for screen capture consent");
+  // macOS still waits on its prompt.
+  const mac = view({
+    ...ready,
+    grants: { accessibility: "granted", screenCapture: "pending" },
+    capture: "pending",
+  });
+  expect(mac.steps[0]?.grants[1]?.detail.join(" ")).toContain("Waiting for your answer");
+});
