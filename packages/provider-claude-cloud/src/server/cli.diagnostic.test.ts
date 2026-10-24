@@ -109,6 +109,11 @@ it.effect.each([
     "[link redacted]",
   ],
   ["fixture-secret", "Error: invalid fixture-\u001b\u001b[1m[1msecret\n", "invalid [redacted]"],
+  [
+    "synthetic-secret-prefix\nView: synthetic-suffix",
+    "Error: invalid synthetic-secret-prefix\r\r\nView: synthetic-suffix\r\r\n",
+    "invalid [redacted]",
+  ],
 ] as const)(
   "masks what plain redaction masks however the screen spaced it (%#)",
   ([value, output, shown]) =>

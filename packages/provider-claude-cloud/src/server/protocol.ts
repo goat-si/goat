@@ -94,22 +94,27 @@ export function readDiagnostic(raw: string, environment: NodeJS.ProcessEnv) {
   // after the error is other output, not a continuation.
   const rest = /^(?:\n[ \t]*\S[^\n]*\n)*/.exec(text.slice(first.index + first[0].length))?.[0];
   let offset = first.index + first[0].length;
+  // Masks cover every candidate line; display stops at Claude's next record (the session receipt
+  // or the folder trust question), so a value wrapped into that record still stays masked.
+  let shownLines: number | undefined;
   for (const piece of (rest ?? "").split("\n").slice(0, -1)) {
-    // The session receipt and the folder trust question are Claude's next records, not the error.
     if (
-      /^\s*(?:Created cloud session:|View:|Resume with:)/.test(piece) ||
-      FOLDER_QUESTION.test(piece)
+      shownLines === undefined &&
+      (/^\s*(?:Created cloud session:|View:|Resume with:)/.test(piece) ||
+        FOLDER_QUESTION.test(piece))
     )
-      break;
+      shownLines = lines.length;
     if (piece.trim()) lines.push(cells.slice(offset, offset + piece.length));
     offset += piece.length + 1;
   }
   const block: Cell[] = [];
   const ranges: Array<readonly [number, number]> = [];
+  let shownEnd = 0;
   for (const [index, cellsOfLine] of lines.entries()) {
     if (index > 0) block.push({ character: "\n", gap: false });
     ranges.push([block.length, block.length + cellsOfLine.length]);
     for (const cell of cellsOfLine) block.push(cell);
+    if (shownLines === undefined || index < shownLines) shownEnd = block.length;
   }
   const marks = { hidden: new Set<number>(), masked: new Set<number>(), links: new Set<number>() };
   const pass = (start: number, end: number, link: RegExp) =>
@@ -118,7 +123,7 @@ export function readDiagnostic(raw: string, environment: NodeJS.ProcessEnv) {
   // A link wrapped onto following lines keeps its continuation inside the mask.
   pass(0, block.length, /https?:\/\/[^\s<>]+(?:\n[^\s<>]+)*/g);
   let shown = "";
-  for (let index = 0; index < block.length; index++) {
+  for (let index = 0; index < shownEnd; index++) {
     const cell = block[index];
     if (cell === undefined) continue;
     if (!marks.hidden.has(index)) {
@@ -127,7 +132,7 @@ export function readDiagnostic(raw: string, environment: NodeJS.ProcessEnv) {
     }
     let link = false;
     let masked = false;
-    for (; index < block.length && marks.hidden.has(index); index++) {
+    for (; index < shownEnd && marks.hidden.has(index); index++) {
       link ||= marks.links.has(index);
       masked ||= marks.masked.has(index);
     }
