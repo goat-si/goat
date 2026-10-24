@@ -1,4 +1,11 @@
-import { AuthSessionId, EnvironmentId, previewSessionChip, ThreadId } from "@goat/contracts";
+import {
+  AuthSessionId,
+  EnvironmentId,
+  HandoffError,
+  previewSessionChip,
+  ThreadId,
+  TurnItemId,
+} from "@goat/contracts";
 import { it as effectIt } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -169,6 +176,38 @@ describe("preview sessions", () => {
       const result = yield* sessions.control({ control: "stopAll" }, AuthSessionId.make("session"));
       expect(result).toEqual({ applied: true });
       expect(stopped).toEqual(["browser", "desktop"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  effectIt.effect("says Stop all did not apply when a screen grant stays alive", () => {
+    const layer = PreviewSessions.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ServerBrowser.ServerBrowser)({ stopAllAgents: Effect.void }),
+          Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            stopAll: Effect.succeed([]),
+            grants: Effect.succeed([
+              {
+                threadId,
+                handoffId: TurnItemId.make("handoff:kept"),
+                expiresAt: control.expiresAt,
+              },
+            ]),
+            subscribe: PubSub.unbounded<void>().pipe(Effect.flatMap(PubSub.subscribe)),
+            proxy: undefined,
+          }),
+          // The grant cannot be ended, so its thread could take the screen again next turn.
+          Layer.mock(Handoffs.Handoffs)({
+            respond: () => Effect.fail(new HandoffError({ reason: "unavailable" })),
+          }),
+          Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const sessions = yield* PreviewSessions.PreviewSessions;
+      const result = yield* sessions.control({ control: "stopAll" }, AuthSessionId.make("session"));
+      expect(result).toEqual({ applied: false, reason: "not_allowed" });
     }).pipe(Effect.provide(layer));
   });
 });

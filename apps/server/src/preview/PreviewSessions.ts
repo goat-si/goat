@@ -229,8 +229,11 @@ const make = Effect.gen(function* () {
     if (input.control === "stopAll") {
       // Control first, and nothing a stuck page could hold up: no titles or URLs are read.
       if (Option.isSome(browser)) yield* browser.value.stopAllAgents;
-      yield* stopAllComputerUse(leases, handoffs, sessionId);
-      return { applied: true };
+      const { failed } = yield* stopAllComputerUse(leases, handoffs, sessionId);
+      // A grant left alive lets its thread take the screen again on its next turn.
+      return failed === 0
+        ? { applied: true }
+        : ({ applied: false, reason: "not_allowed" } as const);
     }
     if (input.control === "requestHandoff")
       return { applied: false, reason: "not_allowed" } as const;

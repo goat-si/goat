@@ -30,6 +30,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import { stopAllComputerUse } from "../cua/ComputerUseRpcHandlers.ts";
 import { instanceId, threadId, withHarness } from "./Handoffs.testkit.ts";
 
 const encodeHandoff = Schema.encodeEffect(Schema.toCodecJson(Handoff));
@@ -867,7 +868,7 @@ it.effect(
 );
 
 it.effect(
-  "computer use grants: settings:write approves, one thread per host, ending early and expiry end the lease",
+  "computer use grants: settings:write approves, one thread per host, ending early, expiry and an operator's Stop all end the lease",
   () =>
     withHarness(({ orchestrator, worker }) =>
       Effect.gen(function* () {
@@ -1013,6 +1014,35 @@ it.effect(
             reason: "expired",
           });
           assert.isTrue(Option.isNone(yield* leases.holder()));
+
+          // Stop all is for whoever may stop agents: revoking a grant only narrows access, so an
+          // operator without settings:write still ends it instead of leaving it for the next turn.
+          const third = yield* ask(threadId);
+          yield* worker.drain();
+          const thirdAddress = { threadId, handoffId: third.handoffId };
+          yield* service.respond({ ...thirdAddress, action: "completed" }, owner.sessionId);
+          yield* PubSub.take(wake);
+          assert.isTrue(Option.isSome(yield* leases.active(threadId)));
+          const stopped = yield* stopAllComputerUse(
+            Option.some(leases),
+            service,
+            operator.sessionId,
+          );
+          assert.deepEqual(stopped, { stopped: 1, failed: 0 });
+          assert.equal((yield* service.read(thirdAddress)).state, "cancelled");
+          assert.isTrue(Option.isNone(yield* leases.active(threadId)));
+          // Approving still takes settings:write.
+          const fourth = yield* ask(otherThread);
+          yield* worker.drain();
+          assert.equal(
+            (yield* service
+              .respond(
+                { threadId: otherThread, handoffId: fourth.handoffId, action: "completed" },
+                operator.sessionId,
+              )
+              .pipe(Effect.result))._tag,
+            "Failure",
+          );
         }).pipe(
           Effect.provide(
             Handoffs.layer.pipe(

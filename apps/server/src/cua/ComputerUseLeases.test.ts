@@ -89,6 +89,26 @@ const grant = (threadId: ThreadId, id: string, apps?: ReadonlyArray<string>) =>
   });
 
 layer("ComputerUseLeases controls", (it) => {
+  it.effect("tells session lists about a control minted for a thread that had none", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const signals = yield* leases.subscribe;
+        const minted = ThreadId.make("thread-minted");
+        // The layer is shared: a live control left behind would pause later tests' controls.
+        yield* Effect.addFinalizer(() => leases.stop(minted));
+        yield* leases.control(minted, Option.none());
+        // A second thread's session must reach the session list without waiting for another event.
+        assert.isAbove(yield* PubSub.remaining(signals), 0);
+        yield* PubSub.takeAll(signals);
+        // Each later call of the same turn reuses the control and says nothing new.
+        yield* leases.control(minted, Option.none());
+        assert.equal(yield* PubSub.remaining(signals), 0);
+      }),
+    ),
+  );
+
   it.effect(
     "marks a thread's control idle when its last open run ends, and its next turn reuses it",
     () =>
@@ -529,6 +549,8 @@ it.effect(
         yield* Ref.set(accepted, Option.some(supported));
 
         const control = yield* leases.control(thread, Option.none());
+        // The new control is announced to session lists first.
+        yield* PubSub.take(signals);
         yield* Queue.offer(reports, {
           version: 1,
           type: "cuaPrivateMode",
@@ -662,6 +684,22 @@ it.effect(
       });
       yield* settings.updateSettings({ cuaFullAccessAutoAdmit: true });
     }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("lists a full access thread's session as soon as it is admitted", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const signals = yield* leases.subscribe;
+      const admitted = ThreadId.make("thread-full-access-listed");
+      yield* threadIn(admitted, "full-access");
+      yield* Effect.addFinalizer(() => leases.stop(admitted));
+      assert.isTrue(Option.isSome(yield* leases.everyAppControl(admitted, false)));
+      // Full access admits without a grant; its session still appears in the list at once.
+      assert.isAbove(yield* PubSub.remaining(signals), 0);
+    }),
+  ).pipe(Effect.provide(everyAppLayer)),
 );
 
 it.effect("lets one unattended thread at a time hold the screen without a grant", () =>

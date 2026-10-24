@@ -1,9 +1,11 @@
 import { previewSessionDetail } from "@goat/client-runtime/state/preview-sessions";
+import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-browser-stream";
 import {
-  type ScopedThreadRef,
+  AuthPreviewOperateScope,
   type PreviewSession,
   type PreviewSessionControl,
   previewSessionChip,
+  type ScopedThreadRef,
   ThreadId,
 } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
@@ -17,21 +19,26 @@ import {
   useState,
 } from "react";
 
+import type { ServerBrowserHandle } from "~/browser/ServerBrowserSurface";
+import { useFaviconForThreadUrl } from "~/browserFaviconStore";
 import {
   GlobeIcon,
   MaximizeIcon,
+  MinimizeIcon,
   MonitorIcon,
   MousePointerClickIcon,
   MousePointerIcon,
+  PanelRightIcon,
   SquareIcon,
   XIcon,
 } from "~/components/solar";
+import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { useFaviconForThreadUrl } from "~/browserFaviconStore";
 import { cn } from "~/lib/utils";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { useThreadShell } from "~/state/entities";
 import { previewSessionsEnvironment } from "~/state/previewSessions";
+import { useEnvironmentScope } from "~/state/session";
 
 import { FaviconImage } from "../PreviewFaviconIcon";
 import { PreviewSessionThumbnail } from "./PreviewSessionThumbnail";
@@ -48,13 +55,20 @@ const TONE: Record<Chip, { readonly dot: string; readonly ring: string }> = {
   Stopped: { dot: "bg-muted-foreground/40", ring: "ring-border" },
 };
 
-const sessionName = (session: PreviewSession) =>
-  session.target.title || previewSessionDetail(session);
+type Corner = "top-left" | "top-left-2" | "top-right" | "bottom-left" | "bottom-right";
+
+const CORNER: Record<Corner, string> = {
+  "top-left": "top-2 left-2",
+  "top-left-2": "top-2 left-11",
+  "top-right": "top-2 right-2",
+  "bottom-left": "bottom-2 left-2",
+  "bottom-right": "right-2 bottom-2",
+};
 
 function CornerButton(props: {
   readonly label: string;
   readonly icon: ComponentType<{ readonly className?: string }>;
-  readonly corner: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  readonly corner: Corner;
   readonly shown: boolean;
   readonly destructive?: boolean;
   readonly disabled?: boolean;
@@ -77,10 +91,7 @@ function CornerButton(props: {
               // 28px targets, 8px in from each corner: Stop and Take over sit at opposite corners.
               "absolute flex size-7 items-center justify-center rounded-lg bg-black/65 text-white shadow-sm outline-none backdrop-blur-sm transition-[opacity,background-color] duration-150 hover:bg-black/85 focus-visible:ring-2 focus-visible:ring-ring disabled:text-white/40 motion-reduce:transition-none",
               props.destructive && "text-red-400 hover:bg-destructive hover:text-white",
-              props.corner === "top-left" && "top-2 left-2",
-              props.corner === "top-right" && "top-2 right-2",
-              props.corner === "bottom-left" && "bottom-2 left-2",
-              props.corner === "bottom-right" && "right-2 bottom-2",
+              CORNER[props.corner],
               props.shown ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
             )}
           />
@@ -114,21 +125,37 @@ function ThreadFavicon(props: { readonly threadRef: ScopedThreadRef; readonly ur
 
 export interface AgentScreenCardViewProps {
   readonly session: PreviewSession;
-  /** The page's favicon or the app's icon; the session kind's icon when absent. */
-  readonly icon?: ReactNode;
-  /** The driving thread's title, shown with the page or app in the name's tooltip. */
+  /**
+   * card: Aside's small card. large: the same card grown for watching and taking control; a
+   * browser tab's picture is then its live, interactive stream. Both keep a 16:10 picture.
+   */
+  readonly size?: "card" | "large" | undefined;
+  /** The card's width in px; its height follows from the picture's aspect. */
+  readonly width?: number | undefined;
+  /** The page's favicon; the session kind's icon when absent. */
+  readonly icon?: ReactNode | undefined;
+  /** The driving thread's title: a desktop card's name, and part of every name's tooltip. */
   readonly threadTitle: string | null;
   readonly live: boolean;
-  /** False for a read-only connection: the server would refuse its controls. */
+  /** Stop and the desktop's Take over / Hand back: the session controls grant. */
   readonly canControl: boolean;
+  /** Taking over a browser tab: the preview grant, checked by the tab's stream. */
+  readonly canOperateBrowser: boolean;
   readonly focused: boolean;
   readonly focusRequest: number;
-  /** Opens the full preview; null where there is none, as for a desktop app. */
-  readonly onExpand: (() => void) | null;
+  /** Take control of the browser stream as soon as the large view connects. */
+  readonly takeOverOnOpen?: boolean | undefined;
+  readonly onTakeOverStarted?: (() => void) | undefined;
+  /** Shows this session at the large size; takeOver asks for the browser tab's control there. */
+  readonly onExpand: (options?: { readonly takeOver?: boolean }) => void;
+  /** Returns the large view to a card. */
+  readonly onCollapse?: (() => void) | undefined;
+  /** Opens the browser tab in the thread's right panel; null where there is none. */
+  readonly onOpenInPanel?: (() => void) | null | undefined;
   readonly onControl: (control: PreviewSessionControl) => void;
   readonly onDismiss: () => void;
   /** A control for the whole stack, such as Pop out, beside the first card's name. */
-  readonly headerAction?: ReactNode;
+  readonly headerAction?: ReactNode | undefined;
 }
 
 /**
@@ -137,15 +164,24 @@ export interface AgentScreenCardViewProps {
  */
 export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   const { session } = props;
+  const large = props.size === "large";
   const chip = previewSessionChip(session);
   const tone = TONE[chip];
   const stopped = session.status === "stopped";
-  const name = sessionName(session);
-  const detail = [previewSessionDetail(session), props.threadTitle].filter(Boolean).join(" · ");
+  const browser = session.kind === "browser";
+  const name =
+    (!browser ? props.threadTitle : null) || session.target.title || previewSessionDetail(session);
+  const detail = [previewSessionDetail(session), browser ? props.threadTitle : null]
+    .filter(Boolean)
+    .join(" · ");
   const card = useRef<HTMLElement>(null);
+  const surface = useRef<ServerBrowserHandle | null>(null);
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
   const [revealed, setRevealed] = useState(false);
+  const [stream, setStream] = useState<PreviewStreamControl | null>(null);
+  // A takeover asked for and not yet answered by the stream.
+  const pendingTakeover = useRef(false);
   // A tap that reveals the controls must not also open the preview under them.
   const swallowClick = useRef(false);
   const shown = hovered || focusWithin || revealed;
@@ -168,8 +204,32 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
     if (focusRequest > 0) card.current?.scrollIntoView({ block: "nearest" });
   }, [focusRequest]);
 
+  const takeBrowserControl = () => {
+    pendingTakeover.current = true;
+    surface.current?.takeControl();
+  };
+  const onStreamControl = (next: PreviewStreamControl | null) => {
+    setStream(next);
+    if (next === null) return;
+    if (large && props.takeOverOnOpen && next.controller !== "you" && next.canOperate) {
+      props.onTakeOverStarted?.();
+      takeBrowserControl();
+      return;
+    }
+    if (!pendingTakeover.current || next.controller === "agent") return;
+    pendingTakeover.current = false;
+    if (next.controller === "you") return;
+    toastManager.add({
+      type: "error",
+      title:
+        next.controller === "another-viewer"
+          ? "Someone else controls this tab"
+          : "This connection cannot control the browser",
+    });
+  };
+
   const reveal = (event: ReactPointerEvent) => {
-    if (event.pointerType === "mouse" || shown) return;
+    if (large || event.pointerType === "mouse" || shown) return;
     setRevealed(true);
     swallowClick.current = true;
   };
@@ -178,20 +238,55 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
       swallowClick.current = false;
       return;
     }
-    props.onExpand?.();
+    props.onExpand();
   };
-  const takeover = session.capabilities.controls.find(
+  const collapse = () => {
+    // The card is a passive view; control goes back to the agent before it shrinks.
+    if (stream?.controller === "you") surface.current?.releaseControl();
+    props.onCollapse?.();
+  };
+
+  const desktopTakeover = session.capabilities.controls.find(
     (control) => control === "takeover" || control === "handBack",
   );
+  const youControl = browser && large && stream?.controller === "you";
+  const takeover: { label: string; run: () => void; disabled: boolean } | null = stopped
+    ? null
+    : browser
+      ? youControl
+        ? { label: "Hand back", run: () => surface.current?.releaseControl(), disabled: false }
+        : {
+            label: "Take over",
+            run: () => (large ? takeBrowserControl() : props.onExpand({ takeOver: true })),
+            disabled:
+              !props.canOperateBrowser || (large && stream?.controller === "another-viewer"),
+          }
+      : desktopTakeover
+        ? {
+            label: desktopTakeover === "takeover" ? "Take over" : "Hand back",
+            run: () => props.onControl(desktopTakeover),
+            disabled: !props.canControl,
+          }
+        : null;
   const canStop = session.capabilities.controls.includes("stop");
-  const thumbnail = <PreviewSessionThumbnail session={session} live={props.live} />;
+  const thumbnail = (
+    <PreviewSessionThumbnail
+      session={session}
+      live={props.live}
+      size={large ? "large" : "card"}
+      surfaceRef={surface}
+      onStreamControl={onStreamControl}
+    />
+  );
 
   return (
     <article
       ref={card}
       data-stack-interactive
       data-session-state={chip}
+      data-size={large ? "large" : "card"}
       aria-label={`${name}: ${chip}`}
+      style={props.width === undefined ? undefined : { width: props.width }}
       className={cn(
         // Clipped content would otherwise let the scrolling list squeeze a card instead of scrolling.
         "pointer-events-auto shrink-0 overflow-hidden rounded-2xl border bg-popover/95 p-1.5 text-popover-foreground shadow-lg backdrop-blur-sm",
@@ -241,7 +336,9 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
         )}
         onPointerDown={reveal}
       >
-        {props.onExpand ? (
+        {large ? (
+          <div className="size-full">{thumbnail}</div>
+        ) : (
           <button
             type="button"
             className="block size-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
@@ -250,59 +347,87 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
           >
             {thumbnail}
           </button>
-        ) : (
-          <div className="size-full">{thumbnail}</div>
         )}
-        <div className="pointer-events-none absolute inset-0">
-          {stopped ? (
+        {stopped ? (
+          <CornerButton
+            label="Close"
+            icon={XIcon}
+            corner="top-right"
+            shown={shown}
+            onClick={props.onDismiss}
+          />
+        ) : canStop ? (
+          <CornerButton
+            label="Stop"
+            icon={SquareIcon}
+            corner="top-right"
+            shown={shown}
+            destructive
+            disabled={!props.canControl}
+            onClick={() => props.onControl("stop")}
+          />
+        ) : null}
+        {takeover ? (
+          <CornerButton
+            label={takeover.label}
+            icon={takeover.label === "Take over" ? MousePointerClickIcon : MousePointerIcon}
+            corner="bottom-left"
+            shown={shown}
+            disabled={takeover.disabled}
+            onClick={takeover.run}
+          />
+        ) : null}
+        {large ? (
+          <>
             <CornerButton
-              label="Close"
-              icon={XIcon}
-              corner="top-right"
+              label="Shrink to a card"
+              icon={MinimizeIcon}
+              corner="top-left"
               shown={shown}
-              onClick={props.onDismiss}
+              onClick={collapse}
             />
-          ) : canStop ? (
-            <CornerButton
-              label="Stop"
-              icon={SquareIcon}
-              corner="top-right"
-              shown={shown}
-              destructive
-              disabled={!props.canControl}
-              onClick={() => props.onControl("stop")}
-            />
-          ) : null}
-          {takeover ? (
-            <CornerButton
-              label={takeover === "takeover" ? "Take over" : "Hand back"}
-              icon={takeover === "takeover" ? MousePointerClickIcon : MousePointerIcon}
-              corner="bottom-left"
-              shown={shown}
-              disabled={!props.canControl}
-              onClick={() => props.onControl(takeover)}
-            />
-          ) : null}
-          {props.onExpand ? (
-            <CornerButton
-              label="Open the full preview"
-              icon={MaximizeIcon}
-              corner="bottom-right"
-              shown={shown}
-              onClick={() => props.onExpand?.()}
-            />
-          ) : null}
-        </div>
+            {props.onOpenInPanel ? (
+              <CornerButton
+                label="Open in the right panel"
+                icon={PanelRightIcon}
+                corner="top-left-2"
+                shown={shown}
+                onClick={() => {
+                  collapse();
+                  props.onOpenInPanel?.();
+                }}
+              />
+            ) : null}
+          </>
+        ) : (
+          <CornerButton
+            label="Enlarge"
+            icon={MaximizeIcon}
+            corner="bottom-right"
+            shown={shown}
+            onClick={() => props.onExpand()}
+          />
+        )}
       </div>
     </article>
   );
 }
 
-/** A card wired to navigation, the session's thread, and the environment's control grant. */
+/** A card wired to navigation, the session's thread, and the environment's grants. */
 export function AgentScreenCard(
   props: Pick<
     AgentScreenCardViewProps,
-    "session" | "live" | "focused" | "focusRequest" | "headerAction"
+    | "session"
+    | "size"
+    | "width"
+    | "live"
+    | "focused"
+    | "focusRequest"
+    | "headerAction"
+    | "takeOverOnOpen"
+    | "onTakeOverStarted"
+    | "onExpand"
+    | "onCollapse"
   > & {
     readonly onControl: (control: PreviewSessionControl) => void;
     readonly onDismiss: () => void;
@@ -317,8 +442,7 @@ export function AgentScreenCard(
       : { environmentId: session.environmentId, threadId: ThreadId.make(session.threadId) };
   const thread = useThreadShell(threadRef);
   const browserTab = session.target.kind === "browser" ? session.target.tabId : null;
-  // A browser tab's full preview is where a person takes and returns control of it.
-  const expand =
+  const openInPanel =
     threadRef === null || browserTab === null
       ? null
       : () => {
@@ -328,9 +452,12 @@ export function AgentScreenCard(
   const canControl = useAtomValue(
     previewSessionsEnvironment.control.permissionAtom(session.environmentId),
   );
+  const canOperateBrowser = useEnvironmentScope(session.environmentId, AuthPreviewOperateScope);
   return (
     <AgentScreenCardView
       session={session}
+      size={props.size}
+      width={props.width}
       icon={
         threadRef && session.target.kind === "browser" ? (
           <ThreadFavicon threadRef={threadRef} url={session.target.url} />
@@ -339,16 +466,15 @@ export function AgentScreenCard(
       threadTitle={thread?.title ?? null}
       live={props.live}
       canControl={canControl}
+      canOperateBrowser={canOperateBrowser}
       focused={props.focused}
       focusRequest={props.focusRequest}
-      onExpand={expand}
-      onControl={(control) =>
-        session.kind === "browser" &&
-        control !== "stop" &&
-        !(control === "handBack" && session.status === "stopped")
-          ? expand?.()
-          : props.onControl(control)
-      }
+      takeOverOnOpen={props.takeOverOnOpen}
+      onTakeOverStarted={props.onTakeOverStarted}
+      onExpand={props.onExpand}
+      onCollapse={props.onCollapse}
+      onOpenInPanel={openInPanel}
+      onControl={props.onControl}
       onDismiss={props.onDismiss}
       headerAction={props.headerAction}
     />

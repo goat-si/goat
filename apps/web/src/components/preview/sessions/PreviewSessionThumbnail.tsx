@@ -3,7 +3,8 @@ import {
   PREVIEW_SESSION_THUMBNAIL_WIDTH,
 } from "@goat/client-runtime/state/preview-sessions";
 import type { PreviewSession, PreviewSessionNoPicture } from "@goat/contracts";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-browser-stream";
+import { type RefObject, useEffect, useState, useSyncExternalStore } from "react";
 
 import { GlobeIcon, LockIcon, MonitorIcon, MousePointerClickIcon } from "~/components/solar";
 import { type ServerBrowserHandle, ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
@@ -31,8 +32,8 @@ const PLACEHOLDER_ICON = {
 
 function Placeholder(props: {
   readonly icon: keyof typeof PLACEHOLDER_ICON;
-  readonly text?: string;
-  readonly className?: string;
+  readonly text?: string | undefined;
+  readonly className?: string | undefined;
 }) {
   const Icon = PLACEHOLDER_ICON[props.icon];
   return (
@@ -49,8 +50,10 @@ function Placeholder(props: {
 }
 
 /**
- * A browser tab's live picture. The stream says a secret field has focus before the session list
- * does, so its signal alone hides the picture and wipes the pixels already painted (#1336).
+ * A browser tab's picture. The card is a passive, low-rate view; the large size is the tab's
+ * interactive stream. The stream says a secret field has focus before the session list does, so
+ * its signal hides the picture from everyone but the person typing it, and the surface wipes
+ * what was painted (#1336). Hidden stays hidden across a reconnect until the stream says otherwise.
  */
 function BrowserThumbnail(props: {
   readonly session: PreviewSession;
@@ -58,8 +61,10 @@ function BrowserThumbnail(props: {
   readonly threadId: string;
   readonly live: boolean;
   readonly stopped: boolean;
+  readonly large: boolean;
+  readonly surfaceRef?: RefObject<ServerBrowserHandle | null> | undefined;
+  readonly onStreamControl?: ((control: PreviewStreamControl | null) => void) | undefined;
 }) {
-  const surface = useRef<ServerBrowserHandle | null>(null);
   const [streamPrivate, setStreamPrivate] = useState(false);
   return (
     <>
@@ -75,7 +80,7 @@ function BrowserThumbnail(props: {
       >
         {/* The built-in browser's own surface, so a card and the full preview are one view. */}
         <ServerBrowserSurface
-          ref={surface}
+          ref={props.surfaceRef ?? null}
           environmentId={props.session.environmentId}
           threadId={props.threadId}
           tabId={props.tabId}
@@ -83,17 +88,19 @@ function BrowserThumbnail(props: {
           visible={props.live && !props.stopped}
           followSize={false}
           controlPosition="none"
-          thumbnail={{
-            frameIntervalMs: PREVIEW_SESSION_THUMBNAIL_FRAME_MS,
-            maxWidth: PREVIEW_SESSION_THUMBNAIL_WIDTH,
-          }}
+          {...(props.large
+            ? {}
+            : {
+                thumbnail: {
+                  frameIntervalMs: PREVIEW_SESSION_THUMBNAIL_FRAME_MS,
+                  maxWidth: PREVIEW_SESSION_THUMBNAIL_WIDTH,
+                },
+              })}
           onControl={(control) => {
-            const next = control?.private === true;
-            if (next) {
-              const canvas = surface.current?.canvas();
-              canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
-            }
-            setStreamPrivate(next);
+            props.onStreamControl?.(control);
+            // A disconnect (null) keeps the last answer: only the stream can lift privacy.
+            if (control !== null)
+              setStreamPrivate(control.private === true && control.controller !== "you");
           }}
           className="size-full"
         />
@@ -154,12 +161,22 @@ function DesktopThumbnail(props: {
 export function PreviewSessionThumbnail(props: {
   readonly session: PreviewSession;
   readonly live: boolean;
+  readonly size?: "card" | "large" | undefined;
+  /** The large browser view's stream, for Take over and Hand back. */
+  readonly surfaceRef?: RefObject<ServerBrowserHandle | null> | undefined;
+  readonly onStreamControl?: ((control: PreviewStreamControl | null) => void) | undefined;
 }) {
   const { session } = props;
-  if (session.owner === "private") return <Placeholder icon="lock" text="Private" />;
-  // A person who took over is working in their own view; other clients do not watch them.
-  if (session.owner === "human") return <Placeholder icon="person" text="A person is in control" />;
+  const large = props.size === "large";
   const stopped = session.status === "stopped";
+  // The large browser view may be the controller itself, typing a secret: it keeps its stream,
+  // which sends a private page only to its controller. A card is never the controller.
+  const interactive = large && session.target.kind === "browser" && !stopped;
+  if (!interactive && session.owner === "private")
+    return <Placeholder icon="lock" text="Private" />;
+  // A person who took over is working in their own view; a card does not watch them.
+  if (!interactive && session.owner === "human")
+    return <Placeholder icon="person" text="A person is in control" />;
   if (
     session.target.kind === "browser" &&
     session.threadId !== undefined &&
@@ -172,6 +189,9 @@ export function PreviewSessionThumbnail(props: {
         threadId={session.threadId}
         live={props.live}
         stopped={stopped}
+        large={large}
+        surfaceRef={props.surfaceRef}
+        onStreamControl={props.onStreamControl}
       />
     );
   if (session.target.kind === "desktop")

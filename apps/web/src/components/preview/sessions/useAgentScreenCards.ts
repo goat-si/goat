@@ -1,12 +1,14 @@
 import { orderPreviewSessions } from "@goat/client-runtime/state/preview-sessions";
-import type { EnvironmentId, ScopedThreadRef } from "@goat/contracts";
+import type { EnvironmentId, PreviewSession, ScopedThreadRef } from "@goat/contracts";
 import { type RefObject, useEffect, useMemo, useState } from "react";
 
 import { observeResize } from "~/lib/observeResize";
 import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
-import { usePreviewSessions } from "~/state/previewSessions";
+import { toastManager } from "~/components/ui/toast";
+import { previewSessionsEnvironment, usePreviewSessions } from "~/state/previewSessions";
+import { useAtomCommand } from "~/state/use-atom-command";
 
-import { usePreviewSessionStack } from "./previewSessionStackStore";
+import { sessionKey, usePreviewSessionStack } from "./previewSessionStackStore";
 
 /** Aside's card width; browser and desktop cards share it. */
 export const AGENT_CARD_WIDTH_PX = 240;
@@ -98,7 +100,8 @@ export function placeAgentColumn(input: {
 
 export interface AgentScreenLayout {
   readonly card: AgentCardsPlacement;
-  readonly large: AgentCardsPlacement & { readonly width: number };
+  /** Null when the large view cannot fit its 16:10 picture; the session then stays a card. */
+  readonly large: (AgentCardsPlacement & { readonly width: number }) | null;
 }
 
 const OBSTACLES = ["[data-thread-details-card]", "[data-preview-mini-player]"] as const;
@@ -113,7 +116,10 @@ export function layoutAgentScreen(input: {
   const card = placeAgentColumn({ ...input, width: AGENT_CARD_WIDTH_PX });
   const roomy = largeAgentViewWidth(paneWidth, input.viewport.height - input.pane.top);
   const placed = placeAgentColumn({ ...input, width: roomy });
-  return { card, large: { ...placed, width: largeAgentViewWidth(paneWidth, placed.maxHeight) } };
+  const width = largeAgentViewWidth(paneWidth, placed.maxHeight);
+  const fits =
+    agentCardHeight(width) <= placed.maxHeight && width <= paneWidth - 2 * AGENT_CARD_GAP_PX;
+  return { card, large: fits ? { ...placed, width } : null };
 }
 
 const sameLayout = (a: AgentScreenLayout | null, b: AgentScreenLayout) =>
@@ -121,9 +127,9 @@ const sameLayout = (a: AgentScreenLayout | null, b: AgentScreenLayout) =>
   a.card.top === b.card.top &&
   a.card.right === b.card.right &&
   a.card.maxHeight === b.card.maxHeight &&
-  a.large.top === b.large.top &&
-  a.large.width === b.large.width &&
-  a.large.maxHeight === b.large.maxHeight;
+  a.large?.top === b.large?.top &&
+  a.large?.width === b.large?.width &&
+  a.large?.maxHeight === b.large?.maxHeight;
 
 /**
  * Measures the thread pane under `[data-chat-header]` and the conversation width that `probe`
@@ -189,9 +195,29 @@ export function useAgentCardsPlacement(
 }
 
 /**
+ * One desktop card per thread: a thread's live session (waiting or blocked ones rank first in
+ * orderPreviewSessions) stands for it, and a stopped one shows only when nothing newer runs.
+ */
+export function onePerThread(sessions: ReadonlyArray<PreviewSession>) {
+  const seen = new Set<string>();
+  return [
+    ...sessions.filter((session) => session.status !== "stopped"),
+    ...sessions.filter((session) => session.status === "stopped"),
+  ]
+    .filter((session) => {
+      if (session.kind !== "desktop" || session.threadId === undefined) return true;
+      const key = `${session.environmentId}|${session.threadId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .toSorted((a, b) => sessions.indexOf(a) - sessions.indexOf(b));
+}
+
+/**
  * The sessions that get a card: every agent-driven browser tab and desktop session on the
- * environment's host, waiting ones first, minus the tab the thread's mini player already shows
- * and stopped sessions whose card the person closed.
+ * environment's host, waiting ones first, one per thread for the desktop, minus the tab the
+ * thread's mini player already shows and stopped sessions whose card the person closed.
  */
 export function useAgentScreenSessions(
   environmentId: EnvironmentId | null,
@@ -206,9 +232,9 @@ export function useAgentScreenSessions(
   const threadId = threadRef?.threadId;
   return useMemo(
     () =>
-      orderPreviewSessions(sessions).filter(
+      onePerThread(orderPreviewSessions(sessions)).filter(
         (session) =>
-          !(session.status === "stopped" && dismissed.has(session.id)) &&
+          !(session.status === "stopped" && dismissed.has(sessionKey(session))) &&
           !(
             shownTab !== null &&
             session.threadId === threadId &&
@@ -218,4 +244,23 @@ export function useAgentScreenSessions(
       ),
     [sessions, dismissed, shownTab, threadId],
   );
+}
+
+/**
+ * Stop all, from the header or the cards: every agent on this host's screen and browser tabs
+ * stops now. A stop the server could not finish (a grant it could not end) says so.
+ */
+export function useStopAllAgents(environmentId: EnvironmentId | null) {
+  const control = useAtomCommand(previewSessionsEnvironment.control);
+  return async () => {
+    if (environmentId === null) return;
+    const result = await control({ environmentId, input: { control: "stopAll" } });
+    // A failed call is reported by the command itself.
+    if (result._tag !== "Success" || result.value.applied) return;
+    toastManager.add({
+      type: "error",
+      title: "Some agents could not be stopped",
+      description: "An approval for computer use is still active. Try Stop all again.",
+    });
+  };
 }

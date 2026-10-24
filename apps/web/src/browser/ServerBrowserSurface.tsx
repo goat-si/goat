@@ -14,10 +14,11 @@ import {
   type PreviewStreamViewport,
   previewStreamHostSetupMessage,
 } from "@goat/client-runtime/preview/server-browser-stream";
-import type {
-  EnvironmentId,
-  PreviewStreamHostSetup,
-  PreviewViewportSetting,
+import {
+  type EnvironmentId,
+  type PreviewStreamHostSetup,
+  type PreviewViewportSetting,
+  ThreadId,
 } from "@goat/contracts";
 import {
   type FormEvent,
@@ -37,6 +38,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
 import { cn } from "~/lib/utils";
+import { usePreviewTabAgentDriven } from "~/previewStateStore";
 import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/previewStream";
 import { observeResize } from "~/lib/observeResize";
 
@@ -48,6 +50,9 @@ export interface ServerBrowserHandle {
   readonly reload: (options?: { readonly ignoreCache?: boolean }) => void;
   readonly viewport: (setting: PreviewViewportSetting) => void;
   readonly canvas: () => HTMLCanvasElement | null;
+  /** Asks the stream for control of the page; onControl reports whether it was granted. */
+  readonly takeControl: () => void;
+  readonly releaseControl: () => void;
 }
 
 const RESIZE_THROTTLE_MS = 150;
@@ -161,7 +166,7 @@ export function ServerBrowserSurface(props: {
     threadId,
     tabId,
     visible,
-    followSize = true,
+    followSize: followSizeProp = true,
     controlPosition = "top",
     thumbnail,
     onFirstFrame,
@@ -172,6 +177,17 @@ export function ServerBrowserSurface(props: {
     pdfUrl = null,
     ref,
   } = props;
+  // An agent's page keeps its own viewport in every view, so this window's size never changes its
+  // layout or the coordinates the agent acts on; views letterbox it instead.
+  const agentDriven = usePreviewTabAgentDriven(
+    { environmentId, threadId: ThreadId.make(threadId || "none") },
+    tabId,
+  );
+  const followSize = followSizeProp && !agentDriven;
+  const followSizeRef = useRef(followSize);
+  followSizeRef.current = followSize;
+  // A secret field stays hidden from this viewer across a reconnect until the stream says otherwise.
+  const privateRef = useRef(false);
   const thumbnailFrameMs = thumbnail?.frameIntervalMs;
   const thumbnailWidth = thumbnail?.maxWidth;
   const access = usePreviewStreamAccess(environmentId);
@@ -320,6 +336,8 @@ export function ServerBrowserSurface(props: {
         send({ type: "reload", ...(options?.ignoreCache ? { ignoreCache: true } : {}) }),
       viewport: (setting) => send({ type: "viewport", setting }),
       canvas: () => (!pdfUrl && hasFrameRef.current ? canvasRef.current : null),
+      takeControl: () => send({ type: "takeControl" }),
+      releaseControl: () => send({ type: "releaseControl" }),
     }),
     [pdfUrl, send],
   );
@@ -379,6 +397,7 @@ export function ServerBrowserSurface(props: {
       hasFrameRef.current = true;
       firstFrame();
     });
+    painter.setSuppressed(privateRef.current);
     const client = createPreviewStreamClient(
       thumbnailFrameMs === undefined || thumbnailWidth === undefined
         ? { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height }
@@ -427,6 +446,14 @@ export function ServerBrowserSurface(props: {
         },
         onControl: (next) => {
           const previous = controlRef.current;
+          // The person entering the secret keeps their view; the server sends nobody else frames.
+          const hidden = next.private === true && next.controller !== "you";
+          if (hidden && !privateRef.current) {
+            canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+            setAgentCursor(null);
+          }
+          privateRef.current = hidden;
+          painter.setSuppressed(hidden);
           controlRef.current = next;
           setControl(next);
           controlChanged(next);
@@ -439,7 +466,7 @@ export function ServerBrowserSurface(props: {
             clearInput();
           } else if (previous?.controller !== "you") {
             const size = sizeRef.current;
-            if (followSize && size) client.send({ type: "resize", ...size });
+            if (followSizeRef.current && size) client.send({ type: "resize", ...size });
           }
         },
         onConnectedChange: (connected) => {
@@ -484,7 +511,6 @@ export function ServerBrowserSurface(props: {
     thumbnailWidth,
     clearInput,
     environmentId,
-    followSize,
     hostSetup,
     tabId,
     threadId,
