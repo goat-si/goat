@@ -3543,15 +3543,11 @@ function useLegacySidebarThreads(input: {
         ),
       ];
     }
-    // The preview may append an open subagent's owner past the cut, so match by key, not index.
-    const previewKeys = new Set(
-      previewThreads.map((thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      ),
-    );
+    // The preview may append an open subagent's owner past the cut, so match threads, not indexes.
+    const previewSet = new Set(previewThreads);
     return projectThreads.flatMap((thread) => {
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      return previewKeys.has(threadKey) || threadKey === activeThreadKey ? [threadKey] : [];
+      return previewSet.has(thread) || threadKey === activeThreadKey ? [threadKey] : [];
     });
   });
   const visibleSidebarThreadKeys = resolveProjectsViewThreadOrder(

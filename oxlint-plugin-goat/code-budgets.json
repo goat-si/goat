@@ -469,7 +469,7 @@
   "apps/web/src/components/ConfirmDialogHost.tsx": { "nonNull": 1 },
   "apps/web/src/components/DiffPanel.tsx": { "lines": 1226 },
   "apps/web/src/components/GitActionsControl.tsx": { "lines": 2112, "nonNull": 1 },
-  "apps/web/src/components/LegacySidebar.tsx": { "lines": 4043, "nonNull": 2 },
+  "apps/web/src/components/LegacySidebar.tsx": { "lines": 4041, "nonNull": 2 },
   "apps/web/src/components/ProviderUpdateLaunchNotification.logic.ts": { "nonNull": 6 },
   "apps/web/src/components/ProviderUpdatePrimaryNotification.tsx": { "nonNull": 1 },
   "apps/web/src/components/RightPanelTabs.tsx": { "lines": 1503 },
