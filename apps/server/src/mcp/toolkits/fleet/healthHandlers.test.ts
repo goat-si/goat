@@ -207,8 +207,10 @@ it.effect(
       expect(cordons).toMatchObject([{ host: "box", draining: true }]);
       const drained = result.at(-1)?.result as { readonly message?: string } | undefined;
       expect(drained).toMatchObject({ host: "box", cordoned: true, draining: true });
-      // Nothing moves goal attempts off a draining host yet (#1130), so the result must not say so.
+      // Goal workers run only on this machine (#1451), so drain moves no goal attempt and the
+      // result must not claim a move.
       expect(drained?.message).not.toMatch(/move to other hosts/);
+      expect(drained?.message).toContain("moves no goal attempt");
       expect(drained?.message).toContain("goat_thread_reschedule");
     }),
 );
