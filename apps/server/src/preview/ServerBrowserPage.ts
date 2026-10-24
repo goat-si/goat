@@ -192,8 +192,15 @@ const targetChanged = () =>
  * The viewport point where raw input lands on the target now: its centre, provided it is enabled
  * and nothing covers it there. Call it after the trial's waits, right before the gate.
  */
-const landing = async (locator: Locator, timeout: number) => {
+/** The target's element, after Playwright's wait for it; a detached target is a changed one. */
+const elementOf = async (locator: Locator, timeout: number) => {
   const handle = await locator.elementHandle({ timeout });
+  if (handle === null) throw targetChanged();
+  return handle;
+};
+
+const landing = async (locator: Locator, timeout: number) => {
+  const handle = await elementOf(locator, timeout);
   try {
     const [box, owned] = await Promise.all([
       handle.boundingBox(),
@@ -938,7 +945,7 @@ export const select = async (
   gate: DispatchGate = open,
 ): Promise<PreviewAutomationSelectResult> => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const handle = await targetLocator(page, input)!.elementHandle({ timeout });
+  const handle = await elementOf(targetLocator(page, input)!, timeout);
   try {
     const found = await handle.evaluate((element) => {
       if (element.tagName !== "SELECT") return null;
@@ -1030,7 +1037,7 @@ export const setInputFiles = async (
 ) => {
   const locator = targetLocator(page, input);
   if (locator === null) return false;
-  const handle = await locator.elementHandle({ timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS });
+  const handle = await elementOf(locator, input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
     gate();
     await handle.setInputFiles([...input.paths]);
