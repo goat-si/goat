@@ -106,14 +106,13 @@ final class FrameCapture {
     guard #available(macOS 14.0, *) else {
       return unavailable(target, "unsupported", framesId: framesId)
     }
-    if let secure = focusedSecureField(), secure.pid == Int(target.pid) {
-      return unavailable(target, "private", framesId: framesId)
-    }
+    if isPrivate(target) { return unavailable(target, "private", framesId: framesId) }
     busy.insert(target.key)
     SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) {
       [weak self] content, _ in
       guard let self else { return }
       self.queue.async {
+        // A replaced request's lookup touches nothing: busy belongs to the request in force.
         guard self.framesId == framesId else { return }
         guard let window = content?.windows.first(where: { $0.windowID == target.windowId }),
           let owner = window.owningApplication, owner.processID == target.pid
@@ -125,9 +124,20 @@ final class FrameCapture {
           self.busy.remove(target.key)
           return self.unavailable(target, "appNotApproved", framesId: framesId)
         }
+        // Focus can move into a secret field while the window was looked up.
+        if self.isPrivate(target) {
+          self.busy.remove(target.key)
+          return self.unavailable(target, "private", framesId: framesId)
+        }
         self.capture(window, target, framesId: framesId)
       }
     }
+  }
+
+  /// A secure text field has focus in the window's app; its windows are not pictured at all.
+  private func isPrivate(_ target: FrameTarget) -> Bool {
+    guard let secure = focusedSecureField() else { return false }
+    return secure.pid == Int(target.pid)
   }
 
   @available(macOS 14.0, *)
@@ -146,11 +156,14 @@ final class FrameCapture {
       guard let self else { return }
       let data = image.flatMap(jpeg)
       self.queue.async {
+        // A replaced request's capture neither clears the new one's busy flag nor says anything.
+        guard self.framesId == framesId else { return }
         self.busy.remove(target.key)
-        guard self.framesId == framesId, let image else {
+        // And once more as it is sent: a secret field focused during the capture drops it.
+        if self.isPrivate(target) { return self.unavailable(target, "private", framesId: framesId) }
+        guard let image, let data else {
           return self.unavailable(target, "captureFailed", framesId: framesId)
         }
-        guard let data else { return self.unavailable(target, "captureFailed", framesId: framesId) }
         self.told[target.key] = nil
         emit([
           "type": "frame", "framesId": framesId, "key": target.key,

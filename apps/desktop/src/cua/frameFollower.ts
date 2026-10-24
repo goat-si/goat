@@ -9,6 +9,10 @@ type Frameable = Pick<HelperSession, "canFrame" | "frames" | "onFrame">;
  * what it captures on as cuaFrame (#1370). The server decides which windows may be captured;
  * this only carries the request to whichever helper generation runs. A helper that cannot
  * capture, or a request that fails, is answered per window so the tile says why.
+ *
+ * Requests apply in the order the publisher hands them over. Their seq is the server's and starts
+ * again when another server attaches, so it is never compared; the helper gets this follower's
+ * own increasing framesId, and its frames go back under the seq of the request in force.
  */
 export function makeFrameFollower(deps: {
   readonly publish: (frame: DesktopCuaFrame) => void;
@@ -17,8 +21,11 @@ export function makeFrameFollower(deps: {
 }) {
   let request: DesktopCuaFrames = { version: 1, type: "cuaFrames", seq: 0, targets: [] };
   let session: Frameable | undefined;
-  /** The session and request seq the helper last accepted. */
-  let sent: { readonly session: Frameable; readonly seq: number } | undefined;
+  /** The session and request the helper last accepted. */
+  let sent: { readonly session: Frameable; readonly request: DesktopCuaFrames } | undefined;
+  /** The framesId of the request the helper is asked for now, and that request's server seq. */
+  let inForce: { readonly framesId: number; readonly seq: number } | undefined;
+  let lastFramesId = 0;
   let unsubscribe: (() => void) | undefined;
   let retryPending = false;
   let chain = Promise.resolve();
@@ -34,13 +41,14 @@ export function makeFrameFollower(deps: {
       });
   };
   const onFrame = (frame: HelperFrame) => {
-    if (frame.framesId !== request.seq) return;
+    if (inForce === undefined || frame.framesId !== inForce.framesId) return;
+    const seq = inForce.seq;
     deps.publish(
       frame.type === "frame"
         ? {
             version: 1,
             type: "cuaFrame",
-            seq: frame.framesId,
+            seq,
             key: frame.key,
             width: frame.width,
             height: frame.height,
@@ -50,7 +58,7 @@ export function makeFrameFollower(deps: {
         : {
             version: 1,
             type: "cuaFrameUnavailable",
-            seq: frame.framesId,
+            seq,
             key: frame.key,
             reason: frame.reason,
           },
@@ -59,22 +67,25 @@ export function makeFrameFollower(deps: {
   const reconcile = async () => {
     const current = session;
     if (current === undefined) return;
-    if (sent?.session === current && sent.seq === request.seq) return;
+    const wanted = request;
+    if (sent?.session === current && sent.request === wanted) return;
     // A helper starts capturing nothing; there is nothing to stop before the first request.
-    if (sent?.session !== current && request.targets.length === 0) {
-      sent = { session: current, seq: request.seq };
+    if (sent?.session !== current && wanted.targets.length === 0) {
+      sent = { session: current, request: wanted };
       return;
     }
     if (!current.canFrame) {
       // An older helper generation: it would answer an unknown method (#1338's lesson).
-      sent = { session: current, seq: request.seq };
+      sent = { session: current, request: wanted };
       refuse("unsupported");
       return;
     }
-    const seq = request.seq;
+    const framesId = ++lastFramesId;
+    // In force as it is sent, like the session's own filter: earlier frames drop from here on.
+    inForce = { framesId, seq: wanted.seq };
     try {
-      await current.frames(seq, request.targets);
-      sent = { session: current, seq };
+      await current.frames(framesId, wanted.targets);
+      sent = { session: current, request: wanted };
     } catch {
       refuse("captureFailed");
       if (!retryPending) {
@@ -94,7 +105,6 @@ export function makeFrameFollower(deps: {
 
   return {
     setRequest: (next: DesktopCuaFrames) => {
-      if (next.seq < request.seq) return chain;
       request = next;
       return settle();
     },
@@ -112,6 +122,7 @@ export function makeFrameFollower(deps: {
       unsubscribe = undefined;
       session = undefined;
       sent = undefined;
+      inForce = undefined;
     },
   };
 }

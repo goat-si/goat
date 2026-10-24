@@ -26,7 +26,10 @@ function fakeHelper(options: {
     request: { id: string; method: string; params: unknown },
     write: (line: object) => void,
   ) => object | undefined;
-  readonly after?: (request: { id: string; method: string }, write: (line: object) => void) => void;
+  readonly after?: (
+    request: { id: string; method: string; params: unknown },
+    write: (line: object) => void,
+  ) => void;
 }) {
   const stdin = new NodeStream.PassThrough();
   const stdout = new NodeStream.PassThrough();
