@@ -357,16 +357,26 @@ const make = Effect.gen(function* () {
     const kicks = yield* PubSub.subscribe(watchKick);
     const receiver = desktop.value;
     yield* Effect.gen(function* () {
-      // What the desktop last heard; it starts out not watching.
+      // What the desktop last heard; it starts out not watching. After a failed write it may
+      // have heard either value, so the current one goes out until a write succeeds.
       let delivered = false;
+      let unsure = false;
       for (;;) {
         // A grant cancelled or expired under a control ends it, though nothing here ended it.
+        let endedAny = false;
         for (const record of [...controls.values()]) {
           if (record.ended !== undefined || record.handoffId === undefined) continue;
           const grant = yield* state(record.threadId, record.handoffId).pipe(Effect.option);
-          if (Option.isSome(grant) && grant.value._tag === "ended")
-            end(record.threadId, grant.value.reason);
+          // The lookup yields: a newer control for the thread is not judged by this grant.
+          if (
+            Option.isSome(grant) &&
+            grant.value._tag === "ended" &&
+            controls.get(record.threadId)?.controlId === record.controlId
+          )
+            endedAny = end(record.threadId, grant.value.reason) || endedAny;
         }
+        // Proxies waiting on a pause hear their control ended.
+        if (endedAny) yield* PubSub.publish(signals, undefined);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
         const expiries = [...controls.values()]
           .filter((record) => record.ended === undefined)
@@ -374,13 +384,18 @@ const make = Effect.gen(function* () {
           .filter((expiresAt) => expiresAt > now);
         const active = expiries.length > 0;
         let retry = false;
-        if (active !== delivered) {
+        if (active !== delivered || unsure) {
           const sent = yield* receiver.setCuaWatch(active).pipe(
             Effect.as(true),
             Effect.orElseSucceed(() => false),
           );
-          if (sent) delivered = active;
-          else retry = true;
+          if (sent) {
+            delivered = active;
+            unsure = false;
+          } else {
+            unsure = true;
+            retry = true;
+          }
         }
         const waits = [
           ...(active ? [Math.min(...expiries) - now] : []),

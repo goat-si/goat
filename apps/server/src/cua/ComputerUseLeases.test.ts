@@ -255,6 +255,54 @@ it.effect("tells the desktop again after a failed write, without waiting for it 
   }),
 );
 
+it.effect("after a failed write, a later control is sent even when the desktop last heard it", () =>
+  Effect.gen(function* () {
+    const attempts = yield* Queue.unbounded<boolean>();
+    let failNext = false;
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* leases.control(thread, Option.none());
+      assert.isTrue(yield* Queue.take(attempts));
+      failNext = true;
+      yield* leases.stop(thread);
+      assert.isFalse(yield* Queue.take(attempts));
+      // The desktop may still be watching or may have stopped; it is told again either way.
+      yield* leases.control(thread, Option.none());
+      assert.isTrue(yield* Queue.take(attempts));
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                setCuaWatch: (active) =>
+                  Queue.offer(attempts, active).pipe(
+                    Effect.andThen(
+                      Effect.suspend(() => {
+                        if (!failNext) return Effect.void;
+                        failNext = false;
+                        return Effect.fail(
+                          new DesktopTelemetryReceiver.DesktopTelemetryControlFailed({
+                            fd: 4,
+                            operation: "write",
+                            cause: "EAGAIN",
+                          }),
+                        );
+                      }),
+                    ),
+                  ),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
 it.effect("stops watching when the grant behind the last control is cancelled", () =>
   Effect.gen(function* () {
     const sent = yield* Queue.unbounded<boolean>();
@@ -265,9 +313,13 @@ it.effect("stops watching when the grant behind the last control is cancelled", 
       yield* grant(other, "handoff:watched");
       yield* leases.control(other, yield* leases.active(other));
       assert.isTrue(yield* Queue.take(sent));
+      const proxies = yield* leases.subscribe;
       yield* sql`DELETE FROM orchestration_v2_projection_turn_items WHERE turn_item_id = 'handoff:watched'`;
       yield* leases.changed;
+      yield* PubSub.take(proxies);
       assert.isFalse(yield* Queue.take(sent));
+      // Ending it here tells proxies too, so one held on a pause does not wait on.
+      yield* PubSub.take(proxies);
     }).pipe(
       Effect.provide(
         ComputerUseLeases.layer.pipe(
