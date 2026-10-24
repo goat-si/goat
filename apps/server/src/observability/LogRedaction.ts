@@ -26,10 +26,19 @@ import { isCredentialKey, MASK, redactLogText } from "./LogTextRedaction.ts";
 
 const DEFECT_SUMMARY_MAX_CHARS = 2_000;
 
+/**
+ * An Error from this realm or another: vm contexts and workers build Errors that fail
+ * `instanceof Error` but carry the native Error slot. A Proxy of an Error passes `instanceof`
+ * only, and may throw doing so, so callers guard this check.
+ */
+function isError(value: unknown): value is Error {
+  return value instanceof Error || Error.isError(value);
+}
+
 /** What died, for one log line: an Error's stack or message, never its fields. */
 export const defectSummary = (defect: unknown): string => {
   // Classified once, behind a guard: a Proxy's prototype lookup can throw, now or on a second try.
-  const error = guarded(() => (defect instanceof Error ? defect : undefined), undefined);
+  const error = guarded(() => (isError(defect) ? defect : undefined), undefined);
   if (error === undefined) return `non-Error defect (${typeof defect})`;
   const text =
     diagnostic(error, "stack") ??
@@ -240,7 +249,7 @@ function inspectError(
   depth = 0,
 ): Error {
   const frames = annotations === undefined ? "" : annotationFrames(annotations);
-  if (!(value instanceof Error)) {
+  if (!isError(value)) {
     // A thrown string is a message; any other value is named by its type, never printed.
     const message =
       typeof value === "string"
@@ -258,7 +267,7 @@ function inspectError(
   const nested = causeOf(value);
   let cause: Error | undefined;
   try {
-    if (nested instanceof Error && !seen.has(nested))
+    if (isError(nested) && !seen.has(nested))
       cause =
         depth < MAX_CAUSE_DEPTH
           ? sanitizedError(nested, undefined, seen, depth + 1)
@@ -373,7 +382,7 @@ function sanitize(value: unknown, depth: number, budget: Budget): unknown {
 function sanitizeObject(value: object, depth: number, budget: Budget): unknown {
   if (Cause.isCause(value)) return fit(Cause.pretty(redactCause(value)), budget);
   // Rendered like a cause, so the sanitized Error cause chain shows as Effect would print it.
-  if (value instanceof Error)
+  if (isError(value))
     return fit(
       Cause.pretty(Cause.fromReasons([Cause.makeDieReason(sanitizedError(value))])),
       budget,

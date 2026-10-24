@@ -1,4 +1,5 @@
 import * as NodeUtil from "node:util";
+import * as NodeVm from "node:vm";
 
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -214,6 +215,28 @@ describe("defectSummary", () => {
     expect(defectSummary(flaky)).toContain("original failure");
     // A thrown value that is not an Error is named by its type only.
     expect(defectSummary({ token: "canary-object-token" })).toBe("non-Error defect (object)");
+  });
+});
+
+describe("errors from another realm", () => {
+  // vm contexts and workers build Errors whose prototype is not this realm's Error.prototype.
+  const foreign = () =>
+    NodeVm.runInNewContext(
+      'Object.assign(new TypeError("cross-realm failure"), { requestBody: "canary-realm-extra" })',
+    ) as unknown;
+
+  it("keeps a foreign error's name and message and drops its fields, as a field, defect or cause", () => {
+    const printed = [
+      JSON.stringify(redactLogMessage({ error: foreign() })),
+      defectSummary(foreign()),
+      Cause.pretty(redactCause(Cause.die(foreign()))),
+      Cause.pretty(redactCause(Cause.die(new Error("outer", { cause: foreign() })))),
+      ...redactedDefects(Cause.die(foreign())).map((cause) => Cause.pretty(cause)),
+    ];
+    for (const text of printed) {
+      expect(text).toContain("TypeError: cross-realm failure");
+      expect(text).not.toContain("canary-realm-extra");
+    }
   });
 });
 
