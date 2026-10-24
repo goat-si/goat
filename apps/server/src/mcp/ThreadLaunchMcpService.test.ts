@@ -273,7 +273,7 @@ function fixture(
     readonly failLaunches?: boolean;
     readonly childThreadVisible?: boolean;
     /** The first launch creates its thread, then its first message is refused. */
-    readonly createdThenRefused?: { readonly sql: () => SqlClient.SqlClient["Service"] };
+    readonly createdThenRefused?: { readonly sql: () => SqlClient.SqlClient };
     readonly maxLanes?: number;
   },
 ) {
@@ -747,7 +747,7 @@ it.effect(
 it.effect(
   "regression #493: a launch refused after its thread was created holds no lane while that thread does not run",
   () => {
-    let sqlRef: SqlClient.SqlClient["Service"] | undefined;
+    let sqlRef: SqlClient.SqlClient | undefined;
     const f = fixture(
       false,
       "published-ref",
