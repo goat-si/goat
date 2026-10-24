@@ -54,14 +54,12 @@ provider (Codex, Claude, ...)
   the server before each call and holds one session for its thread and generation.
 - Each session has its own `mcp --direct` driver process under the helper, and ending a session
   kills exactly that process. That is the boundary ADR-0022 measured: cancellation and session
-  revoke do not stop a running `run_script`, and killing its transport does. Whether several
-  direct runtimes run side by side cleanly is a qualification item for WS3. If they do not,
-  sessions share one driver process and a Stop interrupts every session on it: the helper fences
-  their queued input, kills the process, releases held input and sends a cleanup report per
-  session; actions in flight report `partial` or `unverifiable` and are never replayed; the
-  restarted driver is a new generation, so earlier replies are quarantined; and each affected
-  session must observe again before acting. The sessions themselves, their owners and leases
-  survive.
+  revoke do not stop a running `run_script`, and killing its transport does. WS3 qualifies
+  several direct runtimes side by side; if they cannot coexist, that changes this decision and
+  is recorded as an amendment to ADR-0023.
+- Current state, not the design: the first helper (#1211) runs one `serve --embedded` daemon that
+  every session shares, and Stop behaves as ADR-0022 describes: only a leased turn's proxy kills
+  its `cua-driver mcp` client.
 - Stop, stop all, lease end, a lost stream, or computer use turned off end the session at every
   hop. The proxy refuses new calls and exits. The server marks the session ended and tells the
   helper over the control channel. The helper kills that session's driver process, releases the
@@ -69,8 +67,7 @@ provider (Codex, Claude, ...)
   depend on the proxy still being there. A disconnect at any hop ends the session the same way:
   a vanished proxy makes the server end it, and a vanished server or host closes the helper's
   stdin, so the helper ends every session.
-- With a driver process per session, sessions of other threads keep running through a Stop;
-  with a shared one they are interrupted as above. Stop all ends every session. ADR-0022's
+- Sessions of other threads keep running through a Stop; stop all ends every session. ADR-0022's
   six-app `run_script` stop measurement is repeated through this topology before WS6 counts as
   done.
 - Remote machines run their own server and helper. Each server checks its own screen before
@@ -131,9 +128,7 @@ requirement, never from a pid or path alone. The driver stays the helper's child
   accessibility reads can miss nodes. GOAT's observation tracker
   (`packages/shared/src/computerUseObservation.ts`) assigns refs by tree position, so a ref keeps
   naming the same control while the driver's own tokens rotate, and gives a position a ref only
-  when it is unambiguous all the way up. A full observation starts a new lineage and says why
-  (`first`, `unknown_since`, `scope_changed`, `reordered`, `incomplete`, `window_changed`,
-  `epoch_changed`).
+  when it is unambiguous all the way up. A full observation starts a new lineage and says why.
 - A ref from an older lineage or epoch is refused with `staleElement` or `epochChanged`. The
   helper never guesses among several matches.
 - `observe` with `screenshot: false` returns the tree without capturing pixels. Omitting the image
@@ -148,35 +143,25 @@ requirement, never from a pid or path alone. The driver stays the helper's child
 
 ## Actions and results
 
-- The protocol methods are `capabilities`, `permissions`, `listWindows`, `observe` and nine
-  actions: `click`, `doubleClick`, `rightClick`, `typeText`, `pressKey`, `scroll`, `drag`,
-  `setValue` and `performAction`. Every action names an exact target, the observation it acts on
-  and its delivery; there is no "frontmost window" default.
-- Input means the same on every platform. Keys are canonical names (`ComputerUseKey`: one
-  printable character, or `enter`, `tab`, `escape`, `arrowUp`, `pageDown`, `f1`–`f20` and the
-  like), modifiers are roles (`option` is Alt and `command` is the Windows or Super key off macOS),
-  a chord is `pressKey` with modifiers, and `scroll` counts lines from 1 to 50.
+- The methods, actions, keys, results and refusal reasons are defined once, in
+  [computerUseProtocol.ts](../../packages/contracts/src/computerUseProtocol.ts) (#1207);
+  readiness steps follow #1226. This page records the rules behind them, not the lists.
+- Every action names an exact target, the observation it acts on and its delivery; there is no
+  "frontmost window" default. Input means the same on every platform: keys by meaning and
+  modifiers by role, translated by each helper.
 - Background delivery comes first. Foreground delivery happens only when the request asks for it
-  and the lease allows it; otherwise the refusal is `foregroundNotAllowed` or
-  `backgroundUnavailable`.
+  and the lease allows it; otherwise the action is refused.
 - Each action is decided before dispatch: the helper picks one route (semantic, background
   synthetic, or foreground) and does not switch routes or windows after an unknown outcome.
-- Results pair an outcome with what the helper saw: `confirmed` and `suspected_noop` are
-  `verified`, `unverifiable` is `dispatched_unknown`, and `partial` may be either. Input that never
-  left is a refusal, never an outcome. A missed deadline is `unverifiable`.
-- `computerUseNextStep` is the one no-replay rule: `partial` and `unverifiable` input is observed
-  again, never resent; only an undispatched `busy` refusal is retried.
-- Refusals name their cause (`ComputerUseRefusalReason`): `userStoppedSession`, `userIntervened`,
-  `screenLocked`, `permissionsNotGranted`, `permissionsPending`, `appNotAllowed`, `blockedURL`,
-  `incompatibleClientVersion` and `targetRefused` (a named policy); observation and targeting
-  reasons such as `staleElement`, `epochChanged`, `windowNotFound`, `ownerMismatch`,
-  `targetGone`, `privateMode`, `leaseRequired`, `foregroundNotAllowed` and `backgroundUnavailable`;
-  and channel reasons such as `unsupported`, `invalidRequest`, `frameTooLarge`, `busy` and
-  `helperUnavailable`. `userStoppedSession` is used only when a person pressed Stop or stop all,
-  and `userIntervened` only when the helper saw a person's input or takeover. A vendor helper that
-  reports a policy refusal as "stopped by the user" makes agents end their turn (#1146); GOAT's
-  helper does not. The mini-view stack below needs two reasons the contract does not have yet,
-  `unsafeCapture` and `targetBoundsUnavailable`; WS7 adds them.
+- Results say whether the helper saw the effect. Input that never left is a refusal, never an
+  outcome, and a missed deadline counts as unverifiable, not refused.
+- No replay: input that may have landed is observed again, never resent; only a refusal that
+  dispatched nothing for a transient reason is retried (`computerUseNextStep`).
+- Refusals name their cause. A person's Stop and a person's input or takeover have their own
+  reasons, and a policy refusal or a missing grant never uses them: a vendor helper that reports
+  a policy refusal as "stopped by the user" makes agents end their turn (#1146). The mini-view
+  stack below needs two reasons the contract does not have yet, for an unsafe capture and for
+  unknown window bounds; WS7 adds them.
 
 ## Transcript fidelity
 
