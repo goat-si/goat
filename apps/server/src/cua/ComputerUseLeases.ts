@@ -528,6 +528,7 @@ const make = Effect.gen(function* () {
       // What the desktop last heard; it starts out not watching. After a failed write it may
       // have heard either value, so the current one goes out until a write succeeds.
       let delivered = false;
+      let deliveredApps = "[]";
       let unsure = false;
       for (;;) {
         // A grant cancelled or expired under a control ends it, though nothing here ended it.
@@ -545,20 +546,42 @@ const make = Effect.gen(function* () {
         }
         // Proxies waiting on a pause hear their control ended.
         if (endedAny) yield* PubSub.publish(signals, undefined);
+        // Read approvals independently of pause state: a paused helper must keep watching.
+        const listed = yield* live().pipe(Effect.option);
+        if (Option.isNone(listed)) {
+          // No new decision on a failed approval read; retry without losing delivered state.
+          yield* Effect.race(PubSub.take(kicks), Effect.sleep(WATCH_RETRY_MS));
+          continue;
+        }
+        const grants = listed.value;
         const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const expiries = [...controls.values()]
-          .filter(acting)
-          .map((record) => DateTime.toEpochMillis(record.expiresAt))
-          .filter((expiresAt) => expiresAt > now);
-        const active = expiries.length > 0;
+        const current = [...controls.values()].filter(
+          (record) => acting(record) && DateTime.toEpochMillis(record.expiresAt) > now,
+        );
+        const expiries = current.map((record) => DateTime.toEpochMillis(record.expiresAt));
+        const approved = new Set<string>();
+        for (const record of current) {
+          if (record.everyApp !== undefined) continue;
+          const held = grants.filter(
+            (grant) =>
+              grant.threadId === record.threadId &&
+              (record.handoffId === undefined || grant.handoffId === record.handoffId),
+          );
+          for (const grant of held) expiries.push(DateTime.toEpochMillis(grant.expiresAt));
+          for (const app of scoped(record, appsOf(held)) ?? []) approved.add(app);
+        }
+        const apps = [...approved].sort();
+        const appsKey = JSON.stringify(apps);
+        const active = current.length > 0;
         let retry = false;
-        if (active !== delivered || unsure) {
-          const sent = yield* receiver.setCuaWatch(active).pipe(
+        if (active !== delivered || appsKey !== deliveredApps || unsure) {
+          const sent = yield* receiver.setCuaWatch(active, apps).pipe(
             Effect.as(true),
             Effect.orElseSucceed(() => false),
           );
           if (sent) {
             delivered = active;
+            deliveredApps = appsKey;
             unsure = false;
           } else {
             unsure = true;

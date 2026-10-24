@@ -339,6 +339,94 @@ it.effect(
     }),
 );
 
+it.effect("sends the union of named approvals, updating apps while controls stay active", () =>
+  Effect.gen(function* () {
+    const sent = yield* Queue.unbounded<{
+      active: boolean;
+      apps: ReadonlyArray<string> | undefined;
+    }>();
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      // A whole-screen approval contributes nothing to the named union.
+      yield* grant(other, "handoff:screen");
+      yield* leases.control(other, yield* leases.active(other));
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+      yield* leases.control(thread, Option.none());
+      yield* grant(thread, "handoff:first", ["com.example.notes"]);
+      yield* leases.changed;
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
+      yield* grant(thread, "handoff:second", ["com.example.new", "com.example.notes"]);
+      yield* leases.changed;
+      assert.deepEqual(yield* Queue.take(sent), {
+        active: true,
+        apps: ["com.example.new", "com.example.notes"],
+      });
+      yield* leases.stop(thread);
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+      yield* leases.stop(other);
+      assert.deepEqual(yield* Queue.take(sent), { active: false, apps: [] });
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                setCuaWatch: (active, apps) =>
+                  Queue.offer(sent, { active, apps }).pipe(Effect.asVoid),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect(
+  "removes expired approved apps while the interactive control keeps watching through a pause",
+  () =>
+    Effect.gen(function* () {
+      const sent = yield* Queue.unbounded<{
+        active: boolean;
+        apps: ReadonlyArray<string> | undefined;
+      }>();
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* grant(thread, "handoff:earlier", ["com.example.notes"]);
+        yield* TestClock.adjust("30 minutes");
+        const control = yield* leases.control(thread, Option.none());
+        assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
+        yield* leases.pause("human_input");
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "paused");
+        yield* TestClock.adjust("31 minutes");
+        assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+        yield* leases.resume;
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+        yield* leases.stop(thread);
+        assert.deepEqual(yield* Queue.take(sent), { active: false, apps: [] });
+      }).pipe(
+        Effect.provide(
+          ComputerUseLeases.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                database,
+                NodeServices.layer,
+                DesktopTelemetryReceiver.layerTest({
+                  setCuaWatch: (active, apps) =>
+                    Queue.offer(sent, { active, apps }).pipe(Effect.asVoid),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
+);
+
 it.effect("tells the desktop again after a failed write, without waiting for it to reconnect", () =>
   Effect.gen(function* () {
     const attempts = yield* Queue.unbounded<boolean>();
