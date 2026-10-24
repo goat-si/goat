@@ -273,6 +273,8 @@ interface OwnedHost {
   readonly host: NativeHost;
   readonly abort: AbortController;
   readonly started: Promise<EmbeddedDriverConnection>;
+  /** Run by GOAT Computer Use; only such a host makes the helper's readiness "running". */
+  readonly helper: boolean;
   monitor?: Promise<void>;
   cleanup?: Promise<void>;
 }
@@ -398,6 +400,17 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     });
   const noteChecked = (update: (state: HelperReadinessState) => HelperReadinessState) =>
     Effect.suspend(() => (checkingHelper ? noteHelper(update) : Effect.void));
+  /**
+   * The helper seen before is gone, unusable, or not chosen: what it proved then says nothing
+   * now, and nothing runs as it.
+   */
+  const forgetHelper = (chosen: Engine | string | undefined) =>
+    noteHelper((state) =>
+      withoutProof(
+        withRunning(state, false),
+        typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
+      ),
+    );
 
   // UniFFI calls can outlive cancellation. Retain the host until every native
   // promise settles, even after the public shutdown deadline has elapsed.
@@ -575,6 +588,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       host,
       abort: new AbortController(),
       started: Promise.resolve().then(() => host.start()),
+      helper: engine.kind === "helper",
     };
     owned = entry;
     void entry.started.then(
@@ -615,14 +629,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     }
     const chosen = yield* engine();
     checkingHelper = typeof chosen === "object" && chosen.kind === "helper";
-    if (!checkingHelper)
-      // The helper seen before is gone or unusable: what it proved then says nothing now.
-      yield* noteHelper((state) =>
-        withoutProof(
-          withRunning(state, false),
-          typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
-        ),
-      );
+    if (!checkingHelper) yield* forgetHelper(chosen);
     if (typeof chosen === "string") {
       record("grants", chosen);
       return done();
@@ -841,6 +848,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return;
     }
     const selected = yield* engine();
+    if (typeof selected !== "object" || selected.kind !== "helper") yield* forgetHelper(selected);
     if (typeof selected === "string") {
       yield* report(request.requestId, "unavailable", selected);
       return;
@@ -894,7 +902,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         Effect.timeout("20 seconds"),
       );
       const mcp = yield* decodeMcp({ ...connection.mcp, socketPath: connection.socketPath });
-      if (selected.kind === "helper") yield* noteHelper((state) => withRunning(state, true));
+      if (entry.helper) yield* noteHelper((state) => withRunning(state, true));
       if (!closed)
         yield* publisher.publishCuaReport({
           version: 1,

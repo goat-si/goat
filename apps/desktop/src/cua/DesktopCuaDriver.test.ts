@@ -732,6 +732,58 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
       ),
   );
 
+  it.effect("a start request that cannot use the helper drops its earlier proofs", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+        });
+        assert.isTrue((yield* test.verify).verified);
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.restart;
+        assert.equal((yield* test.next).status, "stopped");
+
+        yield* test.loseHelper("unusable");
+        yield* test.request("unusable");
+        assert.equal((yield* test.next).status, "unavailable");
+        const after = test.readiness.at(-1)?.readiness;
+        assert.isFalse(after ? computerUseReady(after) : true);
+        assert.isTrue((after?.reasons ?? []).some((reason) => /cannot be used/.test(reason)));
+      }),
+    ),
+  );
+
+  it.effect("a driver GOAT runs itself never counts as the helper running", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+        });
+        assert.isTrue((yield* test.verify).verified);
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.restart;
+        assert.equal((yield* test.next).status, "stopped");
+
+        // Without the helper this build runs the driver under GOAT's own identity.
+        yield* test.loseHelper("absent");
+        yield* test.request("embedded");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.restoreHelper;
+        yield* test.request("helper-back");
+        assert.equal((yield* test.next).status, "ready");
+        const after = test.readiness.at(-1)?.readiness;
+        assert.equal(after?.helper, "unauthenticated");
+        assert.isFalse(after ? computerUseReady(after) : true);
+      }),
+    ),
+  );
+
   it.effect("drops earlier proofs when a later check fails before reading a window", () =>
     Effect.scoped(
       Effect.gen(function* () {

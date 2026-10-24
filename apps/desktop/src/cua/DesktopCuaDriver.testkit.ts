@@ -387,6 +387,9 @@ export const fixture = Effect.fn(function* (
       Effect.sync(() => {
         helperLost = how;
       }),
+    restoreHelper: Effect.sync(() => {
+      helperLost = undefined;
+    }),
     crash: Effect.sync(() => exits.at(-1)?.()),
     constructors,
     launches,
