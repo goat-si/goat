@@ -29,6 +29,7 @@ The \`cua-driver\` tools act on the computer the person is using right now. Use 
 - \`partial\`, \`unverifiable\`, any other code, or no clear effect: the input may have landed. Observe and never resend it unchanged; a repeated keystroke can submit twice.
 - GOAT's own refusals carry \`refused\` and \`detail\`, and nothing was sent: \`userStoppedSession\`, \`userIntervened\`, \`appNotAllowed\`, \`helperUnavailable\`, \`targetRefused\`. Their text says what to do: make single calls on an approved window, or ask with \`computer_use.request\` and end your turn.
 - \`code: "interrupted"\`: a pause or Stop cut off a call that had already started. With \`effect: "unverifiable"\` it may have acted; without one it was a read and changed nothing.
+- Detail \`target_busy\`: another thread, named in the answer, is acting on that window or on the whole desktop; nothing was sent. Wait for it or work elsewhere, then observe. \`control_idle\`: this thread's turn is over; leave the screen until its next turn.
 </computer_use>`;
 
 /** Stop, take over, private fields and confirmation: what the person sees and decides. */

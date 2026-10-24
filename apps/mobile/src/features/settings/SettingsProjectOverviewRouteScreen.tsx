@@ -34,6 +34,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsActionRow } from "./components/SettingsActionRow";
+import { ProjectActionsSettings } from "./ProjectActionsSettings";
 import {
   AndroidSettingsEnvironmentFilter,
   SettingsEnvironmentFilterHeader,
@@ -322,6 +323,7 @@ function ProjectOverviewContent(props: {
           );
         })}
       </SettingsSection>
+      <ProjectActionsSettings members={props.members} environments={props.environments} />
       <SettingsSection title="Danger">
         <SettingsActionRow
           icon="trash"

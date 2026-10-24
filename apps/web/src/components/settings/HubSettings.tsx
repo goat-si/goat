@@ -22,6 +22,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 
 import { profileLabel } from "../desktop/firstRunPrompts.logic";
 import { Button } from "../ui/button";
+import { OpenCodexSyncButton } from "../opencodex/OpenCodexSyncDialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -303,6 +304,13 @@ function HubControls({
             }
           />
         )}
+        {home?.installed ? (
+          <SettingsRow
+            title="OpenCodex models"
+            description="Load OpenCodex's current models into Codex here, then on each linked Child. Children take this Home's models and settings. GOAT also syncs after every managed OpenCodex update."
+            control={<OpenCodexSyncButton environmentId={environmentId} homeLabel={label} />}
+          />
+        ) : null}
       </SettingsSection>
       <HubDeviceListSection
         environmentId={environmentId}

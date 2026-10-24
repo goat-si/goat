@@ -71,4 +71,28 @@ export const originEntries = {
       openWorldHint: true,
     },
   }),
+  "origin.resolve_binding": entry({
+    resource: "origin",
+    verb: "resolve_binding",
+    name: "goat_origin_resolve_binding",
+    toolkit: "remoteReport",
+    summary: "Resolve a lost remote launch correlation, or durably fence it as never landed.",
+    description:
+      "Settle a correlation whose launch outcome was lost: return its binding with the thread's live state, or durably fence the id so a late bind is refused. Only a confirmed fence proves absence; a bare miss never does.",
+    guide:
+      "Pass the correlation id and its read key. A bound result carries the destination thread and its live run state; rebind and observe it, never relaunch. A fenced result is durable proof that nothing bound or will bind; only then may the caller release reserved capacity. An unknown tool, a timeout, or an unreachable host leaves the outcome unknown and keeps capacity reserved.",
+    effect: "write",
+    capability: "none",
+    capabilityReason: "The correlation's read key authorizes it; a new fence stores its hash.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The fence row is the dedup: a repeat resolve finds the fence and answers fenced again, and a bound binding answers bound again.",
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
 } as const;

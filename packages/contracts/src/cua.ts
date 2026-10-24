@@ -131,6 +131,11 @@ export const ComputerUseLeaseAgentInput = Schema.Struct({
     call: TrimmedNonEmptyString,
     state: Schema.Literals(["start", "end"]),
     at: EpochMillis,
+    /**
+     * The kinds of event a starting call can post. Only an event of a kind listed here is taken
+     * for the agent's own; a start without it covers both, as an older proxy's did.
+     */
+    kinds: Schema.optionalKey(Schema.Array(Schema.Literals(["keyboard", "pointer"]))),
   }),
 });
 export type ComputerUseLeaseAgentInput = typeof ComputerUseLeaseAgentInput.Type;
@@ -141,6 +146,52 @@ export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeaseAgentInput,
 ]);
 export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
+
+/**
+ * Why the desktop would not give agents a driver, in a form every surface can act on: the
+ * preview tile, Settings and onboarding, the agent's own computer_use request, and the trace
+ * (#1399). Only a grant the helper lacks so far; other refusals keep their message.
+ */
+export const CuaAgentBlock = Schema.Struct({
+  reason: Schema.Literal("permissionsNotGranted"),
+  /** The grants macOS has not given the app that holds them, GOAT Computer Use or GOAT. */
+  missing: Schema.Array(Schema.Literals(["accessibility", "screenRecording"])).check(
+    Schema.isMinLength(1),
+  ),
+  holder: Schema.Literals(["helper", "app"]),
+});
+export type CuaAgentBlock = typeof CuaAgentBlock.Type;
+
+/** The System Settings lists a block names, as macOS titles them. */
+export const cuaAgentBlockLists = (block: CuaAgentBlock): string =>
+  block.missing
+    .map((grant) =>
+      grant === "accessibility" ? "Accessibility" : "Screen & System Audio Recording",
+    )
+    .join(" and ");
+
+/** The sentence every surface shows for a block. */
+export const cuaAgentBlockMessage = (block: CuaAgentBlock): string =>
+  `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security.`;
+
+/**
+ * What of a block newer readiness still bears out: only the grants it does not report granted,
+ * and nothing once every one is back, so no surface keeps naming a grant the person gave.
+ * Readiness is the helper's, so it only speaks for a block the helper holds; a block on GOAT
+ * itself stays as it was.
+ */
+export const cuaAgentBlockUnder = (
+  block: CuaAgentBlock,
+  readiness: typeof ComputerUseReadiness.Type,
+): CuaAgentBlock | undefined => {
+  if (block.holder !== "helper") return block;
+  const missing = block.missing.filter(
+    (grant) =>
+      readiness.grants[grant === "accessibility" ? "accessibility" : "screenCapture"] !== "granted",
+  );
+  if (missing.length === block.missing.length) return block;
+  return missing.length === 0 ? undefined : { ...block, missing };
+};
 
 export const DesktopCuaDriverReport = Schema.Union([
   Schema.Struct({
@@ -156,6 +207,8 @@ export const DesktopCuaDriverReport = Schema.Union([
     requestId: TrimmedNonEmptyString,
     status: Schema.Literals(["stopped", "unavailable"]),
     message: Schema.optionalKey(Schema.String),
+    /** Set when the reason is one of the typed ones; older desktops send only the message. */
+    block: ForwardCompatibleOptional(CuaAgentBlock),
   }),
 ]);
 export type DesktopCuaDriverReport = typeof DesktopCuaDriverReport.Type;
@@ -188,6 +241,8 @@ export const CuaHostStatus = Schema.Struct({
   running: Schema.Boolean,
   /** Why the last start failed, until a later start succeeds. */
   failure: Schema.optionalKey(Schema.String),
+  /** The typed reason behind that failure, when it is one agents cannot get past alone. */
+  block: ForwardCompatibleOptional(CuaAgentBlock),
   /** Linux hosts in a Wayland session, where the driver supports fewer apps than on X11. */
   wayland: Schema.optionalKey(Schema.Boolean),
   /** Older hosts omit it; they predate the check, so clients fall back to the platform. */
@@ -293,6 +348,8 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     expiresAt: Schema.String,
     apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+    /** Calls echo this value so a missed idle/reuse update cannot admit old-turn input. */
+    idleEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     /**
      * How many times the host has paused agents, and why last. A pause and its end can both
      * land before the proxy reads the control, so a higher count still ends the call in flight.
@@ -300,12 +357,18 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     interruptions: Schema.optionalKey(
       Schema.Struct({ count: Schema.Int, last: ComputerUsePauseReason }),
     ),
+    /**
+     * Another thread holds a grant on this screen, so calls that bring a window forward or move
+     * the pointer would take it from that thread.
+     */
+    shared: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.Struct({
     state: Schema.Literal("paused"),
     controlId: TrimmedNonEmptyString,
     reason: ComputerUsePauseReason,
   }),
+  Schema.Struct({ state: Schema.Literal("idle"), controlId: TrimmedNonEmptyString }),
   Schema.Struct({ state: Schema.Literal("ended"), reason: ComputerUseControlEnd }),
 ]);
 export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
@@ -315,6 +378,9 @@ export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
  * computerUseProtocol.ts). A policy refusal is targetRefused, never a person's stop (#1146).
  */
 export const ComputerUseRefusalDetail = Schema.Literals([
+  "target_busy",
+  "invalid_target",
+  "control_idle",
   "app_not_approved",
   "desktop_not_approved",
   /** Whole-display screenshots are off; an agent looks at one window at a time (#1321). */
@@ -327,6 +393,8 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "helper_restarted",
   /** The driver named a window that is not on the screen GOAT gave it (#1358). */
   "wrong_display",
+  /** It would bring a window forward or move the pointer while another thread holds apps here. */
+  "screen_shared",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 
@@ -350,6 +418,45 @@ export const computerUseRefusalReason = (
 
 /** Path the proxy reads control updates from, on the server that issued its MCP credential. */
 export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
+
+const ComputerUseCallOwner = {
+  controlId: TrimmedNonEmptyString,
+  connectionId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+};
+
+/** A proxy reserves execution before dispatch, and closes a driver generation after cutoff. */
+export const ComputerUseCallReservation = Schema.Union([
+  Schema.Struct({
+    ...ComputerUseCallOwner,
+    action: Schema.Literal("reserve"),
+    callId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+    interruptions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    idleEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+    args: Schema.Unknown,
+  }),
+  Schema.Struct({
+    ...ComputerUseCallOwner,
+    action: Schema.Literal("release"),
+    reservationId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({ ...ComputerUseCallOwner, action: Schema.Literal("close") }),
+]);
+export type ComputerUseCallReservation = typeof ComputerUseCallReservation.Type;
+
+export const ComputerUseCallAdmission = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("admitted"),
+    reservationId: Schema.NullOr(Schema.String),
+  }),
+  Schema.Struct({ status: Schema.Literal("released") }),
+  Schema.Struct({
+    status: Schema.Literal("refused"),
+    detail: ComputerUseRefusalDetail,
+    holderThreadId: Schema.optionalKey(ThreadId),
+  }),
+]);
+export type ComputerUseCallAdmission = typeof ComputerUseCallAdmission.Type;
 
 /**
  * Sent by the desktop host's computer use helper when a person's own keyboard or pointer input
@@ -448,8 +555,11 @@ export const ComputerUseRequestResult = Schema.Union([
       "not_unattended",
       /** The host cannot tell when a person types a secret or uses the desktop (#1235). */
       "detection_unsupported",
+      /** macOS has not granted what computer use needs; a person allows it in System Settings. */
+      "not_granted",
     ]),
     holderThreadId: Schema.optionalKey(ThreadId),
+    block: Schema.optionalKey(CuaAgentBlock),
     message: Schema.String,
   }),
 ]);

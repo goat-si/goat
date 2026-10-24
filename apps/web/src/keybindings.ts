@@ -20,7 +20,7 @@ import {
   type ShortcutModifierStateLike,
 } from "@goat/shared/keybindings";
 import { isElectron } from "./env";
-import { isFileViewFocused } from "./lib/fileViewFocus";
+import { isFileTreeFocused, isFileViewFocused } from "./lib/fileViewFocus";
 import { isNotesPageOpen } from "./notes/notesPageVisibility";
 import { projectScriptIdFromCommand } from "./projectScripts";
 
@@ -69,6 +69,7 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
     // Every listener resolves this the same way, so a copy-path rule rebound onto
     // another command's keys wins in the file view instead of in the first listener.
     fileViewFocus: isFileViewFocused(),
+    fileTreeFocus: isFileTreeFocused(),
     ...options?.context,
   };
 }
@@ -284,6 +285,8 @@ export function formatShortcutKeyLabel(key: string): string {
   if (key === "arrowdown") return "Down";
   if (key === "arrowleft") return "Left";
   if (key === "arrowright") return "Right";
+  if (key === "pageup") return "PageUp";
+  if (key === "pagedown") return "PageDown";
   return key.slice(0, 1).toUpperCase() + key.slice(1);
 }
 

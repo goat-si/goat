@@ -19,6 +19,7 @@ import { environmentSessionStatesAtom } from "~/state/session";
 import { sshRuntime } from "~/state/sshRuntime";
 import { savedConnectionSshRoute } from "../settings/ConnectionsSettings.logic";
 import { getProviderUpdateRunOutcome } from "../ProviderUpdateLaunchNotification.logic";
+import { openCodexSyncNotes } from "../opencodex/openCodexSync.logic";
 import { useCheckForUpdateWhenHostIsNewer } from "./newerHostUpdateCheck";
 import { useProviderUpdates } from "../ProviderUpdatesAction";
 import {
@@ -414,6 +415,7 @@ export function useUpdateEverything(
               `OpenCodex waits for ${checked.value.waitingOn.map((alias) => alias ?? "this Mac").join(", ") || "idle"}; it updates once they are idle.`,
             );
           }
+          notes.push(...openCodexSyncNotes(checked.value.sync));
         }
       }
       setUpdateEverythingRun((run) => run && closeFinishedUpdateRun({ ...run, phase: "servers" }));

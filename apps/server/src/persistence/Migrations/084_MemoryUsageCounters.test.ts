@@ -71,6 +71,8 @@ it.effect(
         [103, "RemoteReportReceipts"],
         [104, "PendingAttachmentUploads"],
         [105, "ScheduledTaskWebhookSecretRef"],
+        [106, "RemoteReportFences"],
+        [107, "HubProvisionedLinks"],
       ]);
       yield* assertUsageCounters;
       assert.deepStrictEqual(yield* runMigrations(), []);

@@ -1,0 +1,397 @@
+import { assert, describe, it } from "@effect/vitest";
+import { ThreadId } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
+import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+
+describe("proxy execution ownership", () => {
+  it.effect(
+    "settles the acting overlay when a cancelled call receives its terminal reply (#1490)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ overlay: true });
+        yield* h.push(active());
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* h.nextToDriver;
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: 1 },
+          }),
+        );
+        yield* h.nextToDriver;
+        const shown = { op: "show", pid: 4, windowId: 9 };
+        assert.deepEqual(
+          [...h.log],
+          ["draw " + JSON.stringify({ ...shown, phase: "acting" }), "send click"],
+        );
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
+        yield* h.nextToDriver;
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 2);
+        assert.equal(yield* h.providerQueued, 0);
+        assert.deepEqual(
+          [...h.log],
+          [
+            "draw " + JSON.stringify({ ...shown, phase: "acting" }),
+            "send click",
+            "draw " + JSON.stringify({ ...shown, phase: "resting" }),
+          ],
+        );
+      }),
+  );
+
+  it.effect("suppresses cancellation received after Stop while native closure is pending", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({ kill: Deferred.await(gate) });
+      yield* h.push(active());
+      yield* h.send(call(1, "type_text", { pid: 4, window_id: 9, text: "hello" }));
+      yield* h.nextToDriver;
+      yield* h.nextReservation;
+      yield* h.push({ state: "ended", reason: "stopped" });
+      yield* h.killed;
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 1 },
+        }),
+      );
+      yield* h.send(call(99, "get_guide"));
+      assert.equal((yield* h.nextToProvider).id, 99);
+      yield* Deferred.succeed(gate, undefined);
+      assert.equal((yield* h.nextReservation).action, "close");
+      yield* h.close;
+      yield* Fiber.join(h.proxy);
+      assert.equal(yield* h.providerQueued, 0);
+    }),
+  );
+
+  it.effect.each(["kill", "close"] as const)(
+    "suppresses cancellation while cutoff awaits %s acknowledgement",
+    (wait) =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        const held = Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(gate)),
+        );
+        const h = yield* harness({
+          manifestStamp: () => "v1",
+          kill: wait === "kill" ? held : Effect.void,
+          reservation: (request) =>
+            request.action === "reserve"
+              ? Effect.succeed({ status: "admitted", reservationId: "held" } as const)
+              : (wait === "close" && request.action === "close" ? held : Effect.void).pipe(
+                  Effect.as({ status: "released" } as const),
+                ),
+        });
+        yield* h.push(active());
+        yield* h.send(call(1, "type_text", { pid: 4, window_id: 9, text: "hello" }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.nextReservation;
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+        yield* Deferred.await(entered);
+        yield* h.nextToDriver;
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: 1 },
+          }),
+        );
+        yield* h.send(call(99, "get_guide"));
+        assert.equal((yield* h.nextToProvider).id, 99);
+        yield* Deferred.succeed(gate, undefined);
+        assert.equal((yield* h.nextReservation).action, "close");
+        yield* h.push(active());
+        yield* h.restarted;
+        yield* h.send(call(2, "get_guide"));
+        assert.equal((yield* h.nextToDriver).id, 2);
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 2);
+      }),
+  );
+
+  it.effect("suppresses a cancelled call when its driver is later cut off", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ humanInput: true });
+      yield* h.push(active());
+      yield* h.send(call(1, "run_script", { code: "opaque" }));
+      yield* h.nextToDriver;
+      const acquired = yield* h.nextReservation;
+      assert.equal(yield* h.agentCall, "start 1");
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 1 },
+        }),
+      );
+      yield* h.nextToDriver;
+      assert.deepEqual(h.reservations, [acquired]);
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+      assert.equal((yield* h.nextReservation).action, "close");
+      assert.equal(yield* h.agentCall, "end 1");
+      yield* h.push(active());
+      yield* h.restarted;
+      yield* h.send(call(2, "get_guide"));
+      yield* h.nextToDriver;
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+      assert.equal((yield* h.nextToProvider).id, 2);
+    }),
+  );
+
+  it.effect("waits for the target report before reserving or posting input", () =>
+    Effect.gen(function* () {
+      const targetGate = yield* Deferred.make<void>();
+      const h = yield* harness({ onTarget: () => true, targetGate, humanInput: true });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      yield* h.reported;
+      assert.deepEqual(h.reservations, []);
+      assert.equal(yield* h.driverQueued, 0);
+      assert.equal(yield* h.agentCallsQueued, 0);
+      yield* h.push({ state: "idle", controlId: CONTROL });
+      assert.equal((yield* h.nextReservation).action, "close");
+      yield* h.push({ ...active(), idleEpoch: 1 });
+      yield* h.restarted;
+      yield* Deferred.succeed(targetGate, undefined);
+      const answer = (yield* h.nextToProvider).result as { structuredContent: object };
+      assert.deepEqual(answer.structuredContent, {
+        refused: "targetRefused",
+        detail: "control_idle",
+      });
+      assert.isFalse(h.reservations.some((request) => request.action === "reserve"));
+      assert.equal(yield* h.driverQueued, 0);
+      assert.equal(yield* h.agentCallsQueued, 0);
+    }),
+  );
+
+  it.effect("releases a late admission without dispatching across a driver replacement", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({
+        reservation: (request) =>
+          request.action === "reserve"
+            ? Deferred.await(gate).pipe(
+                Effect.as({ status: "admitted", reservationId: "late" } as const),
+              )
+            : Effect.succeed({ status: "released" } as const),
+      });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      const acquired = yield* h.nextReservation;
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+      assert.equal((yield* h.nextReservation).action, "close");
+      yield* h.push(active());
+      yield* h.restarted;
+      yield* Deferred.succeed(gate, undefined);
+      assert.deepEqual(yield* h.nextReservation, {
+        action: "release",
+        controlId: CONTROL,
+        connectionId: acquired.connectionId,
+        reservationId: "late",
+      });
+      const answer = (yield* h.nextToProvider).result as { structuredContent: object };
+      assert.deepEqual(answer.structuredContent, {
+        refused: "userIntervened",
+        detail: "waiting_for_human",
+      });
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect(
+    "suppresses a reply cancelled during asynchronous reply processing while releasing its ticket",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({
+          overlay: (command) =>
+            command.op === "show" && command.phase === "resting"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+              : Effect.void,
+        });
+        yield* h.push(active());
+        yield* h.send(call(7, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* h.nextToDriver;
+        yield* h.nextReservation;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 7,
+            result: { content: [{ type: "text", text: "clicked" }] },
+          }),
+        );
+        yield* Deferred.await(entered);
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: 7 },
+          }),
+        );
+        yield* h.nextToDriver;
+        yield* Deferred.succeed(gate, undefined);
+        assert.equal((yield* h.nextReservation).action, "release");
+        yield* h.send(call(8, "get_guide"));
+        yield* h.nextToDriver;
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 8, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 8);
+      }),
+  );
+  it.effect("returns the holding thread without dispatching a denied mutation", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({
+        reservation: (request) =>
+          Effect.succeed(
+            request.action === "reserve"
+              ? {
+                  status: "refused",
+                  detail: "target_busy",
+                  holderThreadId: ThreadId.make("thread:holder"),
+                }
+              : { status: "released" },
+          ),
+      });
+      yield* h.push(active());
+      yield* h.send(call(1, "type_text", { pid: 42, window_id: 7, text: "hello" }));
+      yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
+      assert.equal((yield* h.nextToDriver).id, 2);
+      const result = (yield* h.nextToProvider).result as { structuredContent: object };
+      assert.deepEqual(result.structuredContent, {
+        refused: "targetRefused",
+        detail: "target_busy",
+        holderThreadId: "thread:holder",
+      });
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect("a call the server refuses to reserve leaves the agent cursor at rest", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({
+        overlay: true,
+        reservation: (request) =>
+          Effect.succeed(
+            request.action === "reserve"
+              ? { status: "refused", detail: "screen_shared" }
+              : { status: "released" },
+          ),
+      });
+      yield* h.push(active());
+      yield* h.send(
+        call(1, "click", { pid: 42, window_id: 7, x: 1, y: 1, dispatch: "foreground" }),
+      );
+      const result = (yield* h.nextToProvider).result as { structuredContent: object };
+      assert.deepInclude(result.structuredContent, { detail: "screen_shared" });
+      const draws = h.log.filter((entry) => entry.startsWith("draw "));
+      assert.include(draws.at(0), '"phase":"acting"');
+      assert.include(draws.at(-1), '"phase":"resting"');
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect(
+    "keeps cancelled execution ownership and input attribution until the terminal reply",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ humanInput: true });
+        yield* h.push(active());
+        yield* h.send(call(1, "run_script", { code: "opaque" }));
+        yield* h.nextToDriver;
+        const acquired = yield* h.nextReservation;
+        assert.equal(yield* h.agentCall, "start 1");
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: 1 },
+          }),
+        );
+        yield* h.nextToDriver;
+        assert.deepEqual(h.reservations, [acquired]);
+        assert.equal(yield* h.agentCallsQueued, 0);
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        assert.equal((yield* h.nextReservation).action, "release");
+        assert.equal(yield* h.agentCall, "end 1");
+        assert.equal(yield* h.providerQueued, 0);
+      }),
+  );
+
+  it.effect("waits for acknowledged driver cutoff before releasing outstanding executions", () =>
+    Effect.gen(function* () {
+      const cutoff = yield* Deferred.make<void>();
+      const h = yield* harness({ kill: Deferred.await(cutoff) });
+      yield* h.push(active());
+      yield* h.send(call(1, "type_text", { pid: 42, window_id: 7, text: "hello" }));
+      yield* h.nextToDriver;
+      yield* h.nextReservation;
+      yield* h.push({ state: "ended", reason: "stopped" });
+      yield* h.killed;
+      const closedEarly = h.reservations.some((request) => request.action === "close");
+      yield* Deferred.succeed(cutoff, undefined);
+      assert.equal((yield* h.nextReservation).action, "close");
+      assert.isFalse(closedEarly);
+      assert.equal((yield* h.nextToProvider).id, 1);
+    }),
+  );
+
+  it.effect("closes an idle driver generation and resumes with a different generation", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.send(call(1, "type_text", { pid: 42, window_id: 7, text: "hello" }));
+      yield* h.nextToDriver;
+      const first = yield* h.nextReservation;
+      yield* h.push({ state: "idle", controlId: CONTROL });
+      assert.equal((yield* h.nextReservation).action, "close");
+      assert.equal((yield* h.nextToProvider).id, 1);
+      yield* h.send(call(2, "type_text", { pid: 42, window_id: 7, text: "hello" }));
+      const refused = (yield* h.nextToProvider).result as { structuredContent: { detail: string } };
+      assert.equal(refused.structuredContent.detail, "control_idle");
+      yield* h.push(active());
+      yield* h.restarted;
+      yield* h.send(call(3, "type_text", { pid: 42, window_id: 7, text: "hello" }));
+      yield* h.nextToDriver;
+      assert.notEqual((yield* h.nextReservation).connectionId, first.connectionId);
+    }),
+  );
+
+  it.effect("cuts off and releases a call at expiry without another agent request", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ expiresAt: "1970-01-01T00:01:00.000Z" });
+      yield* h.push(active("1970-01-01T00:01:00.000Z"));
+      yield* h.send(call(1, "type_text", { pid: 42, window_id: 7, text: "hello" }));
+      yield* h.nextToDriver;
+      yield* h.nextReservation;
+      yield* TestClock.adjust("1 minute");
+      assert.equal((yield* h.nextReservation).action, "close");
+      assert.isTrue(yield* h.isKilled);
+    }),
+  );
+
+  it.effect("cuts off old work when idle and reuse arrive as one active update", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.send(call(1, "type_text", { pid: 42, window_id: 7, text: "hello" }));
+      yield* h.nextToDriver;
+      const first = yield* h.nextReservation;
+      yield* h.push({ ...active(), state: "active", idleEpoch: 1 });
+      assert.equal((yield* h.nextReservation).action, "close");
+      assert.equal((yield* h.nextToProvider).id, 1);
+      yield* h.restarted;
+      yield* h.send(call(2, "type_text", { pid: 42, window_id: 7, text: "new turn" }));
+      yield* h.nextToDriver;
+      assert.notEqual((yield* h.nextReservation).connectionId, first.connectionId);
+    }),
+  );
+});

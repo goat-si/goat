@@ -113,6 +113,8 @@ const fixture = Effect.fnUntraced(function* (
   >(Option.none());
   const unused = Effect.die("unused");
   const leases = ComputerUseLeases.ComputerUseLeases.of({
+    blocked: () => unused,
+    blockedTurns: unused,
     active: () => unused,
     holder: () => unused,
     channelOrigin: () => unused,
@@ -123,6 +125,7 @@ const fixture = Effect.fnUntraced(function* (
     controlState: () => unused,
     stop: () => unused,
     setTarget: () => unused,
+    callReservation: () => unused,
     humanInput: () => unused,
     agentInput: () => unused,
     stopAll: unused,

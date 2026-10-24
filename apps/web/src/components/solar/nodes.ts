@@ -17,6 +17,7 @@ export const CircleAlert = solar.dangerCircle;
 export const CircleCheck = solar.checkCircle;
 export const Code = solar.code;
 export const Copy = solar.copy;
+export const Keyboard = solar.keyboard;
 export const CornerUpRight = solar.forward;
 export const Eye = solar.eye;
 export const Folder = solar.folder;

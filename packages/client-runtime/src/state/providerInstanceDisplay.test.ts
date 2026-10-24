@@ -1,4 +1,4 @@
-import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
+import { HandoffError, ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,6 +6,7 @@ import {
   openCodexRouteSummary,
   openCodexHomeHandoff,
   codexRouteErrorMessage,
+  handoffRespondErrorMessage,
   normalizeProviderAccentColor,
   providerAccentForegroundColor,
   providerInstanceInitials,
@@ -142,6 +143,19 @@ describe("OpenCodex Home routing", () => {
   it("shows the recovery line for a server busy rejection", () => {
     expect(codexRouteErrorMessage({ code: "provider_instance_busy" })).toBe(
       "Wait for this instance's active turns to finish before changing its model route.",
+    );
+  });
+});
+
+describe("handoffRespondErrorMessage", () => {
+  it("tells a person what holds the app they tried to approve, and stays generic otherwise", () => {
+    const detail =
+      "Thread t holds com.kakao.KakaoTalk on this host until 2026-10-25T02:11:00.000Z.";
+    expect(handoffRespondErrorMessage(new HandoffError({ reason: "conflict", detail }))).toBe(
+      detail,
+    );
+    expect(handoffRespondErrorMessage(new HandoffError({ reason: "conflict" }))).toBe(
+      "Could not update this handoff. It may already be resolved or expired.",
     );
   });
 });

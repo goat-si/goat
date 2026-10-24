@@ -13,6 +13,8 @@ import {
   type AuthSessionId,
   WS_METHODS,
   type ComputerUseRefusalReason,
+  type CuaAgentBlock,
+  cuaAgentBlockLists,
   type PreviewSession,
   type PreviewSessionControl,
   type PreviewSessionControlInput,
@@ -69,6 +71,29 @@ const parseBrowserId = (id: string) => {
 };
 
 type Base = Pick<PreviewSession, "environmentId" | "host" | "platform">;
+
+/**
+ * A running turn the desktop gave no driver for want of a grant (#1399). It holds no control, so
+ * there is nothing to stop or take over; the tile says which grant a person must allow.
+ */
+export const blockedSession = (
+  base: Base,
+  threadId: ThreadId,
+  block: CuaAgentBlock,
+): PreviewSession => ({
+  id: `${DESKTOP_PREFIX}blocked:${threadId}`,
+  kind: "desktop",
+  ...base,
+  threadId,
+  target: {
+    kind: "desktop",
+    title: `Allow ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}`,
+  },
+  owner: "agent",
+  status: "permission-needed",
+  reason: "permissionsNotGranted",
+  capabilities: { controls: [], frames: false, privateMode: false, humanInput: false },
+});
 
 /** An agent's browser tab as a session; a person's own tab is not one. */
 export const browserSession = (
@@ -200,6 +225,8 @@ const make = Effect.gen(function* () {
         const session = desktopSession(base, control, state, detection);
         if (session) sessions.push(session);
       }
+      for (const { threadId, block } of yield* leases.value.blockedTurns)
+        sessions.push(blockedSession(base, threadId, block));
     }
     return { sessions };
   }).pipe(Effect.withSpan("PreviewSessions.snapshot"));

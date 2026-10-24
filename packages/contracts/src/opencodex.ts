@@ -109,6 +109,37 @@ export type OpenCodexChildBootstrapStatus = typeof OpenCodexChildBootstrapStatus
 /** `alias` null is the machine that coordinates the window: the Home, or a standalone install. */
 const UpdateAlias = Schema.NullOr(Schema.String);
 
+/**
+ * One machine's row in an `ocx sync` run. `ready` exists only in a plan. `reason` is a code:
+ * busy (Codex was not restarted, or a Child skipped), not-connected, not-permitted, unreachable,
+ * not-installed, updating, stale (the Home did not answer; the last remote catalog was kept),
+ * connection-changed, timed-out or exit-<n>.
+ */
+export const OpenCodexSyncMember = Schema.Struct({
+  alias: UpdateAlias,
+  state: Schema.Literals(["ready", "syncing", "synced", "failed", "skipped"]),
+  /** Codex is restarted to load the models; false while turns run on that machine. */
+  restartCodex: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  at: Schema.optional(Schema.Number),
+});
+export type OpenCodexSyncMember = typeof OpenCodexSyncMember.Type;
+
+/** The Home first, then each Child; an update's report names the version it followed. */
+export const OpenCodexSyncReport = Schema.Struct({
+  trigger: Schema.Literals(["plan", "manual", "update"]),
+  checkedAt: Schema.Number,
+  targetVersion: Schema.optional(Schema.String),
+  members: Schema.Array(OpenCodexSyncMember),
+});
+export type OpenCodexSyncReport = typeof OpenCodexSyncReport.Type;
+
+/** goat_hub_opencodex_sync: dryRun returns the plan without running anything. */
+export const GoatHubOpenCodexSyncInput = Schema.Struct({
+  dryRun: Schema.optional(Schema.Boolean),
+});
+export type GoatHubOpenCodexSyncInput = typeof GoatHubOpenCodexSyncInput.Type;
+
 export const OpenCodexUpdateMemberRecord = Schema.Struct({
   alias: UpdateAlias,
   phase: Schema.Literals(["installed", "probation", "accepted", "rolled-back", "rollback-failed"]),
@@ -131,5 +162,7 @@ export const OpenCodexUpdateStatus = Schema.Struct({
     Schema.Struct({ alias: UpdateAlias, version: Schema.String, targetVersion: Schema.String }),
   ),
   members: Schema.Array(OpenCodexUpdateMemberRecord),
+  /** The `ocx sync` that followed the last update window, per machine. */
+  sync: ForwardCompatibleOptional(OpenCodexSyncReport),
 });
 export type OpenCodexUpdateStatus = typeof OpenCodexUpdateStatus.Type;

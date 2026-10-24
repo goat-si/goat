@@ -56,6 +56,8 @@ const HTML_RENDER_SHORTCUT_COMMANDS: ReadonlySet<KeybindingCommand> = new Set([
   "filePicker.toggle",
   "projectSearch.toggle",
   "chat.find",
+  // Files: Find shares Cmd/Ctrl+F with chat.find; listing only one would block the other.
+  "files.find",
   "sidebar.toggle",
   "rightPanel.toggle",
   "rightPanel.toggleMaximized",

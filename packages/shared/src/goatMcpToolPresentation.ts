@@ -229,6 +229,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Wait", "Waiting", "Waited", "for origin reports"],
     "thread-wait",
   ),
+  goat_origin_resolve_binding: tool(
+    ["Resolve", "Resolving", "Resolved", "a lost remote launch"],
+    "thread-wait",
+  ),
   goat_workflow_stop: tool(
     ["Stop", "Stopping", "Requested a stop for", "a workflow"],
     "workflow-stop",
@@ -443,6 +447,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_hub_device_repair: tool(
     ["Repair", "Repairing", "Repaired", "a hub device"],
+    "environment-update",
+  ),
+  goat_hub_opencodex_sync: tool(
+    ["Sync", "Syncing", "Synced", "OpenCodex models"],
     "environment-update",
   ),
   goat_scheduler_status: tool(["Read", "Reading", "Read", "scheduler status"], "host-status"),
