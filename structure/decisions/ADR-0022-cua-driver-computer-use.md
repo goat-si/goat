@@ -50,8 +50,15 @@
     honor `GOAT_CUA_DRIVER_PATH` before downloading. Desktop servers ask the Electron main
     process for a host over the private control pipe; the Electron host itself is ported
     separately (#21696, #21697 on feat/cua-driver-desktop).
-  - **Identity.** The standalone host identifies as `si.goat.server`. The Electron host is to
-    use the app's `appUserModelId` (`si.goat.desktop` and its nightly and dev variants).
+  - **Identity.** macOS grants Accessibility and Screen Recording to the app at the top of the
+    driver's launch chain. On a Mac the desktop host runs the driver through
+    `GOAT Computer Use.app` (`<appUserModelId>.computer-use`, in `Contents/Helpers`), which
+    re-execs itself with responsibility disclaimed and spawns `cua-driver serve --embedded` as
+    its direct child, so the grants and the driver's `bundle_identity` check name the helper
+    (`apps/desktop/native/computer-use-helper`, epic #1140). A build without the helper falls
+    back to the Electron host under the app's `appUserModelId`. A standalone server on a Mac
+    reports `unavailable`: its launch chain ends at a terminal or launchd job (#1174). Elsewhere
+    the standalone host identifies as `si.goat.server`.
   - **Provider attachment.** Ported from pingdotgg/t3code#16528 at `7418a6084`: every provider
     that runs on the GOAT host gets the driver as a stdio MCP server named `cua-driver`, with no
     GOAT HTTP proxy, plus a short `<computer_use>` block that keeps input in the background. One

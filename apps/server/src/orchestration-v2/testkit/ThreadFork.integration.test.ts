@@ -9,6 +9,7 @@ import {
   type ProviderReplayTranscript,
   ThreadId,
 } from "@goat/contracts";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -76,7 +77,9 @@ function runGit(
 > {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const exitCode = yield* spawner.exitCode(ChildProcess.make("git", args, { cwd }));
+    const exitCode = yield* spawner.exitCode(
+      ChildProcess.make("git", ["-C", cwd, ...args], { cwd, env: isolatedGitEnv() }),
+    );
     if (Number(exitCode) !== 0) {
       return yield* new ThreadForkGitCommandError({
         command: `git ${args.join(" ")}`,
@@ -91,8 +94,9 @@ const makeCheckpointWorkspace = Effect.gen(function* () {
   const path = yield* Path.Path;
   const cwd = yield* fs.makeTempDirectory({ prefix: "goat-orchestrator-v2-thread-fork-" });
   yield* runGit(cwd, ["init"]);
-  yield* runGit(cwd, ["config", "user.name", "T3 Code Test"]);
-  yield* runGit(cwd, ["config", "user.email", "t3code-test@example.com"]);
+  const gitConfig = path.join(cwd, ".git", "config");
+  yield* runGit(cwd, ["config", "--file", gitConfig, "user.name", "T3 Code Test"]);
+  yield* runGit(cwd, ["config", "--file", gitConfig, "user.email", "t3code-test@example.com"]);
   yield* fs.writeFileString(path.join(cwd, "README.md"), "# thread fork\n");
   yield* runGit(cwd, ["add", "README.md"]);
   yield* runGit(cwd, ["commit", "-m", "initial"]);

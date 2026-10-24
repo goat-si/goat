@@ -1,4 +1,5 @@
 import type { AgentSurfaceEntry, CapabilityDeclaration } from "./registry.ts";
+import { NOTE_REVISION } from "./idempotencyReasons.ts";
 
 /** Note tool metadata, kept beside the registry so its file does not keep growing. */
 export const noteSurfaceEntries = {
@@ -54,6 +55,7 @@ export const noteSurfaceEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: NOTE_REVISION,
     annotations: { idempotentHint: false, openWorldHint: false },
   },
   update: {
@@ -74,6 +76,8 @@ export const noteSurfaceEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "Sets a pin or adds or removes a reference, so a repeat leaves the note the same.",
     annotations: { idempotentHint: true, openWorldHint: false },
   },
   move: {
@@ -94,6 +98,7 @@ export const noteSurfaceEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: NOTE_REVISION,
     annotations: { idempotentHint: false, openWorldHint: false },
   },
 } as const satisfies Record<string, AgentSurfaceEntry & CapabilityDeclaration>;

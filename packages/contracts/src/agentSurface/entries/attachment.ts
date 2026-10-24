@@ -34,6 +34,8 @@ export const attachmentEntries = {
       "Delete a pending attachment upload and its ownership record. If the file cannot be removed, the call fails and the caller keeps ownership, so it can discard again. Already-delivered thread attachments are never deleted.",
     guide:
       "Only the caller that prepared the upload can discard it. Discard removes the pending file and its caller ownership record; the delivered thread copy remains separate.",
+    idempotencyReason:
+      "Discard removes only the prepared caller-owned pending upload. Ownership is retained when removal fails so the caller can discard again, and removed only on success; a repeat after success fails ownership checks.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Discards the caller's own pending upload.",

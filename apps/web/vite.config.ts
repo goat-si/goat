@@ -85,7 +85,9 @@ const unitTestProject = {
     setupFiles: [
       "../../packages/shared/src/testing/longTempDir.ts",
       "../../packages/shared/src/testing/providerEnv.ts",
+      "../../packages/shared/src/testing/gitEnv.setup.ts",
     ],
+    globalSetup: ["../../packages/shared/src/testing/gitConfigGuard.ts"],
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -134,6 +136,11 @@ const browserTestProject = {
         // position starts hovered. test/browserSetup.ts parks it off the page before each test.
         resetPointer: async ({ page }) => {
           await page.mouse.move(-1, -1);
+        },
+        // test/reportMockFactoryFailure.ts: a failed vi.mock factory's cause, which the browser
+        // RPC and the default silent mode would otherwise both drop (#928).
+        reportMockFactoryFailure: (_context, message: string) => {
+          process.stderr.write(`${message}\n`);
         },
       },
     },

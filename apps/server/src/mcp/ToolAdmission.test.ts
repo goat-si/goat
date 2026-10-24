@@ -47,8 +47,9 @@ class Probe extends Context.Service<
 
 // A keyed write (project.delete: idempotency "key", settings.write) whose outcome the test picks.
 const keyed = agentSurfaceRegistry["project.delete"];
-const ProbeToolkit = Toolkit.make(
-  Tool.make(keyed.name, {
+const routed = agentSurfaceRegistry["worktree.remove"];
+const probeTool = (name: typeof keyed.name | typeof routed.name) =>
+  Tool.make(name, {
     parameters: Schema.Struct({
       projectId: Schema.String,
       force: Schema.optional(Schema.Boolean),
@@ -62,8 +63,8 @@ const ProbeToolkit = Toolkit.make(
     failure: OrchestratorMcpFailure,
     failureMode: "return",
     dependencies: [Probe],
-  }),
-);
+  });
+const ProbeToolkit = Toolkit.make(probeTool(keyed.name), probeTool(routed.name));
 
 const outcomes: Readonly<Record<string, OrchestratorMcpFailure>> = {
   pressure: new OrchestratorMcpFailure({ code: "host_pressure", message: "busy" }),
@@ -92,6 +93,7 @@ const handlers = {
         return failure === undefined ? { run } : yield* failure;
       }),
   ),
+  [routed.name]: McpToolAccess.writesWithCapability(() => Effect.succeed({ run: 1 })),
 } as unknown as McpToolAccess.Handlers<typeof ProbeToolkit.tools>;
 
 /** The calling thread's modes, which its user may change between a call and its replay. */
@@ -611,22 +613,41 @@ it.effect(
     }).pipe(Effect.provide(served("owner"))),
 );
 
-it.effect("names the host to read when a routed write's outcome is unknown", () =>
+it.effect.each([keyed, routed])(
+  "$path names a reconcile host only when host is its routing argument",
+  (entry) =>
+    Effect.gen(function* () {
+      yield* seed;
+      const sql = yield* SqlClient.SqlClient;
+      const digest = yield* argumentsDigest({ projectId: "a", host: "box" });
+      yield* sql`INSERT INTO mcp_request_reservations (environment_id, principal, path,
+        client_request_id, receipt_id, tool_name, args_digest, grant_json, state, boot_id,
+        created_at, expires_at)
+        VALUES ('environment', ${`thread:${caller}`}, ${entry.path}, 'k', 'receipt:host',
+          ${entry.name}, ${digest}, '{"runtimeMode":"full-access","interactionMode":"default","goatclaw":null,"role":null,"scopes":null,"readOnly":false}',
+          'running', 'boot:stopped', '1970-01-01T00:00:00.000Z', '1970-01-02T00:00:00.000Z')`;
+      const result = yield* callTool(entry.name, {
+        projectId: "a",
+        host: "box",
+        clientRequestId: "k",
+      });
+      expect(result).toMatchObject({ reason: "outcome_unknown" });
+      expect(result).toMatchObject({
+        message: entry.hostRoutable
+          ? expect.stringContaining("with host box")
+          : expect.not.stringContaining("with host box"),
+      });
+      expect(yield* runs).toBe(0);
+    }).pipe(Effect.provide(served("owner"))),
+);
+
+it.effect.each([keyed, routed])("$path records a host only when it routes there", (entry) =>
   Effect.gen(function* () {
     yield* seed;
+    yield* callTool(entry.name, { projectId: "a", host: "box", clientRequestId: "k" });
     const sql = yield* SqlClient.SqlClient;
-    const digest = yield* argumentsDigest({ projectId: "a", host: "box" });
-    yield* sql`INSERT INTO mcp_request_reservations (environment_id, principal, path,
-      client_request_id, receipt_id, tool_name, args_digest, grant_json, state, boot_id,
-      created_at, expires_at)
-      VALUES ('environment', ${`thread:${caller}`}, ${keyed.path}, 'k', 'receipt:routed',
-        ${keyed.name}, ${digest}, '{"runtimeMode":"full-access","interactionMode":"default","goatclaw":null,"role":null,"scopes":null,"readOnly":false}',
-        'running', 'boot:stopped', '1970-01-01T00:00:00.000Z', '1970-01-02T00:00:00.000Z')`;
-    expect(yield* direct({ projectId: "a", host: "box", clientRequestId: "k" })).toMatchObject({
-      reason: "outcome_unknown",
-      message: expect.stringContaining("with host box"),
-    });
-    expect(yield* runs).toBe(0);
+    const rows = yield* sql<{ host: string | null }>`SELECT host FROM mcp_request_reservations`;
+    expect(rows).toEqual([{ host: entry.hostRoutable ? "box" : null }]);
   }).pipe(Effect.provide(served("owner"))),
 );
 

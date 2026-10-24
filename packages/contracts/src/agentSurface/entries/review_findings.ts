@@ -1,4 +1,5 @@
 import { entry } from "../entry.ts";
+import { ORCHESTRATION_RECEIPT } from "../idempotencyReasons.ts";
 
 export const reviewFindingsEntries = {
   "review_findings.record": entry({
@@ -18,6 +19,7 @@ export const reviewFindingsEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: { title: "Record review findings", idempotentHint: true, openWorldHint: false },
   }),
   "review_findings.export": entry({

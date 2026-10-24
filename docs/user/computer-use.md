@@ -82,9 +82,10 @@ turn a permission off in **System Settings → Privacy & Security**, the setting
 shows it as off; choose **Set up** to allow it again.
 
 From another computer or the mobile app, the switch turns computer use on, but
-someone at that Mac still has to grant both permissions there. For a server run
-from a terminal or a service, grant them to the app or process that runs the
-server.
+someone at that Mac still has to grant both permissions there. A GOAT server
+started from a terminal or a service cannot use computer use on a Mac, because
+macOS would give the permissions to the terminal; open the GOAT desktop app on
+that Mac instead.
 
 ## Windows and Linux
 

@@ -56,6 +56,7 @@ import {
 } from "@goat/shared/toolActivity";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@goat/shared/model";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { codexToolOutput } from "./CodexToolOutput.ts";
 import type {
   ChatAttachment,
   OrchestrationV2AppThread,
@@ -492,24 +493,6 @@ export interface CodexDynamicToolProjection extends McpToolPresentation {
   readonly status: OrchestrationV2TurnItem["status"];
 }
 
-function codexMcpToolOutput(
-  item: Extract<CodexDynamicToolItem, { readonly type: "mcpToolCall" }>,
-): unknown | undefined {
-  const resultOutput =
-    item.result === null || item.result === undefined
-      ? undefined
-      : item.result.structuredContent !== null && item.result.structuredContent !== undefined
-        ? item.result.structuredContent
-        : item.result.content;
-
-  if (item.error === null || item.error === undefined) {
-    return resultOutput;
-  }
-  return resultOutput === undefined
-    ? { error: item.error.message }
-    : { error: item.error.message, result: resultOutput };
-}
-
 // Reading an app's resource is one MCP round trip; a server that hangs must not
 // hold the item (and the run's ingestion) open.
 const MCP_APP_CAPTURE_TIMEOUT = "20 seconds";
@@ -518,15 +501,6 @@ function codexMcpAppResourceUri(item: CodexDynamicToolItem): string | undefined 
   if (item.type !== "mcpToolCall") return undefined;
   const uri = item.mcpAppUi?.resourceUri ?? item.mcpAppResourceUri ?? item.appContext?.resourceUri;
   return typeof uri === "string" && uri.startsWith(MCP_APP_RESOURCE_SCHEME) ? uri : undefined;
-}
-
-function codexDynamicToolOutput(
-  item: Extract<CodexDynamicToolItem, { readonly type: "dynamicToolCall" }>,
-): unknown | undefined {
-  if (item.contentItems !== null && item.contentItems !== undefined) {
-    return item.contentItems;
-  }
-  return item.success === false ? { success: false } : undefined;
 }
 
 type CodexImageGenerationItem = Extract<
@@ -558,8 +532,7 @@ function codexImageGenerationProjection(
 const projectCodexDynamicToolItem = Effect.fn("CodexAdapterV2.projectDynamicToolItem")(function* (
   item: CodexDynamicToolItem,
 ): Effect.fn.Return<CodexDynamicToolProjection, never, Crypto.Crypto> {
-  const output =
-    item.type === "mcpToolCall" ? codexMcpToolOutput(item) : codexDynamicToolOutput(item);
+  const output = codexToolOutput(item);
   const toolName =
     item.type === "mcpToolCall"
       ? `${item.server}.${item.tool}`

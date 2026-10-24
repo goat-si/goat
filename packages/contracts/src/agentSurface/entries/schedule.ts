@@ -1,4 +1,5 @@
 import { entry } from "../entry.ts";
+import { ORCHESTRATION_RECEIPT } from "../idempotencyReasons.ts";
 
 export const scheduleEntries = {
   "schedule.create": entry({
@@ -17,6 +18,7 @@ export const scheduleEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["secret"],
+    idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Schedule a recurring task",
       idempotentHint: false,
@@ -74,6 +76,8 @@ export const scheduleEntries = {
     description:
       "Permanently delete a scheduled task and prevent future scheduled runs. Already dispatched provider work continues. To pause the schedule instead, use goat_schedule_update with enabled=false.",
     guide: "Pass scheduledTaskId from goat_schedule_list.",
+    idempotencyReason:
+      "ScheduledTaskService.delete removes the row and webhook records by scheduledTaskId; OrchestratorMcpService refuses a missing task on repeat, so it cannot delete another schedule or stop dispatched work.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,

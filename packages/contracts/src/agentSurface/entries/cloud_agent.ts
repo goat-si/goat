@@ -29,15 +29,17 @@ export const cloudAgentEntries = {
     toolkit: "provider",
     summary: "Launch a cloud agent on a credential holder",
     description:
-      "Start a Claude Cloud, Cursor Cloud, or Devin Cloud run in a new thread on the environment holding that login. Cloud runs bill the provider account; launch only when the user asked. Each call creates another thread: after a lost response, check goat_thread_list with the holder as host before retrying. Claude Cloud uses the holder's project folder; the others use a pushed branch.",
+      "Start a cloud agent on a credential holder; bills that account, so launch only when asked. Retry identical arguments with the same clientRequestId. After approval use a new key with handoffId or decisionId. If outcome is unknown, read thread.list with holder as host, or allHosts:true for auto placement; check unavailableHosts before concluding it did not start.",
     guide:
-      "An explicit holder wins; otherwise a configured hub wins, then a ready current holder with the fewest active cloud runs, preferring this environment on a tie. An unusable hub fails rather than switching accounts. The holder needs an existing project matching repo. Claude Cloud uses that project’s checked-out folder, including local changes; branch cannot select a different checkout. Cursor Cloud and Devin Cloud use the selected published branch, or the project’s current branch when omitted. Credentials remain on the holder, so no local sign-in is needed for a remote launch. The result identifies the holder and thread; goat_thread_status follows a remote thread when given its host, while goat_cloud_agent_run_list lists runs on the environment where it executes. dryRun selects the holder without launching. Cloud runs bill the provider account; launch only at the user’s request. With goatclaw enabled, cloud.launch is required and remote holder launches are currently refused. A launch not already admitted as human-started asks for approval: a handoff inside a thread, or a bound decision outside it. After approval, repeat the same launch with handoffId or decisionId. Approval is consumed once. Needs a full-access caller.",
+      "After an unknown outcome, reconcile with thread.list using the explicit holder as host (omit host for local). With automatic placement use allHosts:true and allProjects:true, and inspect unavailableHosts and truncated before concluding no launch happened; an incomplete search cannot establish absence. An explicit holder wins; otherwise a configured hub wins, then a ready current holder with the fewest active cloud runs, preferring this environment on a tie. An unusable hub fails rather than switching accounts. The holder needs an existing project matching repo. Claude Cloud uses that project’s checked-out folder, including local changes; branch cannot select a different checkout. Cursor Cloud and Devin Cloud use the selected published branch, or the project’s current branch when omitted. Credentials remain on the holder, so no local sign-in is needed for a remote launch. The result identifies the holder and thread; goat_thread_status follows a remote thread when given its host, while goat_cloud_agent_run_list lists runs on the environment where it executes. dryRun selects the holder without launching. Cloud runs bill the provider account; launch only at the user’s request. With goatclaw enabled, cloud.launch is required and remote holder launches are currently refused. A launch not already admitted as human-started asks for approval: a handoff inside a thread, or a bound decision outside it. After approval, repeat the same launch with handoffId or decisionId. Approval is consumed once. Needs a full-access caller.",
     effect: "write",
     capability: "cloud.launch",
     hostRoutable: false,
     requires: "either",
     dryRun: "supported",
     humanSteps: ["approval"],
+    idempotency: "key",
+    reconcile: "thread.list",
     annotations: { title: "Launch a cloud agent", idempotentHint: false, openWorldHint: true },
   }),
   "cloud_agent.run_register": entry({
@@ -56,6 +58,8 @@ export const cloudAgentEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "CloudAgentService.register serializes registrations and reuses the existing provider plus external run id on the selected holder; remote registration uses that holder's same deduplication.",
     annotations: { title: "Register a cloud run", idempotentHint: true, openWorldHint: true },
   }),
   "cloud_agent.run_list": entry({
@@ -90,6 +94,8 @@ export const cloudAgentEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "CloudAgentService.forget deletes only the specified registered thread; a missing run returns forgotten:false and the provider run is never cancelled.",
     annotations: { title: "Forget a cloud run", idempotentHint: true, openWorldHint: false },
   }),
 } as const;
