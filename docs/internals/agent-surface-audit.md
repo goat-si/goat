@@ -17,9 +17,9 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | Mutating tools whose clientRequestId GOAT deduplicates | 35               |
 | Input parameters with a description                    | 162 of 760 (21%) |
 | Tool descriptions with an example                      | 3 of 199         |
-| CLI commands, listed / unlisted                        | 58 / 19          |
-| CLI commands with usage examples                       | 0 of 77          |
-| Listed CLI leaf commands with --json                   | 11 of 45         |
+| CLI commands, listed / unlisted                        | 60 / 19          |
+| CLI commands with usage examples                       | 0 of 79          |
+| Listed CLI leaf commands with --json                   | 11 of 46         |
 
 | Toolkit                | Tools | Mutating | clientRequestId | Paginated | failureMode   | Error tags | Source                                                     |
 | ---------------------- | ----- | -------- | --------------- | --------- | ------------- | ---------- | ---------------------------------------------------------- |
@@ -191,10 +191,10 @@ There is no single handoff primitive. Each case has its own tool, error code, or
 
 ## CLI
 
-The CLI operates a server; it is not an agent interface. Its 58 listed commands cover serving, auth tokens, pairing, the background service, updates, themes, traces, triage, and T3 Connect. Nothing lists, reads, or drives threads or tasks, and projects only have `goat project add`, `remove`, and `rename`. The one generic bridge, `goat acp-mcp-call`, is unlisted and its arguments are undescribed (apps/server/src/cli/acpMcpBridge.ts).
+The CLI operates a server; it is not an agent interface. Its 60 listed commands cover serving, auth tokens, pairing, the background service, updates, themes, traces, triage, and T3 Connect. Nothing lists, reads, or drives threads or tasks, and projects only have `goat project add`, `remove`, and `rename`. The one generic bridge, `goat acp-mcp-call`, is unlisted and its arguments are undescribed (apps/server/src/cli/acpMcpBridge.ts).
 
-- 0 of 77 commands define usage examples, so `--help` never shows a worked call.
-- 11 of 45 listed leaf commands offer `--json`: `goat auth pairing create`, `goat auth pairing list`, `goat auth session issue`, `goat auth session list`, `goat auth client create`, `goat auth client list`, `goat provider diagnose`, `goat thread list`, `goat thread start`, `goat thread send`, `goat thread show`.
+- 0 of 79 commands define usage examples, so `--help` never shows a worked call.
+- 11 of 46 listed leaf commands offer `--json`: `goat auth pairing create`, `goat auth pairing list`, `goat auth session issue`, `goat auth session list`, `goat auth client create`, `goat auth client list`, `goat provider diagnose`, `goat thread list`, `goat thread start`, `goat thread send`, `goat thread show`.
 - 20 commands have no description, all of them unlisted internals. Undescribed parameters: `goat acp-mcp-call arguments`, `goat call arguments`, `goat describe arguments`, `goat imessage enable --allow`, `goat imessage enable --own`, `goat imessage enable --full-access`, and 50 more.
 - `goat auth client revoke` reuses the session revoke command under a second parent, so its help reads "Revoke an active session." (apps/server/src/cli/auth.ts).
 - Server flags such as `--dev-url` repeat on subcommands that start no server, such as `goat auth pairing create`.
@@ -239,7 +239,7 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 8. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 9. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.
 10. **Give the CLI an agent face.** Add listed `goat tool list` and `goat tool call <name> --json` generated from the same registry, so shells and CI reach every MCP capability through one documented grammar. Today only the unlisted `acp-mcp-call` exists.
-11. **`--json` on every listed leaf command.** Only 11 of 45 offer it; agents parse human tables otherwise.
+11. **`--json` on every listed leaf command.** Only 11 of 46 offer it; agents parse human tables otherwise.
 12. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 3 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
 13. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_attachment_pending_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
 14. **Move routing policy out of tool descriptions.** The longest description is 399 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
