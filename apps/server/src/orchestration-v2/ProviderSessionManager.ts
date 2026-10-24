@@ -57,7 +57,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
-import { withTurnAgentAccess } from "./TurnCapabilities.ts";
+import { preparedTurnCapabilities, withTurnAgentAccess } from "./TurnCapabilities.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
@@ -667,7 +667,11 @@ export const layerWithOptions = (
                         ...(input.interactionMode === undefined
                           ? {}
                           : { interactionMode: input.interactionMode }),
-                        ...(input.turnCapabilities && { turnCapabilities: input.turnCapabilities }),
+                        ...preparedTurnCapabilities(
+                          reusePreparedInput === true ? "internal" : "open",
+                          admitted.turnCapabilities,
+                          input.turnCapabilities,
+                        ),
                         readOnly: admitted.readOnly === true || input.readOnly === true,
                       }
                     : { ...input, readOnly: input.readOnly === true };
