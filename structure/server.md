@@ -205,11 +205,10 @@ Anything missing from the list becomes an unavailable snapshot.
 | `acpRegistry` | `packages/provider-acp-registry/src/server/driver.ts`   |
 | `devinCloud`  | `packages/provider-devin-cloud/src/server/driver.ts`    |
 
-`BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2` in
-`apps/server/src/orchestration-v2/builtInProviderAdapterDrivers.ts` lists the v2 turn adapters for
-codex, claude, cursor, opencode, grok, pi, and `acpRegistry`. Antigravity and Muse attach their v2
-adapters on the driver: `makeAntigravityAdapterV2` inside `AntigravityDriver.ts`, and
-`makeMuseAdapterV2` inside `packages/provider-muse/src/server/driver.ts`.
+Every driver in this table attaches its own v2 turn adapter to the provider instance it creates,
+for example `createCodexAdapterV2` inside `CodexDriver.ts`, `makeAntigravityAdapterV2` inside
+`AntigravityDriver.ts`, and `makeMuseAdapterV2` inside `packages/provider-muse/src/server/driver.ts`.
+`ProviderAdapterRegistryV2` reads that adapter from the instance.
 
 `packages/provider-core` holds the driver and adapter-driver interfaces those packages implement.
 `packages/provider-acp` is the ACP client stack the ACP drivers sit on. Shared provider behavior
