@@ -25,6 +25,8 @@ import { overlayChannel } from "./overlayChannel.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
+/** A window report waits this long at most; the call it rides on goes ahead either way. */
+const TARGET_REPORT_TIMEOUT_MS = 2_000;
 const decodeX11Display = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({ DISPLAY: Schema.String, XAUTHORITY: Schema.optionalKey(Schema.String) }),
@@ -46,6 +48,25 @@ async function* responseLines(response: Response): AsyncGenerator<string> {
       yield buffer.slice(0, newline);
       buffer = buffer.slice(newline + 1);
     }
+  }
+}
+
+/** Tells the lease route which window the control acts on; true when the server took it. */
+async function reportTarget(
+  url: string,
+  authorization: string,
+  body: { readonly controlId: string; readonly pid: number; readonly windowId: number },
+): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TARGET_REPORT_TIMEOUT_MS),
+    });
+    return response.status === 204;
+  } catch {
+    return false;
   }
 }
 
@@ -95,6 +116,14 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         () => undefined,
       ).pipe(Stream.catchCause(() => Stream.empty)),
       output: (line) => Effect.sync(() => void process.stdout.write(line + "\n")),
+      onTarget: (target) =>
+        Effect.promise(() =>
+          reportTarget(url, authorization, {
+            controlId,
+            pid: target.pid,
+            windowId: target.windowId,
+          }),
+        ),
       leaseUpdates: leaseUpdateLines(
         Stream.fromAsyncIterable(
           (async function* () {
