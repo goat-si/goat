@@ -2,16 +2,22 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import { onTestFinished } from "vite-plus/test";
 
 import { killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 
 const platform = HostProcess.Platform.defaultValue();
 
-// A shell and its own child both hold the pipe: it closes only when neither is left.
-const pairLike = () =>
-  spawnDriverProcess(platform, "/bin/sh", ["-c", "sleep 600 & echo started; wait"], {
+// A shell and its own child both hold the pipe: it closes only when neither is left. The child
+// ends on its own within a minute, so even a test runner killed mid-test leaves nothing behind.
+const pairLike = () => {
+  const child = spawnDriverProcess(platform, "/bin/sh", ["-c", "sleep 60 & echo started; wait"], {
     PATH: "/bin:/usr/bin",
   });
+  // A failed or timed-out test still ends its group; a no-op once the group is gone.
+  onTestFinished(() => killDriverGroup(platform, child, "SIGKILL"));
+  return child;
+};
 // Ready once the shell has started its own child, so there is a grandchild to end.
 const started = (child: ReturnType<typeof pairLike>) =>
   Effect.promise(() => new Promise<void>((resolve) => child.stdout.once("data", () => resolve())));
@@ -43,13 +49,15 @@ describe.skipIf(platform === "win32")("lease proxy driver processes", () => {
         // group was signalled, and TERM, posted first, runs first.
         const script =
           "trap 'echo group; exit' TERM; trap 'echo direct; exit' USR1; echo $$; " +
-          "while :; do sleep 1 & wait $!; done";
+          // Bounded, like pairLike's child: at most a minute even if nothing ends it.
+          "i=0; while [ $i -lt 60 ]; do i=$((i+1)); sleep 1 & wait $!; done";
         const leaderOnly = spawnDriverProcess(
           platform,
           "/bin/sh",
           ["-c", '/bin/sh -c "$GRANDCHILD" & wait'],
           { PATH: "/bin:/usr/bin", GRANDCHILD: script },
         );
+        onTestFinished(() => killDriverGroup(platform, leaderOnly, "SIGKILL"));
         let output = "";
         leaderOnly.stdout.on("data", (chunk: Buffer) => (output += String(chunk)));
         const grandchild = yield* Effect.promise(
@@ -60,6 +68,15 @@ describe.skipIf(platform === "win32")("lease proxy driver processes", () => {
               ),
             ),
         );
+        // The leader is reaped below, so its group can no longer be signalled; a failed test ends
+        // the grandchild by the PID it reported itself.
+        onTestFinished(() => {
+          try {
+            process.kill(grandchild, "SIGKILL");
+          } catch {
+            // Already gone.
+          }
+        });
         const exited = Effect.promise(
           () => new Promise<void>((resolve) => leaderOnly.once("exit", () => resolve())),
         );
