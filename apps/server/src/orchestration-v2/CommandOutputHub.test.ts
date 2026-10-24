@@ -229,6 +229,33 @@ layer("CommandOutputHub", (it) => {
       ),
   );
 
+  it.effect("a live viewer never sees the GOAT MCP token an env dump prints", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hub = yield* CommandOutputHub.CommandOutputHub;
+        const threadId = yield* seedThread;
+        yield* writeCommandItem(threadId, { status: "running" });
+        const secret = "SyntheticMcpTokenNotARealCredential00000000";
+        // The chunk boundary falls inside the token.
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: "PWD=/work\nGOAT_ACP_MCP_AUTHORIZATION=Bearer testtag0Synthetic",
+        });
+        const frames = yield* subscribeFrames(threadId);
+        let client = applyFrame(EMPTY_TERMINAL_OUTPUT, yield* takeFrame(frames));
+        yield* hub.append({ threadId, itemId: ITEM_ID, chunk: secret.slice(9) + "\nTERM=xterm" });
+        yield* TestClock.adjust("1 second");
+        client = applyFrame(client, yield* takeFrame(frames));
+
+        assert.equal(
+          client.text,
+          "PWD=/work\nGOAT_ACP_MCP_AUTHORIZATION=Bearer [redacted]\nTERM=xterm",
+        );
+      }),
+    ),
+  );
+
   it.effect("a row that is not a known command fails instead of waiting forever", () =>
     Effect.gen(function* () {
       const hub = yield* CommandOutputHub.CommandOutputHub;

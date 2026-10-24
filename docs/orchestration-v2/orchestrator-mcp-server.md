@@ -46,7 +46,9 @@ Before `ProviderSessionManager` opens a new V2 provider session, it asks
 - the provider session.
 
 The credential grants `preview` and `orchestration` capabilities. The raw
-token is not persisted in orchestration state.
+token is not persisted in orchestration state. Agents see it in their shell environment, so the
+ingestor and the live command output stream redact it from tool output and messages
+([goatCredentialRedaction.ts](../../apps/server/src/orchestration-v2/goatCredentialRedaction.ts)).
 
 A thread keeps one bearer token for as long as GOAT holds its attachment to a
 provider instance. Provider processes keep the header they were given, for the

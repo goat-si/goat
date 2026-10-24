@@ -707,6 +707,61 @@ layer("ProviderEventIngestorV2", (it) => {
       }),
   );
 
+  it.effect("persists a command row's env dump without the GOAT MCP token", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const threadEvent = yield* threadCreatedEvent(now);
+      const runId = RunId.make("run:provider-event-redaction");
+      const itemId = TurnItemId.make("turn-item:provider-event-redaction");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId: threadEvent.threadId,
+      });
+      // Synthetic, shaped like an issued MCP credential.
+      const token = "testtag0" + "SyntheticMcpTokenNotARealCredential00000000";
+      const turnItem = {
+        id: itemId,
+        threadId: threadEvent.threadId,
+        runId,
+        nodeId: NodeId.make("node:provider-event-redaction"),
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "completed",
+        title: null,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        type: "command_execution",
+        input: "env",
+        output: `HOME=/home/agent\nGOAT_ACP_MCP_AUTHORIZATION=Bearer ${token}\n`,
+      } satisfies OrchestrationV2TurnItem;
+
+      yield* eventSink.write({ events: [threadEvent] });
+      yield* ingestor.ingestNormalized({
+        providerSessionId,
+        providerInstanceId: modelSelection.instanceId,
+        threadId: threadEvent.threadId,
+        runId,
+        event: { type: "turn_item.updated", driver: CODEX_DRIVER, turnItem },
+      });
+      const projection = yield* projectionStore.getThreadProjection(threadEvent.threadId);
+      const persisted = projection.turnItems.find((item) => item.id === itemId);
+
+      assert.equal(persisted?.type, "command_execution");
+      assert.equal(
+        persisted?.type === "command_execution" ? persisted.output : undefined,
+        "HOME=/home/agent\nGOAT_ACP_MCP_AUTHORIZATION=Bearer [redacted]\n",
+      );
+    }),
+  );
+
   it.effect("persists an interrupted run's inherited terminal through the live run router", () =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;

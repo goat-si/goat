@@ -39,6 +39,7 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailureTurnItem } from "@goat/provider-core/server/failure";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import { redactGoatCredentialsDeep } from "./goatCredentialRedaction.ts";
 import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
 import { boundFileChangeForStorage } from "./WireProjection.ts";
 import { withFileChangeLineCounts } from "./fileChangeLineCounts.ts";
@@ -644,7 +645,7 @@ export const layer: Layer.Layer<
                 yield* makeDomainEvent(input, {
                   type: "message.updated",
                   threadId: input.event.message.threadId,
-                  payload: input.event.message,
+                  payload: redactGoatCredentialsDeep(input.event.message),
                   runId: input.event.message.runId,
                   nodeId: input.event.message.nodeId,
                 }),
@@ -656,7 +657,9 @@ export const layer: Layer.Layer<
                   threadId: input.event.turnItem.threadId,
                   payload: boundFileChangeForStorage(
                     withFileChangeLineCounts(
-                      stripUnservedToolOutputImageBytes(withCommandActions(input.event.turnItem)),
+                      stripUnservedToolOutputImageBytes(
+                        withCommandActions(redactGoatCredentialsDeep(input.event.turnItem)),
+                      ),
                     ),
                   ),
                   runId: input.event.turnItem.runId,
