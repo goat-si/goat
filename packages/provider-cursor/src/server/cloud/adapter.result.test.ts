@@ -31,6 +31,9 @@ describe("Cursor Cloud failed run", () => {
     ["Authentication: required", ACCESS],
     ["Permission denied for repository fixture/repo", ACCESS],
     ["The agent stopped because of an unexpected error.", UNEXPECTED],
+    // Transport failures that only share a word with account problems.
+    ["WebSocket upgrade failed: 502 Bad Gateway", UNEXPECTED],
+    ["Could not access the repository host: ETIMEDOUT", UNEXPECTED],
     ["   ", UNEXPECTED],
   ])("says what to fix for %j", (message, expected) => {
     expect(resultTask(task, failed({ message })).error).toBe(expected);
