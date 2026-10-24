@@ -7,13 +7,13 @@ export const decisionEntries = {
     name: "goat_decision_list",
     toolkit: "decision",
     summary:
-      "List durable decisions and read-only projections of pending GOAT questions in this environment.",
+      "List local decisions and decisions from threads this environment launched on other hosts.",
     description:
-      "List durable decisions and projections of pending GOAT questions in this environment. The read also expires overdue durable decisions.",
+      "List local and launched remote decisions, with unavailableHosts and truncated for partial results. Use host for one destination, or hosts to add discovery targets. Reads expire overdue local decisions.",
     guide:
-      "Projected approvals require a person in a GOAT client or an outside MCP client token holding orchestration:approve. Other humanRequired questions require a person in an authenticated GOAT client. Listing a projection does not answer it.",
+      "Discovery matches direct launch lineage across this environment, without grandchildren. Remote reach requires live read and operate grants plus threads.remote for each host. Foreign filters and forwarded ceilings are transport-only and never fan out; older hosts require an update. Listing does not answer an item.",
     effect: "read",
-    hostRoutable: false,
+    hostRoutable: true,
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
@@ -26,10 +26,11 @@ export const decisionEntries = {
     toolkit: "decision",
     summary: "Read one durable decision or projected pending question by id.",
     description:
-      "Read one durable decision or projected pending question by id. The read also expires overdue durable decisions.",
-    guide: "Pass the decision or projected question id.",
+      "Read one durable decision or projected pending question by id, optionally on host. The origin rechecks remote authority and the destination applies its transport grant intersected with the forwarded ceiling.",
+    guide:
+      "Pass the item id and its from.host when remote. Its from.environmentId identifies the destination; ids alone are not globally unique.",
     effect: "read",
-    hostRoutable: false,
+    hostRoutable: true,
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
@@ -64,14 +65,14 @@ export const decisionEntries = {
     summary:
       "Answer an open decision using optionId, or a projected pending question using answers or decision plus reason.",
     description:
-      "Answer an open durable decision or projected pending question. The answer is recorded first; notifying the requesting thread can lag and is retried, and a request from an outside client has no thread to notify.",
+      "Answer an open decision here or on host under independently checked origin and destination authority. The asking host records the answer and retries delivery to its own requesting thread.",
     guide:
-      "Use optionId for a durable decision. For a projected pending question, send answers or decision plus reason; omit optionId.\n\nMeet the effective permission profile requirements named by the item, except for provider approvals. A provider approval requires a person in a GOAT client or an MCP client token holding orchestration:approve under its own runtime ceiling, as with goat_pending_request_respond. Other humanRequired items require a person in an authenticated GOAT client.",
+      "Pass the row's from.host for a remote decision. Use optionId for a durable decision. For a projected pending question, send answers or decision plus reason; omit optionId.\n\nMeet the effective permission profile requirements named by the item, except for provider approvals. A provider approval requires a person in a GOAT client or an MCP client token holding orchestration:approve under its own runtime ceiling, as with goat_pending_request_respond. Other humanRequired items require a person in an authenticated GOAT client and are refused over transport. Remote approvals require an approve-capable SSH session; linked hosts refuse them. Agents must dominate a locally known required profile, with their effective ceiling forwarded to the destination.",
     effect: "destructive",
     capability: "none",
     capabilityReason:
       "Checked against the profile the decision names; approvals need a person or an approve-scoped client.",
-    hostRoutable: false,
+    hostRoutable: true,
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
