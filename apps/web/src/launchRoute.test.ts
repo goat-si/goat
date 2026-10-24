@@ -45,7 +45,7 @@ describe("openLaunchRoute", () => {
 });
 
 describe("isLaunchLanding", () => {
-  it("lets startup continue to setup or a directory's thread from where a launch lands", () => {
+  it("lets first-run setup open from where a launch lands", () => {
     expect(isLaunchLanding(launchAt("/").location.pathname)).toBe(true);
     expect(isLaunchLanding(launchAt("/", { hostedStatic: true }).location.pathname)).toBe(true);
   });

@@ -20,8 +20,7 @@ export function openLaunchRoute(
 
 /**
  * Where a launch lands when nothing more specific was asked for: Fleet, or "/" on the hosted
- * app. Only here may startup move on by itself, to first-run setup or to the thread `goat` opened
- * for its directory; a page opened by a direct link stays put.
+ * app. First-run setup may take over only here; a page opened by a direct link stays put.
  */
 export function isLaunchLanding(pathname: string): boolean {
   return pathname === LAUNCH_PATH || pathname === "/";
