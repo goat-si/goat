@@ -25,6 +25,7 @@ import {
   type RunRow,
   type Task,
   type TimelineItem,
+  agentListedNames,
   answerInstruction,
   extractAnswer,
   listingMatches,
@@ -48,7 +49,7 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface Client {
   readonly call: (name: string, args: JsonObject) => Promise<JsonObject>;
-  /** Tool names tools/list gives this client, under the server's current listing. */
+  /** Tool names agents GOAT runs are listed under the server's current listing. */
   readonly list: () => Promise<ReadonlyArray<string>>;
 }
 
@@ -106,8 +107,7 @@ const connect = async (endpoint: string, authorization: string): Promise<Client>
         (result["structuredContent"] as JsonObject | undefined) ?? (JSON.parse(text) as JsonObject)
       );
     },
-    list: async () =>
-      asObjects((await rpc("tools/list", {}))["tools"]).map((tool) => String(tool["name"])),
+    list: async () => agentListedNames(await rpc("tools/list", {})),
   };
 };
 
@@ -503,8 +503,8 @@ const stopThreads = async (
 
 /**
  * Puts the server on the arm's listing when the campaign names its settings file, then reads
- * tools/list as this client sees it. The server reloads the file on change, so the listing is
- * read again until it matches or a few seconds pass.
+ * from tools/list the listing agents get. The server reloads the file on change, so the listing
+ * is read again until it matches or a few seconds pass.
  */
 /**
  * Resident tools the campaign's core arms name, and which of them the runner's own client cannot

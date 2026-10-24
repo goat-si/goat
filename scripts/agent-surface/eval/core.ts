@@ -5,6 +5,11 @@
  * verdict are tested apart from the runs they judge.
  */
 
+import {
+  AGENT_TOOL_LISTING_META_KEY,
+  ALWAYS_LOAD_META_KEY,
+} from "@goat/contracts/agentSurface/listing";
+
 export type Json =
   | null
   | boolean
@@ -526,7 +531,7 @@ export const sumMetrics = (runs: ReadonlyArray<RunMetrics>): RunMetrics => ({
 });
 
 /**
- * Whether tools/list, as the runner's own client saw it, is the listing an arm states. A core
+ * Whether the listing agents get, as the runner read it, is the listing an arm states. A core
  * listing is exactly the core tools and the arm's residents; a full one holds every tool any
  * core arm of the campaign lists and more, so no core variant passes for it.
  */
@@ -544,6 +549,23 @@ export const listingMatches = (
   return listing.mode === "core"
     ? holdsExpected && seen.size === expected.size
     : holdsExpected && seen.size > expected.size;
+};
+
+/**
+ * The tool names agents GOAT runs are listed, read from a tools/list result the runner's client
+ * got. Clients keep the full listing (D22), and the result names the agents' listing in _meta;
+ * their core listing is the tools carrying the always-load marker. A server without that key
+ * lists its clients what it lists its agents.
+ */
+export const agentListedNames = (result: JsonObject): ReadonlyArray<string> => {
+  const tools = (Array.isArray(result["tools"]) ? result["tools"] : []).filter(isObject);
+  const meta = result["_meta"];
+  const core = isObject(meta) && meta[AGENT_TOOL_LISTING_META_KEY] === "core";
+  const marked = (tool: Record<string, unknown>) => {
+    const toolMeta = tool["_meta"];
+    return isObject(toolMeta) && toolMeta[ALWAYS_LOAD_META_KEY] === true;
+  };
+  return (core ? tools.filter(marked) : tools).map((tool) => String(tool["name"]));
 };
 
 /**

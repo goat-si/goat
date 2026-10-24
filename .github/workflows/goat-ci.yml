@@ -188,12 +188,18 @@ jobs:
         if: matrix.task == 'check'
         run: vp check
 
-      # Every pull request selects check, so a change that moves the agent surface registries or a
-      # line the audit page cites fails here until `pnpm agent-surface:audit` rewrites the page.
+      # Every pull request selects check, so a change to the agent surface registries, or to a file
+      # or symbol the audit page cites, fails here until `pnpm agent-surface:audit` rewrites it.
       # It reads source text and loads the registries, a few seconds.
       - name: Check agent surface audit
         if: matrix.task == 'check'
         run: vp run agent-surface:check
+
+      # What GOAT injects into each harness's context must stay within the context diet's budget
+      # under the default tool listing; it builds the /mcp catalog in process, a few seconds.
+      - name: Check agent context budget
+        if: matrix.task == 'check'
+        run: vp run agent-surface:context-budget-check
 
       # `check:changed` runs the same knip check before every push, so an unused file, export or
       # dependency that reaches dev fails it on every branch, whatever that branch changed.

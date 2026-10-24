@@ -155,6 +155,18 @@ redeliver from the sender, such as GitHub's **Recent Deliveries**, once it is
 back. Holding requests while the environment is offline is unavailable until
 GOAT Connect arrives.
 
+## GOAT tools agents see
+
+GOAT lists two tools to each agent it runs: `goat_describe`, which finds GOAT's capabilities, and
+`goat_call`, which runs one by its path, such as `thread.read`. Every other capability stays
+available through them, so an agent starts with a small context instead of a long tool list.
+
+If an agent on one of your providers handles this badly, list every tool again: in
+**Settings → Integrations → Agent tools**, set **GOAT tools agents see** to **All tools**. The
+setting applies to the whole environment. Running agents are told that the list changed; Pi picks
+the change up in its next session. Set it back to **Core**, or reset it, to return to the two
+tools. Outside agents that connect to GOAT's MCP URL always see every tool.
+
 ## Defaults and inheritance
 
 General contains the model and workspace for new threads. Integrations controls agent browser

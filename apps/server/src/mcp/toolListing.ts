@@ -1,4 +1,5 @@
 import {
+  AGENT_TOOL_LISTING_META_KEY,
   ALWAYS_LOAD_META_KEY,
   type AgentToolListing,
   DEFAULT_AGENT_TOOL_LISTING,
@@ -26,6 +27,9 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
  * The tools a caller is listed: none it cannot use, and in the core listing only entries the
  * registry lists as core. Core entries carry the always-load marker in both listings, so harnesses
  * that defer tools (Claude Code, Pi) keep them resident. Unlisted tools stay callable by name.
+ * The core listing is for the agents GOAT runs (thread callers). A client keeps the full listing:
+ * another GOAT host's dispatch reads a remote's tools/list to learn which launch arguments and
+ * memory tools it supports, and hosts on older versions cannot learn that any other way.
  */
 const listedTools = (
   tools: ReadonlyArray<unknown>,
@@ -39,13 +43,16 @@ const listedTools = (
     if (entry === undefined) return [tool];
     if (!availability(entry, scope, true, profile).now) return [];
     const core = "listing" in entry && entry.listing === "core";
-    if (listing === "core" && !core) return [];
+    if (listing === "core" && !core && scope.thread !== undefined) return [];
     if (!core) return [tool];
     const meta = isRecord(tool._meta) ? tool._meta : {};
     return [{ ...tool, _meta: { ...meta, [ALWAYS_LOAD_META_KEY]: true } }];
   });
 
-/** A JSON-RPC message with its tools/list result filtered; any other message unchanged. */
+/**
+ * A JSON-RPC message with its tools/list result filtered and naming the listing agents get; any
+ * other message unchanged.
+ */
 const filterMessage = (
   text: string,
   scope: McpInvocationContext.McpInvocationScope,
@@ -55,11 +62,13 @@ const filterMessage = (
   const message = Option.getOrUndefined(decodeJson(text));
   if (!isRecord(message) || !isRecord(message.result) || !Array.isArray(message.result.tools))
     return text;
+  const meta = isRecord(message.result._meta) ? message.result._meta : {};
   return encodeJson({
     ...message,
     result: {
       ...message.result,
       tools: listedTools(message.result.tools, scope, listing, profile),
+      _meta: { ...meta, [AGENT_TOOL_LISTING_META_KEY]: listing },
     },
   });
 };

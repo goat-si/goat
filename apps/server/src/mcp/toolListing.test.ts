@@ -1,7 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
+import {
+  AGENT_TOOL_LISTING_META_KEY,
+  ALWAYS_LOAD_META_KEY,
+} from "@goat/contracts/agentSurface/listing";
 import { canonicalToolName, listedToolName } from "@goat/contracts/agentSurface/resolve";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
 import { NodeHttpServer } from "@effect/platform-node";
@@ -63,14 +66,25 @@ const refusalMessage = (result: { readonly content: ReadonlyArray<unknown> }) =>
 /** What a thread's model sees of the core listing: name, description and input schema. */
 const CORE_LISTING_BUDGET_BYTES = 6 * 1024;
 
-it.effect("lists only core tools in the core listing, each caller only those it can use", () =>
-  Effect.gen(function* () {
-    const http = yield* serveCatalogOverHttp(callers, "core");
-    expect(names(yield* http.listTools("thread"))).toEqual(
-      listed((entry) => "listing" in entry && entry.listing === "core"),
-    );
-    expect(names(yield* http.listTools("client"))).toEqual(["goat_call", "goat_describe"]);
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+it.effect(
+  "lists threads only the core tools, and keeps for clients the launch arguments another host's dispatch reads",
+  () =>
+    Effect.gen(function* () {
+      const http = yield* serveCatalogOverHttp(callers, "core");
+      expect(names(yield* http.listTools("thread"))).toEqual(
+        listed((entry) => "listing" in entry && entry.listing === "core"),
+      );
+      const launch = (yield* http.listTools("client")).find(
+        (tool) => tool.name === "goat_thread_launch",
+      );
+      const properties = (launch?.inputSchema as { readonly properties?: object } | undefined)
+        ?.properties;
+      expect(Object.keys(properties ?? {})).toEqual(
+        expect.arrayContaining(["memoryGrantCeiling", "report", "standingInstructions"]),
+      );
+      // A client that keeps the full listing still learns which listing agents get.
+      expect((yield* http.listResultMeta("client"))?.[AGENT_TOOL_LISTING_META_KEY]).toBe("core");
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect(
@@ -226,7 +240,14 @@ it.effect(
         ...DEFAULT_SERVER_SETTINGS,
         goatclaw: { ...goatclaw, enabled: !goatclaw.enabled },
       };
-      const listing = { ...policy, agentToolListing: "core" as const };
+      // The listing that differs from the shipped default, so the change is a real one.
+      const listing = {
+        ...policy,
+        agentToolListing:
+          DEFAULT_SERVER_SETTINGS.agentToolListing === "core"
+            ? ("full" as const)
+            : ("core" as const),
+      };
       yield* Queue.offerAll(changes, [unchanged, policy, listing]);
       const relisted = yield* listingChanges(Option.some(settings)).pipe(
         Stream.take(2),
