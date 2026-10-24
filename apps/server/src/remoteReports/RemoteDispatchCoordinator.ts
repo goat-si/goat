@@ -57,6 +57,7 @@ import {
   frameRemoteReport,
   remoteTaskQuestionNotice,
 } from "./reportFrame.ts";
+import { storeInboxReport } from "./RemoteReportInbox.ts";
 
 export class RemoteDispatchError extends Schema.TaggedError<RemoteDispatchError>()(
   "RemoteDispatchError",
@@ -305,6 +306,7 @@ const make = Effect.gen(function* () {
         text: frameRemoteReport({
           host: r.host,
           correlationId: r.correlation_id,
+          ...(source === "agent" ? { sequence: report.sequence } : {}),
           kind: report.kind,
           summary: report.summary,
           source,
@@ -360,6 +362,7 @@ const make = Effect.gen(function* () {
               frameRemoteReport({
                 host: r.host,
                 correlationId: id,
+                sequence: report.sequence,
                 kind: report.kind,
                 summary: report.summary,
                 source: "agent",
@@ -673,6 +676,7 @@ const make = Effect.gen(function* () {
           const text = frameRemoteReport({
             host: r.host,
             correlationId: id,
+            ...(entry.source === "agent" ? { sequence: entry.report.sequence } : {}),
             kind: entry.report.kind,
             summary: entry.report.summary,
             source: entry.source,
@@ -715,14 +719,13 @@ const make = Effect.gen(function* () {
         yield* db(
           sql.withTransaction(
             Effect.gen(function* () {
-              for (const entry of inbox) {
-                if (entry.kind === "progress")
-                  yield* sql`DELETE FROM remote_report_inbox
-            WHERE origin_thread_id = ${r.origin_thread_id} AND correlation_id = ${id} AND kind = 'progress'`;
-                yield* sql`INSERT INTO remote_report_inbox
-            (origin_thread_id, correlation_id, kind, text, run_id, created_at)
-            VALUES (${r.origin_thread_id}, ${id}, ${entry.kind}, ${entry.text}, ${entry.runId}, ${at})`;
-              }
+              for (const entry of inbox)
+                yield* storeInboxReport(sql, {
+                  ...entry,
+                  originThreadId: r.origin_thread_id,
+                  correlationId: id,
+                  createdAt: at,
+                });
               const last = entries.at(-1)?.report;
               const cursor = fresh.at(-1)?.sequence ?? r.report_cursor;
               // Import every page before persisting a terminal known state.

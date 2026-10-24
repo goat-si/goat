@@ -33,6 +33,7 @@ import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import { makeSession, type MockFrame, mockCopy } from "./ServerBrowserTestFixtures.ts";
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
@@ -62,71 +63,6 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     }
   },
 }));
-
-function makeFrame() {
-  const frame = {
-    copy: "",
-    detached: false,
-    isDetached: () => frame.detached,
-    recording: Promise.withResolvers<void>(),
-  };
-  return frame;
-}
-
-const PNG_HEADER = (() => {
-  const header = Buffer.alloc(24);
-  header.write("IHDR", 12);
-  header.writeUInt32BE(1280, 16);
-  header.writeUInt32BE(800, 20);
-  return header.toString("base64");
-})();
-
-function makeSession(frame?: ReturnType<typeof makeFrame>) {
-  const events = new NodeEvents.EventEmitter();
-  return {
-    on: vi.fn((name: string, listener: () => void) => events.on(name, listener)),
-    emit: (name: string) => events.emit(name),
-    detach: vi.fn(async () => {}),
-    send: vi.fn(async (method: string, input?: unknown): Promise<Record<string, unknown>> => {
-      if (method === "Page.getNavigationHistory") return { currentIndex: 0, entries: [{}] };
-      if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { pageX: 0, pageY: 0 } };
-      if (method === "Page.captureScreenshot") {
-        // A snapshot sizes its screenshot from the PNG header; viewers get JPEG frames as-is.
-        return { data: (input as { format: string }).format === "png" ? PNG_HEADER : "ZnJhbWU=" };
-      }
-      if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
-      // Snapshots read password fields from their own isolated world in each frame.
-      if (method === "Page.createIsolatedWorld") {
-        return {
-          executionContextId:
-            (input as { worldName?: string }).worldName === "goat-preview"
-              ? 1
-              : (input as { worldName?: string }).worldName === "goat-preview-metrics"
-                ? 8
-                : 7,
-        };
-      }
-      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 1) {
-        return { result: { value: [] } };
-      }
-      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 8) {
-        return { result: { value: { ratio: 1, width: 1280, height: 800 } } };
-      }
-      if (method === "Page.addScriptToEvaluateOnNewDocument") frame?.recording.resolve();
-      if (method === "Input.dispatchKeyEvent" && (input as { commands?: unknown }).commands) {
-        if (focusedFrame) focusedFrame.copy = keyCopy || focusedFrame.copy;
-        else pageCopy = keyCopy || pageCopy;
-      }
-      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 7) {
-        const value = frame ? frame.copy : pageCopy;
-        if (frame) frame.copy = "";
-        else pageCopy = "";
-        return { result: { value } };
-      }
-      return { result: { value: "evaluated" } };
-    }),
-  };
-}
 
 function makeContext(onClose?: (context: BrowserContext) => void) {
   const events = new NodeEvents.EventEmitter();
@@ -208,9 +144,7 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
     newPage: async () => page as unknown as Page,
     grantPermissions: vi.fn(async () => {}),
     newCDPSession: async (target: unknown) => {
-      const session = makeSession(
-        target === page ? undefined : (target as ReturnType<typeof makeFrame>),
-      );
+      const session = makeSession(target === page ? undefined : (target as MockFrame));
       sessions.push(session);
       return session;
     },
@@ -227,9 +161,6 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
 const contexts: ReturnType<typeof makeContext>[] = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
-let pageCopy = "";
-let keyCopy = "";
-let focusedFrame: ReturnType<typeof makeFrame> | null = null;
 let contextFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
@@ -336,9 +267,9 @@ beforeEach(() => {
   contextGate = null;
   contextFailure = null;
   initialNavigation = null;
-  pageCopy = "";
-  keyCopy = "";
-  focusedFrame = null;
+  mockCopy.page = "";
+  mockCopy.key = "";
+  mockCopy.focusedFrame = null;
   desktopTabs.clear();
   desktopRendersNext = false;
   releasedDesktopTabs.length = 0;
@@ -1035,15 +966,34 @@ it.live("interrupts an active wait on takeover and frees the queue for human inp
   ).pipe(Effect.provide(layer)),
 );
 
-it.live("allows a wait to observe a human-driven tab without taking control", () =>
+it.live.each([
+  { reader: "another agent", session: "observing-agent" },
+  { reader: "the agent that opened it", session: scope.thread.providerSessionId },
+])("lets $reader read a human-driven tab without taking control", ({ session }) =>
   Effect.scoped(
     Effect.gen(function* () {
       const { browser, broker, tabId } = yield* ready;
       const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
       yield* viewer.input({ type: "takeControl" });
+      const reader = asSession(session);
       const page = contexts[0]!.page;
+      const snapshot = yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope: reader,
+        tabId,
+        operation: "snapshot",
+        input: {},
+      });
+      expect(snapshot.accessibilityTree).toBeTruthy();
+      page.emitConsole("human tab evidence");
+      const logs = yield* broker.invoke<PreviewAutomationLogs>({
+        scope: reader,
+        tabId,
+        operation: "logs",
+        input: {},
+      });
+      expect(logs.console.entries[0]?.text).toBe("human tab evidence");
       yield* broker.invoke({
-        scope: asSession("observing-agent"),
+        scope: reader,
         tabId,
         operation: "waitFor",
         input: { loadState: "load" },
@@ -1237,13 +1187,13 @@ it.live("only the controlling viewer's copy and cut keys reach its clipboard", (
         Queue.clear(queue).pipe(
           Effect.map((items) => items.filter((item) => item._tag === "clipboard")),
         );
-      pageCopy = "unprompted";
+      mockCopy.page = "unprompted";
       yield* viewer.input({ type: "mouse", action: "move", x: 10, y: 10 });
       yield* viewer.input({ type: "wheel", x: 10, y: 10, deltaY: 40 });
       yield* viewer.input({ type: "key", action: "down", key: "v", code: "KeyV", modifiers: 4 });
       yield* viewer.input({ type: "unknown" });
       expect(yield* clipboard(viewer.output)).toEqual([]);
-      keyCopy = "copied";
+      mockCopy.key = "copied";
       yield* viewer.input({ type: "key", action: "down", key: "c", code: "KeyC", modifiers: 4 });
       const cdp = contexts[0]!.sessions.at(-1)!;
       expect(cdp.send).toHaveBeenCalledWith(
@@ -1251,11 +1201,11 @@ it.live("only the controlling viewer's copy and cut keys reach its clipboard", (
         expect.objectContaining({ key: "c", commands: ["copy"] }),
       );
       expect(yield* clipboard(viewer.output)).toEqual([{ _tag: "clipboard", text: "copied" }]);
-      keyCopy = "cut";
+      mockCopy.key = "cut";
       yield* viewer.input({ type: "key", action: "down", key: "x", code: "KeyX", modifiers: 2 });
       expect(yield* clipboard(viewer.output)).toEqual([{ _tag: "clipboard", text: "cut" }]);
-      pageCopy = "left over";
-      keyCopy = "";
+      mockCopy.page = "left over";
+      mockCopy.key = "";
       yield* viewer.input({ type: "key", action: "down", key: "c", code: "KeyC", modifiers: 4 });
       expect(yield* clipboard(viewer.output)).toEqual([]);
       expect(yield* clipboard(watcher.output)).toEqual([]);

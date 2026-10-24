@@ -13,13 +13,15 @@ const REMOTE_DATA_NOTICE =
 export const frameRemoteReport = (input: {
   readonly host: string;
   readonly correlationId: string;
+  /** The sender's sequence, so the origin can see a gap. Omitted for a report GOAT wrote. */
+  readonly sequence?: number;
   readonly kind: RemoteReportKind;
   readonly summary: string;
   readonly source: "agent" | "runtime";
   readonly standalone?: boolean;
 }) =>
   [
-    `Report from a thread on ${input.host} [${input.correlationId}]: ${input.kind}${input.source === "runtime" ? " (observed by GOAT)" : ""}`,
+    `Report${input.sequence === undefined ? "" : ` ${input.sequence}`} from a thread on ${input.host} [${input.correlationId}]: ${input.kind}${input.source === "runtime" ? " (observed by GOAT)" : ""}`,
     ...(input.standalone === true ? [REMOTE_DATA_NOTICE] : []),
     ...input.summary
       .replace(/\r\n?/gu, "\n")
