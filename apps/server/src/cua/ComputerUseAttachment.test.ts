@@ -79,6 +79,7 @@ const fakeLeases = (input: {
     controlState: () => Effect.die("unused"),
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),
+    callReservation: () => Effect.die("unused"),
     humanInput: () => Effect.die("unused"),
     agentInput: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
