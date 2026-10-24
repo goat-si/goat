@@ -276,10 +276,11 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
                   fail("Existing cloud session could not be loaded", cause),
                 ),
               );
-            repositoryConfirmed = Relay.validateRepositorySelection(
-              reply.configOptions,
-              savedSource,
-            );
+            // Before any prompt the whole setup must hold, since a refused setup can leave the
+            // repository selected but not the requested version or platform.
+            repositoryConfirmed =
+              Relay.validateRepositorySelection(reply.configOptions, savedSource) &&
+              (ordinal !== 0 || Relay.confirmsChoices(reply.configOptions, { model, platform }));
             acceptedThread = {
               ...acceptedThread,
               cloudTask: { ...acceptedThread.cloudTask!, ...sessionMetadata(reply._meta) },

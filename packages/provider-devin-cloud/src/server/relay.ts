@@ -110,6 +110,19 @@ function confirmedSelection(
   );
 }
 
+/** The session currently holds the requested version and platform; "default" leaves Devin's own. */
+export function confirmsChoices(
+  configOptions: ReadonlyArray<Acp.SessionConfigOption> | null | undefined,
+  selection: { readonly model: string; readonly platform: string },
+): boolean {
+  return (
+    (selection.model === "default" ||
+      confirmedSelection(configOptions, "devin_version", selection.model)) &&
+    (selection.platform === "default" ||
+      confirmedSelection(configOptions, "platform", selection.platform))
+  );
+}
+
 const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   return DevinCloudRelay.of({
