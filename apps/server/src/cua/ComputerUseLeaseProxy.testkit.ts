@@ -76,6 +76,10 @@ export const harness = Effect.fn(function* (
     /** Holds the first driver's kill open until done, as a child slow to stop would. */
     readonly firstKillGate?: Deferred.Deferred<void>;
     readonly acceptHuman?: () => boolean;
+    /** Holds every report of a person's input until it is done, as a slow server would. */
+    readonly humanGate?: Deferred.Deferred<void>;
+    /** Holds every start report until it is done, as a slow server would. */
+    readonly agentInputGate?: Deferred.Deferred<void>;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -127,9 +131,20 @@ export const harness = Effect.fn(function* (
     ...(options.humanInput
       ? {
           onHumanInput: (input: { source: ComputerUseHumanInputSource; at: number }) =>
-            Queue.offer(people, input.source).pipe(Effect.as(options.acceptHuman?.() ?? true)),
+            Queue.offer(people, input.source).pipe(
+              Effect.andThen(
+                options.humanGate === undefined ? Effect.void : Deferred.await(options.humanGate),
+              ),
+              Effect.as(options.acceptHuman?.() ?? true),
+            ),
           onAgentInput: (report: { call: string; state: "start" | "end"; at: number }) =>
-            Queue.offer(agentCalls, report.state + " " + report.call),
+            Queue.offer(agentCalls, report.state + " " + report.call).pipe(
+              Effect.andThen(
+                report.state === "start" && options.agentInputGate !== undefined
+                  ? Deferred.await(options.agentInputGate)
+                  : Effect.void,
+              ),
+            ),
         }
       : {}),
     // Each update is marked taken as the proxy pulls it, and applied once the proxy has acted.
@@ -145,7 +160,9 @@ export const harness = Effect.fn(function* (
       };
       drivers.push(driver);
       yield* Queue.offer(started, driver);
-      const hid = yield* Queue.unbounded<{ source: ComputerUseHumanInputSource; at: number }>();
+      // Bounded and sliding like the CLI's (ComputerUseLeaseProxyCli.ts): events the proxy does
+      // not take in time are lost there.
+      const hid = yield* Queue.sliding<{ source: ComputerUseHumanInputSource; at: number }>(16);
       hidFeeds.push(hid);
       return {
         ...(options.humanInput ? { humanInput: Stream.fromQueue(hid) } : {}),
