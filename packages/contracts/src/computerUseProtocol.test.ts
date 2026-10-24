@@ -11,10 +11,12 @@ import {
   ComputerUseHelloReply,
   ComputerUseKey,
   ComputerUseObservation,
+  ComputerUseReadiness,
   ComputerUseRequestFrame,
   admitComputerUseReply,
   computerUseDeadlineResult,
   computerUseNextStep,
+  computerUseReplyImageProblem,
   negotiateComputerUseVersion,
   unsupportedComputerUseMethod,
   type ComputerUseActionResult as ActionResult,
@@ -196,5 +198,59 @@ describe("computer use protocol values", () => {
     };
     expect(decodes(ComputerUseHelloReply, { ...hello, maxFrameBytes: 1024 * 1024 })).toBe(true);
     expect(decodes(ComputerUseHelloReply, { ...hello, maxFrameBytes: 16 })).toBe(false);
+  });
+});
+
+describe("computer use readiness and reply images", () => {
+  const decodes = (schema: Schema.Codec<unknown, unknown>, value: unknown) =>
+    Schema.decodeUnknownExit(schema)(value)._tag === "Success";
+
+  it("reports each readiness step on its own, so an unproven step is never shown as done", () => {
+    const portalPending = {
+      grants: { accessibility: "granted", screenCapture: "pending" },
+      helper: "authenticated",
+      capture: "pending",
+      tree: "ready",
+      input: "background",
+      reasons: ["Allow screen sharing in the dialog GNOME opened."],
+      platform: { linux: { displayServer: "wayland" } },
+    };
+    expect(decodes(ComputerUseReadiness, portalPending)).toBe(true);
+    expect(decodes(ComputerUseReadiness, { ...portalPending, capture: "granted" })).toBe(false);
+    expect(
+      decodes(ComputerUseReadiness, {
+        ...portalPending,
+        grants: { accessibility: true, screenCapture: true },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts an image only beside an observation that declares that screenshot, never a private one", () => {
+    const observed = {
+      observationId: "o1",
+      lineage: "l1",
+      kind: "full",
+      reason: "first",
+      target: { pid: 1, windowId: 2, epoch: "e" },
+      complete: true,
+      privateMode: false,
+      screenshot: { mimeType: "image/png", width: 8, height: 6 },
+      elements: [],
+    } as const;
+    const png = { mimeType: "image/png", data: "iVBORw0KGgo=" };
+    expect(computerUseReplyImageProblem(observed, png)).toBeUndefined();
+    expect(computerUseReplyImageProblem(observed, undefined)).toBeUndefined();
+    expect(computerUseReplyImageProblem(observed, { ...png, mimeType: "image/jpeg" })).toMatch(
+      /image\/jpeg/,
+    );
+    const { screenshot: _screenshot, ...withoutScreenshot } = observed;
+    expect(computerUseReplyImageProblem(withoutScreenshot, png)).toBeDefined();
+    expect(computerUseReplyImageProblem(undefined, png)).toBeDefined();
+    expect(
+      computerUseReplyImageProblem(
+        { ...withoutScreenshot, privateMode: true, complete: false, reason: "incomplete" },
+        png,
+      ),
+    ).toMatch(/private/);
   });
 });
