@@ -378,6 +378,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   let helperGeneration = 0;
   let helperSeen = false;
   let lastReadiness: string | undefined;
+  /** Whether the running check reads through the helper; only then do its reads prove anything. */
+  let checkingHelper = false;
   const noteHelper = (update: (state: HelperReadinessState) => HelperReadinessState) =>
     Effect.suspend(() => {
       if (!helperSeen || closed) return Effect.void;
@@ -394,6 +396,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       lastReadiness = key;
       return publisher.publishCuaReadiness(report);
     });
+  const noteChecked = (update: (state: HelperReadinessState) => HelperReadinessState) =>
+    Effect.suspend(() => (checkingHelper ? noteHelper(update) : Effect.void));
 
   // UniFFI calls can outlive cancellation. Retain the host until every native
   // promise settles, even after the public shutdown deadline has elapsed.
@@ -610,10 +614,17 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return done();
     }
     const chosen = yield* engine();
+    checkingHelper = typeof chosen === "object" && chosen.kind === "helper";
+    if (!checkingHelper)
+      // The helper seen before is gone or unusable: what it proved then says nothing now.
+      yield* noteHelper((state) =>
+        withoutProof(
+          withRunning(state, false),
+          typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
+        ),
+      );
     if (typeof chosen === "string") {
       record("grants", chosen);
-      // A helper that was found before and cannot be used now proves nothing it proved then.
-      yield* noteHelper((state) => withoutProof(withRunning(state, false), chosen));
       return done();
     }
     // Electron's grant APIs are macOS only; on Windows the helper is what reads the desktop.
@@ -741,7 +752,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     if (Option.isNone(windowId)) {
       const detail = "Keep a GOAT window open on screen, then try again.";
       record("capture", detail);
-      yield* noteHelper((state) =>
+      yield* noteChecked((state) =>
         withProof(state, { capture: "noWindow", screenLocked: false, details: [detail] }),
       );
       return done();
@@ -773,7 +784,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         screenLocked,
         details: captureFailure === undefined ? [] : [captureFailure],
       };
-      yield* noteHelper((current) => withProof(current, proof));
+      yield* noteChecked((current) => withProof(current, proof));
       return done();
     }
     const elements = Option.match(state, {
@@ -786,7 +797,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         ? undefined
         : (degradedDetail ?? "The driver could not read GOAT's window. Check Accessibility.");
     record("accessibility", treeFailure);
-    yield* noteHelper((current) =>
+    yield* noteChecked((current) =>
       withProof(current, {
         capture: "ready",
         elements,
@@ -804,7 +815,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           !step.ok &&
           (step.id === "restart" || step.id === "permissions" || step.id === "identity"),
       );
-      return early ? noteHelper((state) => withoutProof(state, early.detail)) : Effect.void;
+      return early ? noteChecked((state) => withoutProof(state, early.detail)) : Effect.void;
     }),
     // Only the check's own generation is stopped here: nothing else holds it. A driver that was
     // already serving an agent is retired only by the restart step, which reports "stopped".

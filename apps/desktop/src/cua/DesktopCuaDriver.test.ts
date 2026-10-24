@@ -690,29 +690,46 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
     ),
   );
 
-  it.effect("drops earlier proofs when the helper can no longer be used", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const test = yield* fixture({
-          platform: "darwin",
-          helper: { granted: true },
-          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
-        });
-        assert.isTrue((yield* test.verify).verified);
-        yield* test.request("agent");
-        assert.equal((yield* test.next).status, "ready");
-        const proven = test.readiness.at(-1);
-        assert.isTrue(proven ? computerUseReady(proven.readiness) : false);
+  it.effect.each([
+    { platform: "darwin", how: "unusable" },
+    { platform: "darwin", how: "absent" },
+    { platform: "win32", how: "unusable" },
+    { platform: "win32", how: "absent" },
+  ] as const)(
+    "drops earlier proofs when the helper becomes $how on $platform",
+    ({ platform, how }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform,
+            helper: { granted: true },
+            tools:
+              platform === "win32"
+                ? {
+                    ...healthyTools(),
+                    check_permissions: toolResult({ elevated: false, uia: true }),
+                  }
+                : helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+          });
+          assert.isTrue((yield* test.verify).verified);
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          const proven = test.readiness.at(-1);
+          assert.isTrue(proven ? computerUseReady(proven.readiness) : false);
 
-        yield* test.breakHelper;
-        const failed = yield* test.verify;
-        assert.isFalse(failed.verified);
-        const after = test.readiness.at(-1)?.readiness;
-        assert.isFalse(after ? computerUseReady(after) : true);
-        assert.equal(after?.capture, "pending");
-        assert.include(after?.reasons ?? [], failed.steps[0]?.detail);
-      }),
-    ),
+          yield* test.loseHelper(how);
+          yield* test.verify;
+          const after = test.readiness.at(-1)?.readiness;
+          assert.isFalse(after ? computerUseReady(after) : true);
+          assert.equal(after?.capture, "pending");
+          assert.equal(after?.helper, "unauthenticated");
+          assert.isTrue(
+            (after?.reasons ?? []).some((reason) =>
+              how === "absent" ? /could not be found/.test(reason) : /cannot be used/.test(reason),
+            ),
+          );
+        }),
+      ),
   );
 
   it.effect("drops earlier proofs when a later check fails before reading a window", () =>
