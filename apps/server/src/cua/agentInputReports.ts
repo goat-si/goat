@@ -4,17 +4,19 @@
  * taken for a person. The local log only keeps each call's start and end paired.
  *
  * Reports go to the server one at a time, in the order they were made, so an end never overtakes
- * its start. A start is waited for: the call reaches the driver only once the server knows it.
+ * its start. The helper's own input events go through forwardHelperInput. A start is waited for: the call reaches the driver only once the server knows it.
  * An end, as when Stop kills the driver, is queued and never holds anything up.
  *
  * @module agentInputReports
  */
+import type { ComputerUseHumanInputSource } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 
-import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
+import { type InputKind, KEEP_MS, makeAgentInputLog } from "./agentInputLog.ts";
 
 export interface AgentInputReport {
   readonly call: string;
@@ -77,3 +79,50 @@ export const makeAgentInputReports = Effect.fn("agentInputReports.make")(functio
     }),
   };
 });
+
+interface HelperInput {
+  readonly source: ComputerUseHumanInputSource;
+  readonly at: number;
+}
+
+/**
+ * Sends a helper's keyboard and pointer events to the server until it takes one, and returns
+ * then. Every event goes, even one this agent's own call could explain: only the server sees
+ * every agent's calls, and with them when a run of cover is too long. Reports are slower than
+ * events, so events wait in order until the server has judged each: merging or dropping one
+ * could drop a person's. Only events older than the server still judges are dropped, since it
+ * would refuse them.
+ */
+export const forwardHelperInput = Effect.fn("agentInputReports.forwardHelperInput")(
+  function* (options: {
+    readonly events: Stream.Stream<HelperInput>;
+    /** True when the server took the event. */
+    readonly report: (input: HelperInput) => Effect.Effect<boolean>;
+    /** False once the child the events come from is paused, ended or replaced. */
+    readonly current: () => boolean;
+  }) {
+    const unsent: Array<HelperInput> = [];
+    const wake = yield* Queue.sliding<void>(1);
+    yield* options.events.pipe(
+      Stream.runForEach((input) =>
+        Effect.suspend(() => {
+          if (!unsent.some((event) => event.source === input.source && event.at === input.at))
+            unsent.push({ source: input.source, at: input.at });
+          return Queue.offer(wake, undefined);
+        }),
+      ),
+      Effect.forkScoped,
+    );
+    while (true) {
+      yield* Queue.take(wake);
+      while (unsent.length > 0) {
+        if (!options.current()) return;
+        unsent.sort((left, right) => left.at - right.at);
+        const next = unsent.shift();
+        if (next === undefined) break;
+        if ((yield* Clock.currentTimeMillis) - next.at >= KEEP_MS) continue;
+        if (yield* options.report(next)) return;
+      }
+    }
+  },
+);

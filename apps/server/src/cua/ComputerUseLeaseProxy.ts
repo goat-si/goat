@@ -37,7 +37,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
-import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -46,8 +45,12 @@ import * as Stream from "effect/Stream";
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
-import { inputKinds, KEEP_MS } from "./agentInputLog.ts";
-import { type AgentInputReport, makeAgentInputReports } from "./agentInputReports.ts";
+import { inputKinds } from "./agentInputLog.ts";
+import {
+  type AgentInputReport,
+  forwardHelperInput,
+  makeAgentInputReports,
+} from "./agentInputReports.ts";
 import {
   initialOverlayState,
   type OverlayEvent,
@@ -569,42 +572,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const driver = yield* options.startDriver.pipe(Scope.provide(child));
     const current: Running = { driver, scope: child, manifest };
     running = current;
-    if (driver.humanInput !== undefined && options.onHumanInput !== undefined) {
-      const report = options.onHumanInput;
+    if (driver.humanInput !== undefined && options.onHumanInput !== undefined)
       // Once the server took one, this child is done: the pause that follows stops it.
-      let told = false;
-      // Every event goes to the server, even one this agent's own call could explain: only the
-      // server sees every agent's calls, and with them when a run of cover is too long. Reports
-      // are slower than events, so events wait here in order until the server has judged each:
-      // merging or dropping one could drop a person's. Only events older than the server still
-      // judges are dropped, since it would refuse them.
-      const unsent: Array<{ readonly source: ComputerUseHumanInputSource; readonly at: number }> =
-        [];
-      const wake = yield* Queue.sliding<void>(1);
-      yield* driver.humanInput.pipe(
-        Stream.runForEach((input) =>
-          Effect.suspend(() => {
-            if (!unsent.some((event) => event.source === input.source && event.at === input.at))
-              unsent.push({ source: input.source, at: input.at });
-            return Queue.offer(wake, undefined);
-          }),
-        ),
-        Effect.forkIn(child),
-      );
-      yield* Effect.gen(function* () {
-        while (!told) {
-          yield* Queue.take(wake);
-          while (!told && unsent.length > 0) {
-            if (finished !== undefined || paused !== undefined || running !== current) return;
-            unsent.sort((left, right) => left.at - right.at);
-            const next = unsent.shift();
-            if (next === undefined) break;
-            if ((yield* Clock.currentTimeMillis) - next.at >= KEEP_MS) continue;
-            told = yield* report(next);
-          }
-        }
-      }).pipe(Effect.forkIn(child));
-    }
+      yield* forwardHelperInput({
+        events: driver.humanInput,
+        report: options.onHumanInput,
+        current: () => finished === undefined && paused === undefined && running === current,
+      }).pipe(Effect.scoped, Effect.forkIn(child));
     // A new helper draws nothing yet.
     overlay = initialOverlayState;
     // A fresh child after a pause hears the provider's handshake again; its answers are dropped.
