@@ -305,3 +305,137 @@ it.effect("restarts the current WP5 registry without rewriting lineage or accoun
     assert.deepStrictEqual(yield* sql`SELECT name,sql FROM sqlite_master ORDER BY name`, schema);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+// Nightly 0.1.2-nightly.20261023.256 (5e16fe96a1) and every GOAT build before cycle 261024
+// recorded GOAT's migrations at 68-101. Upstream 068 (ShellStopRequestIndex) took 68, so GOAT's
+// rows move to 69-102. These cases pin what installs that ran 256 see when they upgrade.
+const NIGHTLY_256_GOAT_LEDGER = [
+  [68, "ServerActivityIndexes"],
+  [69, "RemoteReports"],
+  [70, "RemoteDispatches"],
+  [71, "ChannelLedger"],
+  [72, "RemoteDispatchQuestions"],
+  [73, "ThreadRunResults"],
+  [74, "RemoteReportRelay"],
+  [75, "ProjectionTurnItemRequestIndex"],
+  [76, "Memory"],
+  [77, "MemoryHubSync"],
+  [78, "MemorySearchCounters"],
+  [79, "MemoryTaskGrantCeiling"],
+  [80, "MemoryImportLineage"],
+  [81, "MemoryCheckpointAccounting"],
+  [82, "MemoryReportLifecycle"],
+  [83, "MemoryUsageCounters"],
+  [84, "MemoryRevertResults"],
+  [85, "HandoffLookupIndex"],
+  [86, "MemoryLastReadySpace"],
+  [87, "MemoryHubAdministered"],
+  [88, "MemoryCheckpointLifecycle"],
+  [89, "FleetGoals"],
+  [90, "FleetHealth"],
+  [91, "ThreadRunObservedChecks"],
+  [92, "RemoteDispatchObservation"],
+  [93, "MemoryRevisionCheckpointSize"],
+  [94, "HubNodes"],
+  [95, "MemorySummaryWorkThreadIndex"],
+  [96, "ThreadHistoryArchives"],
+  [97, "PermissionProfiles"],
+  [98, "DecisionInbox"],
+  [99, "HumanStepRecords"],
+  [100, "McpRequestReservations"],
+  [101, "RemoteReportInboxRunId"],
+] as const;
+
+/** Upstream 1-67 as this build runs them, then the given 256-era GOAT rows under their old ids. */
+const seedNightly256Ledger = (goatRows: ReadonlyArray<readonly [number, string]>) =>
+  Effect.gen(function* () {
+    yield* runMigrations({ toMigrationInclusive: 67 });
+    const byName = new Map<string, (typeof migrationEntries)[number][2]>(
+      migrationEntries.map(([, name, migration]) => [name, migration]),
+    );
+    yield* Migrator.make({})({
+      loader: Migrator.fromRecord(
+        Object.fromEntries(goatRows.map(([id, name]) => [`${id}_${name}`, byName.get(name)!])),
+      ),
+    });
+  });
+
+const hasShellStopIndex = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const indexes = yield* sql`
+    SELECT name FROM sqlite_master
+    WHERE type = 'index' AND name = 'orchestration_v2_projection_turn_items_stop_request_idx'
+ `;
+  return indexes.length === 1;
+});
+
+const currentGoatRow = (name: string) =>
+  migrationManifest.find(([, entryName]) => entryName === name)!;
+
+describe("upgrading a nightly 256 ledger past upstream 068", () => {
+  it.effect("a new database runs every migration once, upstream 068 included", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(yield* runMigrations(), migrationManifest);
+      assert.isTrue(yield* hasShellStopIndex);
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("a 256 ledger runs only upstream 068 and moves GOAT rows without rerunning them", () =>
+    Effect.gen(function* () {
+      yield* seedNightly256Ledger(NIGHTLY_256_GOAT_LEDGER);
+      assert.isFalse(yield* hasShellStopIndex);
+      // GOAT bodies such as ServerActivityIndexes' ALTER TABLE fail if run twice.
+      assert.deepStrictEqual(yield* runMigrations(), [[68, "ShellStopRequestIndex"]]);
+      assert.isTrue(yield* hasShellStopIndex);
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect.each([
+    ["an older nightly that stopped before Memory", 8],
+    ["an older nightly that stopped before HubNodes", 26],
+  ] as const)("%s moves what it recorded and runs the rest at their new ids", ([, recorded]) =>
+    Effect.gen(function* () {
+      yield* seedNightly256Ledger(NIGHTLY_256_GOAT_LEDGER.slice(0, recorded));
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [68, "ShellStopRequestIndex"],
+        ...NIGHTLY_256_GOAT_LEDGER.slice(recorded).map(([, name]) => currentGoatRow(name)),
+      ]);
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("a database this build left partway resumes at the next migration", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 80 });
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([id]) => id > 80),
+      );
+      assert.deepStrictEqual(yield* history, migrationManifest);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("nightly 256 refuses a database this build migrated and leaves it unchanged", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const sql = yield* SqlClient.SqlClient;
+      const before = yield* history;
+      const schema = yield* sql`SELECT name,sql FROM sqlite_master ORDER BY name`;
+      // 256's manifest: no upstream 068, GOAT one id lower.
+      const nightly256Entries = migrationEntries.flatMap(([id, name, migration]) =>
+        name === "ShellStopRequestIndex"
+          ? []
+          : [[GOAT_MIGRATION_NAMES.has(name) ? id - 1 : id, name, migration] as const],
+      );
+      const failure = yield* Effect.flip(reconcileGoatMigrationIds(nightly256Entries));
+      assert.strictEqual(failure._tag, "MigrationError");
+      assert.strictEqual(failure.kind, "BadState");
+      assert.deepStrictEqual(yield* history, before);
+      assert.deepStrictEqual(yield* sql`SELECT name,sql FROM sqlite_master ORDER BY name`, schema);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+});
