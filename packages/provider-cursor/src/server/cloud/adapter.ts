@@ -812,6 +812,44 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 yield* input.commitCloudTask(task);
               }
               const runId = task.taskId;
+              // startTurn recorded this run's refusal before any Cursor request (the base wrote
+              // this run's submitting intent first), and the run ended before it was finalized.
+              // Settle it as recorded; nothing reached Cursor, so there is nothing to reconcile.
+              if (task.status === "failed" && task.acceptedAppRunId !== input.runId) {
+                const timestamp = yield* DateTime.now;
+                const refused: OrchestrationV2ProviderTurn = {
+                  id: ids.derive.providerTurn({
+                    driver: DRIVER,
+                    nativeTurnId: `${instanceId}:refused:${input.runId}`,
+                  }),
+                  providerThreadId: input.providerThread.id,
+                  nodeId: input.rootNodeId,
+                  runAttemptId: input.attemptId,
+                  nativeTurnRef: null,
+                  ordinal: PositiveInt.make(input.providerTurnOrdinal),
+                  status: "failed",
+                  startedAt: timestamp,
+                  completedAt: timestamp,
+                };
+                yield* emit({
+                  type: "provider_turn.updated",
+                  driver: DRIVER,
+                  threadId: input.threadId,
+                  providerTurn: refused,
+                });
+                yield* emit({
+                  type: "turn.terminal",
+                  driver: DRIVER,
+                  providerThreadId: input.providerThread.id,
+                  providerTurnId: refused.id,
+                  runOrdinal: PositiveInt.make(input.runOrdinal),
+                  failureItemOrdinal: PositiveInt.make(input.providerTurnOrdinal * 100 + 2),
+                  status: "failed",
+                  failure: makeProviderFailure({ class: "provider_error" }),
+                  threadDisposition: "reusable",
+                });
+                return;
+              }
               if (
                 !agentId ||
                 task.status === "submitting" ||

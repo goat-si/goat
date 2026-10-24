@@ -568,6 +568,46 @@ describe("Cursor Cloud adapter", () => {
         expect(h.send).not.toHaveBeenCalled();
       }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
+  effectIt.effect(
+    "a recorded refusal stays failed when a restart reattaches the run before it was finalized",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness;
+        h.readKey.mockReturnValue(
+          Effect.fail(
+            new ProviderSetupError({
+              instanceId,
+              operation: "credentials",
+              detail: "Could not read sign-in.",
+            }),
+          ),
+        );
+        // The base's first-launch intent has no accepted run yet.
+        const { acceptedAppRunId: _accepted, ...intent } = task("submitting");
+        yield* h.runtime
+          .startTurn({
+            ...h.input,
+            providerThread: { ...h.input.providerThread, cloudTask: intent },
+          })
+          .pipe(Effect.flip);
+        const refused = h.commits[0]!;
+        expect(refused.status).toBe("failed");
+        const { message: _message, cloudLaunchSource: _launchSource, ...attach } = h.input;
+        yield* h.runtime.resumeTurn!({
+          ...attach,
+          cloudTask: refused,
+          providerThread: { ...h.thread, cloudTask: refused },
+        });
+        const events = yield* collectTerminal(h.runtime);
+        expect(events.filter((event) => event.type === "turn.terminal")).toEqual([
+          expect.objectContaining({ status: "failed" }),
+        ]);
+        expect(h.commits).toEqual([refused]);
+        expect(h.getRun).not.toHaveBeenCalled();
+        expect(h.create).not.toHaveBeenCalled();
+        expect(h.send).not.toHaveBeenCalled();
+      }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
   effectIt.effect("a failed post-create intent/agent-ref commit sends no prompt", () =>
     Effect.gen(function* () {
       const h = yield* harness;
