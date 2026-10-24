@@ -7,7 +7,9 @@
  *
  * The listing comes from servedCatalog.ts: the registrations /mcp mounts, built in-process at the
  * checked-out commit, and passes through the server's own tools/list filter as a GOAT thread
- * receives it under agentToolListing --listing (default: the server's default listing).
+ * receives it under agentToolListing --listing (default: the server's default listing). It also
+ * measures what an MCP client outside GOAT receives when it asks for the core listing with the
+ * x-goat-tool-listing header, which no setting changes.
  * --check exits 1 when a harness goes over BUDGET, so CI holds the context diet's targets.
  * Instruction text comes from the exported builders. Adapters compose those builders inline, so
  * each harness below names the source that composes it and a fragment that source must still
@@ -289,10 +291,11 @@ if (stale.length > 0) {
 const builders = await loadBuilders();
 const catalog = await loadServedCatalog();
 const listed = await catalog.listedAsThread(listingMode);
+const clientListed = await catalog.listedAsCoreClient();
 await catalog.dispose();
 // A catalog that failed to build would measure zero bytes and pass every budget.
-const missingCore = ["goat_describe", "goat_call"].filter(
-  (name) => !listed.some((tool) => tool.name === name),
+const missingCore = [listed, clientListed].flatMap((tools) =>
+  ["goat_describe", "goat_call"].filter((name) => !tools.some((tool) => tool.name === name)),
 );
 if (missingCore.length > 0) {
   console.error("The served listing has no " + missingCore.join(" or ") + "; nothing to measure.");
@@ -310,6 +313,10 @@ const listing = {
   outputSchemaBytes: listed.reduce((sum, tool) => sum + bytes(json(tool.outputSchema)), 0),
   toolsListBytes: bytes(JSON.stringify(listed)),
   largest: perTool.slice(0, 10),
+};
+const coreClientListing = {
+  tools: clientListed.map((tool) => tool.name).toSorted(),
+  modelFacingBytes: clientListed.reduce((sum, tool) => sum + modelFacing(tool), 0),
 };
 const rows = harnesses.map((harness) => {
   const instructions = bytes(harness.firstTurn(builders));
@@ -330,23 +337,31 @@ const BUDGET = {
   firstPromptBytes: 12 * 1024,
   laterTurnBytes: 300,
 } as const;
-const overBudget = rows.flatMap((row) =>
-  (
-    [
-      ["instructions", row.instructionBytes, BUDGET.instructionBytes],
-      ["listing", listing.modelFacingBytes, BUDGET.listingBytes],
-      ["first prompt", row.firstPromptBytes, BUDGET.firstPromptBytes],
-      ["each later turn", row.laterTurnBytes, BUDGET.laterTurnBytes],
-    ] as const
-  )
-    .filter(([, measured, limit]) => measured > limit)
-    .map(([what, measured, limit]) => `${row.harness}: ${what} ${measured} B, over ${limit} B`),
-);
+const overBudget = [
+  ...rows.flatMap((row) =>
+    (
+      [
+        ["instructions", row.instructionBytes, BUDGET.instructionBytes],
+        ["listing", listing.modelFacingBytes, BUDGET.listingBytes],
+        ["first prompt", row.firstPromptBytes, BUDGET.firstPromptBytes],
+        ["each later turn", row.laterTurnBytes, BUDGET.laterTurnBytes],
+      ] as const
+    )
+      .filter(([, measured, limit]) => measured > limit)
+      .map(([what, measured, limit]) => `${row.harness}: ${what} ${measured} B, over ${limit} B`),
+  ),
+  ...(coreClientListing.modelFacingBytes > BUDGET.listingBytes
+    ? [
+        `outside client asking for core: listing ${coreClientListing.modelFacingBytes} B, over ${BUDGET.listingBytes} B`,
+      ]
+    : []),
+];
 const report = {
   commit: git(["rev-parse", "HEAD"]),
   dirty: git(["status", "--porcelain", "--untracked-files=no"]) !== "",
   tokenEstimate: "utf8 bytes / 4",
   listing,
+  coreClientListing,
   harnesses: rows,
   budget: BUDGET,
   overBudget,
@@ -379,6 +394,12 @@ if (argv.includes("--json")) {
       " B to the " +
       n(listing.toolsListBytes) +
       " B tools/list payload.",
+    "",
+    "An outside MCP client that asks for the core listing (x-goat-tool-listing: core): " +
+      coreClientListing.tools.join(", ") +
+      ", " +
+      kb(coreClientListing.modelFacingBytes) +
+      " model-facing. Clients without the header, such as other GOAT hosts, get the full listing.",
     "",
     "| Harness | Instructions | First prompt (instructions + listing) | Each later turn | Listing | Carrier |",
     "| --- | ---: | ---: | ---: | --- | --- |",
