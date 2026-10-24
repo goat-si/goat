@@ -15,7 +15,7 @@ const layerTest = GitVcsDriver.layer.pipe(
   Layer.provideMerge(NodeServices.layer),
 );
 
-const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>) {
+const git = Effect.fn("test.git")(function* (cwd: string, args: ReadonlyArray<string>) {
   const driver = yield* GitVcsDriver.GitVcsDriver;
   const result = yield* driver.execute({
     operation: "GitVcsDriver.test.git",
@@ -35,7 +35,10 @@ const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>) {
   return result.stdout.trim();
 });
 
-const commitFiles = Effect.fn(function* (cwd: string, files: Record<string, string>) {
+const commitFiles = Effect.fn("test.commitFiles")(function* (
+  cwd: string,
+  files: Record<string, string>,
+) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   yield* fileSystem.makeDirectory(cwd, { recursive: true });
@@ -52,7 +55,7 @@ const commitFiles = Effect.fn(function* (cwd: string, files: Record<string, stri
  * A checkout that is itself a submodule, as GOAT is inside a superproject: its git dir is
  * `<superproject>/.git/modules/sub`, whose shared config sets `core.worktree = ../../../sub`.
  */
-const makeSubmoduleCheckout = Effect.fn(function* (sparse: boolean) {
+const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* (sparse: boolean) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const driver = yield* GitVcsDriver.GitVcsDriver;
@@ -74,11 +77,25 @@ const makeSubmoduleCheckout = Effect.fn(function* (sparse: boolean) {
   const checkout = path.join(superproject, "sub");
   const gitDir = path.join(superproject, ".git", "modules", "sub");
   const head = yield* git(checkout, ["rev-parse", "HEAD"]);
-  const createWorktree = Effect.fn(function* (name: string) {
+  // A setup hook would install dependencies into whatever root it sees.
+  const hookLog = path.join(root, "post-checkout-roots");
+  yield* fileSystem.makeDirectory(path.join(gitDir, "hooks"), { recursive: true });
+  yield* fileSystem.writeFileString(
+    path.join(gitDir, "hooks", "post-checkout"),
+    "#!/bin/sh\ngit rev-parse --show-toplevel >> '" + hookLog + "'\n",
+  );
+  yield* fileSystem.chmod(path.join(gitDir, "hooks", "post-checkout"), 0o755);
+  const hookRoots = () =>
+    fileSystem.readFileString(hookLog).pipe(
+      Effect.map((contents) => contents.trim().split("\n")),
+      Effect.orElseSucceed(() => []),
+    );
+  const createWorktree = Effect.fn("test.createWorktree")(function* (name: string) {
     const worktreePath = path.join(root, name);
     yield* driver.createWorktree({
       cwd: checkout,
-      path: worktreePath,
+      // Git resolves a relative destination against the checkout.
+      path: path.relative(checkout, worktreePath),
       refName: head,
       newRefName: `feature/${name}`,
     });
@@ -93,10 +110,10 @@ const makeSubmoduleCheckout = Effect.fn(function* (sparse: boolean) {
     ]);
   const sharedRoot = () =>
     git(checkout, ["config", "--file", path.join(gitDir, "config"), "core.worktree"]);
-  return { checkout, gitDir, createWorktree, updateSubmodule, readConfig, sharedRoot };
+  return { checkout, gitDir, createWorktree, updateSubmodule, readConfig, sharedRoot, hookRoots };
 });
 
-const assertCheckedOutInPlace = Effect.fn(function* (
+const assertCheckedOutInPlace = Effect.fn("test.assertCheckedOutInPlace")(function* (
   worktreePath: string,
   input: { readonly gitDir: string; readonly sparse: boolean },
 ) {
@@ -130,6 +147,7 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
           sparse: mode === "sparse",
         });
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), `feature/${mode}`);
+        assert.deepStrictEqual(yield* repo.hookRoots(), [worktreePath]);
         assert.deepStrictEqual(yield* repo.readConfig(), configBefore);
         assert.equal(yield* git(repo.checkout, ["rev-parse", "--show-toplevel"]), repo.checkout);
         assert.equal(yield* git(repo.checkout, ["status", "--porcelain"]), "");
@@ -149,6 +167,7 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
 
         yield* assertCheckedOutInPlace(first, { gitDir: repo.gitDir, sparse: true });
         yield* assertCheckedOutInPlace(second, { gitDir: repo.gitDir, sparse: true });
+        assert.deepStrictEqual(yield* repo.hookRoots(), [first, second]);
         assert.equal(yield* git(repo.checkout, ["rev-parse", "--show-toplevel"]), repo.checkout);
         assert.equal(yield* git(repo.checkout, ["status", "--porcelain"]), "");
       }),

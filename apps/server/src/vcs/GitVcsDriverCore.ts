@@ -58,6 +58,7 @@ import {
   defaultCheckoutWorkers,
   missingWindowsCheckoutSettings,
   pinWorktreeRoot,
+  readWorktreeRoot,
   WINDOWS_CHECKOUT_SETTINGS,
   worktreeFolderName,
   worktreeSparseCheckoutPatterns,
@@ -4070,7 +4071,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       worktreePath = path.join(location.directory, repoName, sanitizedBranch);
     }
-    const targetPath = worktreePath;
+    const targetPath = path.resolve(input.cwd, worktreePath);
     const newBranch = input.newRefName;
     const reuse = newBranch !== undefined && options?.reuseExistingBranch === true;
     const state = reuse
@@ -4278,10 +4279,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         input.cwd,
         existing === "added" ? newBranch! : input.refName,
       );
+      const root = yield* readWorktreeRoot(executeGit, input.cwd);
+      // A plain add would check out and run post-checkout with the shared root, so the
+      // checkout follows the add once the root is set.
+      const apart = sparse !== null || (root.inheritsShared && (yield* supportsHookRun(input.cwd)));
       yield* Effect.gen(function* () {
-        if (sparse === null) {
+        if (!apart) {
           yield* runCheckoutCommand("GitVcsDriver.createWorktree", input.cwd, [...args]);
-          yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);
+          if (root.pin) yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);
           return;
         }
         // --no-checkout writes no files and runs no hook, so the patterns apply before
@@ -4293,13 +4298,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           "--no-checkout",
           ...rest,
         ]);
-        yield* runGit(
-          "GitVcsDriver.createWorktree.sparseCheckout",
-          targetPath,
-          ["sparse-checkout", "set", "--no-cone", "--stdin"],
-          { stdin: sparse.patterns },
-        );
-        yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);
+        if (sparse !== null) {
+          yield* runGit(
+            "GitVcsDriver.createWorktree.sparseCheckout",
+            targetPath,
+            ["sparse-checkout", "set", "--no-cone", "--stdin"],
+            { stdin: sparse.patterns },
+          );
+        }
+        if (root.pin) yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);
         // checkout prints progress to a pipe only when asked, and would run post-checkout as a
         // same-commit switch. Hooks are off for it, then post-checkout runs with the
         // all-zero previous HEAD a new worktree gets, which is how hooks tell one apart.
@@ -4310,7 +4317,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           "-f",
           "--progress",
         ]);
-        if (progress?.onSparseCheckout) yield* progress.onSparseCheckout(sparse.excluded);
+        if (sparse && progress?.onSparseCheckout) yield* progress.onSparseCheckout(sparse.excluded);
         const head = (yield* runGitStdout("GitVcsDriver.createWorktree.head", targetPath, [
           "rev-parse",
           "HEAD",

@@ -1,7 +1,7 @@
 import { GitCommandError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
-import { isWindowsReservedFileName } from "@goat/shared/path";
+import { isWindowsReservedFileName, normalizeProjectPathForComparison } from "@goat/shared/path";
 
 /**
  * The folder a new worktree gets for its branch. Git allows branch names Windows refuses as file
@@ -71,29 +71,6 @@ export function defaultCheckoutWorkers(platform: NodeJS.Platform): string {
   return platform === "win32" ? "8" : "0";
 }
 
-/**
- * Where a linked worktree's `core.worktree` comes from, given
- * `git config --show-scope --get-regexp` output for `core.worktree` and
- * `extensions.worktreeConfig` read inside it.
- */
-function worktreeRootSources(scopedConfig: string) {
-  const entries = scopedConfig.split("\n").map((line) => {
-    const [scope = "", entry = ""] = line.split("\t");
-    const [key = "", ...value] = entry.split(" ");
-    return { scope, key: key.toLowerCase(), value: value.join(" ") };
-  });
-  const has = (scope: string, key: string, value?: RegExp) =>
-    entries.some(
-      (entry) => entry.scope === scope && entry.key === key && (value?.test(entry.value) ?? true),
-    );
-  return {
-    // A key without a value is boolean true.
-    worktreeConfig: has("local", "extensions.worktreeconfig", /^(?:|true|yes|on|1)$/iu),
-    shared: has("local", "core.worktree"),
-    own: has("worktree", "core.worktree"),
-  };
-}
-
 type WorktreeGit = (
   operation: string,
   cwd: string,
@@ -102,18 +79,43 @@ type WorktreeGit = (
 ) => Effect.Effect<{ readonly exitCode: number; readonly stdout: string }, GitCommandError>;
 
 /**
- * Gives a new linked worktree its own `core.worktree` when its repository's checkout lives
- * outside the git dir, as a submodule's does, before anything is checked out into it.
+ * Whether new linked worktrees of the checkout at `cwd` need their own `core.worktree`, and
+ * whether a plain `git worktree add` would already resolve to the shared one while checking
+ * out and running post-checkout.
  *
- * Linked worktrees ignore a shared `core.worktree` until `extensions.worktreeConfig` is on,
- * then inherit it unless they set their own. A submodule's git dir shares
- * `core.worktree = ../../../<path>`: `sparse-checkout set` moves it into the main worktree's
- * `config.worktree`, and the next `git submodule update` writes it back, so a worktree
- * without its own value resolves to, and checks out into, the git dir itself (#799).
- *
- * The value goes into that worktree's `config.worktree` by name: `git config --worktree`
- * writes the shared config when `extensions.worktreeConfig` is off, which would move the
- * original checkout's root.
+ * A repository whose checkout lives outside its git dir, as a submodule's does, sets
+ * `core.worktree`. Linked worktrees ignore a shared one until `extensions.worktreeConfig` is
+ * on, then inherit it unless they set their own. In a submodule's git dir the value is
+ * `../../../<path>`: `sparse-checkout set` moves it into the main worktree's
+ * `config.worktree`, and the next `git submodule update` writes it back, so a worktree without
+ * its own value resolves to, and checks out into, the git dir itself (#799). Ordinary
+ * repositories stop after the first probe.
+ */
+export const readWorktreeRoot = Effect.fn("GitVcsDriver.createWorktree.readWorktreeRoot")(
+  function* (git: WorktreeGit, cwd: string) {
+    const operation = "GitVcsDriver.createWorktree.readWorktreeRoot";
+    const lenient = { allowNonZeroExit: true };
+    const roots = yield* git(operation, cwd, ["config", "--get-all", "core.worktree"], lenient);
+    if (roots.exitCode !== 0 || roots.stdout.trim() === "") {
+      return { pin: false, inheritsShared: false };
+    }
+    // Git applies its own boolean rules and precedence.
+    const worktreeConfig = yield* git(
+      operation,
+      cwd,
+      ["config", "--bool", "--get", "extensions.worktreeConfig"],
+      lenient,
+    );
+    return { pin: true, inheritsShared: worktreeConfig.stdout.trim() === "true" };
+  },
+);
+
+/**
+ * Gives a new linked worktree its own `core.worktree` (see `readWorktreeRoot`), then checks
+ * that it resolves to itself. The value goes into that worktree's `config.worktree` by name:
+ * `git config --worktree` writes the shared config when `extensions.worktreeConfig` is off,
+ * which would move the original checkout's root. Git reads the file only once the extension
+ * is on, so the value also holds after a later sparse checkout turns it on.
  */
 export const pinWorktreeRoot = Effect.fn("GitVcsDriver.createWorktree.pinWorktreeRoot")(function* (
   git: WorktreeGit,
@@ -121,33 +123,10 @@ export const pinWorktreeRoot = Effect.fn("GitVcsDriver.createWorktree.pinWorktre
   worktreePath: string,
 ) {
   const operation = "GitVcsDriver.createWorktree.pinWorktreeRoot";
-  const lenient = { allowNonZeroExit: true };
-  const sources = worktreeRootSources(
-    (yield* git(
-      operation,
-      worktreePath,
-      ["config", "--show-scope", "--get-regexp", "^(core\\.worktree|extensions\\.worktreeconfig)$"],
-      lenient,
-    )).stdout,
-  );
-  if (!sources.worktreeConfig || sources.own) return;
-  const dirs = yield* git(
-    operation,
-    worktreePath,
-    ["rev-parse", "--path-format=absolute", "--absolute-git-dir", "--git-common-dir"],
-    lenient,
-  );
-  const [gitDir, commonDir] = dirs.stdout.trim().split("\n");
-  if (dirs.exitCode !== 0 || !gitDir || !commonDir) return;
-  if (!sources.shared) {
-    const main = yield* git(
-      operation,
-      worktreePath,
-      ["config", "--file", `${commonDir}/config.worktree`, "--get", "core.worktree"],
-      lenient,
-    );
-    if (main.stdout.trim() === "") return;
-  }
+  const gitDir = (yield* git(operation, worktreePath, [
+    "rev-parse",
+    "--absolute-git-dir",
+  ])).stdout.trim();
   yield* git(operation, worktreePath, [
     "config",
     "--file",
@@ -160,7 +139,10 @@ export const pinWorktreeRoot = Effect.fn("GitVcsDriver.createWorktree.pinWorktre
     "--show-toplevel",
   ])).stdout.trim();
   const resolve = (target: string) =>
-    fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => target));
+    fileSystem.realPath(target).pipe(
+      Effect.orElseSucceed(() => target),
+      Effect.map(normalizeProjectPathForComparison),
+    );
   if ((yield* resolve(root)) === (yield* resolve(worktreePath))) return;
   return yield* new GitCommandError({
     operation,
