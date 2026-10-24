@@ -34,5 +34,10 @@
   <string>GOAT Computer Use takes screenshots of app windows so an agent can see what it is working on.</string>
   <key>GOATComputerUseAllowAnyParent</key>
   @ALLOW_ANY_PARENT@
+  <!-- Refuse a parent that can run as Node (#1352). Off until GOAT's backend and lease proxy run
+       from a runtime of their own and the app's node fuses are off; until then an open fuse is
+       only a warning, or every signed nightly and stable parent would be refused. -->
+  <key>GOATComputerUseRequireClosedNodeFuses</key>
+  <false/>
 </dict>
 </plist>

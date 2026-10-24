@@ -97,11 +97,12 @@ func satisfies(_ code: SecCode, _ requirementText: String) -> Bool {
 /// serves an unpackaged Electron or a terminal.
 ///
 /// A signed GOAT that can run a launcher's own JavaScript (ELECTRON_RUN_AS_NODE, NODE_OPTIONS or
-/// Node inspect arguments) would pass that check for any same-user code, so the parent app's
-/// Electron fuses must have all three off as well (#1352). GOAT's backend and lease proxy still
-/// run as Node today, so every release parent is refused with parent_runs_node until they move
-/// to a runtime of their own and the fuses are off; release builds do not ship the helper until
-/// then either (#1210).
+/// Node inspect arguments) passes that check for any same-user code (#1352). So the helper also
+/// reads the parent app's Electron fuses. GOAT's backend and lease proxy still run its executable
+/// as Node, so today every signed parent has them on. Refusing such a parent (parent_runs_node)
+/// therefore waits behind GOATComputerUseRequireClosedNodeFuses, off in every build until they
+/// run from a runtime of their own and the fuses are off; until then an open fuse is a warning on
+/// stderr and the launch goes on.
 func parentRefusal(_ parent: pid_t) -> (reason: String, message: String)? {
   if Bundle.main.object(forInfoDictionaryKey: "GOATComputerUseAllowAnyParent") as? Bool == true {
     return nil
@@ -120,16 +121,23 @@ func parentRefusal(_ parent: pid_t) -> (reason: String, message: String)? {
   else {
     return ("untrusted_parent", "The process that launched the helper is not \(appId) signed by team \(team).")
   }
+  let problem: String
   switch parentFuses(parent, teamRequirement) {
   case .closed: return nil
   case .open(let fuses):
-    return (
-      "parent_runs_node",
+    problem =
       "\(appId) can still run any JavaScript as Node (\(fuses.joined(separator: ", ")) on), so the helper cannot tell GOAT's own code from another program's (#1352)."
-    )
   case .unreadable:
-    return ("parent_runs_node", "The Electron fuses of \(appId) could not be read, so the helper cannot tell whether it runs only GOAT's own code (#1352).")
+    problem =
+      "The Electron fuses of \(appId) could not be read, so the helper cannot tell whether it runs only GOAT's own code (#1352)."
   }
+  if Bundle.main.object(forInfoDictionaryKey: "GOATComputerUseRequireClosedNodeFuses") as? Bool
+    == true
+  {
+    return ("parent_runs_node", problem)
+  }
+  FileHandle.standardError.write(Data(("GOAT Computer Use: warning: " + problem + "\n").utf8))
+  return nil
 }
 
 /// The node fuses of the parent app's Electron framework, read from disk and checked against the

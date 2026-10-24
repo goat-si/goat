@@ -105,12 +105,14 @@ requirement, never from a pid or path alone. The driver stays the helper's child
   degraded session.
 - The parent check is only as strong as the parent. A signed GOAT whose Electron fuses let it run
   a launcher's own JavaScript (`RunAsNode`, `NODE_OPTIONS`, Node inspect arguments) passes a
-  signature check for any same-user code, so a release helper also reads the parent app's fuse
-  wire, from the Electron framework it first verifies against the team, and refuses with
-  `parent_runs_node` unless all three are off (#1352). GOAT's backend and CLI still run as Node
-  (`ELECTRON_RUN_AS_NODE`), so today every release parent is refused, until they run from a
-  separately identified runtime and the fuses are turned off (#1210). Signed helper builds stay
-  blocked on that (#1202).
+  signature check for any same-user code (#1352). A release helper therefore also reads the
+  parent app's fuse wire, from the Electron framework it first verifies against the team. GOAT's
+  backend, CLI and lease proxy still run its executable as Node (`ELECTRON_RUN_AS_NODE`), so every
+  signed nightly and stable GOAT has those fuses on. Refusing such a parent (`parent_runs_node`)
+  waits behind the helper's `GOATComputerUseRequireClosedNodeFuses`, off in every build, and an
+  open fuse is only a warning on the helper's stderr. Until they run from a separately identified
+  runtime and the fuses are off, a same-user process can still pass the check by running code
+  under GOAT's signature; that is a blocker for treating the signed helper as a security boundary.
 - Replies are bound to the helper's executable, pid and generation from the hello.
   `admitComputerUseReply` quarantines replies from another generation, to a request a Stop or a
   deadline already ended, or over the frame limit; they never reach the agent.
