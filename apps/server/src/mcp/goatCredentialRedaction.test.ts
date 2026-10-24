@@ -180,6 +180,13 @@ describe("redactGoatCredentialChunk", () => {
     }
   });
 
+  it("finds the same credentials near the cut as in the whole text", () => {
+    // Back-to-back tagged runs whose matches realign when scanned from a later offset.
+    let output = `${TAG}${"x".repeat(119)}`.repeat(7).slice(0, 801);
+    output = `${output.slice(0, 389)}${"S".repeat(43)}${output.slice(432)}`;
+    expect(streamed([output, "\n"]).shown).toBe(redactGoatCredentials(`${output}\n`));
+  });
+
   it("holds back at most a short tail, whatever the output", () => {
     const flood = Array.from({ length: 10 }, () => " ".repeat(10_000));
     expect(streamed(["GOAT_ACP_MCP_AUTHORIZATION=Bearer", ...flood]).maxCarry).toBeLessThan(400);

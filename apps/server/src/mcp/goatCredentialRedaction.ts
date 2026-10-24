@@ -67,17 +67,17 @@ function buildCredential(): RegExp {
 
 /** Text with every GOAT MCP credential replaced by {@link REDACTED_CREDENTIAL}. */
 export function redactGoatCredentials(text: string): string {
-  return redactBefore(text, text.length);
+  return redactBefore(text, text.length, Array.from(text.matchAll(credential)));
 }
 
 /**
- * The redacted text before end, with credentials found in the whole text, so a pattern that looks
- * past end (a token must not run on) sees what really follows.
+ * The redacted text before end. The matches come from the whole text, so a pattern that looks past
+ * end (a token must not run on) sees what really follows.
  */
-function redactBefore(text: string, end: number): string {
+function redactBefore(text: string, end: number, matches: ReadonlyArray<RegExpExecArray>): string {
   let redacted = "";
   let shown = 0;
-  for (const match of text.matchAll(credential)) {
+  for (const match of matches) {
     if (match.index >= end) break;
     const label: string = match[1] ?? match[2] ?? "";
     redacted += text.slice(shown, match.index) + label + REDACTED_CREDENTIAL;
@@ -173,16 +173,15 @@ const LABEL_BEFORE_VALUE = new RegExp(
 );
 
 /** Where the held-back tail starts: nothing before it can still become part of a credential. */
-function partialStart(text: string): number {
+function partialStart(text: string, matches: ReadonlyArray<RegExpExecArray>): number {
   const windowStart = Math.max(0, text.length - PARTIAL_WINDOW);
   const partial = partialCredential.exec(text.slice(windowStart));
   let start = partial === null ? text.length : windowStart + partial.index;
-  // The credentials already complete near the cut, exactly as redactGoatCredentials finds them.
-  const scanFrom = Math.max(0, windowStart - PARTIAL_WINDOW);
-  const spans = Array.from(text.slice(scanFrom).matchAll(credential), (match) => ({
-    from: scanFrom + match.index,
-    to: scanFrom + match.index + match[0].length,
-  }));
+  // The credentials already complete, the same matches the emitted text is redacted with. Only
+  // those near the end can contain the cut.
+  const spans = matches
+    .filter((match) => match.index + match[0].length > windowStart - PARTIAL_WINDOW)
+    .map((match) => ({ from: match.index, to: match.index + match[0].length }));
   let runStart = text.length;
   while (runStart > windowStart && TOKEN_CHARS.test(text.charAt(runStart - 1))) runStart -= 1;
   // Each rule only moves the cut back, so repeating them until none moves it ends on a cut that
@@ -213,6 +212,7 @@ export function redactGoatCredentialChunk(
   chunk: string,
 ): { readonly emit: string; readonly carry: string } {
   const text = carry + chunk;
-  const start = partialStart(text);
-  return { emit: redactBefore(text, start), carry: text.slice(start) };
+  const matches = Array.from(text.matchAll(credential));
+  const start = partialStart(text, matches);
+  return { emit: redactBefore(text, start, matches), carry: text.slice(start) };
 }
