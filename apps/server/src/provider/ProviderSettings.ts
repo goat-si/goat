@@ -67,6 +67,7 @@ import * as Settings from "../serverSettings.ts";
 import { authorizeApprovalRequest } from "../sshRemote/SshHostAuthorization.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { mayHaveReached, remoteFailure } from "./providerSettingsRemote.ts";
+import { isRecord, mergeConfig, mergeEnvironment } from "./providerSettingsMerge.ts";
 import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
 import { instanceFingerprint } from "./CodexRouteService.ts";
 import {
@@ -119,44 +120,12 @@ type Decision =
   | { readonly kind: "direct"; readonly actor: string; readonly profile: string }
   | { readonly kind: "approval" };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
-
 const targetOf = (request: ProviderSettingsRequest) => {
   const subject =
     request.action === "add"
       ? (request.input.instanceId ?? request.input.acpAgentId ?? request.input.driver ?? "new")
       : request.input.instanceId;
   return `${subject}@${request.input.host ?? "local"}`;
-};
-
-const mergeConfig = (base: unknown, patch: Readonly<Record<string, unknown>> = {}) => {
-  const next: Record<string, unknown> = isRecord(base) ? { ...base } : {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === null) delete next[key];
-    else next[key] = value;
-  }
-  return next;
-};
-
-const mergeEnvironment = (
-  base: ProviderInstanceConfig["environment"],
-  patch: ProviderUpdateInput["environment"],
-): ProviderInstanceConfig["environment"] => {
-  if (patch === undefined) return base;
-  const byName = new Map((base ?? []).map((variable) => [variable.name, variable]));
-  for (const change of patch) {
-    if (change.value === null) {
-      byName.delete(change.name);
-      continue;
-    }
-    byName.set(change.name, {
-      name: change.name,
-      value: change.value,
-      sensitive: change.sensitive ?? byName.get(change.name)?.sensitive ?? false,
-    });
-  }
-  return [...byName.values()];
 };
 
 const summarize = (
@@ -566,6 +535,8 @@ const make = Effect.gen(function* () {
       case "add": {
         const plan = yield* planAdd(request.input);
         const installed = plan.install ? yield* install(plan.instance, plan.instanceId) : undefined;
+        // An install can take minutes, during which the cloud target may change.
+        if (installed !== undefined) yield* checkLink((yield* current).providerInstances, plan);
         yield* save(
           { operation: "create", instanceId: plan.instanceId, instance: plan.instance },
           {},

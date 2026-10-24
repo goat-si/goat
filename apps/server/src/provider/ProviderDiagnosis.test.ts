@@ -580,8 +580,7 @@ it.effect("every fix path a diagnosis emits resolves through goat_call", () =>
       { instances: { "devin-one": devinRegistry, "devin-two": devinRegistry } },
     );
     const choose = checkOf(only(ambiguous.result.diagnoses), "sibling")?.fix;
-    expect(choose).toMatchObject({ actor: "human", handoff: "approval" });
-    expect(choose).not.toHaveProperty("path");
+    expect(choose).toEqual({ actor: "human", instruction: expect.any(String) });
     const checks = [
       ...results,
       ...only(ambiguous.result.diagnoses).checks,

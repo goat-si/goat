@@ -77,6 +77,8 @@ interface Fixture {
    */
   readonly crashAt?: { readonly when: (progress: Recorded) => boolean; readonly store: boolean };
   readonly remoteFailure?: Dispatch.SshRemoteDispatchError;
+  /** Holds each install until the test releases it, so settings can change meanwhile. */
+  readonly holdInstall?: boolean;
 }
 
 /** The encoded progress the fake handoff store holds. */
@@ -94,6 +96,8 @@ const setup = Effect.fn("ProviderSettingsTest.setup")(function* (fixture: Fixtur
   const progress = new Map<string, unknown>();
   const retained = new Map<string, unknown>();
   const crashed = yield* Deferred.make<void>();
+  const installing = yield* Deferred.make<void>();
+  const releaseInstall = yield* Deferred.make<void>();
   let crashUsed = false;
   const handoffOf = (input: Parameters<Handoffs.Handoffs["Service"]["create"]>[0]): Handoff => ({
     handoffId: TurnItemId.make(`handoff:${created.length}`),
@@ -247,8 +251,12 @@ const setup = Effect.fn("ProviderSettingsTest.setup")(function* (fixture: Fixtur
       }),
       Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({
         prepare: ({ agentId }) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             prepared.push(agentId);
+            if (fixture.holdInstall === true) {
+              yield* Deferred.succeed(installing, undefined);
+              yield* Deferred.await(releaseInstall);
+            }
             return { agentId, version: "3000.11.1", distribution: "binary", prepared: true };
           }),
       }),
@@ -272,6 +280,8 @@ const setup = Effect.fn("ProviderSettingsTest.setup")(function* (fixture: Fixtur
     boot,
     settings,
     crashed,
+    installing,
+    releaseInstall,
     created,
     prepared,
     remote,
@@ -701,6 +711,28 @@ it.effect("an add stopped between install and save resumes without installing ag
       ]);
     }),
   ),
+);
+
+it.effect(
+  "a direct add whose cloud target is removed during its install is refused before saving",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cloud = ProviderInstanceId.make("team-devin");
+        const fixture = yield* setup({
+          instances: { [cloud]: { driver: ProviderDriverKind.make("devinCloud") } },
+          holdInstall: true,
+        });
+        const adding = yield* fixture.service
+          .manage({ action: "add", input: { acpAgentId: "devin", linkTo: cloud } }, managingClient)
+          .pipe(Effect.flip, Effect.forkChild);
+        yield* Deferred.await(fixture.installing);
+        yield* fixture.settings.updateProviderInstance({ operation: "remove", instanceId: cloud });
+        yield* Deferred.succeed(fixture.releaseInstall, undefined);
+        expect((yield* Fiber.join(adding)).code).toBe("invalid_request");
+        expect(yield* fixture.instances).toEqual({});
+      }),
+    ),
 );
 
 it.effect("a resumed add whose cloud target changed while stopped is refused before saving", () =>
