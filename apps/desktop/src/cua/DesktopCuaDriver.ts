@@ -60,6 +60,7 @@ import {
   type HelperSession,
 } from "./ComputerUseHelper.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
+import { withResolvedWindowsPaths } from "./windowsHostPaths.ts";
 import {
   describeDegraded,
   failedCall,
@@ -200,11 +201,12 @@ export async function prepareDesktopManifest(
   input: Parameters<DesktopCuaDriverDependencies["prepareManifest"]>[0],
 ): Promise<string> {
   const { join } = await import("node:path");
+  const hostBundleIds = await withResolvedWindowsPaths(input.hostBundleIds, input.platform);
   return input.scope === "verify"
     ? writeCuaDriverCapabilityManifest(
         join(input.directory, "verify-manifest.yaml"),
         cuaDriverCapabilityManifest({
-          applications: input.hostBundleIds,
+          applications: hostBundleIds,
           tools: CUA_DRIVER_VERIFY_TOOLS,
         }),
       )
@@ -212,7 +214,7 @@ export async function prepareDesktopManifest(
         binaryPath: input.binaryPath,
         platform: input.platform,
         environment: cuaDriverListingEnvironment(process.env),
-        hostBundleIds: input.hostBundleIds,
+        hostBundleIds,
         path: join(input.directory, "capability-manifest.yaml"),
         ...(input.listApplications ? { listApplications: input.listApplications } : {}),
       });

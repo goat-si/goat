@@ -10,6 +10,7 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   type ChannelBindingId,
+  type ChannelChildWorkId,
   type ChannelConversationId,
   type ChannelDeliveryId,
   type ChannelInboundMessage,
@@ -122,6 +123,33 @@ export const turnSteerIdsFor = (inputId: ChannelInputId, attempt: "first" | "que
  */
 export const remoteCorrelationFor = (taskId: ChannelTaskId, generation: number) =>
   stableId("channel-remote", [taskId, String(generation)]);
+
+/** A prompt's identity for keyless admissions; the prompt itself is never stored. */
+export const childWorkPromptDigestFor = (prompt: string) => digest([prompt]);
+
+/**
+ * The request key when the caller passed none: the request's own parts, so a retry hashes to
+ * the same record instead of minting a duplicate. Destination covers host, cwd/workspace, and
+ * model, so the same prompt aimed at two targets is two requests.
+ */
+export const childWorkKeylessRequestKeyFor = (input: {
+  readonly surface: string;
+  readonly callerThreadId: string;
+  readonly destinationKey: string;
+  readonly promptDigest: string;
+}) => digest([input.surface, input.callerThreadId, input.destinationKey, input.promptDigest]);
+
+/** One admission under one task generation; the same request in the same run finds its record. */
+export const childWorkIdFor = (taskId: ChannelTaskId, generation: number, requestKey: string) =>
+  stableId("channel-child-work", [taskId, String(generation), requestKey]) as ChannelChildWorkId;
+
+/**
+ * The remote binding of one child-work record, supplied to the dispatch coordinator, so a retry
+ * collides on the remote_dispatches primary key instead of launching twice — the same contract
+ * remoteCorrelationFor gives channel-launched workers.
+ */
+export const childWorkCorrelationIdFor = (childWorkId: ChannelChildWorkId) =>
+  stableId("channel-child-remote", [childWorkId]);
 
 /** The remote worktree branch for one task generation. */
 export const remoteBranchFor = (taskId: ChannelTaskId, generation: number) =>

@@ -283,6 +283,8 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "lost",
   /** The driver went away under the proxy: GOAT Computer Use stopped, crashed or was updated. */
   "helper_restarted",
+  /** The driver named a window that is not on the screen GOAT gave it (#1358). */
+  "wrong_display",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 
