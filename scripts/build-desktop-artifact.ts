@@ -4388,6 +4388,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         repoRoot,
         stageRoot,
         platform: options.platform,
+        arch: options.arch,
         appId: resolveDesktopAppId(appVersion),
         signed: options.signed,
       })

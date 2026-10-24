@@ -2,6 +2,7 @@
 // The computer use payload of a desktop artifact: the Cua Driver GOAT runs in-process, and on
 // macOS the "GOAT Computer Use.app" helper embedded in GOAT.app (ADR-0023).
 import * as NodeCrypto from "node:crypto";
+import * as NodeURL from "node:url";
 
 import {
   COMPUTER_USE_HELPER_NAME,
@@ -176,17 +177,36 @@ export interface StagedComputerUseHelper {
  * only that app. An unsigned build gets an ad-hoc helper that serves any parent, because an
  * ad-hoc GOAT.app has no team for it to check.
  */
+/**
+ * Why this build cannot embed the helper, or undefined when it can. A signed build would ship a
+ * Developer ID helper that trusts any code GOAT's executable runs as Node, and whose driver still
+ * listens on a socket, so it waits for #1210 (ADR-0023). @electron/universal rewrites every
+ * nested Info.plist when it merges slices, which breaks the helper's seal.
+ */
+export function computerUseHelperRefusal(input: {
+  readonly platform: DesktopPlatform;
+  readonly arch: DesktopArch;
+  readonly signed: boolean;
+}): string | undefined {
+  if (input.platform !== "mac")
+    return "--computer-use-helper embeds the macOS helper and applies to mac builds only.";
+  if (input.signed)
+    return "Signed builds cannot embed GOAT Computer Use until it brokers the driver over stdio and GOAT's run-as-Node fuses are off (#1210, ADR-0023).";
+  if (input.arch === "universal")
+    return "--computer-use-helper builds arm64 or x64: merging a universal app rewrites the helper's signed Info.plist.";
+  return undefined;
+}
+
 export const stageComputerUseHelper = Effect.fn("stageComputerUseHelper")(function* (input: {
   readonly repoRoot: string;
   readonly stageRoot: string;
   readonly platform: DesktopPlatform;
+  readonly arch: DesktopArch;
   readonly appId: string;
   readonly signed: boolean;
 }) {
-  if (input.platform !== "mac")
-    return yield* new CuaDriverArtifactError({
-      message: "--computer-use-helper embeds the macOS helper and applies to mac builds only.",
-    });
+  const refusal = computerUseHelperRefusal(input);
+  if (refusal !== undefined) return yield* new CuaDriverArtifactError({ message: refusal });
   const path = yield* Path.Path;
   const identity = yield* Config.String("GOAT_CLI_MAC_SIGN_IDENTITY").pipe(Config.option);
   const built = yield* buildComputerUseHelper({
@@ -206,7 +226,9 @@ export const stageComputerUseHelper = Effect.fn("stageComputerUseHelper")(functi
 /**
  * Adds the helper to GOAT.app's Contents and keeps electron-builder's signer off it, so GOAT.app
  * is sealed over the helper's own signature (inner binaries, then the helper, then GOAT.app).
- * Unsigned builds are signed ad-hoc so the nested seal still verifies.
+ * Unsigned builds are signed ad-hoc so the nested seal still verifies. electron-builder matches
+ * an identity of "-" against certificate names before it falls back to ad-hoc, so the sign hook
+ * forces ad-hoc whatever certificate it found.
  */
 export function withComputerUseHelper(
   config: Record<string, unknown>,
@@ -220,7 +242,12 @@ export function withComputerUseHelper(
       ...mac,
       extraFiles: [{ from: helper.bundle, to: COMPUTER_USE_HELPER_IN_APP }],
       signIgnore: [`/Contents/${COMPUTER_USE_HELPER_IN_APP.replaceAll(".", "\\.")}(/|$)`],
-      ...(helper.signed ? {} : { identity: "-" }),
+      ...(helper.signed
+        ? {}
+        : {
+            identity: "-",
+            sign: NodeURL.fileURLToPath(new URL("./sign-macos-ad-hoc.ts", import.meta.url)),
+          }),
     },
   };
 }
@@ -229,7 +256,8 @@ const codeSignature = Effect.fn("readCodeSignature")(function* (target: string) 
   // codesign -d writes its report to stderr.
   const { stderr } = yield* run("codesign -d", "codesign", ["-d", "--verbose=4", target]);
   const field = (name: string) => new RegExp(`^${name}=(.+)$`, "mu").exec(stderr)?.[1]?.trim();
-  return { cdhash: field("CDHash"), team: field("TeamIdentifier") };
+  const team = field("TeamIdentifier");
+  return { cdhash: field("CDHash"), team: team === "not set" ? undefined : team };
 });
 
 /**
@@ -248,7 +276,11 @@ export function embeddedHelperProblems(input: {
     problems.push(
       "The embedded helper is not the helper that was built and signed; it was re-signed.",
     );
-  if (input.helper.signed && (!input.app.team || input.app.team === "not set"))
+  if (!input.helper.signed && (input.app.team !== undefined || input.embedded.team !== undefined))
+    problems.push(
+      "An unsigned build must be ad-hoc throughout, but GOAT.app or its helper carries a Developer ID team.",
+    );
+  else if (input.helper.signed && input.app.team === undefined)
     problems.push("GOAT.app has no Developer ID team.");
   else if (input.helper.signed && input.embedded.team !== input.app.team)
     problems.push(
