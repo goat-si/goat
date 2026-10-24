@@ -175,6 +175,24 @@ describe("recordHostSamples with host clocks that disagree", () => {
 });
 
 describe("fleetHostRows", () => {
+  it("does not list a host again when a server on the primary's machine reports it", () => {
+    const headless = EnvironmentId.make("headless");
+    const rows = fleetHostRows({
+      machines: [
+        machine("studio", { environmentId: studio }),
+        machine("mini", { environmentId: mini }),
+      ],
+      sshAliases: new Map([[mini, ["macmini"]]]),
+      reports: reportsOf(
+        { environmentId: studio, hosts: [entry(null)] },
+        { environmentId: headless, hosts: [entry("macmini"), entry("devbox")] },
+      ),
+      primaryEnvironmentId: studio,
+      primaryMachineEnvironmentIds: new Set([studio, headless]),
+    });
+    expect(rows.map((row) => row.label)).toEqual(["studio", "mini", "devbox"]);
+  });
+
   it("uses the graph's matching and does not list a machine's alias entry again", () => {
     const rows = fleetHostRows({
       machines: [

@@ -184,6 +184,12 @@ export function fleetHostRows(input: {
   readonly sshAliases: ReadonlyMap<EnvironmentId, ReadonlyArray<string>>;
   readonly reports: ReadonlyMap<EnvironmentId, ReadonlyArray<HostStatusEntry>>;
   readonly primaryEnvironmentId: EnvironmentId | null;
+  /**
+   * Servers on the primary's machine, such as the headless server SSH launches keep beside the
+   * desktop's. They read the same SSH config, so their entries for this client's aliases are
+   * machines already listed too. Defaults to the primary alone.
+   */
+  readonly primaryMachineEnvironmentIds?: ReadonlySet<EnvironmentId>;
 }): ReadonlyArray<FleetHostRow> {
   const matched = matchFleetHostEntries(input);
   const sourceOf = new Map<HostStatusEntry, string>();
@@ -205,12 +211,15 @@ export function fleetHostRows(input: {
     };
   });
   const ownAliases = new Set([...input.sshAliases.values()].flat());
+  const onPrimaryMachine = (environmentId: EnvironmentId) =>
+    environmentId === input.primaryEnvironmentId ||
+    input.primaryMachineEnvironmentIds?.has(environmentId) === true;
   for (const [environmentId, hosts] of input.reports) {
     for (const entry of hosts) {
       if (entry.host === null) continue;
       const key = hostSourceKey(environmentId, entry.host);
       if (claimed.has(key)) continue;
-      if (environmentId === input.primaryEnvironmentId && ownAliases.has(entry.host)) continue;
+      if (onPrimaryMachine(environmentId) && ownAliases.has(entry.host)) continue;
       claimed.add(key);
       rows.push({
         key,

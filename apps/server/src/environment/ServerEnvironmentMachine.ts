@@ -2,6 +2,7 @@ import type { EnvironmentMachineKind } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as NodeCrypto from "node:crypto";
 
 import * as ProcessRunner from "../processRunner.ts";
 
@@ -162,3 +163,43 @@ export const detectServerEnvironmentMachineKind = Effect.fn("detectServerEnviron
     }
   },
 );
+
+const readOsMachineIdentifier = Effect.fn("readOsMachineIdentifier")(function* () {
+  switch (yield* HostProcess.Platform) {
+    case "darwin": {
+      const ioreg = yield* runProbe({
+        command: "ioreg",
+        args: ["-rd1", "-c", "IOPlatformExpertDevice"],
+      });
+      return ioreg?.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/)?.[1] ?? null;
+    }
+    case "linux":
+      return (
+        (yield* readOptionalFile("/etc/machine-id")) ??
+        (yield* readOptionalFile("/var/lib/dbus/machine-id"))
+      );
+    case "win32": {
+      const reg = yield* runProbe({
+        command: "reg",
+        args: ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid"],
+      });
+      return reg?.match(/MachineGuid\s+REG_SZ\s+(\S+)/)?.[1] ?? null;
+    }
+    default:
+      return null;
+  }
+});
+
+/**
+ * One value for every GOAT server on this machine, such as the desktop app's server and the
+ * headless server SSH launches start in ~/.goat. Clients only compare it, so it is a salted
+ * hash: the OS identifier itself is not something a paired client needs to learn.
+ */
+export const detectServerMachineId = Effect.fn("detectServerMachineId")(function* () {
+  const identifier = yield* readOsMachineIdentifier();
+  if (identifier === null) return null;
+  return NodeCrypto.createHash("sha256")
+    .update("goat-machine-id:v1:" + identifier.toLowerCase())
+    .digest("hex")
+    .slice(0, 32);
+});

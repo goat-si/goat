@@ -3,7 +3,7 @@ import {
   BOAT_MACHINE_STATUS_LABEL,
   type BoatMachineIdentity,
 } from "@goat/client-runtime/cloud-machines";
-import type { FleetSnapshot } from "@goat/client-runtime/state/fleet";
+import { fleetMachineOwners, type FleetSnapshot } from "@goat/client-runtime/state/fleet";
 import type { FleetHeatTier, FleetMachineHeat } from "@goat/client-runtime/state/fleet-heat";
 import {
   presentConnectionWait,
@@ -444,11 +444,17 @@ function FleetConsoleExpanded(props: {
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const throughput = useAtomValue(fleetThroughputAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
+  const owners = fleetMachineOwners(environments, primaryEnvironmentId);
   const rows = fleetHostRows({
     machines: snapshot.machines,
     sshAliases: new Map(environments.map((env) => [env.environmentId, env.sshAliases] as const)),
     reports: status.reports,
     primaryEnvironmentId,
+    primaryMachineEnvironmentIds: new Set(
+      environments.flatMap((env) =>
+        owners.get(env.environmentId) === primaryEnvironmentId ? [env.environmentId] : [],
+      ),
+    ),
   });
   const unreadable = status.failed.map((environmentId) => ({
     key: environmentId,

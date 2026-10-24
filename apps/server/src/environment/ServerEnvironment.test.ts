@@ -345,6 +345,31 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     }),
   );
 
+  it.effect("servers on one machine name the same machine under their own environment ids", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const describe = Effect.fn(function* () {
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-server-environment-test-",
+        });
+        return yield* Effect.gen(function* () {
+          const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+          return yield* serverEnvironment.getDescriptor;
+        }).pipe(Effect.provide(layerServerEnvironment(baseDir)));
+      });
+      // The desktop app's server and the headless server SSH launches keep in ~/.goat.
+      const desktop = yield* describe();
+      const headless = yield* describe();
+
+      expect(desktop.environmentId).not.toBe(headless.environmentId);
+      expect(desktop.machineId).toBe(headless.machineId);
+      // Every host GOAT CI and its developers run on exposes an OS machine identifier.
+      if (process.platform === "darwin" || process.platform === "linux") {
+        expect(desktop.machineId).toMatch(/^[0-9a-f]{32}$/);
+      }
+    }),
+  );
+
   it.effect("reports agent activity publishing from the current secret state", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
