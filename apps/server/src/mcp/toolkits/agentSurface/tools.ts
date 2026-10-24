@@ -1,10 +1,12 @@
-import { OrchestratorMcpFailure } from "@goat/contracts";
+import { OrchestratorMcpFailure, OrchestratorMcpHost } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as Schema from "effect/Schema";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
 
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
+import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { OperationCancelTool, OperationReadTool, OperationWaitTool } from "./operations.ts";
 
@@ -32,6 +34,9 @@ const SearchMatch = Schema.Struct({
   unmatchedWords: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+/** The machine that answered, when goat_describe was asked for another one. */
+const AnsweredBy = { host: Schema.optionalKey(Schema.String) };
+
 export const DescribeResult = Schema.Union([
   Schema.Struct({
     depth: Schema.Literal("surface"),
@@ -41,15 +46,21 @@ export const DescribeResult = Schema.Union([
       Schema.Struct({ resource: Schema.String, verbs: Schema.Array(Schema.String) }),
     ),
     next: Schema.String,
+    ...AnsweredBy,
   }),
   Schema.Struct({
     depth: Schema.Literal("resource"),
     resource: Schema.String,
     entries: Schema.Array(EntrySummary),
+    ...AnsweredBy,
   }),
   Schema.Struct({
     depth: Schema.Literal("search"),
     surfaceVersion: Schema.String,
+    /** The GOAT build that searched; hosts that predate reporting it omit it. */
+    build: Schema.optionalKey(
+      Schema.Struct({ version: Schema.String, commitTime: Schema.optionalKey(Schema.Int) }),
+    ),
     query: Schema.String,
     /** exact: the query named a path; all: some path has every word; partial: only some. */
     mode: Schema.Literals(["exact", "all", "partial", "none"]),
@@ -68,10 +79,15 @@ export const DescribeResult = Schema.Union([
       ignoredWords: Schema.Array(Schema.String),
       notServed: Schema.Int,
       unavailableToCaller: Schema.Int,
+      /** With host: whether its build is older than this machine's; null when unknown. */
+      hostOlder: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+      /** With host: matches on this page this machine cannot call there for this caller. */
+      unavailableFromHere: Schema.optionalKey(Schema.Int),
     }),
     /** With no match: the paths spelled closest to the query. */
     nearest: Schema.optionalKey(Schema.Array(Schema.String)),
     next: Schema.optionalKey(Schema.String),
+    ...AnsweredBy,
   }),
   Schema.Struct({
     depth: Schema.Literal("path"),
@@ -97,6 +113,7 @@ export const DescribeResult = Schema.Union([
       }),
       EntrySummary,
     ]),
+    ...AnsweredBy,
   }),
 ]);
 export type DescribeResult = typeof DescribeResult.Type;
@@ -131,10 +148,15 @@ const DescribeTool = Tool.make(agentSurfaceRegistry["surface.describe"].name, {
     cursor: Schema.optional(
       Schema.String.annotate({ description: "nextCursor from the previous page of this search." }),
     ),
+    host: Schema.optional(OrchestratorMcpHost),
   }),
   success: DescribeResult,
   failure: OrchestratorMcpFailure,
-  dependencies: [McpInvocationContext.McpInvocationContext],
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    HostThreadsMcpService.HostThreadsMcpService,
+  ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["surface.describe"]));
 
 const CallTool = Tool.make(agentSurfaceRegistry["surface.call"].name, {

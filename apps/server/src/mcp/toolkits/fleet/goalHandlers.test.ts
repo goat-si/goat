@@ -18,6 +18,7 @@ import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import { serveCatalogOverHttp } from "../../agentSurface.testkit.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
+import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { liveThreadsLayer } from "../../McpToolAccess.testkit.ts";
 
@@ -71,6 +72,8 @@ const served = Layer.mergeAll(
   ),
   Layer.provideMerge(Profiles.layer),
   Layer.provideMerge(liveThreadsLayer),
+  // goat_describe reaches other hosts through it; these tests never pass host.
+  Layer.provideMerge(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
   Layer.provideMerge(Sqlite.layerMemory),
   Layer.provideMerge(ServerSettings.layerTest({ goatclaw: { enabled: false } })),
 );

@@ -15,6 +15,7 @@ import { ToolDispatch } from "../../ToolDispatch.ts";
 import { dispatchEnvelope, envelopeError } from "./dispatchEnvelope.ts";
 import { makeOperations } from "./operations.ts";
 import { makeDescribe } from "./describe.ts";
+import { makeHostDescribe } from "./hostDescribe.ts";
 import { AgentSurfaceToolkit } from "./tools.ts";
 
 // Calling these through goat_call would only nest the same checks, or recurse.
@@ -30,7 +31,9 @@ export const layer = McpToolAccess.toLayer(
       makeHandoffReader(yield* Effect.serviceOption(Handoffs.Handoffs)),
     );
 
-    const describe = makeDescribe(dispatch, yield* Profiles.PermissionProfiles);
+    const permissions = yield* Profiles.PermissionProfiles;
+    const describe = makeDescribe(dispatch, permissions);
+    const describeOnHost = makeHostDescribe(dispatch, permissions);
 
     const call = Effect.fn("AgentSurface.call")(function* (input: {
       readonly path: string;
@@ -74,7 +77,15 @@ export const layer = McpToolAccess.toLayer(
     });
 
     return {
-      goat_describe: McpToolAccess.reads(describe),
+      // Another machine is reached with this machine's credentials, under the host-reading gate.
+      goat_describe: McpToolAccess.readsOrReachesHost(
+        (input) => input.host !== undefined,
+        ({ host, ...input }) =>
+          Effect.gen(function* () {
+            if (host === undefined) return yield* describe(input);
+            return yield* describeOnHost({ ...input, host });
+          }),
+      ),
       // Destructive so clients that prompt on destructive tools still prompt for the targets that are.
       goat_call: McpToolAccess.destructive(McpToolAccess.dispatches(call)),
       goat_operation_read: McpToolAccess.reads(operations.read),
