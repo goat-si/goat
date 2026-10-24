@@ -568,6 +568,8 @@ it("tells a turn left without computer use which grant to allow, and watches no 
   setup([]);
   const desk = desktopApp({
     status: "permission-needed",
+    // Frames on, so only the guard keeps the card from watching a picture.
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
     target: {
       kind: "desktop",
       title: "Allow Screen & System Audio Recording for GOAT Computer Use",
