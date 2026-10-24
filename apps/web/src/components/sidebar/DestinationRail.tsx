@@ -519,7 +519,6 @@ export const DestinationRail = memo(function DestinationRail() {
   const preferences = railPreferencesForHydration(hydration, savedPreferences);
 
   const context: RailContext = {
-    environmentCount: environments.length,
     pullRequestsSupported,
     memoryAvailable: environments.some((environment) =>
       isMemoryEnvironmentAvailable(environment.serverConfig?.environment.capabilities),
