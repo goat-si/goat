@@ -28,7 +28,7 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
   );
 
   it.effect(
-    "a person's key is not lost behind a burst of the agent's events while a report is slow",
+    "every event waiting behind a slow report reaches the server in order, a person's key included",
     () =>
       Effect.gen(function* () {
         const gate = yield* Deferred.make<void>();
@@ -38,14 +38,22 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
         // The server holds this report while more events arrive than the helper's feed keeps.
         assert.equal(yield* h.person, "pointer");
         // Events a millisecond apart, as the helper sends them.
-        const event = (source: "pointer" | "keyboard") =>
+        const event = (source: "pointer" | "keyboard" | "unknown") =>
           TestClock.adjust(1).pipe(Effect.andThen(h.hid(source)));
-        for (let count = 0; count < 20; count++) yield* event("pointer");
-        yield* event("keyboard");
-        for (let count = 0; count < 20; count++) yield* event("pointer");
+        const sent: Array<"pointer" | "keyboard"> = [
+          ...Array.from({ length: 20 }, () => "pointer" as const),
+          // A person's key, then the agent's own keys later: the later ones must not replace it.
+          "keyboard",
+          ...Array.from({ length: 20 }, () => "pointer" as const),
+          "keyboard",
+        ];
+        for (const source of sent) yield* event(source);
+        yield* event("unknown");
         yield* Deferred.succeed(gate, undefined);
-        // The newest of each kind is reported next, the key included.
-        assert.sameMembers([yield* h.person, yield* h.person], ["pointer", "keyboard"]);
+        const reported: Array<string> = [];
+        while (reported.at(-1) !== "unknown" && reported.length <= sent.length)
+          reported.push(yield* h.person);
+        assert.deepEqual(reported, [...sent, "unknown"]);
       }),
   );
 

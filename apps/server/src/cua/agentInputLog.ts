@@ -94,8 +94,11 @@ const BEFORE_MS = 50;
  * them after the call returns, and the helper polls every 250 ms.
  */
 const AFTER_MS = 500;
-/** Finished calls older than this can no longer cover an event the helper reports. */
-const KEEP_MS = 10_000;
+/**
+ * How long after the end of its cover a call is remembered, and so the oldest event the server
+ * can still judge: one older than this may have been covered by a call already forgotten.
+ */
+export const KEEP_MS = 10_000;
 /**
  * An open call covers events for at most this long, and so does an unbroken run of calls of one
  * kind. Past it, a person's input of that kind pauses the agents even while calls keep coming: a
@@ -186,18 +189,23 @@ export function makeAgentInputLog() {
     closed(key, call.kinds, end + AFTER_MS);
   };
   /**
-   * Forgets what can no longer cover an event near now: finished calls after KEEP_MS, open ones
-   * after OPEN_MS, and runs that ended that long ago. A start whose end never arrives, or arrives
+   * Forgets what can no longer cover an event near now: finished calls KEEP_MS after their
+   * cover ends, open ones after OPEN_MS (kept as finished at that point), and runs that ended
+   * that long ago. A start whose end never arrives, or arrives
    * first, is gone by then too. now must come from the owner's own clock, never from a report, so
    * a report dated in the future cannot erase another agent's calls.
    */
   const prune = (now: number) => {
-    done = done.filter((call) => now - call.end < KEEP_MS);
     for (const [key, call] of open)
       if (now - call.start > OPEN_MS) {
         open.delete(key);
+        // It covered until start + OPEN_MS and still does for events from then.
+        done = [...done, { ...call, end: call.start + OPEN_MS - AFTER_MS }];
         closed(key, call.kinds, call.start + OPEN_MS);
       }
+    // Kept until KEEP_MS past the end of each call's cover, so every event remembers() admits
+    // is judged against every call that could have covered it.
+    done = done.filter((call) => now - (call.end + AFTER_MS) < KEEP_MS);
     for (const kind of ["keyboard", "pointer"] as const)
       spans[kind] = runsOf(spans[kind])
         .filter((run) => now - Math.max(...run.map((span) => span.to)) < KEEP_MS)

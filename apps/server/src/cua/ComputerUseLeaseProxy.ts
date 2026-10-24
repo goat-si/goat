@@ -47,7 +47,7 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
-import { inputKinds } from "./agentInputLog.ts";
+import { inputKinds, KEEP_MS } from "./agentInputLog.ts";
 import { type AgentInputReport, makeAgentInputReports } from "./agentInputReports.ts";
 import {
   initialOverlayState,
@@ -622,15 +622,17 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       let told = false;
       // Every event goes to the server, even one this agent's own call could explain: only the
       // server sees every agent's calls, and with them when a run of cover is too long. Reports
-      // are slower than events, so the newest unsent event of each kind waits here: a burst of
-      // one kind never pushes out another's, and nothing waits behind a backlog.
-      const unsent = new Map<ComputerUseHumanInputSource, { readonly at: number }>();
+      // are slower than events, so events wait here in order until the server has judged each:
+      // merging or dropping one could drop a person's. Only events older than the server still
+      // judges are dropped, since it would refuse them.
+      const unsent: Array<{ readonly source: ComputerUseHumanInputSource; readonly at: number }> =
+        [];
       const wake = yield* Queue.sliding<void>(1);
       yield* driver.humanInput.pipe(
         Stream.runForEach((input) =>
           Effect.suspend(() => {
-            if ((unsent.get(input.source)?.at ?? -Infinity) <= input.at)
-              unsent.set(input.source, input);
+            if (!unsent.some((event) => event.source === input.source && event.at === input.at))
+              unsent.push({ source: input.source, at: input.at });
             return Queue.offer(wake, undefined);
           }),
         ),
@@ -639,12 +641,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* Effect.gen(function* () {
         while (!told) {
           yield* Queue.take(wake);
-          const batch = [...unsent].sort(([, a], [, b]) => a.at - b.at);
-          unsent.clear();
-          for (const [source, { at }] of batch) {
-            if (told || finished !== undefined || paused !== undefined || running !== current)
-              break;
-            told = yield* report({ source, at });
+          while (!told && unsent.length > 0) {
+            if (finished !== undefined || paused !== undefined || running !== current) return;
+            unsent.sort((left, right) => left.at - right.at);
+            const next = unsent.shift();
+            if (next === undefined) break;
+            if ((yield* Clock.currentTimeMillis) - next.at >= KEEP_MS) continue;
+            told = yield* report(next);
           }
         }
       }).pipe(Effect.forkIn(child));

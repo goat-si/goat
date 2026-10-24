@@ -134,7 +134,8 @@ describe("agentInputLog", () => {
     log.ended("done", 1_400);
     log.prune(5_000);
     assert.equal(log.size(), 3);
-    log.prune(20_000);
+    // Open calls cover until start + 10 s, and are kept until no event they covered is judged.
+    log.prune(22_000);
     assert.equal(log.size(), 0);
   });
 

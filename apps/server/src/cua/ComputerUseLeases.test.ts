@@ -951,6 +951,24 @@ it.effect("back-to-back agent calls hide a person's input for ten seconds at mos
   }).pipe(Effect.provide(freshLeases)),
 );
 
+it.effect("a call's tail still covers an event as long as the server admits that event", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    yield* leases.stopAll;
+    const mine = yield* leases.control(thread, Option.none());
+    const bots = yield* leases.control(other, Option.none());
+    yield* TestClock.adjust(30_000);
+    const report = { call: "tail", kinds: ["pointer"] as const };
+    yield* leases.agentInput(other, bots.controlId, { ...report, state: "start", at: 30_000 });
+    yield* TestClock.adjust(1_100);
+    yield* leases.agentInput(other, bots.controlId, { ...report, state: "end", at: 31_100 });
+    // The event at 31.4 s is inside the call's tail; nearly ten seconds later it is still judged.
+    yield* TestClock.adjust(10_100);
+    assert.equal(yield* leases.humanInput(thread, mine.controlId, 31_400, "pointer"), "agents");
+  }).pipe(Effect.provide(freshLeases)),
+);
+
 it.effect(
   "refuses an input event older than the calls the server remembers, since it cannot be judged",
   () =>
