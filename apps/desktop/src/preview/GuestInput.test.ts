@@ -67,6 +67,24 @@ describe("preview guest input", () => {
     expect(guest.webContents.insertText).toHaveBeenCalledWith("raced");
   });
 
+  it("drops input whose relay was released while its focus probe ran", async () => {
+    let released = false;
+    const guest = makeGuest({ focused: false });
+    guest.sendCommand.mockImplementationOnce(async () => {
+      // The server lets go of the relay, which lifts its hold, while the probe is answering.
+      released = true;
+      return { result: { value: true } };
+    });
+    await sendPageCommand(
+      guest.webContents as unknown as Electron.WebContents,
+      { sendCommand: guest.sendCommand } as unknown as Electron.Debugger,
+      "Input.dispatchKeyEvent",
+      { type: "keyDown", key: "x", text: "x" },
+      () => !released,
+    );
+    expect(guest.webContents.sendInputEvent).not.toHaveBeenCalled();
+  });
+
   it("refuses input when a cross-site frame holds the unfocused page's focus", async () => {
     const guest = makeGuest({ focused: false, focusedDocument: false });
     await expect(guest.send("Input.insertText", { text: "secret" })).rejects.toThrow(

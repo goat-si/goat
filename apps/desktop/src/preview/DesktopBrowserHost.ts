@@ -144,13 +144,15 @@ export const make = Effect.gen(function* () {
         return {};
       }
       if (sessionId !== undefined) return debuggee.sendCommand(method, params, sessionId);
+      // Input from a relay the server has let go of must not land after its hold was lifted.
+      const current = () => tab.relay === relay;
       if (method !== "Page.captureScreenshot")
-        return sendPageCommand(webContents, debuggee, method, params);
+        return sendPageCommand(webContents, debuggee, method, params, current);
       // Chromium answers with the guest's next frame, and a guest parked outside the window
       // composites none, so the app window keeps it painting until this settles.
       runFork(PubSub.publish(captures, { key: tab.key, capturing: true }));
       try {
-        return await sendPageCommand(webContents, debuggee, method, params);
+        return await sendPageCommand(webContents, debuggee, method, params, current);
       } finally {
         runFork(PubSub.publish(captures, { key: tab.key, capturing: false }));
       }

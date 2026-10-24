@@ -123,6 +123,8 @@ export const sendPageCommand = async (
   debuggee: Electron.Debugger,
   method: string,
   params: Record<string, unknown>,
+  /** False once the relay that sent this is released, which also lifts the server's hold. */
+  current: () => boolean = () => true,
 ): Promise<unknown> => {
   // Electron's debugger routes Page.reload on a webview to its embedder window.
   if (method === "Page.reload") {
@@ -139,7 +141,7 @@ export const sendPageCommand = async (
     debuggee,
     `(globalThis.${PREVIEW_AGENT_INPUT_HELD_GLOBAL} ?? 0) > Date.now() ? "held" : ${FOCUSED_DOCUMENT} !== null`,
   );
-  if (probe === "held") return {};
+  if (probe === "held" || !current()) return {};
   if (probe !== true) {
     throw new Error(CROSS_SITE_FOCUS_MESSAGE);
   }
