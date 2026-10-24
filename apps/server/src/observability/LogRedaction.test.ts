@@ -346,6 +346,23 @@ describe("redactCause", () => {
     expect(printed).toContain("original failure");
   });
 
+  it("masks a message that its error's name turns into a credential header", () => {
+    const error = Object.assign(new Error("canary-joined-secret"), { name: "Authorization" });
+    error.stack = "Authorization: canary-joined-secret\n    at handler (file:///a.js:1:1)";
+    const [pretty] = Cause.prettyErrors(redactCause(Cause.die(error)));
+    const printed = [
+      Cause.pretty(redactCause(Cause.die(error))),
+      JSON.stringify(redactLogMessage({ error })),
+      defectSummary(error),
+    ];
+    for (const text of printed) {
+      expect(text).toContain("Authorization");
+      expect(text).not.toContain("canary-joined-secret");
+    }
+    // OTLP sends the message on its own as exception.message.
+    expect(pretty?.message).toBe("***");
+  });
+
   it("keeps a getter-defined message and survives a getter that throws", () => {
     class Computed extends Error {
       override get message() {

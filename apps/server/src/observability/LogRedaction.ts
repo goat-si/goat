@@ -263,7 +263,10 @@ function inspectError(
   const rawName = diagnostic(value, "name") ?? "Error";
   const rawMessage = diagnostic(value, "message") ?? "";
   const name = bounded(redactLogText(rawName), MAX_NAME_CHARS);
-  const message = bounded(redactLogText(rawMessage), MAX_MESSAGE_CHARS);
+  // Joined, a name such as "Authorization" makes "name: message" a header whose value is the
+  // message, so the message is taken from the joined text after redacting it whole.
+  const joined = redactLogText(`${name}: ${bounded(redactLogText(rawMessage), MAX_MESSAGE_CHARS)}`);
+  const message = joined.startsWith(`${name}: `) ? joined.slice(name.length + 2) : MASK;
   const nested = causeOf(value);
   let cause: Error | undefined;
   try {
@@ -286,8 +289,9 @@ function inspectError(
     ? stack.slice(header.length)
     : // Without its own header (some engines, or a rewritten stack) the whole stack is frames.
       `\n${stack}`;
-  const stackFrames = afterHeader.trim().length === 0 ? "" : redactLogText(afterHeader);
-  error.stack = bounded(`${name}: ${message}${stackFrames}${frames}`, MAX_STACK_CHARS);
+  // Redacted in one pass with its header, so a header value folded onto the next line stays hidden.
+  const stackText = afterHeader.trim().length === 0 ? joined : `${joined}${afterHeader}`;
+  error.stack = bounded(`${redactLogText(stackText)}${frames}`, MAX_STACK_CHARS);
   return error;
 }
 
