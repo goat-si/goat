@@ -104,6 +104,34 @@ const windowsOf = (result: unknown): ReadonlyArray<ComputerUseWindowTarget> | un
   });
 };
 
+const UNANSWERED_REASON =
+  "The computer use helper did not answer its readiness check, so window capture, app controls and the safety signals are not proven right now.";
+
+/**
+ * Readiness after a check the helper did not answer: the grants and helper it last reported
+ * stand, while capture, the tree, input and both safety signals are unproven.
+ */
+const unanswered = (
+  previous: DesktopCuaReadinessReport | undefined,
+  launch: number,
+): DesktopCuaReadinessReport => ({
+  version: 1,
+  type: "cuaReadiness",
+  generation: launch,
+  readiness: {
+    ...(previous?.readiness ?? {
+      grants: { accessibility: "unknown", screenCapture: "unknown" },
+      helper: "authenticated",
+      blockers: [],
+    }),
+    capture: "unavailable",
+    tree: "unavailable",
+    input: "unavailable",
+    reasons: [UNANSWERED_REASON],
+  },
+  signals: { privateMode: "unsupported", humanInput: "unsupported" },
+});
+
 /** A helper belongs to the daemon session it was started for: its binary and display. */
 const sessionKey = (session: DriverSession) =>
   [
@@ -142,32 +170,42 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
   const publish = (report: DesktopCuaSafetyReport) => void PubSub.publishUnsafe(hub, report);
 
   /**
-   * A helper's targets are released only when the helper says so or has exited: a stop request
-   * alone proves nothing, and private mode must not end while a secret may still be focused.
+   * Private mode ends only on an observation that the secret is gone: the helper that holds it
+   * says so, or a later helper sees that window without one or no longer sees the window at all.
+   * A helper that exits or is stopped proves nothing, so its holds outlive it until then.
    */
-  const releaseLaunch = (launch: number) => {
+  const release = (drop: (launch: number, window: string) => boolean) => {
     let last: ComputerUseWindowTarget | undefined;
-    for (const [key, target] of secret)
-      if (key.startsWith(launch + "|")) {
-        secret.delete(key);
-        last = target;
-      }
+    for (const [key, target] of secret) {
+      const at = key.indexOf("|");
+      if (!drop(Number(key.slice(0, at)), key.slice(at + 1))) continue;
+      secret.delete(key);
+      last = target;
+    }
     if (last !== undefined && secret.size === 0)
       publish({ version: 1, type: "cuaPrivateMode", active: false, target: last });
   };
+  const windowKey = (target: ComputerUseWindowTarget) => target.pid + ":" + target.windowId;
 
   const onEvent = (launch: number) => (event: ComputerUseEvent) => {
     if (current?.launch !== launch) return;
     if (event.type === "humanInput")
       return publish({ version: 1, type: "cuaHumanInput", source: event.source });
-    const key = launch + "|" + event.target.pid + ":" + event.target.windowId;
+    const window = windowKey(event.target);
     if (event.active) {
       const first = secret.size === 0;
-      secret.set(key, event.target);
+      secret.set(launch + "|" + window, event.target);
       if (first)
         publish({ version: 1, type: "cuaPrivateMode", active: true, target: event.target });
-    } else if (secret.delete(key) && secret.size === 0)
-      publish({ version: 1, type: "cuaPrivateMode", active: false, target: event.target });
+      // This launch holds it now; an earlier one's hold on the same window is superseded.
+      release((held, at) => held !== launch && at === window);
+    } else release((_held, at) => at === window);
+  };
+
+  /** A later helper's accepted view of the screen releases earlier holds on windows now gone. */
+  const observed = (launch: number, targets: ReadonlyArray<ComputerUseWindowTarget>) => {
+    const seen = new Set(targets.map(windowKey));
+    release((held, at) => held !== launch && !seen.has(at));
   };
 
   const backoff = () => RESTART_MS[Math.min(failures++, RESTART_MS.length - 1)] ?? 60_000;
@@ -219,7 +257,6 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     process.onExit(() => {
       entry.ended = true;
       client.close("The computer use helper ended.");
-      releaseLaunch(launch);
       void PubSub.publishUnsafe(kick, undefined);
     });
     const hello = yield* Effect.promise(() =>
@@ -252,18 +289,25 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     entry.readinessAt = now + READINESS_EVERY_MS;
     const result = yield* Effect.promise(() => entry.client.request("permissions", {}, REQUEST_MS));
     const readiness = decodeReadiness(result);
-    if (readiness._tag === "None" || entry.signals === undefined || current !== entry) return;
-    const report: DesktopCuaReadinessReport = {
-      version: 1,
-      type: "cuaReadiness",
-      generation: entry.launch,
-      readiness: readiness.value,
-      signals: entry.signals,
-    };
+    if (entry.signals === undefined || current !== entry) return;
+    const previous = Option.getOrUndefined(yield* Ref.get(deps.report));
+    // A check the helper did not answer proves nothing: capture, app controls and the safety
+    // signals go back to unproven, and the check runs again on the next tick.
+    if (readiness._tag === "None") entry.readinessAt = now;
+    const report: DesktopCuaReadinessReport =
+      readiness._tag === "Some"
+        ? {
+            version: 1,
+            type: "cuaReadiness",
+            generation: entry.launch,
+            readiness: readiness.value,
+            signals: entry.signals,
+          }
+        : unanswered(previous, entry.launch);
     yield* Ref.set(deps.report, Option.some(report));
     // Every read goes out: leases re-judge detection, and a read is only every 30 seconds.
     publish(report);
-    failures = 0;
+    if (readiness._tag === "Some") failures = 0;
   });
 
   /** Watches every window on screen while agents control the host; nothing otherwise. */
@@ -287,11 +331,15 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     if (targets.length === 0) {
       if (entry.client.watching()) yield* Effect.promise(() => entry.client.unwatch(WATCH_MS));
       entry.watched = "";
+      // A successful listing of no windows at all: no earlier secret can still be focused.
+      observed(entry.launch, []);
       return;
     }
     // A watch that was refused or not answered in time leaves the helper's watch unknown, so
     // the next tick asks again rather than trusting the windows it last watched.
-    entry.watched = (yield* Effect.promise(() => entry.client.watch(targets, WATCH_MS))) ? key : "";
+    const accepted = yield* Effect.promise(() => entry.client.watch(targets, WATCH_MS));
+    entry.watched = accepted ? key : "";
+    if (accepted) observed(entry.launch, targets);
   });
 
   /**

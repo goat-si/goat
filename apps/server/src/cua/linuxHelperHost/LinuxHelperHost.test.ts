@@ -84,6 +84,22 @@ const hostWith = (
     return { host, session, report, spawned, safety, nextRequest, expire };
   });
 
+/** The helper's initial state for each window of a watch it took: none of them secret. */
+const initialStates = (request: FakeRequest, send: (frame: unknown) => void) => {
+  if (request.method !== "watch") return;
+  const params = request.params as {
+    watchId: string;
+    targets: ReadonlyArray<{ pid: number; windowId: number }>;
+  };
+  const generation = (request as { generation: string }).generation;
+  for (const target of params.targets)
+    send({
+      generation,
+      watchId: params.watchId,
+      event: { type: "privateMode", active: false, target },
+    });
+};
+
 describe("LinuxHelperHost (#1223)", () => {
   it.effect(
     "runs the helper only while the driver runs, with the session's variables, and reports its readiness",
@@ -140,13 +156,16 @@ describe("LinuxHelperHost (#1223)", () => {
   );
 
   it.effect(
-    "pauses for a secret field in any watched window until the last clears; a helper that exits clears it and is started again",
+    "pauses for a secret field in any watched window until the last clears; after a crash it holds until a new helper sees the field without a secret (#1494 merge review P1)",
     () =>
       Effect.gen(function* () {
-        const t = yield* hostWith([
-          { pid: 7, windowId: 70 },
-          { pid: 8, windowId: 80 },
-        ]);
+        const t = yield* hostWith(
+          [
+            { pid: 7, windowId: 70 },
+            { pid: 8, windowId: 80 },
+          ],
+          { afterAnswer: initialStates },
+        );
         yield* Ref.set(t.session, Option.some(SESSION));
         yield* TestClock.adjust(TICK_MS);
         assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
@@ -168,26 +187,29 @@ describe("LinuxHelperHost (#1223)", () => {
         secret(8, false);
         helper?.event(watchId, { type: "humanInput", source: "pointer" });
         secret(7, true);
+        // A crash proves nothing about the field: the pause holds through it.
         helper?.exit();
+        // The next tick starts a new helper; its watch's initial states show the field clear.
         yield* TestClock.adjust(TICK_MS);
         const reports: Array<DesktopCuaSafetyReport> = [];
-        for (let index = 0; index < 5; index++) reports.push(yield* Queue.take(t.safety));
+        for (let index = 0; index < 6; index++) reports.push(yield* Queue.take(t.safety));
         assert.deepEqual(
           reports.map((report) =>
             report.type === "cuaPrivateMode"
               ? [report.type, report.active, report.target.pid]
-              : [report.type],
+              : report.type === "cuaReadiness"
+                ? [report.type, report.generation]
+                : [report.type],
           ),
           [
             ["cuaPrivateMode", true, 7],
             ["cuaPrivateMode", false, 8],
             ["cuaHumanInput"],
             ["cuaPrivateMode", true, 7],
+            ["cuaReadiness", 2],
             ["cuaPrivateMode", false, 7],
           ],
         );
-        // The next tick starts a new helper, whose readiness is the one reported now.
-        assert.include(yield* Queue.take(t.safety), { type: "cuaReadiness", generation: 2 });
         assert.lengthOf(t.spawned, 2);
       }).pipe(Effect.scoped),
   );
@@ -246,30 +268,72 @@ describe("LinuxHelperHost (#1223)", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect("a stopped daemon's helper holds private mode until it has exited (#1494 r2)", () =>
-    Effect.gen(function* () {
-      const t = yield* hostWith([{ pid: 7, windowId: 70 }]);
-      yield* Ref.set(t.session, Option.some(SESSION));
-      yield* TestClock.adjust(TICK_MS);
-      assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
-      yield* t.host.setWatch(true);
-      const watchId = ((yield* t.nextRequest("watch")).params as { watchId: string }).watchId;
-      const helper = t.spawned[0]?.helper;
-      helper?.event(watchId, {
-        type: "privateMode",
-        active: true,
-        target: { pid: 7, windowId: 70 },
-      });
-      assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: true });
-      yield* Ref.set(t.session, Option.none());
-      yield* TestClock.adjust(TICK_MS);
-      // Asked to stop, not yet gone: readiness is withdrawn, private mode still holds.
-      assert.isTrue(helper?.stopped());
-      assert.deepEqual(yield* t.host.readiness, Option.none());
-      assert.strictEqual(yield* Queue.size(t.safety), 0);
-      helper?.exit();
-      assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: false });
-    }).pipe(Effect.scoped),
+  it.effect(
+    "a stopped or exited helper's hold stands until a later helper no longer sees that window (#1494 merge review P1)",
+    () =>
+      Effect.gen(function* () {
+        let windows = [
+          { pid: 7, windowId: 70 },
+          { pid: 8, windowId: 80 },
+        ];
+        const t = yield* hostWith([], { windows: () => windows, afterAnswer: initialStates });
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
+        yield* t.host.setWatch(true);
+        const watchId = ((yield* t.nextRequest("watch")).params as { watchId: string }).watchId;
+        const helper = t.spawned[0]?.helper;
+        helper?.event(watchId, {
+          type: "privateMode",
+          active: true,
+          target: { pid: 7, windowId: 70 },
+        });
+        assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: true });
+        yield* Ref.set(t.session, Option.none());
+        yield* TestClock.adjust(TICK_MS);
+        // Asked to stop, then gone: readiness is withdrawn, private mode still holds.
+        assert.isTrue(helper?.stopped());
+        helper?.exit();
+        assert.deepEqual(yield* t.host.readiness, Option.none());
+        assert.strictEqual(yield* Queue.size(t.safety), 0);
+        // A later helper's screen no longer has that window, so nothing secret can be focused in it.
+        windows = [{ pid: 8, windowId: 80 }];
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
+        assert.include(yield* Queue.take(t.safety), {
+          type: "cuaPrivateMode",
+          active: false,
+        });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a readiness check the helper does not answer withdraws the signals and says why (#1494 merge review P2)",
+    () =>
+      Effect.gen(function* () {
+        let checks = 0;
+        const t = yield* hostWith([], {
+          override: (request) =>
+            request.method === "permissions" && ++checks > 1
+              ? { outcome: "refused", reason: "busy", message: "busy" }
+              : undefined,
+        });
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.include(yield* Queue.take(t.safety), { type: "cuaReadiness" });
+        yield* TestClock.adjust(30_000);
+        const downgraded = yield* Queue.take(t.safety);
+        assert.deepInclude(downgraded, {
+          type: "cuaReadiness",
+          signals: { privateMode: "unsupported", humanInput: "unsupported" },
+        });
+        assert.deepEqual(yield* t.host.readiness, Option.some(downgraded));
+        assert.include(downgraded.type === "cuaReadiness" ? downgraded.readiness : {}, {
+          capture: "unavailable",
+          tree: "unavailable",
+        });
+      }).pipe(Effect.scoped),
   );
 
   it.effect(
