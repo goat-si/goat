@@ -14,12 +14,13 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
-import type { McpSchema } from "effect/ai";
+import { type McpSchema, Tool } from "effect/ai";
 
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { serveEnforcingCatalogOverHttp } from "./agentSurface.testkit.ts";
+import { serveEnforcingCatalogOverHttp, toolkits } from "./agentSurface.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { AGENT_DEVICE_ACCESS_OFF, availability } from "./toolAvailability.ts";
 
 const CALLER = ThreadId.make("thread:availability-caller");
 const entries = Object.values(agentSurfaceRegistry) as ReadonlyArray<AgentSurfaceRegistryEntry>;
@@ -169,3 +170,36 @@ it.effect(
       expect((yield* http.listTools("thread")).map((tool) => tool.name)).toContain(row.name);
     }).pipe(Effect.scoped, Effect.provide(enforcing({ enabled: true, defaultProfile: "owner" }))),
 );
+
+it("shows device tools as refused, saying a person must grant access, when it is off (#1196)", () => {
+  const withoutDevice: McpInvocationScope = {
+    ...callers.thread,
+    capabilities: new Set(["orchestration", "preview", "worktree", "pull-requests"]),
+  };
+  for (const entry of entries.filter((candidate) => candidate.resource === "device")) {
+    expect(availability(entry, withoutDevice, true), entry.path).toEqual({
+      now: false,
+      reason: AGENT_DEVICE_ACCESS_OFF,
+    });
+    expect(availability(entry, callers.thread, true), entry.path).toEqual({ now: true });
+  }
+  expect(AGENT_DEVICE_ACCESS_OFF).toContain(
+    "Settings → Integrations → Devices → Agent device access",
+  );
+});
+
+it("offers agents no path that turns agent device access on (#1196)", () => {
+  // A human grant: any input schema that names the setting would let an agent grant itself.
+  const granting = entries.filter((entry) =>
+    /AgentDeviceAccess/i.test(
+      JSON.stringify(
+        Tool.getJsonSchema(
+          (toolkits[entry.schemaRefs.toolkit].tools as Record<string, Tool.Any>)[
+            entry.schemaRefs.tool
+          ]!,
+        ),
+      ),
+    ),
+  );
+  expect(granting.map((entry) => entry.path)).toEqual([]);
+});
