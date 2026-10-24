@@ -28,7 +28,9 @@ const DEFECT_SUMMARY_MAX_CHARS = 2_000;
 
 /** What died, for one log line: an Error's stack or message, never its fields. */
 export const defectSummary = (defect: unknown): string => {
-  if (!(defect instanceof Error)) return `non-Error defect (${typeof defect})`;
+  // A revoked Proxy throws on instanceof; it is then named by its type like any non-Error.
+  if (!guarded(() => defect instanceof Error, false) || !(defect instanceof Error))
+    return `non-Error defect (${typeof defect})`;
   const text =
     diagnostic(defect, "stack") ??
     `${diagnostic(defect, "name") ?? "Error"}: ${diagnostic(defect, "message") ?? ""}`;

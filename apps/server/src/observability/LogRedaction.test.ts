@@ -59,6 +59,8 @@ describe("redactLogText", () => {
     [`requestid.${jwt} done`, "requestid.*** done"],
     // A whole assigned value: quoted segments joined to more text, or a JSON value with spaces.
     ["password='first'CANARY user=me", "password=*** user=me"],
+    [`authorization=${"A".repeat(65)} CANARY next`, "authorization=*** next"],
+    ["authorization=Bearer\nCANARY next", "authorization=*** next"],
     ['token={"a": "CANARY", "b": [1, 2]} next', "token=*** next"],
     // Pretty JSON escaped inside a JSON string: its whitespace is escaped too.
     [
@@ -194,6 +196,9 @@ describe("defectSummary", () => {
     expect(summary).toContain("Error: handler died with Bearer ***");
     expect(summary).not.toContain("abcdefghijklmnopqrstuvwxyz0123");
     expect(summary).not.toContain("canary");
+    const revoked = Proxy.revocable(new Error("canary-revoked"), {});
+    revoked.revoke();
+    expect(defectSummary(revoked.proxy)).toBe("non-Error defect (object)");
     // A thrown value that is not an Error is named by its type only.
     expect(defectSummary({ token: "canary-object-token" })).toBe("non-Error defect (object)");
   });

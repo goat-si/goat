@@ -229,8 +229,11 @@ function startsJsonObject(part: string): boolean {
 /** Whether a whole base64url part decodes to a JSON object: a JWS payload. */
 function isJsonObject(part: string): boolean {
   if (part.length < 2 || !mayStartObject(part, 0)) return false;
+  const decoded = Buffer.from(part, "base64url").toString("utf8");
+  // Parse only what could be a whole object: a failed parse costs far more than this check.
+  if (!/\}\s*$/.test(decoded)) return false;
   try {
-    const value: unknown = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    const value: unknown = JSON.parse(decoded);
     return typeof value === "object" && value !== null && !Array.isArray(value);
   } catch {
     return false;
@@ -256,7 +259,8 @@ function maskJoseToken(run: string): string {
 // key=value or key: value for every credential name a field is masked by.
 const ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_KEY})\s*[=:]\s*`, "gi");
 // "authorization=Bearer abc": a scheme word and the credential after it are one value.
-const SCHEME_WORD = /^[A-Za-z][\w-]*[ \t]+(?=\S)/;
+// Sticky, so it is tried once at the value's start, however long the scheme word or its spacing.
+const SCHEME_WORD = /[A-Za-z][\w-]*\s+(?=\S)/y;
 
 /**
  * Every assignment to a credential name with its whole value masked: a JSON value up to its
@@ -271,9 +275,7 @@ function maskAssignments(text: string): string {
     const start = match.index + match[0].length;
     if (match.index < shown || start >= text.length) continue;
     const lead = text.charAt(start);
-    const scheme = /^authorization$/i.test(match[1] ?? "")
-      ? (SCHEME_WORD.exec(text.slice(start, start + 64))?.[0].length ?? 0)
-      : 0;
+    const scheme = /^authorization$/i.test(match[1] ?? "") ? schemeLength(text, start) : 0;
     const end =
       lead === "{" || lead === "["
         ? valueEnd(text, start, false)
@@ -284,6 +286,11 @@ function maskAssignments(text: string): string {
     ASSIGNMENT.lastIndex = end;
   }
   return out + text.slice(shown);
+}
+
+function schemeLength(text: string, start: number): number {
+  SCHEME_WORD.lastIndex = start;
+  return SCHEME_WORD.exec(text)?.[0].length ?? 0;
 }
 
 /** The end of a shell word: up to unquoted whitespace, with quoted segments and escapes inside. */
