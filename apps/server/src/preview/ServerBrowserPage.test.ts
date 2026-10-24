@@ -97,6 +97,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       consoleEntries: [],
       networkEntries: [],
       actionTimeline: [],
+      timeoutMs: 15_000,
     });
 
   it("captures a full document without changing viewport, scroll, or responsive layout", async () => {
@@ -113,6 +114,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       consoleEntries: [],
       networkEntries: [],
       actionTimeline: [],
+      timeoutMs: 15_000,
     });
     expect(result.screenshot).toMatchObject({ width: 800, height: 3000, clipped: false });
     const bottomPixel = await page.evaluate(`(async () => {
@@ -150,6 +152,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
         consoleEntries: [],
         networkEntries: [],
         actionTimeline: [],
+        timeoutMs: 15_000,
       });
       expect(result.screenshot).toMatchObject({ width: 800, height: 3000, clipped: false });
       const image = Buffer.from(result.screenshot.data, "base64");

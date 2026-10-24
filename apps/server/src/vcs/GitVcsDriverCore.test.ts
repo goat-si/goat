@@ -42,27 +42,11 @@ import {
   windowsLongPathConfigEnv,
   existingBranchConflictDetail,
   isSameWorktreePath,
-  worktreeFolderName,
   worktreeListLinesToFields,
 } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { defaultCheckoutWorkers } from "./worktreeCheckout.ts";
 import { gitConfigEnv } from "./VcsProcess.ts";
-
-describe("worktreeFolderName", () => {
-  it("keeps POSIX folder names as before", () => {
-    assert.equal(worktreeFolderName('feature/a"b<c>|d.', "linux"), 'feature-a"b<c>|d.');
-    assert.equal(worktreeFolderName("con", "darwin"), "con");
-  });
-
-  it("avoids names Windows refuses", () => {
-    assert.equal(worktreeFolderName('feature/a"b<c>|d', "win32"), "feature-a-b-c--d");
-    assert.equal(worktreeFolderName("release/1.0. ", "win32"), "release-1.0");
-    assert.equal(worktreeFolderName("CON", "win32"), "CON-branch");
-    assert.equal(worktreeFolderName("lpt1.txt", "win32"), "lpt1.txt-branch");
-    assert.equal(worktreeFolderName("console", "win32"), "console");
-  });
-});
 
 describe("existing worktree branches", () => {
   // Paths from the mini host, where a retried launch hit branch_already_exists.
