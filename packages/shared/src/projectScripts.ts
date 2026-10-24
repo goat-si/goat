@@ -1,4 +1,4 @@
-import type { ProjectId, ProjectScript, ServerSettings } from "@goat/contracts";
+import type { GoatProjectFile, ProjectId, ProjectScript, ServerSettings } from "@goat/contracts";
 import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 
 type ProjectScriptSettings = Pick<
@@ -35,6 +35,32 @@ export function resolveProjectScriptConfiguration(
   return {
     scripts: settings.defaultProjectScripts,
     source: settings.defaultProjectScripts.length > 0 ? "defaults" : "unconfigured",
+  } as const;
+}
+
+/** The setup fallback is separate from persisted actions so edits never import repository commands. */
+export function resolveProjectSetupScriptConfiguration(
+  configuration: ReturnType<typeof resolveProjectScriptConfiguration>,
+  file: GoatProjectFile | null,
+) {
+  if (configuration.source !== "unconfigured") return configuration;
+  const declared = file?.scripts?.find((script) => script.runOnWorktreeCreate);
+  if (declared === undefined) return configuration;
+  let id = "goat-file-setup";
+  for (let suffix = 2; configuration.scripts.some((script) => script.id === id); suffix++) {
+    id = `goat-file-setup-${suffix}`;
+  }
+  return {
+    source: "project-file",
+    scripts: [
+      ...configuration.scripts,
+      {
+        ...declared,
+        id,
+        icon: declared.icon ?? "play",
+        runOnWorktreeCreate: true,
+      } satisfies ProjectScript,
+    ],
   } as const;
 }
 
