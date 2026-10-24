@@ -172,11 +172,14 @@ export const cuaAgentBlockMessage = (block: CuaAgentBlock): string =>
 /**
  * What of a block newer readiness still bears out: only the grants it does not report granted,
  * and nothing once every one is back, so no surface keeps naming a grant the person gave.
+ * Readiness is the helper's, so it only speaks for a block the helper holds; a block on GOAT
+ * itself stays as it was.
  */
 export const cuaAgentBlockUnder = (
   block: CuaAgentBlock,
   readiness: typeof ComputerUseReadiness.Type,
 ): CuaAgentBlock | undefined => {
+  if (block.holder !== "helper") return block;
   const missing = block.missing.filter(
     (grant) =>
       readiness.grants[grant === "accessibility" ? "accessibility" : "screenCapture"] !== "granted",
