@@ -15,11 +15,13 @@ namespace Goat.ComputerUse
     /// not a person and is skipped. Events carry no content: no keys, no pointer position, nothing
     /// a field holds.
     ///
-    /// One thread owns all watch state and one queue carries everything it writes, so the order
-    /// ComputerUseWatchRequest requires holds: a target that leaves while private is cleared under
-    /// the old watch id, then the request is answered, then every target's state goes out under
-    /// the new id. Focus events carry no sample; the owner reads focus itself, after any switch,
-    /// so an old sample can never speak for a new watch. Hook callbacks only enqueue.
+    /// One thread owns all watch state and one queue (SignalOutbox) carries everything written,
+    /// so the order ComputerUseWatchRequest requires holds: a target that leaves while private is
+    /// cleared under the old watch id, then the request is answered, then every target's state
+    /// goes out under the new id. A short lock around only those enqueues, which hooks take too,
+    /// puts every humanInput either before the answer under the old id or after it under the new
+    /// one. Focus events carry no sample; the owner reads focus and window liveness itself, after
+    /// any switch, so an old sample can never speak for a new watch.
     /// </summary>
     internal sealed class Signals
     {
@@ -56,6 +58,8 @@ namespace Goat.ComputerUse
         static extern uint GetCurrentThreadId();
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         static extern IntPtr GetModuleHandle(string name);
+        [DllImport("user32.dll")]
+        static extern bool PeekMessage(out MSG message, IntPtr window, uint min, uint max, uint remove);
 
         /// <summary>One watched window; a target is the pair, not the process.</summary>
         internal struct Target
@@ -65,30 +69,40 @@ namespace Goat.ComputerUse
             public string Key { get { return Pid + ":" + WindowId; } }
         }
 
+        /// <summary>One attempt to run the input hooks; kept until its thread has ended.</summary>
+        sealed class HookWorker
+        {
+            public Thread Thread;
+            public volatile uint ThreadId;
+            public volatile bool Cancelled;
+            public volatile bool Installed;
+            public string Failure;
+            public readonly ManualResetEvent Ready = new ManualResetEvent(false);
+        }
+
         readonly BlockingCollection<Action> inbox = new BlockingCollection<Action>();
-        readonly BlockingCollection<Dictionary<string, object>> outbox = new BlockingCollection<Dictionary<string, object>>();
+        readonly SignalOutbox outbox;
         readonly Thread owner;
+        /// <summary>Held only while enqueueing, never across I/O or UI Automation.</summary>
+        readonly object attribution = new object();
 
         // Owned by the owner thread.
         string watchId;
         List<Target> targets = new List<Target>();
         readonly Dictionary<string, bool> active = new Dictionary<string, bool>();
         AutomationFocusChangedEventHandler focusHandler;
-        Thread hookThread;
-        uint hookThreadId;
+        HookWorker hooks;
         HookProc keyboardProc, mouseProc;
 
-        // Read by hook callbacks without locks.
-        volatile string inputWatch;
+        // Hook callbacks read these under attribution.
+        string inputWatch;
         int focusPending;
         long lastKeyboard, lastPointer;
         int sawKeyboard, sawPointer;
 
         public Signals(Action<Dictionary<string, object>> emit)
         {
-            var writer = new Thread(delegate () { foreach (var frame in outbox.GetConsumingEnumerable()) emit(frame); });
-            writer.IsBackground = true;
-            writer.Start();
+            outbox = new SignalOutbox(emit);
             owner = new Thread(delegate () { foreach (Action work in inbox.GetConsumingEnumerable()) work(); });
             owner.IsBackground = true;
             owner.Start();
@@ -136,29 +150,35 @@ namespace Goat.ComputerUse
                 // The old watch stays as it was.
                 reply.Remove("result");
                 reply["error"] = Error("signals_unavailable", failure);
-                outbox.Add(reply);
+                outbox.Add(reply, null);
                 return;
             }
             var next = new HashSet<string>();
             foreach (Target target in nextTargets) next.Add(target.Key);
-            foreach (Target target in targets)
-                if (!next.Contains(target.Key)) Clear(target);
-            watchId = nextWatchId;
-            targets = nextTargets;
-            active.Clear();
-            inputWatch = nextWatchId;
-            outbox.Add(reply);
+            lock (attribution)
+            {
+                foreach (Target target in targets)
+                    if (!next.Contains(target.Key)) Clear(target);
+                watchId = nextWatchId;
+                targets = nextTargets;
+                active.Clear();
+                inputWatch = nextWatchId;
+                outbox.Add(reply, null);
+            }
             Reconcile(true);
         }
 
         void DoUnwatch(Dictionary<string, object> reply)
         {
-            foreach (Target target in targets) Clear(target);
-            watchId = null;
-            inputWatch = null;
-            targets = new List<Target>();
-            active.Clear();
-            outbox.Add(reply);
+            lock (attribution)
+            {
+                foreach (Target target in targets) Clear(target);
+                watchId = null;
+                inputWatch = null;
+                targets = new List<Target>();
+                active.Clear();
+                outbox.Add(reply, null);
+            }
             StopListening();
         }
 
@@ -167,13 +187,14 @@ namespace Goat.ComputerUse
         {
             bool was;
             if (watchId != null && active.TryGetValue(target.Key, out was) && was)
-                outbox.Add(Frame(watchId, PrivateMode(target, false)));
+                outbox.Add(Frame(watchId, PrivateMode(target, false)), PrivateKey(watchId, target));
             active[target.Key] = false;
         }
 
         /// <summary>
         /// Reads focus now and reports each target whose state changed; every target when the
-        /// watch has just started. Focus UI Automation cannot read counts as private.
+        /// watch has just started. Focus UI Automation cannot read counts as private. A target
+        /// whose window is gone, or now belongs to another process, is no longer private.
         /// </summary>
         void Reconcile(bool all)
         {
@@ -183,11 +204,15 @@ namespace Goat.ComputerUse
             bool known = WindowsFacts.Focus(out pid, out password);
             foreach (Target target in targets)
             {
-                bool now = !known || (password && pid == target.Pid);
+                int owner;
+                IntPtr window = new IntPtr(target.WindowId);
+                bool exists = NativeMethods.IsWindow(window) &&
+                    NativeMethods.GetWindowThreadProcessId(window, out owner) != 0 && owner == target.Pid;
+                bool now = exists && (!known || (password && pid == target.Pid));
                 bool was;
                 if (!all && active.TryGetValue(target.Key, out was) && was == now) continue;
                 active[target.Key] = now;
-                outbox.Add(Frame(watchId, PrivateMode(target, now)));
+                outbox.Add(Frame(watchId, PrivateMode(target, now)), PrivateKey(watchId, target));
             }
         }
 
@@ -208,11 +233,8 @@ namespace Goat.ComputerUse
 
         string StartListening()
         {
-            if (hookThread == null)
-            {
-                string failure = StartHooks();
-                if (failure != null) return failure;
-            }
+            string failure = StartHooks();
+            if (failure != null) return failure;
             if (focusHandler == null)
             {
                 focusHandler = OnFocusChanged;
@@ -228,54 +250,81 @@ namespace Goat.ComputerUse
                 Automation.RemoveAutomationFocusChangedEventHandler(focusHandler);
                 focusHandler = null;
             }
-            if (hookThread != null)
-            {
-                PostThreadMessage(hookThreadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
-                hookThread.Join(2000);
-                hookThread = null;
-                hookThreadId = 0;
-            }
+            if (hooks != null) Cancel(hooks);
         }
 
-        /// <summary>Installs both hooks on a thread that pumps their messages, or neither.</summary>
+        /// <summary>Ends a hook attempt; it is forgotten only once its thread has ended.</summary>
+        void Cancel(HookWorker worker)
+        {
+            worker.Cancelled = true;
+            uint threadId = worker.ThreadId;
+            if (threadId != 0) PostThreadMessage(threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+            if (worker.Thread.Join(2000) && hooks == worker) hooks = null;
+        }
+
+        /// <summary>
+        /// Installs both hooks on a thread that pumps their messages, or neither. An attempt that
+        /// times out is cancelled and kept until its thread ends, and no new one starts meanwhile.
+        /// </summary>
         string StartHooks()
         {
-            var ready = new ManualResetEvent(false);
-            string failure = null;
-            uint threadId = 0;
+            if (hooks != null)
+            {
+                if (hooks.Installed && !hooks.Cancelled && hooks.Thread.IsAlive) return null;
+                if (hooks.Thread.IsAlive) return "An earlier attempt to start the input hooks has not ended yet. Try again.";
+                hooks = null;
+            }
+            var worker = new HookWorker();
             keyboardProc = OnKeyboard;
             mouseProc = OnMouse;
-            var thread = new Thread(delegate ()
+            worker.Thread = new Thread(delegate () { RunHooks(worker); });
+            worker.Thread.IsBackground = true;
+            hooks = worker;
+            worker.Thread.Start();
+            if (!worker.Ready.WaitOne(2000))
             {
-                threadId = GetCurrentThreadId();
-                IntPtr module = GetModuleHandle(null);
-                IntPtr keyboard = SetWindowsHookEx(WH_KEYBOARD_LL, keyboardProc, module, 0);
-                IntPtr mouse = SetWindowsHookEx(WH_MOUSE_LL, mouseProc, module, 0);
-                if (keyboard == IntPtr.Zero || mouse == IntPtr.Zero)
-                {
-                    failure = "Windows refused the input hooks (" + Marshal.GetLastWin32Error() + "), so a person's input could not be noticed.";
-                    if (keyboard != IntPtr.Zero) UnhookWindowsHookEx(keyboard);
-                    if (mouse != IntPtr.Zero) UnhookWindowsHookEx(mouse);
-                    ready.Set();
-                    return;
-                }
-                ready.Set();
-                MSG message;
-                while (GetMessage(out message, IntPtr.Zero, 0, 0) > 0) { }
-                UnhookWindowsHookEx(keyboard);
-                UnhookWindowsHookEx(mouse);
-            });
-            thread.IsBackground = true;
-            thread.Start();
-            if (!ready.WaitOne(2000))
-            {
-                if (threadId != 0) PostThreadMessage(threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+                Cancel(worker);
                 return "The input hooks did not start in time.";
             }
-            if (failure != null) return failure;
-            hookThread = thread;
-            hookThreadId = threadId;
+            if (worker.Failure != null)
+            {
+                worker.Thread.Join(2000);
+                if (!worker.Thread.IsAlive) hooks = null;
+                return worker.Failure;
+            }
             return null;
+        }
+
+        void RunHooks(HookWorker worker)
+        {
+            IntPtr keyboard = IntPtr.Zero, mouse = IntPtr.Zero;
+            try
+            {
+                MSG message;
+                // Creates this thread's message queue, so a quit posted from now on arrives.
+                PeekMessage(out message, IntPtr.Zero, 0, 0, 0);
+                worker.ThreadId = GetCurrentThreadId();
+                if (worker.Cancelled) return;
+                IntPtr module = GetModuleHandle(null);
+                keyboard = SetWindowsHookEx(WH_KEYBOARD_LL, keyboardProc, module, 0);
+                mouse = SetWindowsHookEx(WH_MOUSE_LL, mouseProc, module, 0);
+                if (keyboard == IntPtr.Zero || mouse == IntPtr.Zero)
+                {
+                    worker.Failure = "Windows refused the input hooks (" + Marshal.GetLastWin32Error() + "), so a person's input could not be noticed.";
+                    return;
+                }
+                if (worker.Cancelled) return;
+                worker.Installed = true;
+                worker.Ready.Set();
+                while (GetMessage(out message, IntPtr.Zero, 0, 0) > 0) { }
+            }
+            finally
+            {
+                if (keyboard != IntPtr.Zero) UnhookWindowsHookEx(keyboard);
+                if (mouse != IntPtr.Zero) UnhookWindowsHookEx(mouse);
+                worker.Installed = false;
+                worker.Ready.Set();
+            }
         }
 
         IntPtr OnKeyboard(int code, IntPtr wParam, IntPtr lParam)
@@ -292,18 +341,28 @@ namespace Goat.ComputerUse
             return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
         }
 
-        /// <summary>Runs inside the hook: no locks, no I/O, only a non-blocking enqueue.</summary>
+        /// <summary>
+        /// Runs inside the hook: no I/O, only the short attribution lock around an enqueue, so the
+        /// event lands on the right side of any watch answer.
+        /// </summary>
         void Human(string source, ref long last, ref int seen)
         {
-            string current = inputWatch;
-            if (current == null) return;
             long now = Stopwatch.GetTimestamp();
             if (Interlocked.Exchange(ref seen, 1) == 1 && now - Interlocked.Read(ref last) < HumanInputInterval) return;
             Interlocked.Exchange(ref last, now);
             var signal = new Dictionary<string, object>();
             signal["type"] = "humanInput";
             signal["source"] = source;
-            outbox.TryAdd(Frame(current, signal));
+            lock (attribution)
+            {
+                if (inputWatch == null) return;
+                outbox.Add(Frame(inputWatch, signal), inputWatch + "|human|" + source);
+            }
+        }
+
+        static string PrivateKey(string forWatch, Target target)
+        {
+            return forWatch + "|private|" + target.Key;
         }
 
         static Dictionary<string, object> PrivateMode(Target target, bool on)
