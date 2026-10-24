@@ -41,6 +41,12 @@ import {
   type HelperBundle,
   type HelperHostOptions,
 } from "./ComputerUseHelper.ts";
+import {
+  probeWindowsReadiness,
+  windowsDriverPipe,
+  windowsHelperBundle,
+  windowsPermissionsFailure,
+} from "./ComputerUseHelperWindows.ts";
 
 /** The daemon lifecycle both engines share: the SDK's in-process host and the helper app. */
 interface NativeHost {
@@ -56,7 +62,8 @@ interface NativeHost {
 }
 type DriverClient = Pick<CuaDriverLike, "callTool"> & { readonly uniffiDestroy?: () => void };
 type DriverImage = ToolResult["images"][number];
-type Grants = { accessibility: boolean; screenRecording: boolean };
+/** detail: why a Windows desktop is not ready, in onboarding's words; Windows has no grant to give. */
+type Grants = { accessibility: boolean; screenRecording: boolean; readonly detail?: string };
 
 /**
  * Who runs the driver. "helper": GOAT Computer Use.app owns the TCC identity and spawns the
@@ -90,7 +97,11 @@ export interface DesktopCuaDriverDependencies {
   /** Electron's view of the grants, read without prompting. */
   readonly checkGrants: () => Promise<Grants>;
   /** The helper's own grants, from a fresh helper process; prompts as the helper when asked. */
-  readonly helperGrants: (bundle: HelperBundle, prompt: boolean) => Promise<Grants>;
+  readonly helperGrants: (
+    bundle: HelperBundle,
+    prompt: boolean,
+    platform: NodeJS.Platform,
+  ) => Promise<Grants>;
   /**
    * The helper bundle this build ships. absent: the build has none, and GOAT itself runs the
    * driver as releases did before the helper. unusable: it should be there and cannot be used,
@@ -99,12 +110,17 @@ export interface DesktopCuaDriverDependencies {
   readonly helperBundlePath: (input: {
     readonly isPackaged: boolean;
     readonly resourcesPath: string;
+    readonly platform: NodeJS.Platform;
   }) => Promise<
     | { readonly kind: "found"; readonly path: string }
     | { readonly kind: "absent" }
     | { readonly kind: "unusable"; readonly message: string }
   >;
-  readonly helperHost: (options: Omit<HelperHostOptions, "spawn" | "readMetadata">) => NativeHost;
+  readonly helperHost: (
+    options: Omit<HelperHostOptions, "spawn" | "readMetadata"> & {
+      readonly platform: NodeJS.Platform;
+    },
+  ) => NativeHost;
   readonly imageHasContent: (image: DriverImage) => Promise<boolean>;
   /** Writes the capability manifest for one daemon start and returns its path. */
   readonly prepareManifest: (input: {
@@ -152,15 +168,20 @@ const dependencies: DesktopCuaDriverDependencies = {
       screenRecording: systemPreferences.getMediaAccessStatus("screen") === "granted",
     };
   },
-  helperGrants: (bundle, prompt) =>
-    probeHelperGrants(spawnHelperProcess(bundle.executable), bundle.bundleId, prompt),
-  helperBundlePath: async ({ isPackaged, resourcesPath }) => {
+  helperGrants: (bundle, prompt, platform) =>
+    platform === "win32"
+      ? probeWindowsReadiness(spawnHelperProcess(bundle.executable, platform), bundle.bundleId)
+      : probeHelperGrants(spawnHelperProcess(bundle.executable, platform), bundle.bundleId, prompt),
+  helperBundlePath: async ({ isPackaged, resourcesPath, platform }) => {
     const { access } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const configured = isPackaged ? undefined : process.env.GOAT_CUA_HELPER_PATH?.trim();
     if (!isPackaged && !configured) return { kind: "absent" };
     const candidate =
-      configured || join(resourcesPath, "..", "Helpers", `${COMPUTER_USE_HELPER_NAME}.app`);
+      configured ||
+      (platform === "win32"
+        ? join(resourcesPath, "computer-use-helper")
+        : join(resourcesPath, "..", "Helpers", `${COMPUTER_USE_HELPER_NAME}.app`));
     return access(candidate).then(
       () => ({ kind: "found", path: candidate }) as const,
       (error: NodeJS.ErrnoException) =>
@@ -173,10 +194,11 @@ const dependencies: DesktopCuaDriverDependencies = {
             } as const),
     );
   },
-  helperHost: (options) =>
+  helperHost: ({ platform, ...options }) =>
     makeHelperHost({
       ...options,
-      spawn: spawnHelperProcess,
+      spawn: (executable) => spawnHelperProcess(executable, platform),
+      ...(platform === "win32" ? { socket: windowsDriverPipe } : {}),
       readMetadata: async (socketPath): Promise<DaemonMetadata> => {
         const driver: DriverClient & Pick<CuaDriverLike, "metadata"> = (
           await import("@trycua/cua-driver")
@@ -382,16 +404,17 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       : process.env.GOAT_CUA_DRIVER_PATH?.trim();
 
   /**
-   * A Mac build that ships the helper always uses it. Only a build without one runs the driver
-   * in-process under GOAT's own grants; a helper that is there and unusable is a reason string,
-   * and computer use stays off.
+   * A Mac or Windows build that ships the helper always uses it. Only a build without one runs
+   * the driver in-process under GOAT's own identity; a helper that is there and unusable is a
+   * reason string, and computer use stays off.
    */
   const engine = Effect.fn("desktop.cua.engine")(function* () {
-    if (environment.platform === "darwin") {
+    if (environment.platform === "darwin" || environment.platform === "win32") {
       const found = yield* Effect.tryPromise(() =>
         native.helperBundlePath({
           isPackaged: environment.isPackaged,
           resourcesPath: environment.resourcesPath,
+          platform: environment.platform,
         }),
       ).pipe(
         Effect.orElseSucceed(
@@ -403,11 +426,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         ),
       );
       if (found.kind === "unusable") return found.message;
-      if (found.kind === "found")
+      if (found.kind === "found") {
+        const bundleId = computerUseHelperBundleId(environment.appUserModelId);
         return {
           kind: "helper",
-          bundle: helperBundle(found.path, computerUseHelperBundleId(environment.appUserModelId)),
+          bundle:
+            environment.platform === "win32"
+              ? windowsHelperBundle(found.path, bundleId)
+              : helperBundle(found.path, bundleId),
         } satisfies Engine;
+      }
     }
     const path = driverPath();
     return path ? ({ kind: "embedded", driverPath: path } satisfies Engine) : undefined;
@@ -419,7 +447,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     engine.kind === "helper" ? engine.bundle.bundleId : environment.appUserModelId;
   const engineGrants = (engine: Engine, prompt: boolean): Promise<Grants> =>
     engine.kind === "helper"
-      ? native.helperGrants(engine.bundle, prompt)
+      ? native.helperGrants(engine.bundle, prompt, environment.platform)
       : prompt
         ? native.loadElectron().then((electron) => {
             const granted = electron.hasRequiredMacOSPermissions(
@@ -465,6 +493,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         driverVersion: cuaDriverRelease("darwin", "arm64")?.version ?? "",
         capabilityManifestPath: manifestPath,
         environment: driverEnvironment,
+        platform: environment.platform,
       });
     } else {
       const sdk = yield* Effect.tryPromise(() => native.loadEmbedded());
@@ -514,8 +543,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       verified: steps.length === VERIFICATION_STEPS && steps.every((step) => step.ok),
       steps,
     });
-    if (environment.platform !== "darwin" || closed) {
-      record("grants", "Permission checks run on macOS only.");
+    if ((environment.platform !== "darwin" && environment.platform !== "win32") || closed) {
+      record("grants", "Readiness checks run on macOS and Windows.");
       return done();
     }
     const chosen = yield* engine();
@@ -523,11 +552,19 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       record("grants", chosen);
       return done();
     }
+    // Electron's grant APIs are macOS only; on Windows the helper is what reads the desktop.
+    if (environment.platform === "win32" && chosen?.kind !== "helper") {
+      record(
+        "grants",
+        `Readiness checks on Windows run through ${COMPUTER_USE_HELPER_NAME}, which this build does not include.`,
+      );
+      return done();
+    }
     const selected = chosen;
     const principal = selected?.kind === "helper" ? COMPUTER_USE_HELPER_NAME : "GOAT";
     const grants = yield* Effect.tryPromise(() =>
       selected ? engineGrants(selected, false) : native.checkGrants(),
-    ).pipe(Effect.orElseSucceed(() => ({ accessibility: false, screenRecording: false })));
+    ).pipe(Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })));
     const missing = [
       ...(grants.accessibility ? [] : ["Accessibility"]),
       ...(grants.screenRecording ? [] : ["Screen Recording"]),
@@ -535,9 +572,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     if (
       !record(
         "grants",
-        missing.length === 0
-          ? undefined
-          : `${missing.join(" and ")} ${missing.length > 1 ? "are" : "is"} off for ${principal}.`,
+        grants.detail ??
+          (missing.length === 0
+            ? undefined
+            : `${missing.join(" and ")} ${missing.length > 1 ? "are" : "is"} off for ${principal}.`),
       )
     )
       return done();
@@ -595,13 +633,37 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         Effect.option,
       );
 
-    if (!record("permissions", permissionsFailure(yield* call("check_permissions", {}))))
+    const permissions = yield* call("check_permissions", {});
+    if (
+      !record(
+        "permissions",
+        environment.platform === "win32"
+          ? (failedCall(permissions) ??
+              windowsPermissionsFailure(Option.getOrUndefined(permissions)?.structured))
+          : permissionsFailure(permissions),
+      )
+    )
       return done();
-    const health = yield* call("health_report", { include: ["bundle_identity"] });
-    // With the helper, the driver's parent is the helper's service process, not Electron.
-    const parentPid = selected.kind === "helper" ? (checkServicePid() ?? -1) : native.processId;
-    if (!record("identity", identityFailure(health, engineBundleId(selected), parentPid)))
-      return done();
+    if (environment.platform === "win32") {
+      // health_report skips bundle identity on Windows. The helper host admitted this daemon by
+      // the pid the helper started, embedded mode and the helper's id before handing out its
+      // pipe (daemonMismatch), so identity holds while that helper still owns it.
+      if (
+        !record(
+          "identity",
+          checkServicePid() === undefined
+            ? `${COMPUTER_USE_HELPER_NAME} stopped running the driver. Try again.`
+            : undefined,
+        )
+      )
+        return done();
+    } else {
+      const health = yield* call("health_report", { include: ["bundle_identity"] });
+      // With the helper, the driver's parent is the helper's service process, not Electron.
+      const parentPid = selected.kind === "helper" ? (checkServicePid() ?? -1) : native.processId;
+      if (!record("identity", identityFailure(health, engineBundleId(selected), parentPid)))
+        return done();
+    }
 
     const windows = yield* call("list_windows", { pid: native.processId, on_screen_only: true });
     const windowId = Option.flatMap(windows, ({ structured }) =>
@@ -699,6 +761,17 @@ export const make = Effect.fn("desktop.cua.make")(function* (
               selected.kind === "helper"
                 ? `Allow Accessibility and Screen Recording for ${COMPUTER_USE_HELPER_NAME} in System Settings, then restart computer use.`
                 : "Allow Accessibility and Screen Recording in System Settings, then restart computer use.",
+            );
+            return;
+          }
+        } else if (selected.kind === "helper") {
+          // Windows has no grant to prompt for; a desktop the helper cannot use says why.
+          const ready = yield* Effect.tryPromise(() => engineGrants(selected, false));
+          if (ready.detail !== undefined || !ready.accessibility || !ready.screenRecording) {
+            yield* report(
+              request.requestId,
+              "unavailable",
+              ready.detail ?? `${COMPUTER_USE_HELPER_NAME} cannot use this desktop.`,
             );
             return;
           }

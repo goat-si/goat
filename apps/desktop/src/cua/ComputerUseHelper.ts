@@ -72,7 +72,24 @@ export interface HelperProcess {
   readonly exited: Promise<void>;
 }
 
-export const spawnHelperProcess = (executable: string): HelperProcess => {
+export const spawnHelperProcess = (
+  executable: string,
+  platform: NodeJS.Platform,
+): HelperProcess => {
+  // Windows has no process groups to signal; the helper keeps its driver in a kill-on-close job,
+  // so ending the helper ends the driver.
+  if (platform === "win32") {
+    const child = NodeChildProcess.spawn(executable, [], {
+      stdio: ["pipe", "pipe", "inherit"],
+      windowsHide: true,
+    });
+    const exited = new Promise<void>((resolve) => {
+      child.once("exit", () => resolve());
+      child.once("error", () => resolve());
+    });
+    child.stdin.on("error", () => undefined);
+    return { stdin: child.stdin, stdout: child.stdout, kill: () => child.kill(), exited };
+  }
   // Its own process group: the launcher, the service it re-execs and the driver all join it, so
   // a forced stop reaches the whole tree even when the service is stuck.
   const child = NodeChildProcess.spawn(executable, [], {
@@ -100,6 +117,8 @@ export interface HelperSession {
   /** The service process: the driver's parent and the TCC principal. */
   readonly pid: number;
   readonly bundleId: string;
+  /** One request and its undecoded result, for platform methods such as Windows readiness. */
+  readonly request: (method: string, params?: object) => Promise<unknown>;
   readonly permissions: (prompt: boolean) => Promise<typeof HelperGrants.Type>;
   readonly start: (params: {
     readonly socketPath: string;
@@ -215,6 +234,7 @@ export async function openHelperSession(
   return {
     pid: hello.pid,
     bundleId: hello.bundleId,
+    request,
     permissions: async (prompt) => decodeGrants(await request("permissions", { prompt })),
     start: async (params) => decodeStarted(await request("start", params)),
     stop: async () => {
@@ -246,10 +266,11 @@ export interface HelperBundle {
   readonly bundleId: string;
 }
 
+// A macOS bundle's paths are POSIX wherever this module is tested.
 export const helperBundle = (bundlePath: string, bundleId: string): HelperBundle => ({
   bundlePath,
-  executable: NodePath.join(bundlePath, "Contents", "MacOS", COMPUTER_USE_HELPER_NAME),
-  driverPath: NodePath.join(bundlePath, "Contents", "Resources", "cua-driver", "cua-driver"),
+  executable: NodePath.posix.join(bundlePath, "Contents", "MacOS", COMPUTER_USE_HELPER_NAME),
+  driverPath: NodePath.posix.join(bundlePath, "Contents", "Resources", "cua-driver", "cua-driver"),
   bundleId,
 });
 
@@ -307,11 +328,25 @@ export interface HelperHostOptions {
   readonly environment: ReadonlyArray<{ readonly name: string; readonly value: string }>;
   readonly spawn: (executable: string) => HelperProcess;
   readonly readMetadata: (socketPath: string) => Promise<DaemonMetadata>;
+  /**
+   * Where this generation's driver listens. Defaults to a socket in a fresh private directory;
+   * Windows names a pipe instead.
+   */
+  readonly socket?: () => Promise<{ readonly path: string; readonly release: () => Promise<void> }>;
 }
+
+const privateSocket = async () => {
+  // A short private directory: Unix socket paths stop at 104 bytes.
+  const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-cu-"));
+  return {
+    path: NodePath.join(directory, "driver.sock"),
+    release: () => NodeFSP.rm(directory, { recursive: true, force: true }),
+  };
+};
 
 export function makeHelperHost(options: HelperHostOptions) {
   let session: HelperSession | undefined;
-  let socketDirectory: string | undefined;
+  let releaseSocket: (() => Promise<void>) | undefined;
   let connection: EmbeddedDriverConnection | undefined;
   let generation = 0;
 
@@ -323,8 +358,8 @@ export function makeHelperHost(options: HelperHostOptions) {
       await current.stop().catch(() => undefined);
       await current.close();
     }
-    if (socketDirectory) await NodeFSP.rm(socketDirectory, { recursive: true, force: true });
-    socketDirectory = undefined;
+    await releaseSocket?.();
+    releaseSocket = undefined;
   };
 
   return {
@@ -336,10 +371,10 @@ export function makeHelperHost(options: HelperHostOptions) {
         options.bundle.bundleId,
       );
       try {
-        // A short private directory: Unix socket paths stop at 104 bytes.
-        socketDirectory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-cu-"));
+        const socket = await (options.socket ?? privateSocket)();
+        releaseSocket = socket.release;
         const started = await session.start({
-          socketPath: NodePath.join(socketDirectory, "driver.sock"),
+          socketPath: socket.path,
           capabilityManifestPath: options.capabilityManifestPath,
           environment: options.environment,
           noOverlay: false,
