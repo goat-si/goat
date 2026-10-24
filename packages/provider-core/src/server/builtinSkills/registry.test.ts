@@ -1,4 +1,8 @@
-import { ComputerUseRefusalReason } from "@goat/contracts";
+import {
+  ComputerUseRefusalDetail,
+  ComputerUseRefusalReason,
+  computerUseRefusalReason,
+} from "@goat/contracts";
 import { CUA_DRIVER_EXCLUDED_TOOLS } from "@goat/shared/cuaDriverManifest";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -69,7 +73,7 @@ describe("computer use skill text", () => {
     const mac = builtInSkillSections(["computer-use"], "darwin").join("\n");
     expect(mac).toContain('os="macOS"');
     expect(mac).not.toContain('os="Windows"');
-    expect(builtInSkillSections(["computer-use"], "freebsd")).toHaveLength(1);
+    expect(builtInSkillSections(["computer-use"], "freebsd")).toHaveLength(2);
   });
 
   it("contains no identifier from another vendor's computer use skill", () => {
@@ -93,8 +97,9 @@ describe("computer use skill text", () => {
 });
 
 describe("computer use skill against what agents receive today", () => {
-  // Agents reach the raw `cua-driver` tools; the helper protocol's typed refusals are not on
-  // that path yet, so naming them would teach recovery steps no result ever triggers.
+  // Agents reach the raw `cua-driver` tools through GOAT's lease proxy. The proxy answers with
+  // the reasons computerUseRefusalReason maps its details to; the helper protocol's other
+  // refusals are not on that path yet, so naming them would teach recovery no result triggers.
   const codeSpans = [
     ...builtInSkillSections(["computer-use"], "darwin"),
     ...Object.values(COMPUTER_USE_PLATFORM_NOTES),
@@ -104,9 +109,55 @@ describe("computer use skill against what agents receive today", () => {
     .map((match) => match[1] ?? "")
     .toArray();
 
-  it("names no helper-protocol refusal the driver path does not return", () => {
-    const helperOnly = new Set<string>(ComputerUseRefusalReason.literals);
+  const proxyReasons = new Set<string>(
+    ComputerUseRefusalDetail.literals.map((detail) => computerUseRefusalReason(detail)),
+  );
+  const guidance = [
+    ...builtInSkillSections(["computer-use"], "darwin"),
+    ...Object.values(COMPUTER_USE_PLATFORM_NOTES),
+  ].join("\n");
+
+  it("names no helper-protocol refusal the proxy path does not return", () => {
+    const helperOnly = new Set<string>(
+      ComputerUseRefusalReason.literals.filter((reason) => !proxyReasons.has(reason)),
+    );
     expect(codeSpans.filter((span) => helperOnly.has(span))).toEqual([]);
+  });
+
+  it("names every refusal reason the proxy can answer with, so none reads as an unknown error", () => {
+    for (const reason of proxyReasons) expect(codeSpans, reason).toContain(reason);
+  });
+
+  it("tells agents a cut-off call may have acted, unlike a refusal", () => {
+    // The proxy answers a call a pause or Stop cut off after it reached the driver with
+    // code "interrupted"; with effect "unverifiable" the input may have landed.
+    const line = guidance.split("\n").find((entry) => entry.includes('code: "interrupted"'));
+    expect(line).toBeDefined();
+    expect(line).toContain('effect: "unverifiable"');
+    expect(line).toContain("may have acted");
+  });
+
+  it("teaches diff reads, narrow reads and element tokens from the newest read only", () => {
+    for (const argument of [
+      'since: "latest"',
+      "query",
+      "max_elements",
+      "max_depth",
+      "element_token",
+    ])
+      expect(codeSpans, argument).toContain(argument);
+    expect(guidance).toMatch(/new snapshot id and retires the old tokens/);
+  });
+
+  it("waits on an expected outcome with verify_state and never promises a wait for absence", () => {
+    // verify_state refuses element exists:false: an incomplete walk cannot prove absence.
+    expect(codeSpans).toContain("verify_state");
+    expect(guidance).toMatch(/cannot wait for something to disappear/);
+  });
+
+  it("teaches no tool an approved-app turn refuses", () => {
+    // ComputerUseScope refuses scripts and batches whenever a thread's control names apps.
+    for (const tool of ["run_steps", "run_script"]) expect(codeSpans).not.toContain(tool);
   });
 
   it("treats input as unsent only for an explicit refusal or a pre-send code without an effect", () => {

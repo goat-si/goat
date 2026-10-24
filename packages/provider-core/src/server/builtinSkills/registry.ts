@@ -6,14 +6,19 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 
-import { COMPUTER_USE_PLATFORM_NOTES, COMPUTER_USE_SKILL_CORE } from "./computerUse.ts";
+import {
+  COMPUTER_USE_PLATFORM_NOTES,
+  COMPUTER_USE_SKILL_CORE,
+  COMPUTER_USE_SKILL_PEOPLE,
+} from "./computerUse.ts";
 
 const SECTIONS: Readonly<
   Record<BuiltInSkillName, (platform: NodeJS.Platform) => ReadonlyArray<string>>
 > = {
   "computer-use": (platform) => {
     const notes = COMPUTER_USE_PLATFORM_NOTES[platform];
-    return notes === undefined ? [COMPUTER_USE_SKILL_CORE] : [COMPUTER_USE_SKILL_CORE, notes];
+    const skill = [COMPUTER_USE_SKILL_CORE, COMPUTER_USE_SKILL_PEOPLE];
+    return notes === undefined ? skill : [...skill, notes];
   },
 };
 
