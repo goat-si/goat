@@ -155,7 +155,7 @@ function ConnectionsSection({ children }: { readonly children?: ReactNode }) {
   const { savedConnectionsById } = useSavedRemoteConnections();
   return (
     <SettingsSection title="Connections">
-      <SettingsRow icon="desktopcomputer" label="Devices on this hub" target="SettingsHubNodes" />
+      <SettingsRow icon="desktopcomputer" label="Hub devices" target="SettingsHubNodes" />
       <SettingsRow
         icon="desktopcomputer"
         label="Environments"
