@@ -209,7 +209,9 @@ function CuaGrantWaitingHint({ name }: { name: string }) {
 /**
  * What a grant row of the shared readiness list offers on the Mac that runs the host: the System
  * Settings guide for the next grant, and the waiting hint once its pane is open. The host's report
- * trails this Mac's own read, so a grant this Mac already reads as on says so instead of asking.
+ * trails this Mac's own read, so a grant this Mac already reads as on says so instead of asking,
+ * and the next grant is the first one this Mac reads as off. The report's own "current" grant can
+ * still be one this Mac has allowed, which would leave no row to act on.
  */
 export function cuaReadinessGrantSlot(input: {
   readonly live: CuaGrantHolder;
@@ -220,7 +222,7 @@ export function cuaReadinessGrantSlot(input: {
   return (
     grant: "accessibility" | "screenCapture",
     state: ComputerUseGrant,
-    context: { isCurrent: boolean },
+    _context: { isCurrent: boolean },
   ): { action: ReactNode; detail?: ReactNode } => {
     const permission: CuaPermission =
       grant === "accessibility" ? "accessibility" : "screen-recording";
@@ -234,7 +236,10 @@ export function cuaReadinessGrantSlot(input: {
           </span>
         ),
       };
-    if (!context.isCurrent) return { action: null };
+    // withLiveGrants already demotes a reported grant this Mac reads as off, so this Mac's read
+    // alone picks the next step.
+    const next = cuaGranted(input.live, "accessibility") ? "screen-recording" : "accessibility";
+    if (permission !== next) return { action: null };
     const waiting = input.opened === permission;
     return {
       action: (

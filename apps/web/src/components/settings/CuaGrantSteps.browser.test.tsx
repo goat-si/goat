@@ -65,3 +65,15 @@ it("shows the re-drag hint while the pane is open, and no ask for a grant this M
   await expect.element(screen.getByText("Allowed on this Mac")).toBeVisible();
   expect(buttons()).toEqual(["Open again"]);
 });
+
+it("moves the guide to screen recording once this Mac allows accessibility, before the host reports it", async () => {
+  const onOpen = vi.fn<(permission: CuaPermission) => void>();
+  // The report still says accessibility is denied and screen capture unknown.
+  await using screen = await readiness(
+    cuaReadinessGrantSlot({ live: live(true, false), opened: null, busy: false, onOpen }),
+  );
+  await expect.element(screen.getByText("Allowed on this Mac")).toBeVisible();
+  expect(buttons()).toEqual(["Open Settings"]);
+  await screen.getByRole("button", { name: "Open Settings" }).click();
+  expect(onOpen).toHaveBeenCalledWith("screen-recording");
+});
