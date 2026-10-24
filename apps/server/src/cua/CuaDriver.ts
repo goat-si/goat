@@ -135,6 +135,11 @@ export class CuaDriver extends Context.Service<
     readonly acquire: Effect.Effect<Option.Option<CuaDriverMcpConfiguration>>;
     readonly enabled: Effect.Effect<boolean>;
     readonly lastFailure: Effect.Effect<Option.Option<CuaDriverError>>;
+    /**
+     * Why an agent cannot use the computer here until a person acts, from the last failure and
+     * the helper's newest report only, so admission never waits on a readiness probe.
+     */
+    readonly block: Effect.Effect<CuaAgentBlock | undefined>;
     readonly status: Effect.Effect<CuaHostStatus>;
     readonly computerUse: Effect.Effect<HostComputerUse>;
     /**
@@ -398,6 +403,11 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     ),
     enabled,
     lastFailure: Effect.sync(() => failure),
+    block: (options.helperReadiness ?? Effect.succeedNone).pipe(
+      Effect.map((helper) =>
+        currentBlock(failure, Option.isSome(helper) ? helper.value.readiness : undefined),
+      ),
+    ),
     status: Effect.gen(function* () {
       const display = yield* reported;
       // The helper's own report (desktop telemetry) wins; the server-run Linux helper is read

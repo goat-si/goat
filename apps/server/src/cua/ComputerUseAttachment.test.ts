@@ -121,6 +121,7 @@ const fakeDriver = (input: {
       return input.running ? Option.some(mcp) : Option.none();
     }),
     lastFailure: Effect.succeed(Option.fromUndefinedOr(input.failure)),
+    block: Effect.succeed(undefined),
     status: Effect.succeed({ platform: "darwin", running: input.running }),
     computerUse: Effect.die("unused"),
     admitEnable: Effect.die("unused"),

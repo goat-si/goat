@@ -71,6 +71,7 @@ it.effect("a grant block ends once the helper reports the missing grant granted 
     );
     expect(yield* service.acquire).toEqual(Option.none());
     expect((yield* service.status).block).toEqual(block);
+    expect(yield* service.block).toEqual(block);
     const readiness = (screenCapture: "pending" | "granted") =>
       ({
         readiness: {
@@ -85,11 +86,35 @@ it.effect("a grant block ends once the helper reports the missing grant granted 
       }) satisfies HelperReadiness;
     yield* Ref.set(reported, Option.some(readiness("pending")));
     expect((yield* service.status).block).toEqual(block);
+    expect(yield* service.block).toEqual(block);
     yield* Ref.set(reported, Option.some(readiness("granted")));
     expect((yield* service.status).block).toBeUndefined();
+    expect(yield* service.block).toBeUndefined();
   }).pipe(
     Effect.provide(ServerSettings.layerTest({ enableCua: true })),
     Effect.provideService(HostProcess.Platform, "darwin"),
+    Effect.provideService(HostProcess.Environment, {}),
+    Effect.scoped,
+  ),
+);
+
+it.effect("the agent block never waits on a readiness probe of the running driver", () =>
+  Effect.gen(function* () {
+    const service = yield* CuaDriver.make(
+      () =>
+        Effect.succeed({
+          start: Effect.succeed({ command: "/driver", args: ["mcp"], environment: [] }),
+          stop: Effect.void,
+          waitForExit: Effect.never,
+        }),
+      Effect.succeed({ capability: "available", reason: "Uses this screen.", environment: [] }),
+      { observeReadiness: () => Effect.never },
+    );
+    expect(Option.isSome(yield* service.acquire)).toBe(true);
+    expect(yield* service.block).toBeUndefined();
+  }).pipe(
+    Effect.provide(ServerSettings.layerTest({ enableCua: true })),
+    Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provideService(HostProcess.Environment, {}),
     Effect.scoped,
   ),

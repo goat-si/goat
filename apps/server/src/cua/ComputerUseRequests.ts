@@ -41,8 +41,8 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       message: "Computer use is off on this host. A person turns it on in Settings.",
     } satisfies ComputerUseRequestResult;
   // An approval would not help: the desktop will not start the driver until macOS allows it.
-  // The status drops a block the helper's newer readiness has seen granted since.
-  const block = (yield* cua.value.status).block;
+  // A block the helper's newer readiness has seen granted since no longer refuses.
+  const block = yield* cua.value.block;
   if (block !== undefined)
     return {
       kind: "refused",
