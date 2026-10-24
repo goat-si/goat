@@ -127,8 +127,11 @@ interface WorktreeFacts {
    * turn start and storage cleanup take the workspace lease under.
    */
   readonly leaseKeys: ReadonlyArray<string>;
-  /** Each bound thread's recorded path, which decides whether turn start recreates it. */
-  readonly threadPaths: ReadonlyMap<string, string>;
+  /** Each bound thread's recorded path and branch, which decide whether turn start recreates it. */
+  readonly threadCheckouts: ReadonlyMap<
+    string,
+    { readonly path: string; readonly branch: string | null }
+  >;
 }
 
 interface ScanContext {
@@ -301,7 +304,13 @@ const make = Effect.gen(function* () {
                 ...shells.map((thread) => path.resolve(thread.worktreePath!)),
               ]),
             ].toSorted(),
-            threadPaths: new Map(shells.map((thread) => [thread.id, thread.worktreePath!])),
+            threadCheckouts: new Map(
+              shells.flatMap((thread) =>
+                thread.worktreePath === null
+                  ? []
+                  : [[thread.id, { path: thread.worktreePath, branch: thread.branch }] as const],
+              ),
+            ),
           } satisfies WorktreeFacts;
         }),
       { concurrency: 8 },
@@ -600,31 +609,42 @@ const make = Effect.gen(function* () {
               ),
             );
         }
-        const branchSurvives = !branchDeleted && branch !== null;
-        const recreating: Array<string> = [];
+        // Turn start recreates a missing checkout from the thread's own branch,
+        // and only at a path GOAT placed in its worktrees folder.
+        const recreating = new Map<string, Array<string>>();
         const stranded: Array<string> = [];
+        const outside: Array<string> = [];
         for (const thread of facts.entry.threads) {
           if (thread.archived) continue;
-          const recorded = facts.threadPaths.get(thread.threadId);
-          const recreates =
-            branchSurvives && recorded !== undefined && (yield* isManagedWorktreePath(recorded));
-          (recreates ? recreating : stranded).push(thread.threadId);
+          const recorded = facts.threadCheckouts.get(thread.threadId);
+          const from = recorded?.branch ?? null;
+          if (recorded === undefined || from === null || (branchDeleted && from === branch)) {
+            stranded.push(thread.threadId);
+          } else if (yield* isManagedWorktreePath(recorded.path)) {
+            recreating.set(from, [...(recreating.get(from) ?? []), thread.threadId]);
+          } else {
+            outside.push(thread.threadId);
+          }
         }
-        if (recreating.length > 0)
+        for (const [from, ids] of recreating)
           notes.push(
             "Thread " +
-              recreating.join(", ") +
+              ids.join(", ") +
               " still points at this path; it recreates the checkout from branch " +
-              branch +
+              from +
               " if it runs again.",
           );
         if (stranded.length > 0)
           notes.push(
             "Thread " +
               stranded.join(", ") +
-              (branchSurvives
-                ? " still points at this path and will not recreate its checkout: GOAT recreates only checkouts it placed in its worktrees folder."
-                : " still points at this path and cannot recreate its checkout."),
+              " still points at this path and cannot recreate its checkout.",
+          );
+        if (outside.length > 0)
+          notes.push(
+            "Thread " +
+              outside.join(", ") +
+              " still points at this path and will not recreate its checkout: GOAT recreates only checkouts it placed in its worktrees folder.",
           );
         return { path: facts.entry.path, branch, branchDeleted, notes, saved: work.saved };
       }),
