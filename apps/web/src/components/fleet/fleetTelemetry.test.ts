@@ -13,6 +13,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { FleetConnection } from "./fleetConnection";
 import {
   fleetAlerts,
+  fleetChildSetups,
   fleetHostRows,
   fleetThroughput,
   hostSourceKey,
@@ -425,6 +426,52 @@ describe("hottestReading", () => {
 });
 
 describe("fleetAlerts", () => {
+  it("shows the Home's Child setup on the machine it names, also when this client reads that machine directly", () => {
+    const blocked = {
+      state: "blocked",
+      reason: "npm_missing",
+      message: "npm is not installed on boat-7.",
+      checkedAt: NOW,
+    } as const;
+    const machines = [
+      machine("studio", { environmentId: studio }),
+      machine("boat", { environmentId: mini, reportedAliases: [{ via: studio, alias: "boat-7" }] }),
+    ];
+    const reports = reportsOf(
+      {
+        environmentId: studio,
+        hosts: [
+          entry(null),
+          { ...entry("boat-7"), opencodexChild: blocked },
+          { ...entry("boat-8"), opencodexChild: { state: "running", checkedAt: NOW } },
+          { ...entry("boat-9"), opencodexChild: { state: "child", checkedAt: NOW } },
+        ],
+      },
+      { environmentId: mini, hosts: [entry(null)] },
+    );
+    const rows = fleetHostRows({
+      machines,
+      sshAliases: new Map(),
+      reports,
+      primaryEnvironmentId: studio,
+    });
+    expect(rows.find((row) => row.key === "boat")?.entry?.opencodexChild).toBeUndefined();
+    const alerts = fleetAlerts(rows, new Map(), NOW, {
+      childSetups: fleetChildSetups(rows, machines, reports),
+    }).filter((alert) => alert.key.endsWith(":child-setup"));
+    expect(
+      alerts.map(({ label, tone, detail, lines }) => ({ label, tone, detail, lines })),
+    ).toEqual([
+      {
+        label: "boat",
+        tone: "destructive",
+        detail: "OpenCodex Child setup blocked: npm missing",
+        lines: ["npm is not installed on boat-7."],
+      },
+      { label: "boat-8", tone: "muted", detail: "Setting up as OpenCodex Child", lines: undefined },
+    ]);
+  });
+
   it("reports down connections, stale hosts and version drift, most severe first", () => {
     const rows = fleetHostRows({
       machines: [
