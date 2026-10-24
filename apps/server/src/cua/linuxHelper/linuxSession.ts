@@ -79,6 +79,11 @@ export function detectLinuxSession(facts: LinuxSessionFacts): LinuxSession {
   return { ...base, driverEnvironment: { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" } };
 }
 
+const parseGnomeShellMajor = (output: string): number | null => {
+  const match = /GNOME Shell (\d+)/u.exec(output);
+  return match ? Number(match[1]) : null;
+};
+
 /** The session environment variables a Linux session's facts come from. */
 export interface LinuxSessionEnvironment {
   readonly DISPLAY?: string | undefined;
@@ -121,11 +126,6 @@ export const readGnomeShellVersion = (environment: NodeJS.ProcessEnv): string | 
   } catch {
     return null;
   }
-};
-
-export const parseGnomeShellMajor = (output: string): number | null => {
-  const match = /GNOME Shell (\d+)/u.exec(output);
-  return match ? Number(match[1]) : null;
 };
 
 /** Methods this helper does not serve yet: the safety-signal watch (#1235). */
