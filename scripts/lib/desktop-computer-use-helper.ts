@@ -12,6 +12,7 @@ export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseH
     return (yield* buildComputerUseHelper({
       ...input,
       channel: input.channel === "nightly" ? "nightly" : "stable",
+      adHoc: false,
       identity: process.env.CSC_NAME,
       notaryProfile: process.env.APPLE_KEYCHAIN_PROFILE,
     })).bundle;

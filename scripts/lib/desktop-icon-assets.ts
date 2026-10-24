@@ -1,3 +1,4 @@
+import type { DesktopBuildIconAssets } from "../build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./brand-assets.ts";
 import { resolveDesktopUpdateChannel } from "./desktop-release-channel.ts";
 
