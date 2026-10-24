@@ -10,7 +10,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { ComputerUseReadiness } from "../computerUse/ComputerUseReadiness";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
-import { useCuaGrants } from "./CuaGrantSteps";
+import { cuaReadinessGrantSlot, useCuaGrants } from "./CuaGrantSteps";
 import { CuaSetupDialog } from "./CuaSetupDialog";
 import {
   CUA_PERMISSIONS,
@@ -159,10 +159,23 @@ function ComputerUseControls({
   const [setupOpen, setSetupOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // The pane opened from the readiness list, so its grant is rechecked quickly until it is on.
+  const [opened, setOpened] = useState<CuaPermission | null>(null);
+  const [opening, setOpening] = useState(false);
   // A grant revoked in System Settings shows here while the setting stays on.
   // Each check starts a helper process, so the row rechecks slowly and whenever GOAT regains focus.
-  const grants = useCuaGrants(checkGrants, host.localMac && host.enabled && !setupOpen, 15_000);
+  const grants = useCuaGrants(
+    checkGrants,
+    host.localMac && host.enabled && !setupOpen,
+    opened ? 1500 : 15_000,
+  );
   const current = host.localMac && host.enabled ? grants.grants : null;
+  const live = current && current.principal !== "unusable" ? current : null;
+  // Waiting ends once this Mac reads the opened grant as on, which also ends the quick rechecks.
+  const openedGranted = opened !== null && live !== null && cuaGranted(live, opened);
+  useEffect(() => {
+    if (openedGranted) setOpened(null);
+  }, [openedGranted]);
   const missingGrants =
     current && current.principal !== "unusable"
       ? CUA_PERMISSIONS.filter((id) => !cuaGranted(current, id))
@@ -220,12 +233,32 @@ function ComputerUseControls({
       />
       <ComputerUseReadiness
         platform={host.status?.platform}
-        readiness={withLiveGrants(
-          host.status?.readiness,
-          current && current.principal !== "unusable" ? current : null,
-        )}
+        readiness={withLiveGrants(host.status?.readiness, live)}
         tools={host.status?.tools}
         signals={host.status?.signals}
+        {...(live
+          ? {
+              renderGrantAction: cuaReadinessGrantSlot({
+                live,
+                opened,
+                busy: opening,
+                onOpen: (permission) => {
+                  setOpening(true);
+                  setSaveError(null);
+                  void openGuide(permission).then(
+                    () => {
+                      setOpening(false);
+                      setOpened(permission);
+                    },
+                    () => {
+                      setOpening(false);
+                      setSaveError("Could not open System Settings. Try again.");
+                    },
+                  );
+                },
+              }),
+            }
+          : {})}
       />
       {host.enabled ? <BuiltInSkillRows host={host} /> : null}
       {setupOpen && host.canConfigure ? (
