@@ -170,6 +170,13 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+0", command: "preview.resetZoom", when: "previewFocus" },
   { key: "mod+k", command: "commandPalette.toggle", when: "!terminalFocus" },
   { key: "mod+p", command: "filePicker.toggle", when: "!terminalFocus" },
+  // VS Code's and Zed's explorer pair. JetBrains' mod+shift+c is thread.copyReference here.
+  { key: "mod+alt+c", command: "files.copyPath", when: "fileViewFocus && !editableFocus" },
+  {
+    key: "mod+alt+shift+c",
+    command: "files.copyRelativePath",
+    when: "fileViewFocus && !editableFocus",
+  },
   { key: "mod+shift+f", command: "projectSearch.toggle", when: "!terminalFocus" },
   { key: "mod+u", command: "usage.open", when: "!terminalFocus" },
   { key: "mod+alt+a", command: "theme.select", when: "!terminalFocus" },
