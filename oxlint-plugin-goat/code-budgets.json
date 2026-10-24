@@ -307,7 +307,7 @@
   "apps/server/src/orchestration-v2/ProviderEventIngestor.test.ts": { "lines": 2265 },
   "apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.test.ts": { "lines": 1660 },
   "apps/server/src/orchestration-v2/ProviderSessionManager.test.ts": { "lines": 6014 },
-  "apps/server/src/orchestration-v2/ProviderSessionManager.ts": { "lines": 3114, "nonNull": 3 },
+  "apps/server/src/orchestration-v2/ProviderSessionManager.ts": { "lines": 3090, "nonNull": 3 },
   "apps/server/src/orchestration-v2/ProviderTurnStartService.test.ts": { "lines": 1831 },
   "apps/server/src/orchestration-v2/ProviderTurnStartService.ts": { "lines": 1743, "nonNull": 5 },
   "apps/server/src/orchestration-v2/PullRequestSyncReactor.test.ts": { "lines": 1393 },

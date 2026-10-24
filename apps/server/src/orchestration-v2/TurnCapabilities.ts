@@ -36,16 +36,18 @@ export function withTurnAgentAccess(
 }
 
 /**
- * The capabilities a re-prepare keeps. An internal re-prepare (memory rotation, reattach) runs
- * with an input it read before taking the prepare lock, so its copy can belong to an earlier
- * turn; the admission read under the lock is the current turn's and wins. An open carries its
- * own turn's chips and replaces them.
+ * The capabilities a re-prepare keeps. An internal re-prepare (reattach) asks for nothing of its
+ * own, so the admission read under the prepare lock, which is the current turn's, wins; a
+ * memory rotation re-prepares that stored admission as is. An open carries its own turn's chips
+ * and replaces them.
  */
 export function preparedTurnCapabilities(
-  reuse: "internal" | "open",
-  admitted: ReadonlyArray<TurnCapability> | undefined,
-  requested: ReadonlyArray<TurnCapability> | undefined,
+  internal: boolean,
+  admitted: { readonly turnCapabilities?: ReadonlyArray<TurnCapability> | undefined },
+  requested: { readonly turnCapabilities?: ReadonlyArray<TurnCapability> | undefined },
 ): { readonly turnCapabilities?: ReadonlyArray<TurnCapability> } {
-  const current = reuse === "open" ? (requested ?? admitted) : admitted;
+  const current = internal
+    ? admitted.turnCapabilities
+    : (requested.turnCapabilities ?? admitted.turnCapabilities);
   return current === undefined ? {} : { turnCapabilities: current };
 }
