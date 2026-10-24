@@ -206,8 +206,11 @@ function handleBeforeQuit(
       // isInstallActive decides whether a later quit belongs to the updater or
       // should retry ordinary shutdown after native installer recovery.
       if (result !== "shutdown") {
-        quit.phase = "running";
-        quit.waitingSinceNanos = null;
+        // The updater may already own the quit (before-quit-for-update); keep that.
+        if (quit.phase === "waiting") {
+          quit.phase = "running";
+          quit.waitingSinceNanos = null;
+        }
         return;
       }
       quit.phase = "allowed";

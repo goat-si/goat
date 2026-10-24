@@ -233,6 +233,79 @@ describe("DesktopLifecycle", () => {
       }),
   );
 
+  it.effect("keeps the updater's quit when it starts before the quit installation returns", () =>
+    Effect.gen(function* () {
+      const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
+      const installationReturned = yield* Deferred.make<void>();
+      const events: string[] = [];
+      const updateState = {
+        ...initialUpdateState,
+        installPolicy: "install-on-quit" as const,
+        downloadedVersion: "1.2.4",
+      };
+      const layer = DesktopLifecycle.layer.pipe(
+        Layer.provideMerge(
+          layerUpdates({
+            getState: Effect.succeed(updateState),
+            // Electron's quitAndInstall emits before-quit-for-update synchronously.
+            installPrepared: () =>
+              Effect.sync(() => {
+                appListeners.get("before-quit-for-update")?.();
+              }).pipe(
+                Effect.andThen(Deferred.succeed(installationReturned, undefined)),
+                Effect.as({ accepted: true, completed: false, failed: false, state: updateState }),
+              ),
+          }),
+        ),
+        Layer.provideMerge(layerElectronApp(appListeners)),
+        Layer.provideMerge(layerElectronTheme),
+        Layer.provideMerge(
+          layerElectronWindow(
+            Effect.sync(() => {
+              events.push("destroy");
+            }),
+          ),
+        ),
+        Layer.provideMerge(layerDesktopWindow()),
+        Layer.provideMerge(
+          Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+            platform: "darwin",
+            isDevelopment: false,
+          } as DesktopEnvironment.DesktopEnvironment["Service"]),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(DesktopShutdown.DesktopShutdown, {
+            request: Effect.sync(() => {
+              events.push("shutdown");
+            }),
+            awaitRequest: Effect.never,
+            markComplete: Effect.void,
+            awaitComplete: Effect.void,
+            isComplete: Effect.succeed(false),
+          }),
+        ),
+        Layer.provideMerge(DesktopState.layer),
+      );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* (yield* DesktopLifecycle.DesktopLifecycle).register;
+          let prevented = 0;
+          const event = {
+            preventDefault: () => {
+              prevented += 1;
+            },
+          } as Electron.Event;
+          appListeners.get("before-quit")?.(event);
+          yield* Deferred.await(installationReturned);
+          yield* Effect.yieldNow;
+          appListeners.get("before-quit")?.(event);
+          assert.equal(prevented, 1, "the updater's own before-quit must not be cancelled");
+          assert.deepEqual(events, ["destroy"]);
+        }),
+      ).pipe(Effect.provide(layer));
+    }),
+  );
+
   [
     "refused",
     "failed",

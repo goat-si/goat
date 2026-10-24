@@ -1842,7 +1842,8 @@ export default function ChatView(props: ChatViewProps) {
             activeThreadShell?.hasPendingUserInput === true
           ? ("input" as const)
           : null,
-    awaitingRequestId: activePendingApproval?.requestId ?? activePendingUserInput?.requestId ?? null,
+    awaitingRequestId:
+      activePendingApproval?.requestId ?? activePendingUserInput?.requestId ?? null,
     activeTurnStartedAt: activeWorkStartedAt,
     latestRun: activeActivityRun,
     runningRunId: activeRuntime?.activeRunId ?? null,
