@@ -30,6 +30,8 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as Tracer from "effect/Tracer";
 import { OtlpExporter, OtlpLogger, OtlpTracer } from "effect/observability";
 
+import desktopPackageJson from "../../package.json" with { type: "json" };
+
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
 const DESKTOP_LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
@@ -611,7 +613,8 @@ const layerTelemetry = Layer.unwrap(
     const endpoints = yield* resolveOtlpEndpoints;
     const resource = {
       serviceName: "goat-desktop",
-      serviceVersion: environment.appVersion,
+      // Unpackaged runs launch a script, so Electron reports its own version.
+      serviceVersion: environment.isPackaged ? environment.appVersion : desktopPackageJson.version,
       attributes: {
         "service.namespace": "goat",
         "service.runtime": "desktop",

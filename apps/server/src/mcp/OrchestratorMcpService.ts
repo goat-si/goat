@@ -398,6 +398,11 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
   }
 }
 
+// Without a reason, a Stop reads as the user's (see RunExecutionService.USER_STOP_REASON).
+function agentStopReason(reason: string | undefined): string {
+  return reason === undefined ? "Stopped by an agent" : `Stopped by an agent: ${reason}`;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -3089,14 +3094,14 @@ const make = Effect.gen(function* () {
       });
       const stopChild = Effect.gen(function* () {
         const commandId = stableCommandId({ scope, requestKey: key, operation: "cancel-task" });
-        const reason = input.reason;
+        const reason = agentStopReason(input.reason);
         yield* threadManagement
           .dispatch({
             type: "thread.stop",
             commandId,
             threadId: childThreadId,
             stopDelegatedTasks: false,
-            ...(reason === undefined ? {} : { reason }),
+            reason,
             stopCascadeFrom: scope.thread.threadId,
           })
           .pipe(
@@ -3762,17 +3767,18 @@ const make = Effect.gen(function* () {
             run.status !== "queued" && !ThreadManagementService.isTerminalRunStatus(run.status),
         );
         const commandId = stableCommandId({ scope, requestKey: key, operation: "thread-stop" });
+        const reason = agentStopReason(input.reason);
         yield* threadManagement
           .dispatch({
             type: "thread.stop",
             commandId,
             threadId: input.threadId,
             stopDelegatedTasks: false,
-            ...(input.reason === undefined ? {} : { reason: input.reason }),
+            reason,
           })
           .pipe(Effect.mapError(stopFailure));
         yield* threadManagement
-          .stopDelegatedTasks({ threadId: input.threadId, commandId, reason: input.reason })
+          .stopDelegatedTasks({ threadId: input.threadId, commandId, reason })
           .pipe(Effect.mapError(stopFailure));
         return {
           threadId: input.threadId,
@@ -3791,7 +3797,7 @@ const make = Effect.gen(function* () {
           }),
           threadId: input.threadId,
           ...(input.runId === undefined ? {} : { runId: input.runId }),
-          ...(input.reason === undefined ? {} : { reason: input.reason }),
+          reason: agentStopReason(input.reason),
         })
         .pipe(
           Effect.mapError((error) =>
