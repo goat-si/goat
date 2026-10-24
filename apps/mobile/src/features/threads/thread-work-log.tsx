@@ -59,7 +59,11 @@ import { environmentThreadDetails, threadEnvironment } from "../../state/threads
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toolActivityFaviconUrl } from "@goat/shared/favicon";
 import { isJavaScriptReplTool } from "@goat/shared/toolActivity";
-import { computerUseRun, computerUseRunStatus } from "@goat/client-runtime/work-log/computer-use";
+import {
+  computerUseDisplayInput,
+  computerUseRun,
+  computerUseRunStatus,
+} from "@goat/client-runtime/work-log/computer-use";
 import { ReplCodeText } from "./ReplCodeText";
 import { ThreadComputerUseCard } from "./ThreadComputerUseCard";
 
@@ -975,7 +979,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
     expanded && !isRead && shownItem.type === "command_execution"
       ? toolCallLines({ command: shownItem.input })
       : expanded && !isRead && shownItem.type === "dynamic_tool"
-        ? toolCallLines({ args: shownItem.input })
+        ? toolCallLines({ args: computerUseDisplayInput(shownItem.toolName, shownItem.input) })
         : expanded && shownItem.type === "file_search"
           ? toolCallLines({ args: { pattern: shownItem.pattern } })
           : expanded && shownItem.type === "web_search"

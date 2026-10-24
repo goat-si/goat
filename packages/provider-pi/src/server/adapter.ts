@@ -43,6 +43,7 @@ import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
+import { openPiCuaGate, writePiCuaGate } from "./cuaGate.ts";
 import * as Scope from "effect/Scope";
 import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
@@ -466,18 +467,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
       }
-      // Pi's driver is fixed at launch, so each turn tells the extension through this file
-      // whether it may still use it; a Plan or read-only turn closes it before it starts.
       const cuaGate =
         mcpSession?.cuaDriver === undefined
           ? undefined
           : {
               path: yield* provideCacheFs(
-                Effect.gen(function* () {
-                  const path = yield* fileSystem.makeTempFileScoped({ prefix: "goat-pi-cua-" });
-                  yield* fileSystem.writeFileString(path, "on");
-                  return path;
-                }).pipe(Effect.provideService(Scope.Scope, scope)),
+                openPiCuaGate(fileSystem).pipe(Effect.provideService(Scope.Scope, scope)),
               ),
               key: McpProviderSession.cuaDriverKey(mcpSession.cuaDriver),
             };
@@ -2465,16 +2460,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               turnInput.message.createdBy === "agent" &&
               turnInput.message.creationSource === "provider";
             if (cuaGate !== undefined) {
-              // Written before the prompt, so the extension reads it in before_agent_start.
               const attached = yield* mcpSessions.read(turnInput.threadId);
-              const allowed = McpProviderSession.cuaDriverKey(attached?.cuaDriver) === cuaGate.key;
-              yield* fileSystem
-                .writeFileString(cuaGate.path, allowed ? "on" : "off")
-                .pipe(
-                  Effect.mapError(() =>
-                    protocolError("Could not update Pi's computer use access for this turn"),
-                  ),
-                );
+              yield* writePiCuaGate(fileSystem, cuaGate, attached).pipe(
+                Effect.mapError(() =>
+                  protocolError("Could not update Pi's computer use access for this turn"),
+                ),
+              );
             }
             if (!continuation) yield* applySelection(turnInput.modelSelection);
             if (turnInput.appThread.title !== appliedSessionName) {

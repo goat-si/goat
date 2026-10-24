@@ -6,6 +6,7 @@ import {
   hasCompleteProviderWorkspaceSnapshot,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
+  withBuiltInProviderSkills,
 } from "./providerSkills.ts";
 
 const provider = {
@@ -121,5 +122,42 @@ describe("workspace provider snapshots", () => {
     expect(hasCompleteProviderWorkspaceSnapshot(provider, "/workspace/project-b")).toBe(false);
     expect(hasCompleteProviderWorkspaceSnapshot(undefined, "/workspace/project-a")).toBe(false);
     expect(hasCompleteProviderWorkspaceSnapshot(provider, null)).toBe(false);
+  });
+});
+
+describe("built-in skills in the skill menu", () => {
+  const codex = { driver: ProviderDriverKind.make("codex") };
+  const on = { enableCua: true, disabledBuiltInSkills: [] };
+  const names = (skills: ReadonlyArray<{ name: string }>) => skills.map((skill) => skill.name);
+
+  it("lists Computer Use for a local provider only while computer use is on", () => {
+    const listed = withBuiltInProviderSkills([], codex, on);
+    expect(listed).toMatchObject([{ name: "computer-use", scope: "builtin", enabled: true }]);
+    expect(getProviderSkillsForSlashMenu(listed, true).map((skill) => skill.name)).toEqual([
+      "computer-use",
+    ]);
+    expect(withBuiltInProviderSkills([], codex, { ...on, enableCua: false })).toEqual([]);
+    expect(withBuiltInProviderSkills([], { driver: ProviderDriverKind.make("muse") }, on)).toEqual(
+      [],
+    );
+  });
+
+  it("keeps a skill switched off in Settings out of the menu", () => {
+    const listed = withBuiltInProviderSkills([], codex, {
+      ...on,
+      disabledBuiltInSkills: ["computer-use"],
+    });
+    expect(getProviderSkillsForSlashMenu(listed, true)).toEqual([]);
+  });
+
+  it("lets a skill the person wrote with the same name win", () => {
+    const own = {
+      name: "computer-use",
+      path: "/home/me/.agents/skills/computer-use",
+      enabled: true,
+    };
+    const menu = getProviderSkillsForSlashMenu(withBuiltInProviderSkills([own], codex, on), true);
+    expect(names(menu)).toEqual(["computer-use"]);
+    expect(menu[0]?.path).toBe(own.path);
   });
 });

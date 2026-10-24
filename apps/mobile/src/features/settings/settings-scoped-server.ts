@@ -125,3 +125,24 @@ export function planMobileScopedSettingsClear(
     patch: { projectSettingsOverrides } as ServerSettingsPatch,
   }));
 }
+
+/**
+ * Switches one built-in skill on or off in every selected environment. Each environment keeps
+ * its own switched-off list, so names written by a newer build survive the toggle.
+ */
+export function planMobileBuiltInSkillToggle(
+  targets: readonly ScopedMobileSettingsTarget[],
+  skill: string,
+  on: boolean,
+) {
+  const writes = new Map<EnvironmentId, ServerSettingsPatch>();
+  for (const target of targets) {
+    const others = target.environment.serverConfig.settings.disabledBuiltInSkills.filter(
+      (name) => name !== skill,
+    );
+    writes.set(target.environment.environmentId, {
+      disabledBuiltInSkills: on ? others : [...others, skill],
+    });
+  }
+  return [...writes].map(([environmentId, patch]) => ({ environmentId, patch }));
+}

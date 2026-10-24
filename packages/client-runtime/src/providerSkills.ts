@@ -1,11 +1,22 @@
 import {
+  BUILTIN_SKILL_SCOPE,
+  BUILTIN_SKILLS,
+  COMPUTER_USE_PROVIDER_DRIVERS,
   isProviderWorkspaceSnapshotCurrent,
   type ServerProvider,
+  type ServerSettings,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@goat/contracts";
 
-export type ProviderSkillSourceKind = "app" | "repo" | "project" | "personal" | "system" | "other";
+export type ProviderSkillSourceKind =
+  | "builtin"
+  | "app"
+  | "repo"
+  | "project"
+  | "personal"
+  | "system"
+  | "other";
 
 function normalizePathSeparators(pathValue: string): string {
   return pathValue.replaceAll("\\", "/");
@@ -65,6 +76,8 @@ export function resolveProviderSkillSourceKind(
 
   const normalizedScope = skill.scope?.trim().toLowerCase();
   switch (normalizedScope) {
+    case BUILTIN_SKILL_SCOPE:
+      return "builtin";
     case "repo":
     case "repository":
       return "repo";
@@ -119,6 +132,53 @@ export function resolveProviderSkillsForCwd(
   cwd: string | null | undefined,
 ): ServerProvider["skills"] {
   return resolveProviderWorkspaceSnapshot(provider, cwd)?.skills ?? provider.skills;
+}
+
+/**
+ * Adds GOAT's built-in skills that this provider's turns can carry. They come last, so a skill
+ * of the same name the person wrote wins when the menu dedupes by name. A skill switched off in
+ * Settings is listed as disabled, which keeps it out of the menu.
+ */
+export function withBuiltInProviderSkills(
+  skills: ReadonlyArray<ServerProviderSkill>,
+  provider: Pick<ServerProvider, "driver"> | null | undefined,
+  settings: Pick<ServerSettings, "enableCua" | "disabledBuiltInSkills"> | null | undefined,
+): ReadonlyArray<ServerProviderSkill> {
+  if (!provider || !settings?.enableCua || !COMPUTER_USE_PROVIDER_DRIVERS.has(provider.driver))
+    return skills;
+  return [
+    ...skills,
+    ...BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => ({
+      name: skill.name,
+      displayName: skill.displayName,
+      description: skill.description,
+      path: `goat:builtin/${skill.name}`,
+      scope: BUILTIN_SKILL_SCOPE,
+      enabled: !settings.disabledBuiltInSkills.includes(skill.name),
+    })),
+  ];
+}
+
+/** The skills a thread's provider offers in its workspace, GOAT's built-in ones included. */
+export function resolveThreadProviderSkills(
+  config:
+    | {
+        readonly providers: ReadonlyArray<ServerProvider>;
+        readonly settings?: Pick<ServerSettings, "enableCua" | "disabledBuiltInSkills">;
+      }
+    | null
+    | undefined,
+  instanceId: ServerProvider["instanceId"],
+  cwd: string | null | undefined,
+): ReadonlyArray<ServerProviderSkill> {
+  const provider = config?.providers.find((candidate) => candidate.instanceId === instanceId);
+  return provider
+    ? withBuiltInProviderSkills(
+        resolveProviderSkillsForCwd(provider, cwd),
+        provider,
+        config?.settings,
+      )
+    : [];
 }
 
 export function resolveProviderSlashCommandsForCwd(
