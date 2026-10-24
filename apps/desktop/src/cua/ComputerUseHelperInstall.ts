@@ -140,7 +140,7 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
         (await dependencies.signature(staged))?.cdhash !== wanted ||
         !(await dependencies.satisfies(staged, requirement))
       )
-        return unusable("could not be copied intact to " + input.root + ".");
+        throw new Error("the copy in " + input.root + " does not match GOAT.app's");
       await dependencies.probe(staged, input.bundleId);
       const target = NodePath.join(generations, wanted);
       await NodeFSP.rm(target, { recursive: true, force: true });
@@ -187,7 +187,7 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 
-export const helperInstallDependencies: HelperInstallDependencies = {
+const helperInstallDependencies: HelperInstallDependencies = {
   signature: async (bundle) => {
     try {
       // codesign -d reports on stderr.

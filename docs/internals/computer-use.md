@@ -418,9 +418,12 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   designated requirement and the protocol version range the host supports, and it never installs
   over a generation that is running. Leases are drained or revoked and active sessions end
   through the normal Stop path with their cleanup report; the host then switches to the new
-  generation in one step, keeps the previous one for rollback, and rechecks all four readiness
-  answers before agents get the new helper; a failed check switches back. A GOAT update that
-  carries a newer seed goes through the same switch. TCC keys
+  generation in one step, keeps the previous one for rollback, and rechecks the grants; a
+  generation that lost grants its predecessor held is switched back and not retried until GOAT
+  carries another one. The other readiness answers come from the host's normal check before
+  agents get the helper. A GOAT update that carries a newer seed goes through the same switch
+  (`apps/desktop/src/cua/ComputerUseHelperInstall.ts`). Ad-hoc and development helpers run in
+  place, because an ad-hoc signature has no team a copy could be checked against. TCC keys
   grants to the designated requirement, not the path, so grants should survive a switch; that,
   and a revoked grant being noticed, are negative qualification cases (#1162).
 - The Windows helper is signed through the existing Windows signing path and staged beside the
