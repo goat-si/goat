@@ -321,6 +321,30 @@ describe("X11 window capture against a scripted server", () => {
     ).toEqual({ refused: SHARED_CAPTURE });
   });
 
+  it("refuses when another client's window is a child of the target", async () => {
+    const embedded: Record<number, FakeWindow> = {
+      ...FRAMED,
+      0x200001: { ...FRAMED[0x200001]!, children: [0x600001] },
+      0x600001: { parent: 0x200001, children: [], x: 40, y: 50, width: 30, height: 30 },
+    };
+    await using server = await scriptedServer(embedded, { redirected: [0x400001] });
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toEqual({ refused: SHARED_CAPTURE });
+  });
+
+  it("captures a window with the window manager's own backing window under it, as Openbox frames do", async () => {
+    const openbox: Record<number, FakeWindow> = {
+      ...FRAMED,
+      0x400001: { ...FRAMED[0x400001]!, children: [0x400002, 0x200001] },
+      0x400002: { parent: 0x400001, children: [], x: 10, y: 30, width: 100, height: 80 },
+    };
+    await using server = await scriptedServer(openbox, { redirected: [0x400001] });
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toMatchObject({ width: 100, height: 80 });
+  });
+
   it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {
     await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
     expect(

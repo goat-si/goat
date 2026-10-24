@@ -377,9 +377,11 @@ const overlaps = (a: Rect, b: Rect) =>
 
 /**
  * Whether a window another client drew can show in the target's rectangle inside its top-level
- * ancestor: every sibling of the target or one of its ancestors, with all it holds. Siblings
- * stacked below count too, since a shaped target or one without a background shows what lies
- * under it in the pixmap. Undefined when that cannot be read.
+ * ancestor's pixmap: the target's own children, and every sibling of the target or one of its
+ * ancestors, with all they hold. Siblings stacked below count too, since a shaped target or one
+ * without a background shows what lies under it. The app's own windows and those of the client
+ * that owns the top-level window (the window manager's frame, such as Openbox's backing window
+ * under the client) are not another app. Undefined when that cannot be read.
  */
 async function drawnOver(
   x: Connection,
@@ -388,8 +390,10 @@ async function drawnOver(
   target: Rect,
 ): Promise<boolean | undefined> {
   const client = (window: number) => window & ~setup.idMask;
-  const owner = client(chain[0] ?? 0);
-  const pending: number[] = [];
+  const own = new Set([client(chain[0] ?? 0), client(chain.at(-1) ?? 0)]);
+  const targetTree = await queryTree(x, chain[0] ?? 0);
+  if (!targetTree) return undefined;
+  const pending: number[] = childrenOf(targetTree);
   for (let level = 0; level + 1 < chain.length; level++) {
     const tree = await queryTree(x, chain[level + 1] ?? 0);
     if (!tree) return undefined;
@@ -417,7 +421,7 @@ async function drawnOver(
       height: u16(geometry, 18) + 2 * border,
     };
     if (!overlaps(rect, target)) continue;
-    if (client(window) !== owner) return true;
+    if (!own.has(client(window))) return true;
     const tree = await queryTree(x, window);
     if (!tree) return undefined;
     pending.push(...childrenOf(tree));
