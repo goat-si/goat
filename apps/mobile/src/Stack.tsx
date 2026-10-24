@@ -383,7 +383,7 @@ const SettingsContentStack = createV5SheetStackNavigator({
     SettingsHubNodes: createNativeStackScreen({
       screen: SettingsHubNodesRouteScreen,
       linking: "hub-devices",
-      options: { title: "Devices on this hub" },
+      options: { title: "Hub devices" },
     }),
     SettingsDecisionInbox: createNativeStackScreen({
       screen: SettingsDecisionInboxRouteScreen,

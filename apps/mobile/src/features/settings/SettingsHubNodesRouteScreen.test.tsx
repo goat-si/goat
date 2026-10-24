@@ -1,4 +1,4 @@
-import { EnvironmentId, type HubNode } from "@goat/contracts";
+import { EnvironmentId, type HostStatusEntry, type HubNode } from "@goat/contracts";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   environments: [] as Target[],
   selectedTargets: [] as Target[],
   selectedIds: null as Set<string> | null,
+  hosts: [] as HostStatusEntry[],
   query: vi.fn(),
   check: vi.fn(),
   remove: vi.fn(),
@@ -62,6 +63,7 @@ vi.mock("../../state/server", async () => {
   return {
     serverEnvironment: {
       hubNodesLive: (target: unknown) => target,
+      hostStatus: (target: { environmentId: string }) => ({ hostStatus: target.environmentId }),
       checkHubNodes: Object.assign(state.check, { permissionAtom }),
       removeHubNode: Object.assign(state.remove, { permissionAtom }),
       dismissHubNodeNotice: Object.assign(state.dismiss, { permissionAtom }),
@@ -104,9 +106,14 @@ beforeEach(() => {
   state.environments = [first, second];
   state.selectedTargets = [first, second];
   state.selectedIds = null;
+  state.hosts = [];
   state.query
     .mockReset()
-    .mockReturnValue({ data: { nodes: [device], notices: [] }, error: null, cause: null });
+    .mockImplementation((target: object) =>
+      "hostStatus" in target
+        ? { data: { hosts: state.hosts }, error: null, cause: null, isSuccess: true }
+        : { data: { nodes: [device], notices: [] }, error: null, cause: null },
+    );
   for (const command of [state.check, state.remove, state.dismiss])
     command.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
   container = document.createElement("div");
@@ -207,12 +214,41 @@ it("offers an explicit choice when a hub appears after opening with none", async
 it("tells the user when the chosen hub is too old to keep a device list", async () => {
   state.environments = [first];
   state.selectedTargets = [first];
-  state.query.mockReturnValue({
-    data: null,
-    error: null,
-    cause: new Error("Unknown request tag: hub.nodes.subscribe"),
-  });
+  state.hosts = [
+    { host: "boat-9", reachability: "ok", opencodexChild: { state: "running", checkedAt: 0 } },
+  ];
+  state.query.mockImplementation((target: object) =>
+    "hostStatus" in target
+      ? { data: { hosts: state.hosts }, error: null, cause: null, isSuccess: true }
+      : { data: null, error: null, cause: new Error("Unknown request tag: hub.nodes.subscribe") },
+  );
   await render();
   expect(container.textContent).toContain("This hub runs an older GOAT without a device list.");
   expect(container.querySelector('button[aria-label="Check Lab server"]')).toBeNull();
+  // Host status still answers, so the Home's setup of a cloud machine still shows.
+  expect(container.textContent).toContain("boat-9");
+  expect(container.textContent).toContain("Setting up as OpenCodex Child");
+});
+
+it("shows each device's OpenCodex link and why the hub could not make it a Child", async () => {
+  state.environments = [first];
+  state.selectedTargets = [first];
+  state.hosts = [
+    {
+      host: "lab",
+      reachability: "unreachable",
+      opencodexChild: {
+        state: "blocked",
+        reason: "npm_missing",
+        message: "npm is not installed on lab.",
+        checkedAt: 0,
+      },
+    },
+  ];
+  await render();
+  expect(container.textContent).toContain("Lab server");
+  expect(container.textContent).toContain("Not linked to OpenCodex");
+  expect(container.textContent).toContain("OpenCodex Child setup blocked: npm missing");
+  expect(container.textContent).toContain("npm is not installed on lab.");
+  expect(button("Check Lab server").textContent).toBe("Check");
 });
