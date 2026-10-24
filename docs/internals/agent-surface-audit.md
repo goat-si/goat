@@ -13,9 +13,9 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | MCP tools mounted on /mcp                              | 195              |
 | Toolkits                                               | 24               |
 | Mutating tools, by enforced handler access             | 126              |
-| Mutating tools that accept clientRequestId             | 33               |
-| Mutating tools whose clientRequestId GOAT deduplicates | 21               |
-| Input parameters with a description                    | 161 of 724 (22%) |
+| Mutating tools that accept clientRequestId             | 41               |
+| Mutating tools whose clientRequestId GOAT deduplicates | 29               |
+| Input parameters with a description                    | 161 of 732 (22%) |
 | Tool descriptions with an example                      | 3 of 195         |
 | CLI commands, listed / unlisted                        | 58 / 19          |
 | CLI commands with usage examples                       | 0 of 77          |
@@ -23,19 +23,19 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 
 | Toolkit                | Tools | Mutating | clientRequestId | Paginated | failureMode   | Error tags | Source                                                     |
 | ---------------------- | ----- | -------- | --------------- | --------- | ------------- | ---------- | ---------------------------------------------------------- |
-| `channel`              | 9     | 4        | 1               | 2         | return        | 1          | apps/server/src/mcp/toolkits/channel/tools.ts              |
+| `channel`              | 9     | 4        | 2               | 2         | return        | 1          | apps/server/src/mcp/toolkits/channel/tools.ts              |
 | `orchestrator`         | 29    | 21       | 10              | 3         | return        | 1          | apps/server/src/mcp/toolkits/orchestrator/tools.ts         |
 | `device`               | 4     | 2        | 0               | 0         | error         | 8          | apps/server/src/mcp/toolkits/device/tools.ts               |
 | `attachment`           | 3     | 3        | 1               | 0         | return        | 1          | apps/server/src/mcp/toolkits/attachment/tools.ts           |
 | `agentSurface`         | 5     | 2        | 0               | 1         | error         | 2          | apps/server/src/mcp/toolkits/agentSurface/tools.ts         |
 | `provider`             | 20    | 13       | 9               | 1         | return        | 1          | apps/server/src/mcp/toolkits/provider/tools.ts             |
-| `ssh`                  | 17    | 12       | 3               | 2         | return        | 2          | apps/server/src/mcp/toolkits/ssh/tools.ts                  |
+| `ssh`                  | 17    | 12       | 5               | 2         | return        | 2          | apps/server/src/mcp/toolkits/ssh/tools.ts                  |
 | `computerUse`          | 1     | 1        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/computerUse/tools.ts          |
 | `connection`           | 3     | 2        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/connection/tools.ts           |
-| `decision`             | 4     | 2        | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/decision/tools.ts             |
+| `decision`             | 4     | 2        | 1               | 1         | return        | 1          | apps/server/src/mcp/toolkits/decision/tools.ts             |
 | `environment`          | 2     | 1        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/environment/tools.ts          |
 | `fleet`                | 8     | 5        | 1               | 1         | return        | 1          | apps/server/src/mcp/toolkits/fleet/tools.ts                |
-| `hostStatus`           | 5     | 3        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/hostStatus/tools.ts           |
+| `hostStatus`           | 5     | 3        | 3               | 0         | return        | 1          | apps/server/src/mcp/toolkits/hostStatus/tools.ts           |
 | `note`                 | 5     | 3        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/note/tools.ts                 |
 | `remoteReport`         | 2     | 2        | 0               | 1         | return        | 1          | apps/server/src/mcp/toolkits/remoteReport/tools.ts         |
 | `thread`               | 18    | 11       | 4               | 2         | return        | 1          | apps/server/src/mcp/toolkits/thread/tools.ts               |
@@ -43,7 +43,7 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | `project`              | 8     | 5        | 3               | 1         | return        | 1          | apps/server/src/mcp/toolkits/project/tools.ts              |
 | `worktree`             | 6     | 3        | 1               | 1         | return        | 2          | apps/server/src/mcp/toolkits/worktree/tools.ts             |
 | `html`                 | 2     | 1        | 0               | 0         | error, return | 1          | apps/server/src/mcp/toolkits/html/tools.ts                 |
-| `pullRequests`         | 7     | 5        | 0               | 0         | error         | 15         | apps/server/src/mcp/toolkits/pullRequests/tools.ts         |
+| `pullRequests`         | 7     | 5        | 1               | 0         | error         | 15         | apps/server/src/mcp/toolkits/pullRequests/tools.ts         |
 | `memory`               | 9     | 3        | 0               | 4         | return        | 1          | apps/server/src/mcp/toolkits/memory/tools.ts               |
 | `memoryAdministration` | 3     | 2        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/memoryAdministration/tools.ts |
 | `preview`              | 23    | 19       | 0               | 1         | error         | 19         | apps/server/src/mcp/toolkits/preview/tools.ts              |
@@ -137,28 +137,28 @@ One intent is spelled several ways (tool counts in parentheses):
 
 ## Schemas and envelopes
 
-- **Undeclared arguments.** 175 of 195 published input schemas say `"additionalProperties": true`, but every registration refuses undeclared arguments at call time ((not found)). A client that validates against the schema cannot learn the real contract.
+- **Undeclared arguments.** 176 of 195 published input schemas say `"additionalProperties": true`, but every registration refuses undeclared arguments at call time ((not found)). A client that validates against the schema cannot learn the real contract.
 - **Two failure modes.** Tools split 155 `return` and 40 `error`. Both reach the client as `isError` with JSON in a text block and no `structuredContent` (apps/server/src/mcp/toolkits/core.test.ts `declaredFailure`), so an agent parses text to branch on an error.
 - **7 error families.** 153 tools fail with `OrchestratorMcpFailure`; 4 tools fail with 8 tagged errors; 3 tools fail with `OperationError`; 25 tools fail with 19 tagged errors; 1 tools fail with `OrchestratorMcpFailure` or `SshThreadHandoffFailure`; 2 tools fail with `OrchestratorMcpFailure` or `WorktreeMcpFailure`; 7 tools fail with 15 tagged errors. Only `OrchestratorMcpFailure` carries a machine `code` (packages/contracts/src/orchestratorMcpFailure.ts `OrchestratorMcpFailureCode`). Preview, device, worktree, and pull request failures are told apart by `_tag` alone, and every preview tool advertises all of its toolkit's tags whether or not it can raise them.
-- **Idempotency.** 33 tools accept `clientRequestId`: `channel_ingest`, `create_threads`, `delegate_task`, `goat_cloud_launch`, `goat_cloud_machine_create`, `goat_goal_apply`, `goat_project_create`, `goat_project_delete`, `goat_provider_add`, `goat_provider_home_request`, and 23 more. The other 93 mutating tools have no retry key, including the destructive `delete_scheduled_task`, `device_close`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_call`, `goat_cloud_run_forget`, `goat_connection_remove`, `goat_decision_answer`, `goat_environment_preferences_update`, `goat_goal_delete`, and 30 more.
+- **Idempotency.** 41 tools accept `clientRequestId`: `channel_bot_home_claim`, `channel_ingest`, `create_threads`, `delegate_task`, `goat_cloud_launch`, `goat_cloud_machine_create`, `goat_decision_request`, `goat_goal_apply`, `goat_host_link_create`, `goat_hub_device_join`, and 31 more. The other 85 mutating tools have no retry key, including the destructive `delete_scheduled_task`, `device_close`, `goat_attachment_discard`, `goat_attachment_prepare_upload`, `goat_call`, `goat_cloud_run_forget`, `goat_connection_remove`, `goat_decision_answer`, `goat_environment_preferences_update`, `goat_goal_delete`, and 29 more.
 - **Pagination.** 11 tools use `cursor/nextCursor` (`channel_task_export`, `channel_task_list`, `goat_cloud_run_list`, `goat_goal_list`, and 7 more); 9 tools use `limit only` (`goat_decision_list`, `goat_describe`, `goat_ssh_browse`, `goat_ssh_reports`, and 5 more); 1 tool uses `afterSequence/hasMore` (`goat_origin_reports_wait`); 1 tool uses `limit/hasMore` (`goat_thread_read`). List tools with no page control: `device_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`.
 - **Hints that disagree with enforcement.** The handler's `McpToolAccess` declaration is what the server enforces; the MCP `readOnlyHint` is what clients see. They disagree for no tools. Reads declared `actsAsCaller` without a read-only hint: `task_status`.
 - **Image results.** `preview_snapshot`, `device_screenshot`, and `html_preview` are registered by hand to return image content (apps/server/src/mcp/McpHttpServer.ts `imageToolRegistration`), outside the toolkit path every other tool uses.
 
 ## Descriptions and examples
 
-Only 22% of input parameters carry a description. 131 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `create_threads`, `delete_scheduled_task`, `device_close`, and 121 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
+Only 22% of input parameters carry a description. 132 tools describe none of their parameters, for example `channel_bot_home_claim`, `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `create_threads`, `delete_scheduled_task`, and 122 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
 
 3 of 195 tool descriptions include an example. 95 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
-| Tool                      | Characters | Declared at                                             |
-| ------------------------- | ---------- | ------------------------------------------------------- |
-| `goat_ssh_thread_launch`  | 399        | packages/contracts/src/agentSurface/entries/ssh.ts      |
-| `delegate_task`           | 398        | packages/contracts/src/agentSurface/entries/task.ts     |
-| `goat_describe`           | 393        | packages/contracts/src/agentSurface/surfaceEntries.ts   |
-| `schedule_task`           | 383        | packages/contracts/src/agentSurface/entries/schedule.ts |
-| `goat_thread_launch`      | 376        | packages/contracts/src/agentSurface/entries/thread.ts   |
-| `goat_ssh_runtime_update` | 375        | packages/contracts/src/agentSurface/entries/ssh.ts      |
+| Tool                     | Characters | Declared at                                             |
+| ------------------------ | ---------- | ------------------------------------------------------- |
+| `goat_ssh_thread_launch` | 399        | packages/contracts/src/agentSurface/entries/ssh.ts      |
+| `delegate_task`          | 398        | packages/contracts/src/agentSurface/entries/task.ts     |
+| `goat_describe`          | 393        | packages/contracts/src/agentSurface/surfaceEntries.ts   |
+| `schedule_task`          | 383        | packages/contracts/src/agentSurface/entries/schedule.ts |
+| `goat_thread_launch`     | 376        | packages/contracts/src/agentSurface/entries/thread.ts   |
+| `goat_worktree_handoff`  | 364        | packages/contracts/src/agentSurface/entries/worktree.ts |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
@@ -183,7 +183,7 @@ These are the steps GOAT cannot finish without a person today, and how an agent 
 | Add an SSH host                               | `goat_connection_add_ssh` exists; host key trust, passphrases, and MFA prompts are not modelled as a handoff.                                                                     | packages/contracts/src/agentSurface/entries/connection.ts                                                        |
 | Put `goat` on PATH                            | A desktop install writes a launcher under the GOAT home, off PATH; adding it to PATH is an opt-in desktop action.                                                                 | (not found), (not found)                                                                                         |
 
-Tools whose description or schema tells the agent to involve the user: `create_threads` (user approval), `delegate_task` (user approval), `goat_cloud_launch` (user approval), `goat_connection_add_ssh` (user approval), `goat_decision_answer` (user answers a question), `goat_decision_get` (user answers a question), `goat_goal_apply` (user approval), `goat_goatclaw_sync` (user approval), `goat_host_link_create` (user approval, pairing), `goat_hub_device_join` (user approval), `goat_hub_device_leave` (user approval), `goat_origin_reports_wait` (user approval), `goat_pending_request_list` (user approval), `goat_pending_request_respond` (user approval), `goat_provider_addable_list` (sign-in), `goat_provider_diagnose` (sign-in), `goat_provider_home_request` (user approval), `goat_provider_host_matrix` (sign-in), `goat_provider_link` (sign-in), `goat_provider_login_cancel` (sign-in), `goat_provider_login_start` (sign-in), `goat_provider_login_status` (sign-in), `goat_provider_setup_open` (user approval, sign-in), `goat_provider_sync` (user approval, sign-in), `goat_provider_sync_status` (user approval, sign-in), `goat_provider_update` (sign-in), `goat_ssh_host_add` (user approval), `goat_ssh_host_list` (sign-in), `goat_ssh_runtime_update` (user approval), `goat_ssh_thread_handoff` (user approval), `goat_ssh_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_checkpoint_restore` (user approval), `goat_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_send` (user approval), `goat_thread_wait` (user answers a question), `request_secret` (secret entry), `schedule_task` (secret entry, user chooses in UI), `update_scheduled_task` (secret entry).
+Tools whose description or schema tells the agent to involve the user: `create_threads` (user approval), `delegate_task` (user approval), `goat_cloud_launch` (user approval), `goat_connection_add_ssh` (user approval), `goat_decision_answer` (user answers a question), `goat_decision_get` (user answers a question), `goat_goal_apply` (user approval), `goat_goatclaw_sync` (user approval), `goat_host_link_create` (user approval, pairing), `goat_hub_device_join` (user approval), `goat_hub_device_leave` (user approval), `goat_hub_device_repair` (user approval), `goat_origin_reports_wait` (user approval), `goat_pending_request_list` (user approval), `goat_pending_request_respond` (user approval), `goat_provider_addable_list` (sign-in), `goat_provider_diagnose` (sign-in), `goat_provider_home_request` (user approval), `goat_provider_host_matrix` (sign-in), `goat_provider_link` (sign-in), `goat_provider_login_cancel` (sign-in), `goat_provider_login_start` (sign-in), `goat_provider_login_status` (sign-in), `goat_provider_setup_open` (user approval, sign-in), `goat_provider_sync` (user approval, sign-in), `goat_provider_sync_status` (user approval, sign-in), `goat_provider_update` (sign-in), `goat_ssh_host_add` (user approval), `goat_ssh_host_list` (sign-in), `goat_ssh_runtime_update` (user approval), `goat_ssh_thread_handoff` (user approval), `goat_ssh_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_checkpoint_restore` (user approval), `goat_thread_launch` (secret entry, user approval, user chooses in UI), `goat_thread_send` (user approval), `goat_thread_wait` (user answers a question), `request_secret` (secret entry), `schedule_task` (secret entry, user chooses in UI), `update_scheduled_task` (secret entry).
 
 There is no single handoff primitive. Each case has its own tool, error code, or CLI step, and none returns a resumable handle the agent can wait on.
 
@@ -229,9 +229,9 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (155 `return`, 40 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
 3. **Serve the full tool reference from the registry.** 89 tools appear in no doc or prompt. `/llms.txt` now lists every path for the calling credential; `goat_describe` should serve arguments and examples from the same registry, with no committed reference pages (decision D14 in agent-surface.md).
-4. **Describe every parameter.** 563 of 724 parameters have no description, and 131 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts `publishes unique tool names` to fail on an undescribed field.
-5. **Publish the real argument contract.** 175 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
-6. **Retry keys on every mutating tool.** 93 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
+4. **Describe every parameter.** 571 of 732 parameters have no description, and 132 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts `publishes unique tool names` to fail on an undescribed field.
+5. **Publish the real argument contract.** 176 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
+6. **Retry keys on every mutating tool.** 85 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 7. **One naming grammar.** Pick one shape for all 195 tools, keep old names as hidden aliases for a release, and drop the partial `goat_` prefix that the MCP server name already supplies.
 8. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 9. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.

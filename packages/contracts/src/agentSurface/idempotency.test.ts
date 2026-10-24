@@ -10,16 +10,10 @@ const byPath: ReadonlyMap<string, Entry> = new Map(entries.map((entry) => [entry
 // declares one; this list only shrinks.
 const NOT_YET_KEYED: ReadonlySet<string> = new Set([
   "attachment.prepare_upload",
-  "channel.bot_home_claim",
   "computer_use.request",
-  "decision.request",
   "device.close",
   "device.open",
-  "host_link.create",
   "html.render",
-  "hub.device_join",
-  "hub.device_leave",
-  "hub.device_repair",
   "origin.report",
   "preview.back",
   "preview.click",
@@ -41,9 +35,7 @@ const NOT_YET_KEYED: ReadonlySet<string> = new Set([
   "preview.set_appearance",
   "preview.type",
   "preview.upload",
-  "pull_request_guide.update",
   "schedule.update",
-  "ssh.runtime_update",
   "thread.organize",
 ]);
 
