@@ -35,6 +35,7 @@ const ROUTE = "/api/computer-use/lease";
 const fakeLeases = (input: {
   readonly grant?: ComputerUseLeases.ComputerUseLease;
   readonly proxy?: typeof proxy | undefined;
+  readonly detection?: ComputerUseLeases.ComputerUseDetection;
 }) => {
   const minted: Array<Option.Option<ComputerUseLeases.ComputerUseLease>> = [];
   const service = ComputerUseLeases.ComputerUseLeases.of({
@@ -59,6 +60,7 @@ const fakeLeases = (input: {
     stopAll: Effect.die("unused"),
     grants: Effect.die("unused"),
     pause: () => Effect.die("unused"),
+    detection: Effect.succeed(input.detection ?? { humanInput: true, privateMode: true }),
     resume: Effect.die("unused"),
     subscribe: Effect.die("unused"),
     changed: Effect.die("unused"),
@@ -128,12 +130,40 @@ describe("computerUseAttachment", () => {
         mcp,
         control: interactiveControl,
         proxy,
-        overrideUserConfig: false,
+        // A cua-driver the person configured would skip Stop, pauses and app approvals.
+        overrideUserConfig: true,
       });
       assert.equal(driver.calls.acquire, 1);
       // An interactive control is not tied to a grant, even when the thread holds one.
       assert.deepEqual(leases.minted, [Option.none()]);
     }),
+  );
+
+  it.effect(
+    "refuses unattended work on a host that cannot detect a person's input or a secret field",
+    () =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        for (const detection of [
+          { humanInput: false, privateMode: true },
+          { humanInput: true, privateMode: false },
+        ])
+          assert.deepEqual(
+            yield* decide(driver, {
+              origin: unattended,
+              leases: fakeLeases({ grant: lease, detection }).leases,
+            }),
+            { _tag: "none", reason: "detection-unsupported", blockUserConfig: true },
+          );
+        // A person directing the thread can watch and stop it, so interactive turns still attach.
+        assert.equal(
+          (yield* decide(driver, {
+            leases: fakeLeases({ detection: { humanInput: false, privateMode: false } }).leases,
+          }))._tag,
+          "proxied",
+        );
+        assert.equal(driver.calls.acquire, 1);
+      }),
   );
 
   it.effect("gives an interactive turn no driver when nothing could stop it", () =>
@@ -251,12 +281,11 @@ describe("computerUseAttachment", () => {
     assert.isFalse("cuaDriverBlocked" in detached);
     const attached = ComputerUse.withComputerUse(
       detached,
-      { _tag: "proxied", mcp, control: interactiveControl, proxy, overrideUserConfig: false },
+      { _tag: "proxied", mcp, control: interactiveControl, proxy, overrideUserConfig: true },
       ROUTE,
     );
     assert.equal(attached.cuaDriver?.command, "/goat/node");
-    // An interactive person's own cua-driver configuration still wins.
-    assert.isFalse("cuaDriverOverridesUserConfig" in attached);
+    assert.isTrue(attached.cuaDriverOverridesUserConfig);
     const blocked = ComputerUse.withComputerUse(
       attached,
       { _tag: "none", reason: "needs-approval", blockUserConfig: true },

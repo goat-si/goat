@@ -37,7 +37,9 @@ export type ComputerUseRefusal =
   | "plan"
   | "read-only"
   | "unavailable"
-  | "needs-approval";
+  | "needs-approval"
+  /** Unattended work needs a helper that reports a person's input and secret fields (#1235). */
+  | "detection-unsupported";
 
 /**
  * Every provider session's computer use comes from this one decision, so the
@@ -57,10 +59,7 @@ export type ComputerUseAttachment =
       readonly mcp: CuaDriverMcpConfiguration;
       readonly control: ComputerUseLeases.ComputerUseControl;
       readonly proxy: SelfInvocation;
-      /**
-       * The managed server replaces a `cua-driver` the user configured for the provider:
-       * unattended turns only, since an interactive person chose their own.
-       */
+      /** The managed server replaces a `cua-driver` the user configured for the provider. */
       readonly overrideUserConfig: boolean;
     };
 
@@ -100,6 +99,10 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
       ? yield* leases.value.active(input.threadId).pipe(Effect.orElseSucceed(() => Option.none()))
       : Option.none<ComputerUseLeases.ComputerUseLease>();
   if (unattended && Option.isNone(lease)) return none("needs-approval", true);
+  if (unattended && Option.isSome(leases)) {
+    const detection = yield* leases.value.detection;
+    if (!detection.humanInput || !detection.privateMode) return none("detection-unsupported", true);
+  }
   // Without its proxy nothing could stop the driver, so there is no computer use at all.
   if (Option.isNone(leases) || leases.value.proxy === undefined)
     return none("unavailable", unattended);
@@ -110,7 +113,8 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     mcp: mcp.value,
     control: yield* leases.value.control(input.threadId, lease),
     proxy: leases.value.proxy,
-    overrideUserConfig: unattended,
+    // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
+    overrideUserConfig: true,
   } as const;
 });
 

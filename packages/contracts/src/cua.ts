@@ -121,8 +121,11 @@ export const ComputerUseControlEnd = Schema.Literals([
 ]);
 export type ComputerUseControlEnd = typeof ComputerUseControlEnd.Type;
 
-/** Why the agent waits: a person's own input reached the shared desktop, or they took over. */
-export const ComputerUsePauseReason = Schema.Literals(["human_input", "takeover"]);
+/**
+ * Why the agent waits: a person's own input reached the shared desktop, they took over, or a
+ * secret field has focus (private) until it loses it.
+ */
+export const ComputerUsePauseReason = Schema.Literals(["human_input", "takeover", "private"]);
 export type ComputerUsePauseReason = typeof ComputerUsePauseReason.Type;
 
 /**
@@ -192,6 +195,36 @@ export const DesktopCuaHumanInputReport = Schema.Struct({
 });
 export type DesktopCuaHumanInputReport = typeof DesktopCuaHumanInputReport.Type;
 
+/**
+ * Sent by the desktop host when a secure text field or passkey prompt gains or loses focus, in
+ * the window it names; never what the field holds. While active, agents on the host neither
+ * observe nor act. The helper's own event frame is in computerUseProtocol.ts.
+ */
+export const DesktopCuaPrivateModeReport = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaPrivateMode"),
+  active: Schema.Boolean,
+  target: Schema.Struct({ pid: Schema.Int, windowId: Schema.Int }),
+});
+export type DesktopCuaPrivateModeReport = typeof DesktopCuaPrivateModeReport.Type;
+
+/**
+ * Which of the two safety reports the helper sends at all, announced when it starts. Unattended
+ * turns run only where both are reported (#1235); a host that never says so has neither.
+ */
+export const DesktopCuaDetectionReport = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaDetection"),
+  humanInput: Schema.Boolean,
+  privateMode: Schema.Boolean,
+});
+export type DesktopCuaDetectionReport = typeof DesktopCuaDetectionReport.Type;
+
+export type DesktopCuaSafetyReport =
+  | DesktopCuaHumanInputReport
+  | DesktopCuaPrivateModeReport
+  | DesktopCuaDetectionReport;
+
 export const ComputerUseStopInput = Schema.Struct({ threadId: ThreadId });
 export const ComputerUseStopResult = Schema.Struct({ stopped: Schema.Boolean });
 export const ComputerUseStopAllResult = Schema.Struct({
@@ -233,7 +266,14 @@ export const ComputerUseRequestResult = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("refused"),
-    reason: Schema.Literals(["disabled", "unsupported", "held", "not_unattended"]),
+    reason: Schema.Literals([
+      "disabled",
+      "unsupported",
+      "held",
+      "not_unattended",
+      /** The host cannot tell when a person types a secret or uses the desktop (#1235). */
+      "detection_unsupported",
+    ]),
     holderThreadId: Schema.optionalKey(ThreadId),
     message: Schema.String,
   }),
