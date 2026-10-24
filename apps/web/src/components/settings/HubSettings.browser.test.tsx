@@ -59,6 +59,8 @@ vi.mock("../../state/server", () => ({
     },
   },
 }));
+// Sync OpenCodex has its own dialog; these tests cover the hub's device rows.
+vi.mock("../opencodex/OpenCodexSyncDialog", () => ({ OpenCodexSyncButton: () => null }));
 vi.mock("~/connection/catalog", async () => {
   const { Atom } = await import("effect/reactivity");
   return { environmentCatalog: { catalogValueAtom: Atom.make({ entries: new Map() }) } };

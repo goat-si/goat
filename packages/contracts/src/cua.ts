@@ -131,6 +131,11 @@ export const ComputerUseLeaseAgentInput = Schema.Struct({
     call: TrimmedNonEmptyString,
     state: Schema.Literals(["start", "end"]),
     at: EpochMillis,
+    /**
+     * The kinds of event a starting call can post. Only an event of a kind listed here is taken
+     * for the agent's own; a start without it covers both, as an older proxy's did.
+     */
+    kinds: Schema.optionalKey(Schema.Array(Schema.Literals(["keyboard", "pointer"]))),
   }),
 });
 export type ComputerUseLeaseAgentInput = typeof ComputerUseLeaseAgentInput.Type;
@@ -168,6 +173,25 @@ export const cuaAgentBlockLists = (block: CuaAgentBlock): string =>
 /** The sentence every surface shows for a block. */
 export const cuaAgentBlockMessage = (block: CuaAgentBlock): string =>
   `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security.`;
+
+/**
+ * What of a block newer readiness still bears out: only the grants it does not report granted,
+ * and nothing once every one is back, so no surface keeps naming a grant the person gave.
+ * Readiness is the helper's, so it only speaks for a block the helper holds; a block on GOAT
+ * itself stays as it was.
+ */
+export const cuaAgentBlockUnder = (
+  block: CuaAgentBlock,
+  readiness: typeof ComputerUseReadiness.Type,
+): CuaAgentBlock | undefined => {
+  if (block.holder !== "helper") return block;
+  const missing = block.missing.filter(
+    (grant) =>
+      readiness.grants[grant === "accessibility" ? "accessibility" : "screenCapture"] !== "granted",
+  );
+  if (missing.length === block.missing.length) return block;
+  return missing.length === 0 ? undefined : { ...block, missing };
+};
 
 export const DesktopCuaDriverReport = Schema.Union([
   Schema.Struct({
@@ -333,6 +357,11 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     interruptions: Schema.optionalKey(
       Schema.Struct({ count: Schema.Int, last: ComputerUsePauseReason }),
     ),
+    /**
+     * Another thread holds a grant on this screen, so calls that bring a window forward or move
+     * the pointer would take it from that thread.
+     */
+    shared: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.Struct({
     state: Schema.Literal("paused"),
@@ -364,6 +393,8 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "helper_restarted",
   /** The driver named a window that is not on the screen GOAT gave it (#1358). */
   "wrong_display",
+  /** It would bring a window forward or move the pointer while another thread holds apps here. */
+  "screen_shared",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 

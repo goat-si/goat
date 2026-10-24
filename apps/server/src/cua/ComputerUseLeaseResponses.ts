@@ -24,6 +24,14 @@ const REPLY_WITHHELD =
   "This call reached the driver, so it may already have acted, but GOAT could not confirm its answer is about the screen GOAT gave it and withheld it. Never resend it unchanged.";
 const REPLY_UNCONFIRMED = `${REPLY_WITHHELD} Call list_windows and observe the window before any later action.`;
 
+/** The answer to a provider request under an id the proxy keeps for its own requests. */
+export const reservedIdAnswer = (id: string, prefix: string) =>
+  JSON.stringify({
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32600, message: `Request ids starting with ${prefix} are reserved.` },
+  });
+
 export const refusal = (
   id: JsonRpcId,
   method: string | undefined,

@@ -198,9 +198,22 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   admission for the thread's turns until the expiry, not per-action approval. The approved
   handoff is the lease: it expires on its clock rather than when the asking turn ends, a person
   ends it early by moving it to cancelled (the only terminal transition allowed after approval),
-  and turning computer use off ends it. At most one live lease per host: a second request is
-  refused naming the holder, and a second approval is refused while one is live. Interactive
-  threads still overlap a leased one; there is no focus or input isolation.
+  and turning computer use off ends it. Live leases on a host do not overlap. A grant naming
+  apps overlaps another thread's grant naming one of the same apps. Both sides compare the id
+  `list_apps` reports (the bundle id, or the app name where there is none) without case; the
+  proxy never approves an app by its display name, which would let two grants naming one app
+  differently both reach it. It learns a pid's app only from a pending `list_apps` answer's
+  `apps` entries, and under a list launches an app only on macOS and only by its bundle id: a name is
+  resolved by the system, and on Linux and Windows the driver opens a launch path, AUMID or
+  URL before any id a grant names. A grant without apps overlaps every other, because under it the driver
+  acts on the whole desktop and runs scripts, and unattended full access work counts as one. An
+  overlapping request is refused naming the holder and its apps in the way, and so is an
+  overlapping approval. Grants on different apps coexist: the proxy forwards only calls aimed at
+  an approved app's pid, and background delivery posts input to that process without raising it
+  or moving the pointer. Calls that do take the shared screen (`bring_to_front`, `move_cursor`,
+  foreground delivery) are refused as `screen_shared` while another thread's grant is live.
+  Interactive threads still overlap a leased one; beyond that there is no focus or input
+  isolation.
 - **App approvals.** A grant may name apps (`Handoff.apps`, bundle ids as `list_apps` reports
   them); it then admits only those apps' windows. Interactive threads ask the same way: without a
   grant they may list apps and windows but act on none. The proxy ties a call to an app by the

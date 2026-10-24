@@ -111,7 +111,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   if (unattended && !everyApp && Option.isNone(lease)) return none("needs-approval", true);
   if (unattended && everyApp && Option.isSome(leases)) {
     const held = yield* leases.value
-      .holder(input.threadId)
+      .holder(input.threadId, undefined)
       .pipe(Effect.orElseSucceed(() => Option.some(undefined)));
     if (Option.isSome(held)) return none("held", true);
   }

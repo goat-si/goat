@@ -609,7 +609,9 @@ function FleetConsoleExpanded(props: {
         </section>
 
         <section aria-label="Status" className="flex min-h-0 flex-col gap-3 p-3 md:overflow-y-auto">
-          {hub === null ? null : <FleetHubSummary hub={hub} />}
+          {hub === null ? null : (
+            <FleetHubSummary hub={hub} homeEnvironmentId={environmentOf.get(hub.homeKey) ?? null} />
+          )}
           {quotas.length > 0 ? (
             <div className="flex flex-col gap-1.5">
               <span className="flex items-baseline justify-between gap-2">

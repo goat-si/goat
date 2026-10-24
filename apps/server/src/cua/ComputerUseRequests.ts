@@ -51,13 +51,18 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       message: cuaAgentBlockMessage(block),
     } satisfies ComputerUseRequestResult;
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
-  const held = yield* leases.holder(input.threadId);
+  // Admissions to different apps hold at once; an app, or the whole screen, is one thread's.
+  const held = yield* leases.holder(input.threadId, input.request.apps);
   if (Option.isSome(held))
     return {
       kind: "refused",
       reason: "held",
       holderThreadId: held.value.threadId,
-      message: `Thread ${held.value.threadId} holds computer use on this host until ${DateTime.formatIso(held.value.expiresAt)}. Ask again after it ends.`,
+      message: `${ComputerUseLeases.describeHolder(held.value)} ${
+        held.value.apps === undefined
+          ? "Ask again after it ends."
+          : "Ask only for apps it does not hold, or ask again after it ends."
+      }`,
     } satisfies ComputerUseRequestResult;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const origin = yield* computerUseOrigin(

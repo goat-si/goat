@@ -2,6 +2,7 @@ import * as NodeModule from "node:module";
 
 import {
   CuaAgentBlock,
+  cuaAgentBlockUnder,
   CuaDriverMcpConfiguration,
   type ComputerUseReadiness,
   type CuaDisplayCapability,
@@ -105,20 +106,18 @@ export const agentBlock = (failure: Option.Option<CuaDriverError>) =>
     : undefined;
 
 /**
- * The block that still explains anything: once the helper's newer readiness reports every
- * missing grant granted, the last failure is history and the next start tries again (#1399).
+ * The block that still explains anything: the grants the helper's newer readiness does not
+ * report granted; once every one is back, the last failure is history and the next start tries
+ * again (#1399).
  */
 const currentBlock = (
   failure: Option.Option<CuaDriverError>,
   readiness: ComputerUseReadiness | undefined,
 ) => {
   const block = agentBlock(failure);
-  if (block === undefined || readiness === undefined) return block;
-  const granted = block.missing.every(
-    (grant) =>
-      readiness.grants[grant === "accessibility" ? "accessibility" : "screenCapture"] === "granted",
-  );
-  return granted ? undefined : block;
+  return block === undefined || readiness === undefined
+    ? block
+    : cuaAgentBlockUnder(block, readiness);
 };
 
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
