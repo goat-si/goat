@@ -214,6 +214,7 @@ import {
   resolveProjectsViewThreadOrder,
   createProjectsViewEnvironmentAtoms,
   resolveProjectsViewProjectConnectionStatus,
+  projectsViewProjectKeyByScopedRef,
 } from "./LegacySidebar.logic";
 import { SidebarOpenSubagent } from "./sidebar/SidebarOpenSubagent";
 import {
@@ -3459,17 +3460,7 @@ function useLegacySidebarThreads(input: {
         ] as const,
     ),
   );
-  const projectKeyByScopedRef = new Map(
-    sortedProjects.flatMap((project) =>
-      project.memberProjects.map(
-        (member) =>
-          [
-            scopedProjectKey(scopeProjectRef(member.environmentId, member.id)),
-            project.projectKey,
-          ] as const,
-      ),
-    ),
-  );
+  const projectKeyByScopedRef = projectsViewProjectKeyByScopedRef(sortedProjects);
   const pinnedThreads = sortPinnedThreadsForSidebar(
     visibleThreads.filter(
       (thread) =>

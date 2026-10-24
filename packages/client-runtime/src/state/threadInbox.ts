@@ -28,6 +28,27 @@ export function isThreadWorking(thread: WorkingThreadInput): boolean {
   return !(thread.interactionMode === "plan" && thread.hasActionableProposedPlan && runSettled);
 }
 
+export type ActiveThreadWorkInput = Pick<
+  EnvironmentThreadShell,
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "pendingSubagentRequest"
+  | "runtime"
+  | "pendingBackgroundTasks"
+>;
+
+/**
+ * Work that is running, parked on background work, or waiting for the user, its delegated
+ * children's requests included. Thread lists keep it visible whatever project filter is
+ * selected: a filter arranges finished history, and must not hide work that still runs.
+ */
+export function isActiveThreadWork(thread: ActiveThreadWorkInput): boolean {
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return true;
+  if (thread.pendingSubagentRequest != null) return true;
+  if (threadRuntimeIsActive(thread.runtime)) return true;
+  return thread.runtime?.status === "idle" && thread.pendingBackgroundTasks.length > 0;
+}
+
 type InboxThreadInput = Pick<
   EnvironmentThreadShell,
   "id" | "environmentId" | "createdAt" | "unsettledAt" | "latestRun"
