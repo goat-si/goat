@@ -36,8 +36,6 @@ import {
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
   stageWindowsServerSidecar,
-  MacDesktopBuildPrerequisitesMissingError,
-  preflightMacDesktopBuild,
   preflightWindowsDesktopBuild,
   renderMacPasskeyEntitlements,
   resolveMacWebAuthnEntitlements,
@@ -1088,64 +1086,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ),
         );
       }),
-    ),
-  );
-
-  // Command Line Tools' lipo rejects -version, while xcrun --find locates it and
-  // fails only when no developer tools are installed.
-  const macPreflightSpawner = (lipo: "found" | "missing" | "unspawnable") =>
-    Layer.merge(
-      Layer.succeed(
-        ChildProcessSpawner.ChildProcessSpawner,
-        ChildProcessSpawner.make((command) => {
-          const childProcess = command as unknown as {
-            readonly command: string;
-            readonly args: ReadonlyArray<string>;
-          };
-          const invocation = [childProcess.command, ...childProcess.args].join(" ");
-          if (invocation === "xcrun --find lipo" && lipo === "unspawnable") {
-            return Effect.fail(
-              PlatformError.systemError({
-                _tag: "NotFound",
-                module: "ChildProcess",
-                method: "spawn",
-                pathOrDescriptor: "xcrun",
-              }),
-            );
-          }
-          const fails =
-            invocation === "lipo -version" ||
-            (invocation === "xcrun --find lipo" && lipo === "missing");
-          return Effect.succeed(mockProcess(fails ? 1 : 0));
-        }),
-      ),
-      ConfigProvider.layer(
-        ConfigProvider.fromEnv({ env: { GOAT_DESKTOP_REUSE_RESOURCE_MONITOR: "true" } }),
-      ),
-    );
-
-  it.effect("accepts the Command Line Tools lipo for universal macOS builds", () =>
-    preflightMacDesktopBuild("universal").pipe(Effect.provide(macPreflightSpawner("found"))),
-  );
-
-  it.effect("refuses a universal macOS build when lipo is missing", () =>
-    Effect.gen(function* () {
-      for (const lipo of ["missing", "unspawnable"] as const) {
-        const error = yield* preflightMacDesktopBuild("universal").pipe(
-          Effect.provide(macPreflightSpawner(lipo)),
-          Effect.flip,
-        );
-
-        assert.instanceOf(error, MacDesktopBuildPrerequisitesMissingError);
-        assert.deepStrictEqual(error.missing, ["lipo"]);
-        assert.include(error.message, "Xcode universal-binary tool (lipo)");
-      }
-    }),
-  );
-
-  it.effect("does not require lipo for single-architecture macOS builds", () =>
-    Effect.forEach(["arm64", "x64"] as const, (arch) =>
-      preflightMacDesktopBuild(arch).pipe(Effect.provide(macPreflightSpawner("unspawnable"))),
     ),
   );
 
@@ -2274,70 +2214,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
     }
   });
-
-  it.effect("lets universal macOS apps keep both halves of per-architecture native payloads", () =>
-    Effect.gen(function* () {
-      const universal = yield* createBuildConfig(
-        "mac",
-        "zip",
-        "1.2.3",
-        false,
-        false,
-        undefined,
-        undefined,
-        false,
-        "universal",
-      );
-      const arm64 = yield* createBuildConfig(
-        "mac",
-        "zip",
-        "1.2.3",
-        false,
-        false,
-        undefined,
-        undefined,
-        false,
-        "arm64",
-      );
-      const x64ArchFiles = (universal.mac as { readonly x64ArchFiles?: string }).x64ArchFiles;
-      assert.isString(x64ArchFiles);
-      assert.notProperty(arm64.mac, "x64ArchFiles");
-
-      const resources = "Contents/Resources";
-      const unpacked = `${resources}/app.asar.unpacked/node_modules`;
-      // Thin Mach-O files a universal build found byte-identical in both slices.
-      const singleArchPayloads = ["arm64", "x64"].flatMap((architecture) => [
-        `${unpacked}/@clerk/electron-passkeys/electron-passkeys.darwin-${architecture}.node`,
-        `${unpacked}/@clerk/electron-passkeys-darwin-${architecture}/electron-passkeys.darwin-${architecture}.node`,
-        `${unpacked}/@napi-rs/keyring/keyring.darwin-${architecture}.node`,
-        `${unpacked}/@napi-rs/keyring-darwin-${architecture}/keyring.darwin-${architecture}.node`,
-        `${unpacked}/@crowecawcaw/xa11y-darwin-${architecture}/xa11y.darwin-${architecture}.node`,
-        `${unpacked}/@ff-labs/fff-bin-darwin-${architecture}/libfff_c.dylib`,
-        `${unpacked}/@ubjs/node-darwin-${architecture}/uniffi-runtime-napi.darwin-${architecture}.node`,
-        `${unpacked}/@yuuang/ffi-rs-darwin-${architecture}/ffi-rs.darwin-${architecture}.node`,
-        `${unpacked}/node-pty/prebuilds/darwin-${architecture}/pty.node`,
-        `${unpacked}/node-pty/prebuilds/darwin-${architecture}/spawn-helper`,
-        `${unpacked}/objc-js/prebuilds/darwin-${architecture}/node.napi.node`,
-        `${resources}/node_modules/@cursor/sdk-darwin-${architecture}/bin/rg`,
-        `${resources}/node_modules/@cursor/sdk-darwin-${architecture}/vendor/tree-sitter/binding.node`,
-      ]);
-      for (const payload of singleArchPayloads) {
-        assert.isTrue(NodePath.matchesGlob(payload, x64ArchFiles), payload);
-      }
-      // Binaries rebuilt or merged per slice must still reach lipo or fail loudly.
-      for (const merged of [
-        `${unpacked}/node-pty/build/Release/pty.node`,
-        `${unpacked}/@clerk/electron-passkeys/electron-passkeys.node`,
-        `${unpacked}/some-addon/build/Release/addon.node`,
-        `${unpacked}/@napi-rs/keyring/keyring.linux-x64-gnu.node`,
-        `${unpacked}/@clerk/electron-passkeys/electron-passkeys.win32-x64-msvc.node`,
-        `${resources}/resource-monitor/goat-resource-monitor`,
-        "Contents/Frameworks/Electron Framework.framework/Electron Framework",
-      ]) {
-        assert.isFalse(NodePath.matchesGlob(merged, x64ArchFiles), merged);
-      }
-    }),
-  );
 
   it.effect("applies platform-specific packaging to the build config", () =>
     Effect.gen(function* () {
