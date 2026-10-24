@@ -55,7 +55,7 @@ namespace Goat.ComputerUse
                 Emit(refused);
                 return 77;
             }
-            var service = new DriverService(Path.GetDirectoryName(executable), Emit);
+            var service = new DriverService(executable, Emit);
             var hello = Message("hello");
             hello["protocol"] = ProtocolVersion;
             hello["pid"] = System.Diagnostics.Process.GetCurrentProcess().Id;
@@ -127,6 +127,7 @@ namespace Goat.ComputerUse
                     // Windows has no grant to prompt for; "prompt" is accepted and ignored.
                     case "permissions": reply["result"] = WindowsFacts.Readiness(); break;
                     case "start": reply["result"] = service.Start(parameters); break;
+                    case "listApps": reply["result"] = service.ListApps(); break;
                     case "stop": service.Stop(); reply["result"] = new Dictionary<string, object>(); break;
                     case "window": reply["result"] = Window(parameters); break;
                     default: throw new HelperException("unknown_method", "Unknown method " + method + ".");

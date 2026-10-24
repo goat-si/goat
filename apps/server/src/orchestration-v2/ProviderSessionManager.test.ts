@@ -747,6 +747,7 @@ function runBrowserAccessScenario(input: {
   readonly deviceOverride?: boolean;
   readonly createThread?: boolean;
   readonly projectExists?: boolean;
+  readonly turnCapabilities?: ReadonlyArray<MemoryContracts.TurnCapability>;
 }) {
   return Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -778,8 +779,9 @@ function runBrowserAccessScenario(input: {
           events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now, projectId })],
         });
       }
+      const { turnCapabilities = [] } = input;
       yield* manager
-        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy, turnCapabilities })
         .pipe(Effect.ignore);
     }).pipe(
       Effect.provide(
@@ -1789,26 +1791,22 @@ it.effect(
     }),
 );
 
-it.effect("ProviderSessionManagerV2 honors a project browser-access opt-out", () =>
+it.effect.each([
+  { name: "honors a project browser-access opt-out", expected: false },
+  { name: "withholds browser tools without the project", projectExists: false, expected: false },
+  {
+    name: "opens preview tools for an @browser turn",
+    turnCapabilities: ["browser"],
+    expected: true,
+  },
+] as const)("ProviderSessionManagerV2 $name", ({ name: _, expected, ...scenario }) =>
   Effect.gen(function* () {
     const captured = yield* runBrowserAccessScenario({
       enableAgentBrowserAccess: true,
       projectOverride: false,
+      ...scenario,
     });
-    assert.isDefined(captured);
-    assert.equal(captured?.browserToolsAvailable, false);
-  }),
-);
-
-it.effect("ProviderSessionManagerV2 fails browser access closed for a missing project", () =>
-  Effect.gen(function* () {
-    const captured = yield* runBrowserAccessScenario({
-      enableAgentBrowserAccess: true,
-      projectOverride: true,
-      projectExists: false,
-    });
-    assert.isDefined(captured);
-    assert.equal(captured?.browserToolsAvailable, false);
+    assert.equal(captured?.browserToolsAvailable, expected);
   }),
 );
 

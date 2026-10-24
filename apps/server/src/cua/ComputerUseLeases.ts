@@ -56,7 +56,10 @@ export interface ComputerUseLease {
   readonly apps?: ReadonlyArray<string>;
 }
 
-/** Whether the host's helper reports a person's input and secret fields at all. */
+/**
+ * Whether the host's helper reports a person's input and secret fields at all: true only for a
+ * signal its latest readiness report calls supported.
+ */
 export interface ComputerUseDetection {
   readonly humanInput: boolean;
   readonly privateMode: boolean;
@@ -92,6 +95,7 @@ export interface Interruptions {
 
 /** How long an interactive control lasts before the thread's next turn mints another. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
+const WATCH_RETRY_MS = 1_000;
 
 /** Why a thread runs without a person directing it; see ComputerUseOrigin. */
 export type ChannelOrigin = "goat_bot" | "channel_task";
@@ -192,10 +196,13 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const directory = yield* ChannelBotDirectory.ChannelBotDirectory;
   const signals = yield* PubSub.sliding<void>(16);
+  // Wakes the desktop watch below; a new control does not wake proxies, so it has its own.
+  const watchKick = yield* PubSub.sliding<void>(1);
+  const kick = PubSub.publish(watchKick, undefined).pipe(Effect.asVoid);
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
   const controls = new Map<ThreadId, ControlRecord>();
   let paused: ComputerUsePauseReason | undefined;
-  const changed = PubSub.publish(signals, undefined).pipe(Effect.asVoid);
+  const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
 
   const live = Effect.fn("ComputerUseLeases.live")(function* (threadId?: ThreadId) {
     const rows = yield* sql<{ handoff_json: string | null }>`
@@ -265,6 +272,7 @@ const make = Effect.gen(function* () {
       ...(handoffId === undefined ? {} : { handoffId }),
     };
     controls.set(threadId, next);
+    yield* kick;
     // A proxy still holding the previous id hears it was replaced.
     if (existing !== undefined && existing.ended === undefined) yield* changed;
     return next as ComputerUseControl;
@@ -332,19 +340,30 @@ const make = Effect.gen(function* () {
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
-  // The desktop host's helper reports a person's own input and secret fields, and says which it
-  // can detect at all; a standalone server and an older helper report nothing (#1235).
-  let detection: ComputerUseDetection = { humanInput: false, privateMode: false };
   let privateHost = false;
   const desktop = yield* Effect.serviceOption(DesktopTelemetryReceiver.DesktopTelemetryReceiver);
+  // The desktop host's helper reports a person's own input and secret fields, and its readiness
+  // says which it can detect at all; a standalone server and an older helper report nothing, so
+  // they detect neither (#1235). Read on every admission from the receiver's accepted report,
+  // so a downgrade counts from the moment it arrives.
+  const detection: Effect.Effect<ComputerUseDetection> = Option.isSome(desktop)
+    ? desktop.value.cuaReadiness.pipe(
+        Effect.map(
+          Option.match({
+            onNone: () => ({ humanInput: false, privateMode: false }),
+            onSome: ({ signals }) => ({
+              humanInput: signals.humanInput === "supported",
+              privateMode: signals.privateMode === "supported",
+            }),
+          }),
+        ),
+      )
+    : Effect.succeed({ humanInput: false, privateMode: false });
   if (Option.isSome(desktop))
     yield* desktop.value.cuaSafety.pipe(
       Stream.runForEach((report) => {
         if (report.type === "cuaHumanInput") return pause("human_input");
-        if (report.type === "cuaDetection")
-          return Effect.sync(() => {
-            detection = { humanInput: report.humanInput, privateMode: report.privateMode };
-          }).pipe(Effect.andThen(changed));
+        if (report.type === "cuaReadiness") return changed;
         return Effect.sync(() => {
           if (report.active && !privateHost) interrupted("private");
           privateHost = report.active;
@@ -352,6 +371,63 @@ const make = Effect.gen(function* () {
       }),
       Effect.forkScoped,
     );
+
+  // The desktop's helper watches for secret fields and a person's input only while an agent
+  // controls this host (D7): from the first live control until the last one ends or expires.
+  if (Option.isSome(desktop)) {
+    const kicks = yield* PubSub.subscribe(watchKick);
+    const receiver = desktop.value;
+    yield* Effect.gen(function* () {
+      // What the desktop last heard; it starts out not watching. After a failed write it may
+      // have heard either value, so the current one goes out until a write succeeds.
+      let delivered = false;
+      let unsure = false;
+      for (;;) {
+        // A grant cancelled or expired under a control ends it, though nothing here ended it.
+        let endedAny = false;
+        for (const record of [...controls.values()]) {
+          if (record.ended !== undefined || record.handoffId === undefined) continue;
+          const grant = yield* state(record.threadId, record.handoffId).pipe(Effect.option);
+          // The lookup yields: a newer control for the thread is not judged by this grant.
+          if (
+            Option.isSome(grant) &&
+            grant.value._tag === "ended" &&
+            controls.get(record.threadId)?.controlId === record.controlId
+          )
+            endedAny = end(record.threadId, grant.value.reason) || endedAny;
+        }
+        // Proxies waiting on a pause hear their control ended.
+        if (endedAny) yield* PubSub.publish(signals, undefined);
+        const now = DateTime.toEpochMillis(yield* DateTime.now);
+        const expiries = [...controls.values()]
+          .filter((record) => record.ended === undefined)
+          .map((record) => DateTime.toEpochMillis(record.expiresAt))
+          .filter((expiresAt) => expiresAt > now);
+        const active = expiries.length > 0;
+        let retry = false;
+        if (active !== delivered || unsure) {
+          const sent = yield* receiver.setCuaWatch(active).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          );
+          if (sent) {
+            delivered = active;
+            unsure = false;
+          } else {
+            unsure = true;
+            retry = true;
+          }
+        }
+        const waits = [
+          ...(active ? [Math.min(...expiries) - now] : []),
+          // A failed write is tried again: the desktop may not reconnect to hear it otherwise.
+          ...(retry ? [WATCH_RETRY_MS] : []),
+        ];
+        const woken = PubSub.take(kicks);
+        yield* waits.length > 0 ? Effect.race(woken, Effect.sleep(Math.min(...waits))) : woken;
+      }
+    }).pipe(Effect.forkScoped);
+  }
 
   return ComputerUseLeases.of({
     active: (threadId) =>
@@ -380,7 +456,7 @@ const make = Effect.gen(function* () {
     ),
     grants: live(),
     pause,
-    detection: Effect.sync(() => detection),
+    detection,
     resume: Effect.sync(() => {
       paused = undefined;
     }).pipe(Effect.andThen(changed)),

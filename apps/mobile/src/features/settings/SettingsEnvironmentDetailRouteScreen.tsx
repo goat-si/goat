@@ -28,6 +28,7 @@ import { environmentSession, useEnvironmentScope, readEnvironmentScope } from ".
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { ConnectionEnvironmentRow } from "../connection/ConnectionEnvironmentRow";
+import { ComputerUseHostReadiness } from "./computerUse/ComputerUseReadiness";
 import { EnvironmentRoutesSection } from "./EnvironmentRoutesSection";
 import { OutdatedServerUpdateSection } from "./OutdatedServerUpdateSection";
 import { SettingsActionRow } from "./components/SettingsActionRow";
@@ -210,6 +211,9 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                 onUpdate={connections.onUpdateEnvironment}
               />
             </SettingsSection>
+            {connected && canRead ? (
+              <ComputerUseHostReadiness environmentId={environmentId} />
+            ) : null}
             <EnvironmentRoutesSection
               environmentId={environmentId}
               connected={connected}

@@ -5,6 +5,9 @@
   pingdotgg/t3code#21694 at `b8569ac92` and #21695 at `dc307c8a7`. The commit messages do not
   record the alternatives below; they come from the lane plan and research for this program.
 - Related: [ADR-0003](ADR-0003-effect-services.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
+- Amended by: [ADR-0023](ADR-0023-goat-computer-use-app.md). The Electron-owned host and the
+  `si.goat.desktop` identity under "Identity" are superseded by a separate signed helper app; the
+  rest of this record stands.
 
 ## Decision record
 
@@ -103,8 +106,9 @@
 `computerUseAttachment` returns `none` (with a reason) or `proxied`. It attaches only when
 `enableCua` is on, the driver is running, the provider runs on this host, and the turn is neither
 Plan nor a read-only sandbox. An unattended turn gets `none` with `cuaDriverBlocked` unless its
-thread holds a lease and the host's helper reports both a person's input and secret fields
-(`cuaDetection`; otherwise `detection-unsupported`, #1235). Every attachment carries GOAT's proxy
+thread holds a lease and the host's helper reports both a person's input and secret fields as
+supported signals in its readiness (`cuaReadiness`, also shown as `CuaHostStatus.readiness`;
+otherwise `detection-unsupported`, #1235). Every attachment carries GOAT's proxy
 instead of `cua-driver mcp` under the thread's control (see "Safety") with
 `cuaDriverOverridesUserConfig`: a `cua-driver` the person configured would skip Stop, pauses and app
 approvals. Without the proxy subcommand nothing could stop the driver, so there is no attachment.
