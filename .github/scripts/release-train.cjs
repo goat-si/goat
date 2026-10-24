@@ -7,12 +7,19 @@
 //   node release-train.cjs stable   decide whether to promote a nightly to stable
 //   node release-train.cjs recheck  before publishing, check that promotion still holds
 //   node release-train.cjs base     print the base version the next nightly or stable carries
+//   node release-train.cjs nightly  decide whether to build a nightly of a dev commit
 //
 // Stable promotes the newest published nightly that has been out for 24 hours and is newer than
 // the current stable, unless an open issue is labeled release-blocker or the repository variable
 // GOAT_STABLE_HOLD is 'true'. It rebuilds that nightly's commit with the plain base version. A
 // manual run that names a commit promotes that nightly without the three rules.
+//
+// A nightly builds the newest green dev commit unless it is already a published nightly or is
+// not newer than the commit of the newest published nightly: a manual run may have shipped a
+// newer commit, and building an older one would give users older code under a higher version.
+// A manual run that names a commit builds it unless it is already a published nightly.
 
+const childProcess = require("node:child_process");
 const fs = require("node:fs");
 
 const SOAK_MS = 24 * 60 * 60 * 1000;
@@ -95,6 +102,46 @@ function heldBy({ openBlockers, hold }) {
   if (hold === "true") return "repository variable GOAT_STABLE_HOLD is 'true'";
   if (openBlockers > 0) return openBlockers + " open " + BLOCKER_LABEL + " issue(s)";
   return undefined;
+}
+
+/**
+ * Whether to build a nightly of sha. compareStatus(base, head) returns GitHub's compare status
+ * of head against base. Returns {build, reason}; throws when sha and the newest published
+ * nightly's commit have diverged, since neither is then the newer one.
+ */
+function decideNightlyBuild({ releases, sha, manual, compareStatus }) {
+  const shortSha = sha.toLowerCase().slice(0, 12);
+  const nightlies = releases.filter((release) => release.prerelease);
+  if (nightlies.some((release) => NAME_SHA.exec(release.name ?? "")?.[1] === shortSha)) {
+    return { build: false, reason: sha + " is already a published nightly" };
+  }
+  if (manual) return { build: true, reason: "manual run named " + sha };
+  const newest = nightlies
+    .filter((release) => !release.draft && release.published_at)
+    .map((release) => {
+      const match = NIGHTLY_TAG.exec(release.tag_name);
+      return match ? { release, order: numbers(match, 5) } : undefined;
+    })
+    .filter(Boolean)
+    .sort((a, b) => compare(b.order, a.order))[0];
+  if (newest === undefined) return { build: true, reason: "no nightly has been published" };
+  // An unreadable commit must not let an older nightly stand in for the newest one.
+  const builtSha = NAME_SHA.exec(newest.release.name ?? "")?.[1];
+  if (!builtSha) {
+    throw new Error(
+      "the newest nightly " +
+        newest.release.tag_name +
+        " does not name its commit; name a commit to build",
+    );
+  }
+  const label = newest.release.tag_name + " (" + builtSha + ")";
+  const status = compareStatus(builtSha, sha);
+  if (status === "ahead") return { build: true, reason: sha + " is newer than " + label };
+  if (status === "behind") return { build: false, reason: sha + " is older than " + label };
+  if (status === "identical") return { build: false, reason: sha + " is the commit of " + label };
+  throw new Error(
+    sha + " and the commit of " + label + " have diverged (" + status + "); name a commit to build",
+  );
 }
 
 function decideStablePromotion({ releases, openBlockers, hold, now, sha }) {
@@ -245,12 +292,34 @@ function main(argv = process.argv.slice(2), env = process.env) {
     console.log(lines.join("\n"));
     return;
   }
-  throw new Error("usage: release-train.cjs stable|recheck|base");
+  if (command === "nightly") {
+    const sha = env.SHA ?? "";
+    if (!/^[0-9a-f]{40}$/.test(sha))
+      throw new Error("SHA must be a full commit sha, got '" + sha + "'");
+    const decision = decideNightlyBuild({
+      releases: readJsonLines(env.RELEASES_FILE),
+      sha,
+      manual: Boolean(env.INPUT_SHA),
+      compareStatus: (base, head) =>
+        childProcess
+          .execFileSync(
+            "gh",
+            ["api", "repos/goat-si/goat/compare/" + base + "..." + head, "--jq", ".status"],
+            { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+          )
+          .trim(),
+    });
+    console.error("nightly: " + decision.reason);
+    console.log("build=" + decision.build);
+    return;
+  }
+  throw new Error("usage: release-train.cjs stable|recheck|base|nightly");
 }
 
 module.exports = {
   SOAK_MS,
   BLOCKER_LABEL,
+  decideNightlyBuild,
   decideStablePromotion,
   nextStableBase,
   recheckStablePromotion,
