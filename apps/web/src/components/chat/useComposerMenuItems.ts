@@ -1,5 +1,8 @@
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
-import { matchComposerCapabilityItems } from "@goat/client-runtime/composerCapabilityItems";
+import {
+  composerThreadMayRunUnattended,
+  matchComposerCapabilityItems,
+} from "@goat/client-runtime/composerCapabilityItems";
 import type {
   EnvironmentId,
   ProjectId,
@@ -64,6 +67,7 @@ export function useComposerMenuItems({
   selectedProviderSlashCommands,
   showSkillsInSlashMenu,
   interactionMode,
+  capabilityTargetDrivers,
 }: {
   readonly composerTrigger: ComposerTrigger | null;
   readonly environmentId: EnvironmentId;
@@ -80,6 +84,8 @@ export function useComposerMenuItems({
   readonly selectedProviderSlashCommands: ServerProvider["slashCommands"];
   readonly showSkillsInSlashMenu: boolean;
   readonly interactionMode: ProviderInteractionMode;
+  /** The drivers of every provider this send goes to, so @computer judges the real targets. */
+  readonly capabilityTargetDrivers: ReadonlyArray<string>;
 }) {
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
@@ -95,12 +101,19 @@ export function useComposerMenuItems({
   const settledPullRequestTextQuery =
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
+  const environmentThreadShells = useThreadShells(isPathTrigger);
+  const activeShell = environmentThreadShells.find(
+    (shell) => shell.environmentId === environmentId && shell.id === activeThreadId,
+  );
   const capabilityContext = useComposerCapabilityContext({
     environmentId,
-    interactionMode,
     active: isPathTrigger,
+    turn: {
+      interactionMode,
+      providerDrivers: capabilityTargetDrivers,
+      mayRunUnattended: composerThreadMayRunUnattended(activeThreadId, activeShell?.source),
+    },
   });
-  const environmentThreadShells = useThreadShells(isPathTrigger);
   const workspaceEntries = useComposerPathSearch({
     environmentId,
     cwd: isPathTrigger ? gitCwd : null,

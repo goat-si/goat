@@ -1,6 +1,9 @@
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
 import type { ComposerPathSearchTarget } from "@goat/client-runtime/state/threads";
-import type { ComposerCapabilityItem } from "@goat/client-runtime/composerCapabilityItems";
+import {
+  composerCapabilityDetail,
+  type ComposerCapabilityItem,
+} from "@goat/client-runtime/composerCapabilityItems";
 import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
@@ -178,16 +181,23 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
     props.triggerKind === "slash-command" && props.item.type === "skill" ? props.item.skill : null;
   const pullRequestPresentation =
     props.item.type === "pull-request" ? resolvePullRequestState(props.item.pullRequest) : null;
-  const unavailableReason = props.item.type === "capability" ? props.item.unavailableReason : null;
+  const availability = props.item.type === "capability" ? props.item.availability : null;
+  const inactive = availability !== null && availability.state !== "available";
+  const detail = props.item.type === "capability" ? composerCapabilityDetail(props.item) : null;
 
   return (
     <CommandItem
       render={<div id={props.optionId} />}
       aria-selected={props.isActive}
-      aria-description={unavailableReason ?? undefined}
+      aria-description={inactive ? (detail ?? undefined) : undefined}
+      aria-disabled={
+        availability?.state === "checking" ||
+        (availability?.state === "unavailable" && !availability.setup) ||
+        undefined
+      }
       value={props.item.id}
       data-composer-item-id={props.item.id}
-      data-unavailable={unavailableReason === null ? undefined : "true"}
+      data-unavailable={inactive ? "true" : undefined}
       active={props.isActive}
       onMouseMove={() => {
         if (!props.isActive) props.onHighlight(props.item.id);
@@ -227,7 +237,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         <span
           className={cn(
             "min-w-0 max-w-[45%] shrink-0 truncate font-sans text-xs font-medium",
-            unavailableReason !== null && "text-secondary-label",
+            inactive && "text-secondary-label",
           )}
         >
           {isSlashSkill ? (
@@ -240,9 +250,9 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           )}
         </span>
         <span className="min-w-0 flex-1 truncate text-left text-secondary-label text-xs">
-          {unavailableReason ?? props.item.description}
+          {detail ?? props.item.description}
         </span>
-        {unavailableReason !== null ? (
+        {availability?.state === "unavailable" && availability.setup ? (
           <Badge className="ms-auto" variant="outline">
             Set up
           </Badge>
