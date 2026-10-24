@@ -163,9 +163,10 @@ describe("computer use protocol values", () => {
   });
 
   it("names keys by meaning, so every platform reads a request the same way", () => {
-    for (const key of ["a", "/", "enter", "arrowLeft", "f12"])
+    for (const key of ["a", "/", "\u{10400}", "enter", "arrowLeft", "f12"])
       expect(decodes(ComputerUseKey, key)).toBe(true);
-    for (const key of ["ctrl+a", "Return", "", "f25"])
+    // Controls, a lone surrogate and two characters are not one printable key.
+    for (const key of ["ctrl+a", "Return", "", "f25", "\n", "\u0000", "\uD800", "ab"])
       expect(decodes(ComputerUseKey, key)).toBe(false);
   });
 

@@ -261,3 +261,38 @@ describe("computer use observations", () => {
     ).toMatchObject({ reason: "staleElement" });
   });
 });
+
+describe("computer use observation bookkeeping", () => {
+  it.each(["Form/AXButton:Save", 'Form"]["AXButton","Save'])(
+    "keeps a label that spells another path (%s) from taking that path's ref",
+    (spelled) => {
+      const { tracker, observe } = setup();
+      const first = observe(
+        read(1, [
+          { role: "AXGroup", label: "Form" },
+          { role: "AXButton", label: "Save", parent: 0 },
+        ]),
+      );
+      const save = refOf(first, "Save");
+      // The window now holds one group whose label reads like the old path to Save.
+      const second = observe(read(2, [{ role: "AXGroup", label: spelled }]), first.observationId);
+      expect(
+        tracker.resolve({ ...target, observationId: second.observationId, element: save }),
+      ).toMatchObject({ reason: "staleElement" });
+    },
+  );
+
+  it("counts private windows toward the same 32-window limit", () => {
+    const { tracker, observe } = setup();
+    const secret = observe(read(1, form, { window_id: 100 }), undefined, { privateMode: true });
+    for (let window = 101; window <= 132; window++)
+      observe(read(1, form, { window_id: window }), undefined, { privateMode: true });
+    // Forgotten, so the window reads as unknown rather than staying private forever.
+    expect(
+      tracker.pointsCurrent({ pid: 10, windowId: 100, observationId: secret.observationId }),
+    ).toMatchObject({ reason: "staleElement" });
+    expect(tracker.pointsCurrent({ pid: 10, windowId: 132, observationId: "any" })).toMatchObject({
+      reason: "privateMode",
+    });
+  });
+});

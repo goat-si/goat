@@ -134,8 +134,9 @@ const ObservationFields = {
   complete: Schema.Boolean,
   focused: Schema.optionalKey(ComputerUseElementRef),
   /**
-   * A secure field has focus (D6). The helper withholds the screenshot and values, and refuses
-   * actions with privateMode until it loses focus.
+   * A secure field has focus (D6). Nothing of the window leaves: the observation is full and
+   * incomplete with no elements, no focused ref and no screenshot (labels can repeat a field's
+   * value), and every ref, point and action is refused with privateMode until it loses focus.
    */
   privateMode: Schema.Boolean,
   /** The image travels separately as MCP content; absent when withheld or not requested. */
@@ -206,7 +207,8 @@ const Modifiers = Schema.Array(Schema.Literals(["shift", "control", "option", "c
  * modifiers ("a", "7", "/"), or a named key. Helpers translate it for the active layout.
  */
 export const ComputerUseKey = Schema.Union([
-  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1)),
+  // One code point that is not a control, format, surrogate, private-use or unassigned one.
+  Schema.String.check(Schema.isPattern(/^[^\p{C}]$/u)),
   Schema.Literals([
     "enter",
     "tab",
