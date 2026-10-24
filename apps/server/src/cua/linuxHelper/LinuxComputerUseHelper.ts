@@ -1,6 +1,8 @@
 import {
   ComputerUseActionRequest,
   ComputerUseObserveRequest,
+  ComputerUseWatchRequest,
+  type ComputerUseCapabilities,
   computerUseDeadlineResult,
   computerUseImageInfo,
   type ComputerUseElement,
@@ -23,8 +25,8 @@ import * as Schema from "effect/Schema";
 import type { SecureFocus } from "./atspiFocus.ts";
 import type { DriverClient, DriverImage, DriverToolResult } from "./CuaDriverMcp.ts";
 import { driverRefusalCode, linuxActionResult, linuxDriverCall } from "./linuxActions.ts";
+import type { SignalMonitor } from "./linuxSignals.ts";
 import {
-  linuxCapabilities,
   linuxReadiness,
   pngColors,
   type LinuxSession,
@@ -49,6 +51,9 @@ export interface LinuxHelperDependencies {
   readonly settle: () => Promise<void>;
   readonly newId: () => string;
   readonly now: () => number;
+  /** The safety signals; watch and unwatch arm and disarm it for an agent session. */
+  readonly signals: SignalMonitor;
+  readonly capabilities: ComputerUseCapabilities;
 }
 
 export interface HelperAnswer {
@@ -81,6 +86,7 @@ const field = (value: unknown, key: string): unknown =>
 
 const decodeObserve = Schema.decodeUnknownOption(ComputerUseObserveRequest);
 const decodeAction = Schema.decodeUnknownOption(ComputerUseActionRequest);
+const decodeWatch = Schema.decodeUnknownOption(ComputerUseWatchRequest);
 const decodeRead = Schema.decodeUnknownOption(DriverWindowState);
 
 interface DriverWindow {
@@ -396,7 +402,9 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       };
     if (left() <= 0)
       return { result: refusal("busy", "The deadline passed before anything was sent.") };
-    const answer = await call(call_.tool, call_.args, left(), generation);
+    // The helper's own input may reset the desktop's idle counter; that is not a person.
+    const sent_ = deps.signals.dispatching();
+    const answer = await call(call_.tool, call_.args, left(), generation).finally(sent_);
     if (answer === "deadline") return { result: computerUseDeadlineResult(request.delivery) };
     if (answer === "lost")
       return {
@@ -436,7 +444,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     if (left() <= 0)
       return { result: refusal("busy", "The deadline passed while the request waited.") };
     const deadlineMs = left();
-    if (method === "capabilities") return { result: linuxCapabilities(deps.session) };
+    if (method === "capabilities") return { result: deps.capabilities };
     if (method === "permissions") return { result: await readiness(deadlineMs) };
     if (deps.session.unsupported !== undefined)
       return {
@@ -482,6 +490,17 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         deadlineMs,
       });
     }
+    if (method === "watch") {
+      const decoded = decodeWatch(params);
+      if (decoded._tag === "None")
+        return { result: refusal("invalidRequest", "watch needs at least one window target.") };
+      deps.signals.watch(decoded.value.targets);
+      return { result: { watching: deps.signals.watching() } };
+    }
+    if (method === "unwatch") {
+      deps.signals.unwatch();
+      return { result: { watching: [] } };
+    }
     if (ACTIONS.has(method)) return act(method, params, left);
     return { result: refusal("invalidRequest", method + " is not a computer use method.") };
   };
@@ -504,6 +523,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     close: () =>
       (closing ??= (async () => {
         closed = true;
+        deps.signals.unwatch();
         const current = driver;
         driver = undefined;
         driverGeneration++;
@@ -515,3 +535,5 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       })()),
   };
 }
+
+

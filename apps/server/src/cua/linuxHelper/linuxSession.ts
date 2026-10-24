@@ -83,19 +83,31 @@ export const parseGnomeShellMajor = (output: string): number | null => {
   return match ? Number(match[1]) : null;
 };
 
-export function linuxCapabilities(session: LinuxSession): ComputerUseCapabilities {
+export function linuxCapabilities(
+  session: LinuxSession,
+  /** Whether the desktop has an idle counter the helper can read for human input. */
+  idleCounter: boolean,
+): ComputerUseCapabilities {
+  const usable = session.unavailable === undefined && session.unsupported === undefined;
   return {
     protocol: COMPUTER_USE_PROTOCOL_VERSION,
     platform: "linux",
     methods: Object.fromEntries(
       COMPUTER_USE_METHODS.map((method) => [
         method,
-        session.unsupported !== undefined && method !== "capabilities" && method !== "permissions"
+        session.unsupported !== undefined &&
+        method !== "capabilities" &&
+        method !== "permissions"
           ? "unsupported"
           : "supported",
       ]),
     ) as ComputerUseCapabilities["methods"],
-    backgroundDelivery: session.unavailable === undefined && session.unsupported === undefined,
+    backgroundDelivery: usable,
+    signals: {
+      // AT-SPI focus, read the same way observation reads it.
+      privateMode: usable ? "supported" : "unsupported",
+      humanInput: usable && idleCounter ? "supported" : "unsupported",
+    },
   };
 }
 
@@ -258,3 +270,4 @@ function paeth(a: number, b: number, c: number) {
   const pc = Math.abs(p - c);
   return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
 }
+

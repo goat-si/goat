@@ -11,7 +11,7 @@ import { localDisplayNumber, x11SetupRequest, xauthorityCookie } from "../CuaDis
  * How long ago a person last touched the keyboard or pointer on an X display, from the
  * MIT-SCREEN-SAVER extension (WS10 #1138, #1235). It is the X server's own idle counter, so it
  * needs no input device access and records nothing about what was typed. XWayland reports only
- * input to X clients, so GNOME Wayland uses Mutter's idle monitor instead (see gnomeIdle).
+ * input to X clients, so GNOME Wayland uses Mutter's idle monitor instead (openGnomeIdle).
  */
 
 export interface IdleSource {
@@ -141,5 +141,33 @@ export async function openX11Idle(environment: {
     },
     close,
   };
+}
+
+
+/** `(uint64 N,)` from org.gnome.Mutter.IdleMonitor.GetIdletime. */
+export const parseUint64 = (output: string): number | undefined => {
+  const match = /\(uint64 (\d+),\)/u.exec(output);
+  return match ? Number(match[1]) : undefined;
+};
+
+/**
+ * Mutter's own idle counter on the session bus, for GNOME on Wayland where no X server sees
+ * the person's input. Undefined when it does not answer.
+ */
+export async function openGnomeIdle(
+  run: (args: ReadonlyArray<string>) => Promise<string>,
+): Promise<IdleSource | undefined> {
+  const ask = () =>
+    run([
+      "call",
+      "--session",
+      "--dest",
+      "org.gnome.Mutter.IdleMonitor",
+      "--object-path",
+      "/org/gnome/Mutter/IdleMonitor/Core",
+      "--method",
+      "org.gnome.Mutter.IdleMonitor.GetIdletime",
+    ]).then(parseUint64, () => undefined);
+  return (await ask()) === undefined ? undefined : { idleMs: ask, close: () => undefined };
 }
 
