@@ -1,6 +1,11 @@
-import type { DesktopBuildIconAssets } from "../build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./brand-assets.ts";
 import { resolveDesktopUpdateChannel } from "./desktop-release-channel.ts";
+
+export type DesktopBuildIconAssets = {
+  readonly macIconPng: string;
+  readonly linuxIconPng: string;
+  readonly windowsIconIco: string;
+};
 
 export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
   if (resolveDesktopUpdateChannel(version) === "nightly") {

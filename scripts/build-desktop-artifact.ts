@@ -41,6 +41,7 @@ import { stageDesktopComputerUseHelper } from "./lib/desktop-computer-use-helper
 import { resolveBuildCommitTime } from "./lib/build-commit-time.ts";
 import { resolveDesktopBuildIconAssets } from "./lib/desktop-icon-assets.ts";
 export { resolveDesktopBuildIconAssets };
+export type { DesktopBuildIconAssets } from "./lib/desktop-icon-assets.ts";
 import {
   isPlainReleaseVersion,
   RELEASE_VERSION_STAMP_COMMAND,
