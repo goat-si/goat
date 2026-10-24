@@ -27,7 +27,7 @@ export const ProviderDiagnosisFix = Schema.Struct({
   actor: ProviderDiagnosisActor,
   /** One plain sentence saying what to do now. */
   instruction: TrimmedNonEmptyString,
-  /** Agent surface path that performs or starts this step, such as `provider.setup`. */
+  /** goat_call path that performs or starts this step, such as `provider.update`. */
   path: Schema.optionalKey(TrimmedNonEmptyString),
   handoff: Schema.optionalKey(ProviderDiagnosisHandoffKind),
   /** A command the person runs in a terminal on the environment's machine. */
@@ -44,6 +44,15 @@ export const ProviderDiagnosisFix = Schema.Struct({
   ),
 });
 export type ProviderDiagnosisFix = typeof ProviderDiagnosisFix.Type;
+
+/**
+ * The path a settings fix names: the provider tool its call makes, or, with no call, the
+ * request that asks a person to finish the provider's setup in the app.
+ */
+export const providerSettingsFixPath = (call: ProviderDiagnosisFix["call"]) =>
+  call === undefined
+    ? "provider.setup_open"
+    : `provider.${call.tool.replace(/^goat_provider_/u, "")}`;
 
 export const ProviderDiagnosisCheckStatus = Schema.Literals([
   "pass",

@@ -22,6 +22,7 @@ import {
   ProviderInstanceId,
   implicitDefaultInstance,
   isDevinAcpRegistryInstance,
+  providerSettingsFixPath,
   type ProviderDiagnoseInput,
   type ProviderDiagnoseResult,
   type ProviderDiagnosis,
@@ -103,13 +104,10 @@ const agent = (
 
 type FixCall = NonNullable<ProviderDiagnosisFix["call"]>;
 
-/**
- * A settings change. `call` is the provider tool that applies it; ProviderDiagnosisRouting hands
- * it to the agent when the caller may manage providers, and otherwise a person approves it.
- */
+/** A settings change. Its call runs directly for a provider manager; others get an approval. */
 const settingsChange = (instruction: string, call?: FixCall) =>
   human(instruction, {
-    path: "provider.setup",
+    path: providerSettingsFixPath(call),
     handoff: "approval",
     ...(call === undefined ? {} : { call }),
   });

@@ -292,7 +292,7 @@ it.effect(
       expect(failures(diagnosis)).toEqual(["forbidden_environment"]);
       const environment = checkOf(diagnosis, "environment")!;
       expect(environment.summary).toContain("ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL");
-      expect(environment.fix).toMatchObject({ actor: "human", path: "provider.setup_open" });
+      expect(environment.fix).toMatchObject({ actor: "human", path: "provider.update" });
       expect(environment.fix?.instruction).toContain("OpenCodex Claude intercept");
       expect(environment.fix?.instruction).toContain("empty value");
       expect(JSON.stringify(result)).not.toContain(OPENCODEX_TOKEN);
@@ -429,6 +429,7 @@ it.effect("checks a project's remote without echoing credentials in it", () =>
 const devinCloud = (siblingInstanceId: string) => ({
   "devin-cloud": { driver: driver("devinCloud"), config: { enabled: true, siblingInstanceId } },
 });
+const devinRegistry = devinSibling({ source: "registry", agentId: "devin" });
 
 it.effect("Devin Cloud with a signed-in Devin ACP sibling is ready", () =>
   Effect.gen(function* () {
@@ -571,6 +572,11 @@ it.effect("every fix a diagnosis emits names a path goat_call resolves", () =>
       yield* diagnose(
         { instanceId: id("devin-cloud") },
         { instances: { ...devinCloud("devin-acp"), "devin-acp": devinSibling() }, executables: {} },
+      ),
+      // Two Devin siblings: a person picks one, a settings fix with no call.
+      yield* diagnose(
+        { driver: driver("devinCloud") },
+        { instances: { "devin-one": devinRegistry, "devin-two": devinRegistry } },
       ),
     ].flatMap(({ result }) => result.diagnoses.flatMap((diagnosis) => diagnosis.checks));
     const checks = [

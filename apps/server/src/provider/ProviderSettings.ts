@@ -27,6 +27,7 @@ import {
   PROVIDER_SETTINGS_HANDOFF_PATH,
   PROVIDER_SETUP_HANDOFF_PATH,
   ProviderAddInput,
+  providerSettingsFixPath,
   ProviderDriverKind,
   type ProviderDiagnoseOnHostInput,
   type ProviderDiagnoseOnHostResult,
@@ -377,22 +378,24 @@ const make = Effect.gen(function* () {
       .updateProviderInstance(mutation, patch, undefined, authorize)
       .pipe(Effect.mapError(saveFailure));
 
-  const link = Effect.fn("ProviderSettings.link")(function* (
+  /** The cloud entry that uses siblingId for its sign-in, or why cloudId cannot use it. */
+  const planLink = (
+    instances: Readonly<Record<string, ProviderInstanceConfig>>,
     cloudId: ProviderInstanceId,
     siblingId: ProviderInstanceId,
-    authorize: Effect.Effect<void, ServerSettingsError>,
-  ) {
-    const instances = (yield* current).providerInstances;
+  ) => {
     const cloud = resolveEntry(instances, cloudId);
     if (cloud === undefined || !isCloudSiblingDriver(cloud.driver))
-      return yield* invalid(
-        `${cloudId} is not a Cursor Cloud, Claude Cloud, or Devin Cloud instance.`,
+      return Effect.fail(
+        invalid(`${cloudId} is not a Cursor Cloud, Claude Cloud, or Devin Cloud instance.`),
       );
     const expected = CLOUD_SIBLING_DRIVERS[cloud.driver as keyof typeof CLOUD_SIBLING_DRIVERS];
     const sibling = resolveEntry(instances, siblingId);
     if (sibling === undefined || sibling.driver !== expected)
-      return yield* invalid(
-        `${driverName(cloud.driver)} needs a ${driverName(expected)} instance; ${siblingId} is not one.`,
+      return Effect.fail(
+        invalid(
+          `${driverName(cloud.driver)} needs a ${driverName(expected)} instance; ${siblingId} is not one.`,
+        ),
       );
     if (
       cloud.driver === "devinCloud" &&
@@ -402,13 +405,21 @@ const make = Effect.gen(function* () {
         config: { ...mergeConfig(sibling.config), enabled: true },
       })
     )
-      return yield* invalid(`ACP instance ${siblingId} does not run Devin.`);
+      return Effect.fail(invalid(`ACP instance ${siblingId} does not run Devin.`));
     const key = cloud.driver === "devinCloud" ? "siblingInstanceId" : "sourceInstanceId";
-    const next: ProviderInstanceConfig = {
+    return Effect.succeed<ProviderInstanceConfig>({
       ...cloud,
       enabled: true,
       config: mergeConfig(cloud.config, { [key]: siblingId }),
-    };
+    });
+  };
+
+  const link = Effect.fn("ProviderSettings.link")(function* (
+    cloudId: ProviderInstanceId,
+    siblingId: ProviderInstanceId,
+    authorize: Effect.Effect<void, ServerSettingsError>,
+  ) {
+    const next = yield* planLink((yield* current).providerInstances, cloudId, siblingId);
     yield* save({ operation: "upsert", instanceId: cloudId, instance: next }, {}, authorize);
     return summarize(cloudId, next);
   });
@@ -469,6 +480,9 @@ const make = Effect.gen(function* () {
       ...(Object.keys(config).length === 0 ? {} : { config }),
       ...(environment === undefined || environment.length === 0 ? {} : { environment }),
     };
+    // Refused here, before anything is installed or saved, so a failed link leaves no instance.
+    if (input.linkTo !== undefined)
+      yield* planLink({ ...instances, [instanceId]: instance }, input.linkTo, instanceId);
     return {
       instanceId,
       instance,
@@ -680,7 +694,11 @@ const make = Effect.gen(function* () {
   ) {
     const host = request.input.host;
     const decision = yield* decide(scope, host);
-    if (decision.kind === "approval") return yield* requestApproval(request, scope);
+    if (decision.kind === "approval") {
+      // A person should not be asked to approve an add GOAT would refuse.
+      if (request.action === "add" && host === undefined) yield* planAdd(request.input);
+      return yield* requestApproval(request, scope);
+    }
     const outcome = yield* Effect.exit(
       host === undefined
         ? applyLocal(request, recheckCaller(scope, undefined))
@@ -719,7 +737,7 @@ const make = Effect.gen(function* () {
                         fix: {
                           actor: "agent" as const,
                           instruction: `Call ${check.fix.call.tool}${result.host === undefined ? "" : ` with host ${result.host}`}: ${check.fix.instruction}`,
-                          path: `provider.${check.fix.call.tool.replace(/^goat_provider_/u, "")}`,
+                          path: providerSettingsFixPath(check.fix.call),
                           call: {
                             tool: check.fix.call.tool,
                             arguments:
