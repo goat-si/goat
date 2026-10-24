@@ -1401,20 +1401,25 @@ describe("AcpAdapterV2", () => {
         assert.deepEqual(item?.toolIcon, item?.toolSource?.icon);
       }
       // Child MCP results drop the ACP `result` envelope like root ones, keeping image blocks.
-      assert.deepEqual(childMcp?.output, [{ type: "text", text: "Sunny" }]);
+      assert.deepEqual(childMcp?.type === "dynamic_tool" ? childMcp.output : undefined, [
+        { type: "text", text: "Sunny" },
+      ]);
       const childScreenshot = items.findLast(
         (item) =>
           item.threadId === task?.childThreadId &&
           item.type === "dynamic_tool" &&
           item.toolName === "cua-driver.screenshot",
       );
-      assert.deepEqual(childScreenshot?.output, {
-        content: [
-          { type: "text", text: "Captured the screen" },
-          { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
-        ],
-        structuredContent: { width: 1440, height: 900 },
-      });
+      assert.deepEqual(
+        childScreenshot?.type === "dynamic_tool" ? childScreenshot.output : undefined,
+        {
+          content: [
+            { type: "text", text: "Captured the screen" },
+            { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+          ],
+          structuredContent: { width: 1440, height: 900 },
+        },
+      );
       assert.isTrue(
         items.some(
           (item) =>
