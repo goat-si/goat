@@ -113,13 +113,16 @@ describe("composer capability entries", () => {
   });
 
   it("warns that a thread that may run unattended needs a person's approval first", () => {
+    const thread = (
+      relationshipToParent: "fork" | "subagent" | null,
+      launchedBy?: { kind: "launch" | "promotion" },
+    ) => ({ lineage: { relationshipToParent }, launchedBy });
     expect(composerThreadMayRunUnattended("channel-worker:slack:1", undefined)).toBe(true);
-    expect(composerThreadMayRunUnattended("thread-1", { relationshipToParent: "subagent" })).toBe(
-      true,
-    );
-    expect(composerThreadMayRunUnattended("thread-1", { relationshipToParent: "fork" })).toBe(
-      false,
-    );
+    expect(composerThreadMayRunUnattended("t", thread("subagent"))).toBe(true);
+    // A top-level thread another agent launched, here or from another machine.
+    expect(composerThreadMayRunUnattended("t", thread(null, { kind: "launch" }))).toBe(true);
+    expect(composerThreadMayRunUnattended("t", thread(null, { kind: "promotion" }))).toBe(false);
+    expect(composerThreadMayRunUnattended("t", thread("fork"))).toBe(false);
     expect(
       turnCapabilityAvailability("computer-use", { ...ready, mayRunUnattended: true }),
     ).toEqual({

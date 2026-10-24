@@ -111,7 +111,7 @@ export function useComposerMenuItems({
     turn: {
       interactionMode,
       providerDrivers: capabilityTargetDrivers,
-      mayRunUnattended: composerThreadMayRunUnattended(activeThreadId, activeShell?.lineage),
+      mayRunUnattended: composerThreadMayRunUnattended(activeThreadId, activeShell?.source),
     },
   });
   const workspaceEntries = useComposerPathSearch({

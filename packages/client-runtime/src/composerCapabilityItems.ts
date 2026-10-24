@@ -143,15 +143,23 @@ export function composerCapabilityDetail(item: ComposerCapabilityItem): string {
 }
 
 /**
- * Whether a thread's turns may count as unattended on the server: a channel worker, or a task
- * another agent started. Threads an agent launched elsewhere are not visible here, so this can
- * only say "maybe"; the server decides and the agent explains a refusal.
+ * Whether a thread's turns may count as unattended on the server: a channel worker, a thread
+ * another agent launched (here or from another machine), or a task an agent delegated. A person
+ * promoting a task does not count. The server decides from the run's own history; this only
+ * says "maybe" so the entry can warn before sending.
  */
 export function composerThreadMayRunUnattended(
   threadId: string | null,
-  lineage: { readonly relationshipToParent: "fork" | "subagent" | null } | undefined,
+  thread:
+    | {
+        readonly lineage: { readonly relationshipToParent: "fork" | "subagent" | null };
+        readonly launchedBy?: { readonly kind: "launch" | "promotion" } | undefined;
+      }
+    | undefined,
 ): boolean {
   return (
-    threadId?.startsWith("channel-worker:") === true || lineage?.relationshipToParent === "subagent"
+    threadId?.startsWith("channel-worker:") === true ||
+    thread?.launchedBy?.kind === "launch" ||
+    thread?.lineage.relationshipToParent === "subagent"
   );
 }

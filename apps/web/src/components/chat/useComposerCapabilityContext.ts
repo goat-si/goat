@@ -1,5 +1,5 @@
 import type { ComposerCapabilityContext } from "@goat/client-runtime/composerCapabilityItems";
-import type { EnvironmentId, ProviderInteractionMode } from "@goat/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
