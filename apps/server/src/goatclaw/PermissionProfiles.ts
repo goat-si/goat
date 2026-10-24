@@ -92,6 +92,31 @@ export interface ProfileNarrowing {
   readonly ceilings: ReadonlyArray<PermissionProfile>;
 }
 export type EffectiveProfile = PermissionProfileView & { readonly narrowing?: ProfileNarrowing };
+
+/**
+ * What a role launch grants: the role's stored profile within the caller's, plus what the role
+ * keeps (RoleTemplates `keeps`) when the caller may launch and only its own stored profile lacked
+ * it. A launch snapshot or forwarded ceiling that lacks the capability still removes it.
+ */
+export const roleProfile = (
+  role: GoatclawRole,
+  named: PermissionProfile,
+  caller: EffectiveProfile,
+): PermissionProfile => {
+  const profile = intersectProfiles(named, caller.profile);
+  const ceilings = caller.narrowing?.ceilings;
+  if (ceilings === undefined || !caller.profile.capabilities.includes("threads.launch"))
+    return profile;
+  const kept = goatclawRoleTemplate(role).keeps.filter(
+    (capability) =>
+      named.capabilities.includes(capability) &&
+      !profile.capabilities.includes(capability) &&
+      ceilings.every((ceiling) => ceiling.capabilities.includes(capability)),
+  );
+  return kept.length === 0
+    ? profile
+    : { ...profile, capabilities: [...profile.capabilities, ...kept] };
+};
 export type CheckResult =
   | { readonly ok: true; readonly effective: EffectiveProfile }
   | { readonly ok: false; readonly reason: string };
@@ -468,8 +493,8 @@ export const layer = Layer.effect(
         const named = policy.profiles[profileId];
         if (named === undefined)
           return yield* refusal(`Permission profile ${profileId} does not exist.`);
-        // intersectProfiles keeps its first argument's id, so the child is bound under the role's profile.
-        const profile = intersectProfiles(named, effective.profile);
+        // roleProfile keeps the role profile's id, so the child is bound under the role's profile.
+        const profile = roleProfile(input.role, named, effective);
         const missing = missingRoleCapabilities(input.role, profile);
         if (missing.length > 0) return yield* roleRefusal(input.role, missing);
         granted = { ...effective, profile, runtimeMode: profile.runtimeModeCeiling };
