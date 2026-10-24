@@ -6,8 +6,10 @@ import { SshCommandError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { FetchHttpClient } from "effect/http";
 
+import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
@@ -31,8 +33,11 @@ export const withRemote = <A, E>(
       readonly method: string;
       readonly tool?: string;
       readonly authorization: string | null;
+      readonly arguments?: Readonly<Record<string, unknown>>;
     }) => ToolAnswer | Promise<ToolAnswer>;
     readonly beforeSessionIssue?: (attempt: number) => Effect.Effect<void, SshCommandError>;
+    readonly beforeEnvironmentReady?: Effect.Effect<void, SshCommandError>;
+    readonly linkedHost?: LinkedHosts.LinkedHostCredential;
     readonly ensureFails?: boolean;
     readonly ceilingApplied?: boolean;
     /** The remote CLI cannot grant orchestration:approve. */
@@ -49,19 +54,33 @@ export const withRemote = <A, E>(
       requests: 0,
       sessionRequests: [] as Array<boolean>,
       providersManageRequests: [] as Array<boolean>,
+      sessionOptions: [] as Array<
+        Parameters<SshTunnel.SshEnvironmentManager["Service"]["issueMcpClientSession"]>[1]
+      >,
+      toolCallArguments: [] as Array<{
+        readonly tool: string;
+        readonly arguments: Readonly<Record<string, unknown>> | undefined;
+      }>,
     };
     const fetchEndpoint = vi.fn(async (_url: string, init?: RequestInit) => {
       record.requests += 1;
       const request = JSON.parse(String(init?.body)) as {
         id?: string;
         method: string;
-        params?: { name?: string };
+        params?: { name?: string; arguments?: Readonly<Record<string, unknown>> };
       };
-      if (request.method === "tools/call") record.toolCalls.push(request.params?.name ?? "");
+      if (request.method === "tools/call") {
+        record.toolCalls.push(request.params?.name ?? "");
+        record.toolCallArguments.push({
+          tool: request.params?.name ?? "",
+          arguments: request.params?.arguments,
+        });
+      }
       const answer = await options.answer({
         method: request.method,
         authorization: new Headers(init?.headers).get("authorization"),
         ...(request.params?.name === undefined ? {} : { tool: request.params.name }),
+        ...(request.params?.arguments === undefined ? {} : { arguments: request.params.arguments }),
       });
       if ("throws" in answer) throw new TypeError(answer.throws);
       if ("status" in answer) return new Response(null, { status: answer.status });
@@ -97,7 +116,7 @@ export const withRemote = <A, E>(
               ...(options.serverVersion === undefined
                 ? {}
                 : { remoteServerVersion: options.serverVersion }),
-            }),
+            }).pipe(Effect.tap(() => options.beforeEnvironmentReady ?? Effect.void)),
       readyEnvironment: () =>
         Effect.succeed({
           target,
@@ -107,7 +126,7 @@ export const withRemote = <A, E>(
           ...(options.serverVersion === undefined
             ? {}
             : { remoteServerVersion: options.serverVersion }),
-        }),
+        }).pipe(Effect.tap(() => options.beforeEnvironmentReady ?? Effect.void)),
       beginSetupOperation: () => Effect.die("Unexpected setup operation"),
       publishSetupOutcome: () => Effect.succeed(true),
       publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
@@ -116,6 +135,7 @@ export const withRemote = <A, E>(
       revalidateTunnels: () => Effect.void,
       issueClientSession: () => Effect.die("unused"),
       issueMcpClientSession: (_target, sessionOptions) => {
+        record.sessionOptions.push(sessionOptions);
         record.sessionRequests.push(sessionOptions.approvals === true);
         record.providersManageRequests.push(sessionOptions.providersManage === true);
         return sessionOptions.approvals === true && options.approvalsFail === true
@@ -152,6 +172,19 @@ export const withRemote = <A, E>(
         Effect.provide(
           SshRemoteDispatch.layer.pipe(
             Layer.provide(ServerSettings.layerTest()),
+            Layer.provide(
+              Layer.mock(LinkedHosts.LinkedHosts)({
+                names: Effect.succeed(
+                  options.linkedHost === undefined ? [] : [options.linkedHost.host.name],
+                ),
+                find: (name) =>
+                  Effect.succeed(
+                    options.linkedHost?.host.name === name
+                      ? Option.some(options.linkedHost)
+                      : Option.none(),
+                  ),
+              }),
+            ),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-host-call-test-" })),
             Layer.provide(FetchHttpClient.layer),
             Layer.provide(NodeServices.layer),
