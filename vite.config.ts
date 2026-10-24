@@ -329,6 +329,11 @@ export default defineConfig({
         new URL("./packages/shared/src/testing/providerEnv.ts", import.meta.url),
       ),
     ],
+    globalSetup: [
+      NodeURL.fileURLToPath(
+        new URL("./packages/shared/src/testing/gitConfigGuard.ts", import.meta.url),
+      ),
+    ],
     ...(isRepoRootTestRun
       ? {
           projects: [
