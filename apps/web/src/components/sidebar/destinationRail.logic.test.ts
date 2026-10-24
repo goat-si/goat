@@ -44,7 +44,6 @@ describe("resolveActiveDestination", () => {
 });
 
 const singleMachine: RailContext = {
-  environmentCount: 1,
   pullRequestsSupported: true,
   memoryAvailable: true,
   hubEnabled: false,
@@ -58,8 +57,9 @@ const shownIds = (preferences: RailPreferences, context: RailContext) =>
     .map((item) => item.id);
 
 describe("resolveRailItems", () => {
-  it("shows the everyday destinations on a single machine with a working provider", () => {
+  it("shows Fleet, where GOAT opens, and the everyday destinations on a single machine", () => {
     expect(shownIds(DEFAULT_RAIL_PREFERENCES, singleMachine)).toEqual([
+      "fleet",
       "bot",
       "decisions",
       "usage",
@@ -70,14 +70,10 @@ describe("resolveRailItems", () => {
     ]);
   });
 
-  it("adds Fleet with a second machine and Hub on a hub", () => {
-    const shown = shownIds(DEFAULT_RAIL_PREFERENCES, {
-      ...singleMachine,
-      environmentCount: 2,
-      hubEnabled: true,
-    });
-    expect(shown).toContain("fleet");
-    expect(shown).toContain("hub");
+  it("adds Hub on a hub", () => {
+    expect(shownIds(DEFAULT_RAIL_PREFERENCES, { ...singleMachine, hubEnabled: true })).toContain(
+      "hub",
+    );
   });
 
   it("offers Add provider only once providers have loaded and none is ready", () => {
@@ -99,8 +95,8 @@ describe("resolveRailItems", () => {
   });
 
   it("keeps an item the person hid even when context would show it", () => {
-    const preferences = setRailItemShown(DEFAULT_RAIL_PREFERENCES, "fleet", false);
-    expect(shownIds(preferences, { ...singleMachine, environmentCount: 3 })).not.toContain("fleet");
+    const preferences = setRailItemShown(DEFAULT_RAIL_PREFERENCES, "hub", false);
+    expect(shownIds(preferences, { ...singleMachine, hubEnabled: true })).not.toContain("hub");
   });
 
   it("does not show an unavailable item but keeps the person's choice for later", () => {
