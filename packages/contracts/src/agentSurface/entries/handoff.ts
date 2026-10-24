@@ -18,6 +18,8 @@ export const handoffEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: ["secret"],
+    idempotencyReason:
+      "clientRequestId names the request's card, so a repeat collects the same request's answer instead of asking again.",
     annotations: {
       title: "Request a secret from the user",
       idempotentHint: false,

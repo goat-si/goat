@@ -5,12 +5,15 @@ import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 import { EnvironmentId, VcsListRefsInput } from "@goat/contracts";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 import * as Schema from "effect/Schema";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { checkoutNewTaskBranch } from "./checkout-new-task-branch";
 
-const exec = NodeUtil.promisify(NodeChildProcess.execFile);
+const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
+const exec = (file: string, args: ReadonlyArray<string>) =>
+  execFile(file, args, { env: isolatedGitEnv() });
 let directory: string;
 let cwd: string;
 const git = (...args: string[]) => exec("git", ["-C", cwd, ...args]);

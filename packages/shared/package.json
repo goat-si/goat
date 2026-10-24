@@ -415,6 +415,10 @@
       "types": "./src/testing/fileNames.ts",
       "import": "./src/testing/fileNames.ts"
     },
+    "./testing/gitEnv": {
+      "types": "./src/testing/gitEnv.ts",
+      "import": "./src/testing/gitEnv.ts"
+    },
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"

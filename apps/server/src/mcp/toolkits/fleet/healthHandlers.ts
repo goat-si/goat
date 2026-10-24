@@ -67,9 +67,9 @@ export const layer = McpToolAccess.toLayer(FleetHealthToolkit, {
       });
       return yield* hostResult(
         input.host,
-        "Goal attempts on " +
+        "No new goal work is placed on " +
           input.host +
-          " move to other hosts after their current run, one slot per goal at a time. Threads no goal owns stay.",
+          ". Goal attempts already there keep running there; move one with goat_thread_reschedule.",
       );
     }),
   ),
