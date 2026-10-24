@@ -9,6 +9,7 @@ import {
   type Browser,
   type BrowserContext,
   type CDPSession,
+  type Dialog,
   type Page,
 } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -161,6 +162,28 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     await ServerBrowserPage.click(page, { locator: "#go", timeoutMs: 5_000 });
     response.resolve();
     await page.waitForURL("https://slow.test/next");
+  });
+
+  it("never sends a double click's second press once its first opened a dialog", async () => {
+    await page.setContent(
+      '<button id="b" onclick="window.hits = (window.hits || 0) + 1; if (window.hits === 1) confirm(\'sure?\')">Go</button>',
+    );
+    const control = new SessionControl("agent");
+    control.onDispatchCut(inputFence(cdp));
+    const dialog = new Promise<Dialog>((resolve) => page.once("dialog", resolve));
+    await control.agent("agent", () =>
+      ServerBrowserPage.click(
+        page,
+        { locator: "#b", clickCount: 2 },
+        undefined,
+        control.dispatchGate(),
+      ),
+    );
+    // Stop while the first press waits on the dialog, then a person answers it.
+    control.stopAgents();
+    await (await dialog).dismiss();
+    await control.system(async () => {});
+    expect(await page.evaluate("window.hits")).toBe(1);
   });
 
   it("clears a single select when given no values", async () => {

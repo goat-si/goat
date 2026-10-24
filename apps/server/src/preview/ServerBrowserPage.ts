@@ -823,23 +823,34 @@ export const click = async (
   const locator = targetLocator(page, input);
   const point = await targetPoint(page, locator, input, timeout);
   await pointer(point, "click");
-  const options = { button: input.button ?? "left", clickCount: input.clickCount ?? 1 } as const;
+  const button = input.button ?? "left";
   if (locator !== null) await settled(locator, timeout);
-  gate();
-  const clicked =
-    locator === null
-      ? page.mouse.click(point.x, point.y, options)
-      : locator.click({ ...options, ...dispatched });
   let onDialog = constVoid;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
     page.once("dialog", onDialog);
   });
+  // Each press goes out on its own after the gate: Playwright sends a double click's presses
+  // together, and the browser still delivers the rest after the first opens a dialog.
+  const press = (count: number) => {
+    gate();
+    if (count === 1)
+      return locator === null
+        ? page.mouse.click(point.x, point.y, { button })
+        : locator.click({ button, ...dispatched });
+    return page.mouse
+      .down({ button, clickCount: count })
+      .then(() => page.mouse.up({ button, clickCount: count }));
+  };
   try {
-    if ((await Promise.race([clicked, dialogOpened])) === "dialog") {
-      // The rest of the click (a second press, say) waits on the dialog, past this action.
-      gate.linger?.(clicked);
-      void clicked.catch(constVoid);
+    for (let count = 1; count <= (input.clickCount ?? 1); count++) {
+      const pressed = press(count);
+      if ((await Promise.race([pressed, dialogOpened])) === "dialog") {
+        // That press waits on the dialog, past this action; later presses are never sent.
+        gate.linger?.(pressed);
+        void pressed.catch(constVoid);
+        break;
+      }
     }
   } finally {
     page.off("dialog", onDialog);

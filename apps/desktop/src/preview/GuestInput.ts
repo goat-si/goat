@@ -137,7 +137,7 @@ export const sendPageCommand = async (
   // this wait is where a cut can land between the server's gate and the input.
   const probe = await evaluate(
     debuggee,
-    `globalThis.${PREVIEW_AGENT_INPUT_HELD_GLOBAL} === true ? "held" : ${FOCUSED_DOCUMENT} !== null`,
+    `(globalThis.${PREVIEW_AGENT_INPUT_HELD_GLOBAL} ?? 0) > Date.now() ? "held" : ${FOCUSED_DOCUMENT} !== null`,
   );
   if (probe === "held") return {};
   if (probe !== true) {
