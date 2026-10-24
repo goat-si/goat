@@ -12,36 +12,40 @@ import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
+/** The kill switch: ends every control, then every approved admission, so no later turn picks the screen up. */
+export const stopAllComputerUse = Effect.fn("ComputerUse.stopAll")(function* (
+  leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>,
+  handoffs: Handoffs.Handoffs["Service"],
+  sessionId: AuthSessionId,
+) {
+  if (Option.isNone(leases)) return { stopped: 0 };
+  const stopped = new Set(yield* leases.value.stopAll);
+  const grants = yield* leases.value.grants.pipe(Effect.orElseSucceed(() => []));
+  for (const grant of grants) {
+    yield* handoffs
+      .respond(
+        { threadId: grant.threadId, handoffId: grant.handoffId, action: "cancelled" },
+        sessionId,
+      )
+      .pipe(
+        Effect.tap(() => Effect.sync(() => stopped.add(grant.threadId))),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Kill switch could not end a computer use admission", {
+            handoffId: grant.handoffId,
+            cause,
+          }),
+        ),
+      );
+  }
+  return { stopped: stopped.size };
+});
+
 export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(function* (
   sessionId: AuthSessionId,
 ) {
   const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const handoffs = yield* Handoffs.Handoffs;
-
-  /** Ends every control, then every approved admission, so no later turn picks the screen up. */
-  const stopAll = Effect.fn("ComputerUse.stopAll")(function* () {
-    if (Option.isNone(leases)) return { stopped: 0 };
-    const stopped = new Set(yield* leases.value.stopAll);
-    const grants = yield* leases.value.grants.pipe(Effect.orElseSucceed(() => []));
-    for (const grant of grants) {
-      yield* handoffs
-        .respond(
-          { threadId: grant.threadId, handoffId: grant.handoffId, action: "cancelled" },
-          sessionId,
-        )
-        .pipe(
-          Effect.tap(() => Effect.sync(() => stopped.add(grant.threadId))),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("Kill switch could not end a computer use admission", {
-              handoffId: grant.handoffId,
-              cause,
-            }),
-          ),
-        );
-    }
-    return { stopped: stopped.size };
-  });
 
   return {
     [WS_METHODS.serverCheckComputerUse]: (_input: {}) =>
@@ -54,7 +58,8 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
       Option.isNone(leases)
         ? Effect.succeed({ stopped: false })
         : leases.value.stop(input.threadId).pipe(Effect.map((stopped) => ({ stopped }))),
-    [WS_METHODS.computerUseStopAll]: (_input: {}) => stopAll(),
+    [WS_METHODS.computerUseStopAll]: (_input: {}) =>
+      stopAllComputerUse(leases, handoffs, sessionId),
     [WS_METHODS.computerUseResume]: (_input: {}) =>
       Option.isNone(leases) ? Effect.succeed({}) : leases.value.resume.pipe(Effect.as({})),
   } as const;

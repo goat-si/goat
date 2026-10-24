@@ -299,6 +299,14 @@ expiry, or a pause for a person's input until `computerUse.resume` (`ComputerUse
 
 > Decision record: [ADR-0022](decisions/ADR-0022-cua-driver-computer-use.md)
 
+`apps/server/src/preview/PreviewSessions.ts` lists what agents drive on this host as one
+`PreviewSession` shape (`packages/contracts/src/previewSession.ts`), whether a server browser tab
+or a computer use control, over `previewSessions.subscribe`, and applies a person's controls
+(`previewSessions.control`: takeover, hand back, stop, stop all). A browser tab goes private while
+a password, one-time code or passkey prompt has focus (`PreviewPrivateMode.ts`): its
+`SessionControl` refuses agent actions and observation, and only its controlling viewer and no
+recording get frames.
+
 ## Services
 
 A WebSocket handler, HTTP route, or MCP tool decodes input, calls one service method, and maps
