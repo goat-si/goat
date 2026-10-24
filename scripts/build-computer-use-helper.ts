@@ -326,6 +326,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       "-o",
       slice,
       path.join(sourceDir, "main.swift"),
+      // Single-window live pictures (#1370), requested with the frames method.
+      path.join(sourceDir, "Frames.swift"),
     ]);
     slices.push(slice);
   }
