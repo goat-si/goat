@@ -309,13 +309,24 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     };
   };
 
-  const act = async (params: unknown, deadlineMs: number): Promise<HelperAnswer> => {
+  const act = async (
+    method: ComputerUseMethod,
+    params: unknown,
+    deadlineMs: number,
+  ): Promise<HelperAnswer> => {
     const decoded = decodeAction(params);
     if (decoded._tag === "None")
       return {
         result: refusal("invalidRequest", "That action request does not match the protocol."),
       };
     const request = decoded.value;
+    if (request.action !== method)
+      return {
+        result: refusal(
+          "invalidRequest",
+          "The frame asks for " + method + " and its params for " + request.action + ".",
+        ),
+      };
     const { pid, windowId } = request.target;
     const now = await locate(pid, windowId, deadlineMs);
     if (isRefusal(now)) return { result: now };
@@ -413,7 +424,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         deadlineMs,
       });
     }
-    if (ACTIONS.has(method)) return act(params, deadlineMs);
+    if (ACTIONS.has(method)) return act(method, params, deadlineMs);
     return { result: refusal("invalidRequest", method + " is not a computer use method.") };
   };
 

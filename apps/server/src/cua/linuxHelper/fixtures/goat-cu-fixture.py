@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """GOAT computer use fixture for Linux: a GTK 3 window with known accessible roles.
 
-A counter button, a text entry, a password entry and a scrolled list, so a live run can observe,
-act, read the effect back and see private mode start when the password entry takes focus.
+A counter, a button that increments it, a text entry and a password entry, so a live run can
+observe, act, read the effect back, and see private mode start when the password entry takes
+focus (on SIGUSR1).
 """
+import signal
 import sys
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import GLib, Gtk  # noqa: E402
 
 window = Gtk.Window(title="GOAT CU Fixture")
 window.set_default_size(420, 320)
@@ -47,6 +49,14 @@ if "--focus-password" in sys.argv:
     secret.grab_focus()
 else:
     name.grab_focus()
+
+
+def focus_password():
+    secret.grab_focus()
+    return GLib.SOURCE_CONTINUE
+
+
+GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, focus_password)
 
 window.show_all()
 Gtk.main()
