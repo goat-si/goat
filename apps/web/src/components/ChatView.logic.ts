@@ -360,6 +360,7 @@ export type HeldThreadTimeline<T extends readonly unknown[]> = {
     | "activeTurnInProgress"
     | "isCompacting"
     | "awaitingUser"
+    | "awaitingRequestId"
     | "activeTurnStartedAt"
     | "latestRun"
     | "runningRunId"

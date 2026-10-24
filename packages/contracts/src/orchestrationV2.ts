@@ -2911,6 +2911,11 @@ export const OrchestrationV2Command = Schema.Union([
     reason: Schema.optional(Schema.String),
     /** A cascade is a no-op once this task is no longer a delegated descendant. */
     stopCascadeFrom: Schema.optional(ThreadId),
+    /**
+     * False when the caller stops the thread's delegated tasks itself, as the server's tree walks
+     * do under their caller's dispatch limit. Otherwise Stop also stops every task under the thread.
+     */
+    stopDelegatedTasks: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.create"),

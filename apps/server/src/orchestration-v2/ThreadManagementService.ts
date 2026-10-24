@@ -640,6 +640,7 @@ export function makeStopDelegatedTasks(deps: {
           type: "thread.stop",
           commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
           threadId,
+          stopDelegatedTasks: false,
           ...(input.reason === undefined ? {} : { reason: input.reason }),
           stopCascadeFrom,
         })

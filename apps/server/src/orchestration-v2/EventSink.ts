@@ -829,12 +829,9 @@ const layerBase: Layer.Layer<
             events: normalized,
           });
           let sequence = storedEvents.at(-1)?.sequence;
-          if (
-            sequence === undefined &&
-            input.allowEffectOnly === true &&
-            input.effects.length > 0
-          ) {
-            // Effect-only recovery observes the current thread high-water mark. The receipt
+          if (sequence === undefined && input.effects.length > 0) {
+            // Effect-only commits (recovery, or a Stop that changes nothing but still queues the
+            // stop of its delegated tasks) observe the current thread high-water mark. The receipt
             // and outbox still commit together, and retries reuse this receipt without enqueueing.
             sequence = yield* eventStore.latestSequence({ threadId: input.threadId });
           }

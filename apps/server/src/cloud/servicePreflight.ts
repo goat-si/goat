@@ -23,8 +23,14 @@ export function runServicePreflight(input: {
     return {
       status: "blocked",
       version,
-      reason:
-        "This release requires a newer GOAT service launcher. Update it on the server machine.",
+      // A stale `goat` earlier on PATH (an old npm/nvm global) makes `goat service install`
+      // reinstall itself and report success, so name the exact install and the path check.
+      reason: [
+        `The installed service launcher speaks protocol ${input.launcherProtocol}, but goat@${version} requires protocol ${SERVICE_LAUNCHER_PROTOCOL}.`,
+        `On the server machine, install this exact CLI: \`curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | GOAT_VERSION=${version} sh\`.`,
+        `Check that \`goat --version\` prints ${version} and that \`which -a goat\` lists no older goat (such as an npm or nvm install) first, then run \`~/.local/bin/goat service install\` (the installer's default path).`,
+        "Updating the desktop app does not update this CLI, and `goat service update` only repairs the service with whichever CLI runs it.",
+      ].join(" "),
     };
   }
 
