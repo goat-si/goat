@@ -316,8 +316,8 @@ describe("threadContextsOutsideEnvironment", () => {
         record,
       ]);
     }
-    for (const host of [undefined, "", "  "]) {
-      const unrouted = { ...record, host };
+    const { host: _host, ...withoutHost } = record;
+    for (const unrouted of [withoutHost, { ...record, host: "" }, { ...record, host: "  " }]) {
       expect(
         threadContextsOutsideEnvironment({
           ...input,

@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { environmentCatalog } from "~/connection/catalog";
 import { resolveThreadContextRoute } from "~/lib/threadContextRoute";
@@ -107,19 +106,16 @@ export function useComposerMenuItems({
   const isPathTrigger = composerTriggerKind === "path";
   const environmentThreadShells = useThreadShells(isPathTrigger);
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
-  const sshHostsByEnvironment = useMemo(() => {
-    const hosts = new Map<EnvironmentId, string>();
-    for (const threadEnvironmentId of catalog.entries.keys()) {
-      const route = resolveThreadContextRoute({
-        agentEnvironmentId: environmentId,
-        threadEnvironmentId,
-        entries: catalog.entries,
-        isDesktopRenderer: window.desktopBridge !== undefined,
-      });
-      if (route.kind === "ssh") hosts.set(threadEnvironmentId, route.host);
-    }
-    return hosts;
-  }, [catalog.entries, environmentId]);
+  const sshHostsByEnvironment = new Map<EnvironmentId, string>();
+  for (const threadEnvironmentId of catalog.entries.keys()) {
+    const route = resolveThreadContextRoute({
+      agentEnvironmentId: environmentId,
+      threadEnvironmentId,
+      entries: catalog.entries,
+      isDesktopRenderer: window.desktopBridge !== undefined,
+    });
+    if (route.kind === "ssh") sshHostsByEnvironment.set(threadEnvironmentId, route.host);
+  }
   const activeShell = environmentThreadShells.find(
     (shell) => shell.environmentId === environmentId && shell.id === activeThreadId,
   );

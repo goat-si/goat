@@ -46,8 +46,12 @@ import {
   ComposerContextReferenceChip,
 } from "./composerContextPresentation";
 
-it("keeps an SSH thread readable across disconnect and reconnect", async () => {
+function setup() {
   boundary.phase = "connected";
+}
+
+it("keeps an SSH thread readable across disconnect and reconnect", async () => {
+  setup();
   const previousBridge = Object.getOwnPropertyDescriptor(window, "desktopBridge");
   Object.defineProperty(window, "desktopBridge", { configurable: true, value: {} });
   using _bridge = {

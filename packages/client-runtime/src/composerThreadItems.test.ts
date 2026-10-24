@@ -1,6 +1,6 @@
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { expect, it } from "vite-plus/test";
-import { matchComposerThreadItems, type ComposerThreadCandidate } from "./composerThreadItems";
+import { matchComposerThreadItems, type ComposerThreadCandidate } from "./composerThreadItems.ts";
 
 const local = EnvironmentId.make("local");
 const remote = EnvironmentId.make("remote");

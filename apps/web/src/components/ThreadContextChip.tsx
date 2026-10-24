@@ -23,7 +23,9 @@ export function ThreadContextChip(props: {
         render={
           <ContextChip
             kind="thread"
-            state={props.state === "readable" ? undefined : props.state}
+            {...(props.state === "invalid" || props.state === "unavailable"
+              ? { state: props.state }
+              : {})}
             render={<Link to="/$environmentId/$threadId" params={{ environmentId, threadId }} />}
             aria-label={`Thread, ${title}`}
             data-markdown-copy={props.copyMarkdown}

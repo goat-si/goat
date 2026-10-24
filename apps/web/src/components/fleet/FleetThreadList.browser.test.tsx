@@ -116,7 +116,7 @@ it("drops a remote Fleet thread vertically into a composer without navigating", 
     key: "remote-work",
     ref,
     title: "Remote work",
-    subagents: [{ key: "sub", title: "Worker", status: "running" }],
+    subagents: [{ key: "sub", ref: null, title: "Worker", status: "running" }],
   };
   await using screen = await render(
     <>
