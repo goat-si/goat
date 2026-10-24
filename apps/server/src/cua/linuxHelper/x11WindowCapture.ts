@@ -16,7 +16,8 @@ import { localDisplayNumber, x11SetupRequest, xauthorityCookie } from "../CuaDis
  * Naming succeeds only while that ancestor is redirected, and the pixmap then holds only what
  * is drawn inside the ancestor. Another client's window can still be drawn there, over the
  * target (a shared frame, a virtual root), so every window painted after the target inside the
- * ancestor is checked, and one from another client that overlaps it refuses the capture.
+ * ancestor is checked, and one from another client that overlaps it refuses the capture. The
+ * server is grabbed from the check through the read, so what was checked is what is read.
  * An unredirected window (no compositor, a fullscreen unredirect, rootful Xwayland) is refused.
  */
 export type X11WindowCapture =
@@ -274,8 +275,8 @@ type Connection = ReturnType<typeof connection>;
 export interface DriverShot {
   readonly width: number;
   readonly height: number;
+  /** The window's width when the driver took it; its height is only known rounded. */
   readonly windowWidth: number;
-  readonly windowHeight: number;
 }
 
 export async function captureX11Window(
@@ -311,7 +312,10 @@ export async function captureX11Window(
     return answer ?? { refused: UNREDIRECTED_CAPTURE };
   } finally {
     clearTimeout(timer);
-    socket.destroy();
+    // end() sends what is queued, the server release included; a server that never closes its
+    // side is dropped shortly after.
+    socket.end();
+    setTimeout(() => socket.destroy(), 1_000).unref();
   }
 }
 
@@ -420,13 +424,21 @@ async function exchange(
     }),
   );
   if (!version || (u32(version, 8) === 0 && u32(version, 12) < 2)) return undefined;
+  // Nothing else may map, move or draw a window between the check below and the read: the
+  // server runs only this connection's requests until it is released, or the connection ends.
+  x.send(request(36, 0, 1, () => undefined));
   const geometry = await getGeometry(x, windowId);
   if (!geometry) return undefined;
   const width = u16(geometry, 16);
   const height = u16(geometry, 18);
   if (width === 0 || height === 0 || width * height > MAX_WINDOW_PIXELS)
     return { refused: UNREADABLE };
-  if (width !== size.windowWidth || Math.abs(height - size.windowHeight) > 1)
+  // The driver rounds a resized screenshot, so the window's height is checked by scaling it the
+  // same way rather than by undoing the driver's rounding.
+  if (
+    width !== size.windowWidth ||
+    Math.abs(Math.round((height * size.width) / size.windowWidth) - size.height) > 1
+  )
     return { refused: RESIZED_CAPTURE };
   // The redirected window is the top-level one: the window itself or its ancestor under root.
   const chain = [windowId];
@@ -472,6 +484,7 @@ async function exchange(
     }),
   );
   x.send(request(54, 0, 2, (view) => view.setUint32(4, pixmap, true)));
+  x.send(request(37, 0, 1, () => undefined));
   if (!image) return undefined;
   const format = setup.bitsPerPixel.get(image[1] ?? 0);
   if (!setup.lsbImages || !visual?.trueColor || format?.bpp !== 32) return { refused: UNREADABLE };

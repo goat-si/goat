@@ -60,10 +60,5 @@ export const driverShot = (structured: unknown): DriverShot | undefined => {
   if (typeof width !== "number" || typeof height !== "number" || typeof original !== "number")
     return undefined;
   if (width <= 0 || height <= 0 || original <= 0) return undefined;
-  return {
-    width,
-    height,
-    windowWidth: original,
-    windowHeight: Math.round((height * original) / width),
-  };
+  return { width, height, windowWidth: original };
 };

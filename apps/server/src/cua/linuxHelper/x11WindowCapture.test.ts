@@ -115,9 +115,15 @@ async function scriptedServer(
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
   const path = NodePath.join(dir, "X0");
+  /** Every request's major opcode, in the order the server read them. */
+  const requests: number[] = [];
+  /** Settles when a client's connection has ended and everything it sent was read. */
+  const ended = Promise.withResolvers<void>();
   const setup = Buffer.from(setupReply({ lsb: true }));
   setup.writeUInt32LE(0x1fffff, 16);
   const server = NodeNet.createServer((socket) => {
+    socket.on("end", () => ended.resolve());
+    socket.on("close", () => ended.resolve());
     let buffer = Buffer.alloc(0);
     let started = false;
     let geometries = 0;
@@ -148,6 +154,7 @@ async function scriptedServer(
         if (buffer.length < length) return;
         const op = buffer[0];
         const minor = buffer[1];
+        requests.push(op ?? 0);
         const body = buffer.subarray(0, length);
         buffer = buffer.subarray(length);
         const window = (at: number) => windows[body.readUInt32LE(at)];
@@ -220,6 +227,8 @@ async function scriptedServer(
   await new Promise<void>((resolve) => server.listen(path, resolve));
   return {
     path,
+    requests,
+    ended: ended.promise,
     [Symbol.asyncDispose]: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       NodeFS.rmSync(dir, { recursive: true, force: true });
@@ -228,7 +237,7 @@ async function scriptedServer(
 }
 
 const environment = { DISPLAY: ":0", XAUTHORITY: "/nonexistent/goat-xauthority" };
-const shot = { width: 100, height: 80, windowWidth: 100, windowHeight: 80 };
+const shot = { width: 100, height: 80, windowWidth: 100 };
 // A window manager's frame (client 0x400000) holding the app's window (client 0x200000).
 const FRAMED: Record<number, FakeWindow> = {
   [ROOT]: { parent: 0, children: [0x400001], x: 0, y: 0, width: 800, height: 600 },
@@ -277,6 +286,33 @@ describe("X11 window capture against a scripted server", () => {
     expect(
       await captureX11Window(environment, 0x200001, { ...shot, windowWidth: 90 }, server.path),
     ).toEqual({ refused: RESIZED_CAPTURE });
+  });
+
+  it("holds the server from the first window read through the pixel read, so no window changes between", async () => {
+    await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
+    await captureX11Window(environment, 0x200001, shot, server.path);
+    await server.ended;
+    const grab = server.requests.indexOf(36);
+    expect(grab).toBeGreaterThanOrEqual(0);
+    expect(grab).toBeLessThan(server.requests.indexOf(14));
+    expect(server.requests.indexOf(37)).toBeGreaterThan(server.requests.indexOf(73));
+  });
+
+  it("an unchanged window read at a rounded thumbnail size is not taken for a resized one", async () => {
+    // 1920 x 1040 at 256 wide is 256 x 138.67, which the driver rounds to 139.
+    const wide: Record<number, FakeWindow> = {
+      [ROOT]: { parent: 0, children: [0x200001], x: 0, y: 0, width: 1920, height: 1080 },
+      0x200001: { parent: ROOT, children: [], x: 0, y: 0, width: 1920, height: 1040 },
+    };
+    await using server = await scriptedServer(wide, { redirected: [0x200001] });
+    expect(
+      await captureX11Window(
+        environment,
+        0x200001,
+        { width: 256, height: 139, windowWidth: 1920 },
+        server.path,
+      ),
+    ).toMatchObject({ width: 256, height: 139 });
   });
 
   it("a connection lost in the middle ends the capture instead of leaving it waiting", async () => {
