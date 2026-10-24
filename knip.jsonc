@@ -44,6 +44,8 @@
       "entry": [
         "src/bin.ts!",
         "src/claude-history-worker.ts!",
+        // The Linux computer use helper, run as its own process beside the Cua Driver payload.
+        "src/cua/linuxHelper/main.ts!",
         "scripts/cli.ts",
         "scripts/evaluate-thread-titles.ts",
         "scripts/fetch-expo-schema.ts",
