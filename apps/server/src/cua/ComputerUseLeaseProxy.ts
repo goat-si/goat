@@ -43,6 +43,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
+import { makeLeaseFences } from "./leaseUpdateFences.ts";
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
@@ -181,13 +182,6 @@ const decodeUpdate = Schema.decodeUnknownOption(ComputerUseLeaseUpdate);
 const OWN_ID = "goat-proxy:";
 
 /** A lease update that stops the current child before another call may run. */
-type Stopping =
-  | { readonly pause: ComputerUsePauseReason }
-  | { readonly end: LeaseEnd }
-  | { readonly idle: true }
-  /** An approval that drops apps the current one allows: nothing passes until it applies. */
-  | { readonly narrowed: true };
-
 interface Running {
   readonly driver: LeaseProxyDriver;
   readonly scope: Scope.Closeable;
@@ -213,21 +207,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
    * replaces a child the other just started or stopped.
    */
   const lifecycle = yield* Semaphore.make(1);
-  /**
-   * What the updates taken from the lease stream but not applied yet hold back, oldest first.
-   * Updates are taken as soon as they arrive, even while an earlier one waits for the lifecycle
-   * lock, so no call passes a pause, end or narrowed approval that is already known.
-   */
-  const fences: Array<Stopping> = [];
-  /** The strongest pending fence: an end, then a pause, an idle turn, a narrowed approval. */
-  const pendingStop = (): Stopping | undefined =>
-    fences.find((fence) => "end" in fence) ??
-    fences.find((fence) => "pause" in fence) ??
-    fences.find((fence) => "idle" in fence) ??
-    fences.find((fence) => "narrowed" in fence);
-  /** The apps of the latest active update taken, applied or not; undefined allows every app. */
-  let takenApps: ReadonlySet<string> | undefined;
-  let takenActive = false;
+  /** Lease updates taken but not applied yet, and what each holds back. */
+  const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
   let driverGeneration = 0;
   let interruptionsSeen: number | undefined;
@@ -590,24 +571,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   yield* Effect.addFinalizer(() => end("lost"));
   yield* start();
 
-  /** What an update holds back from the moment it is taken until it has been applied. */
-  const fenceOf = (update: ComputerUseLeaseUpdate): Stopping | undefined => {
-    if (update.state !== "ended" && update.controlId !== options.controlId) return { end: "lost" };
-    if (update.state === "paused") return { pause: update.reason };
-    if (update.state === "ended")
-      return { end: update.reason === "unauthorized" ? "lost" : update.reason };
-    if (update.state === "idle") return { idle: true };
-    // An approval that drops an app the control allows now, or that the latest update taken
-    // allows, holds every call until it applies (#1416).
-    const next = approvedApps(update.apps);
-    const drops = (from: ReadonlySet<string> | undefined) =>
-      next !== undefined && (from === undefined || [...from].some((app) => !next.has(app)));
-    const narrowed = takenActive && (drops(apps) || drops(takenApps));
-    takenApps = next;
-    takenActive = true;
-    return narrowed ? { narrowed: true } : undefined;
-  };
-  const apply = (update: ComputerUseLeaseUpdate | undefined, fence: Stopping | undefined) =>
+  const apply = (
+    update: ComputerUseLeaseUpdate | undefined,
+    fence: ReturnType<typeof fences.take>,
+  ) =>
     lifecycle
       .withPermits(1)(
         (update === undefined
@@ -638,20 +605,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           ),
         ),
       )
-      .pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            const at = fence === undefined ? -1 : fences.indexOf(fence);
-            if (at >= 0) fences.splice(at, 1);
-          }),
-        ),
-      );
+      .pipe(Effect.ensuring(Effect.sync(() => fences.release(fence))));
   // The server is the authority: the first word for this control confirms it, anything else
   // ends. Updates are taken here as they arrive and applied in order by one fiber, so a waiting
   // update never keeps a later one's fence from going up. The stream ending applies as lost.
   const applying = yield* Queue.unbounded<{
     readonly update: ComputerUseLeaseUpdate | undefined;
-    readonly fence: Stopping | undefined;
+    readonly fence: ReturnType<typeof fences.take>;
   }>();
   yield* Queue.take(applying).pipe(
     Effect.flatMap(({ update, fence }) => apply(update, fence)),
@@ -660,8 +620,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   );
   const take = (update: ComputerUseLeaseUpdate | undefined) =>
     Effect.suspend(() => {
-      const fence = update === undefined ? ({ end: "lost" } as const) : fenceOf(update);
-      if (fence !== undefined) fences.push(fence);
+      const fence = update === undefined ? fences.lost() : fences.take(update, apps);
       return Queue.offer(applying, { update, fence });
     });
   yield* options.leaseUpdates.pipe(
@@ -910,7 +869,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
     // holds the lock (#1416), counts as applied: the call never reaches a child.
     const notSent = (requestId: JsonRpcId) => {
-      const pending = pendingStop();
+      const pending = fences.pending();
       const ending =
         finished ?? (pending !== undefined && "end" in pending ? pending.end : undefined);
       const pausing =
@@ -945,7 +904,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       paused === undefined &&
       !idle &&
       finished === undefined &&
-      fences.length === 0;
+      fences.clear();
     if (isRequest && message?.method === "tools/call") {
       // Before the call reaches the driver: a capture must not see the overlay (#1321).
       yield* drawOverlay({
