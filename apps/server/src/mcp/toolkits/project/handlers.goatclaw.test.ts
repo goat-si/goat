@@ -210,14 +210,46 @@ it.effect.each([
 );
 
 // A caller's mode or profile can change while its call waits in admission.
-it.effect.each(["mode", "profile"] as const)(
-  "a worker whose %s is revoked while its create is admitted is refused before it writes",
-  (revoke) => {
-    const state: CallState = { mode: "auto", admissions: 0, writes: 0, revoke };
+it.effect.each([
+  { revoke: "mode", mode: "auto" },
+  { revoke: "profile", mode: "auto" },
+  // goatclaw governs a full-access thread too, so losing worktree.create still refuses it.
+  { revoke: "profile", mode: "full-access" },
+] as const)(
+  "a worker thread at $mode whose $revoke is revoked while its create is admitted is refused before it writes",
+  ({ revoke, mode }) => {
+    const state: CallState = { mode, admissions: 0, writes: 0, revoke };
     return Effect.gen(function* () {
-      yield* seed("auto");
+      yield* seed(mode);
       expect(yield* refusalOf("project.create", threadCaller)).toMatch(/^capability_denied: /);
       expect(state).toMatchObject({ admissions: 1, writes: 0 });
-    }).pipe(Effect.provide(served({ profile: "worker", mode: "auto" }, state)));
+    }).pipe(Effect.provide(served({ profile: "worker", mode }, state)));
+  },
+);
+
+// The profile's runtime ceiling, not the thread's raw mode, decides whether it may set one up.
+it.effect.each(["auto", "full-access"] as const)(
+  "a thread at %s whose worker profile caps it at approval-required cannot set up projects",
+  (mode) => {
+    const state: CallState = { mode, admissions: 0, writes: 0 };
+    return Effect.gen(function* () {
+      yield* seed(mode);
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const policy = (yield* settings.getSettings).goatclaw;
+      yield* settings.updateSettings({
+        goatclaw: {
+          ...policy,
+          profiles: {
+            ...policy.profiles,
+            worker: { ...policy.profiles.worker!, runtimeModeCeiling: "approval-required" },
+          },
+        },
+      });
+      for (const path of ["project.create", "project.clone"] as const)
+        expect(yield* refusalOf(path, threadCaller), path).toMatch(
+          /^capability_denied: .*runs at approval-required under profile worker/,
+        );
+      expect(state.writes).toBe(0);
+    }).pipe(Effect.provide(served({ profile: "worker", mode }, state)));
   },
 );

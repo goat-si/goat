@@ -476,30 +476,34 @@ export const writesEnvironment = <P, A, E, R>(
 type CheckServices = Effect.Services<typeof orchestratingCaller>;
 
 const setsUpProjectsRequired =
-  "Creating or cloning a project needs a live full-access/default caller, or, with goatclaw on, a live auto/default calling thread whose profile allows worktree.create.";
+  "Creating or cloning a project needs a live full-access/default caller, or, with goatclaw on, a live calling thread in default interaction mode whose profile allows worktree.create and lets it run at auto or above.";
 
 /**
  * goatclaw's worker and manager agents set up the projects they work in (#858), and the worker
- * profile caps them at auto, so an auto/default calling thread is enough when its goatclaw profile
- * allows worktree.create. Anyone else still needs full access. Without the profile service that
- * grant cannot be checked, so the full-access requirement stands.
+ * profile caps them at auto. So when goatclaw governs the calling thread, its profile decides,
+ * full access included: it must allow worktree.create, and the thread's mode after the profile's
+ * ceiling must be auto or above. Outside clients, goatclaw off, or no profile service to ask
+ * keep the full-access/default requirement `writesEnvironment` has.
  */
 const assertSetsUpProjects = Effect.fn("McpToolAccess.assertSetsUpProjects")(function* (
   caller: Caller,
 ) {
   const { runtimeMode, interactionMode } = caller.limits;
-  if (interactionMode === "default" && runtimeMode === "full-access") return;
+  const fullAccess = interactionMode === "default" && runtimeMode === "full-access";
+  const ungoverned = fullAccess ? Effect.void : capabilityRefused(setsUpProjectsRequired);
   const permissions = yield* Effect.serviceOption(Profiles.PermissionProfiles);
-  if (
-    caller.scope.thread === undefined ||
-    interactionMode !== "default" ||
-    runtimeMode !== "auto" ||
-    Option.isNone(permissions)
-  )
-    return yield* capabilityRefused(setsUpProjectsRequired);
-  const result = yield* permissions.value.check(caller.scope, "worktree.create");
+  if (caller.scope.thread === undefined || Option.isNone(permissions)) return yield* ungoverned;
+  const result = yield* permissions.value.check(caller.scope, "worktree.create", { runtimeMode });
   if (!result.ok) return yield* capabilityRefused(`${setsUpProjectsRequired} ${result.reason}`);
-  if (!result.effective.enabled) return yield* capabilityRefused(setsUpProjectsRequired);
+  if (!result.effective.enabled) return yield* ungoverned;
+  const effectiveMode = result.effective.runtimeMode;
+  if (
+    interactionMode !== "default" ||
+    (effectiveMode !== "auto" && effectiveMode !== "full-access")
+  )
+    return yield* capabilityRefused(
+      `${setsUpProjectsRequired} This thread runs at ${effectiveMode} under profile ${result.effective.profile.id}.`,
+    );
 });
 
 const projectSetupCaller = orchestratingCaller.pipe(Effect.tap(assertSetsUpProjects));

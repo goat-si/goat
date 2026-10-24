@@ -393,9 +393,10 @@ recheck before an SSH launch and a send's target check and rebinding, derives it
 with the same `roleProfile`; comparing against the caller's plain profile reads the
 kept capability as a narrowing, refusing the launch or send or stripping it.
 Creating and cloning a project are the one environment write a calling thread at
-`auto` may run, because worker agents run at `auto` at most; that needs goatclaw on
-and a profile allowing `worktree.create`, and every other environment write still
-needs full access.
+`auto` may run, because worker agents run at `auto` at most. When goatclaw governs
+the thread its profile decides, full access included, before and again after
+admission: it must allow `worktree.create` and leave the thread at `auto` or above
+after its runtime ceiling. Every other environment write still needs full access.
 With goatclaw on, the served handle refuses a GOAT thread whose effective profile
 lacks the declared capability, before arguments decode, so `goat_call` and anything
 else that calls through the server inherit the check
