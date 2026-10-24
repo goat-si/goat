@@ -376,7 +376,7 @@ const nativeTypePaths = new Set([
 
 const mobileNativePaths = new Set([
   "apps/mobile/.swiftlint.yml",
-  "apps/mobile/deps/react-native-screens-5.0.0-t3.36.tgz",
+  "apps/mobile/deps/react-native-screens-5.0.0-t3.37.tgz",
   "apps/mobile/modules/t3-agent-notifications/android/build.gradle",
   "apps/mobile/modules/t3-agent-notifications/android/src/main/AndroidManifest.xml",
   "apps/mobile/modules/t3-agent-notifications/android/src/main/java/expo/modules/t3agentnotifications/AgentActivityPresentation.kt",

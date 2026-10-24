@@ -12,7 +12,13 @@ import {
   formatComposerContextHref,
   parseComposerContextHref,
 } from "@goat/shared/composerContextReferences";
+import { THREAD_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
 import { hasThreadLinks, parseThreadLinkHref } from "@goat/shared/threadLinks";
+
+const THREAD_LINK_HREF_IN_MARKDOWN = new RegExp(
+  String.raw`\]\(((?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s)]+)\)`,
+  "g",
+);
 
 export function enrichedContextLinkPresentation(
   href: string,
@@ -58,7 +64,7 @@ export function threadChipTargets(
 ): ReadonlyArray<ThreadChipTarget> {
   const targets = new Map<string, ThreadChipTarget>();
   if (hasThreadLinks(markdown)) {
-    for (const [, href = ""] of markdown.matchAll(/\]\((t3-thread:\/\/v1\/[^\s)]+)\)/g)) {
+    for (const [, href = ""] of markdown.matchAll(THREAD_LINK_HREF_IN_MARKDOWN)) {
       const threadId = parseThreadLinkHref(href);
       if (threadId) targets.set(href, { href, environmentId, threadId, link: true });
     }
