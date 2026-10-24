@@ -148,9 +148,33 @@ export function computerUseRun(
 /** The app and window title an observation's result names. */
 export function computerUseObservedTarget(output: unknown): string | null {
   const structured = record(record(output)?.structuredContent) ?? record(output);
-  const app = label(structured?.app_name);
-  const title = label(structured?.window_title);
+  const fields =
+    structured?.app_name !== undefined || structured?.window_title !== undefined
+      ? structured
+      : jsonTextFields(output);
+  const app = label(fields?.app_name);
+  const title = label(fields?.window_title);
   return app !== undefined && title !== undefined ? `${title} in ${app}` : (app ?? title ?? null);
+}
+
+/**
+ * GOAT folds a screenshot result's structured fields into a JSON text block, because Codex drops
+ * the image beside structuredContent, so an observation's names can arrive that way.
+ */
+function jsonTextFields(output: unknown): Record<string, unknown> | undefined {
+  const blocks = Array.isArray(output) ? output : record(output)?.content;
+  if (!Array.isArray(blocks)) return undefined;
+  for (const block of blocks) {
+    const text = record(block)?.type === "text" ? record(block)?.text : undefined;
+    if (typeof text !== "string" || !text.startsWith("{") || text.length > 65_536) continue;
+    try {
+      const parsed = record(JSON.parse(text));
+      if (parsed?.app_name !== undefined || parsed?.window_title !== undefined) return parsed;
+    } catch {
+      // Plain text that only looks like JSON.
+    }
+  }
+  return undefined;
 }
 
 export function computerUseRunStatus(
