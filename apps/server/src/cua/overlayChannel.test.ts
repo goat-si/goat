@@ -2,6 +2,7 @@
 import * as NodeStream from "node:stream";
 
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
@@ -50,6 +51,28 @@ describe("overlayChannel", () => {
       yield* TestClock.adjust(1);
       yield* Fiber.join(fiber);
       assert.lengthOf(helper.lines, 1);
+    }),
+  );
+
+  it.effect("passes on the helper's input reports and ignores lines it cannot read", () =>
+    Effect.gen(function* () {
+      const helper = helperEnd(true);
+      const seen: Array<unknown> = [];
+      const last = yield* Deferred.make<void>();
+      overlayChannel(helper.socket, (input) => {
+        seen.push(input);
+        if (input.source === "pointer") Deferred.doneUnsafe(last, Effect.void);
+      });
+      helper.socket.push(JSON.stringify({ humanInput: { source: "typed text", ageMs: 1 } }) + "\n");
+      helper.socket.push("not json\n");
+      helper.socket.push(JSON.stringify({ humanInput: { source: "keyboard", ageMs: 120 } }) + "\n");
+      // Lines are read in order, so the last one arriving means every earlier one was handled.
+      helper.socket.push(JSON.stringify({ humanInput: { source: "pointer", ageMs: 0 } }) + "\n");
+      yield* Deferred.await(last);
+      assert.deepEqual(seen, [
+        { source: "keyboard", ageMs: 120 },
+        { source: "pointer", ageMs: 0 },
+      ]);
     }),
   );
 

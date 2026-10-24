@@ -43,6 +43,7 @@ import {
   SidebarInput,
 } from "../ui/sidebar";
 import { SidebarUtilityMenu } from "../sidebar/SidebarChrome";
+import { registerSettingsSearchInput } from "./SettingsSearchShortcut";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import { SETTINGS_NAV_GROUPS } from "./settingsNav";
 import {
@@ -106,7 +107,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     ...group,
     paths: group.paths.filter(isNavItemVisible),
   })).filter((group) => group.paths.length > 0);
-  const { isMobile, setOpenMobile, open, setOpen } = useSidebar();
+  const { isMobile, setOpenMobile } = useSidebar();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [activeResultIndex, setActiveResultIndex] = useState(0);
@@ -126,47 +127,6 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       .getElementById(`settings-search-result-${result.id}`)
       ?.scrollIntoView({ block: "nearest" });
   }, [activeResultIndex, results]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing) return;
-      const isFindShortcut =
-        event.key.toLowerCase() === "f" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey;
-      const isSlashShortcut =
-        event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey;
-      if (!isFindShortcut && !isSlashShortcut) return;
-
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        ((isSlashShortcut &&
-          (target.tagName === "INPUT" ||
-            target.tagName === "TEXTAREA" ||
-            target.isContentEditable)) ||
-          target.closest(
-            '[role="dialog"], [aria-modal="true"], [data-slot$="popup"], [data-keybinding-capture]',
-          ) !== null)
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      if (isMobile) {
-        setOpenMobile(true);
-      } else if (!open) {
-        setOpen(true);
-      }
-      requestAnimationFrame(() => {
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-      });
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isMobile, open, setOpen, setOpenMobile]);
 
   const handleSectionClick = (to: SettingsPath) => {
     if (isMobile) {
@@ -236,7 +196,10 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
             <div className="flex h-8 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
               <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
               <SidebarInput
-                ref={searchInputRef}
+                ref={(input) => {
+                  searchInputRef.current = input;
+                  registerSettingsSearchInput(input);
+                }}
                 nativeInput
                 type="search"
                 value={query}
