@@ -59,6 +59,10 @@
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
     },
+    "./composerCapabilityItems": {
+      "types": "./src/composerCapabilityItems.ts",
+      "default": "./src/composerCapabilityItems.ts"
+    },
     "./image-attachment-size": {
       "types": "./src/imageAttachmentSize.ts",
       "default": "./src/imageAttachmentSize.ts"

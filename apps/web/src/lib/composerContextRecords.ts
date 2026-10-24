@@ -40,6 +40,7 @@ import {
   type TerminalContextDraft,
 } from "./terminalContext";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
+import { capabilityContextRecordsInText } from "@goat/shared/turnCapabilities";
 
 const PREVIEW_LABEL_MAX_CHARS = 48;
 
@@ -312,6 +313,8 @@ export function buildMessageContext(input: {
   previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   threadContexts?: ReadonlyArray<ThreadContextRecord>;
   attachments?: ReadonlyArray<BoundComposerAttachment>;
+  /** The text being sent; its `@computer` / `@browser` chips become capability records. */
+  text?: string;
 }): OrchestrationMessageContext | undefined {
   const screenshotAttachmentIds = new Set(
     (input.attachments ?? []).flatMap(({ attachment }) =>
@@ -322,6 +325,7 @@ export function buildMessageContext(input: {
     ...input.terminalContexts.map(terminalContextRecord),
     ...input.reviewComments.map(reviewCommentContextRecord),
     ...(input.threadContexts ?? []),
+    ...capabilityContextRecordsInText(input.text ?? ""),
     ...input.previewAnnotations.map((annotation) =>
       previewAnnotationContextRecord(annotation, {
         screenshotContextId: screenshotAttachmentIds.has(annotation.id) ? annotation.id : undefined,

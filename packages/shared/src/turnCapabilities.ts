@@ -1,8 +1,9 @@
-import type {
-  CapabilityContextRecord,
-  ComposerContextRecord,
-  OrchestrationMessageContext,
-  TurnCapability,
+import {
+  TURN_CAPABILITIES,
+  type CapabilityContextRecord,
+  type ComposerContextRecord,
+  type OrchestrationMessageContext,
+  type TurnCapability,
 } from "@goat/contracts";
 
 import {
@@ -12,12 +13,12 @@ import {
 } from "./composerContextReferences.ts";
 
 /** The chip text for `@computer` and `@browser`, the same on every client. */
-const TURN_CAPABILITY_LABEL: Record<TurnCapability, string> = {
+export const TURN_CAPABILITY_LABEL: Record<TurnCapability, string> = {
   "computer-use": "Computer",
   browser: "Browser",
 };
 
-function turnCapabilityContextRecord(capability: TurnCapability): CapabilityContextRecord {
+export function turnCapabilityContextRecord(capability: TurnCapability): CapabilityContextRecord {
   return {
     version: 1,
     kind: "capability",
@@ -74,4 +75,29 @@ export function withTurnCapabilities(
     text: `${references} ${message.text}`,
     context: { version: 1, records: [...kept, ...added] },
   };
+}
+
+/** The capability a chip's context id names, or undefined for any other id. */
+export function turnCapabilityForContextId(contextId: string): TurnCapability | undefined {
+  return TURN_CAPABILITIES.find(
+    (capability) => turnCapabilityContextRecord(capability).contextId === contextId,
+  );
+}
+
+/**
+ * The capability records a composer's text refers to. A capability chip carries nothing beyond
+ * its id, so a client rebuilds the records from the text at send instead of keeping them in
+ * the draft.
+ */
+export function capabilityContextRecordsInText(text: string): CapabilityContextRecord[] {
+  const capabilities = new Set(
+    collectComposerContextReferences(text).flatMap((occurrence) => {
+      const capability =
+        occurrence.kind === "capability"
+          ? turnCapabilityForContextId(occurrence.contextId)
+          : undefined;
+      return capability === undefined ? [] : [capability];
+    }),
+  );
+  return [...capabilities].map(turnCapabilityContextRecord);
 }
