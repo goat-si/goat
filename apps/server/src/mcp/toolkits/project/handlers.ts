@@ -113,7 +113,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
     }),
   ),
   goat_project_create: McpToolAccess.destructive(
-    McpToolAccess.writesEnvironment(({ workspaceRoot, ...input }) =>
+    McpToolAccess.setsUpProjects(({ workspaceRoot, ...input }) =>
       Effect.gen(function* () {
         const projects = yield* Project.ProjectService;
         if (workspaceRoot === undefined) {
@@ -180,7 +180,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
     ),
   ),
   goat_project_clone: McpToolAccess.destructive(
-    McpToolAccess.writesEnvironment((input) =>
+    McpToolAccess.setsUpProjects((input) =>
       Effect.gen(function* () {
         const repositories = yield* Repositories.SourceControlRepositoryService;
         return yield* repositories.cloneRepository(input).pipe(
