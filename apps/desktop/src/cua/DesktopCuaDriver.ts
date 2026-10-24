@@ -94,7 +94,14 @@ interface NativeHost {
   readonly session?: () =>
     | Pick<
         HelperSession,
-        "watch" | "unwatch" | "onEvent" | "canWatch" | "canFrame" | "frames" | "onFrame"
+        | "watch"
+        | "unwatch"
+        | "onEvent"
+        | "canWatch"
+        | "reportsInput"
+        | "canFrame"
+        | "frames"
+        | "onFrame"
       >
     | undefined;
 }
@@ -328,6 +335,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   let watches = 0;
   // What the running helper said it can do; a build without a method raises nothing for it.
   let helperCanWatch = false;
+  // Whether the running helper's agent connections report a person's input.
+  let helperReportsInput = false;
   let helperCanFrame = false;
   const followers = yield* makeHelperFollowers({
     publisher,
@@ -344,7 +353,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         type: "cuaReadiness",
         generation: helperGeneration,
         readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
-        signals: helperSignals(helperCanWatch),
+        signals: helperSignals(helperCanWatch, helperReportsInput),
         frames: helperCanFrame,
       } as const;
       const key = encodeJson(report);
@@ -891,6 +900,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       const session = entry.host.session?.();
       if (entry.helper) {
         helperCanWatch = session?.canWatch === true;
+        // Only macOS agents run through a connection helper that sees a person's input.
+        helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
         helperCanFrame = session?.canFrame === true;
         yield* noteHelper((state) => withRunning(state, true));
       }

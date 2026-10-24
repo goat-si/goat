@@ -1,4 +1,4 @@
-import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
+import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
@@ -563,7 +563,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
-  Layer.mock(DecisionInbox.DecisionInbox)({}),
+  Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(StrayProcesses.StrayProcesses)({}),
   Layer.mock(WorktreeCheckoutHealth.WorktreeCheckoutHealth)({

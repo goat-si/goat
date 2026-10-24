@@ -61,6 +61,11 @@ namespace Goat.ComputerUse
         SafeFileHandle liveness;
         readonly List<IDisposable> pins = new List<IDisposable>();
         string driverDirectory;
+        /// <summary>
+        /// list_apps exchanges running outside the lock; the pins stay until the last one ends,
+        /// so a stop meanwhile never frees the files a listing driver was started from.
+        /// </summary>
+        int listing;
 
         public DriverService(string executablePath, Action<Dictionary<string, object>> emit)
         {
@@ -223,18 +228,19 @@ namespace Goat.ComputerUse
         /// </summary>
         public object ListApps()
         {
+            IntPtr listJob = IntPtr.Zero;
+            IntPtr child = IntPtr.Zero;
+            SafeFileHandle inWrite = null, outRead = null;
             lock (gate)
             {
                 RequireUsableSession();
-                bool pinnedHere = pins.Count == 0;
                 PinDriverFiles();
-                IntPtr listJob = IntPtr.Zero;
-                IntPtr child = IntPtr.Zero;
+                listing++;
                 try
                 {
                     listJob = CreateJob();
                     var security = Inheritable();
-                    SafeFileHandle inRead, inWrite, outRead, outWrite;
+                    SafeFileHandle inRead, outWrite;
                     if (!NativeMethods.CreatePipe(out inRead, out inWrite, ref security, 0)) throw NativeMethods.LastError("CreatePipe");
                     if (!NativeMethods.CreatePipe(out outRead, out outWrite, ref security, 0)) throw NativeMethods.LastError("CreatePipe");
                     NativeMethods.SetHandleInformation(inWrite, NativeMethods.HANDLE_FLAG_INHERIT, 0);
@@ -243,17 +249,34 @@ namespace Goat.ComputerUse
                     using (inRead)
                     using (outWrite)
                         child = Launch(listJob, new List<string> { "mcp" }, DriverEnvironment(new Dictionary<string, object>()), inRead, outWrite, out pid);
-                    using (var input = new FileStream(inWrite, FileAccess.Write))
-                    using (var output = new FileStream(outRead, FileAccess.Read))
-                        return ExchangeListApps(input, output);
                 }
-                finally
+                catch
                 {
-                    if (listJob != IntPtr.Zero) { NativeMethods.TerminateJobObject(listJob, 0); NativeMethods.CloseHandle(listJob); }
-                    if (child != IntPtr.Zero) NativeMethods.CloseHandle(child);
-                    if (pinnedHere && process == IntPtr.Zero) ReleasePins();
+                    if (inWrite != null) inWrite.Dispose();
+                    if (outRead != null) outRead.Dispose();
+                    EndListingLocked(listJob, child);
+                    throw;
                 }
             }
+            // The exchange can take seconds; it holds no lock, so start and stop never wait on it.
+            try
+            {
+                using (var input = new FileStream(inWrite, FileAccess.Write))
+                using (var output = new FileStream(outRead, FileAccess.Read))
+                    return ExchangeListApps(input, output);
+            }
+            finally
+            {
+                lock (gate) EndListingLocked(listJob, child);
+            }
+        }
+
+        void EndListingLocked(IntPtr listJob, IntPtr child)
+        {
+            if (listJob != IntPtr.Zero) { NativeMethods.TerminateJobObject(listJob, 0); NativeMethods.CloseHandle(listJob); }
+            if (child != IntPtr.Zero) NativeMethods.CloseHandle(child);
+            listing--;
+            if (listing == 0 && process == IntPtr.Zero) ReleasePins();
         }
 
         static object ExchangeListApps(Stream input, Stream output)
@@ -668,7 +691,7 @@ namespace Goat.ComputerUse
             if (job != IntPtr.Zero) { NativeMethods.CloseHandle(job); job = IntPtr.Zero; }
             if (process != IntPtr.Zero) { NativeMethods.CloseHandle(process); process = IntPtr.Zero; }
             driverPid = 0;
-            ReleasePins();
+            if (listing == 0) ReleasePins();
         }
     }
 }

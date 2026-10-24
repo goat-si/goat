@@ -13,25 +13,6 @@ import {
 const mac = { platform: "darwin", running: true } as const;
 
 describe("computerUseStatusText", () => {
-  it("shows a grant revoked in System Settings even while the driver still runs", () => {
-    expect(
-      computerUseStatusText({
-        enabled: true,
-        status: mac,
-        error: null,
-        missingGrants: ["screen-recording"],
-      }),
-    ).toBe("Screen Recording is off. Choose Set up to allow it again.");
-    expect(
-      computerUseStatusText({
-        enabled: true,
-        status: mac,
-        error: null,
-        missingGrants: ["accessibility", "screen-recording"],
-      }),
-    ).toBe("Accessibility and Screen Recording are off. Choose Set up to allow it again.");
-  });
-
   it("reports the host's last failure until a session starts the driver", () => {
     const failure =
       "Allow Accessibility and Screen Recording in System Settings, then restart computer use.";
@@ -40,7 +21,6 @@ describe("computerUseStatusText", () => {
         enabled: true,
         status: { platform: "darwin", running: false, failure },
         error: null,
-        missingGrants: [],
       }),
     ).toBe(failure);
     expect(
@@ -48,12 +28,9 @@ describe("computerUseStatusText", () => {
         enabled: true,
         status: { platform: "linux", running: false },
         error: null,
-        missingGrants: [],
       }),
     ).toBe("Starts with the next agent turn");
-    expect(
-      computerUseStatusText({ enabled: false, status: mac, error: null, missingGrants: [] }),
-    ).toBeNull();
+    expect(computerUseStatusText({ enabled: false, status: mac, error: null })).toBeNull();
   });
 
   it("says why a host's screen limits or blocks computer use before it is turned on", () => {
@@ -64,15 +41,14 @@ describe("computerUseStatusText", () => {
       display: ":1",
     } as const;
     const xvfb = { platform: "linux", running: false, display: partial } as const;
-    expect(
-      computerUseStatusText({ enabled: false, status: xvfb, error: null, missingGrants: [] }),
-    ).toBe(partial.reason);
+    expect(computerUseStatusText({ enabled: false, status: xvfb, error: null })).toBe(
+      partial.reason,
+    );
     expect(
       computerUseStatusText({
         enabled: true,
         status: { ...xvfb, running: true },
         error: null,
-        missingGrants: [],
       }),
     ).toBe(`Running with limits. ${partial.reason}`);
     const blocked = {
@@ -84,9 +60,9 @@ describe("computerUseStatusText", () => {
     expect(computerUseUnavailable(xvfb)).toBe(false);
     // Hosts that predate the check keep the switch.
     expect(computerUseUnavailable({ platform: "linux", running: false })).toBe(false);
-    expect(
-      computerUseStatusText({ enabled: false, status: blocked, error: null, missingGrants: [] }),
-    ).toBe("No X display is reachable for root.");
+    expect(computerUseStatusText({ enabled: false, status: blocked, error: null })).toBe(
+      "No X display is reachable for root.",
+    );
   });
 });
 

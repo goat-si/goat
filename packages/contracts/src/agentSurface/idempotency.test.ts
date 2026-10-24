@@ -8,12 +8,7 @@ const byPath: ReadonlyMap<string, Entry> = new Map(entries.map((entry) => [entry
 
 // Writes that still take no retry key and record no reason (#1029). Remove a path when its write
 // declares one; this list only shrinks.
-const NOT_YET_KEYED: ReadonlySet<string> = new Set([
-  "attachment.prepare_upload",
-  "origin.report",
-  "schedule.update",
-  "thread.organize",
-]);
+const NOT_YET_KEYED: ReadonlySet<string> = new Set<string>([]);
 
 it("gives every write a retry key with a reconcile read, or a recorded reason it has none", () => {
   for (const entry of entries) {
