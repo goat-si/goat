@@ -98,6 +98,15 @@
     contract (owner `agent`, `human` or `private`; status; target; lease; last frame) with the same
     controls (take over, hand back, request handoff, stop, stop all), status chips and private mode
     on web, desktop and mobile.
+  - **Mini-view stack.** Every preview session, computer use window or browser page, appears as a
+    tile in one vertical stack on the right: docked in the desktop app by default, poppable into
+    a floating, non-activating stack at the screen edge, and in the right panel or a sheet on web
+    and mobile. Tiles carry the session's chips and controls, plus pause and resume, and the
+    stack header has stop all. Private tiles show a placeholder, never pixels. Tiles capture only
+    the operated window, or a crop of its bounds where window capture is unavailable, the same on
+    every OS. Thumbnails run at most 2 frames per second and only while visible. The floating
+    stack and the cursor overlay are excluded from capture and never cover an action's target.
+    Requested by Jun on 2026-10-24 (#1215).
   - **Safety.** Per-app approvals and a time-bounded control lease. Unattended origins keep the
     ADR-0022 driver ceiling. Interactive turns also run through the GOAT proxy, so a per-thread
     Stop and the global kill switch end the transport at once. Human input on a shared desktop
