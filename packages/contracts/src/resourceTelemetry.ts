@@ -2,7 +2,13 @@ import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HostPowerSnapshot } from "./background.ts";
-import { DesktopCuaDriverReport, DesktopCuaDriverRequest } from "./cua.ts";
+import {
+  DesktopCuaDriverReport,
+  DesktopCuaDriverRequest,
+  DesktopCuaDetectionReport,
+  DesktopCuaHumanInputReport,
+  DesktopCuaPrivateModeReport,
+} from "./cua.ts";
 import { DesktopUpdateStateSchema } from "./ipc.ts";
 
 export const RESOURCE_MONITOR_PROTOCOL_VERSION = 3 as const;
@@ -301,6 +307,9 @@ export const DesktopHostTelemetryMessage = Schema.Union([
   DesktopHostTelemetrySnapshot,
   DesktopUpdateStatusReport,
   DesktopCuaDriverReport,
+  DesktopCuaHumanInputReport,
+  DesktopCuaPrivateModeReport,
+  DesktopCuaDetectionReport,
 ]);
 export type DesktopHostTelemetryMessage = typeof DesktopHostTelemetryMessage.Type;
 
