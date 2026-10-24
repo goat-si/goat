@@ -35,7 +35,11 @@ interface Seen {
     readonly command: OrchestrationV2ServerCommand;
     readonly limit: unknown;
   }>;
-  readonly launches: Array<{ readonly modes: unknown; readonly threadId: unknown }>;
+  readonly launches: Array<{
+    readonly modes: unknown;
+    readonly threadId: unknown;
+    readonly workspace: unknown;
+  }>;
   workerMode: RuntimeMode;
   lookup: "found" | "missing" | "error";
 }
@@ -80,7 +84,11 @@ const layerFor = (seen: Seen) =>
         Layer.mock(ThreadLaunchMcpService.ThreadLaunchMcpService)({
           launch: (_scope, input, modes, stable) =>
             Effect.sync(() => {
-              seen.launches.push({ modes, threadId: stable?.threadId });
+              seen.launches.push({
+                modes,
+                threadId: stable?.threadId,
+                workspace: input.workspaceStrategy,
+              });
               // Goal workers always launch into their stable thread id.
               const threadId = stable?.threadId;
               if (threadId === undefined)
@@ -149,9 +157,43 @@ describe("GoalWorkerRuntime", () => {
         {
           modes: { runtimeMode: "approval-required", interactionMode: "default" },
           threadId: workerThreadId(actionId),
+          workspace: {
+            type: "worktree",
+            branch: "goal/test/s0-a1",
+            baseRef: "dev",
+            startFromOrigin: false,
+          },
         },
       ]);
       expect(launched.threadId).toBe("fleet-goal:goal:goal_rt:s0:a1:launch");
+    }).pipe(Effect.provide(layerFor(seen)));
+  });
+
+  it.effect("starts a resumed attempt's worktree from the ref it resumes from", () => {
+    const seen = makeSeen();
+    return Effect.gen(function* () {
+      yield* (yield* GoalWorkerRuntime).launch(ownerAccess("full-access"), {
+        goal: careful,
+        slot: 0,
+        actionId: launchActionId(careful, 0, 2),
+        host: null,
+        title: "t",
+        message: "m",
+        branch: "goal/test/s0-a2",
+        modelSelection: careful.spec.workers.modelSelection,
+        workspace: {
+          baseRef: "goat/replica/goal-goal_rt-s0-0123456789ab-1",
+          startFromOrigin: false,
+        },
+      });
+      expect(seen.launches.map((launch) => launch.workspace)).toEqual([
+        {
+          type: "worktree",
+          branch: "goal/test/s0-a2",
+          baseRef: "goat/replica/goal-goal_rt-s0-0123456789ab-1",
+          startFromOrigin: false,
+        },
+      ]);
     }).pipe(Effect.provide(layerFor(seen)));
   });
 
