@@ -165,9 +165,8 @@ const browserTestProject = {
         resetPointer: async ({ page }) => {
           await page.mouse.move(-1, -1);
         },
-        // test/reportMockFactoryFailure.ts, installed by test/browserSetup.ts: a failed vi.mock
-        // factory's module, file and cause, which the browser RPC and the default silent mode
-        // would otherwise both drop (#928).
+        // test/reportMockFactoryFailure.ts: a failed vi.mock factory's cause, which the browser
+        // RPC and the default silent mode would otherwise both drop (#928).
         reportMockFactoryFailure: (_context, message: string) => {
           process.stderr.write(`${message}\n`);
         },
