@@ -21,6 +21,7 @@ export interface IdleSource {
 }
 
 const pad4 = (length: number) => (4 - (length % 4)) % 4;
+const ASK_TIMEOUT_MS = 1_000;
 
 /** The first screen's root window from an X connection setup reply (little-endian). */
 function setupRoot(reply: Uint8Array): number | undefined {
@@ -120,11 +121,20 @@ export async function openX11Idle(environment: {
     close();
     return undefined;
   }
-  // Requests are answered in order, one at a time here.
+  // Requests are answered in order, one at a time here. One that goes unanswered leaves the
+  // queue out of step with the replies, so the source closes and reads nothing more.
   const ask = (request: Uint8Array) =>
     new Promise<Uint8Array | undefined>((resolve) => {
       if (closed) return resolve(undefined);
-      waiting.push(resolve);
+      const timer = setTimeout(() => {
+        close();
+        resolve(undefined);
+      }, ASK_TIMEOUT_MS);
+      timer.unref();
+      waiting.push((message) => {
+        clearTimeout(timer);
+        resolve(message);
+      });
       socket.write(request);
     });
   const extension = await ask(queryExtensionRequest("MIT-SCREEN-SAVER"));

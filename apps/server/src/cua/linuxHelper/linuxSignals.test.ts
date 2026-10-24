@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import type { ComputerUseEvent } from "@goat/contracts";
+
+import type { SecureFocus } from "./atspiFocus.ts";
 import { connect, NOT_SECURE, X11 } from "./LinuxComputerUseHelper.testkit.ts";
+import { makeSignalMonitor } from "./linuxSignals.ts";
 
 describe("Linux safety signals", () => {
   const target = { pid: 10, windowId: 20 };
@@ -83,6 +87,19 @@ describe("Linux safety signals", () => {
     await helper.close();
   });
 
+  it("a driver error listing windows does not count as the window closing", async () => {
+    const helper = await connect({ focus: { known: true, secure: true, windows: 1 } });
+    await watch(helper, "w1");
+    await helper.events();
+    helper.driver.state.nextListError = true;
+    await helper.tick();
+    const states = (await helper.events()).map(
+      (entry) => (entry.event as { active?: boolean }).active,
+    );
+    expect(states).toEqual([true]);
+    await helper.close();
+  });
+
   it("clears an active target whose window closed and stops watching it", async () => {
     const helper = await connect({ focus: { known: true, secure: true, windows: 1 } });
     await watch(helper, "w1");
@@ -126,5 +143,63 @@ describe("Linux safety signals", () => {
       event: { type: "humanInput", source: "unknown" },
     });
     await helper.close();
+  });
+});
+
+/** A monitor on its own, with the work it defers and the checks it arms in the test's hands. */
+function monitor(options: { readonly windowOpen?: () => Promise<boolean | undefined> } = {}) {
+  const focus: { current: SecureFocus } = { current: NOT_SECURE };
+  const events: Array<{ watchId: string; event: ComputerUseEvent }> = [];
+  const deferred: Array<() => Promise<void>> = [];
+  const armed = new Set<() => Promise<void>>();
+  const arming = { count: 0 };
+  const signals = makeSignalMonitor({
+    secureFocus: async () => focus.current,
+    windowOpen: options.windowOpen ?? (async () => true),
+    idle: undefined,
+    now: () => 0,
+    every: (_ms, task) => {
+      arming.count++;
+      armed.add(task);
+      return () => armed.delete(task);
+    },
+    afterReply: (task) => void deferred.push(task),
+    emit: (watchId, event) => events.push({ watchId, event }),
+  });
+  const runDeferred = async () => {
+    for (const task of deferred.splice(0)) await task();
+  };
+  const tick = async () => {
+    for (const task of Array.from(armed)) await task();
+  };
+  return { signals, focus, events, runDeferred, tick, armed, arming };
+}
+
+describe("makeSignalMonitor", () => {
+  const target = { pid: 10, windowId: 20 };
+  const secure: SecureFocus = { known: true, secure: true, windows: 1 };
+
+  it("a target a new watch keeps stays active until read, so an early unwatch still clears it", async () => {
+    const m = monitor();
+    m.focus.current = secure;
+    await m.signals.watch("a", [target]);
+    await m.runDeferred();
+    await m.signals.watch("b", [target]);
+    // Unwatch before watch b's first reading runs.
+    await m.signals.unwatch();
+    expect(m.events.at(-1)).toEqual({
+      watchId: "b",
+      event: { type: "privateMode", active: false, target },
+    });
+  });
+
+  it("work deferred by an earlier watch with the same id never arms a second set of checks", async () => {
+    const m = monitor();
+    await m.signals.watch("a", [target]);
+    await m.signals.unwatch();
+    await m.signals.watch("a", [target]);
+    await m.runDeferred();
+    // One focus check for the live watch; the first watch's deferred start does nothing.
+    expect(m.arming.count).toBe(1);
   });
 });

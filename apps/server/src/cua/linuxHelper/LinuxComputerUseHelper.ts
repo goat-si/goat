@@ -179,7 +179,13 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     if (answer === "lost") return refusal("helperUnavailable", "Cua Driver exited.");
     if (isRefusal(answer)) return answer;
     const list = field(answer.structured, "windows");
-    return Array.isArray(list) ? (list as DriverWindow[]) : [];
+    // An error or an answer without a list says nothing about which windows exist.
+    if (answer.isError || !Array.isArray(list))
+      return refusal(
+        "helperUnavailable",
+        answer.text.split("\n", 1)[0] || "Cua Driver did not list windows.",
+      );
+    return list as DriverWindow[];
   };
 
   /** The window as it is now, with the epoch every ref and point is read against. */

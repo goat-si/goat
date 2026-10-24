@@ -89,6 +89,8 @@ export function fixtureDriver() {
     setValueEffect: "confirmed",
     loseNext: false,
     windowOpen: true,
+    /** The next list_windows answers with an error and no list. */
+    nextListError: false,
     /** Windows of other apps, listed before the fixture's own. */
     otherWindows: [] as Array<{
       pid: number;
@@ -112,6 +114,15 @@ export function fixtureDriver() {
     typeof token === "string" && token.startsWith("s" + state.snapshot + ":");
   const call: DriverClient["call"] = async (tool, args) => {
     if (tool === "check_permissions") return ok({ x11: true, wayland: false, atspi: true });
+    if (tool === "list_windows" && state.nextListError) {
+      state.nextListError = false;
+      return {
+        isError: true,
+        text: "AT-SPI timed out.",
+        structured: { code: "timeout" },
+        images: [],
+      };
+    }
     if (tool === "list_windows")
       return ok({
         windows: !state.windowOpen

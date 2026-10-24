@@ -88,14 +88,20 @@ const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const driverPath =
   environment.GOAT_COMPUTER_USE_DRIVER?.trim() || NodePath.join(here, "cua-driver", "cua-driver");
 
-// The idle counter for human input: the X server's on X11 and XWayland, Mutter's on GNOME
-// Wayland. Opened once; without one, humanInput is unsupported.
+// The idle counter for human input must see all of the person's input. On X11 that is the X
+// server's. Under Wayland, XWayland only sees input to X clients, so only Mutter's counter
+// (GNOME) will do; other compositors have none GOAT can read. Opened once; without one,
+// humanInput is unsupported.
 const gdbus = gdbusRunner(driverEnvironment);
+const gnome = /GNOME/iu.test(environment.XDG_CURRENT_DESKTOP ?? "");
 const idle =
-  session.unavailable === undefined && session.unsupported === undefined
-    ? ((await openX11Idle(environment)) ??
-      (session.displayServer === "wayland" ? await openGnomeIdle(gdbus) : undefined))
-    : undefined;
+  session.unavailable !== undefined || session.unsupported !== undefined
+    ? undefined
+    : session.displayServer === "x11"
+      ? await openX11Idle(environment)
+      : gnome
+        ? await openGnomeIdle(gdbus)
+        : undefined;
 const generation = NodeCrypto.randomUUID();
 const secureFocus = makeSecureFocusProbe(gdbus);
 let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>

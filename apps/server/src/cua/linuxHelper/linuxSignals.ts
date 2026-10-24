@@ -57,6 +57,9 @@ const keyOf = (target: ComputerUseWindowTarget) => target.pid + ":" + target.win
 
 export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonitor {
   let watchId: string | undefined;
+  // Every watch and unwatch starts a new incarnation: a watch id can be reused, so deferred
+  // work and running checks compare this, never the id.
+  let incarnation = 0;
   let targets: ComputerUseWindowTarget[] = [];
   const active = new Map<string, boolean>();
   const spans: Array<{ start: number; end: number | undefined }> = [];
@@ -77,10 +80,15 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
     active.delete(key);
   };
 
-  const readFocus = async (id: string, target: ComputerUseWindowTarget, report: boolean) => {
+  const readFocus = async (
+    id: string,
+    mine: number,
+    target: ComputerUseWindowTarget,
+    report: boolean,
+  ) => {
     const focus = await deps.secureFocus(target.pid);
     // The watch may have changed while AT-SPI answered.
-    if (watchId !== id || !targets.includes(target)) return;
+    if (incarnation !== mine || !targets.includes(target)) return;
     const now = focus.secure || !focus.known;
     const key = keyOf(target);
     if (!report && active.get(key) === now) return;
@@ -90,16 +98,20 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
 
   const checkFocus = async () => {
     const id = watchId;
+    const mine = incarnation;
     if (id === undefined || busy.focus) return;
     busy.focus = true;
     try {
       for (const target of targets) {
-        if ((await deps.windowOpen(target)) === false && watchId === id) {
+        const open = await deps.windowOpen(target);
+        if (incarnation !== mine) return;
+        // Only a list that lacks the window proves it closed; an error proves nothing.
+        if (open === false) {
           release(id, target);
           targets = targets.filter((entry) => entry !== target);
           continue;
         }
-        await readFocus(id, target, false);
+        await readFocus(id, mine, target, false);
       }
     } finally {
       busy.focus = false;
@@ -109,11 +121,12 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
   const checkIdle = async () => {
     const idle = deps.idle;
     const id = watchId;
+    const mine = incarnation;
     if (!idle || id === undefined || busy.idle) return;
     busy.idle = true;
     try {
       const ms = await idle.idleMs();
-      if (ms === undefined || watchId !== id) return;
+      if (ms === undefined || incarnation !== mine) return;
       const now = deps.now();
       const inputAt = now - ms;
       // Readings jitter by a few milliseconds; only a clearly newer input counts.
@@ -142,16 +155,19 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
       if (previous !== undefined)
         for (const target of targets) if (!kept.has(keyOf(target))) release(previous, target);
       watchId = id;
+      const mine = ++incarnation;
       targets = [...next];
-      active.clear();
+      // A retained target keeps its state until its first reading under this watch, so an
+      // unwatch before then still clears it.
+      for (const key of [...active.keys()]) if (!kept.has(key)) active.delete(key);
       // Input from before this watch is not its concern.
       lastInputAt = deps.now();
       lastEventAt = -Infinity;
       busy = { focus: false, idle: false };
       deps.afterReply(async () => {
-        if (watchId !== id) return;
-        await Promise.all(targets.map((target) => readFocus(id, target, true)));
-        if (watchId !== id) return;
+        if (incarnation !== mine) return;
+        await Promise.all(targets.map((target) => readFocus(id, mine, target, true)));
+        if (incarnation !== mine) return;
         stops = [
           deps.every(PRIVATE_MODE_EVERY_MS, checkFocus),
           ...(deps.idle ? [deps.every(HUMAN_INPUT_EVERY_MS, checkIdle)] : []),
@@ -160,6 +176,7 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
     },
     unwatch: async () => {
       stop();
+      incarnation++;
       if (watchId !== undefined) for (const target of targets) release(watchId, target);
       watchId = undefined;
       targets = [];
