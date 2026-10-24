@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ComputerUseCapabilities,
+  ComputerUseHumanInputSource,
   ComputerUseReadiness,
   type ComputerUseRefusalReason,
 } from "./computerUseProtocol.ts";
@@ -209,8 +210,8 @@ export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
 export const DesktopCuaHumanInputReport = Schema.Struct({
   version: Schema.Literal(1),
   type: Schema.Literal("cuaHumanInput"),
-  /** unknown: the helper saw a person's input but not which device sent it. */
-  source: Schema.Literals(["keyboard", "pointer", "unknown"]),
+  /** The same sources the helper's own humanInput event carries (computerUseProtocol.ts). */
+  source: ComputerUseHumanInputSource,
 });
 export type DesktopCuaHumanInputReport = typeof DesktopCuaHumanInputReport.Type;
 
