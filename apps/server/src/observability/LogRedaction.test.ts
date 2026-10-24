@@ -24,7 +24,7 @@ describe("redactLogText", () => {
       "fatal: unable to access 'https://***@github.com/o/r.git/'",
     ],
     ["token github_pat_11ABCDEFG0123456789_abcdefghijklmnop", "token ***"],
-    ["Authorization: Bearer abcdefghijklmnop.qrstuv", "Authorization: Bearer ***"],
+    ["Authorization: Bearer abcdefghijklmnop.qrstuv", "Authorization: ***"],
     ["Authorization: abcdef0123456789", "Authorization: ***"],
     ["export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuv", "export OPENAI_API_KEY=***"],
     ["password=hunter2hunter2 user=me", "password=*** user=me"],
@@ -61,8 +61,16 @@ describe("redactLogText", () => {
     [`bearer${jwt} done`, "bearer*** done"],
     // An escaped line break inside a quoted value, and short scheme credentials.
     ['password="two \\\nCANARY words" user=me', "password=*** user=me"],
-    ["Authorization: Basic dTpw", "Authorization: Basic ***"],
-    ["authorization=Bearer abc", "authorization=Bearer ***"],
+    ["Authorization: Basic dTpw", "Authorization: ***"],
+    ["Authorization: Negotiate CANARY\nnext", "Authorization: ***\nnext"],
+    ['Authorization: Digest username="u", nonce="CANARY", response="CANARY"', "Authorization: ***"],
+    ["csrfToken=CANARY authToken=CANARY", "csrfToken=*** authToken=***"],
+    [
+      "bearerToken: CANARY xsrf_token=CANARY cookie=CANARY",
+      "bearerToken: *** xsrf_token=*** cookie=***",
+    ],
+    [`${"x".repeat(257)}${jwt} done`, `${"x".repeat(257)}*** done`],
+    ["authorization=Bearer abc", "authorization=***"],
     ["https://user:p@CANARY@example.com/x?q=1", "https://***@example.com/x?q=1"],
     [
       `clone https://bot:${"x".repeat(600)}@example.com/r.git`,
@@ -116,6 +124,15 @@ describe("redactLogText", () => {
       expect(text).not.toContain(header.slice(0, 40));
     },
   );
+
+  it("finds a token by its payload when a long prefix joins a long header", () => {
+    const header = Buffer.from(JSON.stringify({ alg: "HS256", kid: "k".repeat(5_000) })).toString(
+      "base64url",
+    );
+    const payload = Buffer.from('{"sub":"canary-joined"}').toString("base64url");
+    const text = redactLogText(`${"x".repeat(300)}${header}.${payload}.c2ln done`);
+    expect(text).toBe("*** done");
+  });
 
   it("redacts a long text before cutting it, so a credential across the cut is still hidden", () => {
     const text = redactLogText(`${"x".repeat(31_990)} ${jwt} ${"y".repeat(100)}`);
@@ -188,6 +205,20 @@ describe("redactCause", () => {
     const cause = Cause.fromReasons([Cause.makeDieReason(new Error("listed"))]);
     Object.defineProperty(cause, "reasons", { value: revokedList.proxy });
     expect(() => redactCause(cause)).not.toThrow();
+  });
+
+  it("renders span frames without running an annotation map's own iterator", () => {
+    let iterated = false;
+    class Annotations extends Map<string, unknown> {
+      override *[Symbol.iterator](): MapIterator<[string, unknown]> {
+        iterated = true;
+        yield* super[Symbol.iterator]();
+      }
+    }
+    const reason = Cause.makeDieReason(new Error("original failure"));
+    Object.defineProperty(reason, "annotations", { value: new Annotations([["k", "v"]]) });
+    expect(Cause.pretty(redactCause(Cause.fromReasons([reason])))).toContain("original failure");
+    expect(iterated).toBe(false);
   });
 
   it("keeps an error whose cause cannot be inspected", () => {

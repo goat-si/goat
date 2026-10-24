@@ -147,6 +147,9 @@ function isJoseHeader(part: string): boolean {
 // The first base64url character of a JSON header: "{" or the whitespace that may precede it.
 const HEADER_LEAD = /[eICD]/;
 const MAX_HEADER_OFFSET = 256;
+// A header is at the end of its part, so offsets this close to the end are tried as well.
+const MAX_HEADER_LENGTH = 4_096;
+const MAX_HEADER_CHECKS = 8;
 
 /**
  * Where a JOSE header starts inside a base64url part, if one does. Text joined to the token without
@@ -154,14 +157,35 @@ const MAX_HEADER_OFFSET = 256;
  * tried. accepts decides on the decoded rest; a cheap look at its start screens most offsets.
  */
 function headerOffset(part: string, accepts: (rest: string) => boolean): number | undefined {
-  const last = Math.min(part.length - 8, MAX_HEADER_OFFSET);
-  for (let offset = 0; offset <= last; offset++) {
+  const tail = Math.max(MAX_HEADER_OFFSET + 1, part.length - MAX_HEADER_LENGTH);
+  let first: number | undefined;
+  let checks = 0;
+  for (let offset = 0; offset <= part.length - 8; offset++) {
+    if (offset > MAX_HEADER_OFFSET && offset < tail) offset = tail;
     if (!HEADER_LEAD.test(part.charAt(offset))) continue;
     const rest = part.slice(offset);
-    const start = Buffer.from(rest.slice(0, 64), "base64url").toString("utf8");
-    if ((/^\s*\{/.test(start) || /^\s{40,}/.test(start)) && accepts(rest)) return offset;
+    // Twelve decoded bytes show whether an object starts here. A header led by whitespace is also
+    // found from a later offset in that whitespace, four characters apart, closer to its "{".
+    const start = Buffer.from(rest.slice(0, 16), "base64url").toString("utf8");
+    if (!/^\s*\{/.test(start)) continue;
+    first ??= offset;
+    // Each full check decodes the rest of the part; a part that keeps looking like a header is
+    // masked from its first candidate rather than checked without end.
+    if (++checks > MAX_HEADER_CHECKS) return first;
+    if (accepts(rest)) return withLeadingWhitespace(part, offset);
   }
   return undefined;
+}
+
+/** The offset moved back over whole base64 groups that decode to whitespace before the header. */
+function withLeadingWhitespace(part: string, offset: number): number {
+  let start = offset;
+  while (
+    start >= 4 &&
+    /^\s+$/.test(Buffer.from(part.slice(start - 4, start), "base64url").toString("utf8"))
+  )
+    start -= 4;
+  return start;
 }
 
 /** A dotted run with every part from a JOSE header on masked, keeping any text joined before it. */
@@ -202,12 +226,31 @@ function startsJsonObject(part: string): boolean {
   return /^\s*\{/.test(Buffer.from(part, "base64url").toString("utf8"));
 }
 
-/** A dotted run from its first JOSE header on, masked; otherwise the run itself. */
+/** Whether a whole base64url part decodes to a JSON object: a JWS payload. */
+function isJsonObject(part: string): boolean {
+  if (part.length < 2) return false;
+  try {
+    const value: unknown = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A dotted run from its first JOSE header on, masked; otherwise the run itself. A JWS is also known
+ * by its payload, which no text can join: the part before a payload is masked whole, with whatever
+ * was joined to its header, when a header cannot be found in it.
+ */
 function maskJoseToken(run: string): string {
   const parts = run.split(".");
-  return (
-    maskFromHeader(parts, (index) => (index + 2 < parts.length ? isJoseHeader : undefined)) ?? run
+  const fromHeader = maskFromHeader(parts, (index) =>
+    index + 2 < parts.length ? isJoseHeader : undefined,
   );
+  if (fromHeader !== undefined) return fromHeader;
+  for (let index = 0; index + 2 < parts.length; index++)
+    if (isJsonObject(parts[index + 1] ?? "")) return [...parts.slice(0, index), MASK].join(".");
+  return run;
 }
 
 const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => string)]> = [
@@ -225,21 +268,15 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   [/\b(?:sk|rk)-[A-Za-z0-9_-]{16,}/g, MASK],
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
   [/\b(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, `$1 ${MASK}`],
+  // An Authorization header holds its scheme and every parameter up to the end of the line.
+  [/\b(authorization\s*:\s*)[^\r\n]+/gi, `$1${MASK}`],
+  // authorization=Scheme value, the scheme word and value together.
   [
-    // Whatever the scheme word, and however short the credential after it.
-    new RegExp(
-      String.raw`\b(authorization\s*[=:]\s*(?:(?:Bearer|Basic|Digest|Token)\s+)?)${VALUE}`,
-      "gi",
-    ),
+    new RegExp(String.raw`\b(authorization\s*=\s*)(?:[A-Za-z][\w-]*\s+)?${VALUE}`, "gi"),
     `$1${MASK}`,
   ],
-  [
-    new RegExp(
-      String.raw`\b((?:(?:access|refresh|id|session|client)[_-]?)?token|api[_-]?key|client[_-]?secret|secret|password|passwd)(\s*[=:]\s*)${VALUE}`,
-      "gi",
-    ),
-    `$1$2${MASK}`,
-  ],
+  // key=value and key: value for every credential name a field is masked by.
+  [new RegExp(String.raw`\b(${CREDENTIAL_KEY})(\s*[=:]\s*)${VALUE}`, "gi"), `$1$2${MASK}`],
 ];
 
 const MAX_STRING = 32_000;
@@ -418,11 +455,11 @@ function inspectError(
 /** The span frames Effect would print for these annotations, rendered once and redacted. */
 function annotationFrames(annotations: ReadonlyMap<string, unknown>): string {
   try {
-    if (annotations.size === 0) return "";
     const placeholder = new Error("frames");
     placeholder.stack = "Error: frames";
     const reason = Cause.makeDieReason(placeholder).annotate(
-      Context.makeUnsafe(new Map(annotations)),
+      // Intrinsic iteration: a Map subclass's own iterator never runs.
+      Context.makeUnsafe(new Map(Map.prototype.entries.call(annotations))),
     );
     const rendered = Cause.prettyErrors(Cause.fromReasons([reason]))[0]?.stack ?? "";
     const firstFrame = rendered.indexOf("\n");
