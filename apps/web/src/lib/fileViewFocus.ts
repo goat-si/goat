@@ -11,3 +11,14 @@ export function isFileViewFocused(
     target.closest("[data-file-view], [data-file-browser-panel]") !== null
   );
 }
+
+/** Focus inside the Files panel tree, its search field and header included. */
+export function isFileTreeFocused(
+  target: EventTarget | null = typeof document === "undefined" ? null : document.activeElement,
+): boolean {
+  return (
+    typeof Element !== "undefined" &&
+    target instanceof Element &&
+    target.closest("[data-file-browser-panel]") !== null
+  );
+}

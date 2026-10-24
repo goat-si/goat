@@ -4,6 +4,8 @@ import {
   type ComputerUseGrant,
   type ComputerUseMethod,
   type ComputerUseReadiness,
+  type CuaAgentBlock,
+  cuaAgentBlockMessage,
   type CuaHostStatus,
   type CuaToolsAvailability,
 } from "@goat/contracts";
@@ -171,6 +173,7 @@ export function computerUseReadinessSteps({
   tools,
   signals,
   machine,
+  block,
 }: {
   readonly readiness?: ComputerUseReadiness | undefined;
   readonly platform?: CuaHostStatus["platform"] | undefined;
@@ -178,6 +181,8 @@ export function computerUseReadinessSteps({
   readonly signals?: ComputerUseCapabilities["signals"] | undefined;
   /** The host's name in the Linux guide, which tells a person where to act. */
   readonly machine?: string | undefined;
+  /** Why the desktop gave agents no driver, when it was a grant macOS has not given (#1399). */
+  readonly block?: CuaAgentBlock | undefined;
 }) {
   const report = platform === "other" ? "unsupported" : readiness ? "reported" : "notReported";
   const unreported = "The helper has not reported readiness yet.";
@@ -245,12 +250,15 @@ export function computerUseReadinessSteps({
           : inputCopy[readiness.input],
       ]
     : [unavailable];
-  const toolsStatus = tools
-    ? toolsCopy[tools]
-    : ({
-        state: "unknown",
-        detail: "The server has not reported whether agent tools are available yet.",
-      } as const);
+  const toolsStatus =
+    block !== undefined && tools !== "off" && tools !== "available"
+      ? ({ state: "blocked", detail: cuaAgentBlockMessage(block) } as const)
+      : tools
+        ? toolsCopy[tools]
+        : ({
+            state: "unknown",
+            detail: "The server has not reported whether agent tools are available yet.",
+          } as const);
   const steps: ReadinessStep[] = [
     {
       id: "grants",
