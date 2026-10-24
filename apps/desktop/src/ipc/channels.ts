@@ -138,3 +138,6 @@ export const CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:cancel-provider-au
 export const TAKE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:take-legacy-local-storage";
 export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-local-storage";
 export const PREVIEW_SESSION_STACK_CHANNEL = "desktop:preview-session-stack";
+
+export const GET_WINDOW_MATERIAL_STATE_CHANNEL = "desktop:get-window-material-state";
+export const WINDOW_MATERIAL_STATE_CHANNEL = "desktop:window-material-state-changed";

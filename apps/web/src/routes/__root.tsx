@@ -1,3 +1,4 @@
+import { DesktopWindowMaterialSync } from "../desktop/DesktopWindowMaterialSync";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { PermissionUpdateNotice } from "../components/PermissionUpdateNotice";
 import { type ServerLifecycleWelcomePayload } from "@goat/contracts";
@@ -188,6 +189,7 @@ function RootRouteView() {
           <ContrastAppearanceSync />
           <EnvironmentThemeSync />
           <GlassAppearanceSync />
+          <DesktopWindowMaterialSync />
           <FontAppearanceSync />
           <ProviderAuthCallbackCoordinator />
           <CustomSnoozeDialogHost />
@@ -227,6 +229,7 @@ function RootRouteView() {
         <ContrastAppearanceSync />
         <EnvironmentThemeSync />
         <GlassAppearanceSync />
+        <DesktopWindowMaterialSync />
         <FontAppearanceSync />
         <ProviderAuthCallbackCoordinator />
         <ChatGptWelcomeCoordinator />

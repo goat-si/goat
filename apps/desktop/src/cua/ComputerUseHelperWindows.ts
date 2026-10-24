@@ -3,6 +3,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 
+import type { ComputerUseReadiness } from "@goat/contracts";
 import { COMPUTER_USE_HELPER_NAME } from "@goat/shared/cuaDriverRelease";
 import * as Schema from "effect/Schema";
 
@@ -59,18 +60,43 @@ export function windowsReadinessFailure(readiness: WindowsReadiness): string | u
   return undefined;
 }
 
+/**
+ * The typed cause behind windowsReadinessFailure's reason, where one fits, so clients can offer
+ * the remedy. Checked in the same order, so the two always describe the same failure.
+ */
+export function windowsReadinessBlocker(
+  readiness: WindowsReadiness,
+): ComputerUseReadiness["blockers"][number] | undefined {
+  if (!readiness.interactiveSession) return "noInteractiveDesktop";
+  if (readiness.helperElevated) return undefined;
+  if (readiness.connectState === "disconnected") return "noInteractiveDesktop";
+  if (readiness.inputDesktop !== "Default") return "screenLocked";
+  return undefined;
+}
+
 /** Readiness from a fresh helper, in the grant shape the desktop host checks. */
 export async function probeWindowsReadiness(
   process: HelperProcess,
   expectedBundleId: string,
-): Promise<{ accessibility: boolean; screenRecording: boolean; detail?: string }> {
+): Promise<{
+  accessibility: boolean;
+  screenRecording: boolean;
+  detail?: string;
+  blocker?: ComputerUseReadiness["blockers"][number];
+}> {
   const session = await openHelperSession(process, expectedBundleId);
   try {
     const readiness = decodeReadiness(await session.request("permissions", { prompt: false }));
     const detail = windowsReadinessFailure(readiness);
+    const blocker = windowsReadinessBlocker(readiness);
     return detail === undefined
       ? { accessibility: readiness.accessibility, screenRecording: readiness.screenRecording }
-      : { accessibility: false, screenRecording: false, detail };
+      : {
+          accessibility: false,
+          screenRecording: false,
+          detail,
+          ...(blocker === undefined ? {} : { blocker }),
+        };
   } finally {
     await session.close();
   }

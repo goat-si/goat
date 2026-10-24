@@ -9,11 +9,15 @@ import {
   type Browser,
   type BrowserContext,
   type CDPSession,
+  type Dialog,
   type Page,
 } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
+import { inputFence } from "./PreviewInputFence.ts";
+import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { SessionControl } from "./SessionControl.ts";
 
 // `chromium.launch({ headless: true })` starts chromium-headless-shell.
 // `chromium.executablePath()` is the full Chrome build, so it stays missing
@@ -129,34 +133,98 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       ServerBrowserPage.type(page, { locator: "#target", clear: true, text: "WRONG" }),
     ).rejects.toMatchObject({ tag: "PreviewAutomationTargetNotEditableError" });
     expect(await page.evaluate("[target.value, other.value]")).toEqual(["old", "keep"]);
+
+    await page.evaluate("target.disabled = false");
+    await ServerBrowserPage.type(page, { locator: "#target", clear: true, text: "NEW" });
+    expect(await page.evaluate("[target.value, other.value]")).toEqual(["NEW", "keep"]);
   });
 
-  it("does not click an element that covered the target after Playwright's check", async () => {
+  it("sends no input while it waits for a drag's ends, so a stopped drag leaves no trace", async () => {
     await page.setContent(
-      '<button id="b" onclick="window.hits.push(\'target\')">Send</button><script>window.hits = []</script>',
+      '<div id="a" draggable="true">a</div><div id="b">b</div><script>window.seen = []; for (const type of ["pointermove", "pointerdown", "pointerup", "click"]) addEventListener(type, (event) => seen.push(type), true)</script>',
     );
-    const cover =
-      "const o = document.createElement('div'); o.style.cssText = 'position:fixed;inset:0'; o.onclick = () => window.hits.push('overlay'); document.body.append(o)";
-    const button = page.locator("#b");
-    // The page changes between Playwright's actionability check and the dispatch.
-    const coveredAfterCheck = new Proxy(page, {
-      get: (target, key) =>
-        key === "locator"
-          ? () =>
-              new Proxy(button, {
-                get: (locator, name) =>
-                  name === "click"
-                    ? async (options: Parameters<typeof button.click>[0]) => {
-                        await locator.click(options);
-                        await page.evaluate(cover);
-                      }
-                    : Reflect.get(locator, name, locator),
-              })
-          : Reflect.get(target, key, target),
-    });
+    const stopped = () => {
+      throw new Error("stopped");
+    };
     await expect(
-      ServerBrowserPage.click(coveredAfterCheck, { locator: "#b" }),
-    ).rejects.toMatchObject({ tag: "PreviewAutomationExecutionError" });
+      ServerBrowserPage.drag(page, { source: "#a", target: "#b" }, undefined, stopped),
+    ).rejects.toThrow("stopped");
+    expect(await page.evaluate("window.seen")).toEqual([]);
+  });
+
+  it("answers a click without waiting for the navigation it starts", async () => {
+    const response = Promise.withResolvers<void>();
+    await page.route("https://slow.test/next", async (route) => {
+      await response.promise;
+      await route.fulfill({ contentType: "text/html", body: "<p>next</p>" });
+    });
+    await page.setContent('<a id="go" href="https://slow.test/next">next</a>');
+    await ServerBrowserPage.click(page, { locator: "#go", timeoutMs: 5_000 });
+    response.resolve();
+    await page.waitForURL("https://slow.test/next");
+  });
+
+  it("never sends a double click's second press once its first opened a dialog", async () => {
+    await page.setContent(
+      '<button id="b" onclick="window.hits = (window.hits || 0) + 1; if (window.hits === 1) confirm(\'sure?\')">Go</button>',
+    );
+    const control = new SessionControl("agent");
+    control.onDispatchCut(inputFence(cdp));
+    const dialog = new Promise<Dialog>((resolve) => page.once("dialog", resolve));
+    await control.agent("agent", () =>
+      ServerBrowserPage.click(
+        page,
+        { locator: "#b", clickCount: 2 },
+        undefined,
+        control.dispatchGate(),
+      ),
+    );
+    // Stop while the first press waits on the dialog, then a person answers it.
+    control.stopAgents();
+    await (await dialog).dismiss();
+    await control.system(async () => {});
+    expect(await page.evaluate("window.hits")).toBe(1);
+  });
+
+  it("clears a single select when given no values", async () => {
+    await page.setContent(
+      '<select id="s"><option value="a">A</option><option value="b" selected>B</option></select>',
+    );
+    expect(await ServerBrowserPage.select(page, { locator: "#s", values: [] })).toEqual({
+      selected: [],
+    });
+    expect(await page.evaluate("s.selectedIndex")).toBe(-1);
+  });
+
+  it("holds a click that passed its gate when Stop arrives, and lets input through after", async () => {
+    await page.setContent(
+      '<button id="b" onclick="window.clicks = (window.clicks || 0) + 1">Send</button>',
+    );
+    const control = new SessionControl("agent");
+    control.onDispatchCut(inputFence(cdp));
+    const clicking = control.agent("agent", () => {
+      const gate = control.dispatchGate();
+      return ServerBrowserPage.click(page, { locator: "#b" }, undefined, () => {
+        gate();
+        // Stop lands after the gate, while Playwright still has the click to send.
+        control.stopAgents();
+      });
+    });
+    await expect(clicking).rejects.toMatchObject({ reason: "stopped" });
+    // Drains the stopped action, which releases the fence.
+    await control.system(async () => {});
+    expect(await page.evaluate("window.clicks ?? 0")).toBe(0);
+    await page.locator("#b").click();
+    expect(await page.evaluate("window.clicks")).toBe(1);
+  });
+
+  it("does not click a covered target, even though waiting for it sends no input", async () => {
+    await page.setContent(
+      '<button id="b" onclick="window.hits.push(\'target\')">Send</button><div id="o" style="position:fixed;inset:0" onclick="window.hits.push(\'overlay\')"></div><script>window.hits = []</script>',
+    );
+    // The button is visible, enabled and stable, so only Playwright's own check after the gate
+    // can see that the overlay would take the click.
+    await expect(ServerBrowserPage.click(page, { locator: "#b" })).rejects.toThrow();
     expect(await page.evaluate("window.hits")).toEqual([]);
   });
 
@@ -174,8 +242,9 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     ).rejects.toThrow("stopped");
     expect(await page.evaluate("s.value")).toBe("a");
 
-    const uploading = ServerBrowserPage.setInputFiles(
+    const uploading = PreviewUpload.setInputFiles(
       page,
+      cdp,
       { locator: "#f", paths: [NodePath.join(NodeOS.tmpdir(), "missing-upload.txt")] },
       stopped,
     );
@@ -183,6 +252,33 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     await page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input id=f type=file>')");
     await expect(uploading).rejects.toThrow("stopped");
     expect(await page.evaluate("f.files.length")).toBe(0);
+  });
+
+  it("uploads through a label in one call after the gate, and refuses a framed input", async () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-upload-"));
+    using _removeDirectory = {
+      [Symbol.dispose]: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
+    };
+    const file = NodePath.join(directory, "note.txt");
+    NodeFS.writeFileSync(file, "hello");
+    await page.setContent(
+      '<label id="l">Attach <input id="f" type="file"></label><iframe srcdoc="<input id=g type=file>"></iframe><script>window.changes = 0; f.addEventListener("change", () => changes++)</script>',
+    );
+    let gates = 0;
+    await PreviewUpload.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, () => {
+      gates++;
+    });
+    expect(gates).toBe(1);
+    expect(await page.evaluate("[f.files[0]?.name, window.changes]")).toEqual(["note.txt", 1]);
+    await expect(
+      PreviewUpload.setInputFiles(
+        page,
+        cdp,
+        { locator: "iframe >> internal:control=enter-frame >> #g", paths: [file] },
+        () => gates++,
+      ),
+    ).rejects.toThrow(/inside a frame/);
+    expect(gates).toBe(1);
   });
 
   it("skips the capture for a text-only snapshot and still returns the page", async () => {

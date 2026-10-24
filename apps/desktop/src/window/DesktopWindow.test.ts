@@ -47,6 +47,8 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
+import * as DesktopWindowMaterial from "./material/DesktopWindowMaterial.ts";
+import { makeFakeBrowserWindow } from "./DesktopWindow.test-fixtures.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 
@@ -61,92 +63,6 @@ const environmentInput = {
   resourcesPath: "/repo/resources",
   runningUnderArm64Translation: false,
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
-
-function makeFakeBrowserWindow() {
-  const windowListeners = new Map<string, (...args: readonly unknown[]) => void>();
-  const webContentsListeners = new Map<string, (...args: readonly unknown[]) => void>();
-  let zoomLevel = 0;
-  const webContents = {
-    copyImageAt: vi.fn(),
-    focus: vi.fn(),
-    isDestroyed: vi.fn(() => false),
-    getURL: vi.fn(() => "goat-dev://app/"),
-    getZoomLevel: vi.fn(() => zoomLevel),
-    getZoomFactor: vi.fn(() => 1.2 ** zoomLevel),
-    setZoomLevel: vi.fn((level: number) => {
-      zoomLevel = level;
-    }),
-    isLoadingMainFrame: vi.fn(() => false),
-    on: vi.fn((eventName: string, listener: (...args: readonly unknown[]) => void) => {
-      webContentsListeners.set(eventName, listener);
-    }),
-    once: vi.fn<(eventName: string, listener: (...args: readonly unknown[]) => void) => void>(),
-    openDevTools: vi.fn(),
-    reload: vi.fn(),
-    reloadIgnoringCache: vi.fn(),
-    replaceMisspelling: vi.fn(),
-    send: vi.fn(),
-    setBackgroundThrottling: vi.fn(),
-    setWindowOpenHandler: vi.fn(),
-    toggleDevTools: vi.fn(),
-  };
-
-  const window = {
-    close: vi.fn(),
-    focus: vi.fn(),
-    getBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
-    getNormalBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
-    isDestroyed: vi.fn(() => false),
-    isFullScreen: vi.fn(() => false),
-    isMaximized: vi.fn(() => false),
-    isMinimized: vi.fn(() => false),
-    isVisible: vi.fn(() => true),
-    loadURL: vi.fn(() => Promise.resolve()),
-    maximize: vi.fn(),
-    on: vi.fn((eventName: string, listener: (...args: readonly unknown[]) => void) => {
-      windowListeners.set(eventName, listener);
-    }),
-    once: vi.fn((eventName: string, listener: (...args: readonly unknown[]) => void) => {
-      windowListeners.set(eventName, listener);
-    }),
-    restore: vi.fn(),
-    setBackgroundColor: vi.fn(),
-    setAutoHideCursor: vi.fn(),
-    setFullScreen: vi.fn(),
-    setOpacity: vi.fn(),
-    setTitle: vi.fn(),
-    setTitleBarOverlay: vi.fn(),
-    setWindowButtonPosition: vi.fn(),
-    show: vi.fn(),
-    webContents,
-  };
-
-  return {
-    window: window as unknown as Electron.BrowserWindow,
-    getBounds: window.getBounds,
-    getNormalBounds: window.getNormalBounds,
-    isDestroyed: window.isDestroyed,
-    isFullScreen: window.isFullScreen,
-    isMaximized: window.isMaximized,
-    isMinimized: window.isMinimized,
-    loadURL: window.loadURL,
-    maximize: window.maximize,
-    openDevTools: webContents.openDevTools,
-    reload: webContents.reload,
-    reloadIgnoringCache: webContents.reloadIgnoringCache,
-    toggleDevTools: webContents.toggleDevTools,
-    send: webContents.send,
-    setZoomLevel: webContents.setZoomLevel,
-    setWindowButtonPosition: window.setWindowButtonPosition,
-    setBackgroundThrottling: webContents.setBackgroundThrottling,
-    setAutoHideCursor: window.setAutoHideCursor,
-    setFullScreen: window.setFullScreen,
-    setOpacity: window.setOpacity,
-    webContentsListeners,
-    webContentsOnce: webContents.once,
-    windowListeners,
-  };
-}
 
 const layerDesktopClientSettings = Layer.mock(DesktopClientSettings.DesktopClientSettings)({
   get: Effect.succeedNone,
@@ -187,6 +103,7 @@ const layerElectronMenu = Layer.succeed(ElectronMenu.ElectronMenu, {
 } satisfies ElectronMenu.ElectronMenu["Service"]);
 
 const layerElectronTheme = Layer.succeed(ElectronTheme.ElectronTheme, {
+  accessibility: Effect.succeed({ reducedTransparency: false, highContrast: false }),
   shouldUseDarkColors: Effect.succeed(false),
   setSource: () => Effect.void,
   onUpdated: () => Effect.void,
@@ -294,6 +211,11 @@ function layerTest(input: {
   return DesktopWindow.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(DesktopWindowMaterial.DesktopWindowMaterial)({
+          attach: () => Effect.void,
+          afterReveal: () => Effect.void,
+          syncAppearance: () => Effect.void,
+        }),
         layerDesktopAssets,
         Layer.succeed(DesktopRendererHistory.DesktopRendererHistory, {
           register: () => Effect.void,
@@ -415,6 +337,11 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
     const layer = DesktopWindow.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.mock(DesktopWindowMaterial.DesktopWindowMaterial)({
+            attach: () => Effect.void,
+            afterReveal: () => Effect.void,
+            syncAppearance: () => Effect.void,
+          }),
           layerDesktopAssets,
           Layer.succeed(DesktopRendererHistory.DesktopRendererHistory, {
             register: () => Effect.void,

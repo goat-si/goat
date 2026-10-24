@@ -19,6 +19,11 @@ namespace Goat.ComputerUse
         public const uint GENERIC_READ = 0x80000000;
         public const uint GENERIC_WRITE = 0x40000000;
         public const uint OPEN_EXISTING = 3;
+        public const uint FILE_READ_ATTRIBUTES = 0x80;
+        public const uint FILE_SHARE_READ = 1;
+        public const uint FILE_SHARE_WRITE = 2;
+        public const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+        public const uint DUPLICATE_SAME_ACCESS = 2;
         public const int ERROR_FILE_NOT_FOUND = 2;
         public const int ERROR_PIPE_BUSY = 231;
         public const int ERROR_SEM_TIMEOUT = 121;
@@ -136,6 +141,19 @@ namespace Goat.ComputerUse
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool CloseHandle(IntPtr handle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+        [DllImport("kernel32.dll")]
+        public static extern IntPtr GetCurrentProcess();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target,
+            uint access, bool inherit, uint options);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern int GetFinalPathNameByHandleW(SafeFileHandle file, StringBuilder path, int length, uint flags);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);

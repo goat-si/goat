@@ -42,6 +42,7 @@ import {
   ThreadPullRequestLinkSource,
 } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
+import { TurnCapability } from "./composerContext.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import { OrchestrationSearchThreadsInput } from "./threadSearch.ts";
@@ -798,6 +799,8 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   host: Schema.optional(OrchestratorMcpHost),
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
+  /** What the turn this message starts may use, as a person's `@computer` / `@browser` would. */
+  capabilities: Schema.optional(Schema.Array(TurnCapability)),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   /** Set by the GOAT that forwards a send from a goatclaw-profiled caller; outside dispatch only. */
   permissionProfileCeiling: Schema.optional(PermissionProfile),

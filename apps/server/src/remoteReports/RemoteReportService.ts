@@ -76,6 +76,10 @@ const BindingRow = Schema.Struct({
   lastSequence: NonNegativeInt,
 });
 const decodeBindingRows = Schema.decodeUnknownEffect(Schema.Array(BindingRow));
+/** relay_send: 0 no relay, 1 relay (an origin older than turn capabilities), 2 relay with them. */
+const RELAY_WITH_CAPABILITIES = 2;
+const relaySendLevel = (value: RemoteReportBindingInput) =>
+  value.relaySend !== true ? 0 : value.relayCapabilities === true ? RELAY_WITH_CAPABILITIES : 1;
 const decodeBindingInput = Schema.decodeUnknownEffect(RemoteReportBindingInput);
 const decodeReportInput = Schema.decodeUnknownEffect(RemoteOriginReportInput);
 const decodeRelayInput = Schema.decodeUnknownEffect(RemoteRelaySend);
@@ -197,7 +201,7 @@ const make = Effect.gen(function* () {
     yield* sql`
       INSERT INTO remote_report_bindings
         (thread_id, correlation_id, origin_label, origin_thread_id, read_key_hash, relay_send, created_at)
-      VALUES (${threadId}, ${value.correlationId}, ${value.originLabel}, ${value.originThreadId}, ${value.readKeyHash}, ${value.relaySend === true ? 1 : 0}, ${createdAt})
+      VALUES (${threadId}, ${value.correlationId}, ${value.originLabel}, ${value.originThreadId}, ${value.readKeyHash}, ${relaySendLevel(value)}, ${createdAt})
     `.pipe(Effect.mapError(storage));
   });
   const unbind = Effect.fn("RemoteReportService.unbind")(function* (threadId: ThreadId) {
@@ -236,7 +240,12 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const binding = (yield* bindingForThread(threadId))[0];
           if (binding === undefined) return yield* new RemoteReportError({ reason: "not_bound" });
-          if (relay !== null && binding.relaySend !== 1)
+          if (
+            relay !== null &&
+            (binding.relaySend === 0 ||
+              ((relay.capabilities?.length ?? 0) > 0 &&
+                binding.relaySend !== RELAY_WITH_CAPABILITIES))
+          )
             return yield* new RemoteReportError({ reason: "relay_unsupported" });
           // A retried relay is the same request, even after the origin collected it.
           if (relay?.clientRequestId !== undefined) {
@@ -639,7 +648,7 @@ const make = Effect.gen(function* () {
       : {
           originLabel: binding.originLabel,
           originThreadId: binding.originThreadId,
-          relaySend: binding.relaySend === 1,
+          relaySend: binding.relaySend !== 0,
         };
   });
   const relayReceipt = Effect.fn("RemoteReportService.relayReceipt")(function* (
