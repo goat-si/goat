@@ -21,8 +21,9 @@ name: goat-nightly
 # not count toward the Actions and Packages storage quota. Draft releases are
 # visible only with push access, so every job that reads or writes a hand-off asks
 # for contents: write and passes github.token to its staging steps alone. The
-# cleanup job deletes the drafts when the run ends, whatever its outcome. Re-running only the failed jobs after
-# that finds no hand-off; re-run all jobs instead.
+# cleanup job deletes the drafts when the run ends, unless a job failed or was
+# cancelled: then it keeps them, so "Re-run failed jobs" rebuilds only what failed
+# from the hand-offs the other jobs already staged.
 on:
   # 03:00 KST. A day without a newer green dev commit publishes nothing.
   schedule:
@@ -947,10 +948,11 @@ jobs:
           while read -r _ name; do cp "release/${name#\*}" release-runtime/; done < release-runtime/SHA256SUMS
           node scripts/publish-nightly-release.ts --repo goat-si/goat --dir release-runtime --assets-only \
             --target "$SHA" --version "$VERSION" --name "$RELEASE_NAME"
-  # Deletes this run's hand-off drafts whatever happened, including cancellation,
-  # and any staging draft a crashed run left behind for more than 72 hours. A dry run
-  # (assemble passed, nothing published) keeps the release-assets draft so the
-  # verified files can be inspected; a later run's sweep removes it after 72 hours.
+  # Deletes this run's hand-off drafts, and any staging draft an earlier run left
+  # behind for more than 72 hours. A dry run (assemble passed, nothing published)
+  # keeps the release-assets draft so the verified files can be inspected. A run with
+  # a failed or cancelled job keeps every hand-off for "Re-run failed jobs", which
+  # re-runs this job too. A later run's sweep removes kept drafts after 72 hours.
   cleanup:
     name: Delete staging release
     needs: [prepare, js_bundle, cli, desktop_mac, desktop_other, assemble, publish]
@@ -1001,8 +1003,10 @@ jobs:
           GOAT_RELEASES_TOKEN: ${{ github.token }}
           ASSEMBLE: ${{ needs.assemble.result }}
           PUBLISH: ${{ needs.publish.result }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           set -euo pipefail
           keep=""
           if [ "$ASSEMBLE" = success ] && [ "$PUBLISH" = skipped ]; then keep=release-assets; fi
+          case " $RESULTS " in *" failure "* | *" cancelled "*) keep="*" ;; esac
           node scripts/.staging/nightly-staging.ts cleanup --repo goat-si/goat --tag "$STAGING_TAG" --keep "$keep"
