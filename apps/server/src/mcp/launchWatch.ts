@@ -187,8 +187,6 @@ export interface LaunchWatchRunDetails {
   readonly linkOnlyRegistration: boolean;
   /** Why the run failed before its agent's first message, when it did. */
   readonly failure: OrchestratorMcpRunFailure | null;
-  /** When the run ended (its completedAt), telling a retried run's ends apart. */
-  readonly end: string | null;
 }
 
 export const noRunDetails: LaunchWatchRunDetails = {
@@ -199,7 +197,6 @@ export const noRunDetails: LaunchWatchRunDetails = {
   prUrl: null,
   linkOnlyRegistration: false,
   failure: null,
-  end: null,
 };
 
 const REPORTED_LIMIT = 20;
@@ -361,9 +358,19 @@ export function rearmRetriedRun(watch: LaunchWatch, runId: RunId, now: number): 
   };
 }
 
-/** Whether this end of a run is the one the watch already reported; an unread end matches one. */
+/**
+ * Whether this end of a run is the one the watch already reported. An end that could not be
+ * read (from a host that predates wait results carrying it) never matches, so it is reported.
+ */
 export const endReported = (watch: LaunchWatch, runId: RunId, end: string | null) =>
-  watch.reportedEnds[runId] === (end ?? "unknown");
+  end !== null && watch.reportedEnds[runId] === end;
+
+/** A name for the next end of a run that could not be read, distinct from earlier ones. */
+const unreadEnd = (watch: LaunchWatch, runId: RunId) => {
+  const previous = watch.reportedEnds[runId];
+  const count = previous?.startsWith("unknown:") ? Number(previous.slice(8)) : 0;
+  return `unknown:${count + 1}`;
+};
 
 /**
  * Settles a run whose end was just reported, remembering that end. A run retried while it was
@@ -375,8 +382,10 @@ export function settleEnd(
   end: string | null,
   now: number,
 ): LaunchWatch {
-  // An end that could not be read still marks the run as reported once.
-  const ended = { ...watch, reportedEnds: { ...watch.reportedEnds, [runId]: end ?? "unknown" } };
+  const ended = {
+    ...watch,
+    reportedEnds: { ...watch.reportedEnds, [runId]: end ?? unreadEnd(watch, runId) },
+  };
   if (watch.followAgain.includes(runId)) {
     return { ...ended, followAgain: watch.followAgain.filter((again) => again !== runId) };
   }
@@ -542,7 +551,7 @@ const runWakeIds = (watch: LaunchWatch, runId: RunId, end: string | null | undef
     watch,
     watch.reportedEnds[runId] === undefined
       ? `run:${runId}`
-      : `run:${runId}:end:${end ?? "unknown"}`,
+      : `run:${runId}:end:${end ?? unreadEnd(watch, runId)}`,
   );
 
 export function finishedWake(input: {

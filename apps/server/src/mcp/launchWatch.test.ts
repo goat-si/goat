@@ -69,13 +69,25 @@ it("gives a retried run's end new ids when an earlier server reported its first 
   expect(retried.messageId).not.toBe(reported.messageId);
 });
 
-it("treats an end that could not be read as reported once it was", () => {
+it("reports each end it could not read, under ids of its own", () => {
   const run = RunId.make("run-1");
-  const owed = rearmRetriedRun(addPendingRun(makeWatch(), run, 0), run, 0);
-  const once = settleEnd(owed, run, null, 0);
-  expect(once.pendingRuns).toEqual([run]);
-  expect(endReported(once, run, null)).toBe(true);
-  expect(endReported(once, run, "2026-10-24T00:00:00.000Z")).toBe(false);
+  const wake = (watch: ReturnType<typeof makeWatch>) =>
+    finishedWake({
+      watch,
+      runId: run,
+      status: "failed",
+      title: null,
+      branch: null,
+      worktreePath: null,
+      excerpt: null,
+      end: null,
+    });
+  const first = addPendingRun(makeWatch(), run, 0);
+  const second = rearmRetriedRun(settleEnd(first, run, null, 0), run, 1);
+  const third = rearmRetriedRun(settleEnd(second, run, null, 1), run, 2);
+  expect(endReported(second, run, null)).toBe(false);
+  const ids = [first, second, third].map((watch) => wake(watch).commandId);
+  expect(new Set(ids).size).toBe(3);
 });
 
 it.effect("notifies once on the third failure and caps contact backoff at fifteen minutes", () =>

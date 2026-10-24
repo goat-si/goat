@@ -602,6 +602,7 @@ export const make = Effect.gen(function* () {
           _tag: "Terminal",
           status: waited.status,
           runId: waited.runId ?? runId,
+          end: waited.completedAt ?? null,
         } satisfies StepResult;
       }
       // Only user questions are listed remotely; approvals show up when the run ends.
@@ -661,7 +662,6 @@ export const make = Effect.gen(function* () {
           turnItemTypes: ["assistant_message", "error"],
         },
       );
-      const run = records.runs.find((candidate) => candidate.id === runId) ?? null;
       return {
         title: shell?.title ?? null,
         branch: shell?.branch ?? null,
@@ -672,8 +672,10 @@ export const make = Effect.gen(function* () {
           (thread) =>
             thread.cloudTask?.attach === "registered" && thread.cloudTask.tracking === "link-only",
         ),
-        failure: runFailure(run, records.turnItems),
-        end: run?.completedAt == null ? null : DateTime.formatIso(run.completedAt),
+        failure: runFailure(
+          records.runs.find((run) => run.id === runId) ?? null,
+          records.turnItems,
+        ),
       } satisfies LaunchWatchRunDetails;
     });
 
@@ -698,7 +700,6 @@ export const make = Effect.gen(function* () {
           REMOTE_READ_TIMEOUT_MS,
         ).pipe(Effect.flatMap(decodeRead));
       const head = yield* read({ view: "messages", limit: 1, runLimit: 1 });
-      const ended = head.recentRuns.find((run) => run.runId === runId);
       const start = head.thread.itemCount - TAIL_WINDOW - 1;
       let afterPosition: number | undefined = start < 0 ? undefined : start;
       const texts: Array<string | null> = [];
@@ -747,8 +748,6 @@ export const make = Effect.gen(function* () {
         // Registered runs live on their holder, whose own watch reads them locally.
         linkOnlyRegistration: false,
         failure,
-        // Read after the wait, so it names the observed end only while the status still matches.
-        end: ended?.status === status ? ended.completedAt : null,
       } satisfies LaunchWatchRunDetails;
     });
 
@@ -915,7 +914,8 @@ export const make = Effect.gen(function* () {
             case "Terminal": {
               missingEscalations.delete(watchId);
               const endedRunId = result.runId;
-              const end = result.end ?? details.end;
+              // The end is the one the step observed, so it always belongs to the status it saw.
+              const end = result.end ?? null;
               // A promoted message ends with the run it joined, and a run retried in place may
               // still sit at the end already reported; either is reported once.
               if (

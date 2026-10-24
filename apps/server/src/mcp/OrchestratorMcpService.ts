@@ -3699,6 +3699,9 @@ const make = Effect.gen(function* () {
         ...(result.pendingRequestIds === undefined
           ? {}
           : { pendingRequestIds: result.pendingRequestIds }),
+        ...(result.run?.completedAt == null
+          ? {}
+          : { completedAt: DateTime.formatIso(result.run.completedAt) }),
       } satisfies OrchestratorMcpThreadWaitResult;
     }),
     threadStatus: (scope, input) =>
