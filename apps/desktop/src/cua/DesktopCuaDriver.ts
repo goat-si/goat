@@ -93,7 +93,7 @@ interface NativeHost {
   readonly servicePid?: () => number | undefined;
   /** The helper session of the running generation, for its private-mode watch (#1235). */
   readonly session?: () =>
-    | Pick<HelperSession, "watch" | "unwatch" | "onEvent" | "canWatch">
+    | Pick<HelperSession, "watch" | "unwatch" | "onEvent" | "canWatch" | "reportsInput">
     | undefined;
 }
 type DriverClient = Pick<CuaDriverLike, "callTool"> & { readonly uniffiDestroy?: () => void };
@@ -326,6 +326,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   let watches = 0;
   // Whether the running helper said it can watch; a build without the method raises nothing.
   let helperCanWatch = false;
+  // Whether the running helper's agent connections report a person's input.
+  let helperReportsInput = false;
   const safety = yield* Queue.unbounded<DesktopCuaPrivateModeReport>();
   const watchRetries = yield* Queue.unbounded<() => void>();
   const privateMode = makePrivateModeFollower({
@@ -344,7 +346,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         type: "cuaReadiness",
         generation: helperGeneration,
         readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
-        signals: helperSignals(helperCanWatch),
+        signals: helperSignals(helperCanWatch, helperReportsInput),
       } as const;
       const key = encodeJson(report);
       if (key === lastReadiness) return Effect.void;
@@ -890,6 +892,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       const session = entry.host.session?.();
       if (entry.helper) {
         helperCanWatch = session?.canWatch === true;
+        // Only macOS agents run through a connection helper that sees a person's input.
+        helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
         yield* noteHelper((state) => withRunning(state, true));
       }
       if (session) yield* Effect.sync(() => void privateMode.attach(session));

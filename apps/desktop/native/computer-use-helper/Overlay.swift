@@ -144,6 +144,16 @@ func runOverlayIfConnected() {
     let line = Array("{\"ack\":\(seq)}\n".utf8)
     _ = line.withUnsafeBytes { write(channel, $0.baseAddress, $0.count) }
   }
+  // A person's input goes to the proxy on the same channel, written from the main queue like
+  // every ack, so two lines never interleave.
+  let input = InputActivity { source, ageMs in
+    DispatchQueue.main.async {
+      let line = Array("{\"humanInput\":{\"source\":\"\(source)\",\"ageMs\":\(ageMs)}}\n".utf8)
+      _ = line.withUnsafeBytes { write(channel, $0.baseAddress, $0.count) }
+    }
+  }
+  retained.append(input)
+  input.start()
   DispatchQueue.global().async {
     var buffer = [UInt8]()
     var chunk = [UInt8](repeating: 0, count: 4096)

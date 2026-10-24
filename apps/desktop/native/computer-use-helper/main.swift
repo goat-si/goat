@@ -805,7 +805,8 @@ func runService() -> Never {
     "type": "hello", "protocol": protocolVersion, "pid": Int(getpid()),
     "bundleId": service.bundleId,
     // Methods beyond the protocol's first set, so the host never relies on one this build lacks.
-    "features": ["watch"],
+    // humanInput: an agent connection started from this bundle reports a person's input.
+    "features": ["watch", "humanInput"],
     "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
       ?? "",
   ])

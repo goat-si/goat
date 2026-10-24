@@ -157,6 +157,11 @@ export interface HelperSession {
   /** Whether this helper can watch for a focused secure field (#1235). */
   readonly canWatch: boolean;
   /**
+   * Whether an agent connection started from this helper's bundle reports a person's input to
+   * its lease proxy (#1235, macOS --mcp).
+   */
+  readonly reportsInput: boolean;
+  /**
    * Starts watching every window for a focused secure field, replacing any earlier watch. The
    * new watch is in force from its answer: events the old one sends before it still arrive,
    * and the new one's first state follows it.
@@ -298,6 +303,7 @@ export async function openHelperSession(
       await request("stop");
     },
     canWatch: hello.features?.includes("watch") === true,
+    reportsInput: hello.features?.includes("humanInput") === true,
     watch: async (watchId) => {
       await request("watch", { watchId, targets: [] }, { to: watchId });
     },
