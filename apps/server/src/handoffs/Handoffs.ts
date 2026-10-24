@@ -142,6 +142,8 @@ export class Handoffs extends Context.Service<
       readonly args: Readonly<Record<string, unknown>>;
       readonly expiresAt?: DateTime.Utc;
       readonly sshProgress?: SshProgressBinding;
+      /** A computer use grant's apps, recorded on the handoff itself. */
+      readonly apps?: ReadonlyArray<string>;
     }) => Effect.Effect<HandoffSummary, HandoffError>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
     /** Client-only; caller supplies an authenticated, server-resolved label. */
@@ -495,6 +497,7 @@ const make = Effect.gen(function* () {
             : (input.expiresAt ?? DateTime.add(now, { minutes: 15 })),
         createdAt: now,
         actor: { type: "agent", threadId: input.requestedBy.threadId },
+        ...(input.apps === undefined ? {} : { apps: input.apps }),
       };
       yield* savePrivate(handoff.handoffId, {
         version: 1,
