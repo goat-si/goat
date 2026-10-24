@@ -46,3 +46,51 @@ it.effect("host status carries the helper's last readiness only once the helper 
     Effect.scoped,
   ),
 );
+
+it.effect("a grant block ends once the helper reports the missing grant granted (#1399)", () =>
+  Effect.gen(function* () {
+    const reported = yield* Ref.make(Option.none<HelperReadiness>());
+    const block = {
+      reason: "permissionsNotGranted",
+      missing: ["screenRecording"],
+      holder: "helper",
+    } as const;
+    const service = yield* CuaDriver.make(
+      () =>
+        Effect.succeed({
+          start: Effect.fail(new CuaDriver.CuaDriverHostError({ operation: "desktop", block })),
+          stop: Effect.void,
+          waitForExit: Effect.never,
+        }),
+      Effect.succeed({
+        capability: "available",
+        reason: "Uses this Mac's screen.",
+        environment: [],
+      }),
+      { helperReadiness: Ref.get(reported) },
+    );
+    expect(yield* service.acquire).toEqual(Option.none());
+    expect((yield* service.status).block).toEqual(block);
+    const readiness = (screenCapture: "pending" | "granted") =>
+      ({
+        readiness: {
+          grants: { accessibility: "granted", screenCapture },
+          helper: "authenticated",
+          capture: "pending",
+          tree: "unavailable",
+          input: "unavailable",
+          blockers: [],
+          reasons: [],
+        },
+      }) satisfies HelperReadiness;
+    yield* Ref.set(reported, Option.some(readiness("pending")));
+    expect((yield* service.status).block).toEqual(block);
+    yield* Ref.set(reported, Option.some(readiness("granted")));
+    expect((yield* service.status).block).toBeUndefined();
+  }).pipe(
+    Effect.provide(ServerSettings.layerTest({ enableCua: true })),
+    Effect.provideService(HostProcess.Platform, "darwin"),
+    Effect.provideService(HostProcess.Environment, {}),
+    Effect.scoped,
+  ),
+);

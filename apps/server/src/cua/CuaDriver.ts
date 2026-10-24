@@ -102,6 +102,23 @@ export const agentBlock = (failure: Option.Option<CuaDriverError>) =>
     ? failure.value.block
     : undefined;
 
+/**
+ * The block that still explains anything: once the helper's newer readiness reports every
+ * missing grant granted, the last failure is history and the next start tries again (#1399).
+ */
+export const currentBlock = (
+  failure: Option.Option<CuaDriverError>,
+  readiness: ComputerUseReadiness | undefined,
+) => {
+  const block = agentBlock(failure);
+  if (block === undefined || readiness === undefined) return block;
+  const granted = block.missing.every(
+    (grant) =>
+      readiness.grants[grant === "accessibility" ? "accessibility" : "screenCapture"] === "granted",
+  );
+  return granted ? undefined : block;
+};
+
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const isStartError = Schema.is(CuaDriverStartError);
 const isHostError = Schema.is(CuaDriverHostError);
@@ -403,6 +420,10 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       // when that read failed or timed out.
       const helper = observe ? yield* reportedByHelper : first;
       const isEnabled = yield* enabled;
+      const block = currentBlock(
+        failure,
+        Option.isSome(helper) ? helper.value.readiness : observed?.readiness,
+      );
       return {
         platform:
           platform === "darwin" || platform === "linux" || platform === "win32"
@@ -414,11 +435,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
           ? observed
           : {}),
         ...(Option.isSome(failure) ? { failure: failure.value.message } : {}),
-        ...(Option.isSome(failure) &&
-        failure.value._tag === "CuaDriverHostError" &&
-        failure.value.block !== undefined
-          ? { block: failure.value.block }
-          : {}),
+        ...(block === undefined ? {} : { block }),
         ...(platform === "linux"
           ? { wayland: hostEnvironment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" }
           : {}),

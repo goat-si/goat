@@ -197,6 +197,40 @@ layer("ComputerUseLeases controls", (it) => {
       }),
   );
 
+  it.effect("wakes the session list whenever a blocked turn is listed or cleared (#1399)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const block = {
+          reason: "permissionsNotGranted",
+          missing: ["accessibility"],
+          holder: "helper",
+        } as const;
+        const subscription = yield* leases.subscribe;
+        const woke = Effect.gen(function* () {
+          const count = yield* PubSub.remaining(subscription);
+          if (count > 0) yield* PubSub.takeAll(subscription);
+          return count > 0;
+        });
+        const first = ThreadId.make("thread-blocked-first");
+        yield* leases.blocked(first, block);
+        assert.isTrue(yield* woke);
+        // Its first control clears it.
+        yield* leases.control(first, Option.none());
+        assert.isTrue(yield* woke);
+        yield* leases.stop(first);
+        yield* woke;
+        // Turning computer use off with only a blocked turn listed clears it too.
+        yield* leases.blocked(ThreadId.make("thread-blocked-off"), block);
+        yield* woke;
+        yield* leases.disable;
+        assert.isTrue(yield* woke);
+        assert.deepEqual(yield* leases.blockedTurns, []);
+      }),
+    ),
+  );
+
   it.effect("ends every control when computer use is turned off", () =>
     Effect.gen(function* () {
       yield* runMigrations();

@@ -78,7 +78,13 @@ const requestFrom = (
           leasesDetecting(signals),
           Layer.mock(CuaDriver.CuaDriver)({
             enabled: Effect.succeed(true),
-            lastFailure: Effect.succeed(failure),
+            status: Effect.succeed({
+              platform: "darwin",
+              running: false,
+              ...(Option.isSome(failure) && failure.value._tag === "CuaDriverHostError"
+                ? { block: failure.value.block }
+                : {}),
+            }),
           }),
           Layer.mock(Environment.ServerEnvironment)({
             getEnvironmentId: Effect.succeed(environmentId),

@@ -300,8 +300,8 @@ const make = Effect.gen(function* () {
   ) {
     const now = yield* DateTime.now;
     const handoffId = Option.isSome(lease) ? lease.value.handoffId : undefined;
-    // A driver started for this thread after all.
-    blockedTurns.delete(threadId);
+    // A driver started for this thread after all; the session list drops the blocked entry.
+    if (blockedTurns.delete(threadId)) yield* changed;
     const existing = controls.get(threadId);
     if (
       existing !== undefined &&
@@ -619,9 +619,11 @@ const make = Effect.gen(function* () {
       ),
     ),
     disable: Effect.sync(() => {
+      const listed = blockedTurns.size > 0;
       blockedTurns.clear();
-      return [...controls.keys()].filter((id) => end(id, "disabled"));
-    }).pipe(Effect.flatMap((ended) => (ended.length > 0 ? changed : Effect.void))),
+      const ended = [...controls.keys()].filter((id) => end(id, "disabled"));
+      return listed || ended.length > 0;
+    }).pipe(Effect.flatMap((cleared) => (cleared ? changed : Effect.void))),
     grants: live(),
     pause,
     detection,
