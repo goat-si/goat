@@ -135,3 +135,66 @@ it.effect("a reschedule whose host allowlist narrows while it waits is refused",
     expect(unchanged.result).toMatchObject({ status: "refused", reason: "no_capacity" });
   }),
 );
+
+it.effect(
+  "regression #980: draining a host says its goal attempts stay instead of claiming a move",
+  () =>
+    Effect.gen(function* () {
+      const cordons: Array<{ readonly host: string; readonly draining: boolean }> = [];
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(McpInvocationContext.McpInvocationContext, {
+          environmentId: EnvironmentId.make("environment"),
+          requestNamespace: "provider:mover",
+          thread: {
+            threadId,
+            providerSessionId: "provider:mover",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+          },
+          client: undefined,
+          capabilities: new Set(["orchestration" as const]),
+          issuedAt: 0,
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: () =>
+            Effect.succeed(liveThreadShell(threadId, { runtimeMode: "full-access" })),
+        }),
+        Layer.mock(FleetHostStates.FleetHostStates)({
+          cordon: (input) =>
+            Effect.sync(() => {
+              cordons.push(input);
+              return { ...input, cordoned: true, changedAt: "2026-10-24T00:00:00.000Z" } as never;
+            }),
+        }),
+        Layer.mock(HostHealthMonitor.HostHealthMonitor)({
+          conditions: () =>
+            Effect.succeed({
+              host: "box",
+              observedAt: "2026-10-24T00:00:00.000Z",
+              conditions: [
+                { type: "Cordoned", since: "2026-10-24T00:00:00.000Z", message: "Cordoned." },
+                { type: "Draining", since: "2026-10-24T00:00:00.000Z", message: "Draining." },
+              ],
+            }),
+        }),
+        Layer.mock(Rescheduler.Rescheduler)({}),
+        Profiles.layer.pipe(
+          Layer.provideMerge(Sqlite.layerMemory),
+          Layer.provideMerge(ServerSettings.layerTest({})),
+        ),
+      );
+      const toolkit = yield* FleetHealthToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(HealthHandlers.layer).pipe(Layer.provide(dependencies)),
+        ),
+      );
+      const result = yield* toolkit
+        .handle("goat_host_drain", { host: "box" })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      expect(cordons).toMatchObject([{ host: "box", draining: true }]);
+      const drained = result.at(-1)?.result as { readonly message?: string } | undefined;
+      expect(drained).toMatchObject({ host: "box", cordoned: true, draining: true });
+      // Nothing moves goal attempts off a draining host yet (#1130), so the result must not say so.
+      expect(drained?.message).not.toMatch(/move to other hosts/);
+      expect(drained?.message).toContain("goat_thread_reschedule");
+    }),
+);
