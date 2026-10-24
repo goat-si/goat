@@ -33,6 +33,7 @@ import * as Stream from "effect/Stream";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import {
+  classifyHelperBundle,
   helperBundle,
   makeHelperHost,
   probeHelperGrants,
@@ -155,22 +156,13 @@ const dependencies: DesktopCuaDriverDependencies = {
   helperGrants: (bundle, prompt) =>
     probeHelperGrants(spawnHelperProcess(bundle.executable), bundle.bundleId, prompt),
   helperBundlePath: async ({ isPackaged, resourcesPath }) => {
-    const { access } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const configured = isPackaged ? undefined : process.env.GOAT_CUA_HELPER_PATH?.trim();
     if (!isPackaged && !configured) return { kind: "absent" };
-    const candidate =
-      configured || join(resourcesPath, "..", "Helpers", `${COMPUTER_USE_HELPER_NAME}.app`);
-    return access(candidate).then(
-      () => ({ kind: "found", path: candidate }) as const,
-      (error: NodeJS.ErrnoException) =>
-        // Only a packaged build without the helper falls back; a set dev path must exist.
-        error.code === "ENOENT" && !configured
-          ? ({ kind: "absent" } as const)
-          : ({
-              kind: "unusable",
-              message: `${COMPUTER_USE_HELPER_NAME} at ${candidate} cannot be used (${error.code ?? "unknown error"}).`,
-            } as const),
+    // A set dev path must exist; only a packaged build with nothing at Helpers falls back.
+    return classifyHelperBundle(
+      configured || join(resourcesPath, "..", "Helpers", `${COMPUTER_USE_HELPER_NAME}.app`),
+      configured !== undefined,
     );
   },
   helperHost: (options) =>
