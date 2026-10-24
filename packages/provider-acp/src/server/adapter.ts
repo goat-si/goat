@@ -2651,6 +2651,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           });
           const now = yield* DateTime.now;
           const status = projectedStatus ?? toolStatus(merged.status);
+          const rawOutput = merged.data.rawOutput ?? merged.data.content;
           const startedAt = context.toolStartedAt.get(key) ?? now;
           context.toolStartedAt.set(key, startedAt);
           const ordinal = resolveSubagentChildOrdinal(subagent, key);
@@ -2690,7 +2691,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   ? (merged.title ?? merged.kind ?? "Tool")
                   : `${mcpIdentity.server}.${mcpIdentity.tool}`,
               input: merged.data.rawInput ?? null,
-              output: merged.data.rawOutput ?? merged.data.content ?? null,
+              // Child MCP results get the same normalization as root ones, so screenshots render.
+              output:
+                (mcpIdentity === undefined || rawOutput === undefined
+                  ? rawOutput
+                  : acpMcpToolCallOutput(rawOutput)) ?? null,
             },
           });
         });
