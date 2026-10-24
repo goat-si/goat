@@ -241,6 +241,16 @@ describe("SessionControl", () => {
     await expect(observing).rejects.toMatchObject({ reason: "privateMode" });
   });
 
+  it("keeps an action's input cancelled after a brief secret ends", async () => {
+    const control = new SessionControl("agent");
+    const gate = control.dispatchGate();
+    control.setPrivate(true);
+    control.setPrivate(false);
+    expect(control.agentCanActNow("agent")).toBe(true);
+    expect(gate).toThrow(BrowserControlInterrupted);
+    expect(control.dispatchGate()).not.toThrow();
+  });
+
   it("withholds a read that a brief secret overlapped, even after the secret is gone", async () => {
     const control = new SessionControl("agent");
     const read = Promise.withResolvers<string>();

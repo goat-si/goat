@@ -174,11 +174,55 @@ const noPointer: PointerReporter = async () => {};
 
 /**
  * Throws when the input may no longer land: Stop, a takeover or a secret field arrived while the
- * action waited. Called after every wait, right before input leaves; Playwright's own
- * actionability waits run first as trials, so nothing is dispatched after the check.
+ * action waited. Called after every wait, right before input leaves. Playwright's own actions
+ * wait for their target after any check made before them, and `force` skips the check that the
+ * target still receives the input, so they only run as trials; the input itself is raw mouse,
+ * keyboard or element calls that do not wait for the page.
  */
 export type DispatchGate = () => void;
 const open: DispatchGate = () => {};
+
+const targetChanged = () =>
+  new ServerBrowserOperationError(
+    "PreviewAutomationExecutionError",
+    "The target moved, was covered or was disabled before the input landed. Take a fresh snapshot and try again.",
+  );
+
+/**
+ * The viewport point where raw input lands on the target now: its centre, provided it is enabled
+ * and nothing covers it there. Call it after the trial's waits, right before the gate.
+ */
+const landing = async (locator: Locator, timeout: number) => {
+  const handle = await locator.elementHandle({ timeout });
+  try {
+    const [box, owned] = await Promise.all([
+      handle.boundingBox(),
+      handle.evaluate((element) => {
+        type Hit = { readonly parentNode: Hit | null; readonly host?: Hit } | null | undefined;
+        const target = element as unknown as {
+          matches(selector: string): boolean;
+          getBoundingClientRect(): { left: number; top: number; width: number; height: number };
+          getRootNode(): { elementFromPoint?(x: number, y: number): Hit };
+        };
+        if (target.matches(":disabled")) return false;
+        const rect = target.getBoundingClientRect();
+        // Hits inside a shadow root resolve to its host, so climb through hosts too.
+        let hit = target
+          .getRootNode()
+          .elementFromPoint?.(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        while (hit) {
+          if (hit === (element as unknown)) return true;
+          hit = hit.parentNode ?? hit.host;
+        }
+        return false;
+      }),
+    ]);
+    if (!box || !owned) throw targetChanged();
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  } finally {
+    void handle.dispose().catch(constVoid);
+  }
+};
 
 const targetPoint = async (
   page: Page,
@@ -788,11 +832,9 @@ export const click = async (
   await pointer(point, "click");
   const options = { button: input.button ?? "left", clickCount: input.clickCount ?? 1 } as const;
   if (locator !== null) await locator.click({ ...options, timeout, trial: true });
+  const at = locator === null ? point : await landing(locator, timeout);
   gate();
-  const clicked =
-    locator === null
-      ? page.mouse.click(point.x, point.y, options)
-      : locator.click({ ...options, timeout, force: true });
+  const clicked = page.mouse.click(at.x, at.y, options);
   let onDialog = constVoid;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
@@ -803,7 +845,7 @@ export const click = async (
   } finally {
     page.off("dialog", onDialog);
   }
-  return point;
+  return at;
 };
 
 export const type = async (
@@ -813,12 +855,7 @@ export const type = async (
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const locator = targetLocator(page, input);
-  if (locator !== null && input.clear) {
-    await locator.waitFor({ state: "visible", timeout });
-    gate();
-    await locator.fill(input.text, { timeout, force: true });
-    return;
-  }
+  if (locator !== null) await locator.waitFor({ state: "visible", timeout });
   // A shadow host also matches :focus; use its innermost focused descendant.
   const target = locator ?? page.locator("*:focus").last();
   const focused =
@@ -890,8 +927,9 @@ export const hover = async (
     return;
   }
   await locator.hover({ timeout, trial: true });
+  const at = await landing(locator, timeout);
   gate();
-  await locator.hover({ timeout, force: true });
+  await page.mouse.move(at.x, at.y);
 };
 
 export const select = async (
@@ -899,36 +937,67 @@ export const select = async (
   input: PreviewAutomationSelectInput,
   gate: DispatchGate = open,
 ): Promise<PreviewAutomationSelectResult> => {
-  const locator = targetLocator(page, input)!;
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const options = await locator.evaluate(
-    (element) =>
-      element.tagName === "SELECT"
-        ? Array.from(
-            (element as unknown as { options: ArrayLike<{ value: string; label: string }> })
-              .options,
-            ({ value, label }) => ({ value, label: label.trim() }),
-          )
-        : null,
-    undefined,
-    { timeout },
-  );
-  const values =
-    options &&
-    input.values.map(
+  const handle = await targetLocator(page, input)!.elementHandle({ timeout });
+  try {
+    const found = await handle.evaluate((element) => {
+      if (element.tagName !== "SELECT") return null;
+      const select = element as unknown as {
+        readonly disabled: boolean;
+        readonly multiple: boolean;
+        readonly options: ArrayLike<{ value: string; label: string }>;
+      };
+      return {
+        disabled: select.disabled,
+        multiple: select.multiple,
+        options: Array.from(select.options, ({ value, label }) => ({ value, label: label.trim() })),
+      };
+    });
+    if (found === null)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationTargetNotEditableError",
+        "This element is not a <select>. Click a custom dropdown, then click its option.",
+      );
+    if (found.disabled) throw targetChanged();
+    const values = input.values.map(
       (entry) =>
         (
-          options.find((option) => option.value === entry) ??
-          options.find((option) => option.label === entry.trim())
-        )?.value ?? entry,
+          found.options.find((option) => option.value === entry) ??
+          found.options.find((option) => option.label === entry.trim())
+        )?.value,
     );
-  if (values === null)
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationTargetNotEditableError",
-      "This element is not a <select>. Click a custom dropdown, then click its option.",
-    );
-  gate();
-  return { selected: await locator.selectOption(values, { timeout, force: true }) };
+    const missing = values.indexOf(undefined);
+    if (missing !== -1 || (!found.multiple && values.length > 1))
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        missing !== -1
+          ? `This <select> has no option "${input.values[missing]}".`
+          : "This <select> takes one option.",
+      );
+    gate();
+    // What Playwright's selectOption does once the options exist, without its wait for them.
+    const selected = await handle.evaluate((element, chosen) => {
+      const select = element as unknown as {
+        readonly options: ArrayLike<{ value: string; selected: boolean }>;
+        readonly selectedOptions: ArrayLike<{ value: string }>;
+        dispatchEvent(event: unknown): boolean;
+      };
+      for (const option of Array.from(select.options)) option.selected = false;
+      for (const value of chosen) {
+        const option = Array.from(select.options).find((entry) => entry.value === value);
+        if (option) option.selected = true;
+      }
+      const EventType = (
+        globalThis as unknown as { Event: new (type: string, init: object) => unknown }
+      ).Event;
+      select.dispatchEvent(new EventType("input", { bubbles: true, composed: true }));
+      select.dispatchEvent(new EventType("change", { bubbles: true }));
+      return Array.from(select.selectedOptions, (option) => option.value);
+    }, values as ReadonlyArray<string>);
+    return { selected };
+  } finally {
+    void handle.dispose().catch(constVoid);
+  }
 };
 
 export const drag = async (
@@ -942,17 +1011,16 @@ export const drag = async (
   const target = targetLocator(page, { locator: input.target })!;
   await pointer(await targetPoint(page, source, {}, timeout), "move");
   await source.dragTo(target, { timeout, trial: true });
-  gate();
-  // Observe the drag's outcome as it starts: a rejection nobody handles while the cursor
-  // moves exits the server.
-  const dragFailure = source.dragTo(target, { timeout, force: true }).then(
-    () => null,
-    (error: unknown) => ({ error }),
-  );
   const end = await target.boundingBox({ timeout }).catch(() => null);
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
-  const failure = await dragFailure;
-  if (failure) throw failure.error;
+  const from = await landing(source, timeout);
+  const to = await landing(target, timeout);
+  gate();
+  // The gesture runs whole once it starts: a button left down would outlast the agent.
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y);
+  await page.mouse.up();
 };
 
 export const setInputFiles = async (
@@ -962,8 +1030,13 @@ export const setInputFiles = async (
 ) => {
   const locator = targetLocator(page, input);
   if (locator === null) return false;
-  gate();
-  await locator.setInputFiles([...input.paths], { timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS });
+  const handle = await locator.elementHandle({ timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS });
+  try {
+    gate();
+    await handle.setInputFiles([...input.paths]);
+  } finally {
+    void handle.dispose().catch(constVoid);
+  }
   return true;
 };
 
