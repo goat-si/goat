@@ -70,7 +70,7 @@ const NAMED_KEYS: Readonly<Record<string, string>> = {
   ),
 };
 
-export const driverKeyName = (key: ComputerUseKey): string | undefined =>
+const driverKeyName = (key: ComputerUseKey): string | undefined =>
   key.length === 1 ? key : NAMED_KEYS[key];
 
 const isSecureRole = (role: string | undefined) => role === "password text";

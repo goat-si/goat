@@ -37,7 +37,7 @@ export interface DriverClient {
   readonly exited: Promise<void>;
 }
 
-export class DriverStartError extends Error {
+class DriverStartError extends Error {
   override readonly name = "DriverStartError";
 }
 
@@ -49,7 +49,7 @@ type Pending = (message: Record<string, unknown> | "gone") => void;
 const record = (value: unknown): Record<string, unknown> =>
   typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 
-export function toolResult(value: unknown): DriverToolResult {
+function toolResult(value: unknown): DriverToolResult {
   const result = record(value);
   const content = Array.isArray(result.content) ? result.content.map(record) : [];
   return {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off -- A local build script: files, hashes and tar, nothing long-lived.
+// @effect-diagnostics globalFetch:off -- One download in a one-shot script; the archive's sha256 is checked below.
 // Builds "goat-computer-use" for Linux, the helper GOAT spawns for computer use (WS10 #1138):
 // a bundled Node program, the pinned Cua Driver payload it runs as its child, a launcher and a
 // manifest of every file's hash. Local builds only; CI signing and release are a proposal.
@@ -10,9 +11,9 @@
 // binary works as that Node only with ELECTRON_RUN_AS_NODE=1, which its launcher sets.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
-import * as NodeFS from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import { parseArgs } from "node:util";
+import * as NodeUtil from "node:util";
 
 import { COMPUTER_USE_PROTOCOL_VERSION } from "@goat/contracts";
 import { cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
@@ -21,42 +22,44 @@ import { build } from "vite-plus/pack";
 import serverPackage from "../apps/server/package.json" with { type: "json" };
 
 const repoRoot = NodePath.resolve(import.meta.dirname, "..");
-const { values } = parseArgs({
+const { values } = NodeUtil.parseArgs({
   options: {
     out: {
       type: "string",
       default: NodePath.join(repoRoot, "apps/server/.computer-use-helper-linux"),
     },
+    // oxlint-disable-next-line goat/no-global-process-runtime -- A one-shot script with no Effect runtime.
     arch: { type: "string", default: process.arch },
     "driver-archive": { type: "string" },
   },
 });
 const out = NodePath.resolve(values.out);
-const release = cuaDriverRelease("linux", values.arch);
-if (!release) throw new Error("Cua Driver has no Linux build for " + values.arch + ".");
+const pinned = cuaDriverRelease("linux", values.arch);
+if (!pinned) throw new Error("Cua Driver has no Linux build for " + values.arch + ".");
+const release = pinned;
 
 const sha256 = (bytes: Uint8Array) => NodeCrypto.createHash("sha256").update(bytes).digest("hex");
 
 async function driverArchive(): Promise<Uint8Array> {
-  if (values["driver-archive"]) return NodeFS.readFile(values["driver-archive"]);
+  if (values["driver-archive"]) return NodeFSP.readFile(values["driver-archive"]);
   const response = await fetch(release.url);
   if (!response.ok)
     throw new Error("Downloading " + release.url + " failed: " + response.status + ".");
   return new Uint8Array(await response.arrayBuffer());
 }
 
-await NodeFS.rm(out, { recursive: true, force: true });
-await NodeFS.mkdir(NodePath.join(out, "cua-driver"), { recursive: true });
+await NodeFSP.rm(out, { recursive: true, force: true });
+await NodeFSP.mkdir(NodePath.join(out, "cua-driver"), { recursive: true });
 
 const archive = await driverArchive();
 if (archive.byteLength !== release.bytes || sha256(archive) !== release.sha256)
   throw new Error(release.archiveName + " does not match the pinned size and sha256.");
 const archivePath = NodePath.join(out, release.archiveName);
-await NodeFS.writeFile(archivePath, archive);
+await NodeFSP.writeFile(archivePath, archive);
 NodeChildProcess.execFileSync("tar", ["-xzf", archivePath, "-C", NodePath.join(out, "cua-driver")]);
-await NodeFS.rm(archivePath);
+await NodeFSP.rm(archivePath);
 for (const file of release.requiredFiles)
-  await NodeFS.access(NodePath.join(out, "cua-driver", file));
+  await NodeFSP.access(NodePath.join(out, "cua-driver", file));
 
 await build({
   config: false,
@@ -77,7 +80,7 @@ await build({
 });
 
 const launcher = NodePath.join(out, "goat-computer-use");
-await NodeFS.writeFile(
+await NodeFSP.writeFile(
   launcher,
   [
     "#!/bin/sh",
@@ -91,14 +94,14 @@ await NodeFS.writeFile(
 
 const files: Record<string, string> = {};
 const walk = async (directory: string) => {
-  for (const entry of await NodeFS.readdir(directory, { withFileTypes: true })) {
+  for (const entry of await NodeFSP.readdir(directory, { withFileTypes: true })) {
     const path = NodePath.join(directory, entry.name);
     if (entry.isDirectory()) await walk(path);
-    else files[NodePath.relative(out, path)] = sha256(await NodeFS.readFile(path));
+    else files[NodePath.relative(out, path)] = sha256(await NodeFSP.readFile(path));
   }
 };
 await walk(out);
-await NodeFS.writeFile(
+await NodeFSP.writeFile(
   NodePath.join(out, "manifest.json"),
   JSON.stringify(
     {

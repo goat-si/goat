@@ -1,4 +1,4 @@
-import { PassThrough } from "node:stream";
+import * as NodeStream from "node:stream";
 import * as NodeZlib from "node:zlib";
 
 import {
@@ -22,6 +22,11 @@ import {
   pngColors,
   type LinuxSessionFacts,
 } from "./linuxSession.ts";
+
+const decodeObservation = Schema.decodeUnknownSync(ComputerUseObservation);
+const decodeResult = Schema.decodeUnknownSync(ComputerUseActionResult);
+const decodeHello = Schema.decodeUnknownSync(ComputerUseHelloReply);
+const isActionResult = Schema.is(ComputerUseActionResult);
 
 const X11: LinuxSessionFacts = {
   display: ":91",
@@ -184,7 +189,7 @@ async function connect(
     settle: async () => undefined,
     newId: () => "o" + ++id,
   });
-  const input = new PassThrough();
+  const input = new NodeStream.PassThrough();
   const lines: string[] = [];
   const waiters: Array<() => void> = [];
   const served = serveHelperChannel({
@@ -226,7 +231,7 @@ async function connect(
     });
     return {
       ...reply,
-      observation: Schema.decodeUnknownSync(ComputerUseObservation)(reply.result),
+      observation: decodeObservation(reply.result),
     };
   };
   const act = async (
@@ -241,7 +246,7 @@ async function connect(
       target: from.target,
       observationId: from.observationId,
     });
-    return Schema.decodeUnknownSync(ComputerUseActionResult)(reply.result);
+    return decodeResult(reply.result);
   };
   const ref = (observation: ComputerUseObservation, label: string) => {
     const elements =
@@ -267,7 +272,7 @@ async function connect(
 describe("Linux computer use helper conformance", () => {
   it("hello binds the helper and names every protocol method as supported or unsupported", async () => {
     const helper = await connect();
-    const hello = Schema.decodeUnknownSync(ComputerUseHelloReply)(helper.hello);
+    const hello = decodeHello(helper.hello);
     if (!("capabilities" in hello)) throw new Error("refused");
     expect(hello.binding).toEqual({
       executable: "/opt/goat/goat-computer-use",
@@ -390,7 +395,7 @@ describe("Linux computer use helper conformance", () => {
       first.observation,
     );
     expect(result).toMatchObject({ outcome: "refused", reason: "backgroundUnavailable" });
-    expect(Schema.is(ComputerUseActionResult)(result)).toBe(true);
+    expect(isActionResult(result)).toBe(true);
     await helper.close();
   });
 

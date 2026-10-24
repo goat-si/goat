@@ -78,6 +78,7 @@ for (const name of SESSION_NAMES) {
 Object.assign(driverEnvironment, session.driverEnvironment);
 // Given nothing, the listing environment is just the telemetry and update-check opt-outs.
 Object.assign(driverEnvironment, cuaDriverListingEnvironment({}));
+// oxlint-disable-next-line goat/no-global-process-runtime -- The helper is a plain Node process with no Effect runtime.
 const driverVersion = cuaDriverRelease("linux", process.arch)?.version ?? "unknown";
 
 const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));

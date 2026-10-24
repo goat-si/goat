@@ -29,12 +29,12 @@ const ROLE_PASSWORD_TEXT = 40;
 const MAX_WINDOWS = 16;
 
 /** `('unix:path=...',)` from org.a11y.Bus.GetAddress. */
-export function parseAddress(output: string): string | null {
+function parseAddress(output: string): string | null {
   return /^\('(.+)',\)\s*$/u.exec(output.trim())?.[1] ?? null;
 }
 
 /** The (bus name, object path) references in a GetChildren or GetMatches reply. */
-export function parseReferences(
+function parseReferences(
   output: string,
 ): ReadonlyArray<{ readonly bus: string; readonly path: string }> {
   return [...output.matchAll(/\('([^']+)', objectpath '([^']+)'\)/gu)].map(([, bus, path]) => ({
@@ -44,7 +44,7 @@ export function parseReferences(
 }
 
 /** The number in a `(uint32 N,)` reply: a process id or a role. */
-export function parseUint32(output: string): number | null {
+function parseUint32(output: string): number | null {
   const match = /\(uint32 (\d+),\)/u.exec(output);
   return match ? Number(match[1]) : null;
 }

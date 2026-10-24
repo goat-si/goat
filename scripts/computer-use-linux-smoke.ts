@@ -10,10 +10,10 @@
 //   node scripts/build-computer-use-helper-linux.ts --out /tmp/gcu
 //   node scripts/computer-use-linux-smoke.ts --helper /tmp/gcu/goat-computer-use --evidence /tmp/gcu-evidence [--xvfb /path/to/Xvfb]
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
-import { parseArgs } from "node:util";
+import * as NodeUtil from "node:util";
 
 import {
   admitComputerUseReply,
@@ -23,7 +23,7 @@ import {
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
-const { values } = parseArgs({
+const { values } = NodeUtil.parseArgs({
   options: {
     helper: { type: "string" },
     evidence: { type: "string", default: "computer-use-linux-evidence" },
@@ -33,7 +33,7 @@ const { values } = parseArgs({
 });
 if (!values.helper) throw new Error("--helper <path to goat-computer-use> is required.");
 const evidence = NodePath.resolve(values.evidence);
-await NodeFS.mkdir(evidence, { recursive: true });
+await NodeFSP.mkdir(evidence, { recursive: true });
 const fixture = NodePath.resolve(
   import.meta.dirname,
   "../apps/server/src/cua/linuxHelper/fixtures/goat-cu-fixture.py",
@@ -66,10 +66,10 @@ const start = (
 };
 /** Child pids of one process, from /proc; the helper's driver is found this way. */
 const children = async (pid: number) => {
-  const tasks = await NodeFS.readdir("/proc/" + pid + "/task").catch(() => []);
+  const tasks = await NodeFSP.readdir("/proc/" + pid + "/task").catch(() => []);
   const pids: number[] = [];
   for (const task of tasks) {
-    const text = await NodeFS.readFile(
+    const text = await NodeFSP.readFile(
       "/proc/" + pid + "/task/" + task + "/children",
       "utf8",
     ).catch(() => "");
@@ -96,10 +96,10 @@ try {
     "pipe",
     "ignore",
   ]);
+  const busOutput = dbus.stdout;
+  if (!busOutput) throw new Error("dbus-daemon has no stdout.");
   const address = await new Promise<string>((resolve) =>
-    NodeReadline.createInterface({ input: dbus.stdout! }).once("line", (line) =>
-      resolve(line.trim()),
-    ),
+    NodeReadline.createInterface({ input: busOutput }).once("line", (line) => resolve(line.trim())),
   );
   const env = {
     PATH: process.env.PATH,
@@ -121,7 +121,10 @@ try {
     stdio: ["pipe", "pipe", "inherit"],
   });
   started.push(helper);
-  const replies = NodeReadline.createInterface({ input: helper.stdout! });
+  const { stdin: toHelper, stdout: fromHelper, pid: helperPid } = helper;
+  if (!toHelper || !fromHelper || helperPid === undefined)
+    throw new Error("The helper did not start.");
+  const replies = NodeReadline.createInterface({ input: fromHelper });
   const queue: string[] = [];
   const waiters: Array<() => void> = [];
   replies.on("line", (line) => {
@@ -130,16 +133,16 @@ try {
   });
   const next = async () => {
     while (queue.length === 0) await new Promise<void>((wake) => waiters.push(wake));
-    return queue.shift()!;
+    return queue.shift() ?? "";
   };
-  helper.stdin!.write(JSON.stringify({ clientApiVersion: COMPUTER_USE_PROTOCOL_VERSION }) + "\n");
+  toHelper.write(JSON.stringify({ clientApiVersion: COMPUTER_USE_PROTOCOL_VERSION }) + "\n");
   const hello = Schema.decodeUnknownSync(Schema.fromJsonString(ComputerUseHelloReply))(
     await next(),
   );
   if (!("binding" in hello)) throw new Error("helper refused: " + hello.message);
   check(
     "hello binds the spawned process",
-    hello.binding.pid !== undefined && negotiateComputerUseVersion(hello.serverApiVersion) === true,
+    hello.binding.pid === helperPid && negotiateComputerUseVersion(hello.serverApiVersion) === true,
     { binding: hello.binding, maxFrameBytes: hello.maxFrameBytes },
   );
   const generation = hello.binding.generation;
@@ -149,9 +152,7 @@ try {
     const id = String(++serial);
     pending.add(id);
     const t0 = performance.now();
-    helper.stdin!.write(
-      JSON.stringify({ id, generation, method, deadlineMs: 20_000, params }) + "\n",
-    );
+    toHelper.write(JSON.stringify({ id, generation, method, deadlineMs: 20_000, params }) + "\n");
     const line = await next();
     const reply = JSON.parse(line) as {
       id: string;
@@ -173,7 +174,7 @@ try {
   const saveImage = async (name: string, image: { data: string } | undefined) => {
     if (!image) return undefined;
     const file = NodePath.join(evidence, name);
-    await NodeFS.writeFile(file, Buffer.from(image.data, "base64"));
+    await NodeFSP.writeFile(file, Buffer.from(image.data, "base64"));
     return file;
   };
 
@@ -319,11 +320,11 @@ try {
     blocked.result,
   );
 
-  const driverPids = await children(helper.pid!);
+  const driverPids = await children(helperPid);
   const exited = new Promise<number | null>((resolve) =>
     helper.once("exit", (code) => resolve(code)),
   );
-  helper.stdin!.end();
+  toHelper.end();
   const code = await Promise.race([exited, sleep(10_000).then(() => "timeout" as const)]);
   await sleep(300);
   check(
@@ -340,7 +341,7 @@ try {
   await sleep(500);
   const left = started.filter((child) => child.pid !== undefined && alive(child.pid));
   log("cleanup", { left: left.map((child) => child.pid) });
-  await NodeFS.writeFile(
+  await NodeFSP.writeFile(
     NodePath.join(evidence, "transcript.json"),
     JSON.stringify(transcript, null, 2) + "\n",
   );
