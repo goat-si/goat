@@ -8,7 +8,7 @@
     // nodeGypDependencies (default true) brings python3/make/g++, which Linux
     // needs for node-pty's node-gyp fallback (its prebuilds are mac/win only).
     "ghcr.io/devcontainers/features/node:2": {
-      "version": "26"
+      "version": "24"
     },
     // native/resource-monitor (edition 2024, needs stable >= 1.85). The server
     // degrades gracefully without the binary, but CI checks cargo fmt + test.

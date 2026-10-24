@@ -75,6 +75,20 @@ describe("subagent shell events", () => {
     ).toBe(true);
     expect(subagents.has("new-child")).toBe(true);
   });
+  it("publishes a promoted delegated task's transcript updates again", () => {
+    const subagents = new Set(["child"]);
+    const promoted = {
+      event: {
+        threadId: "child",
+        type: "thread.metadata-updated",
+        payload: { lineage: { relationshipToParent: null } },
+      },
+    } as ApplicationStoredEvent;
+    expect(shouldPublishShellApplicationEvent(promoted, subagents)).toBe(true);
+    expect(shouldPublishShellApplicationEvent(stored("child", "message.updated"), subagents)).toBe(
+      true,
+    );
+  });
 });
 
 it.effect("coalesces a slow shell subscriber by identity and location in sequence order", () =>

@@ -119,6 +119,15 @@ export function shouldPublishShellApplicationEvent(
     }
     return true;
   }
+  if (event.type === "thread.metadata-updated") {
+    // GOAT promotion detaches a delegated task in place, so its lineage can stop being a subagent.
+    if (event.payload.lineage.relationshipToParent === "subagent") {
+      subagentThreadIds.add(event.threadId);
+    } else {
+      subagentThreadIds.delete(event.threadId);
+    }
+    return true;
+  }
   if (event.type === "thread.deleted") {
     // Replay and the live tail overlap; keep known IDs so late events stay filtered.
     return true;

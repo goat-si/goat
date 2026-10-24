@@ -248,7 +248,7 @@ describe("saved SSH runtime row", () => {
     await click("Update runtime");
     await settle();
     expect(container.textContent).toContain(
-      "Installing GOAT runtime — first setup can take a few minutes",
+      "Installing GOAT runtime. First setup can take a few minutes",
     );
     const ready: SshHostResult = {
       kind: "ok",
@@ -401,7 +401,7 @@ it("polls a pending Add while the Desktop connection has not published its first
     await vi.advanceTimersByTimeAsync(1_000);
   });
   expect(container.textContent).toContain(
-    "Installing GOAT runtime — first setup can take a few minutes",
+    "Installing GOAT runtime. First setup can take a few minutes",
   );
 });
 
@@ -552,7 +552,7 @@ it("uses local phase before the owner poll and clears it immediately on terminal
   expect(container.textContent?.match(/Installing GOAT runtime/g)).toHaveLength(1);
   expect(container.textContent).not.toMatch(/Checking GOAT|Setting up GOAT|unknown/);
   expect(container.querySelector('[role="status"]')?.textContent).toBe(
-    "Installing GOAT runtime — first setup can take a few minutes",
+    "Installing GOAT runtime. First setup can take a few minutes",
   );
   await draw({ ...preparation, phase: null, outcome: "pending" });
   expect(container.textContent).not.toMatch(/Installing|Checking GOAT|Setting up GOAT/);

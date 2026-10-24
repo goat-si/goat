@@ -3545,7 +3545,9 @@ function useLegacySidebarThreads(input: {
     }
     // The preview may append an open subagent's owner past the cut, so match by key, not index.
     const previewKeys = new Set(
-      previewThreads.map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+      previewThreads.map((thread) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      ),
     );
     return projectThreads.flatMap((thread) => {
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
@@ -3663,8 +3665,8 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
   // mount scroll to the open thread once. Its row can mount after the route
   // does, once its environment's shells arrive, so the reveal waits for it.
   const mountRevealOwed = useRef(true);
-  const routeRowRendered =
-    routeThreadKey !== null && visibleSidebarThreadKeys.includes(routeThreadKey);
+  // An open subagent is listed under its owner's row, so wait for that row.
+  const routeRowRendered = routeRowKey !== null && visibleSidebarThreadKeys.includes(routeRowKey);
   const revealRouteRow = useStableCallback(() => {
     const pendingKey = pendingSidebarRouteReveal(routeReveal, routeThreadKey);
     if (pendingKey === null && (!mountRevealOwed.current || routeThreadKey === null)) return;
@@ -3676,7 +3678,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
     mountRevealOwed.current = false;
     activeRow.scrollIntoView({ block: "nearest" });
   });
-  useEffect(revealRouteRow, [revealRouteRow, routeThreadKey, routeRowRendered]);
+  useEffect(revealRouteRow, [revealRouteRow, routeThreadKey, routeRowKey, routeRowRendered]);
   const newThreadShortcutLabelOptions = {
     platform,
     context: {
