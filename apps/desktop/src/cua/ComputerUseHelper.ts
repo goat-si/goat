@@ -8,6 +8,7 @@ import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 
 import { COMPUTER_USE_HELPER_NAME } from "@goat/shared/cuaDriverRelease";
+import type { CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
 import type { EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
 import * as Schema from "effect/Schema";
 
@@ -47,6 +48,17 @@ export const HelperGrants = Schema.Struct({
   screenRecording: Schema.Boolean,
 });
 const decodeGrants = Schema.decodeUnknownSync(HelperGrants);
+/** list_apps entries as the driver reports them; extra fields are dropped. */
+const decodeListedApps = Schema.decodeUnknownSync(
+  Schema.Struct({
+    apps: Schema.Array(
+      Schema.Struct({
+        bundle_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  }),
+);
 const Started = Schema.Struct({
   socketPath: Schema.String,
   driverPid: Schema.Number,
@@ -246,6 +258,19 @@ export async function openHelperSession(
 }
 
 /** Reads a helper's own grants from a fresh process: macOS caches TCC answers per process. */
+/** The apps the helper's driver lists, run inside the helper after its seal check (#1241). */
+export async function listHelperApplications(
+  process: HelperProcess,
+  expectedBundleId: string,
+): Promise<ReadonlyArray<CuaDriverListedApp>> {
+  const session = await openHelperSession(process, expectedBundleId);
+  try {
+    return decodeListedApps(await session.request("listApps")).apps;
+  } finally {
+    await session.close();
+  }
+}
+
 export async function probeHelperGrants(
   process: HelperProcess,
   expectedBundleId: string,

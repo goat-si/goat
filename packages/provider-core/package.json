@@ -31,6 +31,10 @@
       "types": "./src/server/auth.ts",
       "import": "./src/server/auth.ts"
     },
+    "./server/builtinSkills/registry": {
+      "types": "./src/server/builtinSkills/registry.ts",
+      "import": "./src/server/builtinSkills/registry.ts"
+    },
     "./server/collectStreamText": {
       "types": "./src/server/collectStreamText.ts",
       "import": "./src/server/collectStreamText.ts"

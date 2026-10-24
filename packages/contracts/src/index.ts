@@ -11,6 +11,7 @@ export * from "./relayClient.ts";
 export * from "./desktopBootstrap.ts";
 export * from "./cua.ts";
 export * from "./computerUseProtocol.ts";
+export * from "./builtinSkills.ts";
 export * from "./desktopBrowser.ts";
 export * from "./desktopAppActivation.ts";
 export * from "./remoteAccess.ts";

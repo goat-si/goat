@@ -43,16 +43,16 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   const url = process.env[LEASE_PROXY_ENV.url];
   const authorization = process.env[LEASE_PROXY_ENV.authorization];
   const driver = decodeDriver(process.env[LEASE_PROXY_ENV.driver] ?? "");
-  const handoffId = argument(args, "--handoff");
+  const controlId = argument(args, "--control");
   const expiresAt = DateTime.make(argument(args, "--expires") ?? "");
   if (
     url === undefined ||
     authorization === undefined ||
     Option.isNone(driver) ||
-    handoffId === undefined ||
+    controlId === undefined ||
     Option.isNone(expiresAt)
   ) {
-    process.stderr.write("cua-lease-proxy was started without its lease or driver.\n");
+    process.stderr.write("cua-lease-proxy was started without its control or driver.\n");
     process.exitCode = 2;
     return;
   }
@@ -63,12 +63,12 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   for (const variable of descriptor.environment) childEnvironment[variable.name] = variable.value;
 
   const leaseUrl = new URL(url);
-  leaseUrl.searchParams.set("handoff", handoffId);
+  leaseUrl.searchParams.set("control", controlId);
   const abort = new AbortController();
 
   await Effect.runPromise(
     runLeaseProxy({
-      handoffId,
+      controlId,
       expiresAt: expiresAt.value,
       input: Stream.fromAsyncIterable(
         NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
