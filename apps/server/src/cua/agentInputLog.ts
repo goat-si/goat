@@ -45,11 +45,13 @@ const AFTER_MS = 500;
 /** Finished calls older than this can no longer cover an event the helper reports. */
 const KEEP_MS = 10_000;
 /**
- * An open call covers events for at most this long. A call that never answers, or whose end
- * report was lost, must not hide a person's input for the rest of the control; a script longer
- * than this pauses the agents for its own input, which errs toward the person.
+ * An open call covers events for at most this long. Past it, a person's input pauses the agents
+ * even while a call is still open: a call that never answers, or whose end report was lost, must
+ * not hide a person for long. An input call that really runs longer, such as a long script, then
+ * pauses the agents for its own input, which errs toward the person. The proxy does not know a
+ * call's own deadline, so this is a fixed bound.
  */
-const OPEN_MS = 60_000;
+const OPEN_MS = 10_000;
 
 export function makeAgentInputLog() {
   const open = new Map<string, number>();

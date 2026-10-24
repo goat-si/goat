@@ -14,15 +14,15 @@ describe("agentInputLog", () => {
     assert.isFalse(log.isAgents(900));
   });
 
-  it("a call still open covers later events for a minute at most, and none once its control ends", () => {
+  it("a call still open covers later events for ten seconds at most, and none once its control ends", () => {
     const log = makeAgentInputLog();
     log.started("1", 1_000);
-    assert.isTrue(log.isAgents(60_000));
+    assert.isTrue(log.isAgents(10_000));
     // A call that never answered stops hiding a person's input.
-    assert.isFalse(log.isAgents(62_000));
+    assert.isFalse(log.isAgents(12_000));
     assert.isFalse(log.isAgents(2_000, (key) => key !== "1"));
-    log.endAll(30_000);
-    assert.isFalse(log.isAgents(31_000));
+    log.endAll(5_000);
+    assert.isFalse(log.isAgents(6_000));
   });
 
   it("only calls known to read leave a person's input visible; an unknown tool counts as input", () => {
