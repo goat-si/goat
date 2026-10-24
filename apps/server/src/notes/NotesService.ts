@@ -6,8 +6,6 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import {
   NOTE_BODY_MAX_BYTES,
-  NOTE_TITLE_MAX_LENGTH,
-  NOTE_PREVIEW_MAX_LENGTH,
   NoteConflictError,
   NoteError,
   NoteFolder,
@@ -43,6 +41,7 @@ import * as Stream from "effect/Stream";
 import * as Projections from "../orchestration-v2/ProjectionStore.ts";
 import * as ServerConfig from "../config.ts";
 import { parseNote, serializeNote, type NoteContents } from "./frontmatter.ts";
+import { bodySummary } from "./noteSummary.ts";
 import * as NotesGit from "./NotesGit.ts";
 import * as NoteResults from "./NoteResults.ts";
 
@@ -53,36 +52,6 @@ const isFolder = Schema.is(NoteFolder);
 const LIST_LIMIT = 500;
 const MAX_FILE_BYTES = NOTE_BODY_MAX_BYTES + 256 * 1024;
 const summary = ({ body: _body, ...note }: NoteDocument): NoteSummary => note;
-const displayText = (text: string, maxLength: number) => {
-  if (text.length <= maxLength) return text;
-  const cut = text.slice(0, maxLength - 1);
-  return `${/[\uD800-\uDBFF]$/u.test(cut) ? cut.slice(0, -1) : cut}…`;
-};
-const displayTitle = (title: string) => displayText(title, NOTE_TITLE_MAX_LENGTH);
-const stripMarkers = (line: string) =>
-  line
-    .trim()
-    .replace(/^(?:(?:#{1,6}|[-*+>]|\d+\.)\s+|\[[ xX]\]\s*)+/u, "")
-    .trim();
-const bodySummary = (body: string, fallback: string) => {
-  const lines = body.split(/\r?\n/u);
-  const heading = /^#{1,6}\s+(.+?)\s*#*\s*$/mu.exec(body);
-  const titleIndex = heading
-    ? body.slice(0, heading.index).split("\n").length - 1
-    : lines.findIndex((line) => line.trim().length > 0);
-  const firstLine = lines[titleIndex];
-  const title = heading?.[1] ?? (firstLine === undefined ? fallback : stripMarkers(firstLine));
-  const preview = lines
-    .filter((line, index) => index !== titleIndex && !/^\s*(?:`{3,}|~{3,})/u.test(line))
-    .map(stripMarkers)
-    .join(" ")
-    .replace(/\s+/gu, " ")
-    .trim();
-  return {
-    title: displayTitle(title || fallback),
-    preview: displayText(preview, NOTE_PREVIEW_MAX_LENGTH),
-  };
-};
 const sha256 = (bytes: Uint8Array) => NodeCrypto.createHash("sha256").update(bytes).digest("hex");
 
 export class NotesService extends Context.Service<
@@ -484,7 +453,13 @@ const make = Effect.gen(function* () {
             const revision = yield* diskRevision(name, removed).pipe(
               Effect.orElseSucceed(() => undefined),
             );
-            if (revision === expected) return (captured = false);
+            // Verify containment before discarding anything: a failure after the bytes are gone
+            // would make a move roll back its destination too.
+            const verified = yield* directory.verify.pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            );
+            if (revision === expected && verified) return (captured = false);
             // link(2) never replaces a file created at the path meanwhile, and unlike a copy the
             // restored note is complete the moment it is visible.
             captured = yield* Effect.tryPromise(() =>
@@ -504,7 +479,6 @@ const make = Effect.gen(function* () {
           });
         if (changed) return yield* changedOnDisk(name, expected);
         forget(name);
-        yield* directory.verify;
       }),
     );
   const checkRevision = (document: NoteDocument, revision: string) =>
@@ -785,10 +759,26 @@ const make = Effect.gen(function* () {
             });
           const contents: NoteContents = { ...source.contents, updatedBy: author };
           const document = yield* persist(input.to, contents, null, false);
-          // Roll back only the bytes this move placed; a destination edited since then stays.
+          // Roll back only the bytes this move placed; a destination edited since then stays. A
+          // storage failure there can hold a captured edit, so it is reported with the first error.
           const placed = sha256(new TextEncoder().encode(serializeNote(contents)));
           yield* unlink(source.document.path, source.document.revision).pipe(
-            Effect.tapError(() => unlink(input.to, placed).pipe(Effect.ignore({ log: true }))),
+            Effect.catch((error) =>
+              unlink(input.to, placed).pipe(
+                Effect.catch((rollback) =>
+                  rollback._tag === "NoteError" && rollback.reason === "storage"
+                    ? Effect.fail(
+                        new NoteError({
+                          reason: "storage",
+                          message: `${error.message} The moved copy could not be removed: ${rollback.message}`,
+                          path: input.to,
+                        }),
+                      )
+                    : Effect.void,
+                ),
+                Effect.andThen(Effect.fail(error)),
+              ),
+            ),
           );
           yield* publish(document);
           yield* removed(input.from);

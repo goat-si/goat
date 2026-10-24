@@ -13,7 +13,7 @@ import { notesLayer as layer } from "./NotesTestkit.ts";
 // External writers racing the service's own filesystem calls, injected at the syscall it makes.
 type Promises = typeof NodeFS.promises;
 /** Replaces a node:fs/promises function the service imports, for the scope's lifetime. */
-const replaceFs = <K extends "link" | "copyFile" | "unlink" | "rename" | "open">(
+const replaceFs = <K extends "link" | "copyFile" | "unlink" | "rename" | "open" | "realpath">(
   key: K,
   replacement: (original: Promises[K]) => Promises[K],
 ) =>
@@ -239,6 +239,74 @@ it.effect("interrupting a delete after its note was set aside still puts the edi
     assert.strictEqual(yield* fs.readFileString(`${notesDir}/a.md`), "# Terminal\n");
     assert.deepStrictEqual(yield* fs.readDirectory(notesDir), ["a.md"]);
   }).pipe(Effect.scoped, Effect.provide(layer())),
+);
+
+it.effect(
+  "a removal whose folder check fails after the set-aside keeps the note and the moved copy",
+  () =>
+    Effect.gen(function* () {
+      const notes = yield* Notes.NotesService;
+      const fs = yield* FileSystem.FileSystem;
+      const { notesDir } = yield* Config.ServerConfig;
+      const initial = yield* notes.write(
+        { path: "a.md", body: "# A\n", baseRevision: null },
+        "user",
+      );
+      const before = yield* fs.readFileString(`${notesDir}/a.md`);
+      let armed = false;
+      yield* replaceFs("rename", (original) => async (from, to) => {
+        await original(from, to);
+        armed = String(from).endsWith("/a.md");
+      });
+      yield* replaceFs("realpath", (original) => (target, options) => {
+        if (!armed || !String(target).includes("/.note-")) return original(target, options);
+        armed = false;
+        return Promise.reject(Object.assign(new Error("i/o error"), { code: "EIO" }));
+      });
+      yield* notes
+        .move({ from: "a.md", to: "b.md", baseRevision: initial.revision }, "user")
+        .pipe(Effect.flip);
+      assert.strictEqual(yield* fs.readFileString(`${notesDir}/a.md`), before);
+      assert.deepStrictEqual(yield* fs.readDirectory(notesDir), ["a.md"]);
+    }).pipe(Effect.scoped, Effect.provide(layer())),
+);
+
+it.effect(
+  "a destination edited while a failed move rolls it back is kept and its location reported",
+  () =>
+    Effect.gen(function* () {
+      const notes = yield* Notes.NotesService;
+      const fs = yield* FileSystem.FileSystem;
+      const { notesDir } = yield* Config.ServerConfig;
+      const initial = yield* notes.write(
+        { path: "a.md", body: "# A\n", baseRevision: null },
+        "user",
+      );
+      yield* replaceFs("rename", (original) => async (from, to) => {
+        const edit = String(from).endsWith("/a.md")
+          ? "# Terminal\n"
+          : String(from).endsWith("/b.md")
+            ? "# Destination edit\n"
+            : undefined;
+        if (edit !== undefined) await NodeFS.promises.writeFile(String(from), edit);
+        return original(from, to);
+      });
+      yield* replaceFs(
+        "link",
+        (original) => (source, target) =>
+          String(source).endsWith("/removed.md") && String(target).endsWith("/b.md")
+            ? Promise.reject(Object.assign(new Error("no hard links"), { code: "ENOTSUP" }))
+            : original(source, target),
+      );
+      const failed = yield* notes
+        .move({ from: "a.md", to: "b.md", baseRevision: initial.revision }, "user")
+        .pipe(Effect.flip);
+      assert.strictEqual(failed._tag === "NoteError" && failed.reason, "storage");
+      assert.strictEqual(yield* fs.readFileString(`${notesDir}/a.md`), "# Terminal\n");
+      const captured = yield* capturedNote(notesDir);
+      assert.strictEqual(captured.contents, "# Destination edit\n");
+      assert.include(failed.message, captured.location);
+    }).pipe(Effect.scoped, Effect.provide(layer())),
 );
 
 it.effect("a failed move keeps a destination edited after it was placed", () =>
