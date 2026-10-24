@@ -20,6 +20,12 @@ export function createPreviewSessionAtoms<R, E>(
       label: "environment-data:preview-sessions:control",
       tag: WS_METHODS.previewSessionsControl,
     }),
+    /** A desktop session's live picture; the capture stops as soon as nothing reads it. */
+    frames: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:preview-sessions:frames",
+      tag: WS_METHODS.previewSessionsFrames,
+      idleTtlMs: 0,
+    }),
   };
 }
 

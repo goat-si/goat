@@ -2,12 +2,13 @@ import {
   PREVIEW_SESSION_THUMBNAIL_FRAME_MS,
   PREVIEW_SESSION_THUMBNAIL_WIDTH,
 } from "@goat/client-runtime/state/preview-sessions";
-import type { PreviewSession } from "@goat/contracts";
-import { useRef, useState, useSyncExternalStore } from "react";
+import type { PreviewSession, PreviewSessionNoPicture } from "@goat/contracts";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { GlobeIcon, LockIcon, MonitorIcon, MousePointerClickIcon } from "~/components/solar";
 import { type ServerBrowserHandle, ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
 import { cn } from "~/lib/utils";
+import { useDesktopSessionFrame } from "~/state/previewSessions";
 
 /** Whether the window shows at all; a backgrounded or minimized app streams nothing. */
 export function useDocumentVisible(doc: Document = document) {
@@ -30,8 +31,8 @@ const PLACEHOLDER_ICON = {
 
 function Placeholder(props: {
   readonly icon: keyof typeof PLACEHOLDER_ICON;
-  readonly text?: string | undefined;
-  readonly className?: string | undefined;
+  readonly text?: string;
+  readonly className?: string;
 }) {
   const Icon = PLACEHOLDER_ICON[props.icon];
   return (
@@ -104,6 +105,51 @@ function BrowserThumbnail(props: {
   );
 }
 
+/** Why a desktop window shows no picture, said only when a person can do something about it. */
+const NO_PICTURE: Partial<Record<PreviewSessionNoPicture, string>> = {
+  screenRecordingNotGranted: "Allow Screen Recording for GOAT Computer Use",
+  appNotApproved: "This app is not approved for the agent",
+  windowGone: "The window is closed",
+};
+
+/**
+ * The agent's window, captured on its own (#1404). Frames stream only while the card shows; a
+ * stopped session keeps its last frame, dimmed, and a private one keeps nothing.
+ */
+function DesktopThumbnail(props: {
+  readonly session: PreviewSession;
+  readonly live: boolean;
+  readonly stopped: boolean;
+}) {
+  const { session } = props;
+  const watching = props.live && !props.stopped && session.capabilities.frames;
+  const { event } = useDesktopSessionFrame(session.environmentId, watching ? session.id : null);
+  const [last, setLast] = useState<string | null>(null);
+  const frame = event?.type === "frame" ? `data:${event.mime};base64,${event.data}` : null;
+  const reason = event?.type === "unavailable" ? event.reason : undefined;
+  useEffect(() => {
+    if (frame !== null) setLast(frame);
+    else if (reason === "private") setLast(null);
+  }, [frame, reason]);
+  const shown = frame ?? (props.stopped ? last : null);
+  if (shown !== null)
+    return (
+      <img
+        alt=""
+        className={cn("size-full object-contain", props.stopped && "opacity-50 grayscale")}
+        src={shown}
+      />
+    );
+  if (reason === "private") return <Placeholder icon="lock" text="Private" />;
+  return (
+    <Placeholder
+      icon="monitor"
+      text={props.stopped ? undefined : reason === undefined ? "No preview" : NO_PICTURE[reason]}
+      className={props.stopped ? "opacity-50" : undefined}
+    />
+  );
+}
+
 /** What a card shows of its session: its picture, or a quiet placeholder. Never a private screen. */
 export function PreviewSessionThumbnail(props: {
   readonly session: PreviewSession;
@@ -128,9 +174,11 @@ export function PreviewSessionThumbnail(props: {
         stopped={stopped}
       />
     );
+  if (session.target.kind === "desktop")
+    return <DesktopThumbnail session={session} live={props.live} stopped={stopped} />;
   return (
     <Placeholder
-      icon={session.kind === "browser" ? "globe" : "monitor"}
+      icon="globe"
       text={stopped ? undefined : "No preview"}
       className={stopped ? "opacity-50" : undefined}
     />
