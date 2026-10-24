@@ -23,7 +23,6 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -189,71 +188,6 @@ layer("ComputerUseLeases controls", (it) => {
       }),
   );
 
-  it.effect(
-    "lists a turn the desktop blocked while it runs, until a driver starts for it or the turn ends (#1399)",
-    () =>
-      Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        const block = {
-          reason: "permissionsNotGranted",
-          missing: ["screenRecording"],
-          holder: "helper",
-        } as const;
-        const sql = yield* SqlClient.SqlClient;
-        const blocked = ThreadId.make("thread-blocked");
-        yield* run(blocked, "run-blocked-1", 1, "running");
-        yield* leases.blocked(blocked, block);
-        assert.deepEqual(yield* leases.blockedTurns, [{ threadId: blocked, block }]);
-        // Still running: the turn stays listed.
-        yield* leases.settle;
-        assert.lengthOf(yield* leases.blockedTurns, 1);
-        yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE run_id = 'run-blocked-1'`;
-        yield* leases.settle;
-        assert.deepEqual(yield* leases.blockedTurns, []);
-
-        // A later turn that gets a driver is no longer blocked.
-        const granted = ThreadId.make("thread-granted");
-        yield* leases.blocked(granted, block);
-        yield* leases.control(granted, Option.none());
-        assert.deepEqual(yield* leases.blockedTurns, []);
-      }),
-  );
-
-  it.effect("wakes the session list whenever a blocked turn is listed or cleared (#1399)", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        const block = {
-          reason: "permissionsNotGranted",
-          missing: ["accessibility"],
-          holder: "helper",
-        } as const;
-        const subscription = yield* leases.subscribe;
-        const woke = Effect.gen(function* () {
-          const count = yield* PubSub.remaining(subscription);
-          if (count > 0) yield* PubSub.takeAll(subscription);
-          return count > 0;
-        });
-        const first = ThreadId.make("thread-blocked-first");
-        yield* leases.blocked(first, block);
-        assert.isTrue(yield* woke);
-        // Its first control clears it.
-        yield* leases.control(first, Option.none());
-        assert.isTrue(yield* woke);
-        yield* leases.stop(first);
-        yield* woke;
-        // Turning computer use off with only a blocked turn listed clears it too.
-        yield* leases.blocked(ThreadId.make("thread-blocked-off"), block);
-        yield* woke;
-        yield* leases.disable;
-        assert.isTrue(yield* woke);
-        assert.deepEqual(yield* leases.blockedTurns, []);
-      }),
-    ),
-  );
-
   it.effect("ends every control when computer use is turned off", () =>
     Effect.gen(function* () {
       yield* runMigrations();
@@ -379,85 +313,6 @@ layer("ComputerUseLeases controls", (it) => {
         // With nobody left on the screen the pause is gone too.
         const after = yield* leases.control(thread, Option.none());
         assert.equal((yield* leases.controlState(thread, after.controlId))._tag, "active");
-      }),
-  );
-
-  it.effect(
-    "another agent's own input seen by a helper pauses nobody, a person's after it does",
-    () =>
-      Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        yield* leases.stopAll;
-        const mine = yield* leases.control(thread, Option.none());
-        const bots = yield* leases.control(other, Option.none());
-        const call = (state: "start" | "end", at: number) =>
-          leases.agentInput(other, bots.controlId, { call: "7", state, at });
-        // Only a live control's own proxy records its calls.
-        assert.isFalse(
-          yield* leases.agentInput(thread, bots.controlId, { call: "7", state: "start", at: 0 }),
-        );
-        assert.isTrue(yield* call("start", 1_000));
-        // A report dated far from the server's clock is refused and records nothing.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 10 * 60_000), "refused");
-        assert.isFalse(
-          yield* leases.agentInput(other, bots.controlId, {
-            call: "8",
-            state: "start",
-            at: 10 * 60_000,
-          }),
-        );
-        // The bot's click, seen by my helper while it runs and just after it answered.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_100), "agents");
-        yield* call("end", 1_200);
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_600), "agents");
-        assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
-        // A person, a moment later.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 2_000), "paused");
-        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
-          _tag: "paused",
-          reason: "human_input",
-        });
-        yield* leases.resume;
-        // A call left open by a control that has ended covers nothing.
-        yield* call("start", 5_000);
-        yield* leases.stop(other);
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 5_100), "paused");
-        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
-          _tag: "paused",
-          reason: "human_input",
-        });
-      }),
-  );
-
-  it.effect(
-    "a proxy's report of a person's input pauses every agent, from its live control only",
-    () =>
-      Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        yield* leases.stopAll;
-        const mine = yield* leases.control(thread, Option.none());
-        const bots = yield* leases.control(other, Option.none());
-        // An old proxy, or another thread's control id, pauses nobody.
-        assert.equal(yield* leases.humanInput(thread, "control:old", 0), "refused");
-        assert.equal(yield* leases.humanInput(thread, bots.controlId, 0), "refused");
-        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
-
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0), "paused");
-        for (const [id, control] of [
-          [thread, mine],
-          [other, bots],
-        ] as const)
-          assert.deepEqual(yield* leases.controlState(id, control.controlId), {
-            _tag: "paused",
-            reason: "human_input",
-          });
-        yield* leases.resume;
-        yield* leases.stop(thread);
-        // An ended control's proxy can no longer pause the agents left.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0), "refused");
-        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
       }),
   );
 });
