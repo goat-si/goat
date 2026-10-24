@@ -87,6 +87,7 @@ export function linuxCapabilities(session: LinuxSession): ComputerUseCapabilitie
   return {
     protocol: COMPUTER_USE_PROTOCOL_VERSION,
     platform: "linux",
+    signals: { humanInput: "unsupported", privateMode: "supported" },
     methods: Object.fromEntries(
       COMPUTER_USE_METHODS.map((method) => [
         method,

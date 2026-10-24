@@ -6,7 +6,6 @@ import {
   type ComputerUseElement,
   type ComputerUseObservation,
   type ComputerUseRefusal,
-  type ComputerUseReadiness,
   type ComputerUseRefusalReason,
   type ComputerUseWindow,
   COMPUTER_USE_ACTIONS,
@@ -20,16 +19,11 @@ import {
 } from "@goat/shared/computerUseObservation";
 import * as Schema from "effect/Schema";
 
+import { readLinuxReadiness } from "./readiness.ts";
 import type { SecureFocus } from "./atspiFocus.ts";
 import type { DriverClient, DriverImage, DriverToolResult } from "./CuaDriverMcp.ts";
 import { driverRefusalCode, linuxActionResult, linuxDriverCall } from "./linuxActions.ts";
-import {
-  linuxCapabilities,
-  linuxReadiness,
-  pngColors,
-  type LinuxSession,
-  type ReadinessFacts,
-} from "./linuxSession.ts";
+import { linuxCapabilities, type LinuxSession } from "./linuxSession.ts";
 
 /**
  * What the Linux helper does with each protocol request (WS10 #1138). It owns one Cua Driver
@@ -304,50 +298,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     return image ? { result: observation, image } : { result: observation };
   };
 
-  const readiness = async (deadlineMs: number): Promise<ComputerUseReadiness> => {
-    const facts: { -readonly [K in keyof ReadinessFacts]: ReadinessFacts[K] } = {
-      session: deps.session,
-      driver: null,
-      capture: "unproven",
-      tree: "unavailable",
-      uinputWritable: await deps.uinputWritable(),
-    };
-    if (blocked === undefined) {
-      const permissions = await call("check_permissions", {}, deadlineMs);
-      if (typeof permissions !== "string" && !isRefusal(permissions)) {
-        const flag = (name: string) => field(permissions.structured, name) === true;
-        facts.driver = { x11: flag("x11"), wayland: flag("wayland"), atspi: flag("atspi") };
-        const list = await windows(deadlineMs);
-        const shown = isRefusal(list)
-          ? undefined
-          : list.find((entry) => entry.is_on_screen !== false);
-        if (!shown) facts.capture = isRefusal(list) ? "failed" : "noWindow";
-        else {
-          // display_only: a readiness capture never stands in for the agent's own observation.
-          const capture = await call(
-            "get_window_state",
-            {
-              pid: shown.pid,
-              window_id: shown.window_id,
-              include_accessibility_tree: false,
-              display_only: true,
-              max_image_dimension: 256,
-            },
-            deadlineMs,
-          );
-          const image =
-            typeof capture === "string" || isRefusal(capture) ? undefined : capture.images[0];
-          const colors = image ? pngColors(Buffer.from(image.data, "base64")) : undefined;
-          facts.capture = image === undefined ? "failed" : (colors ?? "failed");
-          // The tree is proven through AT-SPI directly: a driver read would replace the
-          // snapshot the agent's element tokens belong to.
-          const focus = await deps.secureFocus(shown.pid);
-          facts.tree = !focus.known ? "unavailable" : focus.windows > 0 ? "ready" : "empty";
-        }
-      }
-    }
-    return linuxReadiness(facts);
-  };
+  const readiness = (deadlineMs: number) => readLinuxReadiness({ ...deps, call }, deadlineMs);
 
   const act = async (
     method: ComputerUseMethod,

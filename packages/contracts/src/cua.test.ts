@@ -27,6 +27,28 @@ const metrics = {
 };
 
 describe("computer use on the wire", () => {
+  it("preserves reported readiness and signals, and drops future optional shapes independently", () => {
+    const decode = Schema.decodeUnknownSync(CuaHostStatus);
+    const readiness = {
+      grants: { accessibility: "granted", screenCapture: "pending" },
+      helper: "authenticated",
+      capture: "pending",
+      tree: "ready",
+      input: "foregroundOnly",
+      blockers: ["restartRequired"],
+      reasons: ["Waiting for consent."],
+    };
+    const signals = { humanInput: "supported", privateMode: "unsupported" };
+    const status = { platform: "linux", running: true, readiness, signals, tools: "available" };
+    expect(decode(status)).toEqual(status);
+    expect(
+      decode({ ...status, readiness: { ...readiness, helper: "future" }, tools: "future" }),
+    ).toEqual({ platform: "linux", running: true, signals });
+    expect(
+      decode({ ...status, signals: { ...signals, humanInput: "future" } }).signals,
+    ).toBeUndefined();
+  });
+
   it("decodes driver status from hosts that predate the display check", () => {
     const decode = Schema.decodeUnknownSync(CuaHostStatus);
     expect(decode({ platform: "linux", running: false })).toEqual({

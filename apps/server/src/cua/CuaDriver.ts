@@ -2,6 +2,7 @@ import * as NodeModule from "node:module";
 
 import {
   CuaDriverMcpConfiguration,
+  type ComputerUseReadiness,
   type CuaDisplayCapability,
   type CuaHostStatus,
   type HostComputerUse,
@@ -39,6 +40,7 @@ import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetry
 import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
+import * as LinuxReadiness from "./LinuxReadiness.ts";
 
 export class CuaDriverStartError extends Schema.TaggedError<CuaDriverStartError>()(
   "CuaDriverStartError",
@@ -142,6 +144,9 @@ const withoutEnvironment = (probe: CuaDisplay.CuaDisplayProbe): CuaDisplayCapabi
 });
 
 export interface CuaDriverOptions {
+  readonly observeReadiness?: (
+    mcp: CuaDriverMcpConfiguration,
+  ) => Effect.Effect<ComputerUseReadiness | undefined>;
   /** The verified install, run when computer use is turned on; absent where the driver ships. */
   readonly install?: Effect.Effect<void, CuaDriverHostError>;
   /** The running daemon's own view of the macOS grants; null when it does not say. */
@@ -327,20 +332,34 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     acquire,
     enabled,
     lastFailure: Effect.sync(() => failure),
-    status: reported.pipe(
-      Effect.map((display) => ({
+    status: Effect.gen(function* () {
+      const display = yield* reported;
+      const entry = active;
+      const readiness =
+        options.observeReadiness && entry?.running && entry.mcp
+          ? yield* options.observeReadiness(entry.mcp).pipe(
+              Effect.timeoutOrElse({
+                duration: "15 seconds",
+                orElse: () => Effect.succeed(undefined),
+              }),
+            )
+          : undefined;
+      const isEnabled = yield* enabled;
+      return {
         platform:
           platform === "darwin" || platform === "linux" || platform === "win32"
             ? platform
             : ("other" as const),
         running: running(),
+        tools: !isEnabled ? "off" : running() ? "available" : "unavailable",
+        ...(isEnabled && entry === active && entry?.running && readiness ? { readiness } : {}),
         ...(Option.isSome(failure) ? { failure: failure.value.message } : {}),
         ...(platform === "linux"
           ? { wayland: hostEnvironment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" }
           : {}),
         display,
-      })),
-    ),
+      } satisfies CuaHostStatus;
+    }),
     computerUse: Effect.all([enabled, reported]).pipe(
       Effect.map(([isEnabled, display]) => ({
         enabled: isEnabled,
@@ -676,6 +695,7 @@ export const layer = Layer.effect(
     return yield* make(factory, probe, {
       ...(install ? { install } : {}),
       ...(platform === "darwin" ? { observeGrants: yield* makeMacGrantObserver() } : {}),
+      ...(platform === "linux" ? { observeReadiness: yield* LinuxReadiness.makeObserver() } : {}),
     });
   }),
 );

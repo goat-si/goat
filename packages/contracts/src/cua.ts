@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ComputerUseCapabilities, ComputerUseReadiness } from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
@@ -57,6 +58,9 @@ export const CuaDisplayCapability = Schema.Struct({
 });
 export type CuaDisplayCapability = typeof CuaDisplayCapability.Type;
 
+export const CuaToolsAvailability = Schema.Literals(["available", "off", "unavailable"]);
+export type CuaToolsAvailability = typeof CuaToolsAvailability.Type;
+
 /** Driver readiness on one host, independent of the enableCua setting. */
 export const CuaHostStatus = Schema.Struct({
   platform: Schema.Literals(["darwin", "linux", "win32", "other"]),
@@ -67,6 +71,10 @@ export const CuaHostStatus = Schema.Struct({
   wayland: Schema.optionalKey(Schema.Boolean),
   /** Older hosts omit it; they predate the check, so clients fall back to the platform. */
   display: ForwardCompatibleOptional(CuaDisplayCapability),
+  readiness: ForwardCompatibleOptional(ComputerUseReadiness),
+  signals: ForwardCompatibleOptional(ComputerUseCapabilities.fields.signals),
+  /** Decided by the server's setting and running driver, never by the helper. */
+  tools: ForwardCompatibleOptional(CuaToolsAvailability),
 });
 export type CuaHostStatus = typeof CuaHostStatus.Type;
 
