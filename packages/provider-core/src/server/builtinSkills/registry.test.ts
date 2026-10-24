@@ -1,3 +1,5 @@
+import { ComputerUseRefusalReason } from "@goat/contracts";
+import { CUA_DRIVER_EXCLUDED_TOOLS } from "@goat/shared/cuaDriverManifest";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildRuntimeInstructions } from "../runtimeInstructions.ts";
@@ -87,5 +89,27 @@ describe("computer use skill text", () => {
     expect(buildRuntimeInstructions({ harness: "Codex", computerUse: false })).not.toContain(
       "<computer_use>",
     );
+  });
+});
+
+describe("computer use skill against what agents receive today", () => {
+  // Agents reach the raw `cua-driver` tools; the helper protocol's typed refusals are not on
+  // that path yet, so naming them would teach recovery steps no result ever triggers.
+  const codeSpans = [
+    ...builtInSkillSections(["computer-use"], "darwin"),
+    ...Object.values(COMPUTER_USE_PLATFORM_NOTES),
+  ]
+    .join("\n")
+    .matchAll(/`([^`]+)`/g)
+    .map((match) => match[1] ?? "")
+    .toArray();
+
+  it("names no helper-protocol refusal the driver path does not return", () => {
+    const helperOnly = new Set<string>(ComputerUseRefusalReason.literals);
+    expect(codeSpans.filter((span) => helperOnly.has(span))).toEqual([]);
+  });
+
+  it("names no driver tool GOAT withholds from agents", () => {
+    expect(codeSpans.filter((span) => Object.hasOwn(CUA_DRIVER_EXCLUDED_TOOLS, span))).toEqual([]);
   });
 });
